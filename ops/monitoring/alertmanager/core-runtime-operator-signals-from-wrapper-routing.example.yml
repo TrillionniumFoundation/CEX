@@ -1,0 +1,55 @@
+# Example Alertmanager routing/inhibition for the cross-service wrapper-derived operator signals.
+# Intended for the metrics rendered by scripts/render-operator-signals-prometheus.sh.
+
+route:
+  receiver: cex-operator-chat
+  group_by:
+    - service
+    - family
+    - alertname
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 1h
+  routes:
+    - matchers:
+        - severity="critical"
+      receiver: cex-operator-page
+      continue: false
+
+    - matchers:
+        - severity="warning"
+      receiver: cex-operator-chat
+      continue: false
+
+receivers:
+  - name: cex-operator-chat
+    webhook_configs:
+      - url: http://127.0.0.1:19093/example-chat-webhook
+        send_resolved: true
+
+  - name: cex-operator-page
+    webhook_configs:
+      - url: http://127.0.0.1:19094/example-page-webhook
+        send_resolved: true
+
+inhibit_rules:
+  - source_matchers:
+      - alertname="CexExecutionInfoEndpointUnreachable"
+    target_matchers:
+      - alertname="CexGatewayInvocationCreateUpstreamFailures"
+    equal:
+      - family
+
+  - source_matchers:
+      - alertname="CexExecutionRefundFailures"
+    target_matchers:
+      - alertname="CexGatewayInvocationCreateUpstreamFailures"
+    equal:
+      - family
+
+  - source_matchers:
+      - alertname="CexExecutionRefundFailures"
+    target_matchers:
+      - alertname="CexExecutionAuditFailures"
+    equal:
+      - service

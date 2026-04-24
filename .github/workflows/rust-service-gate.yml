@@ -1,0 +1,37 @@
+name: rust-service-gate
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'gate-local.ps1'
+      - 'scripts/rust-regression-check.ps1'
+      - 'services/**'
+      - 'crates/**'
+      - '.github/workflows/rust-service-gate.yml'
+  pull_request:
+    paths:
+      - 'gate-local.ps1'
+      - 'scripts/rust-regression-check.ps1'
+      - 'services/**'
+      - 'crates/**'
+      - '.github/workflows/rust-service-gate.yml'
+
+jobs:
+  service-local-gate:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run service-local gate
+        run: ./gate-local.ps1 -ServiceLocalOnly

@@ -1,0 +1,15 @@
+{
+  "id": "26-runtime-blackbox-expander",
+  "name": "Runtime Blackbox Expander",
+  "group": "verify",
+  "priority": 67,
+  "cadenceMinutes": 5,
+  "intent": "write",
+  "lockGroup": "tests-runtime",
+  "milestone": "M0",
+  "goal": "Extend runtime blackbox scenarios for auth, provider, and async milestones.",
+  "outputs": [
+    "services/gateway-service/tests/"
+  ],
+  "enabled": false
+}

@@ -1,0 +1,16 @@
+{
+  "id": "19-execution-policy-extractor",
+  "name": "Execution Policy Extractor",
+  "group": "implement",
+  "priority": 74,
+  "cadenceMinutes": 5,
+  "intent": "write",
+  "lockGroup": "execution",
+  "milestone": "M3",
+  "goal": "Replace in-process execution policy heuristic with remote/service-backed policy evaluation.",
+  "outputs": [
+    "services/execution-service/",
+    "services/gateway-service/"
+  ],
+  "enabled": false
+}

@@ -1,0 +1,16 @@
+{
+  "id": "16-capability-schema-writer",
+  "name": "Capability Schema Writer",
+  "group": "implement",
+  "priority": 77,
+  "cadenceMinutes": 5,
+  "intent": "write",
+  "lockGroup": "capability",
+  "milestone": "M2",
+  "goal": "Add capability registry schema/storage model and supporting types.",
+  "outputs": [
+    "migrations/",
+    "crates/shared-types/"
+  ],
+  "enabled": false
+}

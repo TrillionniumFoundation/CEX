@@ -1,0 +1,15 @@
+{
+  "id": "25-service-local-test-expander",
+  "name": "Service Local Test Expander",
+  "group": "verify",
+  "priority": 68,
+  "cadenceMinutes": 5,
+  "intent": "write",
+  "lockGroup": "tests-service-local",
+  "milestone": "M0",
+  "goal": "Expand service-local test coverage for newly added APIs and invariants.",
+  "outputs": [
+    "services/*/tests/"
+  ],
+  "enabled": false
+}

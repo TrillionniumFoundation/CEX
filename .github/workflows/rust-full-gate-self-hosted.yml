@@ -1,0 +1,119 @@
+name: rust-full-gate-self-hosted
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Which self-hosted gate mode to run
+        required: true
+        default: full
+        type: choice
+        options:
+          - full
+          - service-local-only
+          - preflight-only
+      bootstrap_env:
+        description: Bootstrap .env from .env.example when missing during preflight
+        required: true
+        default: true
+        type: boolean
+      upload_artifacts:
+        description: Upload the diagnostic artifact bundle at the end of the run
+        required: true
+        default: true
+        type: boolean
+      note:
+        description: Optional operator note for this run
+        required: false
+        type: string
+
+concurrency:
+  group: rust-full-gate-self-hosted
+  cancel-in-progress: false
+
+jobs:
+  full-local-gate:
+    runs-on:
+      - self-hosted
+      - windows
+      - x64
+      - cex-full-gate
+    timeout-minutes: 120
+    env:
+      ARTIFACT_ROOT: ci-artifacts\self-hosted-full-gate
+      GATE_MODE: ${{ inputs.mode }}
+      BOOTSTRAP_ENV: ${{ inputs.bootstrap_env }}
+      UPLOAD_ARTIFACTS: ${{ inputs.upload_artifacts }}
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Prepare artifact directory
+        run: New-Item -ItemType Directory -Force -Path $env:ARTIFACT_ROOT | Out-Null
+
+      - name: Record workflow inputs
+        run: |
+          @(
+            "mode=${{ inputs.mode }}"
+            "bootstrap_env=${{ inputs.bootstrap_env }}"
+            "upload_artifacts=${{ inputs.upload_artifacts }}"
+            "note=${{ inputs.note }}"
+          ) | Set-Content -LiteralPath (Join-Path $env:ARTIFACT_ROOT 'dispatch-inputs.txt') -Encoding UTF8
+
+      - name: Show operator note
+        if: ${{ inputs.note != '' }}
+        run: |
+          $notePath = Join-Path $env:ARTIFACT_ROOT 'operator-note.txt'
+          Write-Host "operator-note=${{ inputs.note }}"
+          Set-Content -LiteralPath $notePath -Value "${{ inputs.note }}" -Encoding UTF8
+
+      - name: Bootstrap + validate self-hosted runner
+        run: |
+          $preflightArgs = @()
+          if ($env:BOOTSTRAP_ENV -eq 'true') {
+            $preflightArgs += '-BootstrapEnv'
+          }
+          & .\scripts\self-hosted-runner-preflight.ps1 @preflightArgs *>&1 |
+            Tee-Object -FilePath (Join-Path $env:ARTIFACT_ROOT 'preflight-output.txt')
+          exit $LASTEXITCODE
+
+      - name: Run selected gate mode
+        if: ${{ inputs.mode != 'preflight-only' }}
+        run: |
+          $gateArgs = @()
+          switch ($env:GATE_MODE) {
+            'full' { }
+            'service-local-only' { $gateArgs += '-ServiceLocalOnly' }
+            default { throw "unsupported GATE_MODE=$env:GATE_MODE" }
+          }
+          & .\gate-local.ps1 @gateArgs *>&1 |
+            Tee-Object -FilePath (Join-Path $env:ARTIFACT_ROOT 'gate-output.txt')
+          exit $LASTEXITCODE
+
+      - name: Mark gate as skipped in preflight-only mode
+        if: ${{ inputs.mode == 'preflight-only' }}
+        run: |
+          Set-Content -LiteralPath (Join-Path $env:ARTIFACT_ROOT 'gate-output.txt') -Value 'gate skipped because mode=preflight-only' -Encoding UTF8
+
+      - name: Collect self-hosted gate artifacts
+        if: ${{ always() }}
+        run: |
+          powershell -ExecutionPolicy Bypass -File .\scripts\collect-self-hosted-artifacts.ps1 -OutputDir $env:ARTIFACT_ROOT
+
+      - name: Upload self-hosted gate artifacts
+        if: ${{ always() && inputs.upload_artifacts }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-full-gate-self-hosted-${{ github.run_id }}
+          path: ci-artifacts/self-hosted-full-gate
+          if-no-files-found: warn
+          retention-days: 14

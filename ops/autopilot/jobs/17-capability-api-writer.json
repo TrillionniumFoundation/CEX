@@ -1,0 +1,15 @@
+{
+  "id": "17-capability-api-writer",
+  "name": "Capability API Writer",
+  "group": "implement",
+  "priority": 76,
+  "cadenceMinutes": 5,
+  "intent": "write",
+  "lockGroup": "capability",
+  "milestone": "M2",
+  "goal": "Add capability registry CRUD/query APIs and metadata endpoints.",
+  "outputs": [
+    "services/"
+  ],
+  "enabled": false
+}

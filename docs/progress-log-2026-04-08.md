@@ -1,0 +1,4 @@
+﻿- Added `.github/workflows/rust-full-gate-self-hosted.yml` as a manual-dispatch self-hosted Windows workflow for the full local gate (`./gate-local.ps1`).
+- Added `docs/SELF-HOSTED-RUNNER.md` to document runner labels (`self-hosted`, `windows`, `x64`, `cex-full-gate`), prerequisites, and operating policy for the full gate.
+- Updated `docs/CI-GATE.md` so the hosted/service-local workflow and the self-hosted/full-gate workflow are now both documented.
+- This step was workflow/doc wiring only; verification consisted of syncing and re-reading the created files to confirm the label set, trigger mode, and operator guidance.

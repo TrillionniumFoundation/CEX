@@ -1,0 +1,16 @@
+{
+  "id": "13-identity-schema-writer",
+  "name": "Identity Schema Writer",
+  "group": "implement",
+  "priority": 80,
+  "cadenceMinutes": 5,
+  "intent": "write",
+  "lockGroup": "identity",
+  "milestone": "M1",
+  "goal": "Add identity persistence/migration pieces for orgs, users, and API keys.",
+  "outputs": [
+    "services/identity-service/",
+    "migrations/"
+  ],
+  "enabled": false
+}

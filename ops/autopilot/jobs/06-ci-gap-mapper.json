@@ -1,0 +1,16 @@
+{
+  "id": "06-ci-gap-mapper",
+  "name": "CI Gap Mapper",
+  "group": "scout",
+  "priority": 95,
+  "cadenceMinutes": 5,
+  "intent": "read",
+  "lockGroup": "repo-read",
+  "milestone": "M0",
+  "goal": "Track hosted CI, self-hosted gate, artifact, and runner hygiene gaps.",
+  "outputs": [
+    "ops/autopilot/runtime/reports/ci-gaps.json"
+  ],
+  "enabled": true,
+  "workerScript": "scripts\\autopilot\\ci-gap-mapper.ps1"
+}

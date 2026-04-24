@@ -1,0 +1,16 @@
+{
+  "id": "21-provider-first-impl",
+  "name": "Provider First Impl",
+  "group": "implement",
+  "priority": 72,
+  "cadenceMinutes": 5,
+  "intent": "write",
+  "lockGroup": "provider",
+  "milestone": "M4",
+  "goal": "Implement the first real provider-backed execution path.",
+  "outputs": [
+    "services/execution-service/",
+    "services/gateway-service/"
+  ],
+  "enabled": false
+}

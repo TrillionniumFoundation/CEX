@@ -1,0 +1,17 @@
+{
+  "id": "15-gateway-auth-writer",
+  "name": "Gateway Auth Writer",
+  "group": "implement",
+  "priority": 78,
+  "cadenceMinutes": 5,
+  "intent": "write",
+  "lockGroup": "gateway",
+  "milestone": "M1",
+  "goal": "Integrate gateway with identity/auth context and inject org/actor provenance.",
+  "outputs": [
+    "services/gateway-service/",
+    "crates/shared-types/",
+    "crates/shared-config/"
+  ],
+  "enabled": false
+}

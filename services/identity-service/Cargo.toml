@@ -1,0 +1,22 @@
+[package]
+name = "identity-service"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+axum.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+reqwest.workspace = true
+shared-types = { path = "../../crates/shared-types" }
+shared-tracing = { path = "../../crates/shared-tracing" }
+shared-config = { path = "../../crates/shared-config" }
+sha2 = "0.10"
+
+[dev-dependencies]
+tower = "0.5"

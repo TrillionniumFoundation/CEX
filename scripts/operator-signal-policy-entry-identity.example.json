@@ -1,0 +1,48 @@
+[
+  {
+    "name": "entry-identity-hard",
+    "priority": 220,
+    "groupKey": "entry-identity",
+    "matchAny": [
+      "consumer_entry:identity_binding_not_loaded",
+      "consumer_entry:identity_registry_not_loaded",
+      "consumer_entry:identity_ref_integrity_not_ok",
+      "consumer_entry:session_auth_issuer_registry_not_loaded",
+      "consumer_entry:session_auth_issuer_registry_revision_missing",
+      "matrix_entry:consumer_entry_session_auth_issuer_registry_not_loaded",
+      "matrix_entry:consumer_entry_session_auth_issuer_registry_revision_missing"
+    ],
+    "command": "./scripts/notify-operator-signals-example.sh",
+    "route": "policy:entry-identity:page"
+  },
+  {
+    "name": "entry-identity-soft",
+    "priority": 180,
+    "groupKey": "entry-identity",
+    "matchAny": [
+      "consumer_entry:identity_governance_invalid",
+      "consumer_entry:identity_actor_gate_invalid",
+      "consumer_entry:identity_approval_source_invalid",
+      "consumer_entry:identity_approval_coverage_invalid",
+      "consumer_entry:session_auth_issuer_registry_governance_invalid",
+      "consumer_entry:session_auth_issuer_registry_actor_gate_invalid",
+      "consumer_entry:session_auth_issuer_registry_approval_source_invalid",
+      "consumer_entry:session_auth_issuer_registry_approval_coverage_invalid",
+      "matrix_entry:consumer_entry_session_auth_governance_invalid",
+      "matrix_entry:consumer_entry_session_auth_selection_invalid",
+      "matrix_entry:consumer_entry_session_auth_approval_source_invalid",
+      "matrix_entry:consumer_entry_session_auth_approval_coverage_invalid"
+    ],
+    "suppressedByPolicies": [
+      "entry-identity-hard"
+    ],
+    "occurrenceWindowSeconds": 1800,
+    "maxGapSeconds": 1800,
+    "groupOccurrenceWindowSeconds": 1800,
+    "groupMaxGapSeconds": 1800,
+    "escalateAfterOccurrences": 3,
+    "escalationRoute": "policy:entry-identity:page",
+    "command": "./scripts/notify-operator-signals-example.sh",
+    "route": "policy:entry-identity:chat"
+  }
+]

@@ -1,0 +1,184 @@
+# Example Prometheus alert rules for the current consumer-entry identity/session governance metrics.
+# These rules are intentionally narrow: they only cover the new entry-identity governance line,
+# not the whole CEX alert surface.
+
+groups:
+  - name: cex-consumer-entry-identity-governance
+    rules:
+      - alert: CexConsumerEntryIdentityGovernanceInvalid
+        expr: cex_consumer_entry_identity_governance_valid == 0
+        for: 5m
+        labels:
+          severity: warning
+          service: consumer-entry-api
+          family: entry-identity
+          route_hint: chat
+        annotations:
+          summary: consumer-entry identity governance is invalid
+          description: |
+            consumer-entry-api reports identity_governance_valid=0.
+            Check /health.identity_governance_overview to see which governance checks failed
+            before attempting reload or rollback.
+          runbook: docs/operator-runbook-v1.md
+          first_action: "curl -s http://127.0.0.1:8090/health | jq '.identity_governance_overview'"
+
+      - alert: CexConsumerEntryIdentityBindingNotLoaded
+        expr: cex_consumer_entry_identity_binding_loaded == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: consumer-entry-api
+          family: entry-identity
+          route_hint: page
+        annotations:
+          summary: consumer-entry identity binding store is not loaded
+          description: |
+            Binding metadata did not load successfully. This is closer to live identity resolution loss
+            than a soft governance gap, so treat it as a paging candidate.
+          runbook: docs/operator-runbook-v1.md
+          first_action: "curl -s http://127.0.0.1:8090/health | jq '.identity_governance_overview, .identity_binding_metadata'"
+
+      - alert: CexConsumerEntryIdentityRegistryNotLoaded
+        expr: cex_consumer_entry_identity_registry_loaded == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: consumer-entry-api
+          family: entry-identity
+          route_hint: page
+        annotations:
+          summary: consumer-entry identity registry is not loaded
+          description: |
+            The separate repo-local identity registry did not load successfully.
+            Check registry metadata and registry path drift before retrying reload.
+          runbook: docs/operator-runbook-v1.md
+          first_action: "curl -s http://127.0.0.1:8090/health | jq '.identity_governance_overview, .identity_registry_metadata'"
+
+      - alert: CexConsumerEntryIdentityRefIntegrityBroken
+        expr: cex_consumer_entry_identity_ref_integrity_ok == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: consumer-entry-api
+          family: entry-identity
+          route_hint: page
+        annotations:
+          summary: consumer-entry identity ref-integrity is broken
+          description: |
+            product_user_id references are broken in the active binding/registry pair.
+            Fix the broken references first; do not treat this as just an actor/approval policy issue.
+          runbook: docs/operator-runbook-v1.md
+          first_action: "curl -s http://127.0.0.1:8090/health | jq '.identity_governance_overview, .identity_source_of_truth, .identity_binding_counts'"
+
+      - alert: CexConsumerEntryIdentityActorGateInvalid
+        expr: cex_consumer_entry_identity_actor_gate_valid == 0
+        for: 15m
+        labels:
+          severity: warning
+          service: consumer-entry-api
+          family: entry-identity
+          route_hint: chat
+        annotations:
+          summary: consumer-entry identity actor gate is invalid
+          description: |
+            Actor gate configuration does not currently satisfy governance requirements.
+            This is usually a control-plane gap, not immediate live identity loss.
+          runbook: docs/operator-runbook-v1.md
+          first_action: "curl -s -H 'x-entry-token: <token>' http://127.0.0.1:8090/v1/admin/identity-actors/status | jq"
+
+      - alert: CexConsumerEntryIdentityApprovalSourceInvalid
+        expr: cex_consumer_entry_identity_approval_source_valid == 0
+        for: 15m
+        labels:
+          severity: warning
+          service: consumer-entry-api
+          family: entry-identity
+          route_hint: chat
+        annotations:
+          summary: consumer-entry identity approval source is invalid
+          description: |
+            The approved-revision source itself is empty, missing, or failed to load.
+            Review the current approval source before retrying reload.
+          runbook: docs/operator-runbook-v1.md
+          first_action: "curl -s -H 'x-entry-token: <token>' http://127.0.0.1:8090/v1/admin/identity-approval/source?limit=20 | jq"
+
+      - alert: CexConsumerEntryIdentityApprovalCoverageInvalid
+        expr: cex_consumer_entry_identity_approval_coverage_valid == 0
+        for: 15m
+        labels:
+          severity: warning
+          service: consumer-entry-api
+          family: entry-identity
+          route_hint: chat
+        annotations:
+          summary: consumer-entry identity approval coverage is invalid
+          description: |
+            The current effective identity revision is not covered by the approved-revision source.
+            This is a governance gap, even if binding and registry still load.
+          runbook: docs/operator-runbook-v1.md
+          first_action: "curl -s -H 'x-entry-token: <token>' http://127.0.0.1:8090/v1/admin/identity-approval/status | jq"
+
+      - alert: CexConsumerEntrySessionAuthIssuerRegistryGovernanceInvalid
+        expr: cex_consumer_entry_session_auth_issuer_registry_governance_valid == 0
+        for: 10m
+        labels:
+          severity: warning
+          service: consumer-entry-api
+          family: entry-identity
+          route_hint: chat
+        annotations:
+          summary: consumer-entry session-auth issuer registry governance is invalid
+          description: |
+            The repo-local session-auth issuer registry governance line is not healthy.
+            Check /health.session_auth_issuer_registry_governance_overview to see whether
+            the issue is load status, revision metadata, actor gate, approval source, or approval coverage.
+          runbook: docs/operator-runbook-v1.md
+          first_action: "curl -s http://127.0.0.1:8090/health | jq '.session_auth_issuer_registry_governance_overview'"
+
+      - alert: CexConsumerEntrySessionAuthIssuerRegistryActorGateInvalid
+        expr: cex_consumer_entry_session_auth_issuer_registry_actor_gate_valid == 0
+        for: 15m
+        labels:
+          severity: warning
+          service: consumer-entry-api
+          family: entry-identity
+          route_hint: chat
+        annotations:
+          summary: consumer-entry session-auth issuer registry actor gate is invalid
+          description: |
+            The actor gate for repo-local session-auth issuer registry governance is enabled but
+            not configured correctly.
+          runbook: docs/operator-runbook-v1.md
+          first_action: "curl -s -H 'x-entry-token: <token>' http://127.0.0.1:8090/v1/admin/session-auth/issuer-registry/actors/status | jq"
+
+      - alert: CexConsumerEntrySessionAuthIssuerRegistryApprovalSourceInvalid
+        expr: cex_consumer_entry_session_auth_issuer_registry_approval_source_valid == 0
+        for: 15m
+        labels:
+          severity: warning
+          service: consumer-entry-api
+          family: entry-identity
+          route_hint: chat
+        annotations:
+          summary: consumer-entry session-auth issuer registry approval source is invalid
+          description: |
+            The approved-revision source for the repo-local session-auth issuer registry is missing,
+            empty, or failed to load.
+          runbook: docs/operator-runbook-v1.md
+          first_action: "curl -s -H 'x-entry-token: <token>' http://127.0.0.1:8090/v1/admin/session-auth/issuer-registry/approval/status?limit=20 | jq"
+
+      - alert: CexConsumerEntrySessionAuthIssuerRegistryApprovalCoverageInvalid
+        expr: cex_consumer_entry_session_auth_issuer_registry_approval_coverage_valid == 0
+        for: 15m
+        labels:
+          severity: warning
+          service: consumer-entry-api
+          family: entry-identity
+          route_hint: chat
+        annotations:
+          summary: consumer-entry session-auth issuer registry approval coverage is invalid
+          description: |
+            The current live session-auth issuer registry revision is not covered by the current
+            approved-revision source.
+          runbook: docs/operator-runbook-v1.md
+          first_action: "curl -s -H 'x-entry-token: <token>' http://127.0.0.1:8090/v1/admin/session-auth/issuer-registry/approval/validate?limit=20 | jq"

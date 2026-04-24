@@ -1,0 +1,62 @@
+# Example Alertmanager routing/inhibition for wrapper-derived product-edge signals.
+# Intended for the metrics rendered by scripts/render-operator-signals-prometheus.sh.
+
+route:
+  receiver: cex-operator-chat
+  group_by:
+    - service
+    - family
+    - alertname
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 1h
+  routes:
+    - matchers:
+        - service="consumer-entry-api"
+        - family="entry-abuse"
+      receiver: cex-operator-chat
+      continue: false
+
+    - matchers:
+        - service="matrix-entry-adapter"
+        - family="entry-abuse"
+      receiver: cex-operator-chat
+      continue: false
+
+    - matchers:
+        - family="product-edge"
+      receiver: cex-operator-chat
+      continue: false
+
+receivers:
+  - name: cex-operator-chat
+    webhook_configs:
+      - url: http://127.0.0.1:19093/example-chat-webhook
+        send_resolved: true
+
+inhibit_rules:
+  - source_matchers:
+      - alertname="CexConsumerEntryHealthEndpointUnreachable"
+    target_matchers:
+      - alertname="CexConsumerEntryHealthStatusNotOk"
+      - alertname="CexConsumerEntryRateLimitedRequests"
+      - alertname="CexConsumerEntryIngressAuthFailures"
+    equal:
+      - service
+
+  - source_matchers:
+      - alertname="CexMatrixEntryHealthEndpointUnreachable"
+    target_matchers:
+      - alertname="CexMatrixEntryHealthStatusNotOk"
+      - alertname="CexMatrixEntryRateLimitedRequests"
+      - alertname="CexMatrixEntryIngressAuthFailures"
+      - alertname="CexMatrixEntryDuplicateEvents"
+    equal:
+      - service
+
+  - source_matchers:
+      - alertname="CexMatrixEntryHealthStatusNotOk"
+    target_matchers:
+      - alertname="CexMatrixEntryDuplicateEvents"
+    equal:
+      - service

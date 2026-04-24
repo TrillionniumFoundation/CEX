@@ -1,0 +1,31 @@
+[
+  {
+    "name": "monitoring-deploy-hard",
+    "priority": 210,
+    "groupKey": "monitoring-deploy",
+    "matchAny": [
+      "monitoring_deploy:metadata_unreadable"
+    ],
+    "command": "./scripts/notify-operator-signals-example.sh",
+    "route": "policy:monitoring-deploy:page"
+  },
+  {
+    "name": "monitoring-deploy-soft",
+    "priority": 170,
+    "groupKey": "monitoring-deploy",
+    "matchAny": [
+      "monitoring_deploy:post_action_status"
+    ],
+    "suppressedByPolicies": [
+      "monitoring-deploy-hard"
+    ],
+    "occurrenceWindowSeconds": 1800,
+    "maxGapSeconds": 1800,
+    "groupOccurrenceWindowSeconds": 1800,
+    "groupMaxGapSeconds": 1800,
+    "escalateAfterOccurrences": 3,
+    "escalationRoute": "policy:monitoring-deploy:page",
+    "command": "./scripts/notify-operator-signals-example.sh",
+    "route": "policy:monitoring-deploy:chat"
+  }
+]

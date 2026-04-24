@@ -1,0 +1,19 @@
+{
+  "id": "12-refactor-roadmap-slicer",
+  "name": "Refactor Roadmap Slicer",
+  "group": "design",
+  "priority": 85,
+  "cadenceMinutes": 5,
+  "intent": "write",
+  "lockGroup": "refactor-design",
+  "milestone": "M6",
+  "goal": "Slice large-file / mixed-responsibility refactors into safe domain-locked patches.",
+  "outputs": [
+    "ops/autopilot/runtime/queue/refactor/"
+  ],
+  "enabled": true,
+  "workerScript": "scripts\\autopilot\\roadmap-slicer.ps1",
+  "workerArgs": {
+    "Domain": "refactor"
+  }
+}

@@ -1,0 +1,138 @@
+# Example Prometheus alert rules built from the unified JSON output of:
+#   ./scripts/check-operator-signals.sh --compact
+# converted through:
+#   ./scripts/render-operator-signals-prometheus.sh
+#
+# This is the minimal cross-service rule set for gateway + execution (+ endpoint reachability),
+# not a full production rule library.
+
+groups:
+  - name: cex-core-runtime-operator-signals-from-wrapper
+    rules:
+      - alert: CexGatewayInfoEndpointUnreachable
+        expr: cex_operator_signal_source_fetch_ok{source="gateway"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: gateway-service
+          family: upstream
+          route_hint: page
+        annotations:
+          summary: gateway /v1/info is unreachable
+          description: |
+            The unified operator-signal wrapper could not fetch gateway /v1/info.
+            Treat this as core runtime unreachability, not just a product-edge warning.
+          first_action: "curl -s http://127.0.0.1:8080/health && curl -s http://127.0.0.1:8080/v1/info | jq"
+          runbook: docs/operator-runbook-v1.md
+
+      - alert: CexExecutionInfoEndpointUnreachable
+        expr: cex_operator_signal_source_fetch_ok{source="execution"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: execution-service
+          family: execution-runtime
+          route_hint: page
+        annotations:
+          summary: execution /v1/info is unreachable
+          description: |
+            The unified operator-signal wrapper could not fetch execution /v1/info.
+            This usually means execution-service itself or one of its immediate dependencies is unavailable.
+          first_action: "curl -s http://127.0.0.1:7003/health && curl -s http://127.0.0.1:7003/v1/info | jq"
+          runbook: docs/operator-runbook-v1.md
+
+      - alert: CexGatewayInvocationCreateUpstreamFailures
+        expr: cex_operator_signal_active{service="gateway",name="invocation_create_upstream_failures"} == 1
+        for: 5m
+        labels:
+          severity: warning
+          service: gateway-service
+          family: upstream
+          route_hint: chat
+        annotations:
+          summary: gateway invocation_create_upstream_failures is active
+          description: |
+            gateway-service is reporting upstream invocation-create failures through the wrapper signal surface.
+            Check execution before restarting gateway blindly.
+          first_action: "curl -s http://127.0.0.1:8080/v1/info | jq && curl -s http://127.0.0.1:7003/v1/info | jq"
+          runbook: docs/operator-runbook-v1.md
+
+      - alert: CexExecutionApprovalBacklog
+        expr: cex_operator_signal_active{service="execution",name="approval_backlog"} == 1
+        for: 10m
+        labels:
+          severity: warning
+          service: execution-service
+          family: approval
+          route_hint: chat
+        annotations:
+          summary: execution approval backlog is active
+          description: |
+            execution-service reports approval backlog above threshold.
+            This is often a policy/operator bottleneck rather than a worker crash.
+          first_action: "curl -s http://127.0.0.1:7003/v1/info | jq '.runtime.awaiting_approval, .operator_signals.approval_backlog, .policy'"
+          runbook: docs/operator-runbook-v1.md
+
+      - alert: CexExecutionQueuedWorkerLeaseExpired
+        expr: cex_operator_signal_active{service="execution",name="queued_worker_lease_expired"} == 1
+        for: 5m
+        labels:
+          severity: warning
+          service: execution-service
+          family: worker
+          route_hint: chat
+        annotations:
+          summary: execution queued-worker lease expired churn is active
+          description: |
+            execution-service reports expired worker leases above threshold.
+            Check whether workers are missing, stuck, or simply too slow.
+          first_action: "curl -s http://127.0.0.1:7003/v1/info | jq '.runtime.queued_worker, .operator_signals.queued_worker_lease_expired'"
+          runbook: docs/operator-runbook-v1.md
+
+      - alert: CexExecutionQueuedWorkerRetryBudgetExhausted
+        expr: cex_operator_signal_active{service="execution",name="queued_worker_retry_budget_exhausted"} == 1
+        for: 5m
+        labels:
+          severity: warning
+          service: execution-service
+          family: worker
+          route_hint: chat
+        annotations:
+          summary: execution queued-worker retry budget exhausted is active
+          description: |
+            execution-service reports retry-budget exhaustion in the queued worker path.
+            Inspect failing executions before bulk requeue.
+          first_action: "curl -s http://127.0.0.1:7003/v1/info | jq '.runtime.queued_worker, .operator_signals.queued_worker_retry_budget_exhausted'"
+          runbook: docs/operator-runbook-v1.md
+
+      - alert: CexExecutionAuditFailures
+        expr: cex_operator_signal_active{service="execution",name="audit_failures"} == 1
+        for: 5m
+        labels:
+          severity: warning
+          service: execution-service
+          family: audit
+          route_hint: chat
+        annotations:
+          summary: execution audit_failures is active
+          description: |
+            execution-service reports audit write failures.
+            This is an integrity degradation even if the business path still partially works.
+          first_action: "curl -s http://127.0.0.1:7004/health && curl -s http://127.0.0.1:7003/v1/info | jq '.metrics.audit_failures, .operator_signals.audit_failures'"
+          runbook: docs/operator-runbook-v1.md
+
+      - alert: CexExecutionRefundFailures
+        expr: cex_operator_signal_active{service="execution",name="refund_failures"} == 1
+        for: 2m
+        labels:
+          severity: critical
+          service: execution-service
+          family: refund
+          route_hint: page
+        annotations:
+          summary: execution refund_failures is active
+          description: |
+            execution-service reports refund failures above threshold.
+            Treat this as a consistency-impacting incident, not a low-priority warning.
+          first_action: "curl -s http://127.0.0.1:7002/health && curl -s http://127.0.0.1:7003/v1/info | jq '.metrics.refund_failures, .operator_signals.refund_failures'"
+          runbook: docs/operator-runbook-v1.md

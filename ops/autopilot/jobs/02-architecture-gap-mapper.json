@@ -1,0 +1,16 @@
+{
+  "id": "02-architecture-gap-mapper",
+  "name": "Architecture Gap Mapper",
+  "group": "scout",
+  "priority": 99,
+  "cadenceMinutes": 5,
+  "intent": "read",
+  "lockGroup": "repo-read",
+  "milestone": "M0",
+  "goal": "Compare current source tree with target platform architecture and record missing domains.",
+  "outputs": [
+    "ops/autopilot/runtime/reports/architecture-gaps.json"
+  ],
+  "enabled": true,
+  "workerScript": "scripts\\autopilot\\architecture-gap-mapper.ps1"
+}

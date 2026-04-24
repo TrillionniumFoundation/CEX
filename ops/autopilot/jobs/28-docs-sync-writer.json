@@ -1,0 +1,15 @@
+{
+  "id": "28-docs-sync-writer",
+  "name": "Docs Sync Writer",
+  "group": "verify",
+  "priority": 65,
+  "cadenceMinutes": 5,
+  "intent": "write",
+  "lockGroup": "docs",
+  "milestone": "M0",
+  "goal": "Keep CI/gate/runner/roadmap docs aligned with actual source and runtime behavior.",
+  "outputs": [
+    "docs/"
+  ],
+  "enabled": false
+}

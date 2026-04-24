@@ -1,0 +1,15 @@
+{
+  "id": "23-execution-decomposer",
+  "name": "Execution Decomposer",
+  "group": "implement",
+  "priority": 70,
+  "cadenceMinutes": 5,
+  "intent": "write",
+  "lockGroup": "execution",
+  "milestone": "M6",
+  "goal": "Split execution-service responsibilities out of oversized api.rs into smaller modules.",
+  "outputs": [
+    "services/execution-service/"
+  ],
+  "enabled": false
+}

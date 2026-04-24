@@ -1,0 +1,19 @@
+[package]
+name = "ledger-service"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+axum.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+sqlx.workspace = true
+shared-tracing = { path = "../../crates/shared-tracing" }
+shared-config = { path = "../../crates/shared-config" }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }

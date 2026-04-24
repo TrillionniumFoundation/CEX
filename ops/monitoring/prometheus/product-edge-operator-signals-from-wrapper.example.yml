@@ -1,0 +1,155 @@
+# Example Prometheus alert rules built from the unified JSON output of:
+#   ./scripts/check-operator-signals.sh --compact
+# converted through:
+#   ./scripts/render-operator-signals-prometheus.sh
+#
+# This file focuses on product-edge wrapper-derived signals (consumer-entry + matrix-entry).
+# It intentionally does NOT duplicate the direct consumer-entry identity-governance rules,
+# which already live in consumer-entry-identity-governance-alerts.example.yml.
+
+groups:
+  - name: cex-product-edge-operator-signals-from-wrapper
+    rules:
+      - alert: CexConsumerEntryHealthEndpointUnreachable
+        expr: cex_operator_signal_source_fetch_ok{source="consumer_entry"} == 0
+        for: 5m
+        labels:
+          severity: warning
+          service: consumer-entry-api
+          family: product-edge
+          route_hint: chat
+        annotations:
+          summary: consumer-entry /health is unreachable
+          description: |
+            The unified wrapper could not fetch consumer-entry-api /health.
+            This is a product-edge availability issue even if core runtime remains reachable.
+          first_action: "curl -s http://127.0.0.1:8090/health | jq"
+          runbook: docs/operator-runbook-v1.md
+
+      - alert: CexConsumerEntryHealthStatusNotOk
+        expr: cex_operator_signal_active{service="consumer_entry",name="health_status_not_ok"} == 1
+        for: 10m
+        labels:
+          severity: warning
+          service: consumer-entry-api
+          family: product-edge
+          route_hint: chat
+        annotations:
+          summary: consumer-entry health status is not ok
+          description: |
+            consumer-entry-api /health is reachable but reports status != ok.
+            Inspect the health payload before assuming ingress abuse or runtime unreachability.
+          first_action: "curl -s http://127.0.0.1:8090/health | jq"
+          runbook: docs/operator-runbook-v1.md
+
+      - alert: CexConsumerEntryRateLimitedRequests
+        expr: cex_operator_signal_active{service="consumer_entry",name="rate_limited_requests"} == 1
+        for: 10m
+        labels:
+          severity: warning
+          service: consumer-entry-api
+          family: entry-abuse
+          route_hint: chat
+        annotations:
+          summary: consumer-entry rate_limited_requests is active
+          description: |
+            consumer-entry-api reports rate-limited requests above the configured wrapper threshold.
+            This may be abuse, a noisy integration, or an undersized threshold.
+          first_action: "curl -s http://127.0.0.1:8090/health | jq '.metrics, .rate_limit_window_secs, .rate_limit_max_requests'"
+          runbook: docs/operator-runbook-v1.md
+
+      - alert: CexConsumerEntryIngressAuthFailures
+        expr: cex_operator_signal_active{service="consumer_entry",name="ingress_auth_failures"} == 1
+        for: 10m
+        labels:
+          severity: warning
+          service: consumer-entry-api
+          family: entry-abuse
+          route_hint: chat
+        annotations:
+          summary: consumer-entry ingress_auth_failures is active
+          description: |
+            consumer-entry-api reports ingress auth failures above threshold.
+            Treat this as a likely entry token / caller-config / abuse investigation.
+          first_action: "curl -s http://127.0.0.1:8090/health | jq '.metrics, .ingress_protected'"
+          runbook: docs/operator-runbook-v1.md
+
+      - alert: CexMatrixEntryHealthEndpointUnreachable
+        expr: cex_operator_signal_source_fetch_ok{source="matrix_entry"} == 0
+        for: 5m
+        labels:
+          severity: warning
+          service: matrix-entry-adapter
+          family: product-edge
+          route_hint: chat
+        annotations:
+          summary: matrix-entry /health is unreachable
+          description: |
+            The unified wrapper could not fetch matrix-entry-adapter /health.
+            Check the adapter process and its local ingress before blaming gateway/execution.
+          first_action: "curl -s http://127.0.0.1:8091/health | jq"
+          runbook: docs/operator-runbook-v1.md
+
+      - alert: CexMatrixEntryHealthStatusNotOk
+        expr: cex_operator_signal_active{service="matrix_entry",name="health_status_not_ok"} == 1
+        for: 10m
+        labels:
+          severity: warning
+          service: matrix-entry-adapter
+          family: product-edge
+          route_hint: chat
+        annotations:
+          summary: matrix-entry health status is not ok
+          description: |
+            matrix-entry-adapter /health is reachable but reports status != ok.
+            Inspect its health payload before assuming Matrix-side duplicate or abuse noise.
+          first_action: "curl -s http://127.0.0.1:8091/health | jq"
+          runbook: docs/operator-runbook-v1.md
+
+      - alert: CexMatrixEntryRateLimitedRequests
+        expr: cex_operator_signal_active{service="matrix_entry",name="rate_limited_requests"} == 1
+        for: 10m
+        labels:
+          severity: warning
+          service: matrix-entry-adapter
+          family: entry-abuse
+          route_hint: chat
+        annotations:
+          summary: matrix-entry rate_limited_requests is active
+          description: |
+            matrix-entry-adapter reports rate-limited requests above threshold.
+            Inspect recent event volume and rate-limit windows before changing thresholds.
+          first_action: "curl -s http://127.0.0.1:8091/health | jq '.metrics, .rate_limit_window_secs, .rate_limit_max_requests'"
+          runbook: docs/operator-runbook-v1.md
+
+      - alert: CexMatrixEntryIngressAuthFailures
+        expr: cex_operator_signal_active{service="matrix_entry",name="ingress_auth_failures"} == 1
+        for: 10m
+        labels:
+          severity: warning
+          service: matrix-entry-adapter
+          family: entry-abuse
+          route_hint: chat
+        annotations:
+          summary: matrix-entry ingress_auth_failures is active
+          description: |
+            matrix-entry-adapter reports ingress auth failures above threshold.
+            Investigate token drift or unauthorized callers before widening access.
+          first_action: "curl -s http://127.0.0.1:8091/health | jq '.metrics, .ingress_protected, .consumer_entry_protected'"
+          runbook: docs/operator-runbook-v1.md
+
+      - alert: CexMatrixEntryDuplicateEvents
+        expr: cex_operator_signal_active{service="matrix_entry",name="duplicate_events"} == 1
+        for: 10m
+        labels:
+          severity: warning
+          service: matrix-entry-adapter
+          family: entry-abuse
+          route_hint: chat
+        annotations:
+          summary: matrix-entry duplicate_events is active
+          description: |
+            matrix-entry-adapter reports duplicate Matrix events above threshold.
+            This can indicate sync-loop drift, replay windows that are too small, or upstream resend churn.
+          first_action: "curl -s http://127.0.0.1:8091/health | jq '.metrics, .recent_event_window_secs, .recent_event_cache_size'"
+          runbook: docs/operator-runbook-v1.md

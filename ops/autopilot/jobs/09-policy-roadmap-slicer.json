@@ -1,0 +1,19 @@
+{
+  "id": "09-policy-roadmap-slicer",
+  "name": "Policy Roadmap Slicer",
+  "group": "design",
+  "priority": 88,
+  "cadenceMinutes": 5,
+  "intent": "write",
+  "lockGroup": "policy-design",
+  "milestone": "M3",
+  "goal": "Slice policy-risk extraction into service boundary, contract, and rollout steps.",
+  "outputs": [
+    "ops/autopilot/runtime/queue/policy/"
+  ],
+  "enabled": true,
+  "workerScript": "scripts\\autopilot\\roadmap-slicer.ps1",
+  "workerArgs": {
+    "Domain": "policy"
+  }
+}

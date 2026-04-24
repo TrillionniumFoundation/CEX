@@ -1,0 +1,16 @@
+{
+  "id": "18-policy-service-scaffolder",
+  "name": "Policy Service Scaffolder",
+  "group": "implement",
+  "priority": 75,
+  "cadenceMinutes": 5,
+  "intent": "write",
+  "lockGroup": "policy",
+  "milestone": "M3",
+  "goal": "Create policy-risk service skeleton and decision contract.",
+  "outputs": [
+    "services/",
+    "crates/shared-types/"
+  ],
+  "enabled": false
+}

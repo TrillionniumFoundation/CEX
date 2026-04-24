@@ -1,0 +1,22 @@
+[package]
+name = "execution-service"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+axum.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+reqwest.workspace = true
+sqlx.workspace = true
+async-trait = "0.1"
+shared-tracing = { path = "../../crates/shared-tracing" }
+shared-types = { path = "../../crates/shared-types" }
+shared-config = { path = "../../crates/shared-config" }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }

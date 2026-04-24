@@ -1,0 +1,71 @@
+name: rust-self-hosted-preflight-hygiene
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '15 2 * * 1'
+
+concurrency:
+  group: rust-self-hosted-preflight-hygiene
+  cancel-in-progress: false
+
+jobs:
+  runner-hygiene:
+    runs-on:
+      - self-hosted
+      - windows
+      - x64
+      - cex-full-gate
+    timeout-minutes: 30
+    env:
+      ARTIFACT_ROOT: ci-artifacts\self-hosted-preflight-hygiene
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Prepare artifact directory
+        run: New-Item -ItemType Directory -Force -Path $env:ARTIFACT_ROOT | Out-Null
+
+      - name: Record hygiene workflow context
+        run: |
+          @(
+            "event_name=${{ github.event_name }}"
+            "ref=${{ github.ref }}"
+            "sha=${{ github.sha }}"
+            "workflow=rust-self-hosted-preflight-hygiene"
+            "schedule_utc=15 2 * * 1"
+          ) | Set-Content -LiteralPath (Join-Path $env:ARTIFACT_ROOT 'hygiene-context.txt') -Encoding UTF8
+
+      - name: Run self-hosted preflight
+        run: |
+          powershell -ExecutionPolicy Bypass -File .\scripts\self-hosted-runner-preflight.ps1 -BootstrapEnv *>&1 |
+            Tee-Object -FilePath (Join-Path $env:ARTIFACT_ROOT 'preflight-output.txt')
+          exit $LASTEXITCODE
+
+      - name: Mark gate as intentionally skipped
+        if: ${{ always() }}
+        run: |
+          Set-Content -LiteralPath (Join-Path $env:ARTIFACT_ROOT 'gate-output.txt') -Value 'gate skipped intentionally; this workflow only runs periodic self-hosted preflight hygiene' -Encoding UTF8
+
+      - name: Collect hygiene artifacts
+        if: ${{ always() }}
+        run: |
+          powershell -ExecutionPolicy Bypass -File .\scripts\collect-self-hosted-artifacts.ps1 -OutputDir $env:ARTIFACT_ROOT
+
+      - name: Upload hygiene artifacts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-self-hosted-preflight-hygiene-${{ github.run_id }}
+          path: ci-artifacts/self-hosted-preflight-hygiene
+          if-no-files-found: warn
+          retention-days: 21

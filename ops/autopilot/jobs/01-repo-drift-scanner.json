@@ -1,0 +1,16 @@
+{
+  "id": "01-repo-drift-scanner",
+  "name": "Repo Drift Scanner",
+  "group": "scout",
+  "priority": 100,
+  "cadenceMinutes": 5,
+  "intent": "read",
+  "lockGroup": "repo-read",
+  "milestone": "M0",
+  "goal": "Detect repo drift, TODO hotspots, oversized files, and code/doc mismatch candidates.",
+  "outputs": [
+    "ops/autopilot/runtime/reports/repo-drift.json"
+  ],
+  "enabled": true,
+  "workerScript": "scripts\\autopilot\\repo-drift-scanner.ps1"
+}

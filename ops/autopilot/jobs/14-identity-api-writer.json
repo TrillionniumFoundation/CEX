@@ -1,0 +1,15 @@
+{
+  "id": "14-identity-api-writer",
+  "name": "Identity API Writer",
+  "group": "implement",
+  "priority": 79,
+  "cadenceMinutes": 5,
+  "intent": "write",
+  "lockGroup": "identity",
+  "milestone": "M1",
+  "goal": "Implement identity CRUD/auth endpoints beyond health-only stub behavior.",
+  "outputs": [
+    "services/identity-service/"
+  ],
+  "enabled": false
+}

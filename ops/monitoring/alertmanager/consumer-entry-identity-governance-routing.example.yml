@@ -1,0 +1,74 @@
+# Example Alertmanager routing/inhibition for the focused consumer-entry entry-identity alerts.
+# Adjust receivers, grouping windows, and tenancy labels for your real deployment.
+
+route:
+  receiver: cex-operator-chat
+  group_by:
+    - service
+    - family
+    - alertname
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 1h
+  routes:
+    - matchers:
+        - service="consumer-entry-api"
+        - family="entry-identity"
+        - severity="critical"
+      receiver: cex-operator-page
+      continue: false
+
+    - matchers:
+        - service="consumer-entry-api"
+        - family="entry-identity"
+        - severity="warning"
+      receiver: cex-operator-chat
+      continue: false
+
+receivers:
+  - name: cex-operator-chat
+    # Replace with your actual chat/IM/webhook integration.
+    webhook_configs:
+      - url: http://127.0.0.1:19093/example-chat-webhook
+        send_resolved: true
+
+  - name: cex-operator-page
+    # Replace with your actual paging/escalation integration.
+    webhook_configs:
+      - url: http://127.0.0.1:19094/example-page-webhook
+        send_resolved: true
+
+inhibit_rules:
+  - source_matchers:
+      - alertname="CexConsumerEntryIdentityBindingNotLoaded"
+    target_matchers:
+      - alertname="CexConsumerEntryIdentityGovernanceInvalid"
+    equal:
+      - service
+      - family
+
+  - source_matchers:
+      - alertname="CexConsumerEntryIdentityRegistryNotLoaded"
+    target_matchers:
+      - alertname="CexConsumerEntryIdentityGovernanceInvalid"
+    equal:
+      - service
+      - family
+
+  - source_matchers:
+      - alertname="CexConsumerEntryIdentityRefIntegrityBroken"
+    target_matchers:
+      - alertname="CexConsumerEntryIdentityGovernanceInvalid"
+    equal:
+      - service
+      - family
+
+  - source_matchers:
+      - alertname="CexConsumerEntryIdentityRefIntegrityBroken"
+    target_matchers:
+      - alertname="CexConsumerEntryIdentityActorGateInvalid"
+      - alertname="CexConsumerEntryIdentityApprovalSourceInvalid"
+      - alertname="CexConsumerEntryIdentityApprovalCoverageInvalid"
+    equal:
+      - service
+      - family
