@@ -123,7 +123,7 @@ start_lease_renewer() {
           ;;
       esac
     done
-  ) &
+  ) >/dev/null &
   echo $!
 }
 

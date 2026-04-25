@@ -2,8 +2,11 @@ use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::process::Stdio;
 use std::time::Duration;
-use tokio::process::Command;
+use tokio::io::AsyncReadExt;
+use tokio::process::{Child, Command};
+use tokio::sync::oneshot;
 use tokio::time::timeout;
 
 #[derive(Debug, Clone, Default)]
@@ -122,6 +125,12 @@ struct OpenClawModelRunOutput {
     media_url: Option<String>,
 }
 
+enum OpenClawStdoutResult {
+    Parsed(OpenClawModelRunResponse),
+    Finished(Vec<u8>),
+    ReadError(String),
+}
+
 #[async_trait]
 impl ProviderAdapter for OllamaProviderAdapter {
     fn provider(&self) -> &'static str {
@@ -205,44 +214,114 @@ impl ProviderAdapter for OpenClawCliProviderAdapter {
         let model_key = format!("{canonical_provider}/{provider_ref}");
         let mut command = Command::new(&self.cli_bin);
         self.env_scope.apply_to_command(&mut command);
-        let output = timeout(Duration::from_secs(self.timeout_seconds), async {
-            command
-                .args(["infer", "model", "run", "--local", "--json", "--model"])
-                .arg(&model_key)
-                .args(["--prompt"])
-                .arg(&input.prompt)
-                .output()
-                .await
-        })
-        .await
-        .map_err(|_| {
-            ProviderDispatchError::transport(format!(
-                "provider dispatch timed out after {}s: {model_key}",
-                self.timeout_seconds
-            ))
-        })?
-        .map_err(|err| {
+        command
+            .args(["infer", "model", "run", "--local", "--json", "--model"])
+            .arg(&model_key)
+            .args(["--prompt"])
+            .arg(&input.prompt)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        let mut child = command.spawn().map_err(|err| {
             ProviderDispatchError::transport(format!(
                 "spawn openclaw model bridge failed for {model_key}: {err}"
             ))
         })?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            let detail = if !stderr.is_empty() { stderr } else { stdout };
-            return Err(ProviderDispatchError::transport(format!(
-                "openclaw model bridge failed for {model_key}: {detail}"
-            )));
-        }
+        let mut stdout = child.stdout.take().ok_or_else(|| {
+            ProviderDispatchError::transport(format!(
+                "openclaw model bridge missing stdout pipe for {model_key}"
+            ))
+        })?;
+        let mut stderr = child.stderr.take().ok_or_else(|| {
+            ProviderDispatchError::transport(format!(
+                "openclaw model bridge missing stderr pipe for {model_key}"
+            ))
+        })?;
 
-        let parsed: OpenClawModelRunResponse =
-            serde_json::from_slice(&output.stdout).map_err(|err| {
-                ProviderDispatchError::decode(format!(
-                    "decode openclaw model bridge response failed: {err}; stdout={}",
-                    String::from_utf8_lossy(&output.stdout)
-                ))
-            })?;
+        let (stdout_tx, stdout_rx) = oneshot::channel();
+        tokio::spawn(async move {
+            let mut buf = Vec::new();
+            let mut chunk = [0_u8; 4096];
+            loop {
+                match stdout.read(&mut chunk).await {
+                    Ok(0) => {
+                        let _ = stdout_tx.send(OpenClawStdoutResult::Finished(buf));
+                        break;
+                    }
+                    Ok(n) => {
+                        buf.extend_from_slice(&chunk[..n]);
+                        if let Ok(parsed) = serde_json::from_slice::<OpenClawModelRunResponse>(&buf)
+                        {
+                            let _ = stdout_tx.send(OpenClawStdoutResult::Parsed(parsed));
+                            break;
+                        }
+                    }
+                    Err(err) => {
+                        let _ = stdout_tx.send(OpenClawStdoutResult::ReadError(err.to_string()));
+                        break;
+                    }
+                }
+            }
+        });
+
+        let stderr_task = tokio::spawn(async move {
+            let mut buf = Vec::new();
+            let _ = stderr.read_to_end(&mut buf).await;
+            buf
+        });
+
+        let parsed = match timeout(Duration::from_secs(self.timeout_seconds), stdout_rx).await {
+            Ok(Ok(OpenClawStdoutResult::Parsed(parsed))) => {
+                terminate_child(&mut child).await;
+                let _ = stderr_task.await;
+                parsed
+            }
+            Ok(Ok(OpenClawStdoutResult::Finished(stdout_buf))) => {
+                let status = child.wait().await.map_err(|err| {
+                    ProviderDispatchError::transport(format!(
+                        "wait openclaw model bridge failed for {model_key}: {err}"
+                    ))
+                })?;
+                let stderr_buf = stderr_task.await.unwrap_or_default();
+                if !status.success() {
+                    let stderr = String::from_utf8_lossy(&stderr_buf).trim().to_string();
+                    let stdout = String::from_utf8_lossy(&stdout_buf).trim().to_string();
+                    let detail = if !stderr.is_empty() { stderr } else { stdout };
+                    return Err(ProviderDispatchError::transport(format!(
+                        "openclaw model bridge failed for {model_key}: {detail}"
+                    )));
+                }
+                serde_json::from_slice(&stdout_buf).map_err(|err| {
+                    ProviderDispatchError::decode(format!(
+                        "decode openclaw model bridge response failed: {err}; stdout={}",
+                        String::from_utf8_lossy(&stdout_buf)
+                    ))
+                })?
+            }
+            Ok(Ok(OpenClawStdoutResult::ReadError(err))) => {
+                terminate_child(&mut child).await;
+                let _ = stderr_task.await;
+                return Err(ProviderDispatchError::transport(format!(
+                    "read openclaw model bridge stdout failed for {model_key}: {err}"
+                )));
+            }
+            Ok(Err(_)) => {
+                terminate_child(&mut child).await;
+                let _ = stderr_task.await;
+                return Err(ProviderDispatchError::transport(format!(
+                    "openclaw model bridge stdout channel closed for {model_key}"
+                )));
+            }
+            Err(_) => {
+                terminate_child(&mut child).await;
+                let _ = stderr_task.await;
+                return Err(ProviderDispatchError::transport(format!(
+                    "provider dispatch timed out after {}s: {model_key}",
+                    self.timeout_seconds
+                )));
+            }
+        };
 
         let output_text = parsed
             .outputs
@@ -273,6 +352,14 @@ impl ProviderAdapter for OpenClawCliProviderAdapter {
             }),
         })
     }
+}
+
+async fn terminate_child(child: &mut Child) {
+    if matches!(child.try_wait(), Ok(Some(_))) {
+        return;
+    }
+    let _ = child.kill().await;
+    let _ = child.wait().await;
 }
 
 pub async fn dispatch_via_provider(
