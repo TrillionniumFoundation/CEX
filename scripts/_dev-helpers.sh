@@ -12,7 +12,9 @@ CEX_DATABASE_URL_DEFAULT="postgres://postgres:postgres@127.0.0.1:5432/cex_ai"
 cex_load_env() {
   local env_file="${1:-}"
   if [[ -z "$env_file" ]]; then
-    if [[ -f "$CEX_PROJECT_ROOT/.env" ]]; then
+    if [[ -n "${CEX_ENV_FILE:-}" ]]; then
+      env_file="$CEX_ENV_FILE"
+    elif [[ -f "$CEX_PROJECT_ROOT/.env" ]]; then
       env_file="$CEX_PROJECT_ROOT/.env"
     elif [[ -f "$CEX_PROJECT_ROOT/.env.example" ]]; then
       env_file="$CEX_PROJECT_ROOT/.env.example"

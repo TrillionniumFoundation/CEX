@@ -102,6 +102,16 @@ The soak writes JSONL plus a summary under `run/soak/` and exits non-zero on any
 
 A production-posture env skeleton is available at `.env.production.example`; it enumerates the non-default keys, ingress/session-auth controls, durable edge stores, identity governance files, and provider probe settings that the default production readiness mode expects.
 
+For a local generated production-posture profile (high-entropy local secrets, durable edge files under `run/local-production/`, and a repo-local OpenClaw CEX scope), use:
+
+```bash
+./scripts/bootstrap-local-production-env.sh --force
+CEX_ENV_FILE=run/local-production/.env ./scripts/runtime-manager-linux.sh restart
+CEX_ENV_FILE=run/local-production/.env CEX_PROVIDER_PROBE_MODEL=google/gemini-2.5-flash ./scripts/check-production-readiness.sh
+```
+
+`CEX_ENV_FILE` is honored by the shared shell helpers and lets local signoff avoid mutating `.env`.
+
 It now aggregates:
 
 - core surfaces: `gateway /v1/info`, `execution /v1/info`
