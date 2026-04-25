@@ -301,7 +301,8 @@ impl ProviderAdapter for OpenClawCliProviderAdapter {
                 parsed
             }
             OpenClawWaitOutcome::Finished(stdout_buf) => {
-                if let Ok(parsed) = serde_json::from_slice::<OpenClawModelRunResponse>(&stdout_buf) {
+                if let Ok(parsed) = serde_json::from_slice::<OpenClawModelRunResponse>(&stdout_buf)
+                {
                     let status = child.wait().await.map_err(|err| {
                         ProviderDispatchError::transport(format!(
                             "wait openclaw model bridge failed for {model_key}: {err}"
@@ -323,49 +324,52 @@ impl ProviderAdapter for OpenClawCliProviderAdapter {
                         ));
                     }
                 } else {
-                let status = child.wait().await.map_err(|err| {
-                    ProviderDispatchError::transport(format!(
-                        "wait openclaw model bridge failed for {model_key}: {err}"
-                    ))
-                })?;
-                let stderr_buf = stderr_task.await.unwrap_or_default();
-                if status.code() == Some(124) {
-                    let stderr = String::from_utf8_lossy(&stderr_buf).trim().to_string();
-                    let stderr_surface =
-                        extract_openclaw_stderr_surface_error(&stderr).unwrap_or(stderr);
-                    let stdout = String::from_utf8_lossy(&stdout_buf).trim().to_string();
-                    let detail = if !stderr_surface.is_empty() {
-                        stderr_surface
-                    } else if !stdout.is_empty() {
-                        stdout
-                    } else {
-                        format!("provider dispatch timed out after {}s", self.timeout_seconds)
-                    };
-                    return Err(ProviderDispatchError::transport(format!(
-                        "provider dispatch timed out after {}s: {model_key}; detail={detail}",
-                        self.timeout_seconds
-                    )));
-                }
-                if !status.success() {
-                    let stderr = String::from_utf8_lossy(&stderr_buf).trim().to_string();
-                    let stderr_surface =
-                        extract_openclaw_stderr_surface_error(&stderr).unwrap_or(stderr);
-                    let stdout = String::from_utf8_lossy(&stdout_buf).trim().to_string();
-                    let detail = if !stderr_surface.is_empty() {
-                        stderr_surface
-                    } else {
-                        stdout
-                    };
-                    return Err(ProviderDispatchError::transport(format!(
-                        "openclaw model bridge failed for {model_key}: {detail}"
-                    )));
-                }
-                serde_json::from_slice(&stdout_buf).map_err(|err| {
-                    ProviderDispatchError::decode(format!(
-                        "decode openclaw model bridge response failed: {err}; stdout={}",
-                        String::from_utf8_lossy(&stdout_buf)
-                    ))
-                })?
+                    let status = child.wait().await.map_err(|err| {
+                        ProviderDispatchError::transport(format!(
+                            "wait openclaw model bridge failed for {model_key}: {err}"
+                        ))
+                    })?;
+                    let stderr_buf = stderr_task.await.unwrap_or_default();
+                    if status.code() == Some(124) {
+                        let stderr = String::from_utf8_lossy(&stderr_buf).trim().to_string();
+                        let stderr_surface =
+                            extract_openclaw_stderr_surface_error(&stderr).unwrap_or(stderr);
+                        let stdout = String::from_utf8_lossy(&stdout_buf).trim().to_string();
+                        let detail = if !stderr_surface.is_empty() {
+                            stderr_surface
+                        } else if !stdout.is_empty() {
+                            stdout
+                        } else {
+                            format!(
+                                "provider dispatch timed out after {}s",
+                                self.timeout_seconds
+                            )
+                        };
+                        return Err(ProviderDispatchError::transport(format!(
+                            "provider dispatch timed out after {}s: {model_key}; detail={detail}",
+                            self.timeout_seconds
+                        )));
+                    }
+                    if !status.success() {
+                        let stderr = String::from_utf8_lossy(&stderr_buf).trim().to_string();
+                        let stderr_surface =
+                            extract_openclaw_stderr_surface_error(&stderr).unwrap_or(stderr);
+                        let stdout = String::from_utf8_lossy(&stdout_buf).trim().to_string();
+                        let detail = if !stderr_surface.is_empty() {
+                            stderr_surface
+                        } else {
+                            stdout
+                        };
+                        return Err(ProviderDispatchError::transport(format!(
+                            "openclaw model bridge failed for {model_key}: {detail}"
+                        )));
+                    }
+                    serde_json::from_slice(&stdout_buf).map_err(|err| {
+                        ProviderDispatchError::decode(format!(
+                            "decode openclaw model bridge response failed: {err}; stdout={}",
+                            String::from_utf8_lossy(&stdout_buf)
+                        ))
+                    })?
                 }
             }
             OpenClawWaitOutcome::ReadError(err) => {
@@ -395,7 +399,9 @@ impl ProviderAdapter for OpenClawCliProviderAdapter {
                 match stdout_after_term {
                     Ok(Ok(OpenClawStdoutResult::Parsed(parsed))) => parsed,
                     Ok(Ok(OpenClawStdoutResult::Finished(stdout_buf))) => {
-                        if let Ok(parsed) = serde_json::from_slice::<OpenClawModelRunResponse>(&stdout_buf) {
+                        if let Ok(parsed) =
+                            serde_json::from_slice::<OpenClawModelRunResponse>(&stdout_buf)
+                        {
                             parsed
                         } else {
                             let stderr = String::from_utf8_lossy(&stderr_buf).trim().to_string();
@@ -416,7 +422,10 @@ impl ProviderAdapter for OpenClawCliProviderAdapter {
                     Ok(Err(_)) | Err(_) => {
                         let stderr = String::from_utf8_lossy(&stderr_buf).trim().to_string();
                         let detail = if stderr.is_empty() {
-                            format!("provider dispatch timed out after {}s", self.timeout_seconds)
+                            format!(
+                                "provider dispatch timed out after {}s",
+                                self.timeout_seconds
+                            )
                         } else {
                             stderr
                         };
@@ -532,7 +541,8 @@ fn build_openclaw_cli_error(
 ) -> ProviderDispatchError {
     let surfaced_text = openclaw_surface_text(parsed).unwrap_or_default();
     let stderr = String::from_utf8_lossy(stderr_buf).trim().to_string();
-    let stderr_surface = extract_openclaw_stderr_surface_error(&stderr).unwrap_or_else(|| stderr.clone());
+    let stderr_surface =
+        extract_openclaw_stderr_surface_error(&stderr).unwrap_or_else(|| stderr.clone());
 
     if !surfaced_text.is_empty() {
         if let Some(timeout_seconds) = timeout_seconds {
@@ -574,7 +584,12 @@ fn openclaw_surface_text(parsed: &OpenClawModelRunResponse) -> Option<String> {
         .outputs
         .iter()
         .find_map(|entry| entry.text.as_deref())
-        .or_else(|| parsed.outputs.first().and_then(|entry| entry.media_url.as_deref()))
+        .or_else(|| {
+            parsed
+                .outputs
+                .first()
+                .and_then(|entry| entry.media_url.as_deref())
+        })
         .map(|text| text.trim().to_string())
         .filter(|text| !text.is_empty())
 }
@@ -597,11 +612,7 @@ fn extract_openclaw_stderr_surface_error(stderr: &str) -> Option<String> {
     for line in stderr.lines() {
         if let Some(idx) = line.find("error=") {
             let rest = &line[idx + "error=".len()..];
-            let cleaned = rest
-                .split(" rawError=")
-                .next()
-                .unwrap_or(rest)
-                .trim();
+            let cleaned = rest.split(" rawError=").next().unwrap_or(rest).trim();
             if !cleaned.is_empty() {
                 return Some(cleaned.to_string());
             }

@@ -192,8 +192,22 @@ pub struct ExecutionOperatorSignals {
     pub approval_backlog: ExecutionAlertSignal,
     pub queued_worker_lease_expired: ExecutionAlertSignal,
     pub queued_worker_retry_budget_exhausted: ExecutionAlertSignal,
+    pub provider_failures: ExecutionAlertSignal,
+    pub provider_billing_failures: ExecutionAlertSignal,
+    pub provider_timeout_failures: ExecutionAlertSignal,
     pub audit_failures: ExecutionAlertSignal,
     pub refund_failures: ExecutionAlertSignal,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct ProviderFailureSummary {
+    pub total: usize,
+    pub billing: usize,
+    pub timeout: usize,
+    pub auth: usize,
+    pub rate_limited: usize,
+    pub unavailable: usize,
+    pub unknown: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -212,6 +226,7 @@ pub struct ExecutionRuntimeOverview {
     pub timed_out: usize,
     pub refunded: usize,
     pub queued_worker: WorkerQueueSummary,
+    pub provider_failures: ProviderFailureSummary,
 }
 
 #[derive(Serialize)]
@@ -1729,6 +1744,18 @@ fn build_execution_operator_signals(
             overview.queued_worker.retry_budget_exhausted,
             state.alert_retry_budget_exhausted_threshold,
         ),
+        provider_failures: build_execution_alert_signal(
+            overview.provider_failures.total,
+            state.alert_provider_failure_threshold,
+        ),
+        provider_billing_failures: build_execution_alert_signal(
+            overview.provider_failures.billing,
+            state.alert_provider_billing_failure_threshold,
+        ),
+        provider_timeout_failures: build_execution_alert_signal(
+            overview.provider_failures.timeout,
+            state.alert_provider_timeout_failure_threshold,
+        ),
         audit_failures: build_execution_alert_signal(
             metrics.audit_failures as usize,
             state.alert_audit_failure_threshold,
@@ -1737,6 +1764,70 @@ fn build_execution_operator_signals(
             metrics.refund_failures as usize,
             state.alert_refund_failure_threshold,
         ),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProviderFailureKind {
+    Billing,
+    Timeout,
+    Auth,
+    RateLimited,
+    Unavailable,
+    Unknown,
+}
+
+fn classify_provider_failure(record: &ExecutionRecord) -> Option<ProviderFailureKind> {
+    if record.provider_target.is_none()
+        || !matches!(
+            record.status,
+            ExecutionStatus::Failed | ExecutionStatus::Refunded | ExecutionStatus::TimedOut
+        )
+    {
+        return None;
+    }
+
+    let error = record
+        .result_payload
+        .as_ref()
+        .and_then(|payload| payload.get("error"))
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    Some(classify_provider_error_text(error))
+}
+
+fn classify_provider_error_text(error: &str) -> ProviderFailureKind {
+    let lowered = error.to_ascii_lowercase();
+    if lowered.contains("insufficient balance")
+        || lowered.contains("billing error")
+        || lowered.contains("run out of credits")
+        || lowered.contains("quota")
+    {
+        ProviderFailureKind::Billing
+    } else if lowered.contains("timed out") || lowered.contains("timeout") {
+        ProviderFailureKind::Timeout
+    } else if lowered.contains("unauthorized")
+        || lowered.contains("forbidden")
+        || lowered.contains("invalid api key")
+        || lowered.contains("auth error")
+        || lowered.contains("authentication")
+    {
+        ProviderFailureKind::Auth
+    } else if lowered.contains("rate limit")
+        || lowered.contains("too many requests")
+        || lowered.contains("429")
+    {
+        ProviderFailureKind::RateLimited
+    } else if lowered.contains("unavailable")
+        || lowered.contains("connection refused")
+        || lowered.contains("connection reset")
+        || lowered.contains("503")
+        || lowered.contains("502")
+        || lowered.contains("500")
+    {
+        ProviderFailureKind::Unavailable
+    } else {
+        ProviderFailureKind::Unknown
     }
 }
 
@@ -1779,6 +1870,7 @@ fn build_execution_runtime_overview(records: Vec<ExecutionRecord>) -> ExecutionR
             retry_budget_exhausted: 0,
             active_workers: 0,
         },
+        provider_failures: ProviderFailureSummary::default(),
     };
 
     for record in records {
@@ -1828,6 +1920,18 @@ fn build_execution_runtime_overview(records: Vec<ExecutionRecord>) -> ExecutionR
                     }
                 }
                 _ => {}
+            }
+        }
+
+        if let Some(kind) = classify_provider_failure(&record) {
+            overview.provider_failures.total += 1;
+            match kind {
+                ProviderFailureKind::Billing => overview.provider_failures.billing += 1,
+                ProviderFailureKind::Timeout => overview.provider_failures.timeout += 1,
+                ProviderFailureKind::Auth => overview.provider_failures.auth += 1,
+                ProviderFailureKind::RateLimited => overview.provider_failures.rate_limited += 1,
+                ProviderFailureKind::Unavailable => overview.provider_failures.unavailable += 1,
+                ProviderFailureKind::Unknown => overview.provider_failures.unknown += 1,
             }
         }
     }
@@ -4830,23 +4934,62 @@ mod tests {
         let mut running = sample_record(ExecutionStatus::Running);
         running.execution_id = Uuid::new_v4();
 
+        let mut provider_failure = sample_record(ExecutionStatus::Refunded);
+        provider_failure.execution_id = Uuid::new_v4();
+        provider_failure.provider_target = Some("minimax://MiniMax-M2.5".to_string());
+        provider_failure.result_payload = Some(json!({
+            "error": "⚠️ minimax returned a billing error — insufficient balance (1008)"
+        }));
+
         let overview = build_execution_runtime_overview(vec![
             awaiting,
             queued_worker,
             dispatching_worker,
             running,
+            provider_failure,
         ]);
 
-        assert_eq!(overview.total, 4);
+        assert_eq!(overview.total, 5);
         assert_eq!(overview.awaiting_approval, 1);
         assert_eq!(overview.queued, 1);
         assert_eq!(overview.dispatching, 1);
         assert_eq!(overview.running, 1);
+        assert_eq!(overview.refunded, 1);
         assert_eq!(overview.queued_worker.total, 2);
         assert_eq!(overview.queued_worker.queued, 1);
         assert_eq!(overview.queued_worker.dispatching, 1);
         assert_eq!(overview.queued_worker.claimed_active, 1);
         assert_eq!(overview.queued_worker.active_workers, 1);
+        assert_eq!(overview.provider_failures.total, 1);
+        assert_eq!(overview.provider_failures.billing, 1);
+    }
+
+    #[test]
+    fn classify_provider_error_text_covers_operator_categories() {
+        assert_eq!(
+            classify_provider_error_text("insufficient balance (1008)"),
+            ProviderFailureKind::Billing
+        );
+        assert_eq!(
+            classify_provider_error_text("provider dispatch timed out after 60s"),
+            ProviderFailureKind::Timeout
+        );
+        assert_eq!(
+            classify_provider_error_text("invalid api key"),
+            ProviderFailureKind::Auth
+        );
+        assert_eq!(
+            classify_provider_error_text("rate limit exceeded 429"),
+            ProviderFailureKind::RateLimited
+        );
+        assert_eq!(
+            classify_provider_error_text("provider upstream returned status 503"),
+            ProviderFailureKind::Unavailable
+        );
+        assert_eq!(
+            classify_provider_error_text("unexpected provider shape"),
+            ProviderFailureKind::Unknown
+        );
     }
 
     #[test]
@@ -4855,6 +4998,9 @@ mod tests {
         state.alert_approval_backlog_threshold = 2;
         state.alert_lease_expired_threshold = 1;
         state.alert_retry_budget_exhausted_threshold = 1;
+        state.alert_provider_failure_threshold = 1;
+        state.alert_provider_billing_failure_threshold = 1;
+        state.alert_provider_timeout_failure_threshold = 1;
         state.alert_audit_failure_threshold = 1;
         state.alert_refund_failure_threshold = 1;
         state
@@ -4891,12 +5037,24 @@ mod tests {
                 retry_budget_exhausted: 1,
                 active_workers: 0,
             },
+            provider_failures: ProviderFailureSummary {
+                total: 2,
+                billing: 1,
+                timeout: 1,
+                auth: 0,
+                rate_limited: 0,
+                unavailable: 0,
+                unknown: 0,
+            },
         };
 
         let signals = build_execution_operator_signals(&state, &overview);
         assert!(signals.approval_backlog.alert);
         assert!(signals.queued_worker_lease_expired.alert);
         assert!(signals.queued_worker_retry_budget_exhausted.alert);
+        assert!(signals.provider_failures.alert);
+        assert!(signals.provider_billing_failures.alert);
+        assert!(signals.provider_timeout_failures.alert);
         assert!(signals.audit_failures.alert);
         assert!(signals.refund_failures.alert);
         assert_eq!(signals.approval_backlog.value, 2);

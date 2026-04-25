@@ -27,6 +27,9 @@ pub const DEFAULT_EXECUTION_PROVIDER_DISPATCH_TIMEOUT_SECONDS: u64 = 60;
 pub const DEFAULT_ALERT_APPROVAL_BACKLOG_THRESHOLD: usize = 10;
 pub const DEFAULT_ALERT_LEASE_EXPIRED_THRESHOLD: usize = 3;
 pub const DEFAULT_ALERT_RETRY_BUDGET_EXHAUSTED_THRESHOLD: usize = 3;
+pub const DEFAULT_ALERT_PROVIDER_FAILURE_THRESHOLD: usize = 1;
+pub const DEFAULT_ALERT_PROVIDER_BILLING_FAILURE_THRESHOLD: usize = 1;
+pub const DEFAULT_ALERT_PROVIDER_TIMEOUT_FAILURE_THRESHOLD: usize = 3;
 pub const DEFAULT_ALERT_AUDIT_FAILURE_THRESHOLD: usize = 1;
 pub const DEFAULT_ALERT_REFUND_FAILURE_THRESHOLD: usize = 1;
 const DEFAULT_APPROVAL_SENSITIVE_KEYWORDS: &[&str] =
@@ -138,6 +141,9 @@ pub struct AppState {
     pub alert_approval_backlog_threshold: usize,
     pub alert_lease_expired_threshold: usize,
     pub alert_retry_budget_exhausted_threshold: usize,
+    pub alert_provider_failure_threshold: usize,
+    pub alert_provider_billing_failure_threshold: usize,
+    pub alert_provider_timeout_failure_threshold: usize,
     pub alert_audit_failure_threshold: usize,
     pub alert_refund_failure_threshold: usize,
     pub pool: Option<PgPool>,
@@ -205,6 +211,18 @@ impl AppState {
             "ALERT_RETRY_BUDGET_EXHAUSTED_THRESHOLD",
             DEFAULT_ALERT_RETRY_BUDGET_EXHAUSTED_THRESHOLD,
         );
+        let alert_provider_failure_threshold = positive_usize_env(
+            "ALERT_PROVIDER_FAILURE_THRESHOLD",
+            DEFAULT_ALERT_PROVIDER_FAILURE_THRESHOLD,
+        );
+        let alert_provider_billing_failure_threshold = positive_usize_env(
+            "ALERT_PROVIDER_BILLING_FAILURE_THRESHOLD",
+            DEFAULT_ALERT_PROVIDER_BILLING_FAILURE_THRESHOLD,
+        );
+        let alert_provider_timeout_failure_threshold = positive_usize_env(
+            "ALERT_PROVIDER_TIMEOUT_FAILURE_THRESHOLD",
+            DEFAULT_ALERT_PROVIDER_TIMEOUT_FAILURE_THRESHOLD,
+        );
         let alert_audit_failure_threshold = positive_usize_env(
             "ALERT_AUDIT_FAILURE_THRESHOLD",
             DEFAULT_ALERT_AUDIT_FAILURE_THRESHOLD,
@@ -267,6 +285,9 @@ impl AppState {
             alert_approval_backlog_threshold,
             alert_lease_expired_threshold,
             alert_retry_budget_exhausted_threshold,
+            alert_provider_failure_threshold,
+            alert_provider_billing_failure_threshold,
+            alert_provider_timeout_failure_threshold,
             alert_audit_failure_threshold,
             alert_refund_failure_threshold,
             pool,
@@ -346,6 +367,11 @@ impl AppState {
             alert_approval_backlog_threshold: DEFAULT_ALERT_APPROVAL_BACKLOG_THRESHOLD,
             alert_lease_expired_threshold: DEFAULT_ALERT_LEASE_EXPIRED_THRESHOLD,
             alert_retry_budget_exhausted_threshold: DEFAULT_ALERT_RETRY_BUDGET_EXHAUSTED_THRESHOLD,
+            alert_provider_failure_threshold: DEFAULT_ALERT_PROVIDER_FAILURE_THRESHOLD,
+            alert_provider_billing_failure_threshold:
+                DEFAULT_ALERT_PROVIDER_BILLING_FAILURE_THRESHOLD,
+            alert_provider_timeout_failure_threshold:
+                DEFAULT_ALERT_PROVIDER_TIMEOUT_FAILURE_THRESHOLD,
             alert_audit_failure_threshold: DEFAULT_ALERT_AUDIT_FAILURE_THRESHOLD,
             alert_refund_failure_threshold: DEFAULT_ALERT_REFUND_FAILURE_THRESHOLD,
             pool: None,
