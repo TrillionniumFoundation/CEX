@@ -55,7 +55,7 @@ Required:
 
 Still missing in repo shape:
 
-- consistent metrics surface across core services (consumer-entry / matrix-entry 现在已有 `/metrics` Prometheus 文本面，外加 `/health` JSON；其中 consumer-entry 还已开始暴露 identity governance gauge，例如 binding loaded / registry loaded / ref-integrity / actor gate / approval source / approval coverage；execution `/v1/info` 现在已补到更接近值班面的 runtime/operator snapshot，包含 queued-worker backlog/lease/retry 信号，以及 provider failure 分类汇总与阈值信号（billing / timeout / auth / rate_limited / unavailable / unknown），但 execution/gateway 仍尚未统一成正式 exporter)
+- consistent metrics surface across core services (consumer-entry / matrix-entry 现在已有 `/metrics` Prometheus 文本面，外加 `/health` JSON；其中 consumer-entry 还已开始暴露 identity governance gauge，例如 binding loaded / registry loaded / ref-integrity / actor gate / approval source / approval coverage；execution `/v1/info` 现在已补到更接近值班面的 runtime/operator snapshot，包含 queued-worker backlog/lease/retry 信号，以及 provider failure 分类汇总与阈值信号（billing / timeout / auth / rate_limited / unavailable / unknown / dead_letter / retry_budget_exhausted），但 execution/gateway 仍尚未统一成正式 exporter)
 - alerting rules
 - SLO / error-budget policy
 - rollback and incident playbooks

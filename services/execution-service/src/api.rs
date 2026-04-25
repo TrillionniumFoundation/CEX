@@ -195,6 +195,8 @@ pub struct ExecutionOperatorSignals {
     pub provider_failures: ExecutionAlertSignal,
     pub provider_billing_failures: ExecutionAlertSignal,
     pub provider_timeout_failures: ExecutionAlertSignal,
+    pub provider_dead_letters: ExecutionAlertSignal,
+    pub provider_retry_budget_exhausted: ExecutionAlertSignal,
     pub audit_failures: ExecutionAlertSignal,
     pub refund_failures: ExecutionAlertSignal,
 }
@@ -208,6 +210,9 @@ pub struct ProviderFailureSummary {
     pub rate_limited: usize,
     pub unavailable: usize,
     pub unknown: usize,
+    pub dead_letter: usize,
+    pub retry_budget_exhausted: usize,
+    pub non_retryable_terminal: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1756,6 +1761,14 @@ fn build_execution_operator_signals(
             overview.provider_failures.timeout,
             state.alert_provider_timeout_failure_threshold,
         ),
+        provider_dead_letters: build_execution_alert_signal(
+            overview.provider_failures.dead_letter,
+            state.alert_provider_dead_letter_threshold,
+        ),
+        provider_retry_budget_exhausted: build_execution_alert_signal(
+            overview.provider_failures.retry_budget_exhausted,
+            state.alert_provider_retry_budget_exhausted_threshold,
+        ),
         audit_failures: build_execution_alert_signal(
             metrics.audit_failures as usize,
             state.alert_audit_failure_threshold,
@@ -1796,6 +1809,23 @@ fn classify_provider_failure(record: &ExecutionRecord) -> Option<ProviderFailure
     Some(classify_provider_error_text(error))
 }
 
+fn provider_failure_retryable_kind(kind: ProviderFailureKind) -> bool {
+    matches!(
+        kind,
+        ProviderFailureKind::Timeout
+            | ProviderFailureKind::RateLimited
+            | ProviderFailureKind::Unavailable
+    )
+}
+
+fn provider_failure_retry_budget_exhausted(record: &ExecutionRecord) -> bool {
+    record.max_attempts > 1 && remaining_attempts(record) == 0
+}
+
+fn provider_failure_dead_letter(record: &ExecutionRecord, kind: ProviderFailureKind) -> bool {
+    !provider_failure_retryable_kind(kind) || provider_failure_retry_budget_exhausted(record)
+}
+
 fn classify_provider_error_text(error: &str) -> ProviderFailureKind {
     let lowered = error.to_ascii_lowercase();
     if lowered.contains("insufficient balance")
@@ -1834,12 +1864,7 @@ fn classify_provider_error_text(error: &str) -> ProviderFailureKind {
 fn should_auto_retry_provider_failure(record: &ExecutionRecord, error: &str) -> bool {
     matches!(record.dispatch_mode, ExecutionDispatchMode::QueuedWorker)
         && has_worker_attempt_budget_remaining(record)
-        && matches!(
-            classify_provider_error_text(error),
-            ProviderFailureKind::Timeout
-                | ProviderFailureKind::RateLimited
-                | ProviderFailureKind::Unavailable
-        )
+        && provider_failure_retryable_kind(classify_provider_error_text(error))
 }
 
 fn provider_retry_backoff_seconds(state: &AppState, record: &ExecutionRecord) -> i64 {
@@ -1975,6 +2000,15 @@ fn build_execution_runtime_overview(records: Vec<ExecutionRecord>) -> ExecutionR
                 ProviderFailureKind::RateLimited => overview.provider_failures.rate_limited += 1,
                 ProviderFailureKind::Unavailable => overview.provider_failures.unavailable += 1,
                 ProviderFailureKind::Unknown => overview.provider_failures.unknown += 1,
+            }
+            if provider_failure_retry_budget_exhausted(&record) {
+                overview.provider_failures.retry_budget_exhausted += 1;
+            }
+            if !provider_failure_retryable_kind(kind) {
+                overview.provider_failures.non_retryable_terminal += 1;
+            }
+            if provider_failure_dead_letter(&record, kind) {
+                overview.provider_failures.dead_letter += 1;
             }
         }
     }
@@ -5030,6 +5064,8 @@ mod tests {
         let mut provider_failure = sample_record(ExecutionStatus::Refunded);
         provider_failure.execution_id = Uuid::new_v4();
         provider_failure.provider_target = Some("minimax://MiniMax-M2.5".to_string());
+        provider_failure.attempt_count = 1;
+        provider_failure.max_attempts = 3;
         provider_failure.result_payload = Some(json!({
             "error": "⚠️ minimax returned a billing error — insufficient balance (1008)"
         }));
@@ -5055,6 +5091,27 @@ mod tests {
         assert_eq!(overview.queued_worker.active_workers, 1);
         assert_eq!(overview.provider_failures.total, 1);
         assert_eq!(overview.provider_failures.billing, 1);
+        assert_eq!(overview.provider_failures.dead_letter, 1);
+        assert_eq!(overview.provider_failures.non_retryable_terminal, 1);
+        assert_eq!(overview.provider_failures.retry_budget_exhausted, 0);
+    }
+
+    #[test]
+    fn build_execution_runtime_overview_counts_retry_budget_exhausted_dead_letters() {
+        let mut timeout_exhausted = sample_record(ExecutionStatus::Failed);
+        timeout_exhausted.provider_target = Some("codex://gpt-5.4".to_string());
+        timeout_exhausted.attempt_count = 3;
+        timeout_exhausted.max_attempts = 3;
+        timeout_exhausted.result_payload = Some(json!({
+            "error": "provider dispatch timed out after 60s"
+        }));
+
+        let overview = build_execution_runtime_overview(vec![timeout_exhausted]);
+        assert_eq!(overview.provider_failures.total, 1);
+        assert_eq!(overview.provider_failures.timeout, 1);
+        assert_eq!(overview.provider_failures.dead_letter, 1);
+        assert_eq!(overview.provider_failures.retry_budget_exhausted, 1);
+        assert_eq!(overview.provider_failures.non_retryable_terminal, 0);
     }
 
     #[test]
@@ -5094,6 +5151,8 @@ mod tests {
         state.alert_provider_failure_threshold = 1;
         state.alert_provider_billing_failure_threshold = 1;
         state.alert_provider_timeout_failure_threshold = 1;
+        state.alert_provider_dead_letter_threshold = 1;
+        state.alert_provider_retry_budget_exhausted_threshold = 1;
         state.alert_audit_failure_threshold = 1;
         state.alert_refund_failure_threshold = 1;
         state
@@ -5138,6 +5197,9 @@ mod tests {
                 rate_limited: 0,
                 unavailable: 0,
                 unknown: 0,
+                dead_letter: 2,
+                retry_budget_exhausted: 1,
+                non_retryable_terminal: 1,
             },
         };
 
@@ -5148,6 +5210,8 @@ mod tests {
         assert!(signals.provider_failures.alert);
         assert!(signals.provider_billing_failures.alert);
         assert!(signals.provider_timeout_failures.alert);
+        assert!(signals.provider_dead_letters.alert);
+        assert!(signals.provider_retry_budget_exhausted.alert);
         assert!(signals.audit_failures.alert);
         assert!(signals.refund_failures.alert);
         assert_eq!(signals.approval_backlog.value, 2);

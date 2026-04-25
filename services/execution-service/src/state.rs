@@ -32,6 +32,8 @@ pub const DEFAULT_ALERT_RETRY_BUDGET_EXHAUSTED_THRESHOLD: usize = 3;
 pub const DEFAULT_ALERT_PROVIDER_FAILURE_THRESHOLD: usize = 1;
 pub const DEFAULT_ALERT_PROVIDER_BILLING_FAILURE_THRESHOLD: usize = 1;
 pub const DEFAULT_ALERT_PROVIDER_TIMEOUT_FAILURE_THRESHOLD: usize = 3;
+pub const DEFAULT_ALERT_PROVIDER_DEAD_LETTER_THRESHOLD: usize = 1;
+pub const DEFAULT_ALERT_PROVIDER_RETRY_BUDGET_EXHAUSTED_THRESHOLD: usize = 1;
 pub const DEFAULT_ALERT_AUDIT_FAILURE_THRESHOLD: usize = 1;
 pub const DEFAULT_ALERT_REFUND_FAILURE_THRESHOLD: usize = 1;
 const DEFAULT_APPROVAL_SENSITIVE_KEYWORDS: &[&str] =
@@ -148,6 +150,8 @@ pub struct AppState {
     pub alert_provider_failure_threshold: usize,
     pub alert_provider_billing_failure_threshold: usize,
     pub alert_provider_timeout_failure_threshold: usize,
+    pub alert_provider_dead_letter_threshold: usize,
+    pub alert_provider_retry_budget_exhausted_threshold: usize,
     pub alert_audit_failure_threshold: usize,
     pub alert_refund_failure_threshold: usize,
     pub pool: Option<PgPool>,
@@ -235,6 +239,14 @@ impl AppState {
             "ALERT_PROVIDER_TIMEOUT_FAILURE_THRESHOLD",
             DEFAULT_ALERT_PROVIDER_TIMEOUT_FAILURE_THRESHOLD,
         );
+        let alert_provider_dead_letter_threshold = positive_usize_env(
+            "ALERT_PROVIDER_DEAD_LETTER_THRESHOLD",
+            DEFAULT_ALERT_PROVIDER_DEAD_LETTER_THRESHOLD,
+        );
+        let alert_provider_retry_budget_exhausted_threshold = positive_usize_env(
+            "ALERT_PROVIDER_RETRY_BUDGET_EXHAUSTED_THRESHOLD",
+            DEFAULT_ALERT_PROVIDER_RETRY_BUDGET_EXHAUSTED_THRESHOLD,
+        );
         let alert_audit_failure_threshold = positive_usize_env(
             "ALERT_AUDIT_FAILURE_THRESHOLD",
             DEFAULT_ALERT_AUDIT_FAILURE_THRESHOLD,
@@ -302,6 +314,8 @@ impl AppState {
             alert_provider_failure_threshold,
             alert_provider_billing_failure_threshold,
             alert_provider_timeout_failure_threshold,
+            alert_provider_dead_letter_threshold,
+            alert_provider_retry_budget_exhausted_threshold,
             alert_audit_failure_threshold,
             alert_refund_failure_threshold,
             pool,
@@ -388,6 +402,9 @@ impl AppState {
                 DEFAULT_ALERT_PROVIDER_BILLING_FAILURE_THRESHOLD,
             alert_provider_timeout_failure_threshold:
                 DEFAULT_ALERT_PROVIDER_TIMEOUT_FAILURE_THRESHOLD,
+            alert_provider_dead_letter_threshold: DEFAULT_ALERT_PROVIDER_DEAD_LETTER_THRESHOLD,
+            alert_provider_retry_budget_exhausted_threshold:
+                DEFAULT_ALERT_PROVIDER_RETRY_BUDGET_EXHAUSTED_THRESHOLD,
             alert_audit_failure_threshold: DEFAULT_ALERT_AUDIT_FAILURE_THRESHOLD,
             alert_refund_failure_threshold: DEFAULT_ALERT_REFUND_FAILURE_THRESHOLD,
             pool: None,
