@@ -92,6 +92,14 @@ CEX_PROVIDER_PROBE_MODEL=minimax/MiniMax-M2.5 ./scripts/check-production-readine
 
 A non-zero result is expected while provider dead letters or external billing/quota blockers remain. If you only want the local runtime/operator portion, set `CEX_PROVIDER_PROBE_REQUIRED=0`; production signoff should leave it required and set `CEX_PROVIDER_PROBE_MODEL` to the provider/model intended for launch.
 
+For a bounded runtime soak that repeats runtime status, metrics smoke, operator signals, and worker-queue checks, while probing the live provider at the beginning and end when configured:
+
+```bash
+CEX_PROVIDER_PROBE_MODEL=google/gemini-2.5-flash   CEX_SOAK_DURATION_SECONDS=300   CEX_SOAK_INTERVAL_SECONDS=30   ./scripts/soak-runtime.sh
+```
+
+The soak writes JSONL plus a summary under `run/soak/` and exits non-zero on any failed tick or provider probe.
+
 It now aggregates:
 
 - core surfaces: `gateway /v1/info`, `execution /v1/info`
