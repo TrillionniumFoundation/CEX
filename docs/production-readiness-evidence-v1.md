@@ -27,15 +27,16 @@ This page records evidence for production-readiness claims. It is intentionally 
 | Monitoring deploy verification | `scripts/deploy-monitoring-bundles.sh --mode copy --include-focused --force --verify --verify-mode command ...` deployed Prometheus/Alertmanager bundles to `run/monitoring-live-target` and verified both targets via command mode | PASS |
 | Provider launch policy posture | Production policy blocks known non-launch provider prefixes `cap.openclaw.model.minimax.` and `cap.openclaw.model.openai-codex.` while Google Gemini is the validated launch provider | PASS |
 | Local production secret-file posture | `run/local-production/.env` and generated policy bundle chmod `600`; production readiness fails if `CEX_ENV_FILE` has group/other permissions | PASS |
+| Scoped production signoff gate | `CEX_ENV_FILE=run/local-production/.env CEX_PROVIDER_PROBE_MODEL=google/gemini-2.5-flash scripts/check-production-signoff.sh` returned `SIGNOFF_READY` for `linux-self-hosted-local-production` (summary `run/signoff/production-signoff-20260425T102143Z-394008.summary.json`) | PASS |
 
-## Active blockers to a truthful 100% claim
+## Scope notes / residual non-launch caveats
 
 - PowerShell 7.6.1 is now installed and the full `gate-local.ps1` passes under Linux PowerShell Core, including runtime blackbox/probe suites; a true Windows-host-native run is still not available on this machine.
 - Direct non-sudo Docker socket access for user `qian` is still denied, but passwordless `sudo docker` is available and the Docker-backed Linux gate now passes through that path.
 - The current strict production profile pass and soak use generated owner-only local secrets under `run/local-production/.env`; they validate posture mechanics but are not a real external secret-management environment.
 - Formal production deployment to a non-local host and migration rollback strategy beyond restore-from-backup still need real environment evidence. A local Docker Postgres backup/restore drill, 2-hour local-production soak, and local monitoring bundle deploy/verify now pass.
 - MiniMax remains provider-account blocked by billing/credit errors; OpenAI Codex remains quota/plan blocked. Google Gemini is the currently validated successful external provider path, and production policy now blocks the known non-launch MiniMax/OpenAI-Codex capability prefixes until those account states are resolved.
-- The latest production readiness rerun after the 2-hour soak passed again with the required live Google provider probe. Production mode now also requires fresh DB backup/restore drill and monitoring deploy verification summaries by default.
+- The scoped `linux-self-hosted-local-production` signoff now returns `SIGNOFF_READY`; broader non-local deployment, true Windows-host-native validation, and re-enabling MiniMax/OpenAI-Codex remain future expansion work rather than blockers for this scoped launch profile.
 
 ## Signoff commands
 
