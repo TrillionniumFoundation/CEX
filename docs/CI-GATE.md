@@ -172,7 +172,7 @@ The standard hosted workflow now runs **service-local-only** validation on both 
 
 - file: `.github/workflows/rust-service-gate.yml`
 - Windows job runs `./gate-local.ps1 -ServiceLocalOnly`
-- Linux job runs `bash ./scripts/gate-local-linux.sh --service-local-only --skip-db-bootstrap`; full runtime mode also runs `scripts/smoke-runtime-metrics.sh` after runtime blackbox/status to assert native core `/metrics` endpoints are live; `scripts/check-production-readiness.sh` is intentionally stricter and should stay red until operator signals and provider dead letters are clear
+- Linux job runs `bash ./scripts/gate-local-linux.sh --service-local-only --skip-db-bootstrap`; full runtime mode starts core plus entry services, seeds repo-local entry identity governance defaults under `run/linux-runtime/entry-config/`, and runs `scripts/smoke-runtime-metrics.sh` after runtime blackbox/status to assert native core/entry `/metrics` endpoints are live; `scripts/check-production-readiness.sh` is intentionally stricter and should stay red until operator signals, provider dead letters, and live provider probe success are clear
 - validates the Rust service-local tests on relevant pushes / pull requests across both OS families
 - does **not** attempt to boot the full detached local runtime or provision DB/infra on the hosted runner
 

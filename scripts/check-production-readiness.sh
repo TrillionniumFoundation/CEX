@@ -8,6 +8,8 @@ cex_load_env
 
 EXECUTION_BASE_URL="${EXECUTION_BASE_URL:-http://127.0.0.1:7003}"
 EXECUTION_ADMIN_TOKEN="${EXECUTION_ADMIN_TOKEN:-${CEX_EXECUTION_ADMIN_TOKEN:-${LOCAL_DEV_ADMIN_TOKEN:-local-dev-admin-token}}}"
+CEX_PROVIDER_PROBE_REQUIRED="${CEX_PROVIDER_PROBE_REQUIRED:-1}"
+CEX_PROVIDER_PROBE_MODEL="${CEX_PROVIDER_PROBE_MODEL:-}"
 
 cex_require_cmd bash curl jq
 
@@ -76,6 +78,27 @@ else
   fail 'provider dead-letter endpoint unreachable'
 fi
 rm -f "$dead_letters_json_file"
+
+section 'live provider probe'
+if [[ "$CEX_PROVIDER_PROBE_REQUIRED" == "0" ]]; then
+  pass 'live provider probe not required by environment'
+elif [[ -z "$CEX_PROVIDER_PROBE_MODEL" ]]; then
+  fail 'live provider probe model is not configured (set CEX_PROVIDER_PROBE_MODEL)'
+else
+  provider_probe_json_file="$(mktemp)"
+  provider_probe_status=0
+  bash "$SCRIPT_DIR/probe-openclaw-provider.sh" --model "$CEX_PROVIDER_PROBE_MODEL" --compact \
+    >"$provider_probe_json_file" || provider_probe_status=$?
+  provider_probe_ok="$(jq -r '.ok // false' "$provider_probe_json_file")"
+  provider_probe_status_text="$(jq -r '.status // "unknown"' "$provider_probe_json_file")"
+  if [[ "$provider_probe_status" -eq 0 && "$provider_probe_ok" == "true" ]]; then
+    pass "live provider probe succeeded ($CEX_PROVIDER_PROBE_MODEL)"
+  else
+    provider_probe_error="$(jq -r '.error // "unknown provider probe error"' "$provider_probe_json_file")"
+    fail "live provider probe failed ($CEX_PROVIDER_PROBE_MODEL status=$provider_probe_status_text): $provider_probe_error"
+  fi
+  rm -f "$provider_probe_json_file"
+fi
 
 section 'production readiness verdict'
 if [[ "$failures" -eq 0 ]]; then

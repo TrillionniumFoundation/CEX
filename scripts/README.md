@@ -78,13 +78,19 @@ For a direct runtime smoke of the native core and entry Prometheus endpoints:
 ./scripts/smoke-runtime-metrics.sh
 ```
 
-For a stricter pre-production verdict that combines runtime health, native metrics, unified operator signals, and provider dead-letter blockers:
+For a live OpenClaw provider smoke probe through the repo-local CEX scope:
 
 ```bash
-./scripts/check-production-readiness.sh
+./scripts/probe-openclaw-provider.sh --model minimax/MiniMax-M2.5
 ```
 
-A non-zero result is expected while provider dead letters or external billing/quota blockers remain.
+For a stricter pre-production verdict that combines runtime health, native metrics, unified operator signals, provider dead-letter blockers, and an optional-but-required-by-default live provider probe:
+
+```bash
+CEX_PROVIDER_PROBE_MODEL=minimax/MiniMax-M2.5 ./scripts/check-production-readiness.sh
+```
+
+A non-zero result is expected while provider dead letters or external billing/quota blockers remain. If you only want the local runtime/operator portion, set `CEX_PROVIDER_PROBE_REQUIRED=0`; production signoff should leave it required and set `CEX_PROVIDER_PROBE_MODEL` to the provider/model intended for launch.
 
 It now aggregates:
 
