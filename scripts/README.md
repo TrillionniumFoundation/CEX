@@ -40,7 +40,7 @@ The Linux gate relies on:
 ./scripts/seed-local-dev.sh
 ```
 
-The detached Linux runtime now also starts a repo-local queued-worker loop by default, and it rebuilds the Rust service binaries before launch so a restart does not silently boot stale code. If you intentionally want to reuse already-built binaries, set `CEX_RUNTIME_SKIP_BUILD=1`. Useful commands:
+The detached Linux runtime now also starts a repo-local queued-worker loop and the product-edge `consumer-entry-api` / `matrix-entry-adapter` surfaces by default, and it rebuilds the Rust service binaries before launch so a restart does not silently boot stale code. It writes a local identity binding/registry/approved-revision bundle under `run/linux-runtime/entry-config/` when those entry governance paths are not supplied, so operator-signal checks exercise the real identity governance path instead of treating missing bindings as healthy. If you intentionally want to reuse already-built binaries, set `CEX_RUNTIME_SKIP_BUILD=1`. Useful commands:
 
 ```bash
 ./scripts/runtime-manager-linux.sh restart
@@ -48,7 +48,7 @@ The detached Linux runtime now also starts a repo-local queued-worker loop by de
 ./scripts/execution-queued-worker.sh once
 ```
 
-Set `CEX_ENABLE_QUEUED_WORKER=0` when you need deterministic gate/debug behavior without background queue consumption.
+Set `CEX_ENABLE_QUEUED_WORKER=0` when you need deterministic gate/debug behavior without background queue consumption. Set `CEX_ENABLE_ENTRY_SERVICES=0` only when you explicitly want the older core-only local runtime.
 
 If you want CEX to use a repo-local isolated OpenClaw scope instead of the default `~/.openclaw` / `main` agent, bootstrap it once with:
 
@@ -72,7 +72,7 @@ If you want to turn that unified JSON into Prometheus text exposition, use:
 ./scripts/render-operator-signals-prometheus.sh run/operator-signals/last.json
 ```
 
-For a direct runtime smoke of the native gateway/execution/core Prometheus endpoints:
+For a direct runtime smoke of the native core and entry Prometheus endpoints:
 
 ```bash
 ./scripts/smoke-runtime-metrics.sh

@@ -33,12 +33,19 @@ export EXECUTION_BASE_URL="${EXECUTION_BASE_URL:-http://127.0.0.1:7003}"
 export IDENTITY_BASE_URL="${IDENTITY_BASE_URL:-http://127.0.0.1:7001}"
 export AUDIT_BASE_URL="${AUDIT_BASE_URL:-http://127.0.0.1:7004}"
 export CAPABILITY_BASE_URL="${CAPABILITY_BASE_URL:-http://127.0.0.1:7005}"
+export CONSUMER_ENTRY_BIND_ADDR="${CONSUMER_ENTRY_BIND_ADDR:-127.0.0.1:8090}"
+export MATRIX_ENTRY_ADAPTER_BIND_ADDR="${MATRIX_ENTRY_ADAPTER_BIND_ADDR:-127.0.0.1:8091}"
+export CONSUMER_ENTRY_BASE_URL="${CONSUMER_ENTRY_BASE_URL:-http://127.0.0.1:8090}"
+export CEX_GATEWAY_BASE_URL="${CEX_GATEWAY_BASE_URL:-http://127.0.0.1:8080}"
+export CEX_GATEWAY_API_KEY="${CEX_GATEWAY_API_KEY:-local-dev-key}"
+export CONSUMER_ENTRY_API_KEY="${CONSUMER_ENTRY_API_KEY:-local-dev-key}"
 export OLLAMA_BASE_URL="${OLLAMA_BASE_URL:-http://127.0.0.1:11434}"
 export EXECUTION_CLAIM_LEASE_SECONDS="${EXECUTION_CLAIM_LEASE_SECONDS:-300}"
 export EXECUTION_DEFAULT_MAX_ATTEMPTS="${EXECUTION_DEFAULT_MAX_ATTEMPTS:-1}"
 export EXECUTION_QUEUED_WORKER_MAX_ATTEMPTS="${EXECUTION_QUEUED_WORKER_MAX_ATTEMPTS:-3}"
 export EXECUTION_PROVIDER_DISPATCH_TIMEOUT_SECONDS="${EXECUTION_PROVIDER_DISPATCH_TIMEOUT_SECONDS:-60}"
 export CEX_ENABLE_QUEUED_WORKER="${CEX_ENABLE_QUEUED_WORKER:-1}"
+export CEX_ENABLE_ENTRY_SERVICES="${CEX_ENABLE_ENTRY_SERVICES:-1}"
 export CEX_RUNTIME_SKIP_BUILD="${CEX_RUNTIME_SKIP_BUILD:-0}"
 export EXECUTION_WORKER_ID="${EXECUTION_WORKER_ID:-cex-linux-worker}"
 export EXECUTION_WORKER_IDLE_SECS="${EXECUTION_WORKER_IDLE_SECS:-2}"
@@ -51,9 +58,13 @@ export NATS_URL="${NATS_URL:-nats://127.0.0.1:4222}"
 RUNTIME_DIR="${CEX_LINUX_RUNTIME_DIR:-$PROJECT_ROOT/run/linux-runtime}"
 LOG_DIR="$RUNTIME_DIR/logs"
 PID_DIR="$RUNTIME_DIR/pids"
+ENTRY_CONFIG_DIR="$RUNTIME_DIR/entry-config"
 mkdir -p "$LOG_DIR" "$PID_DIR"
 
 SERVICES=(ledger-service execution-service identity-service audit-service capability-service gateway-service)
+if [[ "$CEX_ENABLE_ENTRY_SERVICES" == "1" ]]; then
+  SERVICES+=(consumer-entry-api matrix-entry-adapter)
+fi
 WORKER_NAME="execution-queued-worker"
 WORKER_SCRIPT="$SCRIPT_DIR/execution-queued-worker.sh"
 HEALTH_URLS=(
@@ -64,11 +75,96 @@ HEALTH_URLS=(
   "http://127.0.0.1:7005/health"
   "http://127.0.0.1:8080/health"
 )
+if [[ "$CEX_ENABLE_ENTRY_SERVICES" == "1" ]]; then
+  HEALTH_URLS+=(
+    "http://127.0.0.1:8090/health"
+    "http://127.0.0.1:8091/health"
+  )
+fi
 
 usage() {
   cat <<'EOF'
 Usage: scripts/runtime-manager-linux.sh <start|stop|restart|status|logs>
 EOF
+}
+
+ensure_entry_runtime_config() {
+  if [[ "$CEX_ENABLE_ENTRY_SERVICES" != "1" ]]; then
+    return 0
+  fi
+
+  mkdir -p "$ENTRY_CONFIG_DIR"
+  local bindings_path registry_path approvals_path audit_path
+  bindings_path="${CONSUMER_ENTRY_IDENTITY_BINDINGS_PATH:-$ENTRY_CONFIG_DIR/identity-bindings.json}"
+  registry_path="${CONSUMER_ENTRY_IDENTITY_REGISTRY_PATH:-$ENTRY_CONFIG_DIR/identity-registry.json}"
+  approvals_path="${CONSUMER_ENTRY_IDENTITY_BINDING_APPROVED_REVISIONS_PATH:-$ENTRY_CONFIG_DIR/identity-approved-revisions.json}"
+  audit_path="${CONSUMER_ENTRY_IDENTITY_BINDING_AUDIT_LOG_PATH:-$ENTRY_CONFIG_DIR/identity-binding-audit.jsonl}"
+
+  if [[ ! -f "$bindings_path" ]]; then
+    cat > "$bindings_path" <<'JSON'
+{
+  "version": 1,
+  "revision": "local-dev-entry-bindings-v1",
+  "chat_users": {
+    "local-dev-chat-user": {
+      "product_user_id": "pu-local-dev"
+    }
+  },
+  "matrix_users": {
+    "@alice:local.dev": {
+      "product_user_id": "pu-local-dev"
+    },
+    "@cex-bot:local.dev": {
+      "product_user_id": "pu-local-bot"
+    }
+  }
+}
+JSON
+  fi
+
+  if [[ ! -f "$registry_path" ]]; then
+    cat > "$registry_path" <<'JSON'
+{
+  "version": 1,
+  "revision": "local-dev-entry-registry-v1",
+  "product_users": {
+    "pu-local-dev": {
+      "org_id": "org-local-dev",
+      "account_id": "acct-local-dev",
+      "status": "active"
+    },
+    "pu-local-bot": {
+      "org_id": "org-local-dev",
+      "account_id": "acct-local-bot",
+      "status": "active"
+    }
+  }
+}
+JSON
+  fi
+
+  if [[ ! -f "$approvals_path" ]]; then
+    cat > "$approvals_path" <<'JSON'
+{
+  "version": 1,
+  "revision": "local-dev-entry-approval-v1",
+  "approved_revisions": [
+    "binding:local-dev-entry-bindings-v1|registry:local-dev-entry-registry-v1"
+  ]
+}
+JSON
+  fi
+  touch "$audit_path"
+
+  export CONSUMER_ENTRY_IDENTITY_BINDINGS_PATH="$bindings_path"
+  export CONSUMER_ENTRY_IDENTITY_REGISTRY_PATH="$registry_path"
+  export CONSUMER_ENTRY_IDENTITY_BINDING_APPROVED_REVISIONS_PATH="$approvals_path"
+  export CONSUMER_ENTRY_IDENTITY_BINDING_AUDIT_LOG_PATH="$audit_path"
+  export CONSUMER_ENTRY_REQUIRE_IDENTITY_BINDING="${CONSUMER_ENTRY_REQUIRE_IDENTITY_BINDING:-true}"
+  export CONSUMER_ENTRY_IDENTITY_BINDING_RELOAD_REQUIRE_REVISION="${CONSUMER_ENTRY_IDENTITY_BINDING_RELOAD_REQUIRE_REVISION:-true}"
+  export CONSUMER_ENTRY_IDENTITY_BINDING_RELOAD_REQUIRE_APPROVED_REVISION="${CONSUMER_ENTRY_IDENTITY_BINDING_RELOAD_REQUIRE_APPROVED_REVISION:-true}"
+  export CONSUMER_ENTRY_IDENTITY_BINDING_RELOAD_REQUIRE_ACTOR="${CONSUMER_ENTRY_IDENTITY_BINDING_RELOAD_REQUIRE_ACTOR:-true}"
+  export CONSUMER_ENTRY_IDENTITY_BINDING_RELOAD_ALLOWED_ACTORS="${CONSUMER_ENTRY_IDENTITY_BINDING_RELOAD_ALLOWED_ACTORS:-cex-runtime-manager}"
 }
 
 stop_worker() {
@@ -127,6 +223,7 @@ stop_runtime() {
 start_runtime() {
   local svc bin
   cex_require_cmd cargo curl
+  ensure_entry_runtime_config
   for svc in "${SERVICES[@]}"; do
     ensure_binary "$svc"
   done
