@@ -72,6 +72,12 @@ If you want to turn that unified JSON into Prometheus text exposition, use:
 ./scripts/render-operator-signals-prometheus.sh run/operator-signals/last.json
 ```
 
+For a direct runtime smoke of the native gateway/execution Prometheus endpoints:
+
+```bash
+./scripts/smoke-runtime-metrics.sh
+```
+
 It now aggregates:
 
 - core surfaces: `gateway /v1/info`, `execution /v1/info`

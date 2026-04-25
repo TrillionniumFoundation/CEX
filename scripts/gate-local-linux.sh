@@ -134,4 +134,7 @@ echo '==> cargo test -p gateway-service --test runtime_approval_probe -- --ignor
 echo '==> runtime status after linux gate'
 bash "$SCRIPT_DIR/runtime-manager-linux.sh" status
 
+echo '==> runtime metrics smoke after linux gate'
+bash "$SCRIPT_DIR/smoke-runtime-metrics.sh"
+
 echo '==> linux gate complete'
