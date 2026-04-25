@@ -12,6 +12,7 @@ use state::AppState;
 pub fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(api::health))
+        .route("/metrics", get(api::metrics))
         .route("/v1/executions", post(api::create_execution))
         .route("/v1/executions/worker-queue", get(api::worker_queue))
         .route(

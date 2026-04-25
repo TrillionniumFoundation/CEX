@@ -414,6 +414,28 @@ async fn get_json(app: axum::Router, uri: &str) -> (StatusCode, Value) {
     get_json_with_headers(app, uri, &[("x-admin-token", "local-dev-admin-token")]).await
 }
 
+async fn get_text(app: axum::Router, uri: &str) -> (StatusCode, String, String) {
+    let request = Request::builder()
+        .method("GET")
+        .uri(uri)
+        .body(Body::empty())
+        .expect("build get request");
+
+    let response = app.oneshot(request).await.expect("router response");
+    let status = response.status();
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    let bytes = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read body bytes");
+    let text = String::from_utf8(bytes.to_vec()).expect("decode text body");
+    (status, content_type, text)
+}
+
 #[tokio::test]
 async fn create_execution_exposes_auto_approved_http_flow() {
     let app = build_router(test_state());
@@ -436,6 +458,31 @@ async fn create_execution_exposes_auto_approved_http_flow() {
     assert_eq!(get_status, StatusCode::OK);
     assert_eq!(fetched["execution_id"], created["execution_id"]);
     assert_eq!(fetched["status"], "Queued");
+}
+
+#[tokio::test]
+async fn metrics_endpoint_exports_runtime_and_operator_gauges() {
+    let state = test_state();
+    let billing = test_execution_record(
+        ExecutionStatus::Refunded,
+        Some("minimax://MiniMax-M2.5"),
+        Some("billing error: insufficient balance"),
+    );
+    {
+        let mut map = state.executions.write().await;
+        map.insert(billing.execution_id, billing);
+    }
+
+    let app = build_router(state);
+    let (status, content_type, body) = get_text(app, "/metrics").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(content_type.starts_with("text/plain; version=0.0.4"));
+    assert!(body.contains("cex_execution_runtime_up 1\n"));
+    assert!(body.contains("cex_execution_provider_failures_total{kind=\"billing\"} 1\n"));
+    assert!(body.contains("cex_execution_provider_failures_total{kind=\"dead_letter\"} 1\n"));
+    assert!(
+        body.contains("cex_execution_operator_signal_active{name=\"provider_dead_letters\"} 1\n")
+    );
 }
 
 #[tokio::test]

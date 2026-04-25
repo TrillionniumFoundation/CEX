@@ -490,6 +490,7 @@ curl -s http://127.0.0.1:8080/health
 curl -s http://127.0.0.1:8080/v1/info | jq
 curl -s http://127.0.0.1:7003/health
 curl -s http://127.0.0.1:7003/v1/info | jq
+curl -s http://127.0.0.1:7003/metrics | grep -E 'cex_execution_runtime_up|cex_execution_provider_failures_total|cex_execution_operator_signal_active'
 curl -s http://127.0.0.1:7003/v1/executions/worker-queue/summary | jq
 curl -s -H 'x-admin-token: <admin-token>' http://127.0.0.1:7003/v1/executions/provider-dead-letters | jq
 curl -s http://127.0.0.1:7004/health

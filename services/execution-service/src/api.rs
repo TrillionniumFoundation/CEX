@@ -322,6 +322,32 @@ pub async fn health() -> &'static str {
     "execution-service ok"
 }
 
+pub async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
+    let snapshot = state.metrics.snapshot();
+    let runtime_summary = load_execution_runtime_overview(&state).await;
+    let mut body = render_execution_metrics_header();
+    append_execution_runtime_metrics(&mut body, &snapshot);
+
+    match runtime_summary {
+        Ok(runtime) => {
+            let signals = build_execution_operator_signals(&state, &runtime);
+            append_metric(&mut body, "cex_execution_runtime_up", 1);
+            append_execution_runtime_overview_metrics(&mut body, &runtime);
+            append_execution_operator_signal_metrics(&mut body, &signals);
+        }
+        Err(_) => {
+            append_metric(&mut body, "cex_execution_runtime_up", 0);
+        }
+    }
+
+    (
+        StatusCode::OK,
+        [("content-type", "text/plain; version=0.0.4; charset=utf-8")],
+        body,
+    )
+        .into_response()
+}
+
 pub async fn execution_info(State(state): State<AppState>) -> Json<ExecutionInfo> {
     let runtime_summary = load_execution_runtime_overview(&state).await;
     let (runtime, operator_signals, runtime_error) = match runtime_summary {
@@ -2315,6 +2341,345 @@ async fn load_provider_dead_letters(
         })
         .take(limit)
         .collect())
+}
+
+fn render_execution_metrics_header() -> String {
+    concat!(
+        "# HELP cex_execution_runtime_up Whether execution runtime overview could be loaded.\n",
+        "# TYPE cex_execution_runtime_up gauge\n",
+        "# HELP cex_execution_runtime_counter_total Execution-service in-process counters.\n",
+        "# TYPE cex_execution_runtime_counter_total counter\n",
+        "# HELP cex_execution_status_total Execution records grouped by lifecycle status.\n",
+        "# TYPE cex_execution_status_total gauge\n",
+        "# HELP cex_execution_queued_worker_total Queued-worker execution gauges.\n",
+        "# TYPE cex_execution_queued_worker_total gauge\n",
+        "# HELP cex_execution_provider_failures_total Provider-backed terminal failures grouped by kind.\n",
+        "# TYPE cex_execution_provider_failures_total gauge\n",
+        "# HELP cex_execution_operator_signal_active Execution operator signal active flag.\n",
+        "# TYPE cex_execution_operator_signal_active gauge\n",
+        "# HELP cex_execution_operator_signal_value Execution operator signal value.\n",
+        "# TYPE cex_execution_operator_signal_value gauge\n",
+        "# HELP cex_execution_operator_signal_threshold Execution operator signal threshold.\n",
+        "# TYPE cex_execution_operator_signal_threshold gauge\n",
+    )
+    .to_string()
+}
+
+fn append_execution_runtime_metrics(body: &mut String, metrics: &ExecutionRuntimeMetricsSnapshot) {
+    append_labeled_metric(
+        body,
+        "cex_execution_runtime_counter_total",
+        &[("name", "create_requests")],
+        metrics.create_requests,
+    );
+    append_labeled_metric(
+        body,
+        "cex_execution_runtime_counter_total",
+        &[("name", "create_blocked_policy")],
+        metrics.create_blocked_policy,
+    );
+    append_labeled_metric(
+        body,
+        "cex_execution_runtime_counter_total",
+        &[("name", "create_awaiting_approval")],
+        metrics.create_awaiting_approval,
+    );
+    append_labeled_metric(
+        body,
+        "cex_execution_runtime_counter_total",
+        &[("name", "create_auto_approved")],
+        metrics.create_auto_approved,
+    );
+    append_labeled_metric(
+        body,
+        "cex_execution_runtime_counter_total",
+        &[("name", "approve_requests")],
+        metrics.approve_requests,
+    );
+    append_labeled_metric(
+        body,
+        "cex_execution_runtime_counter_total",
+        &[("name", "approve_successes")],
+        metrics.approve_successes,
+    );
+    append_labeled_metric(
+        body,
+        "cex_execution_runtime_counter_total",
+        &[("name", "reject_requests")],
+        metrics.reject_requests,
+    );
+    append_labeled_metric(
+        body,
+        "cex_execution_runtime_counter_total",
+        &[("name", "reject_successes")],
+        metrics.reject_successes,
+    );
+    append_labeled_metric(
+        body,
+        "cex_execution_runtime_counter_total",
+        &[("name", "retry_requests")],
+        metrics.retry_requests,
+    );
+    append_labeled_metric(
+        body,
+        "cex_execution_runtime_counter_total",
+        &[("name", "cancel_requests")],
+        metrics.cancel_requests,
+    );
+    append_labeled_metric(
+        body,
+        "cex_execution_runtime_counter_total",
+        &[("name", "claim_requests")],
+        metrics.claim_requests,
+    );
+    append_labeled_metric(
+        body,
+        "cex_execution_runtime_counter_total",
+        &[("name", "claim_successes")],
+        metrics.claim_successes,
+    );
+    append_labeled_metric(
+        body,
+        "cex_execution_runtime_counter_total",
+        &[("name", "audit_failures")],
+        metrics.audit_failures,
+    );
+    append_labeled_metric(
+        body,
+        "cex_execution_runtime_counter_total",
+        &[("name", "refund_failures")],
+        metrics.refund_failures,
+    );
+}
+
+fn append_execution_runtime_overview_metrics(
+    body: &mut String,
+    runtime: &ExecutionRuntimeOverview,
+) {
+    append_labeled_metric(
+        body,
+        "cex_execution_status_total",
+        &[("status", "total")],
+        runtime.total,
+    );
+    append_labeled_metric(
+        body,
+        "cex_execution_status_total",
+        &[("status", "created")],
+        runtime.created,
+    );
+    append_labeled_metric(
+        body,
+        "cex_execution_status_total",
+        &[("status", "policy_check_pending")],
+        runtime.policy_check_pending,
+    );
+    append_labeled_metric(
+        body,
+        "cex_execution_status_total",
+        &[("status", "awaiting_approval")],
+        runtime.awaiting_approval,
+    );
+    append_labeled_metric(
+        body,
+        "cex_execution_status_total",
+        &[("status", "approved")],
+        runtime.approved,
+    );
+    append_labeled_metric(
+        body,
+        "cex_execution_status_total",
+        &[("status", "queued")],
+        runtime.queued,
+    );
+    append_labeled_metric(
+        body,
+        "cex_execution_status_total",
+        &[("status", "dispatching")],
+        runtime.dispatching,
+    );
+    append_labeled_metric(
+        body,
+        "cex_execution_status_total",
+        &[("status", "running")],
+        runtime.running,
+    );
+    append_labeled_metric(
+        body,
+        "cex_execution_status_total",
+        &[("status", "succeeded")],
+        runtime.succeeded,
+    );
+    append_labeled_metric(
+        body,
+        "cex_execution_status_total",
+        &[("status", "failed")],
+        runtime.failed,
+    );
+    append_labeled_metric(
+        body,
+        "cex_execution_status_total",
+        &[("status", "cancelled")],
+        runtime.cancelled,
+    );
+    append_labeled_metric(
+        body,
+        "cex_execution_status_total",
+        &[("status", "timed_out")],
+        runtime.timed_out,
+    );
+    append_labeled_metric(
+        body,
+        "cex_execution_status_total",
+        &[("status", "refunded")],
+        runtime.refunded,
+    );
+
+    append_worker_queue_metric(body, "total", runtime.queued_worker.total);
+    append_worker_queue_metric(body, "queued", runtime.queued_worker.queued);
+    append_worker_queue_metric(body, "dispatching", runtime.queued_worker.dispatching);
+    append_worker_queue_metric(body, "claimable", runtime.queued_worker.claimable);
+    append_worker_queue_metric(body, "lease_expired", runtime.queued_worker.lease_expired);
+    append_worker_queue_metric(body, "claimed_active", runtime.queued_worker.claimed_active);
+    append_worker_queue_metric(body, "retryable", runtime.queued_worker.retryable);
+    append_worker_queue_metric(
+        body,
+        "retry_budget_exhausted",
+        runtime.queued_worker.retry_budget_exhausted,
+    );
+    append_worker_queue_metric(body, "active_workers", runtime.queued_worker.active_workers);
+
+    append_provider_failure_metric(body, "total", runtime.provider_failures.total);
+    append_provider_failure_metric(body, "billing", runtime.provider_failures.billing);
+    append_provider_failure_metric(body, "timeout", runtime.provider_failures.timeout);
+    append_provider_failure_metric(body, "auth", runtime.provider_failures.auth);
+    append_provider_failure_metric(body, "rate_limited", runtime.provider_failures.rate_limited);
+    append_provider_failure_metric(body, "unavailable", runtime.provider_failures.unavailable);
+    append_provider_failure_metric(body, "unknown", runtime.provider_failures.unknown);
+    append_provider_failure_metric(body, "dead_letter", runtime.provider_failures.dead_letter);
+    append_provider_failure_metric(
+        body,
+        "retry_budget_exhausted",
+        runtime.provider_failures.retry_budget_exhausted,
+    );
+    append_provider_failure_metric(
+        body,
+        "non_retryable_terminal",
+        runtime.provider_failures.non_retryable_terminal,
+    );
+}
+
+fn append_execution_operator_signal_metrics(body: &mut String, signals: &ExecutionOperatorSignals) {
+    append_operator_signal_metric(body, "approval_backlog", &signals.approval_backlog);
+    append_operator_signal_metric(
+        body,
+        "queued_worker_lease_expired",
+        &signals.queued_worker_lease_expired,
+    );
+    append_operator_signal_metric(
+        body,
+        "queued_worker_retry_budget_exhausted",
+        &signals.queued_worker_retry_budget_exhausted,
+    );
+    append_operator_signal_metric(body, "provider_failures", &signals.provider_failures);
+    append_operator_signal_metric(
+        body,
+        "provider_billing_failures",
+        &signals.provider_billing_failures,
+    );
+    append_operator_signal_metric(
+        body,
+        "provider_timeout_failures",
+        &signals.provider_timeout_failures,
+    );
+    append_operator_signal_metric(
+        body,
+        "provider_dead_letters",
+        &signals.provider_dead_letters,
+    );
+    append_operator_signal_metric(
+        body,
+        "provider_retry_budget_exhausted",
+        &signals.provider_retry_budget_exhausted,
+    );
+    append_operator_signal_metric(body, "audit_failures", &signals.audit_failures);
+    append_operator_signal_metric(body, "refund_failures", &signals.refund_failures);
+}
+
+fn append_worker_queue_metric(body: &mut String, name: &'static str, value: usize) {
+    append_labeled_metric(
+        body,
+        "cex_execution_queued_worker_total",
+        &[("state", name)],
+        value,
+    );
+}
+
+fn append_provider_failure_metric(body: &mut String, kind: &'static str, value: usize) {
+    append_labeled_metric(
+        body,
+        "cex_execution_provider_failures_total",
+        &[("kind", kind)],
+        value,
+    );
+}
+
+fn append_operator_signal_metric(
+    body: &mut String,
+    name: &'static str,
+    signal: &ExecutionAlertSignal,
+) {
+    let labels = [("name", name)];
+    append_labeled_metric(
+        body,
+        "cex_execution_operator_signal_active",
+        &labels,
+        if signal.alert { 1 } else { 0 },
+    );
+    append_labeled_metric(
+        body,
+        "cex_execution_operator_signal_value",
+        &labels,
+        signal.value,
+    );
+    append_labeled_metric(
+        body,
+        "cex_execution_operator_signal_threshold",
+        &labels,
+        signal.threshold,
+    );
+}
+
+fn append_metric(body: &mut String, name: &'static str, value: impl std::fmt::Display) {
+    body.push_str(name);
+    body.push(' ');
+    body.push_str(&value.to_string());
+    body.push('\n');
+}
+
+fn append_labeled_metric(
+    body: &mut String,
+    name: &'static str,
+    labels: &[(&'static str, &'static str)],
+    value: impl std::fmt::Display,
+) {
+    body.push_str(name);
+    if !labels.is_empty() {
+        body.push('{');
+        for (idx, (label, value)) in labels.iter().enumerate() {
+            if idx > 0 {
+                body.push(',');
+            }
+            body.push_str(label);
+            body.push_str("=\"");
+            body.push_str(value);
+            body.push('"');
+        }
+        body.push('}');
+    }
+    body.push(' ');
+    body.push_str(&value.to_string());
+    body.push('\n');
 }
 
 async fn load_execution(state: &AppState, id: Uuid) -> Result<Option<ExecutionRecord>, String> {

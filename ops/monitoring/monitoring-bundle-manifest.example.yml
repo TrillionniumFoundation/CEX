@@ -62,8 +62,9 @@ bridgeScripts:
 notes:
 - consumer-entry identity governance currently has both direct metrics rules and wrapper-derived
   endpoint/abuse rules
-- gateway-service and execution-service currently rely on wrapper-derived signals
-  until native /metrics exporter coverage exists
+- gateway-service still relies on wrapper-derived signals until native /metrics exporter
+  coverage exists; execution-service now has native /metrics gauges while the minimal
+  bundle keeps wrapper-derived alerts during migration
 - matrix-entry-adapter currently participates through wrapper-derived product-edge
   signals
 - monitoring deploy post-action verdicts can now surface through wrapper-derived
