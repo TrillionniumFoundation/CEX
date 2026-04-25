@@ -100,6 +100,8 @@ CEX_PROVIDER_PROBE_MODEL=google/gemini-2.5-flash   CEX_SOAK_DURATION_SECONDS=300
 
 The soak writes JSONL plus a summary under `run/soak/` and exits non-zero on any failed tick or provider probe.
 
+A production-posture env skeleton is available at `.env.production.example`; it enumerates the non-default keys, ingress/session-auth controls, durable edge stores, identity governance files, and provider probe settings that the default production readiness mode expects.
+
 It now aggregates:
 
 - core surfaces: `gateway /v1/info`, `execution /v1/info`
