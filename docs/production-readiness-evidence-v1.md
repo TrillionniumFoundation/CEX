@@ -16,12 +16,13 @@ This page records evidence for production-readiness claims. It is intentionally 
 | Gateway → queued worker → OpenClaw provider success | `cap.openclaw.model.google.gemini-2-5-flash` invocation completed with `output_text=CEX_PROVIDER_PROBE_OK` | PASS |
 | Short local soak | `CEX_SOAK_DURATION_SECONDS=60 CEX_SOAK_INTERVAL_SECONDS=15 CEX_PROVIDER_PROBE_MODEL=google/gemini-2.5-flash scripts/soak-runtime.sh` | PASS |
 | 10-minute local soak | `CEX_READINESS_MODE=local CEX_SOAK_DURATION_SECONDS=600 CEX_SOAK_INTERVAL_SECONDS=60 CEX_PROVIDER_PROBE_MODEL=google/gemini-2.5-flash scripts/soak-runtime.sh` | PASS |
+| Local production-posture soak | `CEX_ENV_FILE=run/local-production/.env CEX_SOAK_DURATION_SECONDS=300 CEX_SOAK_INTERVAL_SECONDS=60 CEX_PROVIDER_PROBE_MODEL=google/gemini-2.5-flash scripts/soak-runtime.sh` (summary `run/soak/soak-20260425T055657Z-248676.summary.json`) | PASS |
 
 ## Active blockers to a truthful 100% claim
 
 - Windows-native `gate-local.ps1` still has not run on this host because PowerShell is unavailable.
 - Docker-backed bootstrap / migration path still has not run in-session because Docker socket access is unavailable without elevation.
-- The current strict production profile pass uses generated local secrets under `run/local-production/.env`; it validates posture mechanics but is not a real secret-management or deployment environment.
+- The current strict production profile pass and soak use generated local secrets under `run/local-production/.env`; they validate posture mechanics but are not a real secret-management or deployment environment.
 - Formal production deployment, backup/restore drills, migration rollback rehearsal, and longer soak windows still need real environment evidence.
 - MiniMax remains provider-account blocked by billing/credit errors; OpenAI Codex remains quota/plan blocked. Google Gemini is the currently validated successful external provider path.
 
