@@ -10,6 +10,15 @@ EXECUTION_BASE_URL="${EXECUTION_BASE_URL:-http://127.0.0.1:7003}"
 EXECUTION_ADMIN_TOKEN="${EXECUTION_ADMIN_TOKEN:-${CEX_EXECUTION_ADMIN_TOKEN:-${LOCAL_DEV_ADMIN_TOKEN:-local-dev-admin-token}}}"
 CEX_PROVIDER_PROBE_REQUIRED="${CEX_PROVIDER_PROBE_REQUIRED:-1}"
 CEX_PROVIDER_PROBE_MODEL="${CEX_PROVIDER_PROBE_MODEL:-}"
+CEX_READINESS_MODE="${CEX_READINESS_MODE:-production}"
+
+case "$CEX_READINESS_MODE" in
+  local|production) ;;
+  *)
+    echo "invalid CEX_READINESS_MODE: $CEX_READINESS_MODE (expected local|production)" >&2
+    exit 64
+    ;;
+esac
 
 cex_require_cmd bash curl jq
 
@@ -27,6 +36,64 @@ fail() {
 pass() {
   printf 'OK %s\n' "$*"
 }
+
+secret_is_default_or_empty() {
+  local value="$1"
+  [[ -z "$value" || "$value" == "local-dev-key" || "$value" == "local-dev-admin-token" ]]
+}
+
+required_bool_true() {
+  local value="$1"
+  [[ "${value,,}" == "true" || "$value" == "1" ]]
+}
+
+section 'deployment posture'
+printf 'readiness mode=%s\n' "$CEX_READINESS_MODE"
+if [[ "$CEX_READINESS_MODE" == "local" ]]; then
+  pass 'local readiness posture selected (production secret/profile checks skipped)'
+else
+  posture_failures=0
+  if secret_is_default_or_empty "${CEX_GATEWAY_API_KEY:-}"; then
+    posture_failures=$((posture_failures + 1))
+    fail 'production posture requires non-default CEX_GATEWAY_API_KEY'
+  fi
+  if secret_is_default_or_empty "${EXECUTION_ADMIN_TOKEN:-}"; then
+    posture_failures=$((posture_failures + 1))
+    fail 'production posture requires non-default execution admin token'
+  fi
+  if [[ -z "${CONSUMER_ENTRY_INGRESS_TOKEN:-}" ]]; then
+    posture_failures=$((posture_failures + 1))
+    fail 'production posture requires CONSUMER_ENTRY_INGRESS_TOKEN'
+  fi
+  if [[ -z "${MATRIX_ENTRY_INGRESS_TOKEN:-}" ]]; then
+    posture_failures=$((posture_failures + 1))
+    fail 'production posture requires MATRIX_ENTRY_INGRESS_TOKEN'
+  fi
+  if ! required_bool_true "${CONSUMER_ENTRY_REQUIRE_SESSION_AUTH:-}"; then
+    posture_failures=$((posture_failures + 1))
+    fail 'production posture requires CONSUMER_ENTRY_REQUIRE_SESSION_AUTH=true'
+  fi
+  if ! required_bool_true "${CONSUMER_ENTRY_REQUIRE_IDENTITY_BINDING:-}"; then
+    posture_failures=$((posture_failures + 1))
+    fail 'production posture requires CONSUMER_ENTRY_REQUIRE_IDENTITY_BINDING=true'
+  fi
+  if [[ -z "${CONSUMER_ENTRY_REPLAY_STORE_PATH:-}" ]]; then
+    posture_failures=$((posture_failures + 1))
+    fail 'production posture requires durable CONSUMER_ENTRY_REPLAY_STORE_PATH'
+  fi
+  if [[ -z "${CONSUMER_ENTRY_RATE_LIMIT_STORE_PATH:-}" ]]; then
+    posture_failures=$((posture_failures + 1))
+    fail 'production posture requires durable CONSUMER_ENTRY_RATE_LIMIT_STORE_PATH'
+  fi
+  if [[ -z "${MATRIX_ENTRY_RECENT_EVENT_STORE_PATH:-}" ]]; then
+    posture_failures=$((posture_failures + 1))
+    fail 'production posture requires durable MATRIX_ENTRY_RECENT_EVENT_STORE_PATH'
+  fi
+
+  if [[ "$posture_failures" -eq 0 ]]; then
+    pass 'production posture checks clear'
+  fi
+fi
 
 section 'runtime health/status'
 if bash "$SCRIPT_DIR/runtime-manager-linux.sh" status; then
@@ -102,9 +169,9 @@ fi
 
 section 'production readiness verdict'
 if [[ "$failures" -eq 0 ]]; then
-  echo 'READY production readiness smoke passed'
+  echo "READY $CEX_READINESS_MODE readiness smoke passed"
   exit 0
 fi
 
-echo "NOT_READY production readiness smoke found $failures blocker(s)" >&2
+echo "NOT_READY $CEX_READINESS_MODE readiness smoke found $failures blocker(s)" >&2
 exit 2

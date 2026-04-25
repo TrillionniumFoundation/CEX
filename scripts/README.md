@@ -87,10 +87,10 @@ For a live OpenClaw provider smoke probe through the repo-local CEX scope:
 For a stricter pre-production verdict that combines runtime health, native metrics, unified operator signals, provider dead-letter blockers, and an optional-but-required-by-default live provider probe:
 
 ```bash
-CEX_PROVIDER_PROBE_MODEL=minimax/MiniMax-M2.5 ./scripts/check-production-readiness.sh
+CEX_READINESS_MODE=local CEX_PROVIDER_PROBE_MODEL=google/gemini-2.5-flash ./scripts/check-production-readiness.sh
 ```
 
-A non-zero result is expected while provider dead letters or external billing/quota blockers remain. If you only want the local runtime/operator portion, set `CEX_PROVIDER_PROBE_REQUIRED=0`; production signoff should leave it required and set `CEX_PROVIDER_PROBE_MODEL` to the provider/model intended for launch.
+A non-zero result is expected while provider failures, dead letters, external billing/quota blockers, or production-posture checks remain. The script defaults to `CEX_READINESS_MODE=production`, which rejects local-dev keys, missing ingress tokens, missing session-auth enforcement, and non-durable edge replay/rate-limit stores. Use `CEX_READINESS_MODE=local` for the Linux/local smoke path only; production signoff should leave provider probing required and set `CEX_PROVIDER_PROBE_MODEL` to the provider/model intended for launch.
 
 For a bounded runtime soak that repeats runtime status, metrics smoke, operator signals, and worker-queue checks, while probing the live provider at the beginning and end when configured:
 
