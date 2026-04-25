@@ -4,7 +4,7 @@ use axum::{
     response::IntoResponse,
     Json,
 };
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use shared_config::{
@@ -211,6 +211,7 @@ pub struct ProviderFailureSummary {
     pub unavailable: usize,
     pub unknown: usize,
     pub dead_letter: usize,
+    pub acknowledged_dead_letter: usize,
     pub retry_budget_exhausted: usize,
     pub non_retryable_terminal: usize,
 }
@@ -283,6 +284,14 @@ pub struct ProviderDeadLetterQuery {
     pub kind: Option<String>,
     pub retry_budget_exhausted_only: Option<bool>,
     pub non_retryable_only: Option<bool>,
+    pub include_acknowledged: Option<bool>,
+    pub acknowledged_only: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ProviderDeadLetterAckRequest {
+    pub acknowledged_by: String,
+    pub note: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -296,6 +305,10 @@ pub struct ProviderDeadLetterExecutionView {
     pub dead_letter_reason: &'static str,
     pub retry_budget_exhausted: bool,
     pub non_retryable_terminal: bool,
+    pub acknowledged: bool,
+    pub acknowledged_by: Option<String>,
+    pub acknowledged_at: Option<chrono::DateTime<Utc>>,
+    pub acknowledgement_note: Option<String>,
     pub attempt_count: i32,
     pub max_attempts: i32,
     pub attempts_remaining: i32,
@@ -840,6 +853,93 @@ pub async fn provider_dead_letters(
         )
             .into_response(),
     }
+}
+
+pub async fn acknowledge_provider_dead_letter(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    Json(req): Json<ProviderDeadLetterAckRequest>,
+) -> impl IntoResponse {
+    let mut record =
+        match require_execution_access(&state, &headers, id, &["executions:manage"]).await {
+            Ok(record) => record,
+            Err(response) => return response.into_response(),
+        };
+
+    let acknowledged_by = req.acknowledged_by.trim().to_string();
+    if acknowledged_by.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "acknowledged_by is required" })),
+        )
+            .into_response();
+    }
+    if acknowledged_by.chars().count() > 128 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "acknowledged_by is too long" })),
+        )
+            .into_response();
+    }
+    let note = req
+        .note
+        .map(|note| note.trim().to_string())
+        .filter(|note| !note.is_empty());
+    if note
+        .as_deref()
+        .map(|note| note.chars().count() > 1000)
+        .unwrap_or(false)
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "note is too long" })),
+        )
+            .into_response();
+    }
+
+    let Some(kind) = classify_provider_failure(&record) else {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({ "error": "execution is not a provider failure" })),
+        )
+            .into_response();
+    };
+    if !provider_failure_dead_letter(&record, kind) {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({ "error": "execution is not a provider dead letter" })),
+        )
+            .into_response();
+    }
+
+    let now = Utc::now();
+    let mut payload = record.result_payload.take().unwrap_or_else(|| json!({}));
+    if !payload.is_object() {
+        payload = json!({ "provider_result": payload });
+    }
+    payload["provider_dead_letter_ack"] = json!({
+        "acknowledged": true,
+        "acknowledged_by": acknowledged_by,
+        "acknowledged_at": now.to_rfc3339(),
+        "note": note,
+    });
+    record.result_payload = Some(payload);
+    record.updated_at = now;
+
+    if let Err(message) = store_execution(&state, &record).await {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": message })),
+        )
+            .into_response();
+    }
+
+    (
+        StatusCode::OK,
+        Json(provider_dead_letter_view(record, kind)),
+    )
+        .into_response()
 }
 
 pub async fn claim_next_execution(
@@ -1969,6 +2069,53 @@ fn provider_failure_dead_letter(record: &ExecutionRecord, kind: ProviderFailureK
     !provider_failure_retryable_kind(kind) || provider_failure_retry_budget_exhausted(record)
 }
 
+fn provider_dead_letter_ack_payload(record: &ExecutionRecord) -> Option<&Value> {
+    record
+        .result_payload
+        .as_ref()
+        .and_then(|payload| payload.get("provider_dead_letter_ack"))
+}
+
+fn provider_dead_letter_acknowledged(record: &ExecutionRecord) -> bool {
+    provider_dead_letter_ack_payload(record)
+        .and_then(|ack| ack.get("acknowledged"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+fn provider_dead_letter_acknowledged_by(record: &ExecutionRecord) -> Option<String> {
+    provider_dead_letter_ack_payload(record)
+        .and_then(|ack| ack.get("acknowledged_by"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn provider_dead_letter_acknowledged_at(record: &ExecutionRecord) -> Option<DateTime<Utc>> {
+    provider_dead_letter_ack_payload(record)
+        .and_then(|ack| ack.get("acknowledged_at"))
+        .and_then(Value::as_str)
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.with_timezone(&Utc))
+}
+
+fn provider_dead_letter_acknowledgement_note(record: &ExecutionRecord) -> Option<String> {
+    provider_dead_letter_ack_payload(record)
+        .and_then(|ack| ack.get("note"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn provider_failure_active_dead_letter(
+    record: &ExecutionRecord,
+    kind: ProviderFailureKind,
+) -> bool {
+    provider_failure_dead_letter(record, kind) && !provider_dead_letter_acknowledged(record)
+}
+
 fn classify_provider_error_text(error: &str) -> ProviderFailureKind {
     let lowered = error.to_ascii_lowercase();
     if lowered.contains("insufficient balance")
@@ -2137,6 +2284,13 @@ fn build_execution_runtime_overview(records: Vec<ExecutionRecord>) -> ExecutionR
         }
 
         if let Some(kind) = classify_provider_failure(&record) {
+            if provider_failure_dead_letter(&record, kind)
+                && provider_dead_letter_acknowledged(&record)
+            {
+                overview.provider_failures.acknowledged_dead_letter += 1;
+                continue;
+            }
+
             overview.provider_failures.total += 1;
             match kind {
                 ProviderFailureKind::Billing => overview.provider_failures.billing += 1,
@@ -2152,7 +2306,7 @@ fn build_execution_runtime_overview(records: Vec<ExecutionRecord>) -> ExecutionR
             if !provider_failure_retryable_kind(kind) {
                 overview.provider_failures.non_retryable_terminal += 1;
             }
-            if provider_failure_dead_letter(&record, kind) {
+            if provider_failure_active_dead_letter(&record, kind) {
                 overview.provider_failures.dead_letter += 1;
             }
         }
@@ -2295,6 +2449,8 @@ async fn load_provider_dead_letters(
     };
     let retry_budget_exhausted_only = query.retry_budget_exhausted_only.unwrap_or(false);
     let non_retryable_only = query.non_retryable_only.unwrap_or(false);
+    let include_acknowledged = query.include_acknowledged.unwrap_or(false);
+    let acknowledged_only = query.acknowledged_only.unwrap_or(false);
 
     let records = load_visible_execution_records(state, admin).await?;
     Ok(records
@@ -2302,6 +2458,13 @@ async fn load_provider_dead_letters(
         .filter_map(|record| {
             let kind = classify_provider_failure(&record)?;
             if !provider_failure_dead_letter(&record, kind) {
+                return None;
+            }
+            let acknowledged = provider_dead_letter_acknowledged(&record);
+            if acknowledged_only && !acknowledged {
+                return None;
+            }
+            if !include_acknowledged && !acknowledged_only && acknowledged {
                 return None;
             }
             if let Some(kind_filter) = kind_filter {
@@ -2319,30 +2482,48 @@ async fn load_provider_dead_letters(
                 return None;
             }
 
-            let attempts_remaining = remaining_attempts(&record);
-            let dead_letter_reason = provider_dead_letter_reason(kind, retry_budget_exhausted);
-            let error = provider_error_text(&record).map(truncate_provider_error_text);
-            Some(ProviderDeadLetterExecutionView {
-                execution_id: record.execution_id,
-                invocation_id: record.invocation_id,
-                org_id: record.org_id,
-                status: record.status,
-                provider_target: record.provider_target,
-                provider_failure_kind: provider_failure_kind_label(kind),
-                dead_letter_reason,
-                retry_budget_exhausted,
-                non_retryable_terminal,
-                attempt_count: record.attempt_count,
-                max_attempts: record.max_attempts,
-                attempts_remaining,
-                error,
-                created_at: record.created_at,
-                updated_at: record.updated_at,
-                ended_at: record.ended_at,
-            })
+            Some(provider_dead_letter_view(record, kind))
         })
         .take(limit)
         .collect())
+}
+
+fn provider_dead_letter_view(
+    record: ExecutionRecord,
+    kind: ProviderFailureKind,
+) -> ProviderDeadLetterExecutionView {
+    let retry_budget_exhausted = provider_failure_retry_budget_exhausted(&record);
+    let non_retryable_terminal = !provider_failure_retryable_kind(kind);
+    let attempts_remaining = remaining_attempts(&record);
+    let dead_letter_reason = provider_dead_letter_reason(kind, retry_budget_exhausted);
+    let acknowledged = provider_dead_letter_acknowledged(&record);
+    let acknowledged_by = provider_dead_letter_acknowledged_by(&record);
+    let acknowledged_at = provider_dead_letter_acknowledged_at(&record);
+    let acknowledgement_note = provider_dead_letter_acknowledgement_note(&record);
+    let error = provider_error_text(&record).map(truncate_provider_error_text);
+
+    ProviderDeadLetterExecutionView {
+        execution_id: record.execution_id,
+        invocation_id: record.invocation_id,
+        org_id: record.org_id,
+        status: record.status,
+        provider_target: record.provider_target,
+        provider_failure_kind: provider_failure_kind_label(kind),
+        dead_letter_reason,
+        retry_budget_exhausted,
+        non_retryable_terminal,
+        acknowledged,
+        acknowledged_by,
+        acknowledged_at,
+        acknowledgement_note,
+        attempt_count: record.attempt_count,
+        max_attempts: record.max_attempts,
+        attempts_remaining,
+        error,
+        created_at: record.created_at,
+        updated_at: record.updated_at,
+        ended_at: record.ended_at,
+    }
 }
 
 fn render_execution_metrics_header() -> String {
@@ -2559,6 +2740,11 @@ fn append_execution_runtime_overview_metrics(
     append_provider_failure_metric(body, "unavailable", runtime.provider_failures.unavailable);
     append_provider_failure_metric(body, "unknown", runtime.provider_failures.unknown);
     append_provider_failure_metric(body, "dead_letter", runtime.provider_failures.dead_letter);
+    append_provider_failure_metric(
+        body,
+        "acknowledged_dead_letter",
+        runtime.provider_failures.acknowledged_dead_letter,
+    );
     append_provider_failure_metric(
         body,
         "retry_budget_exhausted",
@@ -5755,6 +5941,7 @@ mod tests {
                 unavailable: 0,
                 unknown: 0,
                 dead_letter: 2,
+                acknowledged_dead_letter: 0,
                 retry_budget_exhausted: 1,
                 non_retryable_terminal: 1,
             },

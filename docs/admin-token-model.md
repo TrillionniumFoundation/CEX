@@ -115,6 +115,7 @@ Examples:
 - `POST /v1/executions/:id/timeout`
 - `POST /v1/executions/:id/succeed`
 - `POST /v1/executions/:id/fail`
+- `POST /v1/executions/:id/provider-dead-letter/ack`
 
 ### Execution read endpoints
 
@@ -129,6 +130,7 @@ Also accepted:
 Examples:
 
 - `GET /v1/executions/:id`
+- `GET /v1/executions/provider-dead-letters`
 
 When a dedicated execution read-only principal exists, runtime helpers should prefer `executions:read` before falling back to `executions:manage`.
 

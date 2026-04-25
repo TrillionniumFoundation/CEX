@@ -1072,12 +1072,59 @@ async fn provider_dead_letters_lists_terminal_provider_failures_with_filters() {
             && item["retry_budget_exhausted"] == true
     }));
 
-    let (status, timeout_items) =
-        get_json(app, "/v1/executions/provider-dead-letters?kind=timeout").await;
+    let (status, timeout_items) = get_json(
+        app.clone(),
+        "/v1/executions/provider-dead-letters?kind=timeout",
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     let timeout_items = timeout_items.as_array().expect("timeout array");
     assert_eq!(timeout_items.len(), 1);
     assert_eq!(timeout_items[0]["execution_id"], timeout_id.to_string());
+
+    let (ack_status, acked) = send_json(
+        app.clone(),
+        "POST",
+        &format!("/v1/executions/{billing_id}/provider-dead-letter/ack"),
+        json!({"acknowledged_by":"operator-1","note":"billing tracked externally"}),
+    )
+    .await;
+    assert_eq!(ack_status, StatusCode::OK);
+    assert_eq!(acked["execution_id"], billing_id.to_string());
+    assert_eq!(acked["acknowledged"], true);
+    assert_eq!(acked["acknowledged_by"], "operator-1");
+
+    let (status, active_items) =
+        get_json(app.clone(), "/v1/executions/provider-dead-letters").await;
+    assert_eq!(status, StatusCode::OK);
+    let active_items = active_items.as_array().expect("active dead-letter array");
+    assert_eq!(active_items.len(), 1);
+    assert_eq!(active_items[0]["execution_id"], timeout_id.to_string());
+
+    let (status, acknowledged_items) = get_json(
+        app.clone(),
+        "/v1/executions/provider-dead-letters?acknowledged_only=true",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let acknowledged_items = acknowledged_items
+        .as_array()
+        .expect("acknowledged dead-letter array");
+    assert_eq!(acknowledged_items.len(), 1);
+    assert_eq!(
+        acknowledged_items[0]["execution_id"],
+        billing_id.to_string()
+    );
+
+    let (status, info) = get_json(app, "/v1/info").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(info["runtime"]["provider_failures"]["total"], 2);
+    assert_eq!(info["runtime"]["provider_failures"]["billing"], 0);
+    assert_eq!(info["runtime"]["provider_failures"]["dead_letter"], 1);
+    assert_eq!(
+        info["runtime"]["provider_failures"]["acknowledged_dead_letter"],
+        1
+    );
 }
 
 #[tokio::test]

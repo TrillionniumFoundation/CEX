@@ -37,6 +37,10 @@ pub fn build_router(state: AppState) -> Router {
             post(api::timeout_expired_executions),
         )
         .route("/v1/executions/:id", get(api::get_execution))
+        .route(
+            "/v1/executions/:id/provider-dead-letter/ack",
+            post(api::acknowledge_provider_dead_letter),
+        )
         .route("/v1/executions/:id/approve", post(api::approve_execution))
         .route("/v1/executions/:id/reject", post(api::reject_execution))
         .route("/v1/executions/:id/dispatch", post(api::dispatch_execution))
