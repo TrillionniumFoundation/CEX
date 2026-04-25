@@ -3,14 +3,15 @@ param()
 
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
-if (-not (Test-Path (Join-Path $projectRoot '.env'))) {
+$explicitEnvFile = [System.Environment]::GetEnvironmentVariable('CEX_ENV_FILE', 'Process')
+if (-not $explicitEnvFile -and -not (Test-Path (Join-Path $projectRoot '.env'))) {
     Copy-Item (Join-Path $projectRoot '.env.example') (Join-Path $projectRoot '.env') -Force
     Write-Host 'Created .env from .env.example'
 }
 
 . (Join-Path $PSScriptRoot '_dev-helpers.ps1')
 $dockerExe = Get-CexDockerExe
-$env:PATH = (Split-Path $dockerExe -Parent) + ';' + $env:PATH
+$env:PATH = (Split-Path $dockerExe -Parent) + [System.IO.Path]::PathSeparator + $env:PATH
 Push-Location $projectRoot
 try {
     & $dockerExe compose up -d
@@ -29,4 +30,3 @@ Write-Host '  powershell -ExecutionPolicy Bypass -File scripts\start-rust-servic
 Write-Host '  powershell -ExecutionPolicy Bypass -File scripts\start-rust-service.ps1 -Package execution-service'
 Write-Host '  powershell -ExecutionPolicy Bypass -File scripts\start-rust-service.ps1 -Package audit-service'
 Write-Host '  powershell -ExecutionPolicy Bypass -File scripts\start-rust-service.ps1 -Package gateway-service'
-

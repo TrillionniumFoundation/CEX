@@ -12,6 +12,7 @@ This page records evidence for production-readiness claims. It is intentionally 
 | Linux full runtime gate | `scripts/gate-local-linux.sh --skip-workspace --skip-db-bootstrap` with core + entry services and metrics smoke | PASS |
 | Docker-backed Linux full gate | `scripts/gate-local-linux.sh` with Docker Postgres migrations/seeding via passwordless `sudo docker`, core + entry services, ignored runtime suites, and metrics smoke | PASS |
 | PowerShell service-local gate on Linux | `pwsh -NoLogo -NoProfile -File ./gate-local.ps1 -ServiceLocalOnly` after installing PowerShell 7.6.1; cargo service-local slices passed and runtime was restored with local-production profile | PASS |
+| PowerShell full gate on Linux | `pwsh -NoLogo -NoProfile -File ./gate-local.ps1` after cross-platform Docker/PowerShell/runtime fixes; service-local slices, detached runtime restart, audit/identity/gateway ignored runtime suites, and approval probe all passed | PASS |
 | Local readiness smoke | `CEX_READINESS_MODE=local CEX_PROVIDER_PROBE_MODEL=google/gemini-2.5-flash scripts/check-production-readiness.sh` | PASS |
 | Local production-posture smoke | `CEX_ENV_FILE=run/local-production/.env CEX_PROVIDER_PROBE_MODEL=google/gemini-2.5-flash scripts/check-production-readiness.sh` | PASS |
 | Live provider probe | `scripts/probe-openclaw-provider.sh --model google/gemini-2.5-flash` | PASS |
@@ -19,14 +20,16 @@ This page records evidence for production-readiness claims. It is intentionally 
 | Short local soak | `CEX_SOAK_DURATION_SECONDS=60 CEX_SOAK_INTERVAL_SECONDS=15 CEX_PROVIDER_PROBE_MODEL=google/gemini-2.5-flash scripts/soak-runtime.sh` | PASS |
 | 10-minute local soak | `CEX_READINESS_MODE=local CEX_SOAK_DURATION_SECONDS=600 CEX_SOAK_INTERVAL_SECONDS=60 CEX_PROVIDER_PROBE_MODEL=google/gemini-2.5-flash scripts/soak-runtime.sh` | PASS |
 | Local production-posture soak | `CEX_ENV_FILE=run/local-production/.env CEX_SOAK_DURATION_SECONDS=300 CEX_SOAK_INTERVAL_SECONDS=60 CEX_PROVIDER_PROBE_MODEL=google/gemini-2.5-flash scripts/soak-runtime.sh` (summary `run/soak/soak-20260425T055657Z-248676.summary.json`) | PASS |
+| 1-hour local production-posture soak | `CEX_ENV_FILE=run/local-production/.env CEX_SOAK_DURATION_SECONDS=3600 CEX_SOAK_INTERVAL_SECONDS=60 CEX_SOAK_SKIP_PROVIDER_PROBE=1 scripts/soak-runtime.sh` (summary `run/soak/soak-20260425T064637Z-302074.summary.json`) | PASS |
 | DB backup/restore drill | `scripts/drill-db-backup-restore.sh` using Docker Postgres backup, temporary restore DB, and core table count comparison (summary `run/drills/db-backup-restore-20260425T063804Z-289267.summary.json`) | PASS |
+| Latest production readiness signoff smoke | `CEX_ENV_FILE=run/local-production/.env CEX_PROVIDER_PROBE_MODEL=google/gemini-2.5-flash scripts/check-production-readiness.sh` after 1-hour soak and fresh DB restore drill | PASS |
 
 ## Active blockers to a truthful 100% claim
 
-- PowerShell 7.6.1 is now installed and `gate-local.ps1 -ServiceLocalOnly` passes under Linux PowerShell Core, but a true Windows-native full gate still has not run on a Windows host.
+- PowerShell 7.6.1 is now installed and the full `gate-local.ps1` passes under Linux PowerShell Core, including runtime blackbox/probe suites; a true Windows-host-native run is still not available on this machine.
 - Direct non-sudo Docker socket access for user `qian` is still denied, but passwordless `sudo docker` is available and the Docker-backed Linux gate now passes through that path.
 - The current strict production profile pass and soak use generated local secrets under `run/local-production/.env`; they validate posture mechanics but are not a real secret-management or deployment environment.
-- Formal production deployment, migration rollback strategy beyond restore-from-backup, and longer soak windows still need real environment evidence. A local Docker Postgres backup/restore drill now passes.
+- Formal production deployment and migration rollback strategy beyond restore-from-backup still need real environment evidence. A local Docker Postgres backup/restore drill and a 1-hour local-production soak now pass.
 - MiniMax remains provider-account blocked by billing/credit errors; OpenAI Codex remains quota/plan blocked. Google Gemini is the currently validated successful external provider path.
 - The latest production readiness rerun after the temporary Google rate-limit window cleared passed again with the required live Google provider probe. Production mode now also requires a fresh DB backup/restore drill summary by default.
 

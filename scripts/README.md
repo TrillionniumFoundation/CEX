@@ -14,7 +14,7 @@ or CI-safe/service-local mode:
 powershell -ExecutionPolicy Bypass -File .\gate-local.ps1 -ServiceLocalOnly
 ```
 
-The PowerShell helper also honors `CEX_ENV_FILE`, then `.env`, then `.env.example`; this lets PowerShell Core run service-local gates on Linux without requiring a checked-in `.env`.
+The PowerShell helper also honors `CEX_ENV_FILE`, then `.env`, then `.env.example`; this lets PowerShell Core run service-local and full core-runtime gates on Linux without requiring a checked-in `.env`. On Linux, PowerShell Docker discovery also falls back to a repo-local `sudo -n docker` shim when direct Docker socket access is denied.
 
 On Linux, use the repo-local equivalent full gate:
 

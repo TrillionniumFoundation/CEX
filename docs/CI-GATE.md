@@ -100,7 +100,7 @@ Helpful flags:
 
 Use `--skip-db-bootstrap` when the database is already provisioned but the current user does not have a usable `psql` client or Docker access for applying migrations/seeding. When direct Docker socket access is denied but passwordless `sudo docker` is available, the Linux helper automatically falls back to `sudo -n docker` for containerized Postgres; set `CEX_DOCKER_USE_SUDO=1` to force that path.
 
-PowerShell Core on Linux can run `gate-local.ps1 -ServiceLocalOnly` for the service-local Rust slices. The PowerShell dotenv helper honors `CEX_ENV_FILE`, then `.env`, then `.env.example`, matching the Linux helper fallback. Full runtime PowerShell orchestration is still Windows-oriented; use `scripts/gate-local-linux.sh` for Linux runtime gates.
+PowerShell Core on Linux can run `gate-local.ps1` end-to-end for the current core runtime gate. The PowerShell dotenv helper honors `CEX_ENV_FILE`, then `.env`, then `.env.example`, matching the Linux helper fallback; Docker discovery falls back to a repo-local `sudo -n docker` shim when direct socket access is unavailable. Use `scripts/gate-local-linux.sh` for the Linux-native core+entry runtime gate and metrics smoke.
 
 ## Under the hood
 

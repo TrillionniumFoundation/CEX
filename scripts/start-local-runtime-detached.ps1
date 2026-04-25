@@ -6,8 +6,11 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot '_dev-helpers.ps1')
 $runDir = Join-Path $projectRoot 'run'
+$logDir = Join-Path $projectRoot 'logs'
 New-Item -ItemType Directory -Force -Path $runDir | Out-Null
+New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 
 if ($Restart) {
     & (Join-Path $PSScriptRoot 'stop-local-runtime.ps1')
@@ -20,6 +23,7 @@ if (-not $SkipBuild) {
 }
 
 $services = @('identity-service','ledger-service','execution-service','audit-service','capability-service','gateway-service')
+$powerShellExe = Get-CexPowerShellExe
 foreach ($pkg in $services) {
     $pidFile = Join-Path $runDir ("{0}.pid" -f $pkg)
     $existingProc = $null
@@ -43,10 +47,17 @@ foreach ($pkg in $services) {
 
     Remove-Item -LiteralPath $pidFile -Force -ErrorAction SilentlyContinue
 
-    Start-Process -FilePath 'powershell.exe' `
-        -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',(Join-Path $PSScriptRoot 'service-host.ps1'),'-Package',$pkg) `
-        -WorkingDirectory $projectRoot `
-        -WindowStyle Hidden
+    $startProcessArgs = @{
+        FilePath = $powerShellExe
+        ArgumentList = @('-NoProfile','-ExecutionPolicy','Bypass','-File',(Join-Path $PSScriptRoot 'service-host.ps1'),'-Package',$pkg)
+        WorkingDirectory = $projectRoot
+        RedirectStandardOutput = (Join-Path $logDir ("{0}.host.out.log" -f $pkg))
+        RedirectStandardError = (Join-Path $logDir ("{0}.host.err.log" -f $pkg))
+    }
+    if ($IsWindows) {
+        $startProcessArgs['WindowStyle'] = 'Hidden'
+    }
+    Start-Process @startProcessArgs
 
     Start-Sleep -Seconds 1
 }

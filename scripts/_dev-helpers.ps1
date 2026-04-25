@@ -443,6 +443,13 @@ function Get-CexFlowCheckpointObject {
 }
 
 function Enter-CexVsDevShell {
+    if (-not $IsWindows) {
+        if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
+            throw 'cargo not found in PATH'
+        }
+        return
+    }
+
     $launchScript = 'D:\VSstudio\Common7\Tools\Launch-VsDevShell.ps1'
     if (-not (Test-Path $launchScript)) {
         throw "Launch-VsDevShell.ps1 not found at $launchScript"
@@ -456,6 +463,32 @@ function Enter-CexVsDevShell {
 }
 
 function Get-CexDockerExe {
+    if (-not $IsWindows) {
+        $dockerCommand = Get-Command docker -ErrorAction SilentlyContinue
+        if ($dockerCommand) {
+            & $dockerCommand.Source info *> $null
+            if ($LASTEXITCODE -eq 0) {
+                return $dockerCommand.Source
+            }
+
+            $sudoCommand = Get-Command sudo -ErrorAction SilentlyContinue
+            if ($sudoCommand) {
+                & $sudoCommand.Source -n $dockerCommand.Source info *> $null
+                if ($LASTEXITCODE -eq 0) {
+                    $shimDir = Join-Path $script:ProjectRoot 'run/powershell-shims'
+                    New-Item -ItemType Directory -Force -Path $shimDir | Out-Null
+                    $shimPath = Join-Path $shimDir 'docker.exe'
+                    @('#!/usr/bin/env bash', 'exec sudo -n docker "$@"') -join "`n" |
+                        Set-Content -LiteralPath $shimPath -Encoding utf8NoBOM
+                    chmod +x $shimPath
+                    return $shimPath
+                }
+            }
+
+            return $dockerCommand.Source
+        }
+    }
+
     foreach ($candidate in @(
         'D:\Docker\DockerDesktop\resources\bin\docker.exe',
         'C:\Program Files\Docker\Docker\resources\bin\docker.exe'
@@ -466,6 +499,17 @@ function Get-CexDockerExe {
     }
 
     throw 'docker.exe not found'
+}
+
+function Get-CexPowerShellExe {
+    foreach ($candidate in @('powershell.exe', 'powershell', 'pwsh')) {
+        $command = Get-Command $candidate -ErrorAction SilentlyContinue
+        if ($command) {
+            return $command.Source
+        }
+    }
+
+    throw 'PowerShell executable not found'
 }
 
 function Wait-CexPostgresReady {
