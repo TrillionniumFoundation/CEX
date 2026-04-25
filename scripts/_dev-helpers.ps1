@@ -2,11 +2,28 @@
 
 function Import-CexDotEnv {
     param(
-        [string]$Path = (Join-Path $script:ProjectRoot '.env')
+        [string]$Path = $null
     )
 
-    if (-not (Test-Path $Path)) {
-        throw ".env not found at $Path"
+    if (-not $Path) {
+        $explicitPath = [System.Environment]::GetEnvironmentVariable('CEX_ENV_FILE', 'Process')
+        if ($explicitPath) {
+            $Path = $explicitPath
+        }
+        else {
+            $envPath = Join-Path $script:ProjectRoot '.env'
+            $examplePath = Join-Path $script:ProjectRoot '.env.example'
+            if (Test-Path $envPath) {
+                $Path = $envPath
+            }
+            elseif (Test-Path $examplePath) {
+                $Path = $examplePath
+            }
+        }
+    }
+
+    if (-not $Path -or -not (Test-Path $Path)) {
+        throw ".env not found; set CEX_ENV_FILE or create .env/.env.example"
     }
 
     Get-Content -LiteralPath $Path | ForEach-Object {

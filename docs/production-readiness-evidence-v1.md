@@ -11,6 +11,7 @@ This page records evidence for production-readiness claims. It is intentionally 
 | Workspace tests | `cargo test -p execution-service` after provider failure ack + policy bundle changes | PASS |
 | Linux full runtime gate | `scripts/gate-local-linux.sh --skip-workspace --skip-db-bootstrap` with core + entry services and metrics smoke | PASS |
 | Docker-backed Linux full gate | `scripts/gate-local-linux.sh` with Docker Postgres migrations/seeding via passwordless `sudo docker`, core + entry services, ignored runtime suites, and metrics smoke | PASS |
+| PowerShell service-local gate on Linux | `pwsh -NoLogo -NoProfile -File ./gate-local.ps1 -ServiceLocalOnly` after installing PowerShell 7.6.1; cargo service-local slices passed and runtime was restored with local-production profile | PASS |
 | Local readiness smoke | `CEX_READINESS_MODE=local CEX_PROVIDER_PROBE_MODEL=google/gemini-2.5-flash scripts/check-production-readiness.sh` | PASS |
 | Local production-posture smoke | `CEX_ENV_FILE=run/local-production/.env CEX_PROVIDER_PROBE_MODEL=google/gemini-2.5-flash scripts/check-production-readiness.sh` | PASS |
 | Live provider probe | `scripts/probe-openclaw-provider.sh --model google/gemini-2.5-flash` | PASS |
@@ -22,7 +23,7 @@ This page records evidence for production-readiness claims. It is intentionally 
 
 ## Active blockers to a truthful 100% claim
 
-- Windows-native `gate-local.ps1` still has not run on this host because PowerShell is unavailable.
+- PowerShell 7.6.1 is now installed and `gate-local.ps1 -ServiceLocalOnly` passes under Linux PowerShell Core, but a true Windows-native full gate still has not run on a Windows host.
 - Direct non-sudo Docker socket access for user `qian` is still denied, but passwordless `sudo docker` is available and the Docker-backed Linux gate now passes through that path.
 - The current strict production profile pass and soak use generated local secrets under `run/local-production/.env`; they validate posture mechanics but are not a real secret-management or deployment environment.
 - Formal production deployment, migration rollback strategy beyond restore-from-backup, and longer soak windows still need real environment evidence. A local Docker Postgres backup/restore drill now passes.

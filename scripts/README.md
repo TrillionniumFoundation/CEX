@@ -14,6 +14,8 @@ or CI-safe/service-local mode:
 powershell -ExecutionPolicy Bypass -File .\gate-local.ps1 -ServiceLocalOnly
 ```
 
+The PowerShell helper also honors `CEX_ENV_FILE`, then `.env`, then `.env.example`; this lets PowerShell Core run service-local gates on Linux without requiring a checked-in `.env`.
+
 On Linux, use the repo-local equivalent full gate:
 
 ```bash
