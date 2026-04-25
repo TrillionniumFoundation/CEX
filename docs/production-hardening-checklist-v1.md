@@ -82,7 +82,8 @@ Current repo status:
 - execution retry budget exists; queued-worker provider failures now also distinguish retryable vs non-retryable classes, so timeout / rate-limit / provider-unavailable failures can auto-requeue with bounded exponential backoff while billing/auth-style failures still terminate and refund rather than loop
 - approval threshold exists
 - execution policy now supports configurable approval/block keywords, capability-prefix rules, and optional hard reserve reject threshold
-- policy still remains service-local and env-driven, not yet a full standalone policy/risk layer
+- execution policy can now load a repo/local JSON bundle via `EXECUTION_POLICY_BUNDLE_PATH` (example: `config/execution-policy.production.example.json`), with emergency env overrides still taking precedence and load status exposed through `/v1/info.policy`
+- policy still remains service-local and file/env-driven, not yet a full standalone DB-backed policy/risk layer
 
 Still missing:
 

@@ -172,6 +172,9 @@ struct RefundingOutcome {
 
 #[derive(Serialize)]
 pub struct ExecutionPolicyInfo {
+    pub policy_bundle_path: Option<String>,
+    pub policy_bundle_load_status: String,
+    pub policy_bundle_load_error: Option<String>,
     pub approval_reserve_threshold: f64,
     pub hard_reject_reserve_threshold: Option<f64>,
     pub approval_sensitive_keywords: Vec<String>,
@@ -386,6 +389,9 @@ pub async fn execution_info(State(state): State<AppState>) -> Json<ExecutionInfo
         service: "execution-service",
         state_machine: "created -> policy_check_pending -> awaiting_approval|queued -> dispatching -> running -> succeeded|failed|timed_out|cancelled with durable ledger settlement/refund",
         policy: ExecutionPolicyInfo {
+            policy_bundle_path: state.policy_bundle_path.clone(),
+            policy_bundle_load_status: state.policy_bundle_load_status.clone(),
+            policy_bundle_load_error: state.policy_bundle_load_error.clone(),
             approval_reserve_threshold: state.approval_reserve_threshold,
             hard_reject_reserve_threshold: state.hard_reject_reserve_threshold,
             approval_sensitive_keywords: state.approval_sensitive_keywords.as_ref().clone(),
