@@ -223,6 +223,42 @@
 
 ---
 
+## A4b. Provider dead-letter / retry budget exhausted
+
+### Condition
+
+触发当：
+
+- `execution.operator_signals.provider_dead_letters.alert == true`
+- 或 `execution.operator_signals.provider_retry_budget_exhausted.alert == true`
+
+阈值来源：
+
+- `ALERT_PROVIDER_DEAD_LETTER_THRESHOLD`
+- `ALERT_PROVIDER_RETRY_BUDGET_EXHAUSTED_THRESHOLD`
+
+### Severity
+
+- 默认：`critical`
+
+这表示 provider-backed execution 已进入不应盲目自动重试的终态：要么是 billing/auth/unknown 这类不可重试失败，要么是 timeout/rate-limit/unavailable 在耗尽 attempt budget 后仍失败。
+
+### First action
+
+1. 看 `runtime.provider_failures`
+2. 先区分 `non_retryable_terminal` 与 `retry_budget_exhausted`
+3. 对 billing/auth 类先处理 provider/key/余额，不要批量 retry
+4. 对 timeout/unavailable 类先看 provider 健康与 OpenClaw bridge 日志，再决定是否切 provider 或手动 retry
+
+### Likely causes
+
+- provider 余额不足或 key/auth 错误
+- provider 持续 timeout / unavailable
+- 某个 provider bridge 出口退化
+- retry/backoff 已尽但上游仍未恢复
+
+---
+
 ## A5. Audit write failures
 
 ### Condition
