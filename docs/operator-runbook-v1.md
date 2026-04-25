@@ -488,6 +488,7 @@ curl -s -H 'x-admin-token: <admin-token>' 'http://127.0.0.1:7003/v1/executions/p
 ```bash
 curl -s http://127.0.0.1:8080/health
 curl -s http://127.0.0.1:8080/v1/info | jq
+curl -s http://127.0.0.1:8080/metrics | grep -E 'cex_gateway_runtime_counter_total|cex_gateway_operator_signal_active'
 curl -s http://127.0.0.1:7003/health
 curl -s http://127.0.0.1:7003/v1/info | jq
 curl -s http://127.0.0.1:7003/metrics | grep -E 'cex_execution_runtime_up|cex_execution_provider_failures_total|cex_execution_operator_signal_active'

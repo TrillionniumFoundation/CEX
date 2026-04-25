@@ -30,6 +30,7 @@ struct GatewayInfo {
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
+        .route("/metrics", get(metrics))
         .route("/v1/info", get(info))
         .route("/v1/invocations", post(create_invocation))
         .route("/v1/invocations/:id", get(get_invocation))
@@ -43,6 +44,21 @@ async fn health() -> &'static str {
     "gateway-service ok"
 }
 
+async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
+    let snapshot = state.metrics.snapshot();
+    let signals = build_gateway_operator_signals(&state);
+    let mut body = render_gateway_metrics_header();
+    append_gateway_runtime_metrics(&mut body, &snapshot);
+    append_gateway_operator_signal_metrics(&mut body, &signals);
+
+    (
+        StatusCode::OK,
+        [("content-type", "text/plain; version=0.0.4; charset=utf-8")],
+        body,
+    )
+        .into_response()
+}
+
 fn build_gateway_operator_signals(state: &AppState) -> GatewayOperatorSignals {
     let metrics = state.metrics.snapshot();
     GatewayOperatorSignals {
@@ -53,6 +69,124 @@ fn build_gateway_operator_signals(state: &AppState) -> GatewayOperatorSignals {
                 >= state.alert_gateway_upstream_failure_threshold,
         },
     }
+}
+
+fn render_gateway_metrics_header() -> String {
+    concat!(
+        "# HELP cex_gateway_runtime_counter_total Gateway-service in-process counters.\n",
+        "# TYPE cex_gateway_runtime_counter_total counter\n",
+        "# HELP cex_gateway_operator_signal_active Gateway operator signal active flag.\n",
+        "# TYPE cex_gateway_operator_signal_active gauge\n",
+        "# HELP cex_gateway_operator_signal_value Gateway operator signal value.\n",
+        "# TYPE cex_gateway_operator_signal_value gauge\n",
+        "# HELP cex_gateway_operator_signal_threshold Gateway operator signal threshold.\n",
+        "# TYPE cex_gateway_operator_signal_threshold gauge\n",
+    )
+    .to_string()
+}
+
+fn append_gateway_runtime_metrics(body: &mut String, metrics: &GatewayRuntimeMetricsSnapshot) {
+    append_labeled_metric(
+        body,
+        "cex_gateway_runtime_counter_total",
+        "invocation_create_requests",
+        metrics.invocation_create_requests,
+    );
+    append_labeled_metric(
+        body,
+        "cex_gateway_runtime_counter_total",
+        "invocation_create_auth_failures",
+        metrics.invocation_create_auth_failures,
+    );
+    append_labeled_metric(
+        body,
+        "cex_gateway_runtime_counter_total",
+        "invocation_create_capability_failures",
+        metrics.invocation_create_capability_failures,
+    );
+    append_labeled_metric(
+        body,
+        "cex_gateway_runtime_counter_total",
+        "invocation_create_upstream_failures",
+        metrics.invocation_create_upstream_failures,
+    );
+    append_labeled_metric(
+        body,
+        "cex_gateway_runtime_counter_total",
+        "invocation_get_requests",
+        metrics.invocation_get_requests,
+    );
+    append_labeled_metric(
+        body,
+        "cex_gateway_runtime_counter_total",
+        "invocation_get_auth_failures",
+        metrics.invocation_get_auth_failures,
+    );
+    append_labeled_metric(
+        body,
+        "cex_gateway_runtime_counter_total",
+        "execution_approve_requests",
+        metrics.execution_approve_requests,
+    );
+    append_labeled_metric(
+        body,
+        "cex_gateway_runtime_counter_total",
+        "execution_retry_requests",
+        metrics.execution_retry_requests,
+    );
+    append_labeled_metric(
+        body,
+        "cex_gateway_runtime_counter_total",
+        "execution_cancel_requests",
+        metrics.execution_cancel_requests,
+    );
+}
+
+fn append_gateway_operator_signal_metrics(body: &mut String, signals: &GatewayOperatorSignals) {
+    append_gateway_operator_signal_metric(
+        body,
+        "invocation_create_upstream_failures",
+        &signals.invocation_create_upstream_failures,
+    );
+}
+
+fn append_gateway_operator_signal_metric(
+    body: &mut String,
+    name: &'static str,
+    signal: &GatewayAlertSignal,
+) {
+    append_labeled_metric(
+        body,
+        "cex_gateway_operator_signal_active",
+        name,
+        if signal.alert { 1 } else { 0 },
+    );
+    append_labeled_metric(
+        body,
+        "cex_gateway_operator_signal_value",
+        name,
+        signal.value,
+    );
+    append_labeled_metric(
+        body,
+        "cex_gateway_operator_signal_threshold",
+        name,
+        signal.threshold,
+    );
+}
+
+fn append_labeled_metric(
+    body: &mut String,
+    metric: &'static str,
+    name: &'static str,
+    value: impl std::fmt::Display,
+) {
+    body.push_str(metric);
+    body.push_str("{name=\"");
+    body.push_str(name);
+    body.push_str("\"} ");
+    body.push_str(&value.to_string());
+    body.push('\n');
 }
 
 async fn info(State(state): State<AppState>) -> Json<GatewayInfo> {
