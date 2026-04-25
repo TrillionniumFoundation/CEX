@@ -16,5 +16,8 @@
   "approval_capability_prefixes": [
     "cap.openclaw.model."
   ],
-  "block_capability_prefixes": []
+  "block_capability_prefixes": [
+    "cap.openclaw.model.minimax.",
+    "cap.openclaw.model.openai-codex."
+  ]
 }

@@ -16,6 +16,7 @@ CEX_READINESS_MODE="${CEX_READINESS_MODE:-production}"
 CEX_DB_BACKUP_RESTORE_DRILL_REQUIRED="${CEX_DB_BACKUP_RESTORE_DRILL_REQUIRED:-}"
 CEX_DB_BACKUP_RESTORE_DRILL_SUMMARY_PATH="${CEX_DB_BACKUP_RESTORE_DRILL_SUMMARY_PATH:-}"
 CEX_DB_BACKUP_RESTORE_DRILL_MAX_AGE_SECONDS="${CEX_DB_BACKUP_RESTORE_DRILL_MAX_AGE_SECONDS:-86400}"
+CEX_REQUIRED_BLOCK_CAPABILITY_PREFIXES="${CEX_REQUIRED_BLOCK_CAPABILITY_PREFIXES:-}"
 
 case "$CEX_READINESS_MODE" in
   local|production) ;;
@@ -65,6 +66,11 @@ file_has_group_or_other_permissions() {
   local mode
   mode="$(stat -c '%a' "$path")"
   (( (8#$mode & 077) != 0 ))
+}
+
+csv_items() {
+  local raw="$1"
+  tr ',' '\n' <<<"$raw" | sed 's/^ *//;s/ *$//' | awk 'length > 0'
 }
 
 section 'deployment posture'
@@ -173,6 +179,38 @@ if bash "$SCRIPT_DIR/runtime-manager-linux.sh" status; then
   pass 'runtime status'
 else
   fail 'runtime status'
+fi
+
+section 'execution policy posture'
+if [[ "$CEX_READINESS_MODE" == "local" ]]; then
+  pass 'local readiness posture selected (execution policy posture checks skipped)'
+else
+  policy_info_file="$(mktemp)"
+  if curl -fsS "$EXECUTION_BASE_URL/v1/info" >"$policy_info_file"; then
+    policy_status="$(jq -r '.policy.policy_bundle_load_status // "unknown"' "$policy_info_file")"
+    if [[ "$policy_status" == "loaded" ]]; then
+      pass 'execution policy bundle loaded'
+    else
+      fail "execution policy bundle is not loaded (status=$policy_status)"
+    fi
+    if [[ -n "$CEX_REQUIRED_BLOCK_CAPABILITY_PREFIXES" ]]; then
+      missing_policy_prefixes=0
+      while IFS= read -r required_prefix; do
+        if jq -e --arg prefix "$required_prefix" '.policy.block_capability_prefixes // [] | index($prefix) != null' "$policy_info_file" >/dev/null; then
+          :
+        else
+          missing_policy_prefixes=$((missing_policy_prefixes + 1))
+          fail "execution policy must block non-launch capability prefix: $required_prefix"
+        fi
+      done < <(csv_items "$CEX_REQUIRED_BLOCK_CAPABILITY_PREFIXES")
+      if [[ "$missing_policy_prefixes" -eq 0 ]]; then
+        pass 'required non-launch capability prefixes blocked'
+      fi
+    fi
+  else
+    fail 'execution info endpoint unreachable for policy posture'
+  fi
+  rm -f "$policy_info_file"
 fi
 
 section 'native metrics smoke'

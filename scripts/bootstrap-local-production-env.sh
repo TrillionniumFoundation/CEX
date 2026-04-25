@@ -163,6 +163,7 @@ lines = [
     "MATRIX_ENTRY_CONSUMER_SESSION_AUTH_AUDIENCE=consumer-entry-api",
     "MATRIX_ENTRY_CONSUMER_SESSION_AUTH_TTL_SECS=300",
     f"EXECUTION_POLICY_BUNDLE_PATH={out_dir / 'config/execution-policy.json'}",
+    "CEX_REQUIRED_BLOCK_CAPABILITY_PREFIXES=cap.openclaw.model.minimax.,cap.openclaw.model.openai-codex.",
     "CEX_READINESS_MODE=production",
 ]
 
