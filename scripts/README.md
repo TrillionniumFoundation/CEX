@@ -77,6 +77,8 @@ It now aggregates:
 - core surfaces: `gateway /v1/info`, `execution /v1/info`
 - supporting product-edge surfaces: `consumer-entry-api /health`, `matrix-entry-adapter /health`
 
+Provider-backed execution dead letters can be drilled from the execution service with `GET /v1/executions/provider-dead-letters`; `check-operator-signals.sh` treats `execution:provider_dead_letters` and `execution:provider_retry_budget_exhausted` as critical by default.
+
 It also promotes a small set of entry-surface metrics into warn signals via env-driven thresholds:
 
 - `ALERT_CONSUMER_ENTRY_RATE_LIMITED_THRESHOLD` (default `20`)

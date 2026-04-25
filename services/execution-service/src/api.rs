@@ -277,6 +277,34 @@ pub struct WorkerQueueExecutionView {
     pub claimable: bool,
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct ProviderDeadLetterQuery {
+    pub limit: Option<usize>,
+    pub kind: Option<String>,
+    pub retry_budget_exhausted_only: Option<bool>,
+    pub non_retryable_only: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProviderDeadLetterExecutionView {
+    pub execution_id: Uuid,
+    pub invocation_id: Uuid,
+    pub org_id: Option<String>,
+    pub status: ExecutionStatus,
+    pub provider_target: Option<String>,
+    pub provider_failure_kind: &'static str,
+    pub dead_letter_reason: &'static str,
+    pub retry_budget_exhausted: bool,
+    pub non_retryable_terminal: bool,
+    pub attempt_count: i32,
+    pub max_attempts: i32,
+    pub attempts_remaining: i32,
+    pub error: Option<String>,
+    pub created_at: chrono::DateTime<Utc>,
+    pub updated_at: chrono::DateTime<Utc>,
+    pub ended_at: Option<chrono::DateTime<Utc>>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct WorkerQueueSummary {
     pub total: usize,
@@ -756,6 +784,30 @@ pub async fn worker_queue_summary(
 
     match load_worker_queue_summary(&state, &admin).await {
         Ok(summary) => (StatusCode::OK, Json(summary)).into_response(),
+        Err(message) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": message })),
+        )
+            .into_response(),
+    }
+}
+
+pub async fn provider_dead_letters(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<ProviderDeadLetterQuery>,
+) -> impl IntoResponse {
+    let admin = match authorize_execution_admin(
+        &state,
+        &headers,
+        &["executions:read", "executions:manage"],
+    ) {
+        Ok(admin) => admin,
+        Err(response) => return response.into_response(),
+    };
+
+    match load_provider_dead_letters(&state, &admin, &query).await {
+        Ok(items) => (StatusCode::OK, Json(items)).into_response(),
         Err(message) => (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(json!({ "error": message })),
@@ -1716,6 +1768,15 @@ async fn load_all_execution_records(state: &AppState) -> Result<Vec<ExecutionRec
     }
 }
 
+async fn load_visible_execution_records(
+    state: &AppState,
+    admin: &AdminPrincipal,
+) -> Result<Vec<ExecutionRecord>, String> {
+    let mut records = load_all_execution_records(state).await?;
+    records.retain(|record| worker_queue_visible_to_admin(admin, record));
+    Ok(records)
+}
+
 async fn load_execution_runtime_overview(
     state: &AppState,
 ) -> Result<ExecutionRuntimeOverview, String> {
@@ -1800,13 +1861,69 @@ fn classify_provider_failure(record: &ExecutionRecord) -> Option<ProviderFailure
         return None;
     }
 
-    let error = record
+    let error = provider_error_text(record).unwrap_or("");
+    Some(classify_provider_error_text(error))
+}
+
+fn provider_error_text(record: &ExecutionRecord) -> Option<&str> {
+    record
         .result_payload
         .as_ref()
-        .and_then(|payload| payload.get("error"))
+        .and_then(|payload| {
+            payload
+                .get("error")
+                .or_else(|| payload.get("last_provider_error"))
+        })
         .and_then(|value| value.as_str())
-        .unwrap_or("");
-    Some(classify_provider_error_text(error))
+}
+
+fn provider_failure_kind_label(kind: ProviderFailureKind) -> &'static str {
+    match kind {
+        ProviderFailureKind::Billing => "billing",
+        ProviderFailureKind::Timeout => "timeout",
+        ProviderFailureKind::Auth => "auth",
+        ProviderFailureKind::RateLimited => "rate_limited",
+        ProviderFailureKind::Unavailable => "unavailable",
+        ProviderFailureKind::Unknown => "unknown",
+    }
+}
+
+fn parse_provider_failure_kind_filter(raw: &str) -> Result<ProviderFailureKind, String> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "billing" => Ok(ProviderFailureKind::Billing),
+        "timeout" => Ok(ProviderFailureKind::Timeout),
+        "auth" => Ok(ProviderFailureKind::Auth),
+        "rate_limited" | "rate-limited" | "ratelimited" => Ok(ProviderFailureKind::RateLimited),
+        "unavailable" => Ok(ProviderFailureKind::Unavailable),
+        "unknown" => Ok(ProviderFailureKind::Unknown),
+        other => Err(format!("invalid provider failure kind filter: {other}")),
+    }
+}
+
+fn provider_dead_letter_reason(
+    kind: ProviderFailureKind,
+    retry_budget_exhausted: bool,
+) -> &'static str {
+    if !provider_failure_retryable_kind(kind) {
+        "non_retryable_terminal"
+    } else if retry_budget_exhausted {
+        "retry_budget_exhausted"
+    } else {
+        "terminal_provider_failure"
+    }
+}
+
+fn truncate_provider_error_text(error: &str) -> String {
+    const MAX_CHARS: usize = 512;
+    let mut out = String::new();
+    for (idx, ch) in error.chars().enumerate() {
+        if idx >= MAX_CHARS {
+            out.push('…');
+            return out;
+        }
+        out.push(ch);
+    }
+    out
 }
 
 fn provider_failure_retryable_kind(kind: ProviderFailureKind) -> bool {
@@ -2127,6 +2244,73 @@ async fn load_worker_queue(
                 created_at: record.created_at,
                 updated_at: record.updated_at,
                 claimable,
+            })
+        })
+        .take(limit)
+        .collect())
+}
+
+async fn load_provider_dead_letters(
+    state: &AppState,
+    admin: &AdminPrincipal,
+    query: &ProviderDeadLetterQuery,
+) -> Result<Vec<ProviderDeadLetterExecutionView>, String> {
+    let limit = normalize_worker_queue_limit(query.limit);
+    let kind_filter = match query
+        .kind
+        .as_deref()
+        .map(str::trim)
+        .filter(|kind| !kind.is_empty())
+    {
+        Some(kind) => Some(parse_provider_failure_kind_filter(kind)?),
+        None => None,
+    };
+    let retry_budget_exhausted_only = query.retry_budget_exhausted_only.unwrap_or(false);
+    let non_retryable_only = query.non_retryable_only.unwrap_or(false);
+
+    let records = load_visible_execution_records(state, admin).await?;
+    Ok(records
+        .into_iter()
+        .filter_map(|record| {
+            let kind = classify_provider_failure(&record)?;
+            if !provider_failure_dead_letter(&record, kind) {
+                return None;
+            }
+            if let Some(kind_filter) = kind_filter {
+                if kind != kind_filter {
+                    return None;
+                }
+            }
+
+            let retry_budget_exhausted = provider_failure_retry_budget_exhausted(&record);
+            let non_retryable_terminal = !provider_failure_retryable_kind(kind);
+            if retry_budget_exhausted_only && !retry_budget_exhausted {
+                return None;
+            }
+            if non_retryable_only && !non_retryable_terminal {
+                return None;
+            }
+
+            let attempts_remaining = remaining_attempts(&record);
+            let dead_letter_reason = provider_dead_letter_reason(kind, retry_budget_exhausted);
+            let error = provider_error_text(&record).map(truncate_provider_error_text);
+            Some(ProviderDeadLetterExecutionView {
+                execution_id: record.execution_id,
+                invocation_id: record.invocation_id,
+                org_id: record.org_id,
+                status: record.status,
+                provider_target: record.provider_target,
+                provider_failure_kind: provider_failure_kind_label(kind),
+                dead_letter_reason,
+                retry_budget_exhausted,
+                non_retryable_terminal,
+                attempt_count: record.attempt_count,
+                max_attempts: record.max_attempts,
+                attempts_remaining,
+                error,
+                created_at: record.created_at,
+                updated_at: record.updated_at,
+                ended_at: record.ended_at,
             })
         })
         .take(limit)

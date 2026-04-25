@@ -246,9 +246,10 @@
 ### First action
 
 1. 看 `runtime.provider_failures`
-2. 先区分 `non_retryable_terminal` 与 `retry_budget_exhausted`
-3. 对 billing/auth 类先处理 provider/key/余额，不要批量 retry
-4. 对 timeout/unavailable 类先看 provider 健康与 OpenClaw bridge 日志，再决定是否切 provider 或手动 retry
+2. 拉清单：`curl -s -H 'x-admin-token: <admin-token>' http://127.0.0.1:7003/v1/executions/provider-dead-letters | jq`
+3. 先区分 `non_retryable_terminal` 与 `retry_budget_exhausted`
+4. 对 billing/auth 类先处理 provider/key/余额，不要批量 retry
+5. 对 timeout/unavailable 类先看 provider 健康与 OpenClaw bridge 日志，再决定是否切 provider 或手动 retry
 
 ### Likely causes
 

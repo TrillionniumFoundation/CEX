@@ -5,7 +5,10 @@ use axum::{
     Json, Router,
 };
 use chrono::{DateTime, Utc};
-use execution_service::{build_router, state::AppState};
+use execution_service::{
+    build_router,
+    state::{AppState, ExecutionRecord},
+};
 use serde_json::{json, Value};
 use shared_types::{ExecutionDispatchMode, ExecutionStatus};
 use std::{
@@ -26,6 +29,35 @@ fn test_state() -> AppState {
         ],
         Vec::new(),
     )
+}
+
+fn test_execution_record(
+    status: ExecutionStatus,
+    provider_target: Option<&str>,
+    error: Option<&str>,
+) -> ExecutionRecord {
+    let now = Utc::now();
+    ExecutionRecord {
+        execution_id: uuid::Uuid::new_v4(),
+        invocation_id: uuid::Uuid::new_v4(),
+        trace_id: uuid::Uuid::new_v4(),
+        org_id: Some("00000000-0000-0000-0000-00000000ce01".to_string()),
+        status,
+        provider_target: provider_target.map(str::to_string),
+        dispatch_mode: ExecutionDispatchMode::Manual,
+        attempt_count: 0,
+        max_attempts: 3,
+        worker_id: None,
+        lease_expires_at: None,
+        started_at: Some(now - chrono::Duration::seconds(20)),
+        ended_at: Some(now - chrono::Duration::seconds(10)),
+        result_payload: error.map(|error| json!({ "error": error })),
+        approval_required: false,
+        policy_reason: Some("auto-approved by configured policy".to_string()),
+        approved_by: None,
+        created_at: now - chrono::Duration::seconds(30),
+        updated_at: now - chrono::Duration::seconds(10),
+    }
 }
 
 struct MockProviderServer {
@@ -938,6 +970,67 @@ async fn worker_queue_summary_reports_visible_queue_counts() {
     assert_eq!(summary["retryable"], 3);
     assert_eq!(summary["retry_budget_exhausted"], 0);
     assert_eq!(summary["active_workers"], 1);
+}
+
+#[tokio::test]
+async fn provider_dead_letters_lists_terminal_provider_failures_with_filters() {
+    let state = test_state();
+    let billing = test_execution_record(
+        ExecutionStatus::Refunded,
+        Some("minimax://MiniMax-M2.5"),
+        Some("⚠️ minimax returned a billing error — insufficient balance (1008)"),
+    );
+    let billing_id = billing.execution_id;
+    let mut timeout_exhausted = test_execution_record(
+        ExecutionStatus::Failed,
+        Some("codex://gpt-5.4"),
+        Some("provider dispatch timed out after 60s"),
+    );
+    timeout_exhausted.attempt_count = 3;
+    timeout_exhausted.max_attempts = 3;
+    let timeout_id = timeout_exhausted.execution_id;
+    let mut timeout_still_retryable = test_execution_record(
+        ExecutionStatus::Failed,
+        Some("codex://gpt-5.4"),
+        Some("provider dispatch timed out after 60s"),
+    );
+    timeout_still_retryable.attempt_count = 1;
+    timeout_still_retryable.max_attempts = 3;
+
+    {
+        let mut map = state.executions.write().await;
+        map.insert(billing.execution_id, billing);
+        map.insert(timeout_exhausted.execution_id, timeout_exhausted);
+        map.insert(
+            timeout_still_retryable.execution_id,
+            timeout_still_retryable,
+        );
+    }
+
+    let app = build_router(state);
+    let (status, items) = get_json(app.clone(), "/v1/executions/provider-dead-letters").await;
+    assert_eq!(status, StatusCode::OK);
+    let items = items.as_array().expect("dead-letter array");
+    assert_eq!(items.len(), 2);
+    assert!(items.iter().any(|item| {
+        item["execution_id"] == billing_id.to_string()
+            && item["provider_failure_kind"] == "billing"
+            && item["dead_letter_reason"] == "non_retryable_terminal"
+            && item["non_retryable_terminal"] == true
+    }));
+    assert!(items.iter().any(|item| {
+        item["execution_id"] == timeout_id.to_string()
+            && item["provider_failure_kind"] == "timeout"
+            && item["dead_letter_reason"] == "retry_budget_exhausted"
+            && item["retry_budget_exhausted"] == true
+    }));
+
+    let (status, timeout_items) =
+        get_json(app, "/v1/executions/provider-dead-letters?kind=timeout").await;
+    assert_eq!(status, StatusCode::OK);
+    let timeout_items = timeout_items.as_array().expect("timeout array");
+    assert_eq!(timeout_items.len(), 1);
+    assert_eq!(timeout_items[0]["execution_id"], timeout_id.to_string());
 }
 
 #[tokio::test]

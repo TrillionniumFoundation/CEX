@@ -18,6 +18,10 @@ pub fn build_router(state: AppState) -> Router {
             "/v1/executions/worker-queue/summary",
             get(api::worker_queue_summary),
         )
+        .route(
+            "/v1/executions/provider-dead-letters",
+            get(api::provider_dead_letters),
+        )
         .route("/v1/executions/claim-next", post(api::claim_next_execution))
         .route(
             "/v1/executions/claim-batch",

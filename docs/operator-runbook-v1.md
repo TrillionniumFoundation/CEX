@@ -178,6 +178,33 @@
 2. 若 `lease_expired` 高，优先看 worker 稳定性与 provider latency
 3. 若 `retry_budget_exhausted` 高，优先抽样失败 execution，而不是盲目 requeue
 
+### 3.3.1 Symptom: provider dead-letter / retry budget exhausted
+
+先看：
+
+- `GET http://127.0.0.1:7003/v1/info`
+- `GET http://127.0.0.1:7003/v1/executions/provider-dead-letters`
+
+常用 drill：
+
+```bash
+curl -s -H 'x-admin-token: <admin-token>' http://127.0.0.1:7003/v1/executions/provider-dead-letters | jq
+curl -s -H 'x-admin-token: <admin-token>' 'http://127.0.0.1:7003/v1/executions/provider-dead-letters?kind=billing' | jq
+curl -s -H 'x-admin-token: <admin-token>' 'http://127.0.0.1:7003/v1/executions/provider-dead-letters?retry_budget_exhausted_only=true' | jq
+curl -s -H 'x-admin-token: <admin-token>' 'http://127.0.0.1:7003/v1/executions/provider-dead-letters?non_retryable_only=true' | jq
+```
+
+判断：
+
+- `dead_letter_reason=non_retryable_terminal`：先处理 billing/auth/unknown 根因，不要批量 retry
+- `dead_letter_reason=retry_budget_exhausted`：说明 timeout/rate-limit/unavailable 已跑穿 retry budget，先看 provider/bridge 健康和是否需要切 provider
+
+建议动作：
+
+1. 先按 `provider_failure_kind` 分组，不要把 billing 与 timeout 混在一起处理
+2. billing/auth 先修 key/余额/权限，再手动挑样本 retry
+3. timeout/unavailable 先查 OpenClaw bridge 和 provider 状态；确认恢复后再小批量 retry
+
 ### 3.4 Symptom: refund 失败
 
 先看：
@@ -464,6 +491,7 @@ curl -s http://127.0.0.1:8080/v1/info | jq
 curl -s http://127.0.0.1:7003/health
 curl -s http://127.0.0.1:7003/v1/info | jq
 curl -s http://127.0.0.1:7003/v1/executions/worker-queue/summary | jq
+curl -s -H 'x-admin-token: <admin-token>' http://127.0.0.1:7003/v1/executions/provider-dead-letters | jq
 curl -s http://127.0.0.1:7004/health
 curl -s http://127.0.0.1:7002/health
 curl -s http://127.0.0.1:8090/health
