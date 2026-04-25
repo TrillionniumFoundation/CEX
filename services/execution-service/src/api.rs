@@ -1975,6 +1975,8 @@ fn classify_provider_error_text(error: &str) -> ProviderFailureKind {
         || lowered.contains("billing error")
         || lowered.contains("run out of credits")
         || lowered.contains("quota")
+        || lowered.contains("chatgpt usage limit")
+        || (lowered.contains("usage limit") && lowered.contains("free plan"))
     {
         ProviderFailureKind::Billing
     } else if lowered.contains("timed out") || lowered.contains("timeout") {
@@ -5667,6 +5669,12 @@ mod tests {
     fn classify_provider_error_text_covers_operator_categories() {
         assert_eq!(
             classify_provider_error_text("insufficient balance (1008)"),
+            ProviderFailureKind::Billing
+        );
+        assert_eq!(
+            classify_provider_error_text(
+                "You have hit your ChatGPT usage limit (free plan). Try again later"
+            ),
             ProviderFailureKind::Billing
         );
         assert_eq!(
