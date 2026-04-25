@@ -72,3 +72,13 @@ CEX_ENV_FILE=run/local-production/.env \
   CEX_SOAK_INTERVAL_SECONDS=60 \
   ./scripts/soak-runtime.sh
 ```
+
+Final scoped signoff:
+
+```bash
+CEX_ENV_FILE=run/local-production/.env \
+  CEX_PROVIDER_PROBE_MODEL=google/gemini-2.5-flash \
+  ./scripts/check-production-signoff.sh
+```
+
+The signoff scope is `linux-self-hosted-local-production`: the current Linux self-hosted runtime profile, Docker-backed local infra, owner-only local production-posture secrets, Google Gemini as the launch provider, and policy-blocked non-launch providers.
