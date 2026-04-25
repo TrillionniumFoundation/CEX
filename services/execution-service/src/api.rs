@@ -1831,6 +1831,49 @@ fn classify_provider_error_text(error: &str) -> ProviderFailureKind {
     }
 }
 
+fn should_auto_retry_provider_failure(record: &ExecutionRecord, error: &str) -> bool {
+    matches!(record.dispatch_mode, ExecutionDispatchMode::QueuedWorker)
+        && has_worker_attempt_budget_remaining(record)
+        && matches!(
+            classify_provider_error_text(error),
+            ProviderFailureKind::Timeout
+                | ProviderFailureKind::RateLimited
+                | ProviderFailureKind::Unavailable
+        )
+}
+
+fn provider_retry_backoff_seconds(state: &AppState, record: &ExecutionRecord) -> i64 {
+    let base = state.execution_retry_backoff_seconds.max(1);
+    let max = state.execution_retry_backoff_max_seconds.max(base);
+    let exponent = record.attempt_count.saturating_sub(1).clamp(0, 10) as u32;
+    let multiplier = 2_i64.saturating_pow(exponent);
+    base.saturating_mul(multiplier).min(max)
+}
+
+fn prepare_provider_failure_retry(
+    record: &mut ExecutionRecord,
+    provider_target: &str,
+    error: &str,
+    backoff_seconds: i64,
+) {
+    let now = Utc::now();
+    clear_worker_claim(record);
+    record.status = ExecutionStatus::Queued;
+    record.started_at = None;
+    record.ended_at = None;
+    record.lease_expires_at = Some(now + Duration::seconds(backoff_seconds));
+    record.result_payload = Some(json!({
+        "provider_target": provider_target,
+        "last_provider_error": error,
+        "retry_after_seconds": backoff_seconds,
+        "attempt_count": record.attempt_count,
+        "attempts_remaining": remaining_attempts(record),
+        "retry_policy": "auto_backoff"
+    }));
+    record.updated_at = now;
+    record.dispatch_mode = dispatch_mode_for_execution(record);
+}
+
 fn build_execution_runtime_overview(records: Vec<ExecutionRecord>) -> ExecutionRuntimeOverview {
     let now = Utc::now();
     let mut queued_worker = WorkerQueueSummary {
@@ -2815,12 +2858,22 @@ async fn start_execution_inner(state: &AppState, id: Uuid) -> Result<ExecutionRe
                 }
                 Err(err) => {
                     clear_worker_claim(record);
-                    record.status = ExecutionStatus::Failed;
-                    record.result_payload = Some(json!({
-                        "provider_target": provider_target,
-                        "error": err.message,
-                    }));
-                    record.dispatch_mode = dispatch_mode_for_execution(record);
+                    if should_auto_retry_provider_failure(record, &err.message) {
+                        let backoff_seconds = provider_retry_backoff_seconds(state, record);
+                        prepare_provider_failure_retry(
+                            record,
+                            &provider_target,
+                            &err.message,
+                            backoff_seconds,
+                        );
+                    } else {
+                        record.status = ExecutionStatus::Failed;
+                        record.result_payload = Some(json!({
+                            "provider_target": provider_target,
+                            "error": err.message,
+                        }));
+                        record.dispatch_mode = dispatch_mode_for_execution(record);
+                    }
                 }
             }
 
@@ -3298,6 +3351,43 @@ async fn start_execution_in_db(
                     .map_err(|e| ApiError::Unavailable(format!("update invocation after provider success failed: {e}")))?;
             }
             Err(err) => {
+                if should_auto_retry_provider_failure(&record, &err.message) {
+                    let backoff_seconds = provider_retry_backoff_seconds(state, &record);
+                    prepare_provider_failure_retry(
+                        &mut record,
+                        &provider_target,
+                        &err.message,
+                        backoff_seconds,
+                    );
+
+                    sqlx::query("update executions set status = $2, worker_id = $3, lease_expires_at = $4, started_at = $5, ended_at = $6, result_payload = $7::jsonb, updated_at = $8 where execution_id = $1")
+                        .bind(record.execution_id)
+                        .bind(status_to_db(&record.status))
+                        .bind(&record.worker_id)
+                        .bind(record.lease_expires_at)
+                        .bind(record.started_at)
+                        .bind(record.ended_at)
+                        .bind(serde_json::to_string(record.result_payload.as_ref().expect("provider retry payload")).map_err(|e| ApiError::Unavailable(format!("serialize provider retry payload failed: {e}")))?)
+                        .bind(record.updated_at)
+                        .execute(&mut *tx)
+                        .await
+                        .map_err(|e| ApiError::Unavailable(format!("update provider execution retry failed: {e}")))?;
+
+                    sqlx::query("update invocations set status = 'Queued', updated_at = $2, execution_id = $3, failure_reason = null where invocation_id = $1")
+                        .bind(record.invocation_id)
+                        .bind(record.updated_at)
+                        .bind(record.execution_id)
+                        .execute(&mut *tx)
+                        .await
+                        .map_err(|e| ApiError::Unavailable(format!("update invocation after provider retry failed: {e}")))?;
+
+                    tx.commit().await.map_err(|e| {
+                        ApiError::Unavailable(format!("commit provider retry tx failed: {e}"))
+                    })?;
+
+                    return Ok(record);
+                }
+
                 let refunded =
                     if invocation_state.ledger_reserved && !invocation_state.ledger_refunded {
                         release_reserved_credits(
@@ -4140,6 +4230,7 @@ fn execution_from_row(row: &sqlx::postgres::PgRow) -> Result<ExecutionRecord, Ap
 
 fn execution_transition_event_types(status: &ExecutionStatus) -> (&'static str, &'static str) {
     match status {
+        ExecutionStatus::Queued => ("execution.requeued", "invocation.queued"),
         ExecutionStatus::Succeeded => ("execution.succeeded", "invocation.succeeded"),
         ExecutionStatus::Failed => ("execution.failed", "invocation.failed"),
         ExecutionStatus::Refunded => ("execution.refunded", "invocation.refunded"),
@@ -4347,7 +4438,9 @@ fn is_claimable_queued_worker(record: &ExecutionRecord, now: chrono::DateTime<Ut
     }
 
     match record.status {
-        ExecutionStatus::Queued => true,
+        ExecutionStatus::Queued => record
+            .lease_expires_at
+            .is_none_or(|retry_after| retry_after <= now),
         ExecutionStatus::Dispatching => is_expired_worker_lease(record, now),
         _ => false,
     }

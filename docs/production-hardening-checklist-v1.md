@@ -77,7 +77,7 @@ Required:
 
 Current repo status:
 
-- execution retry budget exists
+- execution retry budget exists; queued-worker provider failures now also distinguish retryable vs non-retryable classes, so timeout / rate-limit / provider-unavailable failures can auto-requeue with bounded exponential backoff while billing/auth-style failures still terminate and refund rather than loop
 - approval threshold exists
 - execution policy now supports configurable approval/block keywords, capability-prefix rules, and optional hard reserve reject threshold
 - policy still remains service-local and env-driven, not yet a full standalone policy/risk layer

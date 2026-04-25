@@ -2204,7 +2204,17 @@ async fn process_execution_uses_openclaw_cli_bridge_for_queued_worker() {
 
 #[tokio::test]
 async fn process_execution_fails_when_openclaw_cli_bridge_times_out() {
-    let mut state = test_state();
+    let mut state = AppState::new_for_tests_with_attempt_limits(
+        false,
+        Some("local-dev-admin-token".to_string()),
+        vec![
+            "executions:manage".to_string(),
+            "executions:read".to_string(),
+        ],
+        Vec::new(),
+        1,
+        1,
+    );
     let mock_cli = create_sleeping_mock_openclaw_cli_script(2);
     state.openclaw_cli_bin = mock_cli.command.clone();
     state.execution_provider_dispatch_timeout_seconds = 1;
@@ -2245,6 +2255,67 @@ async fn process_execution_fails_when_openclaw_cli_bridge_times_out() {
         .as_str()
         .expect("timeout error text")
         .contains("timed out"));
+}
+
+#[tokio::test]
+async fn process_execution_auto_requeues_retryable_provider_timeout_with_backoff() {
+    let mut state = test_state();
+    let mock_cli = create_sleeping_mock_openclaw_cli_script(2);
+    state.openclaw_cli_bin = mock_cli.command.clone();
+    state.execution_provider_dispatch_timeout_seconds = 1;
+    state.execution_retry_backoff_seconds = 7;
+    state.execution_retry_backoff_max_seconds = 7;
+    let app = build_router(state);
+    let create_body = json!({
+        "invocation_id": "00000000-0000-0000-0000-00000000011d",
+        "trace_id": "00000000-0000-0000-0000-00000000021d",
+        "org_id": "00000000-0000-0000-0000-00000000ce01",
+        "capability_id": "cap.openclaw.timeout-retry",
+        "capability_provider": "codex",
+        "capability_provider_ref": "gpt-5.4",
+        "prompt": "say hi slowly then retry",
+        "reserve_amount": 1.0
+    });
+
+    let (_, created) = send_json(app.clone(), "POST", "/v1/executions", create_body).await;
+    let execution_id = created["execution_id"].as_str().expect("execution id");
+
+    let (claim_status, _) = send_json(
+        app.clone(),
+        "POST",
+        "/v1/executions/claim-next",
+        json!({ "claimed_by": "worker-timeout-retry", "note": "claim next" }),
+    )
+    .await;
+    assert_eq!(claim_status, StatusCode::OK);
+
+    let (process_status, processed) = send_json(
+        app.clone(),
+        "POST",
+        &format!("/v1/executions/{execution_id}/process"),
+        json!({ "processed_by": "worker-timeout-retry", "note": "dequeue" }),
+    )
+    .await;
+    assert_eq!(process_status, StatusCode::OK);
+    assert_eq!(processed["status"], "Queued");
+    assert_eq!(processed["attempt_count"], 1);
+    assert!(processed["lease_expires_at"].is_string());
+    assert_eq!(processed["result_payload"]["retry_policy"], "auto_backoff");
+    assert_eq!(processed["result_payload"]["retry_after_seconds"], 7);
+    assert!(processed["result_payload"]["last_provider_error"]
+        .as_str()
+        .expect("last provider error")
+        .contains("timed out"));
+
+    let (claim_again_status, body) = send_json(
+        app,
+        "POST",
+        "/v1/executions/claim-next",
+        json!({ "claimed_by": "worker-timeout-retry", "note": "too early" }),
+    )
+    .await;
+    assert_eq!(claim_again_status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"], "no queued worker execution available");
 }
 
 #[tokio::test]
