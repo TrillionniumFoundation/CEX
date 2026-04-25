@@ -27,6 +27,8 @@ Useful Linux variants:
 ./scripts/gate-local-linux.sh --skip-db-bootstrap
 ```
 
+For DB bootstrap, the Linux helpers prefer local `psql`, then Docker Postgres. If the Docker socket is not directly accessible but passwordless `sudo docker` works, they automatically use `sudo -n docker`; set `CEX_DOCKER_USE_SUDO=1` to force that path.
+
 The lower-level Windows orchestrator is:
 
 ```powershell

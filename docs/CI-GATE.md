@@ -98,7 +98,7 @@ Helpful flags:
 ./scripts/gate-local-linux.sh --skip-workspace
 ```
 
-Use `--skip-db-bootstrap` when the database is already provisioned but the current user does not have a usable `psql` client or Docker access for applying migrations/seeding.
+Use `--skip-db-bootstrap` when the database is already provisioned but the current user does not have a usable `psql` client or Docker access for applying migrations/seeding. When direct Docker socket access is denied but passwordless `sudo docker` is available, the Linux helper automatically falls back to `sudo -n docker` for containerized Postgres; set `CEX_DOCKER_USE_SUDO=1` to force that path.
 
 ## Under the hood
 

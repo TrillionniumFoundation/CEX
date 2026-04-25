@@ -10,6 +10,7 @@ This page records evidence for production-readiness claims. It is intentionally 
 | --- | --- | --- |
 | Workspace tests | `cargo test -p execution-service` after provider failure ack + policy bundle changes | PASS |
 | Linux full runtime gate | `scripts/gate-local-linux.sh --skip-workspace --skip-db-bootstrap` with core + entry services and metrics smoke | PASS |
+| Docker-backed Linux full gate | `scripts/gate-local-linux.sh` with Docker Postgres migrations/seeding via passwordless `sudo docker`, core + entry services, ignored runtime suites, and metrics smoke | PASS |
 | Local readiness smoke | `CEX_READINESS_MODE=local CEX_PROVIDER_PROBE_MODEL=google/gemini-2.5-flash scripts/check-production-readiness.sh` | PASS |
 | Local production-posture smoke | `CEX_ENV_FILE=run/local-production/.env CEX_PROVIDER_PROBE_MODEL=google/gemini-2.5-flash scripts/check-production-readiness.sh` | PASS |
 | Live provider probe | `scripts/probe-openclaw-provider.sh --model google/gemini-2.5-flash` | PASS |
@@ -21,10 +22,11 @@ This page records evidence for production-readiness claims. It is intentionally 
 ## Active blockers to a truthful 100% claim
 
 - Windows-native `gate-local.ps1` still has not run on this host because PowerShell is unavailable.
-- Docker-backed bootstrap / migration path still has not run in-session because Docker socket access is unavailable without elevation.
+- Direct non-sudo Docker socket access for user `qian` is still denied, but passwordless `sudo docker` is available and the Docker-backed Linux gate now passes through that path.
 - The current strict production profile pass and soak use generated local secrets under `run/local-production/.env`; they validate posture mechanics but are not a real secret-management or deployment environment.
 - Formal production deployment, backup/restore drills, migration rollback rehearsal, and longer soak windows still need real environment evidence.
 - MiniMax remains provider-account blocked by billing/credit errors; OpenAI Codex remains quota/plan blocked. Google Gemini is the currently validated successful external provider path.
+- Latest post-Docker production readiness rerun reached the live-provider step and then hit Google Gemini rate limiting (`API rate limit reached`); production signoff must rerun the required live probe after the rate window clears.
 
 ## Signoff commands
 

@@ -54,9 +54,28 @@ cex_has_local_pg_isready() {
   command -v pg_isready >/dev/null 2>&1
 }
 
+cex_docker() {
+  if [[ "${CEX_DOCKER_USE_SUDO:-0}" == "1" ]]; then
+    sudo -n docker "$@"
+    return $?
+  fi
+
+  if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+    docker "$@"
+    return $?
+  fi
+
+  if command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then
+    sudo -n docker "$@"
+    return $?
+  fi
+
+  docker "$@"
+}
+
 cex_can_use_docker_postgres() {
   command -v docker >/dev/null 2>&1 && \
-    docker exec "$CEX_POSTGRES_CONTAINER_NAME" true >/dev/null 2>&1
+    cex_docker exec "$CEX_POSTGRES_CONTAINER_NAME" true >/dev/null 2>&1
 }
 
 cex_wait_postgres() {
@@ -74,7 +93,7 @@ cex_wait_postgres() {
         return 0
       fi
     elif cex_can_use_docker_postgres; then
-      if docker exec "$CEX_POSTGRES_CONTAINER_NAME" pg_isready -U "$CEX_POSTGRES_USER" -d "$CEX_POSTGRES_DB" >/dev/null 2>&1; then
+      if cex_docker exec "$CEX_POSTGRES_CONTAINER_NAME" pg_isready -U "$CEX_POSTGRES_USER" -d "$CEX_POSTGRES_DB" >/dev/null 2>&1; then
         return 0
       fi
     else
@@ -98,7 +117,7 @@ cex_psql_stdin() {
   fi
 
   if cex_can_use_docker_postgres; then
-    docker exec -i "$CEX_POSTGRES_CONTAINER_NAME" \
+    cex_docker exec -i "$CEX_POSTGRES_CONTAINER_NAME" \
       psql -U "$CEX_POSTGRES_USER" -d "$CEX_POSTGRES_DB" -v ON_ERROR_STOP=1 "$@"
     return 0
   fi
