@@ -72,11 +72,19 @@ If you want to turn that unified JSON into Prometheus text exposition, use:
 ./scripts/render-operator-signals-prometheus.sh run/operator-signals/last.json
 ```
 
-For a direct runtime smoke of the native gateway/execution Prometheus endpoints:
+For a direct runtime smoke of the native gateway/execution/core Prometheus endpoints:
 
 ```bash
 ./scripts/smoke-runtime-metrics.sh
 ```
+
+For a stricter pre-production verdict that combines runtime health, native metrics, unified operator signals, and provider dead-letter blockers:
+
+```bash
+./scripts/check-production-readiness.sh
+```
+
+A non-zero result is expected while provider dead letters or external billing/quota blockers remain.
 
 It now aggregates:
 
