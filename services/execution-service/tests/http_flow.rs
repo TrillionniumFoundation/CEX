@@ -1043,6 +1043,7 @@ async fn provider_dead_letters_lists_terminal_provider_failures_with_filters() {
     );
     timeout_still_retryable.attempt_count = 1;
     timeout_still_retryable.max_attempts = 3;
+    let retryable_id = timeout_still_retryable.execution_id;
 
     {
         let mut map = state.executions.write().await;
@@ -1116,7 +1117,7 @@ async fn provider_dead_letters_lists_terminal_provider_failures_with_filters() {
         billing_id.to_string()
     );
 
-    let (status, info) = get_json(app, "/v1/info").await;
+    let (status, info) = get_json(app.clone(), "/v1/info").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(info["runtime"]["provider_failures"]["total"], 2);
     assert_eq!(info["runtime"]["provider_failures"]["billing"], 0);
@@ -1125,6 +1126,39 @@ async fn provider_dead_letters_lists_terminal_provider_failures_with_filters() {
         info["runtime"]["provider_failures"]["acknowledged_dead_letter"],
         1
     );
+
+    let (status, retryable_failures) = get_json(
+        app.clone(),
+        "/v1/executions/provider-failures?retryable_only=true",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let retryable_failures = retryable_failures
+        .as_array()
+        .expect("retryable provider failures");
+    assert_eq!(retryable_failures.len(), 1);
+    assert_eq!(
+        retryable_failures[0]["execution_id"],
+        retryable_id.to_string()
+    );
+    assert_eq!(retryable_failures[0]["dead_letter"], false);
+
+    let (ack_status, acked_retryable) = send_json(
+        app.clone(),
+        "POST",
+        &format!("/v1/executions/{retryable_id}/provider-failure/ack"),
+        json!({"acknowledged_by":"operator-1","note":"retryable timeout tracked externally"}),
+    )
+    .await;
+    assert_eq!(ack_status, StatusCode::OK);
+    assert_eq!(acked_retryable["execution_id"], retryable_id.to_string());
+    assert_eq!(acked_retryable["dead_letter"], false);
+    assert_eq!(acked_retryable["acknowledged"], true);
+
+    let (status, info) = get_json(app, "/v1/info").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(info["runtime"]["provider_failures"]["total"], 1);
+    assert_eq!(info["runtime"]["provider_failures"]["timeout"], 1);
 }
 
 #[tokio::test]

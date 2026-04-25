@@ -183,11 +183,14 @@
 先看：
 
 - `GET http://127.0.0.1:7003/v1/info`
+- `GET http://127.0.0.1:7003/v1/executions/provider-failures`
 - `GET http://127.0.0.1:7003/v1/executions/provider-dead-letters`
 
 常用 drill：
 
 ```bash
+curl -s -H 'x-admin-token: <admin-token>' http://127.0.0.1:7003/v1/executions/provider-failures | jq
+curl -s -H 'x-admin-token: <admin-token>' 'http://127.0.0.1:7003/v1/executions/provider-failures?retryable_only=true' | jq
 curl -s -H 'x-admin-token: <admin-token>' http://127.0.0.1:7003/v1/executions/provider-dead-letters | jq
 curl -s -H 'x-admin-token: <admin-token>' 'http://127.0.0.1:7003/v1/executions/provider-dead-letters?kind=billing' | jq
 curl -s -H 'x-admin-token: <admin-token>' 'http://127.0.0.1:7003/v1/executions/provider-dead-letters?retry_budget_exhausted_only=true' | jq
@@ -195,10 +198,12 @@ curl -s -H 'x-admin-token: <admin-token>' 'http://127.0.0.1:7003/v1/executions/p
 curl -s -H 'x-admin-token: <admin-token>' 'http://127.0.0.1:7003/v1/executions/provider-dead-letters?acknowledged_only=true' | jq
 ```
 
-处理完根因或确认已转入外部 incident 后，可对单条 dead-letter 做 ack（ack 后默认清单与 operator signal 不再把它计为 active blocker；`include_acknowledged=true` / `acknowledged_only=true` 仍可追溯）：
+处理完根因或确认已转入外部 incident 后，可对单条 provider failure / dead-letter 做 ack（ack 后默认清单与 operator signal 不再把它计为 active blocker；`include_acknowledged=true` / `acknowledged_only=true` 仍可追溯）：
 
 ```bash
-curl -s -X POST -H 'x-admin-token: <admin-token>' -H 'content-type: application/json'   http://127.0.0.1:7003/v1/executions/<execution-id>/provider-dead-letter/ack   -d '{"acknowledged_by":"operator","note":"billing incident linked externally"}' | jq
+curl -s -X POST -H 'x-admin-token: <admin-token>' -H 'content-type: application/json' \
+  http://127.0.0.1:7003/v1/executions/<execution-id>/provider-failure/ack \
+  -d '{"acknowledged_by":"operator","note":"provider incident linked externally"}' | jq
 ```
 
 判断：
@@ -502,6 +507,8 @@ curl -s http://127.0.0.1:7003/health
 curl -s http://127.0.0.1:7003/v1/info | jq
 curl -s http://127.0.0.1:7003/metrics | grep -E 'cex_execution_runtime_up|cex_execution_provider_failures_total|cex_execution_operator_signal_active'
 curl -s http://127.0.0.1:7003/v1/executions/worker-queue/summary | jq
+curl -s -H 'x-admin-token: <admin-token>' http://127.0.0.1:7003/v1/executions/provider-failures | jq
+curl -s -H 'x-admin-token: <admin-token>' 'http://127.0.0.1:7003/v1/executions/provider-failures?retryable_only=true' | jq
 curl -s -H 'x-admin-token: <admin-token>' http://127.0.0.1:7003/v1/executions/provider-dead-letters | jq
 curl -s http://127.0.0.1:7004/health
 curl -s http://127.0.0.1:7004/metrics | grep cex_audit_service_up

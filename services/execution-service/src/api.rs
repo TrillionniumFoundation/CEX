@@ -294,6 +294,16 @@ pub struct ProviderDeadLetterAckRequest {
     pub note: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct ProviderFailureQuery {
+    pub limit: Option<usize>,
+    pub kind: Option<String>,
+    pub include_acknowledged: Option<bool>,
+    pub acknowledged_only: Option<bool>,
+    pub dead_letter_only: Option<bool>,
+    pub retryable_only: Option<bool>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ProviderDeadLetterExecutionView {
     pub execution_id: Uuid,
@@ -302,6 +312,7 @@ pub struct ProviderDeadLetterExecutionView {
     pub status: ExecutionStatus,
     pub provider_target: Option<String>,
     pub provider_failure_kind: &'static str,
+    pub dead_letter: bool,
     pub dead_letter_reason: &'static str,
     pub retry_budget_exhausted: bool,
     pub non_retryable_terminal: bool,
@@ -855,12 +866,55 @@ pub async fn provider_dead_letters(
     }
 }
 
+pub async fn provider_failures(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<ProviderFailureQuery>,
+) -> impl IntoResponse {
+    let admin = match authorize_execution_admin(
+        &state,
+        &headers,
+        &["executions:read", "executions:manage"],
+    ) {
+        Ok(admin) => admin,
+        Err(response) => return response.into_response(),
+    };
+
+    match load_provider_failures(&state, &admin, &query).await {
+        Ok(items) => (StatusCode::OK, Json(items)).into_response(),
+        Err(message) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": message })),
+        )
+            .into_response(),
+    }
+}
+
 pub async fn acknowledge_provider_dead_letter(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<Uuid>,
     Json(req): Json<ProviderDeadLetterAckRequest>,
 ) -> impl IntoResponse {
+    acknowledge_provider_failure_inner(state, headers, id, req, true).await
+}
+
+pub async fn acknowledge_provider_failure(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<Uuid>,
+    Json(req): Json<ProviderDeadLetterAckRequest>,
+) -> impl IntoResponse {
+    acknowledge_provider_failure_inner(state, headers, id, req, false).await
+}
+
+async fn acknowledge_provider_failure_inner(
+    state: AppState,
+    headers: HeaderMap,
+    id: Uuid,
+    req: ProviderDeadLetterAckRequest,
+    require_dead_letter: bool,
+) -> axum::response::Response {
     let mut record =
         match require_execution_access(&state, &headers, id, &["executions:manage"]).await {
             Ok(record) => record,
@@ -905,7 +959,7 @@ pub async fn acknowledge_provider_dead_letter(
         )
             .into_response();
     };
-    if !provider_failure_dead_letter(&record, kind) {
+    if require_dead_letter && !provider_failure_dead_letter(&record, kind) {
         return (
             StatusCode::CONFLICT,
             Json(json!({ "error": "execution is not a provider dead letter" })),
@@ -918,12 +972,16 @@ pub async fn acknowledge_provider_dead_letter(
     if !payload.is_object() {
         payload = json!({ "provider_result": payload });
     }
-    payload["provider_dead_letter_ack"] = json!({
+    let ack_payload = json!({
         "acknowledged": true,
         "acknowledged_by": acknowledged_by,
         "acknowledged_at": now.to_rfc3339(),
         "note": note,
     });
+    payload["provider_failure_ack"] = ack_payload.clone();
+    if provider_failure_dead_letter(&record, kind) {
+        payload["provider_dead_letter_ack"] = ack_payload;
+    }
     record.result_payload = Some(payload);
     record.updated_at = now;
 
@@ -2070,10 +2128,11 @@ fn provider_failure_dead_letter(record: &ExecutionRecord, kind: ProviderFailureK
 }
 
 fn provider_dead_letter_ack_payload(record: &ExecutionRecord) -> Option<&Value> {
-    record
-        .result_payload
-        .as_ref()
-        .and_then(|payload| payload.get("provider_dead_letter_ack"))
+    record.result_payload.as_ref().and_then(|payload| {
+        payload
+            .get("provider_failure_ack")
+            .or_else(|| payload.get("provider_dead_letter_ack"))
+    })
 }
 
 fn provider_dead_letter_acknowledged(record: &ExecutionRecord) -> bool {
@@ -2284,10 +2343,10 @@ fn build_execution_runtime_overview(records: Vec<ExecutionRecord>) -> ExecutionR
         }
 
         if let Some(kind) = classify_provider_failure(&record) {
-            if provider_failure_dead_letter(&record, kind)
-                && provider_dead_letter_acknowledged(&record)
-            {
-                overview.provider_failures.acknowledged_dead_letter += 1;
+            if provider_dead_letter_acknowledged(&record) {
+                if provider_failure_dead_letter(&record, kind) {
+                    overview.provider_failures.acknowledged_dead_letter += 1;
+                }
                 continue;
             }
 
@@ -2488,12 +2547,63 @@ async fn load_provider_dead_letters(
         .collect())
 }
 
+async fn load_provider_failures(
+    state: &AppState,
+    admin: &AdminPrincipal,
+    query: &ProviderFailureQuery,
+) -> Result<Vec<ProviderDeadLetterExecutionView>, String> {
+    let limit = normalize_worker_queue_limit(query.limit);
+    let kind_filter = match query
+        .kind
+        .as_deref()
+        .map(str::trim)
+        .filter(|kind| !kind.is_empty())
+    {
+        Some(kind) => Some(parse_provider_failure_kind_filter(kind)?),
+        None => None,
+    };
+    let include_acknowledged = query.include_acknowledged.unwrap_or(false);
+    let acknowledged_only = query.acknowledged_only.unwrap_or(false);
+    let dead_letter_only = query.dead_letter_only.unwrap_or(false);
+    let retryable_only = query.retryable_only.unwrap_or(false);
+
+    let records = load_visible_execution_records(state, admin).await?;
+    Ok(records
+        .into_iter()
+        .filter_map(|record| {
+            let kind = classify_provider_failure(&record)?;
+            let dead_letter = provider_failure_dead_letter(&record, kind);
+            let acknowledged = provider_dead_letter_acknowledged(&record);
+            if acknowledged_only && !acknowledged {
+                return None;
+            }
+            if !include_acknowledged && !acknowledged_only && acknowledged {
+                return None;
+            }
+            if dead_letter_only && !dead_letter {
+                return None;
+            }
+            if retryable_only && (dead_letter || !provider_failure_retryable_kind(kind)) {
+                return None;
+            }
+            if let Some(kind_filter) = kind_filter {
+                if kind != kind_filter {
+                    return None;
+                }
+            }
+            Some(provider_dead_letter_view(record, kind))
+        })
+        .take(limit)
+        .collect())
+}
+
 fn provider_dead_letter_view(
     record: ExecutionRecord,
     kind: ProviderFailureKind,
 ) -> ProviderDeadLetterExecutionView {
     let retry_budget_exhausted = provider_failure_retry_budget_exhausted(&record);
     let non_retryable_terminal = !provider_failure_retryable_kind(kind);
+    let dead_letter = provider_failure_dead_letter(&record, kind);
     let attempts_remaining = remaining_attempts(&record);
     let dead_letter_reason = provider_dead_letter_reason(kind, retry_budget_exhausted);
     let acknowledged = provider_dead_letter_acknowledged(&record);
@@ -2509,6 +2619,7 @@ fn provider_dead_letter_view(
         status: record.status,
         provider_target: record.provider_target,
         provider_failure_kind: provider_failure_kind_label(kind),
+        dead_letter,
         dead_letter_reason,
         retry_budget_exhausted,
         non_retryable_terminal,

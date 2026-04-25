@@ -23,6 +23,10 @@ pub fn build_router(state: AppState) -> Router {
             "/v1/executions/provider-dead-letters",
             get(api::provider_dead_letters),
         )
+        .route(
+            "/v1/executions/provider-failures",
+            get(api::provider_failures),
+        )
         .route("/v1/executions/claim-next", post(api::claim_next_execution))
         .route(
             "/v1/executions/claim-batch",
@@ -40,6 +44,10 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/v1/executions/:id/provider-dead-letter/ack",
             post(api::acknowledge_provider_dead_letter),
+        )
+        .route(
+            "/v1/executions/:id/provider-failure/ack",
+            post(api::acknowledge_provider_failure),
         )
         .route("/v1/executions/:id/approve", post(api::approve_execution))
         .route("/v1/executions/:id/reject", post(api::reject_execution))

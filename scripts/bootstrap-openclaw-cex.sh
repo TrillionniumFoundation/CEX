@@ -15,6 +15,15 @@ SOURCE_STATE_DIR="${OPENCLAW_SOURCE_STATE_DIR:-$HOME/.openclaw}"
 SOURCE_CONFIG_PATH="${OPENCLAW_SOURCE_CONFIG_PATH:-$SOURCE_STATE_DIR/openclaw.json}"
 SOURCE_AGENT_DIR="${OPENCLAW_SOURCE_AGENT_DIR:-$SOURCE_STATE_DIR/agents/main/agent}"
 PRIMARY_MODEL="${OPENCLAW_CEX_PRIMARY_MODEL:-}"
+EXTRA_MODELS="${OPENCLAW_CEX_EXTRA_MODELS:-}"
+
+if [[ -n "${GEMINI_API_KEY:-}" ]]; then
+  if [[ -n "$EXTRA_MODELS" ]]; then
+    EXTRA_MODELS="$EXTRA_MODELS,google/gemini-2.5-flash"
+  else
+    EXTRA_MODELS="google/gemini-2.5-flash"
+  fi
+fi
 
 usage() {
   cat <<EOF
@@ -33,6 +42,7 @@ Options:
   --source-config <path>     Source OpenClaw config (default: $SOURCE_CONFIG_PATH)
   --source-agent-dir <dir>   Source OpenClaw agent dir (default: $SOURCE_AGENT_DIR)
   --primary-model <ref>      Override primary model in isolated config
+  --extra-models <csv>       Additional provider/model refs to allow (default: OPENCLAW_CEX_EXTRA_MODELS plus google/gemini-2.5-flash when GEMINI_API_KEY exists)
   -h, --help                 Show this help
 EOF
 }
@@ -71,6 +81,10 @@ while [[ $# -gt 0 ]]; do
       PRIMARY_MODEL="$2"
       shift 2
       ;;
+    --extra-models)
+      EXTRA_MODELS="$2"
+      shift 2
+      ;;
     -h|--help|help)
       usage
       exit 0
@@ -85,7 +99,7 @@ done
 
 mkdir -p "$STATE_DIR" "$AGENT_DIR"
 
-python3 - <<'PY' "$SOURCE_CONFIG_PATH" "$SOURCE_AGENT_DIR" "$CONFIG_PATH" "$AGENT_DIR" "$AGENT_ID" "$WORKSPACE_DIR" "$PRIMARY_MODEL"
+python3 - <<'PY' "$SOURCE_CONFIG_PATH" "$SOURCE_AGENT_DIR" "$CONFIG_PATH" "$AGENT_DIR" "$AGENT_ID" "$WORKSPACE_DIR" "$PRIMARY_MODEL" "$EXTRA_MODELS"
 import json
 import shutil
 import sys
@@ -98,6 +112,7 @@ agent_dir = Path(sys.argv[4]).expanduser()
 agent_id = sys.argv[5].strip() or 'cex'
 workspace_dir = sys.argv[6].strip()
 primary_override = sys.argv[7].strip()
+extra_models_raw = sys.argv[8].strip()
 
 agent_dir.mkdir(parents=True, exist_ok=True)
 config_path.parent.mkdir(parents=True, exist_ok=True)
@@ -179,6 +194,9 @@ for source_provider, provider_cfg in ((source_catalog.get('providers') or {}).it
         if not model_id:
             continue
         add_allowed(f'{provider}/{model_id}')
+
+for raw in extra_models_raw.replace('\n', ',').split(','):
+    add_allowed(raw)
 
 isolated_cfg = {
     'models': source_cfg.get('models') or {},
