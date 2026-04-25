@@ -2,6 +2,9 @@
 
 ## Current state
 
+Readiness evidence and explicit non-100% blockers are summarized in `docs/production-readiness-evidence-v1.md`.
+
+
 CEX is now back to a green workspace test baseline on this branch.
 
 That removes the immediate compile blocker, but it does **not** mean production readiness. The remaining gaps are mainly in ingress hardening, production operations, and stronger policy / abuse controls.

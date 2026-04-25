@@ -91,3 +91,6 @@
 3. 在已经落地的 capability registry + `ollama` / OpenClaw CLI bridge 基础上，继续把 provider handoff 做成更完整执行链，并把当前“本机 OpenClaw”桥逐步收敛为可控的多租户/生产级 provider plane
 4. 后续再推进 worker/runtime persistence、budget/rate limit guardrail、以及更完整的部署/观测面
 5. 把当前最小 `/v1/info` signal 面继续演进成统一 exporter + alert rules + operator dashboard，而不是长期停留在手工 curl/runbook 阶段
+
+
+See `docs/production-readiness-evidence-v1.md` for the current conservative readiness evidence matrix and remaining blockers.
