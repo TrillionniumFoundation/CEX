@@ -23,7 +23,8 @@ This page records evidence for production-readiness claims. It is intentionally 
 | 1-hour local production-posture soak | `CEX_ENV_FILE=run/local-production/.env CEX_SOAK_DURATION_SECONDS=3600 CEX_SOAK_INTERVAL_SECONDS=60 CEX_SOAK_SKIP_PROVIDER_PROBE=1 scripts/soak-runtime.sh` (summary `run/soak/soak-20260425T064637Z-302074.summary.json`) | PASS |
 | 2-hour local production-posture soak | `CEX_ENV_FILE=run/local-production/.env CEX_SOAK_DURATION_SECONDS=7200 CEX_SOAK_INTERVAL_SECONDS=120 CEX_PROVIDER_PROBE_MODEL=google/gemini-2.5-flash scripts/soak-runtime.sh` (summary `run/soak/soak-20260425T081221Z-356435.summary.json`) | PASS |
 | DB backup/restore drill | `scripts/drill-db-backup-restore.sh` using Docker Postgres backup, temporary restore DB, and core table count comparison (summary `run/drills/db-backup-restore-20260425T063804Z-289267.summary.json`) | PASS |
-| Latest production readiness signoff smoke | `CEX_ENV_FILE=run/local-production/.env CEX_PROVIDER_PROBE_MODEL=google/gemini-2.5-flash scripts/check-production-readiness.sh` after 2-hour soak and fresh DB restore drill | PASS |
+| Latest production readiness signoff smoke | `CEX_ENV_FILE=run/local-production/.env CEX_PROVIDER_PROBE_MODEL=google/gemini-2.5-flash scripts/check-production-readiness.sh` after 2-hour soak, fresh DB restore drill, and verified monitoring deploy metadata | PASS |
+| Monitoring deploy verification | `scripts/deploy-monitoring-bundles.sh --mode copy --include-focused --force --verify --verify-mode command ...` deployed Prometheus/Alertmanager bundles to `run/monitoring-live-target` and verified both targets via command mode | PASS |
 | Provider launch policy posture | Production policy blocks known non-launch provider prefixes `cap.openclaw.model.minimax.` and `cap.openclaw.model.openai-codex.` while Google Gemini is the validated launch provider | PASS |
 | Local production secret-file posture | `run/local-production/.env` and generated policy bundle chmod `600`; production readiness fails if `CEX_ENV_FILE` has group/other permissions | PASS |
 
@@ -32,9 +33,9 @@ This page records evidence for production-readiness claims. It is intentionally 
 - PowerShell 7.6.1 is now installed and the full `gate-local.ps1` passes under Linux PowerShell Core, including runtime blackbox/probe suites; a true Windows-host-native run is still not available on this machine.
 - Direct non-sudo Docker socket access for user `qian` is still denied, but passwordless `sudo docker` is available and the Docker-backed Linux gate now passes through that path.
 - The current strict production profile pass and soak use generated owner-only local secrets under `run/local-production/.env`; they validate posture mechanics but are not a real external secret-management environment.
-- Formal production deployment and migration rollback strategy beyond restore-from-backup still need real environment evidence. A local Docker Postgres backup/restore drill and a 2-hour local-production soak now pass.
+- Formal production deployment to a non-local host and migration rollback strategy beyond restore-from-backup still need real environment evidence. A local Docker Postgres backup/restore drill, 2-hour local-production soak, and local monitoring bundle deploy/verify now pass.
 - MiniMax remains provider-account blocked by billing/credit errors; OpenAI Codex remains quota/plan blocked. Google Gemini is the currently validated successful external provider path, and production policy now blocks the known non-launch MiniMax/OpenAI-Codex capability prefixes until those account states are resolved.
-- The latest production readiness rerun after the temporary Google rate-limit window cleared passed again with the required live Google provider probe. Production mode now also requires a fresh DB backup/restore drill summary by default.
+- The latest production readiness rerun after the 2-hour soak passed again with the required live Google provider probe. Production mode now also requires fresh DB backup/restore drill and monitoring deploy verification summaries by default.
 
 ## Signoff commands
 

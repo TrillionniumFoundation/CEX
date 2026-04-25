@@ -17,6 +17,9 @@ CEX_DB_BACKUP_RESTORE_DRILL_REQUIRED="${CEX_DB_BACKUP_RESTORE_DRILL_REQUIRED:-}"
 CEX_DB_BACKUP_RESTORE_DRILL_SUMMARY_PATH="${CEX_DB_BACKUP_RESTORE_DRILL_SUMMARY_PATH:-}"
 CEX_DB_BACKUP_RESTORE_DRILL_MAX_AGE_SECONDS="${CEX_DB_BACKUP_RESTORE_DRILL_MAX_AGE_SECONDS:-86400}"
 CEX_REQUIRED_BLOCK_CAPABILITY_PREFIXES="${CEX_REQUIRED_BLOCK_CAPABILITY_PREFIXES:-}"
+CEX_MONITORING_DEPLOY_VERIFY_REQUIRED="${CEX_MONITORING_DEPLOY_VERIFY_REQUIRED:-}"
+CEX_MONITORING_DEPLOY_METADATA_PATH="${CEX_MONITORING_DEPLOY_METADATA_PATH:-$CEX_PROJECT_ROOT/run/monitoring-live-target/metadata/monitoring-deploy-metadata.yml}"
+CEX_MONITORING_DEPLOY_MAX_AGE_SECONDS="${CEX_MONITORING_DEPLOY_MAX_AGE_SECONDS:-86400}"
 
 case "$CEX_READINESS_MODE" in
   local|production) ;;
@@ -31,6 +34,13 @@ if [[ -z "$CEX_DB_BACKUP_RESTORE_DRILL_REQUIRED" ]]; then
     CEX_DB_BACKUP_RESTORE_DRILL_REQUIRED="1"
   else
     CEX_DB_BACKUP_RESTORE_DRILL_REQUIRED="0"
+  fi
+fi
+if [[ -z "$CEX_MONITORING_DEPLOY_VERIFY_REQUIRED" ]]; then
+  if [[ "$CEX_READINESS_MODE" == "production" ]]; then
+    CEX_MONITORING_DEPLOY_VERIFY_REQUIRED="1"
+  else
+    CEX_MONITORING_DEPLOY_VERIFY_REQUIRED="0"
   fi
 fi
 
@@ -300,6 +310,58 @@ else
     else
       pass "db backup/restore drill evidence fresh (${drill_age}s old, $drill_summary_path)"
     fi
+  fi
+fi
+
+section 'monitoring deploy verification evidence'
+if [[ "$CEX_MONITORING_DEPLOY_VERIFY_REQUIRED" == "0" ]]; then
+  pass 'monitoring deploy verification evidence not required by environment'
+else
+  if [[ ! -f "$CEX_MONITORING_DEPLOY_METADATA_PATH" ]]; then
+    fail "monitoring deploy metadata is missing ($CEX_MONITORING_DEPLOY_METADATA_PATH)"
+  elif python3 - "$CEX_MONITORING_DEPLOY_METADATA_PATH" "$CEX_MONITORING_DEPLOY_MAX_AGE_SECONDS" <<'PY'
+from datetime import datetime, timezone
+from pathlib import Path
+import sys, yaml
+path = Path(sys.argv[1])
+max_age = int(sys.argv[2])
+data = yaml.safe_load(path.read_text()) or {}
+overall = (((data.get('postDeployActions') or {}).get('overall')) or {})
+if overall.get('successful') is not True or overall.get('requiresAttention') is True:
+    raise SystemExit('monitoring deploy post action is not successful')
+deployed = data.get('deployed') or {}
+missing = []
+for section in ('prometheus', 'alertmanager'):
+    deployed_path = ((deployed.get(section) or {}).get('deployedPath'))
+    if not deployed_path or not Path(deployed_path).exists():
+        missing.append(section)
+if missing:
+    raise SystemExit('missing deployed monitoring artifacts: ' + ','.join(missing))
+deployed_at = data.get('deployedAt')
+if not deployed_at:
+    raise SystemExit('missing deployedAt')
+parsed = datetime.fromisoformat(str(deployed_at).replace('Z', '+00:00'))
+if parsed.tzinfo is None:
+    parsed = parsed.replace(tzinfo=timezone.utc)
+age = int((datetime.now(timezone.utc) - parsed.astimezone(timezone.utc)).total_seconds())
+if age < 0 or age > max_age:
+    raise SystemExit(f'monitoring deploy metadata is stale age={age}s max={max_age}s')
+PY
+  then
+    monitoring_age="$(python3 - "$CEX_MONITORING_DEPLOY_METADATA_PATH" <<'PY'
+from datetime import datetime, timezone
+from pathlib import Path
+import sys, yaml
+data = yaml.safe_load(Path(sys.argv[1]).read_text()) or {}
+parsed = datetime.fromisoformat(str(data.get('deployedAt')).replace('Z', '+00:00'))
+if parsed.tzinfo is None:
+    parsed = parsed.replace(tzinfo=timezone.utc)
+print(int((datetime.now(timezone.utc) - parsed.astimezone(timezone.utc)).total_seconds()))
+PY
+)"
+    pass "monitoring deploy verification evidence fresh (${monitoring_age}s old, $CEX_MONITORING_DEPLOY_METADATA_PATH)"
+  else
+    fail "monitoring deploy verification metadata is not successful or fresh ($CEX_MONITORING_DEPLOY_METADATA_PATH)"
   fi
 fi
 
