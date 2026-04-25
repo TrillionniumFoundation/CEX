@@ -286,15 +286,42 @@ impl ProviderAdapter for OpenClawCliProviderAdapter {
 
         let parsed = match wait_outcome {
             OpenClawWaitOutcome::Parsed(parsed) => {
+                if openclaw_outputs_look_like_error(&parsed) {
+                    terminate_child(&mut child).await;
+                    let stderr_buf = stderr_task.await.unwrap_or_default();
+                    return Err(build_openclaw_cli_error(
+                        &model_key,
+                        &parsed,
+                        &stderr_buf,
+                        None,
+                    ));
+                }
                 terminate_child(&mut child).await;
                 let _ = stderr_task.await;
                 parsed
             }
             OpenClawWaitOutcome::Finished(stdout_buf) => {
                 if let Ok(parsed) = serde_json::from_slice::<OpenClawModelRunResponse>(&stdout_buf) {
-                    let _ = child.wait().await;
-                    let _ = stderr_task.await;
-                    parsed
+                    let status = child.wait().await.map_err(|err| {
+                        ProviderDispatchError::transport(format!(
+                            "wait openclaw model bridge failed for {model_key}: {err}"
+                        ))
+                    })?;
+                    let stderr_buf = stderr_task.await.unwrap_or_default();
+                    if status.success() {
+                        parsed
+                    } else {
+                        return Err(build_openclaw_cli_error(
+                            &model_key,
+                            &parsed,
+                            &stderr_buf,
+                            if status.code() == Some(124) {
+                                Some(self.timeout_seconds)
+                            } else {
+                                None
+                            },
+                        ));
+                    }
                 } else {
                 let status = child.wait().await.map_err(|err| {
                     ProviderDispatchError::transport(format!(
@@ -304,9 +331,11 @@ impl ProviderAdapter for OpenClawCliProviderAdapter {
                 let stderr_buf = stderr_task.await.unwrap_or_default();
                 if status.code() == Some(124) {
                     let stderr = String::from_utf8_lossy(&stderr_buf).trim().to_string();
+                    let stderr_surface =
+                        extract_openclaw_stderr_surface_error(&stderr).unwrap_or(stderr);
                     let stdout = String::from_utf8_lossy(&stdout_buf).trim().to_string();
-                    let detail = if !stderr.is_empty() {
-                        stderr
+                    let detail = if !stderr_surface.is_empty() {
+                        stderr_surface
                     } else if !stdout.is_empty() {
                         stdout
                     } else {
@@ -319,8 +348,14 @@ impl ProviderAdapter for OpenClawCliProviderAdapter {
                 }
                 if !status.success() {
                     let stderr = String::from_utf8_lossy(&stderr_buf).trim().to_string();
+                    let stderr_surface =
+                        extract_openclaw_stderr_surface_error(&stderr).unwrap_or(stderr);
                     let stdout = String::from_utf8_lossy(&stdout_buf).trim().to_string();
-                    let detail = if !stderr.is_empty() { stderr } else { stdout };
+                    let detail = if !stderr_surface.is_empty() {
+                        stderr_surface
+                    } else {
+                        stdout
+                    };
                     return Err(ProviderDispatchError::transport(format!(
                         "openclaw model bridge failed for {model_key}: {detail}"
                     )));
@@ -486,6 +521,110 @@ async fn terminate_child_gracefully(child: &mut Child) {
     #[cfg(not(unix))]
     {
         let _ = child.kill().await;
+    }
+}
+
+fn build_openclaw_cli_error(
+    model_key: &str,
+    parsed: &OpenClawModelRunResponse,
+    stderr_buf: &[u8],
+    timeout_seconds: Option<u64>,
+) -> ProviderDispatchError {
+    let surfaced_text = openclaw_surface_text(parsed).unwrap_or_default();
+    let stderr = String::from_utf8_lossy(stderr_buf).trim().to_string();
+    let stderr_surface = extract_openclaw_stderr_surface_error(&stderr).unwrap_or_else(|| stderr.clone());
+
+    if !surfaced_text.is_empty() {
+        if let Some(timeout_seconds) = timeout_seconds {
+            ProviderDispatchError::transport(format!(
+                "provider dispatch timed out after {}s: {}; surfaced_error={}",
+                timeout_seconds, model_key, surfaced_text
+            ))
+        } else {
+            ProviderDispatchError::transport(format!(
+                "openclaw model bridge surfaced provider error for {}: {}",
+                model_key, surfaced_text
+            ))
+        }
+    } else if let Some(timeout_seconds) = timeout_seconds {
+        let detail = if stderr_surface.is_empty() {
+            format!("provider dispatch timed out after {}s", timeout_seconds)
+        } else {
+            stderr_surface
+        };
+        ProviderDispatchError::transport(format!(
+            "provider dispatch timed out after {}s: {}; detail={detail}",
+            timeout_seconds, model_key
+        ))
+    } else {
+        let detail = if stderr_surface.is_empty() {
+            "unknown openclaw bridge failure".to_string()
+        } else {
+            stderr_surface
+        };
+        ProviderDispatchError::transport(format!(
+            "openclaw model bridge failed for {}: {}",
+            model_key, detail
+        ))
+    }
+}
+
+fn openclaw_surface_text(parsed: &OpenClawModelRunResponse) -> Option<String> {
+    parsed
+        .outputs
+        .iter()
+        .find_map(|entry| entry.text.as_deref())
+        .or_else(|| parsed.outputs.first().and_then(|entry| entry.media_url.as_deref()))
+        .map(|text| text.trim().to_string())
+        .filter(|text| !text.is_empty())
+}
+
+fn openclaw_outputs_look_like_error(parsed: &OpenClawModelRunResponse) -> bool {
+    let Some(text) = openclaw_surface_text(parsed) else {
+        return false;
+    };
+    let lowered = text.to_ascii_lowercase();
+    text.starts_with('⚠')
+        || lowered.contains("returned a billing error")
+        || lowered.contains("insufficient balance")
+        || lowered.contains("run out of credits")
+        || lowered.contains("returned an auth error")
+        || lowered.contains("returned a rate limit error")
+        || lowered.contains("returned an api error")
+}
+
+fn extract_openclaw_stderr_surface_error(stderr: &str) -> Option<String> {
+    for line in stderr.lines() {
+        if let Some(idx) = line.find("error=") {
+            let rest = &line[idx + "error=".len()..];
+            let cleaned = rest
+                .split(" rawError=")
+                .next()
+                .unwrap_or(rest)
+                .trim();
+            if !cleaned.is_empty() {
+                return Some(cleaned.to_string());
+            }
+        }
+    }
+
+    if stderr.contains("insufficient balance") {
+        return Some("insufficient balance (1008)".to_string());
+    }
+
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::extract_openclaw_stderr_surface_error;
+
+    #[test]
+    fn extract_openclaw_stderr_surface_error_prefers_embedded_error_field() {
+        let stderr = r#"[agent/embedded] embedded run agent end: runId=abc isError=true model=MiniMax-M2.5 provider=minimax error=⚠️ minimax (MiniMax-M2.5) returned a billing error — your API key has run out of credits or has an insufficient balance. Check your minimax billing dashboard and top up or switch to a different API key. rawError=500 {"type":"error","error":{"type":"api_error","message":"insufficient balance (1008)"}}"#;
+        let extracted = extract_openclaw_stderr_surface_error(stderr).expect("surface error");
+        assert!(extracted.contains("returned a billing error"));
+        assert!(!extracted.contains("rawError="));
     }
 }
 

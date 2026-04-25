@@ -247,6 +247,69 @@ sleep {sleep_seconds}
     }
 }
 
+fn create_output_then_fail_mock_openclaw_cli_script(exit_code: u32) -> MockOpenClawCliScript {
+    let base = env::temp_dir().join(format!(
+        "cex-openclaw-fail-mock-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos()
+    ));
+    fs::create_dir_all(&base).expect("create fail mock openclaw dir");
+
+    #[cfg(windows)]
+    let script_path = base.join("openclaw.cmd");
+    #[cfg(not(windows))]
+    let script_path = base.join("openclaw.sh");
+
+    let capture_path = base.join("env-capture.json");
+    let capture_path_string = path_to_command_string(capture_path.clone());
+
+    #[cfg(windows)]
+    let script_body = format!(
+        r#"@echo off
+set CAPTURE_PATH={capture_path}
+> "%CAPTURE_PATH%" (
+  echo {{"OPENCLAW_CONFIG_PATH":"%OPENCLAW_CONFIG_PATH%","OPENCLAW_STATE_DIR":"%OPENCLAW_STATE_DIR%","OPENCLAW_AGENT_DIR":"%OPENCLAW_AGENT_DIR%"}}
+)
+echo {"ok":true,"capability":"model.run","transport":"local","provider":"openai-codex","model":"gpt-5.4","attempts":[],"outputs":[{"text":"⚠️ provider returned a billing error — exhausted credits","mediaUrl":null}]}
+echo raw stderr detail 1>&2
+exit /b {exit_code}
+"#,
+        capture_path = capture_path_string,
+        exit_code = exit_code
+    );
+
+    #[cfg(not(windows))]
+    let script_body = format!(
+        r#"#!/usr/bin/env sh
+printf '%s\n' "{{\"OPENCLAW_CONFIG_PATH\":\"${{OPENCLAW_CONFIG_PATH:-}}\",\"OPENCLAW_STATE_DIR\":\"${{OPENCLAW_STATE_DIR:-}}\",\"OPENCLAW_AGENT_DIR\":\"${{OPENCLAW_AGENT_DIR:-}}\"}}" > '{capture_path}'
+printf '%s\n' '{{"ok":true,"capability":"model.run","transport":"local","provider":"openai-codex","model":"gpt-5.4","attempts":[],"outputs":[{{"text":"⚠️ provider returned a billing error — exhausted credits","mediaUrl":null}}]}}'
+printf '%s\n' 'raw stderr detail' >&2
+exit {exit_code}
+"#,
+        capture_path = capture_path_string,
+        exit_code = exit_code
+    );
+
+    fs::write(&script_path, script_body).expect("write failing mock openclaw script");
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&script_path)
+            .expect("failing mock openclaw metadata")
+            .permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&script_path, perms).expect("chmod failing mock openclaw script");
+    }
+
+    MockOpenClawCliScript {
+        command: path_to_command_string(script_path),
+        capture_path,
+    }
+}
+
 fn path_to_command_string(path: PathBuf) -> String {
     path.to_string_lossy().to_string()
 }
@@ -2227,6 +2290,51 @@ async fn process_execution_uses_openclaw_cli_json_even_if_cli_lingers() {
         processed["result_payload"]["output_text"],
         "bridge output before exit"
     );
+}
+
+#[tokio::test]
+async fn process_execution_prefers_surfaced_openclaw_error_text_over_stderr_noise() {
+    let mut state = test_state();
+    let mock_cli = create_output_then_fail_mock_openclaw_cli_script(1);
+    state.openclaw_cli_bin = mock_cli.command.clone();
+    let app = build_router(state);
+    let create_body = json!({
+        "invocation_id": "00000000-0000-0000-0000-00000000011c",
+        "trace_id": "00000000-0000-0000-0000-00000000021c",
+        "org_id": "00000000-0000-0000-0000-00000000ce01",
+        "capability_id": "cap.openclaw.stdout-error",
+        "capability_provider": "codex",
+        "capability_provider_ref": "gpt-5.4",
+        "prompt": "say billing exhausted",
+        "reserve_amount": 1.0
+    });
+
+    let (_, created) = send_json(app.clone(), "POST", "/v1/executions", create_body).await;
+    let execution_id = created["execution_id"].as_str().expect("execution id");
+
+    let (claim_status, _) = send_json(
+        app.clone(),
+        "POST",
+        "/v1/executions/claim-next",
+        json!({ "claimed_by": "worker-surfaced-error", "note": "claim next" }),
+    )
+    .await;
+    assert_eq!(claim_status, StatusCode::OK);
+
+    let (process_status, processed) = send_json(
+        app.clone(),
+        "POST",
+        &format!("/v1/executions/{execution_id}/process"),
+        json!({ "processed_by": "worker-surfaced-error", "note": "dequeue" }),
+    )
+    .await;
+    assert_eq!(process_status, StatusCode::OK);
+    assert_eq!(processed["status"], "Failed");
+    let error_text = processed["result_payload"]["error"]
+        .as_str()
+        .expect("surfaced error text");
+    assert!(error_text.contains("billing error"));
+    assert!(!error_text.contains("raw stderr detail"));
 }
 
 #[tokio::test]
