@@ -60,12 +60,23 @@ required_bool_true() {
   [[ "${value,,}" == "true" || "$value" == "1" ]]
 }
 
+file_has_group_or_other_permissions() {
+  local path="$1"
+  local mode
+  mode="$(stat -c '%a' "$path")"
+  (( (8#$mode & 077) != 0 ))
+}
+
 section 'deployment posture'
 printf 'readiness mode=%s\n' "$CEX_READINESS_MODE"
 if [[ "$CEX_READINESS_MODE" == "local" ]]; then
   pass 'local readiness posture selected (production secret/profile checks skipped)'
 else
   posture_failures=0
+  if [[ -n "${CEX_ENV_FILE:-}" && -f "$CEX_ENV_FILE" ]] && file_has_group_or_other_permissions "$CEX_ENV_FILE"; then
+    posture_failures=$((posture_failures + 1))
+    fail "production posture requires CEX_ENV_FILE to be owner-only readable ($CEX_ENV_FILE)"
+  fi
   if secret_is_default_or_empty "${CEX_GATEWAY_API_KEY:-}"; then
     posture_failures=$((posture_failures + 1))
     fail 'production posture requires non-default CEX_GATEWAY_API_KEY'

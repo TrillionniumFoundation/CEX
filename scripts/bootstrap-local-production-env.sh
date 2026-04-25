@@ -50,6 +50,7 @@ if [[ -f "$ENV_PATH" && "$FORCE" != "1" ]]; then
 fi
 
 mkdir -p "$OUT_DIR/edge" "$OUT_DIR/config" "$OUT_DIR/logs" "$OUT_DIR/openclaw"
+chmod 700 "$OUT_DIR" "$OUT_DIR/edge" "$OUT_DIR/config" "$OUT_DIR/logs" "$OUT_DIR/openclaw"
 
 python3 - <<'PY' "$ENV_PATH" "$OUT_DIR"
 import json
@@ -174,7 +175,9 @@ print(json.dumps({
 }, indent=2))
 PY
 
+chmod 600 "$ENV_PATH"
 cp "$CEX_PROJECT_ROOT/config/execution-policy.production.example.json" "$OUT_DIR/config/execution-policy.json"
+chmod 600 "$OUT_DIR/config/execution-policy.json"
 OPENCLAW_STATE_DIR="$OUT_DIR/openclaw" \
 OPENCLAW_CONFIG_PATH="$OUT_DIR/openclaw/openclaw.json" \
 OPENCLAW_AGENT_DIR="$OUT_DIR/openclaw/agents/cex/agent" \
