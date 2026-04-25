@@ -1,6 +1,7 @@
 use axum::{
     extract::{Path, State},
     http::StatusCode,
+    response::IntoResponse,
     routing::get,
     Json, Router,
 };
@@ -40,6 +41,7 @@ impl AppState {
 pub fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
+        .route("/metrics", get(metrics))
         .route("/v1/capabilities", get(list_capabilities))
         .route("/v1/capabilities/:id", get(get_capability))
         .with_state(state)
@@ -47,6 +49,37 @@ pub fn build_router(state: AppState) -> Router {
 
 async fn health() -> &'static str {
     "capability-service ok"
+}
+
+async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
+    let total = state.capabilities.len();
+    let enabled = state
+        .capabilities
+        .values()
+        .filter(|record| record.enabled)
+        .count();
+    let disabled = total.saturating_sub(enabled);
+    let body = format!(
+        concat!(
+            "# HELP cex_capability_service_up Whether capability-service metrics are being served.\n",
+            "# TYPE cex_capability_service_up gauge\n",
+            "cex_capability_service_up 1\n",
+            "# HELP cex_capability_records_total Capability registry records grouped by enabled state.\n",
+            "# TYPE cex_capability_records_total gauge\n",
+            "cex_capability_records_total{{state=\"total\"}} {total}\n",
+            "cex_capability_records_total{{state=\"enabled\"}} {enabled}\n",
+            "cex_capability_records_total{{state=\"disabled\"}} {disabled}\n",
+        ),
+        total = total,
+        enabled = enabled,
+        disabled = disabled,
+    );
+    (
+        StatusCode::OK,
+        [("content-type", "text/plain; version=0.0.4; charset=utf-8")],
+        body,
+    )
+        .into_response()
 }
 
 async fn list_capabilities(State(state): State<AppState>) -> Json<Vec<CapabilityRecord>> {
@@ -412,8 +445,6 @@ struct OpenClawModelsStatus {
     #[serde(default)]
     allowed: Vec<String>,
 }
-
-use axum::response::IntoResponse;
 
 #[cfg(test)]
 mod tests {

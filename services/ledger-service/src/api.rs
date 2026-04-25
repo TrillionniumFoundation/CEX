@@ -44,6 +44,41 @@ pub async fn health() -> &'static str {
     "ledger-service ok"
 }
 
+pub async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
+    let accounts = state.accounts.read().await.len();
+    let entries = state.entries.read().await.len();
+    let idempotency_keys = state.idempotency_keys.read().await.len();
+    let body = format!(
+        concat!(
+            "# HELP cex_ledger_service_up Whether ledger-service metrics are being served.\n",
+            "# TYPE cex_ledger_service_up gauge\n",
+            "cex_ledger_service_up 1\n",
+            "# HELP cex_ledger_memory_accounts_total In-memory ledger accounts.\n",
+            "# TYPE cex_ledger_memory_accounts_total gauge\n",
+            "cex_ledger_memory_accounts_total {accounts}\n",
+            "# HELP cex_ledger_memory_entries_total In-memory ledger entries.\n",
+            "# TYPE cex_ledger_memory_entries_total gauge\n",
+            "cex_ledger_memory_entries_total {entries}\n",
+            "# HELP cex_ledger_memory_idempotency_keys_total In-memory ledger idempotency keys.\n",
+            "# TYPE cex_ledger_memory_idempotency_keys_total gauge\n",
+            "cex_ledger_memory_idempotency_keys_total {idempotency_keys}\n",
+            "# HELP cex_ledger_admin_tokens_total Ledger admin tokens currently loaded.\n",
+            "# TYPE cex_ledger_admin_tokens_total gauge\n",
+            "cex_ledger_admin_tokens_total {admin_tokens}\n",
+        ),
+        accounts = accounts,
+        entries = entries,
+        idempotency_keys = idempotency_keys,
+        admin_tokens = state.admin_tokens.len(),
+    );
+    (
+        StatusCode::OK,
+        [("content-type", "text/plain; version=0.0.4; charset=utf-8")],
+        body,
+    )
+        .into_response()
+}
+
 pub async fn create_account(
     State(state): State<AppState>,
     headers: HeaderMap,

@@ -495,7 +495,11 @@ curl -s http://127.0.0.1:7003/metrics | grep -E 'cex_execution_runtime_up|cex_ex
 curl -s http://127.0.0.1:7003/v1/executions/worker-queue/summary | jq
 curl -s -H 'x-admin-token: <admin-token>' http://127.0.0.1:7003/v1/executions/provider-dead-letters | jq
 curl -s http://127.0.0.1:7004/health
+curl -s http://127.0.0.1:7004/metrics | grep cex_audit_service_up
 curl -s http://127.0.0.1:7002/health
+curl -s http://127.0.0.1:7002/metrics | grep cex_ledger_service_up
+curl -s http://127.0.0.1:7001/metrics | grep cex_identity_service_up
+curl -s http://127.0.0.1:7005/metrics | grep cex_capability_service_up
 curl -s http://127.0.0.1:8090/health
 curl -s http://127.0.0.1:8090/health | jq '.identity_governance_overview'
 curl -s -H 'x-entry-token: <token>' http://127.0.0.1:8090/v1/admin/identity-governance/status?limit=20 | jq

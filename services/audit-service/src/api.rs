@@ -18,6 +18,35 @@ pub async fn health() -> &'static str {
     "audit-service ok"
 }
 
+pub async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
+    let event_buffer_count = state.events.read().await.len();
+    let body = format!(
+        concat!(
+            "# HELP cex_audit_service_up Whether audit-service metrics are being served.\n",
+            "# TYPE cex_audit_service_up gauge\n",
+            "cex_audit_service_up 1\n",
+            "# HELP cex_audit_event_buffer_records_total In-memory audit event buffer records.\n",
+            "# TYPE cex_audit_event_buffer_records_total gauge\n",
+            "cex_audit_event_buffer_records_total {event_buffer_count}\n",
+            "# HELP cex_audit_postgres_configured Whether audit-service has a postgres pool.\n",
+            "# TYPE cex_audit_postgres_configured gauge\n",
+            "cex_audit_postgres_configured {postgres_configured}\n",
+            "# HELP cex_audit_admin_tokens_total Audit admin tokens currently loaded.\n",
+            "# TYPE cex_audit_admin_tokens_total gauge\n",
+            "cex_audit_admin_tokens_total {admin_tokens}\n",
+        ),
+        event_buffer_count = event_buffer_count,
+        postgres_configured = if state.pool.is_some() { 1 } else { 0 },
+        admin_tokens = state.admin_tokens.len(),
+    );
+    (
+        StatusCode::OK,
+        [("content-type", "text/plain; version=0.0.4; charset=utf-8")],
+        body,
+    )
+        .into_response()
+}
+
 pub async fn create_event(
     State(state): State<AppState>,
     Json(req): Json<AuditEventCreateRequest>,

@@ -1,6 +1,7 @@
 use axum::{
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
+    response::IntoResponse,
     routing::{get, post},
     Json, Router,
 };
@@ -183,10 +184,43 @@ enum ResolveApiKeyLookup {
 pub fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(|| async { "identity-service ok" }))
+        .route("/metrics", get(metrics))
         .route("/v1/auth/resolve", post(resolve_api_key))
         .route("/v1/api-keys", get(list_api_keys).post(issue_api_key))
         .route("/v1/api-keys/:id/revoke", post(revoke_api_key))
         .with_state(state)
+}
+
+async fn metrics(State(state): State<AppState>) -> impl IntoResponse {
+    let body = format!(
+        concat!(
+            "# HELP cex_identity_service_up Whether identity-service metrics are being served.\n",
+            "# TYPE cex_identity_service_up gauge\n",
+            "cex_identity_service_up 1\n",
+            "# HELP cex_identity_static_api_keys_total Static API keys currently loaded.\n",
+            "# TYPE cex_identity_static_api_keys_total gauge\n",
+            "cex_identity_static_api_keys_total {static_api_keys}\n",
+            "# HELP cex_identity_admin_tokens_total Identity admin tokens currently loaded.\n",
+            "# TYPE cex_identity_admin_tokens_total gauge\n",
+            "cex_identity_admin_tokens_total {admin_tokens}\n",
+            "# HELP cex_identity_postgres_configured Whether identity-service has a postgres pool.\n",
+            "# TYPE cex_identity_postgres_configured gauge\n",
+            "cex_identity_postgres_configured {postgres_configured}\n",
+            "# HELP cex_identity_audit_client_configured Whether identity-service audit client is configured.\n",
+            "# TYPE cex_identity_audit_client_configured gauge\n",
+            "cex_identity_audit_client_configured {audit_configured}\n",
+        ),
+        static_api_keys = state.api_keys.len(),
+        admin_tokens = state.admin_tokens.len(),
+        postgres_configured = if state.pool.is_some() { 1 } else { 0 },
+        audit_configured = if state.audit_base_url.is_some() { 1 } else { 0 },
+    );
+    (
+        StatusCode::OK,
+        [("content-type", "text/plain; version=0.0.4; charset=utf-8")],
+        body,
+    )
+        .into_response()
 }
 
 async fn resolve_api_key(

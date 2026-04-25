@@ -11,6 +11,7 @@ use state::AppState;
 pub fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(api::health))
+        .route("/metrics", get(api::metrics))
         .route("/v1/accounts", post(api::create_account))
         .route("/v1/accounts/:id", get(api::get_account))
         .route("/v1/ledger/reserve", post(api::reserve_credits))
