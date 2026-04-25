@@ -2687,6 +2687,7 @@ async fn start_execution_inner(state: &AppState, id: Uuid) -> Result<ExecutionRe
                     state_dir: state.openclaw_state_dir.clone(),
                     agent_dir: state.openclaw_agent_dir.clone(),
                 },
+                state.execution_provider_dispatch_timeout_seconds,
                 &provider_target,
                 &input,
             )
@@ -3144,6 +3145,7 @@ async fn start_execution_in_db(
                 state_dir: state.openclaw_state_dir.clone(),
                 agent_dir: state.openclaw_agent_dir.clone(),
             },
+            state.execution_provider_dispatch_timeout_seconds,
             &provider_target,
             &input,
         )

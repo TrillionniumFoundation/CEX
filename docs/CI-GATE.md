@@ -80,6 +80,7 @@ What it does:
 - applies SQL migrations and seeds the default local-dev org/key when DB bootstrap is available
 - runs `cargo test --workspace`
 - starts a repo-local detached Linux runtime through `scripts/runtime-manager-linux.sh`
+- explicitly disables the detached queued-worker loop during the gate (`CEX_ENABLE_QUEUED_WORKER=0`) so the ignored runtime suites remain deterministic
 - if `run/openclaw-cex/openclaw.json` exists, the runtime manager auto-scopes OpenClaw bridge/import calls to that isolated repo-local state instead of the default `~/.openclaw/main` scope
 - injects a temporary `powershell` compatibility shim so the existing ignored Rust runtime suites can still call the expected repo scripts
 - runs the ignored runtime black-box and approval DB-probe tests for:

@@ -23,6 +23,7 @@ use uuid::Uuid;
 
 pub const DEFAULT_EXECUTION_DEFAULT_MAX_ATTEMPTS: i32 = 1;
 pub const DEFAULT_EXECUTION_QUEUED_WORKER_MAX_ATTEMPTS: i32 = 3;
+pub const DEFAULT_EXECUTION_PROVIDER_DISPATCH_TIMEOUT_SECONDS: u64 = 60;
 pub const DEFAULT_ALERT_APPROVAL_BACKLOG_THRESHOLD: usize = 10;
 pub const DEFAULT_ALERT_LEASE_EXPIRED_THRESHOLD: usize = 3;
 pub const DEFAULT_ALERT_RETRY_BUDGET_EXHAUSTED_THRESHOLD: usize = 3;
@@ -133,6 +134,7 @@ pub struct AppState {
     pub execution_claim_lease_seconds: i64,
     pub execution_default_max_attempts: i32,
     pub execution_queued_worker_max_attempts: i32,
+    pub execution_provider_dispatch_timeout_seconds: u64,
     pub alert_approval_backlog_threshold: usize,
     pub alert_lease_expired_threshold: usize,
     pub alert_retry_budget_exhausted_threshold: usize,
@@ -186,6 +188,10 @@ impl AppState {
         let execution_queued_worker_max_attempts = positive_i32_env(
             "EXECUTION_QUEUED_WORKER_MAX_ATTEMPTS",
             DEFAULT_EXECUTION_QUEUED_WORKER_MAX_ATTEMPTS,
+        );
+        let execution_provider_dispatch_timeout_seconds = positive_u64_env(
+            "EXECUTION_PROVIDER_DISPATCH_TIMEOUT_SECONDS",
+            DEFAULT_EXECUTION_PROVIDER_DISPATCH_TIMEOUT_SECONDS,
         );
         let alert_approval_backlog_threshold = positive_usize_env(
             "ALERT_APPROVAL_BACKLOG_THRESHOLD",
@@ -257,6 +263,7 @@ impl AppState {
             execution_claim_lease_seconds,
             execution_default_max_attempts,
             execution_queued_worker_max_attempts,
+            execution_provider_dispatch_timeout_seconds,
             alert_approval_backlog_threshold,
             alert_lease_expired_threshold,
             alert_retry_budget_exhausted_threshold,
@@ -334,6 +341,8 @@ impl AppState {
             execution_claim_lease_seconds: 300,
             execution_default_max_attempts: execution_default_max_attempts.max(1),
             execution_queued_worker_max_attempts: execution_queued_worker_max_attempts.max(1),
+            execution_provider_dispatch_timeout_seconds:
+                DEFAULT_EXECUTION_PROVIDER_DISPATCH_TIMEOUT_SECONDS,
             alert_approval_backlog_threshold: DEFAULT_ALERT_APPROVAL_BACKLOG_THRESHOLD,
             alert_lease_expired_threshold: DEFAULT_ALERT_LEASE_EXPIRED_THRESHOLD,
             alert_retry_budget_exhausted_threshold: DEFAULT_ALERT_RETRY_BUDGET_EXHAUSTED_THRESHOLD,
@@ -373,6 +382,14 @@ fn positive_usize_env(name: &str, default_value: usize) -> usize {
     env::var(name)
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(default_value)
+}
+
+fn positive_u64_env(name: &str, default_value: u64) -> u64 {
+    env::var(name)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
         .filter(|value| *value > 0)
         .unwrap_or(default_value)
 }

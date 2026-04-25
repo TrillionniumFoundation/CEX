@@ -37,6 +37,11 @@ export OLLAMA_BASE_URL="${OLLAMA_BASE_URL:-http://127.0.0.1:11434}"
 export EXECUTION_CLAIM_LEASE_SECONDS="${EXECUTION_CLAIM_LEASE_SECONDS:-300}"
 export EXECUTION_DEFAULT_MAX_ATTEMPTS="${EXECUTION_DEFAULT_MAX_ATTEMPTS:-1}"
 export EXECUTION_QUEUED_WORKER_MAX_ATTEMPTS="${EXECUTION_QUEUED_WORKER_MAX_ATTEMPTS:-3}"
+export EXECUTION_PROVIDER_DISPATCH_TIMEOUT_SECONDS="${EXECUTION_PROVIDER_DISPATCH_TIMEOUT_SECONDS:-60}"
+export CEX_ENABLE_QUEUED_WORKER="${CEX_ENABLE_QUEUED_WORKER:-1}"
+export CEX_RUNTIME_SKIP_BUILD="${CEX_RUNTIME_SKIP_BUILD:-0}"
+export EXECUTION_WORKER_ID="${EXECUTION_WORKER_ID:-cex-linux-worker}"
+export EXECUTION_WORKER_IDLE_SECS="${EXECUTION_WORKER_IDLE_SECS:-2}"
 export IDENTITY_ADMIN_TOKEN="${IDENTITY_ADMIN_TOKEN:-local-dev-admin-token}"
 export LEDGER_FAIL_FAST="${LEDGER_FAIL_FAST:-false}"
 export DATABASE_URL="$(cex_effective_database_url)"
@@ -49,6 +54,8 @@ PID_DIR="$RUNTIME_DIR/pids"
 mkdir -p "$LOG_DIR" "$PID_DIR"
 
 SERVICES=(ledger-service execution-service identity-service audit-service capability-service gateway-service)
+WORKER_NAME="execution-queued-worker"
+WORKER_SCRIPT="$SCRIPT_DIR/execution-queued-worker.sh"
 HEALTH_URLS=(
   "http://127.0.0.1:7002/health"
   "http://127.0.0.1:7003/health"
@@ -64,10 +71,34 @@ Usage: scripts/runtime-manager-linux.sh <start|stop|restart|status|logs>
 EOF
 }
 
+stop_worker() {
+  local pidfile pid
+  pidfile="$PID_DIR/$WORKER_NAME.pid"
+  if [[ -f "$pidfile" ]]; then
+    pid="$(cat "$pidfile" 2>/dev/null || true)"
+    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+      kill "$pid" 2>/dev/null || true
+    fi
+    rm -f "$pidfile"
+  fi
+  pkill -f "$WORKER_SCRIPT run" 2>/dev/null || true
+}
+
+start_worker() {
+  if [[ "$CEX_ENABLE_QUEUED_WORKER" != "1" ]]; then
+    echo "==> queued worker disabled (CEX_ENABLE_QUEUED_WORKER=$CEX_ENABLE_QUEUED_WORKER)"
+    return 0
+  fi
+  cex_require_cmd python3
+  echo "==> starting $WORKER_NAME"
+  nohup bash "$WORKER_SCRIPT" run > "$LOG_DIR/$WORKER_NAME.log" 2>&1 &
+  echo $! > "$PID_DIR/$WORKER_NAME.pid"
+}
+
 ensure_binary() {
   local svc="$1"
   local bin="$PROJECT_ROOT/target/debug/$svc"
-  if [[ -x "$bin" ]]; then
+  if [[ "$CEX_RUNTIME_SKIP_BUILD" == "1" && -x "$bin" ]]; then
     return 0
   fi
   echo "==> building $svc"
@@ -76,6 +107,7 @@ ensure_binary() {
 
 stop_runtime() {
   local svc pidfile pid
+  stop_worker
   for svc in "${SERVICES[@]}"; do
     pidfile="$PID_DIR/$svc.pid"
     if [[ -f "$pidfile" ]]; then
@@ -136,6 +168,19 @@ status_runtime() {
       echo "FAIL $url"
     fi
   done
+
+  if [[ "$CEX_ENABLE_QUEUED_WORKER" == "1" ]]; then
+    local pidfile pid
+    pidfile="$PID_DIR/$WORKER_NAME.pid"
+    pid="$(cat "$pidfile" 2>/dev/null || true)"
+    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+      echo "OK worker $WORKER_NAME pid=$pid id=$EXECUTION_WORKER_ID"
+    else
+      echo "FAIL worker $WORKER_NAME"
+    fi
+  else
+    echo "DISABLED worker $WORKER_NAME"
+  fi
 }
 
 logs_runtime() {
@@ -144,6 +189,8 @@ logs_runtime() {
     echo "=== $svc ==="
     tail -n 40 "$LOG_DIR/$svc.log" 2>/dev/null || true
   done
+  echo "=== $WORKER_NAME ==="
+  tail -n 40 "$LOG_DIR/$WORKER_NAME.log" 2>/dev/null || true
 }
 
 cmd="${1:-}"
@@ -151,6 +198,7 @@ case "$cmd" in
   start)
     start_runtime
     health_check
+    start_worker
     ;;
   stop)
     stop_runtime
@@ -159,6 +207,7 @@ case "$cmd" in
     stop_runtime
     start_runtime
     health_check
+    start_worker
     ;;
   status)
     status_runtime

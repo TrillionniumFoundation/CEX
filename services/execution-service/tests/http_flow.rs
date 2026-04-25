@@ -125,6 +125,67 @@ printf '%s\n' '{{"ok":true,"capability":"model.run","transport":"local","provide
     }
 }
 
+fn create_sleeping_mock_openclaw_cli_script(sleep_seconds: u64) -> MockOpenClawCliScript {
+    let base = env::temp_dir().join(format!(
+        "cex-openclaw-timeout-mock-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos()
+    ));
+    fs::create_dir_all(&base).expect("create timeout mock openclaw dir");
+
+    #[cfg(windows)]
+    let script_path = base.join("openclaw.cmd");
+    #[cfg(not(windows))]
+    let script_path = base.join("openclaw.sh");
+
+    let capture_path = base.join("env-capture.json");
+    let capture_path_string = path_to_command_string(capture_path.clone());
+
+    #[cfg(windows)]
+    let script_body = format!(
+        r#"@echo off
+set CAPTURE_PATH={capture_path}
+> "%CAPTURE_PATH%" (
+  echo {{"OPENCLAW_CONFIG_PATH":"%OPENCLAW_CONFIG_PATH%","OPENCLAW_STATE_DIR":"%OPENCLAW_STATE_DIR%","OPENCLAW_AGENT_DIR":"%OPENCLAW_AGENT_DIR%"}}
+)
+ping 127.0.0.1 -n {sleep_plus_one} > nul
+echo {{"ok":true,"capability":"model.run","transport":"local","provider":"openai-codex","model":"gpt-5.4","attempts":[],"outputs":[{{"text":"late response","mediaUrl":null}}]}}
+"#,
+        capture_path = capture_path_string,
+        sleep_plus_one = sleep_seconds + 1
+    );
+
+    #[cfg(not(windows))]
+    let script_body = format!(
+        r#"#!/usr/bin/env sh
+printf '%s\n' "{{\"OPENCLAW_CONFIG_PATH\":\"${{OPENCLAW_CONFIG_PATH:-}}\",\"OPENCLAW_STATE_DIR\":\"${{OPENCLAW_STATE_DIR:-}}\",\"OPENCLAW_AGENT_DIR\":\"${{OPENCLAW_AGENT_DIR:-}}\"}}" > '{capture_path}'
+sleep {sleep_seconds}
+printf '%s\n' '{{"ok":true,"capability":"model.run","transport":"local","provider":"openai-codex","model":"gpt-5.4","attempts":[],"outputs":[{{"text":"late response","mediaUrl":null}}]}}'
+"#,
+        capture_path = capture_path_string,
+        sleep_seconds = sleep_seconds
+    );
+
+    fs::write(&script_path, script_body).expect("write timeout mock openclaw script");
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&script_path)
+            .expect("timeout mock openclaw metadata")
+            .permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&script_path, perms).expect("chmod timeout mock openclaw script");
+    }
+
+    MockOpenClawCliScript {
+        command: path_to_command_string(script_path),
+        capture_path,
+    }
+}
+
 fn path_to_command_string(path: PathBuf) -> String {
     path.to_string_lossy().to_string()
 }
@@ -2015,6 +2076,51 @@ async fn process_execution_uses_openclaw_cli_bridge_for_queued_worker() {
     let (get_status, fetched) = get_json(app, &format!("/v1/executions/{execution_id}")).await;
     assert_eq!(get_status, StatusCode::OK);
     assert_eq!(fetched["status"], "Succeeded");
+}
+
+#[tokio::test]
+async fn process_execution_fails_when_openclaw_cli_bridge_times_out() {
+    let mut state = test_state();
+    let mock_cli = create_sleeping_mock_openclaw_cli_script(2);
+    state.openclaw_cli_bin = mock_cli.command.clone();
+    state.execution_provider_dispatch_timeout_seconds = 1;
+    let app = build_router(state);
+    let create_body = json!({
+        "invocation_id": "00000000-0000-0000-0000-00000000011a",
+        "trace_id": "00000000-0000-0000-0000-00000000021a",
+        "org_id": "00000000-0000-0000-0000-00000000ce01",
+        "capability_id": "cap.openclaw.timeout",
+        "capability_provider": "codex",
+        "capability_provider_ref": "gpt-5.4",
+        "prompt": "say hi slowly",
+        "reserve_amount": 1.0
+    });
+
+    let (_, created) = send_json(app.clone(), "POST", "/v1/executions", create_body).await;
+    let execution_id = created["execution_id"].as_str().expect("execution id");
+
+    let (claim_status, _) = send_json(
+        app.clone(),
+        "POST",
+        "/v1/executions/claim-next",
+        json!({ "claimed_by": "worker-timeout", "note": "claim next" }),
+    )
+    .await;
+    assert_eq!(claim_status, StatusCode::OK);
+
+    let (process_status, processed) = send_json(
+        app.clone(),
+        "POST",
+        &format!("/v1/executions/{execution_id}/process"),
+        json!({ "processed_by": "worker-timeout", "note": "dequeue" }),
+    )
+    .await;
+    assert_eq!(process_status, StatusCode::OK);
+    assert_eq!(processed["status"], "Failed");
+    assert!(processed["result_payload"]["error"]
+        .as_str()
+        .expect("timeout error text")
+        .contains("timed out"));
 }
 
 #[tokio::test]

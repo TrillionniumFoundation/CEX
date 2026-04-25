@@ -40,13 +40,23 @@ The Linux gate relies on:
 ./scripts/seed-local-dev.sh
 ```
 
+The detached Linux runtime now also starts a repo-local queued-worker loop by default, and it rebuilds the Rust service binaries before launch so a restart does not silently boot stale code. If you intentionally want to reuse already-built binaries, set `CEX_RUNTIME_SKIP_BUILD=1`. Useful commands:
+
+```bash
+./scripts/runtime-manager-linux.sh restart
+./scripts/execution-queued-worker.sh status
+./scripts/execution-queued-worker.sh once
+```
+
+Set `CEX_ENABLE_QUEUED_WORKER=0` when you need deterministic gate/debug behavior without background queue consumption.
+
 If you want CEX to use a repo-local isolated OpenClaw scope instead of the default `~/.openclaw` / `main` agent, bootstrap it once with:
 
 ```bash
 ./scripts/bootstrap-openclaw-cex.sh
 ```
 
-That writes an isolated config under `run/openclaw-cex/`; `runtime-manager-linux.sh` will auto-detect that default location and export `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, `OPENCLAW_AGENT_DIR`, and `CAPABILITY_OPENCLAW_MODELS_JSON_PATH` before starting services.
+That writes an isolated config under `run/openclaw-cex/`; `runtime-manager-linux.sh` will auto-detect that default location and export `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, `OPENCLAW_AGENT_DIR`, and `CAPABILITY_OPENCLAW_MODELS_JSON_PATH` before starting services and the Linux queued worker.
 
 For a machine-readable operator snapshot without running the full gate:
 

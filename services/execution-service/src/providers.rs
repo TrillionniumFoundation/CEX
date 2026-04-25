@@ -2,7 +2,9 @@ use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::time::Duration;
 use tokio::process::Command;
+use tokio::time::timeout;
 
 #[derive(Debug, Clone, Default)]
 pub struct OpenClawCliEnvScope {
@@ -80,12 +82,14 @@ pub trait ProviderAdapter: Send + Sync {
 
 pub struct OllamaProviderAdapter {
     pub base_url: String,
+    pub timeout_seconds: u64,
 }
 
 pub struct OpenClawCliProviderAdapter {
     pub cli_bin: String,
     pub source_provider: String,
     pub env_scope: OpenClawCliEnvScope,
+    pub timeout_seconds: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -130,47 +134,58 @@ impl ProviderAdapter for OllamaProviderAdapter {
         provider_ref: &str,
         input: &ProviderDispatchInput,
     ) -> Result<ProviderDispatchOutput, ProviderDispatchError> {
-        let url = format!("{}/api/generate", self.base_url.trim_end_matches('/'));
-        let response = http
-            .post(url)
-            .json(&json!({
-                "model": provider_ref,
-                "prompt": input.prompt,
-                "stream": false,
-            }))
-            .send()
-            .await
-            .map_err(|err| ProviderDispatchError::transport(format!("request failed: {err}")))?;
+        timeout(Duration::from_secs(self.timeout_seconds), async {
+            let url = format!("{}/api/generate", self.base_url.trim_end_matches('/'));
+            let response = http
+                .post(url)
+                .json(&json!({
+                    "model": provider_ref,
+                    "prompt": input.prompt,
+                    "stream": false,
+                }))
+                .send()
+                .await
+                .map_err(|err| {
+                    ProviderDispatchError::transport(format!("request failed: {err}"))
+                })?;
 
-        let status = response.status();
-        let body = response
-            .text()
-            .await
-            .map_err(|err| ProviderDispatchError::transport(format!("read body failed: {err}")))?;
+            let status = response.status();
+            let body = response.text().await.map_err(|err| {
+                ProviderDispatchError::transport(format!("read body failed: {err}"))
+            })?;
 
-        if !status.is_success() {
-            return Err(ProviderDispatchError::upstream(status.as_u16(), body));
-        }
+            if !status.is_success() {
+                return Err(ProviderDispatchError::upstream(status.as_u16(), body));
+            }
 
-        let parsed: OllamaGenerateResponse = serde_json::from_str(&body).map_err(|err| {
-            ProviderDispatchError::decode(format!("decode response failed: {err}; body={body}"))
-        })?;
+            let parsed: OllamaGenerateResponse = serde_json::from_str(&body).map_err(|err| {
+                ProviderDispatchError::decode(format!("decode response failed: {err}; body={body}"))
+            })?;
 
-        Ok(ProviderDispatchOutput {
-            provider: self.provider().to_string(),
-            provider_ref: provider_ref.to_string(),
-            provider_target: build_provider_target(self.provider(), provider_ref),
-            result_payload: json!({
-                "provider": self.provider(),
-                "provider_ref": provider_ref,
-                "model": parsed.model,
-                "output_text": parsed.response,
-                "done": parsed.done,
-                "total_duration": parsed.total_duration,
-                "eval_count": parsed.eval_count,
-                "prompt_eval_count": parsed.prompt_eval_count,
-            }),
+            Ok(ProviderDispatchOutput {
+                provider: self.provider().to_string(),
+                provider_ref: provider_ref.to_string(),
+                provider_target: build_provider_target(self.provider(), provider_ref),
+                result_payload: json!({
+                    "provider": self.provider(),
+                    "provider_ref": provider_ref,
+                    "model": parsed.model,
+                    "output_text": parsed.response,
+                    "done": parsed.done,
+                    "total_duration": parsed.total_duration,
+                    "eval_count": parsed.eval_count,
+                    "prompt_eval_count": parsed.prompt_eval_count,
+                }),
+            })
         })
+        .await
+        .map_err(|_| {
+            ProviderDispatchError::transport(format!(
+                "provider dispatch timed out after {}s: {}",
+                self.timeout_seconds,
+                build_provider_target(self.provider(), provider_ref)
+            ))
+        })?
     }
 }
 
@@ -190,18 +205,27 @@ impl ProviderAdapter for OpenClawCliProviderAdapter {
         let model_key = format!("{canonical_provider}/{provider_ref}");
         let mut command = Command::new(&self.cli_bin);
         self.env_scope.apply_to_command(&mut command);
-        let output = command
-            .args(["infer", "model", "run", "--local", "--json", "--model"])
-            .arg(&model_key)
-            .args(["--prompt"])
-            .arg(&input.prompt)
-            .output()
-            .await
-            .map_err(|err| {
-                ProviderDispatchError::transport(format!(
-                    "spawn openclaw model bridge failed for {model_key}: {err}"
-                ))
-            })?;
+        let output = timeout(Duration::from_secs(self.timeout_seconds), async {
+            command
+                .args(["infer", "model", "run", "--local", "--json", "--model"])
+                .arg(&model_key)
+                .args(["--prompt"])
+                .arg(&input.prompt)
+                .output()
+                .await
+        })
+        .await
+        .map_err(|_| {
+            ProviderDispatchError::transport(format!(
+                "provider dispatch timed out after {}s: {model_key}",
+                self.timeout_seconds
+            ))
+        })?
+        .map_err(|err| {
+            ProviderDispatchError::transport(format!(
+                "spawn openclaw model bridge failed for {model_key}: {err}"
+            ))
+        })?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -256,6 +280,7 @@ pub async fn dispatch_via_provider(
     ollama_base_url: &str,
     openclaw_cli_bin: &str,
     openclaw_env_scope: &OpenClawCliEnvScope,
+    provider_timeout_seconds: u64,
     provider_target: &str,
     input: &ProviderDispatchInput,
 ) -> Result<ProviderDispatchOutput, ProviderDispatchError> {
@@ -267,6 +292,7 @@ pub async fn dispatch_via_provider(
         "ollama" => {
             let adapter = OllamaProviderAdapter {
                 base_url: ollama_base_url.to_string(),
+                timeout_seconds: provider_timeout_seconds,
             };
             adapter.execute(http, provider_ref, input).await
         }
@@ -275,6 +301,7 @@ pub async fn dispatch_via_provider(
                 cli_bin: openclaw_cli_bin.to_string(),
                 source_provider: other.to_string(),
                 env_scope: openclaw_env_scope.clone(),
+                timeout_seconds: provider_timeout_seconds,
             };
             adapter.execute(http, provider_ref, input).await
         }

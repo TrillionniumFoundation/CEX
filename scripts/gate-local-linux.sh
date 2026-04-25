@@ -55,6 +55,7 @@ mkdir -p "$FAKEBIN_DIR"
 
 export PATH="$FAKEBIN_DIR:$PATH"
 export CEX_LINUX_SKIP_SEED_LOCAL_DEV=1
+export CEX_ENABLE_QUEUED_WORKER=0
 
 cat > "$FAKEBIN_DIR/powershell" <<EOF
 #!/usr/bin/env bash
