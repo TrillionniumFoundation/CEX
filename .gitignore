@@ -13,3 +13,14 @@ ops/autopilot/logs/
 logs/
 run/
 dev/matrix-synapse-local/data/
+
+# OpenClaw workspace-local metadata that should not leak into the repo
+.openclaw/
+AGENTS.md
+HEARTBEAT.md
+IDENTITY.md
+SOUL.md
+TOOLS.md
+USER.md
+MEMORY.md
+DREAMS.md
