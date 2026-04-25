@@ -18,15 +18,16 @@ This page records evidence for production-readiness claims. It is intentionally 
 | Short local soak | `CEX_SOAK_DURATION_SECONDS=60 CEX_SOAK_INTERVAL_SECONDS=15 CEX_PROVIDER_PROBE_MODEL=google/gemini-2.5-flash scripts/soak-runtime.sh` | PASS |
 | 10-minute local soak | `CEX_READINESS_MODE=local CEX_SOAK_DURATION_SECONDS=600 CEX_SOAK_INTERVAL_SECONDS=60 CEX_PROVIDER_PROBE_MODEL=google/gemini-2.5-flash scripts/soak-runtime.sh` | PASS |
 | Local production-posture soak | `CEX_ENV_FILE=run/local-production/.env CEX_SOAK_DURATION_SECONDS=300 CEX_SOAK_INTERVAL_SECONDS=60 CEX_PROVIDER_PROBE_MODEL=google/gemini-2.5-flash scripts/soak-runtime.sh` (summary `run/soak/soak-20260425T055657Z-248676.summary.json`) | PASS |
+| DB backup/restore drill | `scripts/drill-db-backup-restore.sh` using Docker Postgres backup, temporary restore DB, and core table count comparison (summary `run/drills/db-backup-restore-20260425T063804Z-289267.summary.json`) | PASS |
 
 ## Active blockers to a truthful 100% claim
 
 - Windows-native `gate-local.ps1` still has not run on this host because PowerShell is unavailable.
 - Direct non-sudo Docker socket access for user `qian` is still denied, but passwordless `sudo docker` is available and the Docker-backed Linux gate now passes through that path.
 - The current strict production profile pass and soak use generated local secrets under `run/local-production/.env`; they validate posture mechanics but are not a real secret-management or deployment environment.
-- Formal production deployment, backup/restore drills, migration rollback rehearsal, and longer soak windows still need real environment evidence.
+- Formal production deployment, migration rollback strategy beyond restore-from-backup, and longer soak windows still need real environment evidence. A local Docker Postgres backup/restore drill now passes.
 - MiniMax remains provider-account blocked by billing/credit errors; OpenAI Codex remains quota/plan blocked. Google Gemini is the currently validated successful external provider path.
-- Latest post-Docker production readiness rerun reached the live-provider step and then hit Google Gemini rate limiting (`API rate limit reached`); production signoff must rerun the required live probe after the rate window clears.
+- The latest production readiness rerun after the temporary Google rate-limit window cleared passed again with the required live Google provider probe.
 
 ## Signoff commands
 
@@ -46,6 +47,12 @@ CEX_ENV_FILE=run/local-production/.env ./scripts/runtime-manager-linux.sh restar
 CEX_ENV_FILE=run/local-production/.env \
   CEX_PROVIDER_PROBE_MODEL=google/gemini-2.5-flash \
   ./scripts/check-production-readiness.sh
+```
+
+Backup/restore drill:
+
+```bash
+./scripts/drill-db-backup-restore.sh
 ```
 
 Soak:

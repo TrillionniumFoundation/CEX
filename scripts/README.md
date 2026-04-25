@@ -60,6 +60,14 @@ If you want CEX to use a repo-local isolated OpenClaw scope instead of the defau
 
 That writes an isolated config under `run/openclaw-cex/`; `runtime-manager-linux.sh` will auto-detect that default location and export `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, `OPENCLAW_AGENT_DIR`, and `CAPABILITY_OPENCLAW_MODELS_JSON_PATH` before starting services and the Linux queued worker.
 
+Database backup/restore production drill:
+
+```bash
+./scripts/drill-db-backup-restore.sh
+```
+
+The drill writes a custom-format `pg_dump`, restores it into a temporary Postgres database, compares core table counts, writes a JSON summary under `run/drills/`, and drops the temporary restore database by default. It uses the same Docker discovery as the Linux gate, including passwordless `sudo -n docker` fallback.
+
 For a machine-readable operator snapshot without running the full gate:
 
 ```bash
