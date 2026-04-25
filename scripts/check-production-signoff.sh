@@ -114,7 +114,6 @@ if int(data.get('provider_probe_failures') or 0) != 0:
 age = int(time.time()) - int(data.get('ended_at_epoch') or 0)
 if age < 0 or age > max_age:
     raise SystemExit(f'soak summary stale age={age}s max={max_age}s')
-print(age)
 PY
   then
     soak_ok=true
