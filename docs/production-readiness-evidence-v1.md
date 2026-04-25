@@ -27,7 +27,7 @@ This page records evidence for production-readiness claims. It is intentionally 
 - The current strict production profile pass and soak use generated local secrets under `run/local-production/.env`; they validate posture mechanics but are not a real secret-management or deployment environment.
 - Formal production deployment, migration rollback strategy beyond restore-from-backup, and longer soak windows still need real environment evidence. A local Docker Postgres backup/restore drill now passes.
 - MiniMax remains provider-account blocked by billing/credit errors; OpenAI Codex remains quota/plan blocked. Google Gemini is the currently validated successful external provider path.
-- The latest production readiness rerun after the temporary Google rate-limit window cleared passed again with the required live Google provider probe.
+- The latest production readiness rerun after the temporary Google rate-limit window cleared passed again with the required live Google provider probe. Production mode now also requires a fresh DB backup/restore drill summary by default.
 
 ## Signoff commands
 

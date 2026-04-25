@@ -13,6 +13,9 @@ MATRIX_ENTRY_BASE_URL="${MATRIX_ENTRY_BASE_URL:-http://127.0.0.1:8091}"
 CEX_PROVIDER_PROBE_REQUIRED="${CEX_PROVIDER_PROBE_REQUIRED:-1}"
 CEX_PROVIDER_PROBE_MODEL="${CEX_PROVIDER_PROBE_MODEL:-}"
 CEX_READINESS_MODE="${CEX_READINESS_MODE:-production}"
+CEX_DB_BACKUP_RESTORE_DRILL_REQUIRED="${CEX_DB_BACKUP_RESTORE_DRILL_REQUIRED:-}"
+CEX_DB_BACKUP_RESTORE_DRILL_SUMMARY_PATH="${CEX_DB_BACKUP_RESTORE_DRILL_SUMMARY_PATH:-}"
+CEX_DB_BACKUP_RESTORE_DRILL_MAX_AGE_SECONDS="${CEX_DB_BACKUP_RESTORE_DRILL_MAX_AGE_SECONDS:-86400}"
 
 case "$CEX_READINESS_MODE" in
   local|production) ;;
@@ -21,6 +24,14 @@ case "$CEX_READINESS_MODE" in
     exit 64
     ;;
 esac
+
+if [[ -z "$CEX_DB_BACKUP_RESTORE_DRILL_REQUIRED" ]]; then
+  if [[ "$CEX_READINESS_MODE" == "production" ]]; then
+    CEX_DB_BACKUP_RESTORE_DRILL_REQUIRED="1"
+  else
+    CEX_DB_BACKUP_RESTORE_DRILL_REQUIRED="0"
+  fi
+fi
 
 cex_require_cmd bash curl jq
 
@@ -216,6 +227,31 @@ else
     fail "live provider probe failed ($CEX_PROVIDER_PROBE_MODEL status=$provider_probe_status_text): $provider_probe_error"
   fi
   rm -f "$provider_probe_json_file"
+fi
+
+section 'db backup/restore drill evidence'
+if [[ "$CEX_DB_BACKUP_RESTORE_DRILL_REQUIRED" == "0" ]]; then
+  pass 'db backup/restore drill evidence not required by environment'
+else
+  drill_summary_path="$CEX_DB_BACKUP_RESTORE_DRILL_SUMMARY_PATH"
+  if [[ -z "$drill_summary_path" ]]; then
+    drill_summary_path="$(find "$SCRIPT_DIR/../run/drills" -maxdepth 1 -type f -name 'db-backup-restore-*.summary.json' -printf '%T@ %p\n' 2>/dev/null | sort -nr | awk 'NR==1 { $1=""; sub(/^ /, ""); print }')"
+  fi
+  if [[ -z "$drill_summary_path" || ! -f "$drill_summary_path" ]]; then
+    fail 'db backup/restore drill evidence is missing (run scripts/drill-db-backup-restore.sh)'
+  else
+    drill_ok="$(jq -r '.ok // false' "$drill_summary_path")"
+    drill_kind="$(jq -r '.kind // "unknown"' "$drill_summary_path")"
+    drill_ended="$(jq -r '.ended_at_epoch // 0' "$drill_summary_path")"
+    drill_age=$(( $(date +%s) - drill_ended ))
+    if [[ "$drill_ok" != "true" || "$drill_kind" != "db_backup_restore_drill" ]]; then
+      fail "db backup/restore drill summary is not successful ($drill_summary_path)"
+    elif [[ "$drill_age" -lt 0 || "$drill_age" -gt "$CEX_DB_BACKUP_RESTORE_DRILL_MAX_AGE_SECONDS" ]]; then
+      fail "db backup/restore drill summary is stale (age=${drill_age}s max=${CEX_DB_BACKUP_RESTORE_DRILL_MAX_AGE_SECONDS}s path=$drill_summary_path)"
+    else
+      pass "db backup/restore drill evidence fresh (${drill_age}s old, $drill_summary_path)"
+    fi
+  fi
 fi
 
 section 'production readiness verdict'

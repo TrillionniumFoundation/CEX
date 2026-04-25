@@ -110,7 +110,7 @@ CEX_PROVIDER_PROBE_MODEL=google/gemini-2.5-flash   CEX_SOAK_DURATION_SECONDS=300
 
 The soak writes JSONL plus a summary under `run/soak/` and exits non-zero on any failed tick or provider probe.
 
-The current readiness evidence matrix and known non-100% blockers are tracked in `docs/production-readiness-evidence-v1.md`.
+The current readiness evidence matrix and known non-100% blockers are tracked in `docs/production-readiness-evidence-v1.md`. In production mode, readiness also requires a fresh successful `scripts/drill-db-backup-restore.sh` summary by default; set `CEX_DB_BACKUP_RESTORE_DRILL_REQUIRED=0` only for local smoke/debug runs.
 
 A production-posture env skeleton is available at `.env.production.example`; it enumerates the non-default keys, ingress/session-auth controls, durable edge stores, identity governance files, and provider probe settings that the default production readiness mode expects.
 
