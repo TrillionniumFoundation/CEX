@@ -8,6 +8,8 @@ cex_load_env
 
 EXECUTION_BASE_URL="${EXECUTION_BASE_URL:-http://127.0.0.1:7003}"
 EXECUTION_ADMIN_TOKEN="${EXECUTION_ADMIN_TOKEN:-${CEX_EXECUTION_ADMIN_TOKEN:-${LOCAL_DEV_ADMIN_TOKEN:-local-dev-admin-token}}}"
+CONSUMER_ENTRY_BASE_URL="${CONSUMER_ENTRY_BASE_URL:-http://127.0.0.1:8090}"
+MATRIX_ENTRY_BASE_URL="${MATRIX_ENTRY_BASE_URL:-http://127.0.0.1:8091}"
 CEX_PROVIDER_PROBE_REQUIRED="${CEX_PROVIDER_PROBE_REQUIRED:-1}"
 CEX_PROVIDER_PROBE_MODEL="${CEX_PROVIDER_PROBE_MODEL:-}"
 CEX_READINESS_MODE="${CEX_READINESS_MODE:-production}"
@@ -93,6 +95,55 @@ else
   if [[ "$posture_failures" -eq 0 ]]; then
     pass 'production posture checks clear'
   fi
+fi
+
+section 'entry runtime posture'
+if [[ "$CEX_READINESS_MODE" == "local" ]]; then
+  pass 'local readiness posture selected (entry runtime posture checks skipped)'
+else
+  consumer_health_file="$(mktemp)"
+  matrix_health_file="$(mktemp)"
+  consumer_health_ok=0
+  matrix_health_ok=0
+  curl -fsS "$CONSUMER_ENTRY_BASE_URL/health" >"$consumer_health_file" || consumer_health_ok=$?
+  curl -fsS "$MATRIX_ENTRY_BASE_URL/health" >"$matrix_health_file" || matrix_health_ok=$?
+  if [[ "$consumer_health_ok" -ne 0 ]]; then
+    fail "production posture cannot read consumer-entry health ($CONSUMER_ENTRY_BASE_URL/health)"
+  else
+    if [[ "$(jq -r '.ingress_protected // false' "$consumer_health_file")" != "true" ]]; then
+      fail 'production runtime requires consumer-entry ingress_protected=true'
+    fi
+    if [[ "$(jq -r '.require_session_auth // false' "$consumer_health_file")" != "true" ]]; then
+      fail 'production runtime requires consumer-entry require_session_auth=true'
+    fi
+    if [[ "$(jq -r '.require_identity_binding // false' "$consumer_health_file")" != "true" ]]; then
+      fail 'production runtime requires consumer-entry require_identity_binding=true'
+    fi
+    if [[ "$(jq -r '.replay_store_enabled // false' "$consumer_health_file")" != "true" ]]; then
+      fail 'production runtime requires consumer-entry replay_store_enabled=true'
+    fi
+    if [[ "$(jq -r '.rate_limit_store_enabled // false' "$consumer_health_file")" != "true" ]]; then
+      fail 'production runtime requires consumer-entry rate_limit_store_enabled=true'
+    fi
+    if [[ "$(jq -r '.identity_governance_overview.valid // false' "$consumer_health_file")" != "true" ]]; then
+      fail 'production runtime requires consumer-entry identity governance valid=true'
+    fi
+  fi
+
+  if [[ "$matrix_health_ok" -ne 0 ]]; then
+    fail "production posture cannot read matrix-entry health ($MATRIX_ENTRY_BASE_URL/health)"
+  else
+    if [[ "$(jq -r '.ingress_protected // false' "$matrix_health_file")" != "true" ]]; then
+      fail 'production runtime requires matrix-entry ingress_protected=true'
+    fi
+    if [[ "$(jq -r '.consumer_entry_protected // false' "$matrix_health_file")" != "true" ]]; then
+      fail 'production runtime requires matrix-entry consumer_entry_protected=true'
+    fi
+    if [[ "$(jq -r '.recent_event_store_enabled // false' "$matrix_health_file")" != "true" ]]; then
+      fail 'production runtime requires matrix-entry recent_event_store_enabled=true'
+    fi
+  fi
+  rm -f "$consumer_health_file" "$matrix_health_file"
 fi
 
 section 'runtime health/status'
