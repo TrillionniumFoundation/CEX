@@ -2028,11 +2028,9 @@ async fn claim_queued_worker_executions_in_db(
         .map_err(|e| ApiError::Unavailable(format!("begin claim tx failed: {e}")))?;
 
     let now = Utc::now();
-    let query_limit = (limit.max(1) * 10).min(200) as i64;
     let rows = sqlx::query(
-        "select execution_id, invocation_id, trace_id, org_id::text as org_id, status, provider_target, attempt_count, max_attempts, worker_id, lease_expires_at, started_at, ended_at, result_payload, approval_required, policy_reason, approved_by, created_at, updated_at from executions where status in ('Queued', 'Dispatching') order by created_at asc limit $1 for update skip locked"
+        "select execution_id, invocation_id, trace_id, org_id::text as org_id, status, provider_target, attempt_count, max_attempts, worker_id, lease_expires_at, started_at, ended_at, result_payload, approval_required, policy_reason, approved_by, created_at, updated_at from executions where status in ('Queued', 'Dispatching') order by created_at asc for update skip locked"
     )
-    .bind(query_limit)
     .fetch_all(&mut *tx)
     .await
     .map_err(|e| ApiError::Unavailable(format!("load queued executions for claim failed: {e}")))?;
@@ -2292,11 +2290,9 @@ async fn reclaim_expired_executions_in_db(
         .map_err(|e| ApiError::Unavailable(format!("begin reclaim expired tx failed: {e}")))?;
 
     let now = Utc::now();
-    let query_limit = (limit.max(1) * 10).min(200) as i64;
     let rows = sqlx::query(
-        "select execution_id, invocation_id, trace_id, org_id::text as org_id, status, provider_target, attempt_count, max_attempts, worker_id, lease_expires_at, started_at, ended_at, result_payload, approval_required, policy_reason, approved_by, created_at, updated_at from executions where status = 'Dispatching' order by created_at asc limit $1 for update skip locked"
+        "select execution_id, invocation_id, trace_id, org_id::text as org_id, status, provider_target, attempt_count, max_attempts, worker_id, lease_expires_at, started_at, ended_at, result_payload, approval_required, policy_reason, approved_by, created_at, updated_at from executions where status = 'Dispatching' order by created_at asc for update skip locked"
     )
-    .bind(query_limit)
     .fetch_all(&mut *tx)
     .await
     .map_err(|e| ApiError::Unavailable(format!("load expired executions for reclaim failed: {e}")))?;
@@ -2685,6 +2681,12 @@ async fn start_execution_inner(state: &AppState, id: Uuid) -> Result<ExecutionRe
             let dispatch_result = dispatch_via_provider(
                 &state.http,
                 &state.ollama_base_url,
+                &state.openclaw_cli_bin,
+                &crate::providers::OpenClawCliEnvScope {
+                    config_path: state.openclaw_config_path.clone(),
+                    state_dir: state.openclaw_state_dir.clone(),
+                    agent_dir: state.openclaw_agent_dir.clone(),
+                },
                 &provider_target,
                 &input,
             )
@@ -3136,6 +3138,12 @@ async fn start_execution_in_db(
         let dispatch_result = dispatch_via_provider(
             &state.http,
             &state.ollama_base_url,
+            &state.openclaw_cli_bin,
+            &crate::providers::OpenClawCliEnvScope {
+                config_path: state.openclaw_config_path.clone(),
+                state_dir: state.openclaw_state_dir.clone(),
+                agent_dir: state.openclaw_agent_dir.clone(),
+            },
             &provider_target,
             &input,
         )
@@ -4296,13 +4304,25 @@ fn prepare_execution_for_retry(record: &mut ExecutionRecord) {
 }
 
 fn validate_worker_lease_holder(record: &ExecutionRecord, worker_id: &str) -> Result<(), ApiError> {
-    if let Some(current_worker_id) = record.worker_id.as_deref() {
-        if current_worker_id != worker_id {
-            return Err(conflict_error(
-                "execution claimed by another worker",
-                &record.status,
-            ));
-        }
+    if !matches!(record.status, ExecutionStatus::Dispatching) {
+        return Err(conflict_error(
+            "execution is not currently claimed",
+            &record.status,
+        ));
+    }
+
+    let Some(current_worker_id) = record.worker_id.as_deref() else {
+        return Err(conflict_error(
+            "execution is not currently claimed",
+            &record.status,
+        ));
+    };
+
+    if current_worker_id != worker_id {
+        return Err(conflict_error(
+            "execution claimed by another worker",
+            &record.status,
+        ));
     }
 
     if let Some(lease_expires_at) = record.lease_expires_at {

@@ -8,6 +8,11 @@ use chrono::{DateTime, Utc};
 use execution_service::{build_router, state::AppState};
 use serde_json::{json, Value};
 use shared_types::{ExecutionDispatchMode, ExecutionStatus};
+use std::{
+    env, fs,
+    path::PathBuf,
+    time::{SystemTime, UNIX_EPOCH},
+};
 use tokio::{net::TcpListener, task::JoinHandle};
 use tower::util::ServiceExt;
 
@@ -26,6 +31,11 @@ fn test_state() -> AppState {
 struct MockProviderServer {
     base_url: String,
     _handle: JoinHandle<()>,
+}
+
+struct MockOpenClawCliScript {
+    command: String,
+    capture_path: PathBuf,
 }
 
 async fn mock_ollama_generate(Json(_body): Json<Value>) -> Json<Value> {
@@ -53,6 +63,70 @@ async fn start_mock_provider_server() -> MockProviderServer {
         base_url: format!("http://{addr}"),
         _handle: handle,
     }
+}
+
+fn create_mock_openclaw_cli_script() -> MockOpenClawCliScript {
+    let base = env::temp_dir().join(format!(
+        "cex-openclaw-mock-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos()
+    ));
+    fs::create_dir_all(&base).expect("create mock openclaw dir");
+
+    #[cfg(windows)]
+    let script_path = base.join("openclaw.cmd");
+    #[cfg(not(windows))]
+    let script_path = base.join("openclaw.sh");
+
+    let capture_path = base.join("env-capture.json");
+    let capture_path_string = path_to_command_string(capture_path.clone());
+
+    #[cfg(windows)]
+    let script_body = format!(
+        r#"@echo off
+set CAPTURE_PATH={capture_path}
+if "%1"=="infer" goto ok
+exit /b 1
+:ok
+> "%CAPTURE_PATH%" (
+  echo {{"OPENCLAW_CONFIG_PATH":"%OPENCLAW_CONFIG_PATH%","OPENCLAW_STATE_DIR":"%OPENCLAW_STATE_DIR%","OPENCLAW_AGENT_DIR":"%OPENCLAW_AGENT_DIR%"}}
+)
+echo {{"ok":true,"capability":"model.run","transport":"local","provider":"openai-codex","model":"gpt-5.4","attempts":[],"outputs":[{{"text":"hello from openclaw bridge","mediaUrl":null}}]}}
+"#,
+        capture_path = capture_path_string
+    );
+
+    #[cfg(not(windows))]
+    let script_body = format!(
+        r#"#!/usr/bin/env sh
+printf '%s\n' "{{\"OPENCLAW_CONFIG_PATH\":\"${{OPENCLAW_CONFIG_PATH:-}}\",\"OPENCLAW_STATE_DIR\":\"${{OPENCLAW_STATE_DIR:-}}\",\"OPENCLAW_AGENT_DIR\":\"${{OPENCLAW_AGENT_DIR:-}}\"}}" > '{capture_path}'
+printf '%s\n' '{{"ok":true,"capability":"model.run","transport":"local","provider":"openai-codex","model":"gpt-5.4","attempts":[],"outputs":[{{"text":"hello from openclaw bridge","mediaUrl":null}}]}}'
+"#,
+        capture_path = capture_path_string
+    );
+
+    fs::write(&script_path, script_body).expect("write mock openclaw script");
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&script_path)
+            .expect("mock openclaw metadata")
+            .permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&script_path, perms).expect("chmod mock openclaw script");
+    }
+
+    MockOpenClawCliScript {
+        command: path_to_command_string(script_path),
+        capture_path,
+    }
+}
+
+fn path_to_command_string(path: PathBuf) -> String {
+    path.to_string_lossy().to_string()
 }
 
 async fn send_json_with_headers(
@@ -1843,6 +1917,104 @@ async fn process_execution_runs_claimed_queued_worker_and_surfaces_provider_fail
     let (get_status, fetched) = get_json(app, &format!("/v1/executions/{execution_id}")).await;
     assert_eq!(get_status, StatusCode::OK);
     assert_eq!(fetched["status"], "Failed");
+}
+
+#[tokio::test]
+async fn process_execution_requires_active_claim_for_queued_worker() {
+    let app = build_router(test_state());
+    let create_body = json!({
+        "invocation_id": "00000000-0000-0000-0000-000000000118",
+        "trace_id": "00000000-0000-0000-0000-000000000218",
+        "org_id": "00000000-0000-0000-0000-00000000ce01",
+        "capability_id": "cap.openai.test",
+        "capability_provider": "openai",
+        "capability_provider_ref": "gpt-4.1-mini",
+        "prompt": "say hi",
+        "reserve_amount": 1.0
+    });
+
+    let (_, created) = send_json(app.clone(), "POST", "/v1/executions", create_body).await;
+    let execution_id = created["execution_id"].as_str().expect("execution id");
+
+    let (process_status, body) = send_json(
+        app,
+        "POST",
+        &format!("/v1/executions/{execution_id}/process"),
+        json!({ "processed_by": "worker-1", "note": "dequeue without claim" }),
+    )
+    .await;
+    assert_eq!(process_status, StatusCode::CONFLICT);
+    assert_eq!(body["error"], "execution is not currently claimed");
+    assert_eq!(body["status"], "Queued");
+}
+
+#[tokio::test]
+async fn process_execution_uses_openclaw_cli_bridge_for_queued_worker() {
+    let mut state = test_state();
+    let mock_cli = create_mock_openclaw_cli_script();
+    state.openclaw_cli_bin = mock_cli.command.clone();
+    state.openclaw_config_path = Some("/tmp/openclaw-cex/openclaw.json".to_string());
+    state.openclaw_state_dir = Some("/tmp/openclaw-cex".to_string());
+    state.openclaw_agent_dir = Some("/tmp/openclaw-cex/agents/cex/agent".to_string());
+    let app = build_router(state);
+    let create_body = json!({
+        "invocation_id": "00000000-0000-0000-0000-000000000109",
+        "trace_id": "00000000-0000-0000-0000-000000000209",
+        "org_id": "00000000-0000-0000-0000-00000000ce01",
+        "capability_id": "cap.openclaw.gpt54",
+        "capability_provider": "codex",
+        "capability_provider_ref": "gpt-5.4",
+        "prompt": "say hi",
+        "reserve_amount": 1.0
+    });
+
+    let (_, created) = send_json(app.clone(), "POST", "/v1/executions", create_body).await;
+    let execution_id = created["execution_id"].as_str().expect("execution id");
+    assert_eq!(created["dispatch_mode"], "queued_worker");
+    assert_eq!(created["provider_target"], "codex://gpt-5.4");
+
+    let (claim_status, _) = send_json(
+        app.clone(),
+        "POST",
+        "/v1/executions/claim-next",
+        json!({ "claimed_by": "worker-bridge", "note": "claim next" }),
+    )
+    .await;
+    assert_eq!(claim_status, StatusCode::OK);
+
+    let (process_status, processed) = send_json(
+        app.clone(),
+        "POST",
+        &format!("/v1/executions/{execution_id}/process"),
+        json!({ "processed_by": "worker-bridge", "note": "dequeue" }),
+    )
+    .await;
+    assert_eq!(process_status, StatusCode::OK);
+    assert_eq!(processed["status"], "Succeeded");
+    assert_eq!(processed["provider_target"], "openai-codex://gpt-5.4");
+    assert_eq!(processed["result_payload"]["bridge"], "openclaw-cli");
+    assert_eq!(
+        processed["result_payload"]["output_text"],
+        "hello from openclaw bridge"
+    );
+
+    let captured_env: Value = serde_json::from_slice(
+        &fs::read(&mock_cli.capture_path).expect("read openclaw env capture"),
+    )
+    .expect("decode openclaw env capture");
+    assert_eq!(
+        captured_env["OPENCLAW_CONFIG_PATH"],
+        "/tmp/openclaw-cex/openclaw.json"
+    );
+    assert_eq!(captured_env["OPENCLAW_STATE_DIR"], "/tmp/openclaw-cex");
+    assert_eq!(
+        captured_env["OPENCLAW_AGENT_DIR"],
+        "/tmp/openclaw-cex/agents/cex/agent"
+    );
+
+    let (get_status, fetched) = get_json(app, &format!("/v1/executions/{execution_id}")).await;
+    assert_eq!(get_status, StatusCode::OK);
+    assert_eq!(fetched["status"], "Succeeded");
 }
 
 #[tokio::test]

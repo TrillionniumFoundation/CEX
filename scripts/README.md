@@ -2,7 +2,7 @@
 
 ## Preferred entrypoints
 
-Day-to-day regression validation should use:
+Day-to-day regression validation on Windows should use:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\gate-local.ps1
@@ -14,11 +14,39 @@ or CI-safe/service-local mode:
 powershell -ExecutionPolicy Bypass -File .\gate-local.ps1 -ServiceLocalOnly
 ```
 
-The lower-level orchestrator is:
+On Linux, use the repo-local equivalent full gate:
+
+```bash
+./scripts/gate-local-linux.sh
+```
+
+Useful Linux variants:
+
+```bash
+./scripts/gate-local-linux.sh --service-local-only
+./scripts/gate-local-linux.sh --skip-db-bootstrap
+```
+
+The lower-level Windows orchestrator is:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\rust-regression-check.ps1
 ```
+
+The Linux gate relies on:
+
+```bash
+./scripts/runtime-manager-linux.sh
+./scripts/seed-local-dev.sh
+```
+
+If you want CEX to use a repo-local isolated OpenClaw scope instead of the default `~/.openclaw` / `main` agent, bootstrap it once with:
+
+```bash
+./scripts/bootstrap-openclaw-cex.sh
+```
+
+That writes an isolated config under `run/openclaw-cex/`; `runtime-manager-linux.sh` will auto-detect that default location and export `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, `OPENCLAW_AGENT_DIR`, and `CAPABILITY_OPENCLAW_MODELS_JSON_PATH` before starting services.
 
 For a machine-readable operator snapshot without running the full gate:
 

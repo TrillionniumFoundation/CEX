@@ -119,6 +119,10 @@ pub struct AppState {
     pub ledger_base_url: String,
     pub ledger_manage_token: String,
     pub ollama_base_url: String,
+    pub openclaw_cli_bin: String,
+    pub openclaw_config_path: Option<String>,
+    pub openclaw_state_dir: Option<String>,
+    pub openclaw_agent_dir: Option<String>,
     pub http: Client,
     pub approval_reserve_threshold: f64,
     pub hard_reject_reserve_threshold: Option<f64>,
@@ -170,6 +174,11 @@ impl AppState {
             .unwrap_or(300);
         let ollama_base_url =
             env::var("OLLAMA_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:11434".to_string());
+        let openclaw_cli_bin =
+            env::var("OPENCLAW_CLI_BIN").unwrap_or_else(|_| "openclaw".to_string());
+        let openclaw_config_path = optional_non_empty_env("OPENCLAW_CONFIG_PATH");
+        let openclaw_state_dir = optional_non_empty_env("OPENCLAW_STATE_DIR");
+        let openclaw_agent_dir = optional_non_empty_env("OPENCLAW_AGENT_DIR");
         let execution_default_max_attempts = positive_i32_env(
             "EXECUTION_DEFAULT_MAX_ATTEMPTS",
             DEFAULT_EXECUTION_DEFAULT_MAX_ATTEMPTS,
@@ -234,6 +243,10 @@ impl AppState {
             ledger_base_url,
             ledger_manage_token,
             ollama_base_url,
+            openclaw_cli_bin,
+            openclaw_config_path,
+            openclaw_state_dir,
+            openclaw_agent_dir,
             http: Client::new(),
             approval_reserve_threshold,
             hard_reject_reserve_threshold,
@@ -302,6 +315,10 @@ impl AppState {
             ledger_base_url: "http://127.0.0.1:9".to_string(),
             ledger_manage_token: "local-dev-admin-token".to_string(),
             ollama_base_url: "http://127.0.0.1:11434".to_string(),
+            openclaw_cli_bin: String::new(),
+            openclaw_config_path: None,
+            openclaw_state_dir: None,
+            openclaw_agent_dir: None,
             http: Client::new(),
             approval_reserve_threshold: 10.0,
             hard_reject_reserve_threshold: None,
@@ -375,6 +392,13 @@ fn csv_env_or_default(name: &str, default_values: &[&str]) -> Vec<String> {
             .map(|value| value.to_string())
             .collect(),
     }
+}
+
+fn optional_non_empty_env(name: &str) -> Option<String> {
+    env::var(name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 fn parse_csv_list(raw: &str) -> Vec<String> {

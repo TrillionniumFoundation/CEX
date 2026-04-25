@@ -46,8 +46,8 @@
 - API key lifecycle 已覆盖 `active / revoked / expired`
 - key management 与 audit trace read 都已支持按 scope 解析 admin token
 - `audit-service` 的 trace read 已受 `audit:read` 保护
-- `capability-service` 已提供最小 capability registry，gateway 在请求带 `capability_id` 时会做真实存在性/启用态校验
-- `execution-service` 已落第一条真实 provider handoff 路径，当前最小 adapter 为 `ollama`
+- `capability-service` 已提供最小 capability registry，gateway 在请求带 `capability_id` 时会做真实存在性/启用态校验；现在还可从本机 OpenClaw `models.json` 自动导入本地 provider/model inventory，并按当前 OpenClaw allowlist 标记 enabled/disabled；如果设置了 `OPENCLAW_CONFIG_PATH` / `OPENCLAW_STATE_DIR` / `OPENCLAW_AGENT_DIR`，它会改为读取那套隔离 OpenClaw scope，而不是默认 `main`
+- `execution-service` 已落第一条真实 provider handoff 路径；除原生 `ollama` 外，queued worker 现在也可经本机 OpenClaw CLI bridge 调起本地已配置/已允许的 OpenClaw text model；bridge 会把 `OPENCLAW_CONFIG_PATH` / `OPENCLAW_STATE_DIR` / `OPENCLAW_AGENT_DIR` 透传给 `openclaw infer model run`，从而可以稳定挂到 CEX 专用 agent/workspace/scope
 - `execution-service` 的 create 响应现在会用显式 `dispatch_mode` 暴露 provider-backed dispatch 意图，当前已区分 `manual` / `immediate` / `queued_worker`；`gateway-service` 只会对 `immediate` 自动触发 execution start，`queued_worker` 则已有最小 `GET /v1/executions/worker-queue`（支持 `limit` / `claimable_only` / `lease_expired_only` / `worker_id` 过滤，并暴露 `attempt_count` / `max_attempts` / `attempts_remaining` / `retry_budget_exhausted`）+ `GET /v1/executions/worker-queue/summary`（现含 `retryable` / `retry_budget_exhausted` 聚合）+ `POST /v1/executions/claim-next`（支持 `lease_expired_only=true`）/ `claim-batch`（支持 `lease_expired_only=true`）+ `POST /v1/executions/reclaim-expired` + `POST /v1/executions/timeout-expired` + `POST /v1/executions/:id/requeue` + `POST /v1/executions/:id/retry` + `POST /v1/executions/:id/renew-lease` + `POST /v1/executions/:id/process` 入口可供后续 worker 接入，并带短租约（`EXECUTION_CLAIM_LEASE_SECONDS`，默认 300 秒）；当前最小 retry budget 语义支持 env 覆盖，`EXECUTION_DEFAULT_MAX_ATTEMPTS` / `EXECUTION_QUEUED_WORKER_MAX_ATTEMPTS` 默认分别为 `1` / `3`，claim/reclaim/requeue/retry 都遵守这一 delivery-attempt budget；gateway 的 invocation create/get 响应也开始附带 execution snapshot，把 `dispatch_mode` 与 attempt/budget metadata 直接透给上层调用方，并把这份 snapshot 缓存到 invocation 持久化层，在 execution-service 临时不可达时回退使用缓存值
 - execution policy 不再只靠硬编码关键词，当前已支持通过 env 配置 approval / block 规则与 reserve 硬阈值，例如：`POLICY_APPROVAL_SENSITIVE_KEYWORDS`、`POLICY_BLOCK_KEYWORDS`、`POLICY_APPROVAL_CAPABILITY_PREFIXES`、`POLICY_BLOCK_CAPABILITY_PREFIXES`、`POLICY_HARD_REJECT_RESERVE_THRESHOLD`
 - `execution-service` 与 `gateway-service` 现都提供最小 `/v1/info` 运行快照，先暴露 policy/guardrail 配置与核心请求计数，便于本地排障与后续接 Prometheus/OTel 前的过渡观测；其中 execution info 还会直接回显 approval backlog、各 status 总量，以及 queued-worker queue depth / claimable / lease expired / active worker 摘要，并给出基于 `ALERT_APPROVAL_BACKLOG_THRESHOLD` / `ALERT_LEASE_EXPIRED_THRESHOLD` / `ALERT_RETRY_BUDGET_EXHAUSTED_THRESHOLD` / `ALERT_AUDIT_FAILURE_THRESHOLD` / `ALERT_REFUND_FAILURE_THRESHOLD` 的最小 operator signal；gateway info 则开始给出基于 `ALERT_GATEWAY_UPSTREAM_FAILURE_THRESHOLD` 的 upstream BAD_GATEWAY 信号
@@ -65,6 +65,9 @@
 
 - 本地运行顺序：`docs/local-run-order-v1.md`
 - 本地 gate：`docs/CI-GATE.md`
+- Linux 等价 full gate：`./scripts/gate-local-linux.sh`
+- Linux detached runtime helper：`./scripts/runtime-manager-linux.sh`
+- OpenClaw 隔离 scope bootstrap：`./scripts/bootstrap-openclaw-cex.sh`
 - 回归覆盖矩阵：`docs/REGRESSION-COVERAGE-MATRIX.md`
 - 生产硬化清单：`docs/production-hardening-checklist-v1.md`
 - operator runbook：`docs/operator-runbook-v1.md`
@@ -84,6 +87,6 @@
 
 1. 继续把 M0 的 operator/admin 权限模型做实，而不是长期停留在 shared secret 或最小 scoped token 层
 2. 让 key lifecycle / audit / provenance 的回归继续保持 service-local + runtime 双层覆盖
-3. 在已经落地的 capability registry + 首条 `ollama` adapter 基础上，继续把 provider handoff 做成更完整执行链
+3. 在已经落地的 capability registry + `ollama` / OpenClaw CLI bridge 基础上，继续把 provider handoff 做成更完整执行链，并把当前“本机 OpenClaw”桥逐步收敛为可控的多租户/生产级 provider plane
 4. 后续再推进 worker/runtime persistence、budget/rate limit guardrail、以及更完整的部署/观测面
 5. 把当前最小 `/v1/info` signal 面继续演进成统一 exporter + alert rules + operator dashboard，而不是长期停留在手工 curl/runbook 阶段

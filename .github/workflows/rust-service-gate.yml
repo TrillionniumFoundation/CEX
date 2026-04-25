@@ -4,21 +4,25 @@ on:
   workflow_dispatch:
   push:
     paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
       - 'gate-local.ps1'
-      - 'scripts/rust-regression-check.ps1'
+      - 'scripts/**'
       - 'services/**'
       - 'crates/**'
       - '.github/workflows/rust-service-gate.yml'
   pull_request:
     paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
       - 'gate-local.ps1'
-      - 'scripts/rust-regression-check.ps1'
+      - 'scripts/**'
       - 'services/**'
       - 'crates/**'
       - '.github/workflows/rust-service-gate.yml'
 
 jobs:
-  service-local-gate:
+  service-local-gate-windows:
     runs-on: windows-latest
     defaults:
       run:
@@ -33,5 +37,23 @@ jobs:
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
 
-      - name: Run service-local gate
+      - name: Run service-local gate (Windows)
         run: ./gate-local.ps1 -ServiceLocalOnly
+
+  service-local-gate-linux:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run service-local gate (Linux)
+        run: bash ./scripts/gate-local-linux.sh --service-local-only --skip-db-bootstrap
