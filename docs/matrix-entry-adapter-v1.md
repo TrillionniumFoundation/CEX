@@ -64,16 +64,24 @@ The adapter will:
 
 1. ignore events sent by the configured bot user itself
 2. extract message text from `text` or `content.body`
-3. parse mobile commands when message starts with `/` (e.g. `/help`, `/task`, `/status`)
+3. parse mobile commands when message starts with `/` (e.g. `/help`, `/task`, `/status`, `/balance`, `/plans`)
 4. call `consumer-entry-api /v1/matrix/messages` for task creation
 5. return a projected Matrix reply payload for the caller to send back to the room
 6. for `/status <invocation-id>` it calls local task projection path and returns latest state
+7. for `/balance` / `/wallet` it calls the consumer wallet projection path and returns a wallet card
+8. for `/plans` / `/package` it returns the current package/plan projection
 
 ### Read a projected reply for a task
 
 `GET /v1/matrix/tasks/:id/projection`
 
 This fetches task state from `consumer-entry-api /v1/chat/tasks/:id` and projects it into a Matrix message payload.
+
+### Wallet/package commands
+
+`/balance` / `/wallet` / `/余额` / `/钱包` call `consumer-entry-api /v1/matrix/users/:matrix_user_id/wallet?room_id=...` and project a Matrix-safe wallet card. The adapter keeps numeric display in the message body/HTML, but stores custom `cex_card` numeric fields as strings so Synapse accepts the event content.
+
+`/plans` / `/plan` / `/package` / `/套餐` project the package metadata returned with the wallet projection, using the same `m.text` + `formatted_body` + `cex_card` shape.
 
 ## Environment variables
 
@@ -154,49 +162,60 @@ curl -s -X POST http://127.0.0.1:8091/v1/matrix/events \
 
 On success it returns:
 
-- the forwarded task response from `consumer-entry-api`
+- the forwarded task response from `consumer-entry-api`, or a command-specific lookup result
 - a `projected_reply` object shaped like a Matrix message event content payload
 
-Example reply shape:
+Task card reply shape:
 
 ```json
 {
   "msgtype": "m.text",
-  "body": "任务已创建，正在排队中。\nTask: <id>",
-  "formatted_body": "...",
+  "body": "🧾 CEX 任务卡\n状态：任务已创建，正在排队中\nTask: <id>\n执行：Queued / manual\n账户：<account-id>\n查看：/status <id>\n余额：/balance",
+  "format": "org.matrix.custom.html",
+  "formatted_body": "<blockquote>...</blockquote>",
   "cex_task_id": "<id>",
   "consumer_status": "queued",
-  "invocation_status": "Queued"
+  "invocation_status": "Queued",
+  "cex_card": {
+    "type": "task_status",
+    "version": 1,
+    "task_id": "<id>",
+    "consumer_status": "queued",
+    "invocation_status": "Queued"
+  }
 }
 ```
+
+Wallet/package replies use the same Matrix `m.text` + `formatted_body` model with `cex_card.type = wallet_summary` or `package_summary`.
 
 ## What this is NOT yet
 
 Still missing:
 
 - Matrix appservice registration
-- sync loop / long-poll event consumption
-- room send API integration
-- message deduplication persistence
-- user mapping persistence
 - confirmation button callbacks
 - attachment/media bridging
-- ingress auth beyond shared edge token
-- durable replay controls and distributed rate limiting beyond current in-memory guardrails
+- richer Element UI customization beyond `formatted_body` cards
+- a shared multi-service identity source-of-truth service beyond the current repo-local identity registry
+- durable replay controls and distributed rate limiting beyond current local persisted stores
 
 ## Recommended next step
 
-当前 v1 先按移动端命令规格落地（无 Web App）：
+当前 v1 已按移动端命令规格落地：
 
 - `/help`
 - `/task <text> [cap=<capability_id>] [account=<account_id>]`
 - `/status <invocation-id>`
+- `/balance` / `/wallet` / `/余额` / `/钱包`
+- `/plans` / `/plan` / `/package` / `/套餐`
 
-详见 `docs/matrix-mobile-command-spec-v1.md`
+详见 `docs/matrix-mobile-command-spec-v1.md`。
 
-After this bridge, build one of these two paths:
+真实 Matrix/Element 房间验收请使用：
 
-1. a Matrix bot process that receives events and posts `projected_reply` back into rooms
-2. a Matrix appservice mode that wires rooms/users into product-managed namespaces
+```bash
+CEX_ENV_FILE=run/local-production/.env ./scripts/start-matrix-live-stack.sh
+./scripts/check-matrix-live-room-e2e.sh
+```
 
-For the current CEX-first architecture, path 1 is the fastest proof-of-concept.
+After this bridge, deeper product UI work should focus on confirmation callbacks, attachment/media bridging, and optional Element customization beyond HTML-compatible cards.

@@ -156,7 +156,8 @@ pub struct MatrixAdapterConfig {
     pub consumer_entry_session_auth_secret: Option<String>,
     pub consumer_entry_session_auth_key_id: Option<String>,
     pub consumer_entry_session_auth_issuer_registry_path: Option<String>,
-    pub consumer_entry_session_auth_issuer_registry: HashMap<String, SessionAuthIssuerRegistryIssuer>,
+    pub consumer_entry_session_auth_issuer_registry:
+        HashMap<String, SessionAuthIssuerRegistryIssuer>,
     pub consumer_entry_session_auth_issuer_registry_load_error: Option<String>,
     pub consumer_entry_session_auth_issuer_registry_metadata: SessionAuthIssuerRegistryMetadata,
     pub consumer_entry_session_auth_issuer_registry_approved_revisions_path: Option<String>,
@@ -178,11 +179,12 @@ pub struct MatrixAdapterConfig {
 
 impl MatrixAdapterConfig {
     pub fn from_env() -> Self {
-        let consumer_entry_session_auth_issuer = env::var("MATRIX_ENTRY_CONSUMER_SESSION_AUTH_ISSUER")
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| "matrix-entry-adapter".to_string());
+        let consumer_entry_session_auth_issuer =
+            env::var("MATRIX_ENTRY_CONSUMER_SESSION_AUTH_ISSUER")
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| "matrix-entry-adapter".to_string());
         let consumer_entry_session_auth_issuer_registry_path = first_present_env(&[
             "MATRIX_ENTRY_CONSUMER_SESSION_AUTH_ISSUER_REGISTRY_PATH",
             "CONSUMER_ENTRY_SESSION_AUTH_ISSUER_REGISTRY_PATH",
@@ -195,7 +197,9 @@ impl MatrixAdapterConfig {
             consumer_entry_session_auth_issuer_registry_path.as_deref(),
         );
         let consumer_entry_session_auth_issuer_registry_load_error =
-            consumer_entry_session_auth_issuer_registry_metadata.load_error.clone();
+            consumer_entry_session_auth_issuer_registry_metadata
+                .load_error
+                .clone();
         let consumer_entry_session_auth_issuer_registry_approved_revisions_path =
             first_present_env(&[
                 "MATRIX_ENTRY_CONSUMER_SESSION_AUTH_ISSUER_REGISTRY_APPROVED_REVISIONS_PATH",
@@ -206,12 +210,11 @@ impl MatrixAdapterConfig {
             "MATRIX_ENTRY_CONSUMER_SESSION_AUTH_SECRET",
             "CONSUMER_ENTRY_SESSION_AUTH_SECRET",
         ]);
-        let explicit_consumer_entry_session_auth_key_id = env::var(
-            "MATRIX_ENTRY_CONSUMER_SESSION_AUTH_KEY_ID",
-        )
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty());
+        let explicit_consumer_entry_session_auth_key_id =
+            env::var("MATRIX_ENTRY_CONSUMER_SESSION_AUTH_KEY_ID")
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty());
         let (
             consumer_entry_session_auth_key_id,
             consumer_entry_session_auth_secret,
@@ -249,7 +252,9 @@ impl MatrixAdapterConfig {
                         issuer: consumer_entry_session_auth_issuer.clone(),
                         key_id: Some(key_id),
                         registry_path: consumer_entry_session_auth_issuer_registry_path.clone(),
-                        detail: Some("selected signing secret from shared issuer registry".to_string()),
+                        detail: Some(
+                            "selected signing secret from shared issuer registry".to_string(),
+                        ),
                     }
                 } else {
                     SessionAuthIssuerRegistrySelection {
@@ -298,7 +303,9 @@ impl MatrixAdapterConfig {
                     issuer: consumer_entry_session_auth_issuer.clone(),
                     key_id: explicit_consumer_entry_session_auth_key_id.clone(),
                     registry_path: None,
-                    detail: Some("no explicit secret or shared issuer registry configured".to_string()),
+                    detail: Some(
+                        "no explicit secret or shared issuer registry configured".to_string(),
+                    ),
                 }
             };
             (
@@ -320,8 +327,10 @@ impl MatrixAdapterConfig {
             consumer_entry_ingress_token: env::var("CONSUMER_ENTRY_INGRESS_TOKEN")
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
-            consumer_entry_session_auth_explicit_secret: explicit_consumer_entry_session_auth_secret,
-            consumer_entry_session_auth_explicit_key_id: explicit_consumer_entry_session_auth_key_id,
+            consumer_entry_session_auth_explicit_secret:
+                explicit_consumer_entry_session_auth_secret,
+            consumer_entry_session_auth_explicit_key_id:
+                explicit_consumer_entry_session_auth_key_id,
             consumer_entry_session_auth_secret,
             consumer_entry_session_auth_key_id,
             consumer_entry_session_auth_issuer_registry_path,
@@ -385,7 +394,9 @@ impl MatrixAdapterConfig {
 
     fn profile_validation_errors(&self) -> Vec<String> {
         let runtime_state = SessionAuthIssuerRegistryRuntimeState {
-            metadata: self.consumer_entry_session_auth_issuer_registry_metadata.clone(),
+            metadata: self
+                .consumer_entry_session_auth_issuer_registry_metadata
+                .clone(),
             registry: self.consumer_entry_session_auth_issuer_registry.clone(),
         };
         matrix_profile_validation_errors(self, &runtime_state)
@@ -412,7 +423,12 @@ fn first_present_env(names: &[&str]) -> Option<String> {
 
 fn boolean_env(names: &[&str], default: bool) -> bool {
     first_present_env(names)
-        .map(|value| matches!(value.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .map(|value| {
+            matches!(
+                value.to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
         .unwrap_or(default)
 }
 
@@ -495,10 +511,10 @@ fn resolve_consumer_entry_session_auth_runtime_selection(
                     status: "ok".to_string(),
                     issuer: config.consumer_entry_session_auth_issuer.clone(),
                     key_id: Some(key_id),
-                    registry_path: config.consumer_entry_session_auth_issuer_registry_path.clone(),
-                    detail: Some(
-                        "selected signing secret from shared issuer registry".to_string(),
-                    ),
+                    registry_path: config
+                        .consumer_entry_session_auth_issuer_registry_path
+                        .clone(),
+                    detail: Some("selected signing secret from shared issuer registry".to_string()),
                 }
             } else {
                 SessionAuthIssuerRegistrySelection {
@@ -506,7 +522,9 @@ fn resolve_consumer_entry_session_auth_runtime_selection(
                     status: "unknown_key_id".to_string(),
                     issuer: config.consumer_entry_session_auth_issuer.clone(),
                     key_id: Some(key_id.clone()),
-                    registry_path: config.consumer_entry_session_auth_issuer_registry_path.clone(),
+                    registry_path: config
+                        .consumer_entry_session_auth_issuer_registry_path
+                        .clone(),
                     detail: Some(format!(
                         "shared issuer registry entry for issuer {} does not contain key_id {}",
                         config.consumer_entry_session_auth_issuer, key_id
@@ -538,7 +556,9 @@ fn resolve_consumer_entry_session_auth_runtime_selection(
             status: "issuer_missing".to_string(),
             issuer: config.consumer_entry_session_auth_issuer.clone(),
             key_id: config.consumer_entry_session_auth_explicit_key_id.clone(),
-            registry_path: config.consumer_entry_session_auth_issuer_registry_path.clone(),
+            registry_path: config
+                .consumer_entry_session_auth_issuer_registry_path
+                .clone(),
             detail: Some(format!(
                 "shared issuer registry does not contain issuer {}",
                 config.consumer_entry_session_auth_issuer
@@ -555,7 +575,11 @@ fn resolve_consumer_entry_session_auth_runtime_selection(
         }
     };
 
-    (None, config.consumer_entry_session_auth_explicit_key_id.clone(), selection)
+    (
+        None,
+        config.consumer_entry_session_auth_explicit_key_id.clone(),
+        selection,
+    )
 }
 
 fn matrix_profile_validation_errors(
@@ -572,9 +596,8 @@ fn matrix_profile_validation_errors(
             errors.push("beta/production profile requires MATRIX_ENTRY_INGRESS_TOKEN".to_string());
         }
         if config.consumer_entry_ingress_token.is_none() {
-            errors.push(
-                "beta/production profile requires CONSUMER_ENTRY_INGRESS_TOKEN".to_string(),
-            );
+            errors
+                .push("beta/production profile requires CONSUMER_ENTRY_INGRESS_TOKEN".to_string());
         }
         if let Some(error) = runtime_state.metadata.load_error.as_deref() {
             errors.push(format!(
@@ -627,8 +650,7 @@ fn matrix_profile_validation_errors(
         }
         if config.recent_event_store_path.is_none() {
             errors.push(
-                "beta/production profile requires MATRIX_ENTRY_RECENT_EVENT_STORE_PATH"
-                    .to_string(),
+                "beta/production profile requires MATRIX_ENTRY_RECENT_EVENT_STORE_PATH".to_string(),
             );
         }
         if config.rate_limit_store_path.is_none() {
@@ -637,7 +659,9 @@ fn matrix_profile_validation_errors(
             );
         }
         if config.bot_user_id.trim() == "@cex-bot:local.dev" {
-            errors.push("beta/production profile requires non-default MATRIX_BOT_USER_ID".to_string());
+            errors.push(
+                "beta/production profile requires non-default MATRIX_BOT_USER_ID".to_string(),
+            );
         }
     }
 
@@ -651,7 +675,9 @@ fn consumer_entry_session_auth_governance_overview_json(
     approval_state: &SessionAuthIssuerRegistryRevisionApprovalState,
     approval_limit: usize,
 ) -> Value {
-    let registry_configured = config.consumer_entry_session_auth_issuer_registry_path.is_some();
+    let registry_configured = config
+        .consumer_entry_session_auth_issuer_registry_path
+        .is_some();
     let approval_source_configured = config
         .consumer_entry_session_auth_issuer_registry_approved_revisions_path
         .is_some();
@@ -919,22 +945,22 @@ fn load_consumer_entry_session_auth_issuer_registry_revision_approval_state(
         }
     };
 
-    let document = match serde_json::from_str::<SessionAuthIssuerRegistryRevisionApprovalDocument>(&raw)
-    {
-        Ok(document) => document,
-        Err(err) => {
-            return SessionAuthIssuerRegistryRevisionApprovalState {
-                source_path,
-                source_modified_epoch,
-                loaded_at_epoch,
-                load_status: "parse_error".to_string(),
-                load_error: Some(err.to_string()),
-                version: 0,
-                revision: None,
-                approved_revisions: Vec::new(),
+    let document =
+        match serde_json::from_str::<SessionAuthIssuerRegistryRevisionApprovalDocument>(&raw) {
+            Ok(document) => document,
+            Err(err) => {
+                return SessionAuthIssuerRegistryRevisionApprovalState {
+                    source_path,
+                    source_modified_epoch,
+                    loaded_at_epoch,
+                    load_status: "parse_error".to_string(),
+                    load_error: Some(err.to_string()),
+                    version: 0,
+                    revision: None,
+                    approved_revisions: Vec::new(),
+                }
             }
-        }
-    };
+        };
 
     SessionAuthIssuerRegistryRevisionApprovalState {
         source_path,
@@ -1201,7 +1227,9 @@ impl AppState {
         let rate_limit_cache = load_rate_limit_cache(&config);
         let consumer_entry_session_auth_issuer_registry_state =
             SessionAuthIssuerRegistryRuntimeState {
-                metadata: config.consumer_entry_session_auth_issuer_registry_metadata.clone(),
+                metadata: config
+                    .consumer_entry_session_auth_issuer_registry_metadata
+                    .clone(),
                 registry: config.consumer_entry_session_auth_issuer_registry.clone(),
             };
         Self {
@@ -1247,8 +1275,10 @@ pub fn build_router(state: AppState) -> Router {
 async fn health(State(state): State<AppState>) -> Json<Value> {
     let consumer_entry_session_auth_runtime_state =
         consumer_entry_session_auth_issuer_registry_runtime_state(&state);
-    let profile_errors =
-        matrix_profile_validation_errors(state.config(), &consumer_entry_session_auth_runtime_state);
+    let profile_errors = matrix_profile_validation_errors(
+        state.config(),
+        &consumer_entry_session_auth_runtime_state,
+    );
     let (_, _, consumer_entry_session_auth_selection) =
         resolve_consumer_entry_session_auth_runtime_selection(
             state.config(),
@@ -1675,10 +1705,8 @@ async fn validate_consumer_entry_session_auth_runtime(
         metadata: candidate_metadata,
         registry: candidate_registry,
     };
-    let (_, _, candidate_selection) = resolve_consumer_entry_session_auth_runtime_selection(
-        state.config(),
-        &candidate_state,
-    );
+    let (_, _, candidate_selection) =
+        resolve_consumer_entry_session_auth_runtime_selection(state.config(), &candidate_state);
     let approval_state =
         load_consumer_entry_session_auth_issuer_registry_revision_approval_state(state.config());
     let approval_checks = consumer_entry_session_auth_issuer_registry_approval_checks_json(
@@ -1778,10 +1806,8 @@ async fn reload_consumer_entry_session_auth_runtime(
         metadata: candidate_metadata,
         registry: candidate_registry,
     };
-    let (_, _, candidate_selection) = resolve_consumer_entry_session_auth_runtime_selection(
-        state.config(),
-        &candidate_state,
-    );
+    let (_, _, candidate_selection) =
+        resolve_consumer_entry_session_auth_runtime_selection(state.config(), &candidate_state);
     let approval_state =
         load_consumer_entry_session_auth_issuer_registry_revision_approval_state(state.config());
     let approval_checks = consumer_entry_session_auth_issuer_registry_approval_checks_json(
@@ -1899,6 +1925,44 @@ enum ParsedCommand {
         text: String,
     },
     Help,
+    League,
+    Arena,
+    Quest,
+    World,
+    Season,
+    Raid {
+        match_id: Option<String>,
+        body: Option<String>,
+    },
+    Team {
+        match_id: Option<String>,
+        role: Option<String>,
+    },
+    Rank,
+    Loadout,
+    Profile,
+    Rewards,
+    Inventory,
+    History,
+    Guild {
+        guild_id: Option<String>,
+    },
+    Draft {
+        heroes: Vec<String>,
+    },
+    Join {
+        match_id: String,
+    },
+    Battle {
+        match_id: String,
+        text: String,
+    },
+    Submit {
+        match_id: String,
+        body: String,
+    },
+    Wallet,
+    Plans,
     Status {
         task_id: String,
     },
@@ -2180,6 +2244,360 @@ async fn handle_matrix_event(
             )
                 .into_response()
         }
+        ParsedCommand::League => match fetch_consumer_entry_get(&state, "/v1/league/home").await {
+            Ok(value) => league_response(
+                "league_home",
+                event,
+                value.clone(),
+                build_league_home_matrix_reply(Some(&value)),
+            ),
+            Err(response) => response,
+        },
+        ParsedCommand::Arena => {
+            match fetch_consumer_entry_get(&state, "/v1/league/matches").await {
+                Ok(value) => league_response(
+                    "league_arena",
+                    event,
+                    value.clone(),
+                    build_league_arena_matrix_reply(Some(&value)),
+                ),
+                Err(response) => response,
+            }
+        }
+        ParsedCommand::Quest => {
+            match fetch_consumer_entry_get(&state, "/v1/league/matches").await {
+                Ok(value) => league_response(
+                    "league_quest",
+                    event,
+                    value.clone(),
+                    build_league_quest_matrix_reply(Some(&value)),
+                ),
+                Err(response) => response,
+            }
+        }
+        ParsedCommand::World => match fetch_consumer_entry_get(&state, "/v1/league/world").await {
+            Ok(value) => league_response(
+                "league_world",
+                event,
+                value.clone(),
+                build_league_world_matrix_reply(&value),
+            ),
+            Err(response) => response,
+        },
+        ParsedCommand::Season => {
+            match fetch_consumer_entry_get(&state, "/v1/league/season").await {
+                Ok(value) => league_response(
+                    "league_season",
+                    event,
+                    value.clone(),
+                    build_league_season_matrix_reply(&value),
+                ),
+                Err(response) => response,
+            }
+        }
+        ParsedCommand::Raid { match_id, body } => {
+            if let Some(match_id) = match_id {
+                let path = format!(
+                    "/v1/league/raids/{}/contribute",
+                    url_encode_component(&match_id)
+                );
+                let body = json!({
+                    "matrix_user_id": event.sender,
+                    "room_id": event.room_id,
+                    "role": "raider",
+                    "body": body.unwrap_or_else(|| "raid contribution: scout evidence, assign builders, define risk gate".to_string()),
+                });
+                match fetch_consumer_entry_post(&state, &path, body).await {
+                    Ok(value) => league_response(
+                        "league_raid_contribution",
+                        event,
+                        value.clone(),
+                        build_league_raid_contribution_matrix_reply(&value),
+                    ),
+                    Err(response) => response,
+                }
+            } else {
+                match fetch_consumer_entry_get(&state, "/v1/league/raids").await {
+                    Ok(value) => league_response(
+                        "league_raids",
+                        event,
+                        value.clone(),
+                        build_league_raids_matrix_reply(&value),
+                    ),
+                    Err(response) => response,
+                }
+            }
+        }
+        ParsedCommand::Team { match_id, role } => {
+            let match_id = match_id.unwrap_or_else(|| "guild-raid-001".to_string());
+            let path = format!(
+                "/v1/league/raids/{}/roster",
+                url_encode_component(&match_id)
+            );
+            if let Some(role) = role {
+                let body = json!({
+                    "matrix_user_id": event.sender,
+                    "room_id": event.room_id,
+                    "role": role,
+                    "hero_id": hero_for_raid_role(&role),
+                });
+                match fetch_consumer_entry_post(&state, &path, body).await {
+                    Ok(value) => league_response(
+                        "league_raid_roster_join",
+                        event,
+                        value.clone(),
+                        build_league_raid_roster_matrix_reply(&value),
+                    ),
+                    Err(response) => response,
+                }
+            } else {
+                match fetch_consumer_entry_get(&state, &path).await {
+                    Ok(value) => league_response(
+                        "league_raid_roster",
+                        event,
+                        value.clone(),
+                        build_league_raid_roster_matrix_reply(&value),
+                    ),
+                    Err(response) => response,
+                }
+            }
+        }
+        ParsedCommand::Rank => {
+            match fetch_consumer_entry_get(&state, "/v1/league/rankings").await {
+                Ok(value) => league_response(
+                    "league_rank",
+                    event,
+                    value.clone(),
+                    build_league_rank_matrix_reply(Some(&value)),
+                ),
+                Err(response) => response,
+            }
+        }
+        ParsedCommand::Guild { guild_id } => {
+            if let Some(guild_id) = guild_id {
+                let path = format!("/v1/league/guilds/{}/join", url_encode_component(&guild_id));
+                let body = json!({
+                    "matrix_user_id": event.sender,
+                    "room_id": event.room_id,
+                    "display_name": event.sender,
+                });
+                match fetch_consumer_entry_post(&state, &path, body).await {
+                    Ok(value) => league_response(
+                        "league_guild_join",
+                        event,
+                        value.clone(),
+                        build_league_guild_join_matrix_reply(&value),
+                    ),
+                    Err(response) => response,
+                }
+            } else {
+                match fetch_consumer_entry_get(&state, "/v1/league/guilds").await {
+                    Ok(value) => league_response(
+                        "league_guilds",
+                        event,
+                        value.clone(),
+                        build_league_guilds_matrix_reply(&value),
+                    ),
+                    Err(response) => response,
+                }
+            }
+        }
+        ParsedCommand::Draft { heroes } => {
+            let path = format!(
+                "/v1/league/players/{}/draft",
+                url_encode_component(&event.sender)
+            );
+            let body = json!({
+                "matrix_user_id": event.sender,
+                "room_id": event.room_id,
+                "heroes": heroes,
+            });
+            match fetch_consumer_entry_post(&state, &path, body).await {
+                Ok(value) => league_response(
+                    "league_draft",
+                    event,
+                    value.clone(),
+                    build_league_draft_matrix_reply(&value),
+                ),
+                Err(response) => response,
+            }
+        }
+        ParsedCommand::Loadout => {
+            let path = format!(
+                "/v1/league/players/{}/loadout",
+                url_encode_component(&event.sender)
+            );
+            match fetch_consumer_entry_get(&state, &path).await {
+                Ok(value) => league_response(
+                    "league_loadout",
+                    event,
+                    value.clone(),
+                    build_league_loadout_matrix_reply(Some(&value)),
+                ),
+                Err(response) => response,
+            }
+        }
+        ParsedCommand::Profile => {
+            let path = format!(
+                "/v1/league/players/{}/profile",
+                url_encode_component(&event.sender)
+            );
+            match fetch_consumer_entry_get(&state, &path).await {
+                Ok(value) => league_response(
+                    "league_profile",
+                    event,
+                    value.clone(),
+                    build_league_profile_matrix_reply(&value),
+                ),
+                Err(response) => response,
+            }
+        }
+        ParsedCommand::Rewards => {
+            let path = format!(
+                "/v1/league/players/{}/rewards",
+                url_encode_component(&event.sender)
+            );
+            match fetch_consumer_entry_get(&state, &path).await {
+                Ok(value) => league_response(
+                    "league_rewards",
+                    event,
+                    value.clone(),
+                    build_league_rewards_matrix_reply(&value),
+                ),
+                Err(response) => response,
+            }
+        }
+        ParsedCommand::Inventory => {
+            let path = format!(
+                "/v1/league/players/{}/inventory",
+                url_encode_component(&event.sender)
+            );
+            match fetch_consumer_entry_get(&state, &path).await {
+                Ok(value) => league_response(
+                    "league_inventory",
+                    event,
+                    value.clone(),
+                    build_league_inventory_matrix_reply(&value),
+                ),
+                Err(response) => response,
+            }
+        }
+        ParsedCommand::History => {
+            let path = format!(
+                "/v1/league/players/{}/history",
+                url_encode_component(&event.sender)
+            );
+            match fetch_consumer_entry_get(&state, &path).await {
+                Ok(value) => league_response(
+                    "league_history",
+                    event,
+                    value.clone(),
+                    build_league_history_matrix_reply(&value),
+                ),
+                Err(response) => response,
+            }
+        }
+        ParsedCommand::Join { match_id } => {
+            let path = format!(
+                "/v1/league/matches/{}/join",
+                url_encode_component(&match_id)
+            );
+            let body = json!({
+                "matrix_user_id": event.sender,
+                "room_id": event.room_id,
+                "display_name": event.sender,
+            });
+            match fetch_consumer_entry_post(&state, &path, body).await {
+                Ok(value) => league_response(
+                    "league_join",
+                    event,
+                    value.clone(),
+                    build_league_join_matrix_reply_from(&value),
+                ),
+                Err(response) => response,
+            }
+        }
+        ParsedCommand::Submit { match_id, body } => {
+            let path = format!(
+                "/v1/league/matches/{}/submit",
+                url_encode_component(&match_id)
+            );
+            let body = json!({
+                "matrix_user_id": event.sender,
+                "room_id": event.room_id,
+                "body": body,
+            });
+            match fetch_consumer_entry_post(&state, &path, body).await {
+                Ok(value) => league_response(
+                    "league_submit",
+                    event,
+                    value.clone(),
+                    build_league_submission_matrix_reply(&value),
+                ),
+                Err(response) => response,
+            }
+        }
+        ParsedCommand::Battle { match_id, text } => {
+            let path = format!(
+                "/v1/league/matches/{}/battle",
+                url_encode_component(&match_id)
+            );
+            let body = build_league_battle_request_body(
+                &event.sender,
+                &event.room_id,
+                &event.event_id,
+                &text,
+                &event.event_type,
+                event.timestamp_ms,
+                &event.metadata,
+                event.content.clone(),
+            );
+            match fetch_consumer_entry_post(&state, &path, body).await {
+                Ok(value) => league_response(
+                    "league_battle",
+                    event,
+                    value.clone(),
+                    build_league_battle_matrix_reply(&value),
+                ),
+                Err(response) => response,
+            }
+        }
+        ParsedCommand::Wallet => {
+            match fetch_wallet_projection(&state, &event.sender, &event.room_id).await {
+                Ok(value) => (
+                    StatusCode::OK,
+                    Json(MatrixAdapterResponse {
+                        accepted: true,
+                        action: "wallet_lookup".to_string(),
+                        event_id: event.event_id,
+                        room_id: event.room_id,
+                        sender: event.sender,
+                        forwarded: Some(value.clone()),
+                        projected_reply: Some(build_wallet_matrix_reply(&value)),
+                    }),
+                )
+                    .into_response(),
+                Err(response) => response,
+            }
+        }
+        ParsedCommand::Plans => {
+            match fetch_wallet_projection(&state, &event.sender, &event.room_id).await {
+                Ok(value) => (
+                    StatusCode::OK,
+                    Json(MatrixAdapterResponse {
+                        accepted: true,
+                        action: "plans_lookup".to_string(),
+                        event_id: event.event_id,
+                        room_id: event.room_id,
+                        sender: event.sender,
+                        forwarded: Some(value.clone()),
+                        projected_reply: Some(build_plans_matrix_reply(&value)),
+                    }),
+                )
+                    .into_response(),
+                Err(response) => response,
+            }
+        }
         ParsedCommand::Unsupported { text } => (
             StatusCode::OK,
             Json(MatrixAdapterResponse {
@@ -2368,6 +2786,35 @@ fn parse_matrix_command(text: &str) -> ParsedCommand {
     let command = parts.remove(0);
     match command {
         "/help" | "/h" => ParsedCommand::Help,
+        "/league" | "/tl" | "/trillionnium" => ParsedCommand::League,
+        "/arena" | "/matches" => ParsedCommand::Arena,
+        "/quest" | "/quests" | "/daily" => ParsedCommand::Quest,
+        "/world" | "/map" => ParsedCommand::World,
+        "/season" => ParsedCommand::Season,
+        "/raid" | "/raids" => parse_raid_command(parts),
+        "/team" | "/party" | "/roster" => parse_team_command(parts),
+        "/rank" | "/leaderboard" => ParsedCommand::Rank,
+        "/loadout" | "/agent" | "/agents" => ParsedCommand::Loadout,
+        "/profile" | "/me" => ParsedCommand::Profile,
+        "/rewards" | "/earnings" => ParsedCommand::Rewards,
+        "/inventory" | "/items" | "/bag" | "/背包" => ParsedCommand::Inventory,
+        "/history" | "/replay" => ParsedCommand::History,
+        "/guild" | "/guilds" => ParsedCommand::Guild {
+            guild_id: parts.first().map(|value| (*value).to_string()),
+        },
+        "/draft" => parse_draft_command(parts),
+        "/join" => match parts.first() {
+            Some(match_id) if !match_id.trim().is_empty() => ParsedCommand::Join {
+                match_id: (*match_id).to_string(),
+            },
+            _ => ParsedCommand::Unsupported {
+                text: "/join 需要 match id，例如 /join daily-dungeon-001".to_string(),
+            },
+        },
+        "/battle" => parse_battle_command(parts),
+        "/submit" => parse_submit_command(parts),
+        "/balance" | "/wallet" | "/余额" | "/钱包" => ParsedCommand::Wallet,
+        "/plans" | "/plan" | "/package" | "/套餐" => ParsedCommand::Plans,
         "/status" => match parts.first() {
             Some(task_id) if !task_id.trim().is_empty() => ParsedCommand::Status {
                 task_id: (*task_id).to_string(),
@@ -2380,6 +2827,114 @@ fn parse_matrix_command(text: &str) -> ParsedCommand {
         _ => ParsedCommand::Unsupported {
             text: trimmed.to_string(),
         },
+    }
+}
+
+fn hero_for_raid_role(role: &str) -> &'static str {
+    match role.trim().to_ascii_lowercase().as_str() {
+        "builder" | "forge" => "forge_builder",
+        "auditor" | "reviewer" => "mirror_auditor",
+        "closer" | "courier" => "courier_closer",
+        "warden" | "risk" => "ledger_warden",
+        "designer" | "muse" => "muse_designer",
+        _ => "oracle_scout",
+    }
+}
+
+fn parse_team_command(parts: Vec<&str>) -> ParsedCommand {
+    let match_id = parts
+        .first()
+        .copied()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    let role = parts
+        .get(1)
+        .copied()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    ParsedCommand::Team { match_id, role }
+}
+
+fn parse_raid_command(parts: Vec<&str>) -> ParsedCommand {
+    let Some(match_id) = parts
+        .first()
+        .copied()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return ParsedCommand::Raid {
+            match_id: None,
+            body: None,
+        };
+    };
+    ParsedCommand::Raid {
+        match_id: Some(match_id.to_string()),
+        body: Some(parts.get(1..).unwrap_or_default().join(" "))
+            .filter(|value| !value.trim().is_empty()),
+    }
+}
+
+fn parse_draft_command(parts: Vec<&str>) -> ParsedCommand {
+    let heroes: Vec<String> = parts
+        .into_iter()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .collect();
+    if heroes.len() < 3 {
+        return ParsedCommand::Unsupported {
+            text: "/draft 至少需要 3 个英雄，例如 /draft oracle_scout forge_builder mirror_auditor"
+                .to_string(),
+        };
+    }
+    ParsedCommand::Draft { heroes }
+}
+
+fn parse_submit_command(parts: Vec<&str>) -> ParsedCommand {
+    let Some(match_id) = parts
+        .first()
+        .copied()
+        .filter(|value| !value.trim().is_empty())
+    else {
+        return ParsedCommand::Unsupported {
+            text: "/submit 需要 match id 和提交内容，例如 /submit daily-dungeon-001 我的最终方案"
+                .to_string(),
+        };
+    };
+    if parts.len() < 2 {
+        return ParsedCommand::Unsupported {
+            text: "/submit 需要提交内容，例如 /submit daily-dungeon-001 我的最终方案".to_string(),
+        };
+    }
+
+    ParsedCommand::Submit {
+        match_id: match_id.to_string(),
+        body: parts[1..].join(" "),
+    }
+}
+
+fn parse_battle_command(parts: Vec<&str>) -> ParsedCommand {
+    let Some(match_id) = parts
+        .first()
+        .copied()
+        .filter(|value| !value.trim().is_empty())
+    else {
+        return ParsedCommand::Unsupported {
+            text: "/battle 需要 match id 和行动文本，例如 /battle daily-dungeon-001 生成一版方案"
+                .to_string(),
+        };
+    };
+    if parts.len() < 2 {
+        return ParsedCommand::Unsupported {
+            text: "/battle 需要行动文本，例如 /battle daily-dungeon-001 生成一版方案".to_string(),
+        };
+    }
+
+    ParsedCommand::Battle {
+        match_id: match_id.to_string(),
+        text: parts[1..].join(" "),
     }
 }
 
@@ -2480,6 +3035,25 @@ fn build_task_request_body(
     }
 
     body
+}
+
+fn build_league_battle_request_body(
+    sender: &str,
+    room_id: &str,
+    event_id: &Option<String>,
+    message: &str,
+    event_type: &Option<String>,
+    timestamp_ms: Option<i64>,
+    metadata: &Option<Value>,
+    content: Option<Value>,
+) -> Value {
+    json!({
+        "matrix_user_id": sender,
+        "room_id": room_id,
+        "message": message,
+        "event_id": event_id,
+        "metadata": merge_metadata(event_type.clone(), timestamp_ms, metadata.clone(), content),
+    })
 }
 
 fn normalize_request_fingerprint_value(value: Option<&str>) -> String {
@@ -2630,6 +3204,151 @@ fn build_consumer_entry_session_auth_headers(
     Ok(Some((assertion, signature)))
 }
 
+async fn fetch_wallet_projection(
+    state: &AppState,
+    matrix_user_id: &str,
+    room_id: &str,
+) -> Result<Value, Response> {
+    let url = format!(
+        "{}/v1/matrix/users/{}/wallet?room_id={}",
+        state.config().consumer_entry_base_url.trim_end_matches('/'),
+        url_encode_component(matrix_user_id),
+        url_encode_component(room_id),
+    );
+
+    let mut req = state.inner.http.get(url);
+    if let Some(api_key) = &state.config().consumer_entry_api_key {
+        req = req.header("x-api-key", api_key);
+    }
+    if let Some(token) = &state.config().consumer_entry_ingress_token {
+        req = req.header("x-entry-token", token);
+    }
+
+    let response = match req.send().await {
+        Ok(response) => response,
+        Err(err) => {
+            return Err((
+                StatusCode::BAD_GATEWAY,
+                Json(json!({ "error": format!("failed to reach consumer-entry-api: {err}") })),
+            )
+                .into_response())
+        }
+    };
+
+    let status = response.status();
+    let value = match response.json::<Value>().await {
+        Ok(value) => value,
+        Err(err) => {
+            return Err((
+                StatusCode::BAD_GATEWAY,
+                Json(json!({ "error": format!(
+                    "consumer-entry-api returned non-json wallet response: {err}"
+                )})),
+            )
+                .into_response())
+        }
+    };
+
+    if !status.is_success() {
+        return Err((status, Json(value)).into_response());
+    }
+
+    Ok(value)
+}
+
+async fn fetch_consumer_entry_get(state: &AppState, path: &str) -> Result<Value, Response> {
+    let url = format!(
+        "{}{}",
+        state.config().consumer_entry_base_url.trim_end_matches('/'),
+        path
+    );
+    let mut req = state.inner.http.get(url);
+    if let Some(api_key) = &state.config().consumer_entry_api_key {
+        req = req.header("x-api-key", api_key);
+    }
+    if let Some(token) = &state.config().consumer_entry_ingress_token {
+        req = req.header("x-entry-token", token);
+    }
+
+    let response = match req.send().await {
+        Ok(response) => response,
+        Err(err) => {
+            return Err((
+                StatusCode::BAD_GATEWAY,
+                Json(json!({ "error": format!("failed to reach consumer-entry-api: {err}") })),
+            )
+                .into_response())
+        }
+    };
+    parse_consumer_entry_json_response(response, "consumer-entry-api returned non-json response")
+        .await
+}
+
+async fn fetch_consumer_entry_post(
+    state: &AppState,
+    path: &str,
+    body: Value,
+) -> Result<Value, Response> {
+    let url = format!(
+        "{}{}",
+        state.config().consumer_entry_base_url.trim_end_matches('/'),
+        path
+    );
+    let mut req = state.inner.http.post(url).json(&body);
+    if let Some(api_key) = &state.config().consumer_entry_api_key {
+        req = req.header("x-api-key", api_key);
+    }
+    if let Some(token) = &state.config().consumer_entry_ingress_token {
+        req = req.header("x-entry-token", token);
+    }
+    if let Some((assertion, signature)) =
+        match build_consumer_entry_session_auth_headers(state, &body) {
+            Ok(value) => value,
+            Err(response) => return Err(response),
+        }
+    {
+        req = req
+            .header(USER_SESSION_ASSERTION_HEADER, assertion)
+            .header(USER_SESSION_SIGNATURE_HEADER, signature);
+    }
+
+    let response = match req.send().await {
+        Ok(response) => response,
+        Err(err) => {
+            return Err((
+                StatusCode::BAD_GATEWAY,
+                Json(json!({ "error": format!("failed to reach consumer-entry-api: {err}") })),
+            )
+                .into_response())
+        }
+    };
+    parse_consumer_entry_json_response(response, "consumer-entry-api returned non-json response")
+        .await
+}
+
+async fn parse_consumer_entry_json_response(
+    response: reqwest::Response,
+    error_prefix: &str,
+) -> Result<Value, Response> {
+    let status = response.status();
+    let value = match response.json::<Value>().await {
+        Ok(value) => value,
+        Err(err) => {
+            return Err((
+                StatusCode::BAD_GATEWAY,
+                Json(json!({ "error": format!("{error_prefix}: {err}") })),
+            )
+                .into_response())
+        }
+    };
+
+    if !status.is_success() {
+        return Err((status, Json(value)).into_response());
+    }
+
+    Ok(value)
+}
+
 async fn fetch_task_projection(state: &AppState, task_id: &str) -> Result<Value, Response> {
     let url = format!(
         "{}/v1/chat/tasks/{}",
@@ -2695,10 +3414,12 @@ async fn forward_to_consumer_entry(state: AppState, request_body: Value) -> Resp
     if let Some(token) = &state.config().consumer_entry_ingress_token {
         req = req.header("x-entry-token", token);
     }
-    if let Some((assertion, signature)) = match build_consumer_entry_session_auth_headers(&state, &request_body) {
-        Ok(value) => value,
-        Err(response) => return response,
-    } {
+    if let Some((assertion, signature)) =
+        match build_consumer_entry_session_auth_headers(&state, &request_body) {
+            Ok(value) => value,
+            Err(response) => return response,
+        }
+    {
         req = req
             .header(USER_SESSION_ASSERTION_HEADER, assertion)
             .header(USER_SESSION_SIGNATURE_HEADER, signature);
@@ -2801,6 +3522,53 @@ fn merge_metadata(
     })
 }
 
+fn url_encode_component(input: &str) -> String {
+    let mut encoded = String::new();
+    for byte in input.bytes() {
+        let is_unreserved =
+            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~');
+        if is_unreserved {
+            encoded.push(byte as char);
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    encoded
+}
+
+fn status_label(consumer_status: &str) -> &'static str {
+    match consumer_status {
+        "queued" => "任务已创建，正在排队中",
+        "waiting_for_confirmation" => "这个任务需要确认后才能继续",
+        "processing" => "任务已经开始处理",
+        "done" => "任务已经完成",
+        "failed" => "任务执行失败",
+        "refunded" => "任务已退款",
+        _ => "任务已收到",
+    }
+}
+
+fn league_response(
+    action: &str,
+    event: MatrixEventEnvelope,
+    forwarded: Value,
+    projected_reply: Value,
+) -> Response {
+    (
+        StatusCode::OK,
+        Json(MatrixAdapterResponse {
+            accepted: true,
+            action: action.to_string(),
+            event_id: event.event_id,
+            room_id: event.room_id,
+            sender: event.sender,
+            forwarded: Some(forwarded),
+            projected_reply: Some(projected_reply),
+        }),
+    )
+        .into_response()
+}
+
 fn build_projected_matrix_reply(forwarded: &Value) -> Value {
     let task_id = forwarded
         .get("task_id")
@@ -2814,17 +3582,41 @@ fn build_projected_matrix_reply(forwarded: &Value) -> Value {
         .get("invocation_status")
         .and_then(Value::as_str)
         .unwrap_or("Created");
+    let execution = forwarded.get("execution").cloned().unwrap_or(Value::Null);
+    let dispatch_mode = execution
+        .get("dispatch_mode")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let attempts_remaining = execution
+        .get("attempts_remaining")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let account_id = forwarded
+        .get("request")
+        .and_then(|value| value.get("account_id"))
+        .and_then(Value::as_str)
+        .or_else(|| {
+            forwarded
+                .get("source")
+                .and_then(|value| value.get("identity_scope"))
+                .and_then(|value| value.get("account_id"))
+                .and_then(Value::as_str)
+        })
+        .unwrap_or("未绑定");
+    let prompt = forwarded
+        .get("request")
+        .and_then(|value| value.get("prompt"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
 
-    let body = match consumer_status {
-        "queued" => format!("任务已创建，正在排队中。\nTask: {task_id}"),
-        "waiting_for_confirmation" => {
-            format!("这个任务需要确认后才能继续。\nTask: {task_id}")
-        }
-        "processing" => format!("任务已经开始处理。\nTask: {task_id}"),
-        "done" => format!("任务已经完成。\nTask: {task_id}"),
-        "failed" => format!("任务执行失败。\nTask: {task_id}"),
-        "refunded" => format!("任务已退款。\nTask: {task_id}"),
-        _ => format!("任务已收到。\nTask: {task_id}"),
+    let label = status_label(consumer_status);
+    let body = format!(
+        "🧾 CEX 任务卡\n状态：{label}\nTask: {task_id}\n执行：{invocation_status} / {dispatch_mode}\n账户：{account_id}\n查看：/status {task_id}\n余额：/balance"
+    );
+    let prompt_html = if prompt.is_empty() {
+        String::new()
+    } else {
+        format!("<p><strong>Prompt</strong>: {}</p>", escape_html(prompt))
     };
 
     json!({
@@ -2832,15 +3624,839 @@ fn build_projected_matrix_reply(forwarded: &Value) -> Value {
         "body": body,
         "format": "org.matrix.custom.html",
         "formatted_body": format!(
-            "<p>{}</p><p><code>{}</code></p><p>Status: <strong>{}</strong> ({})</p>",
-            escape_html(&body.lines().next().unwrap_or("任务已收到。")),
+            "<blockquote><h3>🧾 CEX 任务卡</h3><p><strong>状态</strong>: {}</p><p><strong>Task</strong>: <code>{}</code></p><p><strong>执行</strong>: {} / {}，剩余尝试 {}</p><p><strong>账户</strong>: <code>{}</code></p>{}<p><code>/status {}</code> · <code>/balance</code></p></blockquote>",
+            escape_html(label),
             escape_html(task_id),
-            escape_html(consumer_status),
             escape_html(invocation_status),
+            escape_html(dispatch_mode),
+            attempts_remaining,
+            escape_html(account_id),
+            prompt_html,
+            escape_html(task_id),
         ),
         "cex_task_id": task_id,
         "consumer_status": consumer_status,
         "invocation_status": invocation_status,
+        "cex_card": {
+            "type": "task_status",
+            "version": 1,
+            "task_id": task_id,
+            "consumer_status": consumer_status,
+            "invocation_status": invocation_status,
+            "dispatch_mode": dispatch_mode,
+            "attempts_remaining": attempts_remaining,
+            "account_id": account_id,
+        }
+    })
+}
+
+fn build_wallet_matrix_reply(wallet: &Value) -> Value {
+    let account = wallet.get("account").unwrap_or(wallet);
+    let account_id = account
+        .get("account_id")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown-account");
+    let currency_unit = account
+        .get("currency_unit")
+        .and_then(Value::as_str)
+        .unwrap_or("credit");
+    let balance = account
+        .get("balance")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
+    let reserved = account
+        .get("reserved")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
+    let available = account
+        .get("available")
+        .and_then(Value::as_f64)
+        .unwrap_or(balance - reserved);
+    let package_name = wallet
+        .get("package")
+        .and_then(|value| value.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or("Local Production Credits");
+    let body = format!(
+        "💰 CEX 钱包\n可用：{available:.2} {currency_unit}\n已预留：{reserved:.2}\n总额：{balance:.2}\n套餐：{package_name}\n账户：{account_id}"
+    );
+
+    json!({
+        "msgtype": "m.text",
+        "body": body,
+        "format": "org.matrix.custom.html",
+        "formatted_body": format!(
+            "<blockquote><h3>💰 CEX 钱包</h3><p><strong>可用</strong>: {:.2} {}</p><p><strong>已预留</strong>: {:.2}</p><p><strong>总额</strong>: {:.2}</p><p><strong>套餐</strong>: {}</p><p><strong>账户</strong>: <code>{}</code></p></blockquote>",
+            available,
+            escape_html(currency_unit),
+            reserved,
+            balance,
+            escape_html(package_name),
+            escape_html(account_id),
+        ),
+        "cex_card": {
+            "type": "wallet_summary",
+            "version": 1,
+            "account_id": account_id,
+            "currency_unit": currency_unit,
+            "balance": format!("{balance:.2}"),
+            "reserved": format!("{reserved:.2}"),
+            "available": format!("{available:.2}"),
+            "package_name": package_name,
+        }
+    })
+}
+
+fn build_plans_matrix_reply(wallet: &Value) -> Value {
+    let package = wallet.get("package").unwrap_or(wallet);
+    let package_name = package
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or("Local Production Credits");
+    let billing_model = package
+        .get("billing_model")
+        .and_then(Value::as_str)
+        .unwrap_or("credit_wallet");
+    let body = format!(
+        "📦 CEX 套餐\n当前套餐：{package_name}\n计费方式：{billing_model}\n功能：chat_tasks / matrix_entry / provider_dispatch\n查看余额：/balance"
+    );
+
+    json!({
+        "msgtype": "m.text",
+        "body": body,
+        "format": "org.matrix.custom.html",
+        "formatted_body": format!(
+            "<blockquote><h3>📦 CEX 套餐</h3><p><strong>当前套餐</strong>: {}</p><p><strong>计费方式</strong>: {}</p><p><strong>功能</strong>: chat_tasks / matrix_entry / provider_dispatch</p><p><code>/balance</code></p></blockquote>",
+            escape_html(package_name),
+            escape_html(billing_model),
+        ),
+        "cex_card": {
+            "type": "package_summary",
+            "version": 1,
+            "package_name": package_name,
+            "billing_model": billing_model,
+        }
+    })
+}
+
+fn build_league_home_matrix_reply(home: Option<&Value>) -> Value {
+    let player_count = home
+        .and_then(|value| value.get("player_count"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let match_count = home
+        .and_then(|value| value.get("match_count"))
+        .and_then(Value::as_u64)
+        .unwrap_or(3);
+    let body = format!("🏆 Trillionnium League\nAI 任务电竞联赛已上线预备服。\n\n玩法：带着 Agent 阵容进入任务赛场，完成真实挑战，打榜、组队、赚取奖励。\n\n当前：{match_count} 个赛场 / {player_count} 名玩家\n\n可用入口：\n/arena - 查看当前赛场\n/quest - 今日副本\n/loadout - 我的 Agent 阵容\n/rank - 排行榜\n/wallet - 钱包");
+    json!({
+        "msgtype": "m.text",
+        "body": body,
+        "format": "org.matrix.custom.html",
+        "formatted_body": "<blockquote><h3>🏆 Trillionnium League</h3><p><strong>AI 任务电竞联赛已上线预备服。</strong></p><p>带着 Agent 阵容进入任务赛场，完成真实挑战，打榜、组队、赚取奖励。</p><ul><li><code>/arena</code> 查看当前赛场</li><li><code>/quest</code> 今日副本</li><li><code>/loadout</code> 我的 Agent 阵容</li><li><code>/rank</code> 排行榜</li><li><code>/wallet</code> 钱包</li></ul></blockquote>",
+        "cex_card": {
+            "type": "league_home",
+            "version": 1,
+            "league": "trillionnium_league",
+            "status": "preseason",
+            "commands": ["/arena", "/quest", "/loadout", "/rank", "/wallet"]
+        }
+    })
+}
+
+fn build_league_arena_matrix_reply(_matches: Option<&Value>) -> Value {
+    let body = "⚔️ Trillionnium Arena\n当前赛场：\n1. daily-dungeon-001｜每日副本｜Solo｜奖励：XP + credits\n2. bounty-arena-001｜赏金赛｜PvP/多人｜奖励：Prize Pool\n3. guild-raid-001｜公会团本｜Co-op｜奖励：贡献分成\n\n加入：/join daily-dungeon-001\n出招：/battle daily-dungeon-001 <你的行动>";
+    json!({
+        "msgtype": "m.text",
+        "body": body,
+        "format": "org.matrix.custom.html",
+        "formatted_body": "<blockquote><h3>⚔️ Trillionnium Arena</h3><p><strong>当前赛场</strong></p><ol><li><code>daily-dungeon-001</code>｜每日副本｜Solo｜奖励：XP + credits</li><li><code>bounty-arena-001</code>｜赏金赛｜PvP/多人｜奖励：Prize Pool</li><li><code>guild-raid-001</code>｜公会团本｜Co-op｜奖励：贡献分成</li></ol><p><code>/join daily-dungeon-001</code></p><p><code>/battle daily-dungeon-001 &lt;你的行动&gt;</code></p></blockquote>",
+        "cex_card": {
+            "type": "league_arena",
+            "version": 1,
+            "league": "trillionnium_league",
+            "matches": [
+                {"match_id": "daily-dungeon-001", "mode": "daily_dungeon", "status": "open"},
+                {"match_id": "bounty-arena-001", "mode": "bounty_arena", "status": "preview"},
+                {"match_id": "guild-raid-001", "mode": "guild_raid", "status": "preview"}
+            ]
+        }
+    })
+}
+
+fn build_league_quest_matrix_reply(_matches: Option<&Value>) -> Value {
+    let body = "🗺️ 今日副本：Prompt Forge 入门战\n目标：用最少成本生成一个可交付方案，并给出自评/风险。\n计分：质量 45% / 速度 15% / 成本 15% / 证据 10% / 客户适配 10% / 体育精神 5%\n\n开始：/join daily-dungeon-001";
+    json!({
+        "msgtype": "m.text",
+        "body": body,
+        "format": "org.matrix.custom.html",
+        "formatted_body": "<blockquote><h3>🗺️ 今日副本：Prompt Forge 入门战</h3><p><strong>目标</strong>: 用最少成本生成一个可交付方案，并给出自评/风险。</p><p><strong>计分</strong>: 质量 45% / 速度 15% / 成本 15% / 证据 10% / 客户适配 10% / 体育精神 5%</p><p><code>/join daily-dungeon-001</code></p></blockquote>",
+        "cex_card": {
+            "type": "league_quest",
+            "version": 1,
+            "league": "trillionnium_league",
+            "match_id": "daily-dungeon-001",
+            "scoring": {"quality": "45", "speed": "15", "cost_efficiency": "15", "evidence": "10", "customer_fit": "10", "sportsmanship": "5"}
+        }
+    })
+}
+
+fn build_league_world_matrix_reply(value: &Value) -> Value {
+    let zone_count = value
+        .get("zones")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(5);
+    let body = format!(
+        "🗺️ Trillionnium World Map\n已开放/预告区域：{zone_count}\nPrompt Forge｜Research Wilds｜Code Citadel｜Audit Sanctum｜Market Bazaar\n\n进入赛场：/arena\n加入公会：/guild"
+    );
+    json!({
+        "msgtype": "m.text",
+        "body": body,
+        "format": "org.matrix.custom.html",
+        "formatted_body": format!(
+            "<blockquote><h3>🗺️ Trillionnium World Map</h3><p><strong>Zones</strong>: {}</p><p>Prompt Forge｜Research Wilds｜Code Citadel｜Audit Sanctum｜Market Bazaar</p><p><code>/arena</code> · <code>/guild</code></p></blockquote>",
+            zone_count,
+        ),
+        "cex_card": {"type": "league_world", "version": 1, "league": "trillionnium_league", "zone_count": zone_count}
+    })
+}
+
+fn build_league_season_matrix_reply(value: &Value) -> Value {
+    let season = value.get("season").unwrap_or(value);
+    let name = season
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or("Preseason Zero");
+    let player_count = season
+        .get("player_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let battle_count = season
+        .get("battle_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let reward_count = season
+        .get("reward_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let top_player = value
+        .get("leaderboards")
+        .and_then(|leaderboards| leaderboards.get("players"))
+        .and_then(Value::as_array)
+        .and_then(|players| players.first())
+        .and_then(|player| {
+            player
+                .get("display_name")
+                .or_else(|| player.get("matrix_user_id"))
+        })
+        .and_then(Value::as_str)
+        .unwrap_or("@alice:local.dev");
+    let top_guild = value
+        .get("leaderboards")
+        .and_then(|leaderboards| leaderboards.get("guilds"))
+        .and_then(Value::as_array)
+        .and_then(|guilds| guilds.first())
+        .and_then(|guild| guild.get("name").or_else(|| guild.get("guild_id")))
+        .and_then(Value::as_str)
+        .unwrap_or("Prompt Forge");
+    let body = format!(
+        "📅 League Season\n{name}\nPlayers: {player_count}\nBattles: {battle_count}\nRewards: {reward_count}\nTop Player: {top_player}\nTop Guild: {top_guild}\n/rank 查看天梯"
+    );
+    json!({
+        "msgtype": "m.text",
+        "body": body,
+        "format": "org.matrix.custom.html",
+        "formatted_body": format!(
+            "<blockquote><h3>📅 League Season</h3><p><strong>{}</strong></p><p>Players: {} · Battles: {} · Rewards: {}</p><p>Top Player: <code>{}</code></p><p>Top Guild: <strong>{}</strong></p><p><code>/rank</code></p></blockquote>",
+            escape_html(name), player_count, battle_count, reward_count, escape_html(top_player), escape_html(top_guild),
+        ),
+        "cex_card": {"type": "league_season", "version": 1, "league": "trillionnium_league", "season_name": name, "player_count": player_count, "battle_count": battle_count, "reward_count": reward_count, "top_player": top_player, "top_guild": top_guild}
+    })
+}
+
+fn build_league_rank_matrix_reply(rankings: Option<&Value>) -> Value {
+    let first_player = rankings
+        .and_then(|value| value.get("players"))
+        .and_then(Value::as_array)
+        .and_then(|players| players.first())
+        .and_then(|player| player.get("matrix_user_id"))
+        .and_then(Value::as_str)
+        .unwrap_or("@alice:local.dev");
+    let body = format!("🏅 Trillionnium Rank\n赛季：Preseason Zero\n1. {first_player}｜Bronze I｜1000 RP｜0W-0L\n\n更多排名将在真实提交评分后更新。");
+    json!({
+        "msgtype": "m.text",
+        "body": body,
+        "format": "org.matrix.custom.html",
+        "formatted_body": "<blockquote><h3>🏅 Trillionnium Rank</h3><p>赛季：<strong>Preseason Zero</strong></p><ol><li><code>@alice:local.dev</code>｜Bronze I｜1000 RP｜0W-0L</li></ol><p>更多排名将在真实提交评分后更新。</p></blockquote>",
+        "cex_card": {
+            "type": "league_rank",
+            "version": 1,
+            "league": "trillionnium_league",
+            "season": "preseason-zero"
+        }
+    })
+}
+
+fn build_league_loadout_matrix_reply(_loadout: Option<&Value>) -> Value {
+    let body = "🧙 Agent Loadout\n当前默认阵容：\n1. Oracle Scout｜侦察/调研\n2. Forge Builder｜生成/构建\n3. Mirror Auditor｜审核/测试\n4. Courier Closer｜交付/包装\n\n下一步会开放 /draft 自定义阵容。";
+    json!({
+        "msgtype": "m.text",
+        "body": body,
+        "format": "org.matrix.custom.html",
+        "formatted_body": "<blockquote><h3>🧙 Agent Loadout</h3><p><strong>当前默认阵容</strong></p><ol><li>Oracle Scout｜侦察/调研</li><li>Forge Builder｜生成/构建</li><li>Mirror Auditor｜审核/测试</li><li>Courier Closer｜交付/包装</li></ol><p>下一步会开放 <code>/draft</code> 自定义阵容。</p></blockquote>",
+        "cex_card": {
+            "type": "league_loadout",
+            "version": 1,
+            "league": "trillionnium_league",
+            "heroes": ["oracle_scout", "forge_builder", "mirror_auditor", "courier_closer"]
+        }
+    })
+}
+
+fn build_league_join_matrix_reply_from(value: &Value) -> Value {
+    let match_id = value
+        .get("match")
+        .and_then(|value| value.get("match_id"))
+        .and_then(Value::as_str)
+        .or_else(|| value.get("match_id").and_then(Value::as_str))
+        .unwrap_or("daily-dungeon-001");
+    let safe_match_id = escape_html(match_id);
+    let body = format!("✅ 已加入 Trillionnium League 赛场\nMatch: {match_id}\n下一步：/battle {match_id} <你的行动>");
+    json!({
+        "msgtype": "m.text",
+        "body": body,
+        "format": "org.matrix.custom.html",
+        "formatted_body": format!(
+            "<blockquote><h3>✅ 已加入 Trillionnium League 赛场</h3><p><strong>Match</strong>: <code>{}</code></p><p>下一步：<code>/battle {} &lt;你的行动&gt;</code></p></blockquote>",
+            safe_match_id,
+            safe_match_id,
+        ),
+        "cex_card": {
+            "type": "league_joined",
+            "version": 1,
+            "league": "trillionnium_league",
+            "match_id": match_id,
+            "status": "joined"
+        }
+    })
+}
+
+fn build_league_raids_matrix_reply(value: &Value) -> Value {
+    let raid_count = value
+        .get("raids")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    let first_raid = value
+        .get("raids")
+        .and_then(Value::as_array)
+        .and_then(|raids| raids.first())
+        .and_then(|raid| raid.get("match_id"))
+        .and_then(Value::as_str)
+        .unwrap_or("guild-raid-001");
+    let progress = value
+        .get("progress")
+        .and_then(Value::as_array)
+        .and_then(|items| items.first())
+        .and_then(|item| item.get("progress_percent"))
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
+    let body = format!(
+        "🐉 Guild Raids\nOpen raids: {raid_count}\n{first_raid}: {progress:.1}%\n贡献：/raid {first_raid} <你的团队行动>"
+    );
+    json!({
+        "msgtype": "m.text",
+        "body": body,
+        "format": "org.matrix.custom.html",
+        "formatted_body": format!(
+            "<blockquote><h3>🐉 Guild Raids</h3><p><strong>Open raids</strong>: {}</p><p><code>{}</code>: {:.1}%</p><p><code>/raid {} &lt;你的团队行动&gt;</code></p></blockquote>",
+            raid_count,
+            escape_html(first_raid),
+            progress,
+            escape_html(first_raid),
+        ),
+        "cex_card": {"type": "league_raids", "version": 1, "league": "trillionnium_league", "raid_count": raid_count, "match_id": first_raid, "progress_percent": format!("{progress:.1}")}
+    })
+}
+
+fn build_league_raid_roster_matrix_reply(value: &Value) -> Value {
+    let roster = value.get("roster").unwrap_or(value);
+    let match_id = roster
+        .get("match_id")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            value
+                .get("slot")
+                .and_then(|slot| slot.get("match_id"))
+                .and_then(Value::as_str)
+        })
+        .unwrap_or("guild-raid-001");
+    let slot_count = roster
+        .get("slot_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let ready = roster
+        .get("ready")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let missing = roster
+        .get("missing_roles")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join("/")
+        })
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "none".to_string());
+    let body = format!(
+        "👥 Raid Team\nMatch: {match_id}\nSlots: {slot_count}\nReady: {ready}\nMissing: {missing}\n加入：/team {match_id} scout"
+    );
+    json!({
+        "msgtype": "m.text",
+        "body": body,
+        "format": "org.matrix.custom.html",
+        "formatted_body": format!(
+            "<blockquote><h3>👥 Raid Team</h3><p><strong>Match</strong>: <code>{}</code></p><p><strong>Slots</strong>: {}</p><p><strong>Ready</strong>: {}</p><p><strong>Missing</strong>: {}</p><p><code>/team {} scout</code></p></blockquote>",
+            escape_html(match_id), slot_count, ready, escape_html(&missing), escape_html(match_id),
+        ),
+        "cex_card": {"type": "league_raid_roster", "version": 1, "league": "trillionnium_league", "match_id": match_id, "slot_count": slot_count, "ready": ready, "missing_roles": missing}
+    })
+}
+
+fn build_league_raid_contribution_matrix_reply(value: &Value) -> Value {
+    let contribution = value.get("contribution").unwrap_or(value);
+    let progress = value.get("progress").unwrap_or(value);
+    let match_id = contribution
+        .get("match_id")
+        .and_then(Value::as_str)
+        .unwrap_or("guild-raid-001");
+    let score = contribution
+        .get("contribution_score")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
+    let progress_percent = progress
+        .get("progress_percent")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
+    let phase = progress
+        .get("phase")
+        .and_then(Value::as_str)
+        .unwrap_or("opening");
+    let body = format!(
+        "🐉 Raid Contribution\nMatch: {match_id}\nScore: {score:.1}\nProgress: {progress_percent:.1}%\nPhase: {phase}\n继续：/raid {match_id} <下一步>"
+    );
+    json!({
+        "msgtype": "m.text",
+        "body": body,
+        "format": "org.matrix.custom.html",
+        "formatted_body": format!(
+            "<blockquote><h3>🐉 Raid Contribution</h3><p><strong>Match</strong>: <code>{}</code></p><p><strong>Score</strong>: {:.1}</p><p><strong>Progress</strong>: {:.1}%</p><p><strong>Phase</strong>: {}</p><p><code>/raid {} &lt;下一步&gt;</code></p></blockquote>",
+            escape_html(match_id),
+            score,
+            progress_percent,
+            escape_html(phase),
+            escape_html(match_id),
+        ),
+        "cex_card": {"type": "league_raid_contribution", "version": 1, "league": "trillionnium_league", "match_id": match_id, "score": format!("{score:.1}"), "progress_percent": format!("{progress_percent:.1}"), "phase": phase}
+    })
+}
+
+fn build_league_guilds_matrix_reply(value: &Value) -> Value {
+    let guild_count = value
+        .get("guilds")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    let first_guild = value
+        .get("guilds")
+        .and_then(Value::as_array)
+        .and_then(|guilds| guilds.first())
+        .and_then(|guild| guild.get("guild_id"))
+        .and_then(Value::as_str)
+        .unwrap_or("guild-prompt-forge");
+    let top_standing = value
+        .get("standings")
+        .and_then(Value::as_array)
+        .and_then(|standings| standings.first());
+    let top_guild = top_standing
+        .and_then(|guild| guild.get("name").or_else(|| guild.get("guild_id")))
+        .and_then(Value::as_str)
+        .unwrap_or("Prompt Forge");
+    let top_power = top_standing
+        .and_then(|guild| guild.get("power_score"))
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
+    let body = format!(
+        "🛡️ League Guilds\n开放公会：{guild_count}\nTop Guild: {top_guild} ({top_power:.1})\n加入推荐：/guild {first_guild}\n公会团本：/join guild-raid-001"
+    );
+    json!({
+        "msgtype": "m.text",
+        "body": body,
+        "format": "org.matrix.custom.html",
+        "formatted_body": format!(
+            "<blockquote><h3>🛡️ League Guilds</h3><p><strong>开放公会</strong>: {}</p><p>Top Guild: <strong>{}</strong> ({:.1})</p><p><code>/guild {}</code></p><p><code>/join guild-raid-001</code></p></blockquote>",
+            guild_count,
+            escape_html(top_guild),
+            top_power,
+            escape_html(first_guild),
+        ),
+        "cex_card": {"type": "league_guilds", "version": 1, "league": "trillionnium_league", "guild_count": guild_count, "recommended_guild_id": first_guild, "top_guild": top_guild, "top_power": format!("{top_power:.1}")}
+    })
+}
+
+fn build_league_guild_join_matrix_reply(value: &Value) -> Value {
+    let guild = value.get("guild").unwrap_or(value);
+    let guild_id = guild
+        .get("guild_id")
+        .and_then(Value::as_str)
+        .unwrap_or("guild-prompt-forge");
+    let name = guild
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or("Prompt Forge");
+    let body = format!("🛡️ 已加入公会\n{name}\nGuild: {guild_id}\n下一步：/join guild-raid-001");
+    json!({
+        "msgtype": "m.text",
+        "body": body,
+        "format": "org.matrix.custom.html",
+        "formatted_body": format!(
+            "<blockquote><h3>🛡️ 已加入公会</h3><p><strong>{}</strong></p><p><code>{}</code></p><p><code>/join guild-raid-001</code></p></blockquote>",
+            escape_html(name), escape_html(guild_id),
+        ),
+        "cex_card": {"type": "league_guild_joined", "version": 1, "league": "trillionnium_league", "guild_id": guild_id, "guild_name": name}
+    })
+}
+
+fn build_league_draft_matrix_reply(value: &Value) -> Value {
+    let heroes = value
+        .get("loadout")
+        .and_then(|loadout| loadout.get("heroes"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let hero_names: Vec<String> = heroes
+        .iter()
+        .filter_map(|hero| {
+            hero.get("name")
+                .and_then(Value::as_str)
+                .map(ToString::to_string)
+        })
+        .collect();
+    let display = if hero_names.is_empty() {
+        "Oracle Scout / Forge Builder / Mirror Auditor".to_string()
+    } else {
+        hero_names.join(" / ")
+    };
+    let body = format!("🧬 Draft Locked\n阵容：{display}\n出战：/battle daily-dungeon-001 <行动>");
+    json!({
+        "msgtype": "m.text",
+        "body": body,
+        "format": "org.matrix.custom.html",
+        "formatted_body": format!(
+            "<blockquote><h3>🧬 Draft Locked</h3><p><strong>阵容</strong>: {}</p><p><code>/battle daily-dungeon-001 &lt;行动&gt;</code></p></blockquote>",
+            escape_html(&display),
+        ),
+        "cex_card": {"type": "league_draft", "version": 1, "league": "trillionnium_league", "heroes": hero_names}
+    })
+}
+
+fn build_league_battle_matrix_reply(value: &Value) -> Value {
+    let task = value.get("task").unwrap_or(value);
+    let task_id = task
+        .get("task_id")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown-task");
+    let consumer_status = task
+        .get("consumer_status")
+        .and_then(Value::as_str)
+        .unwrap_or("queued");
+    let invocation_status = task
+        .get("invocation_status")
+        .and_then(Value::as_str)
+        .unwrap_or("Queued");
+    let match_id = value
+        .get("match")
+        .and_then(|value| value.get("match_id"))
+        .and_then(Value::as_str)
+        .unwrap_or("daily-dungeon-001");
+    let entry_id = value
+        .get("entry")
+        .and_then(|value| value.get("entry_id"))
+        .and_then(Value::as_str)
+        .unwrap_or("unknown-entry");
+    let body = format!(
+        "⚡ League Battle 已出招\nMatch: {match_id}\nTask: {task_id}\n状态：{}\n执行：{invocation_status}\n查看：/status {task_id}\n排行榜：/rank",
+        status_label(consumer_status)
+    );
+
+    json!({
+        "msgtype": "m.text",
+        "body": body,
+        "format": "org.matrix.custom.html",
+        "formatted_body": format!(
+            "<blockquote><h3>⚡ League Battle 已出招</h3><p><strong>Match</strong>: <code>{}</code></p><p><strong>Task</strong>: <code>{}</code></p><p><strong>状态</strong>: {}</p><p><strong>执行</strong>: {}</p><p><code>/status {}</code> · <code>/rank</code></p></blockquote>",
+            escape_html(match_id),
+            escape_html(task_id),
+            escape_html(status_label(consumer_status)),
+            escape_html(invocation_status),
+            escape_html(task_id),
+        ),
+        "cex_task_id": task_id,
+        "consumer_status": consumer_status,
+        "invocation_status": invocation_status,
+        "cex_card": {
+            "type": "league_battle",
+            "version": 1,
+            "league": "trillionnium_league",
+            "match_id": match_id,
+            "entry_id": entry_id,
+            "task_id": task_id,
+            "consumer_status": consumer_status,
+            "invocation_status": invocation_status,
+        }
+    })
+}
+
+fn build_league_submission_matrix_reply(value: &Value) -> Value {
+    let submission = value.get("submission").unwrap_or(value);
+    let reward = value.get("reward").unwrap_or(&Value::Null);
+    let match_id = submission
+        .get("match_id")
+        .and_then(Value::as_str)
+        .unwrap_or("daily-dungeon-001");
+    let submission_id = submission
+        .get("submission_id")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown-submission");
+    let score = submission
+        .get("score")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
+    let grade = submission
+        .get("grade")
+        .and_then(Value::as_str)
+        .unwrap_or("D");
+    let reward_amount = reward
+        .get("amount")
+        .and_then(Value::as_f64)
+        .unwrap_or_else(|| {
+            submission
+                .get("reward_amount")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0)
+        });
+    let ledger_status = reward
+        .get("ledger_status")
+        .and_then(Value::as_str)
+        .unwrap_or("pending");
+    let ledger_entry_id = reward
+        .get("ledger_entry_id")
+        .and_then(Value::as_str)
+        .unwrap_or("n/a");
+    let judge_status = submission
+        .get("judge_status")
+        .and_then(Value::as_str)
+        .unwrap_or("rubric_scored");
+    let payout_status = submission
+        .get("payout_status")
+        .and_then(Value::as_str)
+        .unwrap_or("eligible");
+    let score_event_count = submission
+        .get("score_events")
+        .and_then(Value::as_array)
+        .map(|events| events.len())
+        .unwrap_or(0);
+    let body = format!(
+        "🏁 League Submission 已评分\nMatch: {match_id}\nScore: {score:.1}\nGrade: {grade}\nReward: {reward_amount:.2} credit\nJudge: {judge_status} ({score_event_count} dims)\nPayout: {payout_status}\nLedger: {ledger_status}\n排行榜：/rank\n奖励：/rewards"
+    );
+
+    json!({
+        "msgtype": "m.text",
+        "body": body,
+        "format": "org.matrix.custom.html",
+        "formatted_body": format!(
+            "<blockquote><h3>🏁 League Submission 已评分</h3><p><strong>Match</strong>: <code>{}</code></p><p><strong>Score</strong>: {:.1}</p><p><strong>Grade</strong>: {}</p><p><strong>Reward</strong>: {:.2} credit</p><p><strong>Judge</strong>: {} / {} dims</p><p><strong>Payout</strong>: {}</p><p><strong>Ledger</strong>: {}</p><p><code>/rank</code> · <code>/rewards</code></p></blockquote>",
+            escape_html(match_id),
+            score,
+            escape_html(grade),
+            reward_amount,
+            escape_html(judge_status),
+            score_event_count,
+            escape_html(payout_status),
+            escape_html(ledger_status),
+        ),
+        "cex_card": {
+            "type": "league_submission",
+            "version": 1,
+            "league": "trillionnium_league",
+            "match_id": match_id,
+            "submission_id": submission_id,
+            "score": format!("{score:.1}"),
+            "grade": grade,
+            "reward_amount": format!("{reward_amount:.2}"),
+            "currency_unit": "credit",
+            "judge_status": judge_status,
+            "score_event_count": score_event_count,
+            "payout_status": payout_status,
+            "ledger_status": ledger_status,
+            "ledger_entry_id": ledger_entry_id,
+        }
+    })
+}
+
+fn build_league_profile_matrix_reply(value: &Value) -> Value {
+    let player = value.get("player").unwrap_or(value);
+    let display_name = player
+        .get("display_name")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown-player");
+    let rank_tier = player
+        .get("rank_tier")
+        .and_then(Value::as_str)
+        .unwrap_or("Bronze I");
+    let rating = player.get("rating").and_then(Value::as_i64).unwrap_or(1000);
+    let xp = player.get("xp").and_then(Value::as_i64).unwrap_or(0);
+    let earned = player
+        .get("earned_credits")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
+    let body = format!(
+        "🪪 Trillionnium Profile\nPlayer: {display_name}\nRank: {rank_tier} / {rating} RP\nXP: {xp}\nEarned: {earned:.2} credit\n/loadout · /history · /rewards"
+    );
+    json!({
+        "msgtype": "m.text",
+        "body": body,
+        "format": "org.matrix.custom.html",
+        "formatted_body": format!(
+            "<blockquote><h3>🪪 Trillionnium Profile</h3><p><strong>Player</strong>: {}</p><p><strong>Rank</strong>: {} / {} RP</p><p><strong>XP</strong>: {}</p><p><strong>Earned</strong>: {:.2} credit</p><p><code>/loadout</code> · <code>/history</code> · <code>/rewards</code></p></blockquote>",
+            escape_html(display_name),
+            escape_html(rank_tier),
+            rating,
+            xp,
+            earned,
+        ),
+        "cex_card": {
+            "type": "league_profile",
+            "version": 1,
+            "league": "trillionnium_league",
+            "display_name": display_name,
+            "rank_tier": rank_tier,
+            "rating": rating,
+            "xp": xp,
+            "earned_credits": format!("{earned:.2}"),
+        }
+    })
+}
+
+fn build_league_rewards_matrix_reply(value: &Value) -> Value {
+    let total = value
+        .get("total_earned")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
+    let count = value
+        .get("rewards")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    let body = format!("💎 League Rewards\nTotal Earned: {total:.2} credit\nReward Events: {count}\n继续打副本：/arena");
+    json!({
+        "msgtype": "m.text",
+        "body": body,
+        "format": "org.matrix.custom.html",
+        "formatted_body": format!(
+            "<blockquote><h3>💎 League Rewards</h3><p><strong>Total Earned</strong>: {:.2} credit</p><p><strong>Reward Events</strong>: {}</p><p><code>/arena</code></p></blockquote>",
+            total,
+            count,
+        ),
+        "cex_card": {
+            "type": "league_rewards",
+            "version": 1,
+            "league": "trillionnium_league",
+            "total_earned": format!("{total:.2}"),
+            "reward_count": count,
+        }
+    })
+}
+
+fn build_league_inventory_matrix_reply(value: &Value) -> Value {
+    let item_count = value
+        .get("item_count")
+        .and_then(Value::as_u64)
+        .unwrap_or_else(|| {
+            value
+                .get("items")
+                .and_then(Value::as_array)
+                .map(|items| items.len() as u64)
+                .unwrap_or(0)
+        });
+    let total_power = value
+        .get("total_power")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let top_item = value
+        .get("items")
+        .and_then(Value::as_array)
+        .and_then(|items| items.first())
+        .and_then(|item| item.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or("No loot yet");
+    let body = format!(
+        "🎒 League Inventory\nItems: {item_count}\nPower: {total_power}\nTop Loot: {top_item}\n继续打本：/arena"
+    );
+    json!({
+        "msgtype": "m.text",
+        "body": body,
+        "format": "org.matrix.custom.html",
+        "formatted_body": format!(
+            "<blockquote><h3>🎒 League Inventory</h3><p><strong>Items</strong>: {}</p><p><strong>Power</strong>: {}</p><p><strong>Top Loot</strong>: {}</p><p><code>/arena</code></p></blockquote>",
+            item_count,
+            total_power,
+            escape_html(top_item),
+        ),
+        "cex_card": {
+            "type": "league_inventory",
+            "version": 1,
+            "league": "trillionnium_league",
+            "item_count": item_count,
+            "total_power": total_power,
+            "top_item": top_item,
+        }
+    })
+}
+
+fn build_league_history_matrix_reply(value: &Value) -> Value {
+    let battles = value
+        .get("battles")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    let submissions = value
+        .get("submissions")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    let body =
+        format!("📜 League History\nBattles: {battles}\nSubmissions: {submissions}\n继续：/arena");
+    json!({
+        "msgtype": "m.text",
+        "body": body,
+        "format": "org.matrix.custom.html",
+        "formatted_body": format!(
+            "<blockquote><h3>📜 League History</h3><p><strong>Battles</strong>: {}</p><p><strong>Submissions</strong>: {}</p><p><code>/arena</code></p></blockquote>",
+            battles,
+            submissions,
+        ),
+        "cex_card": {
+            "type": "league_history",
+            "version": 1,
+            "league": "trillionnium_league",
+            "battle_count": battles,
+            "submission_count": submissions,
+        }
     })
 }
 
@@ -2855,7 +4471,7 @@ fn build_plain_matrix_reply(body: &str) -> Value {
 
 fn build_help_matrix_reply() -> Value {
     build_plain_matrix_reply(
-        "可用命令:\n/help - 查看帮助\n/task <内容> [cap=<能力id>] [account=<账户id>] - 创建任务\n/status <task-id> - 查询任务状态",
+        "可用命令:\n/league - 进入 Trillionnium League\n/world - 世界地图\n/season - 赛季\n/arena - 查看赛场\n/quest - 今日副本\n/guild - 公会列表，/guild <guild-id> 加入\n/raid - 团本列表，/raid <raid-id> <行动> 贡献团本\n/team - 团本队伍，/team <raid-id> <role> 认领职责\n/draft <hero...> - 锁定 Agent 英雄阵容\n/join <match-id> - 加入赛场\n/battle <match-id> <行动> - 在赛场中出招并创建 CEX 执行\n/submit <match-id> <提交内容> - 交卷评分并领取奖励\n/profile - 玩家档案\n/rank - 排行榜\n/loadout - Agent 阵容\n/rewards - 奖励记录\n/inventory - 背包/装备\n/history - 战斗历史\n/task <内容> [cap=<能力id>] [account=<账户id>] - 创建普通任务\n/status <task-id> - 查询任务状态\n/balance 或 /wallet - 查看余额\n/plans 或 /套餐 - 查看套餐",
     )
 }
 
@@ -2871,16 +4487,16 @@ fn escape_html(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_consumer_entry_session_auth_headers, build_matrix_event_rate_limit_key,
-        build_matrix_request_fingerprint_from_body,
-        consumer_entry_session_auth_governance_overview_json,
+        build_consumer_entry_session_auth_headers, build_league_home_matrix_reply,
+        build_matrix_event_rate_limit_key, build_matrix_request_fingerprint_from_body,
+        build_wallet_matrix_reply, consumer_entry_session_auth_governance_overview_json,
         extract_matrix_body, get_consumer_entry_session_auth_status, health,
         load_consumer_entry_session_auth_issuer_registry_revision_approval_state,
         load_rate_limit_cache, load_session_auth_issuer_registry, metrics, parse_matrix_command,
-        prune_rate_limit_cache, prune_recent_event_cache, reload_consumer_entry_session_auth_runtime,
-        validate_consumer_entry_session_auth_runtime, validate_text_payload, AppState,
-        AppStateInner, MatrixAdapterConfig, MatrixEntryMetrics, MatrixEventEnvelope,
-        ParsedCommand, RateLimitCache, RecentEventCache, RuntimeProfile,
+        prune_rate_limit_cache, prune_recent_event_cache,
+        reload_consumer_entry_session_auth_runtime, validate_consumer_entry_session_auth_runtime,
+        validate_text_payload, AppState, AppStateInner, MatrixAdapterConfig, MatrixEntryMetrics,
+        MatrixEventEnvelope, ParsedCommand, RateLimitCache, RecentEventCache, RuntimeProfile,
         SessionAuthIssuerRegistryIssuer, SessionAuthIssuerRegistryMetadata,
         SessionAuthIssuerRegistryRevisionApprovalState, SessionAuthIssuerRegistryRuntimeState,
         SessionAuthIssuerRegistrySelection, UserSessionAuthClaims, DEFAULT_MAX_TEXT_CHARS,
@@ -2894,11 +4510,11 @@ mod tests {
     };
     use base64::Engine as _;
     use chrono::Utc;
-    use tokio::sync::Mutex;
     use reqwest::Client;
-    use std::sync::{Arc, RwLock as StdRwLock};
     use serde_json::{json, Value};
     use std::collections::{HashMap, VecDeque};
+    use std::sync::{Arc, RwLock as StdRwLock};
+    use tokio::sync::Mutex;
 
     fn test_config() -> MatrixAdapterConfig {
         MatrixAdapterConfig {
@@ -2914,7 +4530,8 @@ mod tests {
             consumer_entry_session_auth_issuer_registry_path: None,
             consumer_entry_session_auth_issuer_registry: HashMap::new(),
             consumer_entry_session_auth_issuer_registry_load_error: None,
-            consumer_entry_session_auth_issuer_registry_metadata: SessionAuthIssuerRegistryMetadata::default(),
+            consumer_entry_session_auth_issuer_registry_metadata:
+                SessionAuthIssuerRegistryMetadata::default(),
             consumer_entry_session_auth_issuer_registry_approved_revisions_path: None,
             consumer_entry_session_auth_issuer_registry_require_approved_revision: false,
             consumer_entry_session_auth_selection: SessionAuthIssuerRegistrySelection::default(),
@@ -2936,7 +4553,9 @@ mod tests {
     fn test_state(config: MatrixAdapterConfig) -> AppState {
         let consumer_entry_session_auth_issuer_registry_state =
             SessionAuthIssuerRegistryRuntimeState {
-                metadata: config.consumer_entry_session_auth_issuer_registry_metadata.clone(),
+                metadata: config
+                    .consumer_entry_session_auth_issuer_registry_metadata
+                    .clone(),
                 registry: config.consumer_entry_session_auth_issuer_registry.clone(),
             };
         AppState {
@@ -3037,7 +4656,8 @@ mod tests {
         config.consumer_entry_session_auth_issuer_registry_approved_revisions_path =
             Some(path.display().to_string());
 
-        let state = load_consumer_entry_session_auth_issuer_registry_revision_approval_state(&config);
+        let state =
+            load_consumer_entry_session_auth_issuer_registry_revision_approval_state(&config);
         assert_eq!(state.load_status, "loaded");
         assert_eq!(state.revision.as_deref(), Some("sess-approval-a"));
         assert_eq!(state.approved_revisions, vec!["sess-reg-a", "sess-reg-b"]);
@@ -3060,9 +4680,10 @@ mod tests {
             "message": "hello"
         });
 
-        let (assertion, signature) = build_consumer_entry_session_auth_headers(&state, &request_body)
-            .unwrap()
-            .unwrap();
+        let (assertion, signature) =
+            build_consumer_entry_session_auth_headers(&state, &request_body)
+                .unwrap()
+                .unwrap();
         assert!(!assertion.is_empty());
         assert!(!signature.is_empty());
         let claims: UserSessionAuthClaims = serde_json::from_slice(
@@ -3079,7 +4700,10 @@ mod tests {
             Some(build_matrix_request_fingerprint_from_body(&request_body).as_str())
         );
         assert_eq!(USER_SESSION_ASSERTION_HEADER, "x-cex-user-session");
-        assert_eq!(USER_SESSION_SIGNATURE_HEADER, "x-cex-user-session-signature");
+        assert_eq!(
+            USER_SESSION_SIGNATURE_HEADER,
+            "x-cex-user-session-signature"
+        );
     }
 
     #[test]
@@ -3099,9 +4723,10 @@ mod tests {
             "message": "hello"
         });
 
-        let (assertion, signature) = build_consumer_entry_session_auth_headers(&state, &request_body)
-            .unwrap()
-            .unwrap();
+        let (assertion, signature) =
+            build_consumer_entry_session_auth_headers(&state, &request_body)
+                .unwrap()
+                .unwrap();
         assert!(!assertion.is_empty());
         assert!(!signature.is_empty());
         let claims: UserSessionAuthClaims = serde_json::from_slice(
@@ -3155,9 +4780,10 @@ mod tests {
             "message": "hello"
         });
 
-        let (assertion_before, _) = build_consumer_entry_session_auth_headers(&state, &request_body)
-            .unwrap()
-            .unwrap();
+        let (assertion_before, _) =
+            build_consumer_entry_session_auth_headers(&state, &request_body)
+                .unwrap()
+                .unwrap();
         let claims_before: UserSessionAuthClaims = serde_json::from_slice(
             &base64::engine::general_purpose::URL_SAFE_NO_PAD
                 .decode(&assertion_before)
@@ -3278,7 +4904,10 @@ mod tests {
         .await;
         assert_eq!(reload_status, StatusCode::CONFLICT);
         assert_eq!(reload_body["reloaded"], Value::Bool(false));
-        assert_eq!(reload_body["status"], Value::String("current_revision_not_approved".to_string()));
+        assert_eq!(
+            reload_body["status"],
+            Value::String("current_revision_not_approved".to_string())
+        );
 
         let (assertion_after, _) = build_consumer_entry_session_auth_headers(&state, &request_body)
             .unwrap()
@@ -3301,24 +4930,31 @@ mod tests {
         config.runtime_profile = RuntimeProfile::Beta;
         config.consumer_entry_session_auth_issuer_registry_path =
             Some("./run/local-runtime/session-auth-issuer-registry.json".to_string());
-        config.consumer_entry_session_auth_issuer_registry_metadata = SessionAuthIssuerRegistryMetadata {
-            version: 1,
-            revision: Some("sess-reg-a".to_string()),
-            source_path: Some("./run/local-runtime/session-auth-issuer-registry.json".to_string()),
-            source_modified_epoch: None,
-            loaded_at_epoch: Some(1),
-            load_status: "loaded".to_string(),
-            load_error: None,
-            issuer_count: 1,
-            key_count: 1,
-        };
+        config.consumer_entry_session_auth_issuer_registry_metadata =
+            SessionAuthIssuerRegistryMetadata {
+                version: 1,
+                revision: Some("sess-reg-a".to_string()),
+                source_path: Some(
+                    "./run/local-runtime/session-auth-issuer-registry.json".to_string(),
+                ),
+                source_modified_epoch: None,
+                loaded_at_epoch: Some(1),
+                load_status: "loaded".to_string(),
+                load_error: None,
+                issuer_count: 1,
+                key_count: 1,
+            };
         config.consumer_entry_session_auth_selection = SessionAuthIssuerRegistrySelection {
             source: "issuer_registry".to_string(),
             status: "issuer_missing".to_string(),
             issuer: "matrix-entry-adapter".to_string(),
             key_id: None,
-            registry_path: Some("./run/local-runtime/session-auth-issuer-registry.json".to_string()),
-            detail: Some("shared issuer registry does not contain issuer matrix-entry-adapter".to_string()),
+            registry_path: Some(
+                "./run/local-runtime/session-auth-issuer-registry.json".to_string(),
+            ),
+            detail: Some(
+                "shared issuer registry does not contain issuer matrix-entry-adapter".to_string(),
+            ),
         };
 
         let approval_state = SessionAuthIssuerRegistryRevisionApprovalState::default();
@@ -3343,17 +4979,20 @@ mod tests {
         config.runtime_profile = RuntimeProfile::Beta;
         config.consumer_entry_session_auth_issuer_registry_path =
             Some("./run/local-runtime/session-auth-issuer-registry.json".to_string());
-        config.consumer_entry_session_auth_issuer_registry_metadata = SessionAuthIssuerRegistryMetadata {
-            version: 1,
-            revision: None,
-            source_path: Some("./run/local-runtime/session-auth-issuer-registry.json".to_string()),
-            source_modified_epoch: None,
-            loaded_at_epoch: Some(1),
-            load_status: "loaded".to_string(),
-            load_error: None,
-            issuer_count: 1,
-            key_count: 1,
-        };
+        config.consumer_entry_session_auth_issuer_registry_metadata =
+            SessionAuthIssuerRegistryMetadata {
+                version: 1,
+                revision: None,
+                source_path: Some(
+                    "./run/local-runtime/session-auth-issuer-registry.json".to_string(),
+                ),
+                source_modified_epoch: None,
+                loaded_at_epoch: Some(1),
+                load_status: "loaded".to_string(),
+                load_error: None,
+                issuer_count: 1,
+                key_count: 1,
+            };
         config.consumer_entry_session_auth_issuer_registry.insert(
             "matrix-entry-adapter".to_string(),
             SessionAuthIssuerRegistryIssuer {
@@ -3366,7 +5005,9 @@ mod tests {
             status: "ok".to_string(),
             issuer: "matrix-entry-adapter".to_string(),
             key_id: Some("v1".to_string()),
-            registry_path: Some("./run/local-runtime/session-auth-issuer-registry.json".to_string()),
+            registry_path: Some(
+                "./run/local-runtime/session-auth-issuer-registry.json".to_string(),
+            ),
             detail: Some("selected signing secret from shared issuer registry".to_string()),
         };
         config.consumer_entry_session_auth_secret = Some("registry-secret".to_string());
@@ -3378,7 +5019,8 @@ mod tests {
             "issuer_registry_revision_missing"
         );
         assert_eq!(
-            health_body["profile_validation"]["checks"]["consumer_entry_session_auth_governance_valid"],
+            health_body["profile_validation"]["checks"]
+                ["consumer_entry_session_auth_governance_valid"],
             Value::Bool(false)
         );
 
@@ -3405,17 +5047,20 @@ mod tests {
         config.runtime_profile = RuntimeProfile::Beta;
         config.consumer_entry_session_auth_issuer_registry_path =
             Some("./run/local-runtime/session-auth-issuer-registry.json".to_string());
-        config.consumer_entry_session_auth_issuer_registry_metadata = SessionAuthIssuerRegistryMetadata {
-            version: 1,
-            revision: Some("sess-reg-live".to_string()),
-            source_path: Some("./run/local-runtime/session-auth-issuer-registry.json".to_string()),
-            source_modified_epoch: None,
-            loaded_at_epoch: Some(1),
-            load_status: "loaded".to_string(),
-            load_error: None,
-            issuer_count: 1,
-            key_count: 1,
-        };
+        config.consumer_entry_session_auth_issuer_registry_metadata =
+            SessionAuthIssuerRegistryMetadata {
+                version: 1,
+                revision: Some("sess-reg-live".to_string()),
+                source_path: Some(
+                    "./run/local-runtime/session-auth-issuer-registry.json".to_string(),
+                ),
+                source_modified_epoch: None,
+                loaded_at_epoch: Some(1),
+                load_status: "loaded".to_string(),
+                load_error: None,
+                issuer_count: 1,
+                key_count: 1,
+            };
         config.consumer_entry_session_auth_issuer_registry.insert(
             "matrix-entry-adapter".to_string(),
             SessionAuthIssuerRegistryIssuer {
@@ -3428,7 +5073,9 @@ mod tests {
             status: "ok".to_string(),
             issuer: "matrix-entry-adapter".to_string(),
             key_id: Some("v1".to_string()),
-            registry_path: Some("./run/local-runtime/session-auth-issuer-registry.json".to_string()),
+            registry_path: Some(
+                "./run/local-runtime/session-auth-issuer-registry.json".to_string(),
+            ),
             detail: Some("selected signing secret from shared issuer registry".to_string()),
         };
         config.consumer_entry_session_auth_secret = Some("registry-secret".to_string());
@@ -3443,15 +5090,20 @@ mod tests {
             "current_revision_not_approved"
         );
         assert_eq!(
-            health_body["profile_validation"]["checks"]["consumer_entry_session_auth_issuer_registry_revision_approved"],
+            health_body["profile_validation"]["checks"]
+                ["consumer_entry_session_auth_issuer_registry_revision_approved"],
             Value::Bool(false)
         );
 
         let response = metrics(State(state)).await;
         let body_bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let body = String::from_utf8(body_bytes.to_vec()).unwrap();
-        assert!(body.contains("cex_matrix_entry_consumer_entry_session_auth_approval_source_valid 1"));
-        assert!(body.contains("cex_matrix_entry_consumer_entry_session_auth_approval_coverage_valid 0"));
+        assert!(
+            body.contains("cex_matrix_entry_consumer_entry_session_auth_approval_source_valid 1")
+        );
+        assert!(
+            body.contains("cex_matrix_entry_consumer_entry_session_auth_approval_coverage_valid 0")
+        );
 
         let _ = std::fs::remove_file(approval_path);
     }
@@ -3556,6 +5208,95 @@ mod tests {
                 task_id: "task-123".to_string()
             }
         );
+    }
+
+    #[test]
+    fn parse_matrix_command_wallet_and_plans_aliases() {
+        assert_eq!(parse_matrix_command("/balance"), ParsedCommand::Wallet);
+        assert_eq!(parse_matrix_command("/钱包"), ParsedCommand::Wallet);
+        assert_eq!(parse_matrix_command("/plans"), ParsedCommand::Plans);
+        assert_eq!(parse_matrix_command("/套餐"), ParsedCommand::Plans);
+    }
+
+    #[test]
+    fn builds_wallet_reply_with_matrix_safe_card_values() {
+        let reply = build_wallet_matrix_reply(&json!({
+            "account": {
+                "account_id": "00000000-0000-0000-0000-00000000ce31",
+                "currency_unit": "credit",
+                "balance": 1000.0,
+                "reserved": 0.0,
+                "available": 1000.0
+            },
+            "package": {
+                "name": "Local Production Credits",
+                "billing_model": "credit_wallet"
+            }
+        }));
+
+        assert_eq!(reply["msgtype"], "m.text");
+        assert_eq!(reply["cex_card"]["type"], "wallet_summary");
+        assert_eq!(reply["cex_card"]["available"], "1000.00");
+        assert_eq!(reply["cex_card"]["reserved"], "0.00");
+    }
+
+    #[test]
+    fn parse_trillionnium_league_commands() {
+        assert_eq!(parse_matrix_command("/league"), ParsedCommand::League);
+        assert_eq!(parse_matrix_command("/tl"), ParsedCommand::League);
+        assert_eq!(parse_matrix_command("/arena"), ParsedCommand::Arena);
+        assert_eq!(parse_matrix_command("/quest"), ParsedCommand::Quest);
+        assert_eq!(parse_matrix_command("/world"), ParsedCommand::World);
+        assert_eq!(parse_matrix_command("/season"), ParsedCommand::Season);
+        assert_eq!(parse_matrix_command("/rank"), ParsedCommand::Rank);
+        assert_eq!(parse_matrix_command("/loadout"), ParsedCommand::Loadout);
+        assert_eq!(parse_matrix_command("/profile"), ParsedCommand::Profile);
+        assert_eq!(parse_matrix_command("/rewards"), ParsedCommand::Rewards);
+        assert_eq!(parse_matrix_command("/history"), ParsedCommand::History);
+        assert_eq!(
+            parse_matrix_command("/guild guild-prompt-forge"),
+            ParsedCommand::Guild {
+                guild_id: Some("guild-prompt-forge".to_string())
+            }
+        );
+        assert_eq!(
+            parse_matrix_command("/draft oracle_scout forge_builder mirror_auditor"),
+            ParsedCommand::Draft {
+                heroes: vec![
+                    "oracle_scout".to_string(),
+                    "forge_builder".to_string(),
+                    "mirror_auditor".to_string()
+                ]
+            }
+        );
+        assert_eq!(
+            parse_matrix_command("/join daily-dungeon-001"),
+            ParsedCommand::Join {
+                match_id: "daily-dungeon-001".to_string()
+            }
+        );
+        assert_eq!(
+            parse_matrix_command("/battle daily-dungeon-001 生成一版方案"),
+            ParsedCommand::Battle {
+                match_id: "daily-dungeon-001".to_string(),
+                text: "生成一版方案".to_string()
+            }
+        );
+        assert_eq!(
+            parse_matrix_command("/submit daily-dungeon-001 最终提交"),
+            ParsedCommand::Submit {
+                match_id: "daily-dungeon-001".to_string(),
+                body: "最终提交".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn builds_trillionnium_league_home_card() {
+        let reply = build_league_home_matrix_reply(None);
+        assert_eq!(reply["msgtype"], "m.text");
+        assert_eq!(reply["cex_card"]["type"], "league_home");
+        assert_eq!(reply["cex_card"]["league"], "trillionnium_league");
     }
 
     #[test]

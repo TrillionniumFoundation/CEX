@@ -1,9 +1,9 @@
 #![recursion_limit = "256"]
 
 use axum::{
-    extract::{Path, Query, State},
-    http::{HeaderMap, StatusCode},
-    response::{IntoResponse, Response},
+    extract::{Form, Path, Query, State},
+    http::{header, HeaderMap, StatusCode},
+    response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
     Json, Router,
 };
@@ -14,6 +14,8 @@ const DEFAULT_RATE_LIMIT_WINDOW_SECS: u64 = 60;
 const DEFAULT_RATE_LIMIT_MAX_REQUESTS: usize = 30;
 const DEFAULT_REPLAY_WINDOW_SECS: u64 = 600;
 const DEFAULT_REPLAY_CACHE_SIZE: usize = 2048;
+const DEFAULT_LEAGUE_LLM_JUDGE_TIMEOUT_MS: u64 = 2500;
+const DEFAULT_LEAGUE_WEB_SESSION_TTL_SECS: u64 = 3600;
 const DEFAULT_SESSION_AUTH_MAX_CLOCK_SKEW_SECS: u64 = 300;
 const DEFAULT_SESSION_AUTH_MAX_TTL_SECS: u64 = 900;
 const USER_SESSION_ASSERTION_HEADER: &str = "x-cex-user-session";
@@ -26,13 +28,13 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, VecDeque},
-    env,
+    env, fs,
+    path::Path as StdPath,
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc,
-        RwLock as StdRwLock,
+        Arc, RwLock as StdRwLock,
     },
-    time::UNIX_EPOCH,
+    time::{Duration, UNIX_EPOCH},
 };
 use tokio::sync::{Mutex, RwLock};
 
@@ -49,6 +51,7 @@ struct AppStateInner {
     identity_binding_store: RwLock<IdentityBindingStore>,
     identity_binding_audit_state: RwLock<IdentityBindingAuditState>,
     session_auth_issuer_registry_state: StdRwLock<SessionAuthIssuerRegistryRuntimeState>,
+    league_state: Mutex<LeagueState>,
     rate_limits: Mutex<RateLimitCache>,
     replay_cache: Mutex<ReplayCache>,
     metrics: ConsumerEntryMetrics,
@@ -532,9 +535,511 @@ struct ReplayEntry {
     response: Option<Value>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LeagueMatch {
+    match_id: String,
+    title: String,
+    mode: String,
+    status: String,
+    objective: String,
+    reward: String,
+    recommended_roles: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LeaguePlayer {
+    player_id: String,
+    matrix_user_id: String,
+    display_name: String,
+    class_tag: String,
+    rank_tier: String,
+    rating: i64,
+    xp: i64,
+    reputation: i64,
+    battles: i64,
+    submissions: i64,
+    wins: i64,
+    earned_credits: f64,
+    created_at_epoch: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LeagueMatchEntry {
+    entry_id: String,
+    match_id: String,
+    player_id: String,
+    matrix_user_id: String,
+    status: String,
+    battles_started: i64,
+    submissions: i64,
+    best_score: f64,
+    rewards_earned: f64,
+    joined_at_epoch: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LeagueBattle {
+    battle_id: String,
+    match_id: String,
+    entry_id: String,
+    player_id: String,
+    matrix_user_id: String,
+    task_id: String,
+    prompt: String,
+    status: String,
+    created_at_epoch: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LeagueSubmission {
+    submission_id: String,
+    match_id: String,
+    entry_id: String,
+    player_id: String,
+    matrix_user_id: String,
+    task_id: Option<String>,
+    body: String,
+    score: f64,
+    grade: String,
+    reward_amount: f64,
+    #[serde(default)]
+    judge_status: Option<String>,
+    #[serde(default)]
+    payout_status: Option<String>,
+    #[serde(default)]
+    anti_cheat_flags: Vec<String>,
+    #[serde(default)]
+    score_events: Vec<LeagueScoreEvent>,
+    created_at_epoch: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LeagueScoreEvent {
+    dimension: String,
+    score: f64,
+    weight: f64,
+    judge_kind: String,
+    evidence: Value,
+}
+
+#[derive(Debug, Clone)]
+struct LeagueJudgement {
+    score: f64,
+    grade: String,
+    reward_amount: f64,
+    judge_status: String,
+    payout_status: String,
+    anti_cheat_flags: Vec<String>,
+    score_events: Vec<LeagueScoreEvent>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct LeagueExternalJudgeResponse {
+    score: Option<f64>,
+    grade: Option<String>,
+    verdict: Option<String>,
+    explanation: Option<String>,
+    flags: Option<Vec<String>>,
+    evidence: Option<Value>,
+}
+
+#[derive(Debug, Clone)]
+struct LeagueExternalJudgeOutcome {
+    event: LeagueScoreEvent,
+    flags: Vec<String>,
+    grade_override: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LeagueReward {
+    reward_id: String,
+    match_id: String,
+    entry_id: String,
+    player_id: String,
+    matrix_user_id: String,
+    amount: f64,
+    currency_unit: String,
+    reason: String,
+    #[serde(default)]
+    ledger_status: Option<String>,
+    #[serde(default)]
+    ledger_account_id: Option<String>,
+    #[serde(default)]
+    ledger_entry_id: Option<String>,
+    #[serde(default)]
+    ledger_balance_after: Option<f64>,
+    #[serde(default)]
+    ledger_error: Option<String>,
+    #[serde(default)]
+    review_status: Option<String>,
+    #[serde(default)]
+    reviewed_by: Option<String>,
+    #[serde(default)]
+    review_note: Option<String>,
+    #[serde(default)]
+    reviewed_at_epoch: Option<i64>,
+    created_at_epoch: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LeagueInventoryItem {
+    item_id: String,
+    player_id: String,
+    matrix_user_id: String,
+    source_submission_id: String,
+    item_kind: String,
+    name: String,
+    rarity: String,
+    power: i64,
+    cosmetic: bool,
+    created_at_epoch: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LeagueGuild {
+    guild_id: String,
+    name: String,
+    motto: String,
+    status: String,
+    rating: i64,
+    reputation: i64,
+    treasury_credits: f64,
+    created_at_epoch: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LeagueGuildMembership {
+    guild_id: String,
+    player_id: String,
+    matrix_user_id: String,
+    role: String,
+    joined_at_epoch: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LeagueRaidContribution {
+    contribution_id: String,
+    match_id: String,
+    guild_id: Option<String>,
+    player_id: String,
+    matrix_user_id: String,
+    room_id: Option<String>,
+    role: String,
+    body: String,
+    contribution_score: f64,
+    progress_delta: f64,
+    created_at_epoch: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LeagueRaidRosterSlot {
+    slot_id: String,
+    match_id: String,
+    guild_id: Option<String>,
+    player_id: String,
+    matrix_user_id: String,
+    room_id: Option<String>,
+    role: String,
+    hero_id: String,
+    status: String,
+    joined_at_epoch: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct LeagueDraftRequest {
+    matrix_user_id: String,
+    heroes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct LeagueState {
+    #[serde(default)]
+    matches: HashMap<String, LeagueMatch>,
+    #[serde(default)]
+    players_by_matrix_user: HashMap<String, LeaguePlayer>,
+    #[serde(default)]
+    entries: HashMap<String, LeagueMatchEntry>,
+    #[serde(default)]
+    battles: HashMap<String, LeagueBattle>,
+    #[serde(default)]
+    submissions: HashMap<String, LeagueSubmission>,
+    #[serde(default)]
+    rewards: Vec<LeagueReward>,
+    #[serde(default)]
+    player_loadouts: HashMap<String, Vec<String>>,
+    #[serde(default)]
+    guilds: HashMap<String, LeagueGuild>,
+    #[serde(default)]
+    guild_memberships: HashMap<String, LeagueGuildMembership>,
+    #[serde(default)]
+    inventory_items: Vec<LeagueInventoryItem>,
+    #[serde(default)]
+    raid_contributions: Vec<LeagueRaidContribution>,
+    #[serde(default)]
+    raid_rosters: Vec<LeagueRaidRosterSlot>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LeagueJoinRequest {
+    matrix_user_id: String,
+    room_id: Option<String>,
+    display_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LeagueBattleRequest {
+    matrix_user_id: String,
+    room_id: String,
+    message: String,
+    event_id: Option<String>,
+    capability_id: Option<String>,
+    account_id: Option<String>,
+    metadata: Option<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LeagueSubmitRequest {
+    matrix_user_id: String,
+    room_id: Option<String>,
+    task_id: Option<String>,
+    body: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct LeagueRaidContributionRequest {
+    matrix_user_id: String,
+    room_id: Option<String>,
+    role: Option<String>,
+    body: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct LeagueRaidRosterRequest {
+    matrix_user_id: String,
+    room_id: Option<String>,
+    role: Option<String>,
+    hero_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LeagueReviewRequest {
+    reviewer_id: Option<String>,
+    room_id: Option<String>,
+    note: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LeagueWebActionRequest {
+    action: String,
+    matrix_user_id: Option<String>,
+    csrf: Option<String>,
+    match_id: Option<String>,
+    guild_id: Option<String>,
+    role: Option<String>,
+    heroes: Option<String>,
+    body: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LeagueWebSessionRequest {
+    matrix_user_id: String,
+    room_id: Option<String>,
+    session_id: Option<String>,
+    csrf: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LeagueWebSessionClaims {
+    version: u32,
+    matrix_user_id: String,
+    room_id: Option<String>,
+    session_id: Option<String>,
+    csrf: String,
+    issued_at_epoch: i64,
+    expires_at_epoch: i64,
+}
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct RateLimitCache {
     seen: HashMap<String, VecDeque<i64>>,
+}
+
+fn default_league_state() -> LeagueState {
+    let matches = [
+        LeagueMatch {
+            match_id: "daily-dungeon-001".to_string(),
+            title: "Prompt Forge 入门战".to_string(),
+            mode: "daily_dungeon".to_string(),
+            status: "open".to_string(),
+            objective: "用最少成本生成一个可交付方案，并给出自评/风险。".to_string(),
+            reward: "XP + credits".to_string(),
+            recommended_roles: vec![
+                "strategist".to_string(),
+                "builder".to_string(),
+                "auditor".to_string(),
+            ],
+        },
+        LeagueMatch {
+            match_id: "bounty-arena-001".to_string(),
+            title: "赏金赛：真实客户任务预备场".to_string(),
+            mode: "bounty_arena".to_string(),
+            status: "preview".to_string(),
+            objective: "多人提交方案，按质量、速度、成本和客户适配评分。".to_string(),
+            reward: "Prize Pool".to_string(),
+            recommended_roles: vec![
+                "scout".to_string(),
+                "builder".to_string(),
+                "closer".to_string(),
+            ],
+        },
+        LeagueMatch {
+            match_id: "guild-raid-001".to_string(),
+            title: "公会团本：多阶段交付".to_string(),
+            mode: "guild_raid".to_string(),
+            status: "preview".to_string(),
+            objective: "团队分工完成调研、构建、审核和交付。".to_string(),
+            reward: "Contribution split".to_string(),
+            recommended_roles: vec![
+                "scout".to_string(),
+                "builder".to_string(),
+                "auditor".to_string(),
+                "closer".to_string(),
+            ],
+        },
+    ]
+    .into_iter()
+    .map(|league_match| (league_match.match_id.clone(), league_match))
+    .collect();
+
+    let now = Utc::now().timestamp();
+    let guilds = [
+        LeagueGuild {
+            guild_id: "guild-prompt-forge".to_string(),
+            name: "Prompt Forge".to_string(),
+            motto: "Draft fast. Ship clean.".to_string(),
+            status: "open".to_string(),
+            rating: 1000,
+            reputation: 0,
+            treasury_credits: 0.0,
+            created_at_epoch: now,
+        },
+        LeagueGuild {
+            guild_id: "guild-audit-sanctum".to_string(),
+            name: "Audit Sanctum".to_string(),
+            motto: "No hallucination survives the raid.".to_string(),
+            status: "open".to_string(),
+            rating: 1000,
+            reputation: 0,
+            treasury_credits: 0.0,
+            created_at_epoch: now,
+        },
+    ]
+    .into_iter()
+    .map(|guild| (guild.guild_id.clone(), guild))
+    .collect();
+
+    LeagueState {
+        matches,
+        players_by_matrix_user: HashMap::new(),
+        entries: HashMap::new(),
+        battles: HashMap::new(),
+        submissions: HashMap::new(),
+        rewards: Vec::new(),
+        player_loadouts: HashMap::new(),
+        guilds,
+        guild_memberships: HashMap::new(),
+        inventory_items: Vec::new(),
+        raid_contributions: Vec::new(),
+        raid_rosters: Vec::new(),
+    }
+}
+
+fn load_league_state(config: &ConsumerEntryConfig) -> LeagueState {
+    let mut state = config
+        .league_state_path
+        .as_deref()
+        .and_then(|path| fs::read_to_string(path).ok())
+        .and_then(|raw| serde_json::from_str::<LeagueState>(&raw).ok())
+        .unwrap_or_else(default_league_state);
+
+    let defaults = default_league_state();
+    for (match_id, league_match) in defaults.matches {
+        state.matches.entry(match_id).or_insert(league_match);
+    }
+    for (guild_id, guild) in defaults.guilds {
+        state.guilds.entry(guild_id).or_insert(guild);
+    }
+    state
+}
+
+fn sql_quote(value: &str) -> String {
+    value.replace('\'', "''")
+}
+
+fn league_state_hash(league: &LeagueState) -> Result<String, serde_json::Error> {
+    let bytes = serde_json::to_vec(league)?;
+    Ok(format!("sha256:{:x}", Sha256::digest(bytes)))
+}
+
+fn league_state_sql_snapshot_bytes(league: &LeagueState) -> Result<Vec<u8>, serde_json::Error> {
+    let state_json = serde_json::to_string_pretty(league)?;
+    let state_hash = league_state_hash(league)?;
+    let generated_at = Utc::now().to_rfc3339();
+    let sql = format!(
+        "-- Trillionnium League SQL-ready snapshot.\n\
+         -- Generated by consumer-entry-api at {generated_at}.\n\
+         -- Apply migrations/0011_add_trillionnium_league_state_snapshots.sql before loading.\n\
+         begin;\n\
+         insert into league_state_snapshots (snapshot_kind, state_hash, state)\n\
+         values ('consumer_entry_json_v1', '{}', '{}'::jsonb);\n\
+         commit;\n",
+        sql_quote(&state_hash),
+        sql_quote(&state_json),
+    );
+    Ok(sql.into_bytes())
+}
+
+async fn write_file_with_parent(path: &str, bytes: Vec<u8>, label: &str) -> Result<(), Response> {
+    if let Some(parent) = StdPath::new(path).parent() {
+        if let Err(err) = tokio::fs::create_dir_all(parent).await {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("failed to create {label} dir: {err}") })),
+            )
+                .into_response());
+        }
+    }
+    tokio::fs::write(path, bytes).await.map_err(|err| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("failed to persist {label}: {err}") })),
+        )
+            .into_response()
+    })
+}
+
+async fn persist_league_state(state: &AppState, league: &LeagueState) -> Result<(), Response> {
+    if let Some(path) = state.config().league_state_path.as_deref() {
+        let bytes = serde_json::to_vec_pretty(league).map_err(|err| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("failed to serialize league state: {err}") })),
+            )
+                .into_response()
+        })?;
+        write_file_with_parent(path, bytes, "league state").await?;
+    }
+    if let Some(path) = state.config().league_sql_snapshot_path.as_deref() {
+        let bytes = league_state_sql_snapshot_bytes(league).map_err(|err| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("failed to serialize league SQL snapshot: {err}") })),
+            )
+                .into_response()
+        })?;
+        write_file_with_parent(path, bytes, "league SQL snapshot").await?;
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -573,6 +1078,8 @@ pub struct ConsumerEntryConfig {
     pub bind_addr: String,
     pub cex_gateway_base_url: String,
     pub cex_gateway_api_key: String,
+    pub ledger_base_url: String,
+    pub ledger_admin_token: Option<String>,
     pub default_capability_id: Option<String>,
     pub default_account_id: Option<String>,
     pub ingress_token: Option<String>,
@@ -617,6 +1124,17 @@ pub struct ConsumerEntryConfig {
     pub replay_window_secs: u64,
     pub replay_cache_size: usize,
     pub replay_store_path: Option<String>,
+    pub league_state_path: Option<String>,
+    pub league_sql_snapshot_path: Option<String>,
+    pub league_hidden_tests_enabled: bool,
+    pub league_llm_judge_url: Option<String>,
+    pub league_llm_judge_token: Option<String>,
+    pub league_llm_judge_required: bool,
+    pub league_llm_judge_timeout_ms: u64,
+    pub league_web_session_required: bool,
+    pub league_web_session_secret: Option<String>,
+    pub league_web_session_cookie_name: String,
+    pub league_web_session_ttl_secs: u64,
 }
 
 impl ConsumerEntryConfig {
@@ -625,10 +1143,8 @@ impl ConsumerEntryConfig {
             "CONSUMER_ENTRY_SESSION_AUTH_ISSUER_REGISTRY_PATH",
             "CEX_SESSION_AUTH_ISSUER_REGISTRY_PATH",
         ]);
-        let (
-            session_auth_issuer_registry_metadata,
-            session_auth_issuer_registry,
-        ) = load_session_auth_issuer_registry(session_auth_issuer_registry_path.as_deref());
+        let (session_auth_issuer_registry_metadata, session_auth_issuer_registry) =
+            load_session_auth_issuer_registry(session_auth_issuer_registry_path.as_deref());
         let session_auth_issuer_registry_load_error =
             session_auth_issuer_registry_metadata.load_error.clone();
 
@@ -640,6 +1156,16 @@ impl ConsumerEntryConfig {
                 .unwrap_or_else(|_| "http://127.0.0.1:8080".to_string()),
             cex_gateway_api_key: env::var("CEX_GATEWAY_API_KEY")
                 .unwrap_or_else(|_| "local-dev-key".to_string()),
+            ledger_base_url: first_present_env(&[
+                "CONSUMER_ENTRY_LEDGER_BASE_URL",
+                "LEDGER_BASE_URL",
+            ])
+            .unwrap_or_else(|| "http://127.0.0.1:7002".to_string()),
+            ledger_admin_token: first_present_env(&[
+                "CONSUMER_ENTRY_LEDGER_ADMIN_TOKEN",
+                "LEDGER_ADMIN_TOKEN",
+            ])
+            .or_else(parse_first_ledger_admin_token_from_env),
             default_capability_id: env::var("CONSUMER_ENTRY_DEFAULT_CAPABILITY_ID")
                 .ok()
                 .filter(|v| !v.trim().is_empty()),
@@ -659,12 +1185,10 @@ impl ConsumerEntryConfig {
             .ok()
             .map(|value| parse_session_auth_issuer_secrets_json(&value))
             .unwrap_or_default(),
-            session_auth_issuer_keys: env::var(
-                "CONSUMER_ENTRY_SESSION_AUTH_ISSUER_KEYS_JSON",
-            )
-            .ok()
-            .map(|value| parse_session_auth_issuer_keys_json(&value))
-            .unwrap_or_default(),
+            session_auth_issuer_keys: env::var("CONSUMER_ENTRY_SESSION_AUTH_ISSUER_KEYS_JSON")
+                .ok()
+                .map(|value| parse_session_auth_issuer_keys_json(&value))
+                .unwrap_or_default(),
             session_auth_issuer_registry_path,
             session_auth_issuer_registry,
             session_auth_issuer_registry_load_error,
@@ -811,6 +1335,48 @@ impl ConsumerEntryConfig {
                 "CONSUMER_ENTRY_REPLAY_STORE_PATH",
                 "CONSUMER_ENTRY_MATRIX_EVENT_STORE_PATH",
             ]),
+            league_state_path: first_present_env(&[
+                "CONSUMER_ENTRY_LEAGUE_STATE_PATH",
+                "CEX_LEAGUE_STATE_PATH",
+            ]),
+            league_sql_snapshot_path: first_present_env(&[
+                "CONSUMER_ENTRY_LEAGUE_SQL_SNAPSHOT_PATH",
+                "CEX_LEAGUE_SQL_SNAPSHOT_PATH",
+            ]),
+            league_hidden_tests_enabled: boolean_env("CONSUMER_ENTRY_LEAGUE_HIDDEN_TESTS", true),
+            league_llm_judge_url: first_present_env(&[
+                "CONSUMER_ENTRY_LEAGUE_LLM_JUDGE_URL",
+                "CEX_LEAGUE_LLM_JUDGE_URL",
+            ]),
+            league_llm_judge_token: first_present_env(&[
+                "CONSUMER_ENTRY_LEAGUE_LLM_JUDGE_TOKEN",
+                "CEX_LEAGUE_LLM_JUDGE_TOKEN",
+            ]),
+            league_llm_judge_required: boolean_env(
+                "CONSUMER_ENTRY_LEAGUE_LLM_JUDGE_REQUIRED",
+                false,
+            ),
+            league_llm_judge_timeout_ms: positive_u64_env(
+                "CONSUMER_ENTRY_LEAGUE_LLM_JUDGE_TIMEOUT_MS",
+                DEFAULT_LEAGUE_LLM_JUDGE_TIMEOUT_MS,
+            ),
+            league_web_session_required: boolean_env(
+                "CONSUMER_ENTRY_LEAGUE_WEB_SESSION_REQUIRED",
+                !matches!(RuntimeProfile::from_env(), RuntimeProfile::LocalDev),
+            ),
+            league_web_session_secret: first_present_env(&[
+                "CONSUMER_ENTRY_LEAGUE_WEB_SESSION_SECRET",
+                "CONSUMER_ENTRY_WEB_SESSION_SECRET",
+            ]),
+            league_web_session_cookie_name: env::var("CONSUMER_ENTRY_LEAGUE_WEB_SESSION_COOKIE")
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| "cex_league_session".to_string()),
+            league_web_session_ttl_secs: positive_u64_env(
+                "CONSUMER_ENTRY_LEAGUE_WEB_SESSION_TTL_SECS",
+                DEFAULT_LEAGUE_WEB_SESSION_TTL_SECS,
+            ),
         }
     }
 
@@ -868,6 +1434,12 @@ impl ConsumerEntryConfig {
             if self.session_auth_expected_audience.is_none() {
                 errors.push(
                     "beta/production profile requires CONSUMER_ENTRY_SESSION_AUTH_EXPECTED_AUDIENCE"
+                        .to_string(),
+                );
+            }
+            if self.league_web_session_required && league_web_session_secret(self).is_none() {
+                errors.push(
+                    "beta/production League web actions require CONSUMER_ENTRY_LEAGUE_WEB_SESSION_SECRET or CONSUMER_ENTRY_SESSION_AUTH_SECRET"
                         .to_string(),
                 );
             }
@@ -1050,6 +1622,23 @@ fn first_present_env(names: &[&str]) -> Option<String> {
     })
 }
 
+fn parse_first_ledger_admin_token_from_env() -> Option<String> {
+    let value = env::var("LEDGER_ADMIN_TOKENS_JSON").ok()?;
+    let parsed: Value = serde_json::from_str(&value).ok()?;
+
+    match parsed {
+        Value::Array(items) => items.into_iter().find_map(|item| {
+            item.get("token")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|token| !token.is_empty())
+                .map(ToString::to_string)
+        }),
+        Value::Object(map) => map.keys().next().cloned(),
+        _ => None,
+    }
+}
+
 fn positive_usize_env_alias(names: &[&str], default: usize) -> usize {
     names
         .iter()
@@ -1095,8 +1684,7 @@ fn parse_session_auth_issuer_secrets_json(value: &str) -> HashMap<String, String
 }
 
 fn parse_session_auth_issuer_keys_json(value: &str) -> HashMap<String, HashMap<String, String>> {
-    let Ok(parsed) = serde_json::from_str::<HashMap<String, HashMap<String, String>>>(value)
-    else {
+    let Ok(parsed) = serde_json::from_str::<HashMap<String, HashMap<String, String>>>(value) else {
         return HashMap::new();
     };
 
@@ -2247,6 +2835,7 @@ impl AppState {
         };
         let rate_limits = load_rate_limit_cache(&config);
         let replay_cache = load_replay_cache(&config);
+        let league_state = load_league_state(&config);
         let metrics = ConsumerEntryMetrics::default();
         if identity_binding_audit_state.last_status != "written"
             && config.identity_binding_audit_log_path.is_some()
@@ -2259,7 +2848,10 @@ impl AppState {
                 config,
                 identity_binding_store: RwLock::new(identity_binding_store),
                 identity_binding_audit_state: RwLock::new(identity_binding_audit_state),
-                session_auth_issuer_registry_state: StdRwLock::new(session_auth_issuer_registry_state),
+                session_auth_issuer_registry_state: StdRwLock::new(
+                    session_auth_issuer_registry_state,
+                ),
+                league_state: Mutex::new(league_state),
                 rate_limits: Mutex::new(rate_limits),
                 replay_cache: Mutex::new(replay_cache),
                 metrics,
@@ -2287,9 +2879,75 @@ pub fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/metrics", get(metrics))
+        .route("/league", get(get_league_web_shell))
+        .route("/league/web/session", post(post_league_web_session))
+        .route("/league/web/action", post(post_league_web_action))
         .route("/v1/chat/tasks", post(create_chat_task))
         .route("/v1/chat/tasks/:id", get(get_chat_task))
         .route("/v1/matrix/messages", post(create_matrix_message_task))
+        .route("/v1/league/home", get(get_league_home))
+        .route("/v1/league/world", get(get_league_world))
+        .route("/v1/league/season", get(get_league_season))
+        .route("/v1/league/matches", get(get_league_matches))
+        .route("/v1/league/state/snapshot", get(get_league_state_snapshot))
+        .route("/v1/league/raids", get(get_league_raids))
+        .route(
+            "/v1/league/raids/:match_id/contribute",
+            post(contribute_league_raid),
+        )
+        .route(
+            "/v1/league/raids/:match_id/roster",
+            get(get_league_raid_roster).post(join_league_raid_roster),
+        )
+        .route("/v1/league/reviews/held", get(get_league_held_reviews))
+        .route(
+            "/v1/league/reviews/:reward_id/approve",
+            post(approve_league_review),
+        )
+        .route(
+            "/v1/league/reviews/:reward_id/reject",
+            post(reject_league_review),
+        )
+        .route("/v1/league/guilds", get(get_league_guilds))
+        .route("/v1/league/guilds/:guild_id/join", post(join_league_guild))
+        .route("/v1/league/matches/:match_id/join", post(join_league_match))
+        .route(
+            "/v1/league/matches/:match_id/battle",
+            post(create_league_battle),
+        )
+        .route(
+            "/v1/league/matches/:match_id/submit",
+            post(submit_league_match),
+        )
+        .route("/v1/league/rankings", get(get_league_rankings))
+        .route(
+            "/v1/league/players/:matrix_user_id/profile",
+            get(get_league_player_profile),
+        )
+        .route(
+            "/v1/league/players/:matrix_user_id/loadout",
+            get(get_league_player_loadout),
+        )
+        .route(
+            "/v1/league/players/:matrix_user_id/draft",
+            post(update_league_player_draft),
+        )
+        .route(
+            "/v1/league/players/:matrix_user_id/rewards",
+            get(get_league_player_rewards),
+        )
+        .route(
+            "/v1/league/players/:matrix_user_id/inventory",
+            get(get_league_player_inventory),
+        )
+        .route(
+            "/v1/league/players/:matrix_user_id/history",
+            get(get_league_player_history),
+        )
+        .route(
+            "/v1/matrix/users/:matrix_user_id/wallet",
+            get(get_matrix_wallet),
+        )
         .route(
             "/v1/admin/identity-bindings/reload",
             post(reload_identity_bindings),
@@ -3385,7 +4043,10 @@ fn session_auth_issuer_registry_active_key_diff_json(
         if current_active_key_id == candidate_active_key_id {
             continue;
         }
-        let status = match (current_active_key_id.as_ref(), candidate_active_key_id.as_ref()) {
+        let status = match (
+            current_active_key_id.as_ref(),
+            candidate_active_key_id.as_ref(),
+        ) {
             (None, Some(_)) => "added",
             (Some(_), None) => "removed",
             (Some(_), Some(_)) => "changed",
@@ -3417,7 +4078,8 @@ fn session_auth_issuer_registry_status_json(
     let mut issuers_without_active_key = registry
         .iter()
         .filter_map(|(issuer, entry)| {
-            entry.active_key_id
+            entry
+                .active_key_id
                 .as_deref()
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
@@ -3484,7 +4146,10 @@ fn session_auth_issuer_registry_actor_checks_json(config: &ConsumerEntryConfig) 
         "disabled"
     } else if !actor_header_valid {
         "actor_header_missing"
-    } else if config.session_auth_issuer_registry_allowed_actors.is_empty() {
+    } else if config
+        .session_auth_issuer_registry_allowed_actors
+        .is_empty()
+    {
         "no_allowed_actors_configured"
     } else {
         "ok"
@@ -3744,16 +4409,15 @@ fn session_auth_issuer_registry_governance_overview_json(
             .and_then(Value::as_bool)
             .unwrap_or(false)
     };
-    let approval_coverage_valid = if !registry_configured
-        || !config.session_auth_issuer_registry_require_approved_revision
-    {
-        true
-    } else {
-        approval_checks
-            .get("valid")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-    };
+    let approval_coverage_valid =
+        if !registry_configured || !config.session_auth_issuer_registry_require_approved_revision {
+            true
+        } else {
+            approval_checks
+                .get("valid")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        };
     let approval_source_status = approval_source
         .get("status")
         .and_then(Value::as_str)
@@ -4265,8 +4929,9 @@ async fn validate_session_auth_issuer_registry(
         &current_state.metadata,
         &current_state.registry,
     );
-    let (candidate_metadata, candidate_registry) =
-        load_session_auth_issuer_registry(state.config().session_auth_issuer_registry_path.as_deref());
+    let (candidate_metadata, candidate_registry) = load_session_auth_issuer_registry(
+        state.config().session_auth_issuer_registry_path.as_deref(),
+    );
     let candidate_status = session_auth_issuer_registry_status_json(
         state.config(),
         &candidate_metadata,
@@ -4275,7 +4940,12 @@ async fn validate_session_auth_issuer_registry(
     let approval_state = load_session_auth_issuer_registry_revision_approval_state(state.config());
     let actor_checks = session_auth_issuer_registry_actor_checks_json(state.config());
     let requesting_actor = headers
-        .get(state.config().session_auth_issuer_registry_actor_header.as_str())
+        .get(
+            state
+                .config()
+                .session_auth_issuer_registry_actor_header
+                .as_str(),
+        )
         .and_then(|value| value.to_str().ok())
         .map(str::trim)
         .filter(|value| !value.is_empty());
@@ -4358,7 +5028,8 @@ async fn validate_session_auth_issuer_registry(
     let matches_loaded_key_count = candidate_metadata.key_count == current_state.metadata.key_count;
     let matches_loaded_issuer_count =
         candidate_metadata.issuer_count == current_state.metadata.issuer_count;
-    let matches_loaded_status = candidate_metadata.load_status == current_state.metadata.load_status;
+    let matches_loaded_status =
+        candidate_metadata.load_status == current_state.metadata.load_status;
     let matches_loaded_active_keys = active_key_diff
         .get("matches")
         .and_then(Value::as_bool)
@@ -4450,7 +5121,12 @@ async fn reload_session_auth_issuer_registry(
     );
     let approval_state = load_session_auth_issuer_registry_revision_approval_state(state.config());
     let requesting_actor = headers
-        .get(state.config().session_auth_issuer_registry_actor_header.as_str())
+        .get(
+            state
+                .config()
+                .session_auth_issuer_registry_actor_header
+                .as_str(),
+        )
         .and_then(|value| value.to_str().ok())
         .map(str::trim)
         .filter(|value| !value.is_empty());
@@ -5364,6 +6040,3149 @@ async fn create_matrix_message_task(
     (StatusCode::ACCEPTED, Json(response)).into_response()
 }
 
+async fn get_league_home(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Err(response) = authorize_ingress(&headers, state.config()) {
+        state.inner.metrics.inc_ingress_auth_failures();
+        return response;
+    }
+
+    let league = state.inner.league_state.lock().await;
+    (
+        StatusCode::OK,
+        Json(json!({
+            "kind": "league_home",
+            "league": "trillionnium_league",
+            "name": "Trillionnium League",
+            "season": "preseason-zero",
+            "status": "preseason",
+            "tagline": "AI Agent esports for real work, skill, and earnings.",
+            "player_count": league.players_by_matrix_user.len(),
+            "match_count": league.matches.len(),
+            "commands": ["/arena", "/quest", "/join <match-id>", "/battle <match-id> <action>", "/rank", "/loadout", "/wallet"]
+        })),
+    )
+        .into_response()
+}
+
+async fn get_league_world(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Err(response) = authorize_ingress(&headers, state.config()) {
+        state.inner.metrics.inc_ingress_auth_failures();
+        return response;
+    }
+    let league = state.inner.league_state.lock().await;
+    (
+        StatusCode::OK,
+        Json(json!({
+            "kind": "league_world",
+            "league": "trillionnium_league",
+            "zones": [
+                {"zone_id": "prompt-forge", "name": "Prompt Forge", "status": "open", "theme": "drafting and agent tuning"},
+                {"zone_id": "research-wilds", "name": "Research Wilds", "status": "preview", "theme": "sourcing and evidence"},
+                {"zone_id": "code-citadel", "name": "Code Citadel", "status": "preview", "theme": "tests and execution"},
+                {"zone_id": "audit-sanctum", "name": "Audit Sanctum", "status": "open", "theme": "review and anti-hallucination"},
+                {"zone_id": "market-bazaar", "name": "Market Bazaar", "status": "preview", "theme": "bounties and client tasks"}
+            ],
+            "match_count": league.matches.len(),
+            "guild_count": league.guilds.len(),
+        })),
+    )
+        .into_response()
+}
+
+async fn get_league_season(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Err(response) = authorize_ingress(&headers, state.config()) {
+        state.inner.metrics.inc_ingress_auth_failures();
+        return response;
+    }
+    let league = state.inner.league_state.lock().await;
+    let mut players: Vec<LeaguePlayer> = league.players_by_matrix_user.values().cloned().collect();
+    players.sort_by(|left, right| {
+        right
+            .rating
+            .cmp(&left.rating)
+            .then_with(|| right.xp.cmp(&left.xp))
+            .then_with(|| left.matrix_user_id.cmp(&right.matrix_user_id))
+    });
+    let top_players: Vec<Value> = players
+        .iter()
+        .take(5)
+        .map(|player| {
+            json!({
+                "player_id": player.player_id,
+                "matrix_user_id": player.matrix_user_id,
+                "display_name": player.display_name,
+                "rating": player.rating,
+                "xp": player.xp,
+                "earned_credits": player.earned_credits,
+            })
+        })
+        .collect();
+    let guild_standings = league_guild_standings(&league);
+    (
+        StatusCode::OK,
+        Json(json!({
+            "kind": "league_season",
+            "league": "trillionnium_league",
+            "season": {
+                "code": "preseason-zero",
+                "name": "Preseason Zero",
+                "status": "active",
+                "theme": "Founding Summoners",
+                "player_count": league.players_by_matrix_user.len(),
+                "battle_count": league.battles.len(),
+                "submission_count": league.submissions.len(),
+                "reward_count": league.rewards.len()
+            },
+            "leaderboards": {
+                "players": top_players,
+                "guilds": guild_standings,
+            }
+        })),
+    )
+        .into_response()
+}
+
+async fn get_league_web_shell(State(state): State<AppState>, headers: HeaderMap) -> Html<String> {
+    let web_session = authorize_league_web_session(&state, &headers, None)
+        .ok()
+        .flatten();
+    let csrf_input = web_session
+        .as_ref()
+        .map(|session| {
+            format!(
+                "<input type=\"hidden\" name=\"csrf\" value=\"{}\" />",
+                escape_html_text(&session.csrf)
+            )
+        })
+        .unwrap_or_default();
+    let console_note = if web_session.is_some() {
+        "Authenticated web session: actions are CSRF-protected and bound to the signed player."
+    } else if matches!(state.config().runtime_profile, RuntimeProfile::LocalDev) {
+        "Local-dev interactive shell: join, draft, submit, and settle rewards without exposing Matrix or ledger tokens to the browser."
+    } else {
+        "Read-only shell: request a signed /league/web/session before submitting web actions."
+    };
+    let league = state.inner.league_state.lock().await;
+    let mut matches: Vec<LeagueMatch> = league.matches.values().cloned().collect();
+    matches.sort_by(|left, right| left.match_id.cmp(&right.match_id));
+    let mut players: Vec<LeaguePlayer> = league.players_by_matrix_user.values().cloned().collect();
+    players.sort_by(|left, right| {
+        right
+            .rating
+            .cmp(&left.rating)
+            .then_with(|| right.xp.cmp(&left.xp))
+            .then_with(|| left.matrix_user_id.cmp(&right.matrix_user_id))
+    });
+    let total_rewards: f64 = league.rewards.iter().map(|reward| reward.amount).sum();
+    let match_cards = matches
+        .iter()
+        .map(|league_match| {
+            format!(
+                "<article class=\"card match\"><div class=\"pill\">{}</div><h3>{}</h3><p>{}</p><footer><code>{}</code><span>{}</span></footer></article>",
+                escape_html_text(&league_match.mode),
+                escape_html_text(&league_match.title),
+                escape_html_text(&league_match.objective),
+                escape_html_text(&league_match.match_id),
+                escape_html_text(&league_match.reward),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let leaderboard = players
+        .iter()
+        .take(8)
+        .enumerate()
+        .map(|(idx, player)| {
+            format!(
+                "<tr><td>#{}</td><td>{}</td><td>{}</td><td>{}</td><td>{:.2}</td></tr>",
+                idx + 1,
+                escape_html_text(&player.display_name),
+                escape_html_text(&player.rank_tier),
+                player.rating,
+                player.earned_credits,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let leaderboard = if leaderboard.is_empty() {
+        "<tr><td>#1</td><td>@alice:local.dev</td><td>Bronze I</td><td>1000</td><td>0.00</td></tr>"
+            .to_string()
+    } else {
+        leaderboard
+    };
+    let guild_cards = league
+        .guilds
+        .values()
+        .map(|guild| {
+            format!(
+                "<article class=\"mini\"><strong>{}</strong><span>{}</span><code>{}</code></article>",
+                escape_html_text(&guild.name),
+                escape_html_text(&guild.motto),
+                escape_html_text(&guild.guild_id),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut timeline_items: Vec<(i64, String)> = Vec::new();
+    for battle in league.battles.values() {
+        timeline_items.push((
+            battle.created_at_epoch,
+            format!(
+                "<li><b>⚔️ Battle</b><span>{}</span><small>{}</small></li>",
+                escape_html_text(&battle.match_id),
+                escape_html_text(&battle.task_id),
+            ),
+        ));
+    }
+    for submission in league.submissions.values() {
+        timeline_items.push((
+            submission.created_at_epoch,
+            format!(
+                "<li><b>🏁 Score {:.1}</b><span>{} · Judge {} · {} dims</span><small>{}</small></li>",
+                submission.score,
+                escape_html_text(&submission.grade),
+                escape_html_text(submission.judge_status.as_deref().unwrap_or("rubric_scored")),
+                submission.score_events.len(),
+                escape_html_text(&submission.submission_id),
+            ),
+        ));
+    }
+    for reward in &league.rewards {
+        timeline_items.push((
+            reward.created_at_epoch,
+            format!(
+                "<li><b>💰 +{:.2} {}</b><span>{}</span><small>{}</small></li>",
+                reward.amount,
+                escape_html_text(&reward.currency_unit),
+                escape_html_text(reward.ledger_status.as_deref().unwrap_or("pending")),
+                escape_html_text(&reward.reward_id),
+            ),
+        ));
+    }
+    timeline_items.sort_by(|left, right| right.0.cmp(&left.0));
+    let timeline = timeline_items
+        .into_iter()
+        .take(10)
+        .map(|(_, html)| html)
+        .collect::<Vec<_>>()
+        .join("\n");
+    let timeline = if timeline.is_empty() {
+        "<li><b>No replays yet</b><span>Submit your first result</span><small>/submit</small></li>"
+            .to_string()
+    } else {
+        timeline
+    };
+    let loadout = league_loadout_for_player(&league, "@alice:local.dev");
+    let player_items: Vec<&LeagueInventoryItem> = league
+        .inventory_items
+        .iter()
+        .filter(|item| item.matrix_user_id == "@alice:local.dev")
+        .collect();
+    let top_loot = player_items
+        .iter()
+        .max_by(|left, right| left.power.cmp(&right.power))
+        .map(|item| format!("{} ({})", item.name, item.rarity))
+        .unwrap_or_else(|| "No loot yet".to_string());
+    let loadout_line = loadout
+        .get("heroes")
+        .and_then(Value::as_array)
+        .map(|heroes| {
+            heroes
+                .iter()
+                .filter_map(|hero| hero.get("name").and_then(Value::as_str))
+                .map(escape_html_text)
+                .collect::<Vec<_>>()
+                .join(" · ")
+        })
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "Oracle Scout · Forge Builder · Mirror Auditor".to_string());
+
+    Html(format!(
+        r#"<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Trillionnium League</title>
+  <style>
+    :root {{ color-scheme: dark; --bg:#060711; --panel:#111426; --panel2:#171b31; --gold:#f8c35b; --cyan:#64e3ff; --pink:#ff5ca8; --text:#f6f7fb; --muted:#9aa3b2; }}
+    * {{ box-sizing:border-box; }}
+    body {{ margin:0; min-height:100vh; font-family:Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background:radial-gradient(circle at 20% 0%, #213064 0, transparent 32rem), radial-gradient(circle at 88% 14%, #532044 0, transparent 30rem), var(--bg); color:var(--text); }}
+    header {{ padding:42px min(6vw,72px) 18px; display:grid; gap:22px; grid-template-columns:1.25fr .75fr; align-items:end; }}
+    h1 {{ margin:0; font-size:clamp(42px,7vw,92px); line-height:.9; letter-spacing:-.07em; }}
+    h2 {{ margin:0 0 16px; letter-spacing:-.03em; }}
+    .subtitle {{ color:var(--muted); font-size:18px; max-width:760px; }}
+    .hero-card,.card,.panel {{ border:1px solid rgba(255,255,255,.11); background:linear-gradient(145deg,rgba(255,255,255,.09),rgba(255,255,255,.035)); box-shadow:0 24px 80px rgba(0,0,0,.35); backdrop-filter: blur(14px); border-radius:24px; }}
+    .hero-card {{ padding:24px; }}
+    .stats {{ display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin-top:22px; }}
+    .stat {{ padding:18px; background:rgba(255,255,255,.06); border-radius:18px; }}
+    .stat b {{ display:block; font-size:26px; color:var(--gold); }}
+    main {{ padding:20px min(6vw,72px) 60px; display:grid; gap:24px; }}
+    .grid {{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:18px; }}
+    .card {{ padding:20px; min-height:210px; }}
+    .card h3 {{ margin:12px 0; font-size:24px; }}
+    .card p {{ color:var(--muted); line-height:1.55; }}
+    .card footer {{ display:flex; justify-content:space-between; gap:10px; align-items:center; margin-top:18px; color:var(--gold); }}
+    .pill {{ display:inline-flex; border:1px solid rgba(100,227,255,.35); color:var(--cyan); padding:5px 10px; border-radius:999px; font-size:12px; text-transform:uppercase; letter-spacing:.12em; }}
+    .panel {{ padding:24px; }}
+    table {{ width:100%; border-collapse:collapse; }}
+    td,th {{ padding:12px 10px; border-bottom:1px solid rgba(255,255,255,.08); text-align:left; }}
+    th {{ color:var(--muted); font-weight:600; }}
+    .commands {{ display:flex; flex-wrap:wrap; gap:10px; }}
+    .play {{ display:grid; grid-template-columns:1fr 1fr; gap:18px; }}
+    form {{ display:grid; gap:10px; margin:0; }}
+    input,textarea,select {{ width:100%; color:var(--text); background:rgba(255,255,255,.07); border:1px solid rgba(255,255,255,.14); border-radius:14px; padding:12px 14px; font:inherit; }}
+    textarea {{ min-height:92px; resize:vertical; }}
+    button {{ border:0; cursor:pointer; color:var(--bg); background:linear-gradient(135deg,var(--gold),#ff8d4d); padding:12px 16px; border-radius:14px; font-weight:800; }}
+    .mini-grid {{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }}
+    .mini {{ display:grid; gap:7px; padding:14px; border-radius:16px; background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.08); }}
+    .mini span, .timeline small {{ color:var(--muted); }}
+    .timeline {{ list-style:none; padding:0; margin:0; display:grid; gap:10px; }}
+    .timeline li {{ display:grid; grid-template-columns:1.3fr .6fr 1.1fr; gap:10px; padding:12px; border-radius:14px; background:rgba(255,255,255,.055); }}
+    code {{ color:var(--cyan); background:rgba(100,227,255,.08); padding:3px 7px; border-radius:8px; }}
+    .cta {{ color:var(--bg); background:linear-gradient(135deg,var(--gold),#ff8d4d); padding:14px 18px; border-radius:16px; display:inline-block; font-weight:800; }}
+    @media (max-width:900px) {{ header {{ grid-template-columns:1fr; }} .grid,.stats,.play,.mini-grid {{ grid-template-columns:1fr; }} }}
+  </style>
+</head>
+<body>
+  <header>
+    <section>
+      <div class="pill">Preseason Zero</div>
+      <h1>Trillionnium League</h1>
+      <p class="subtitle">AI Agent Esports League for real work, skill, and earnings. Draft your agent squad, enter matches, clear quests, score, rank up, and earn credits.</p>
+    </section>
+    <aside class="hero-card">
+      <strong>Live MVP</strong>
+      <p class="subtitle">Playable through Matrix/Element now. Web shell is online as the first game lobby.</p>
+      <a class="cta">Enter via /league</a>
+    </aside>
+  </header>
+  <main>
+    <section class="stats">
+      <div class="stat"><span>Players</span><b>{players}</b></div>
+      <div class="stat"><span>Matches</span><b>{matches}</b></div>
+      <div class="stat"><span>Battles</span><b>{battles}</b></div>
+      <div class="stat"><span>Rewards</span><b>{rewards:.2}</b></div>
+      <div class="stat"><span>Items</span><b>{items}</b></div>
+    </section>
+    <section>
+      <h2>Active Game Modes</h2>
+      <div class="grid">{match_cards}</div>
+    </section>
+    <section class="play">
+      <div class="panel">
+        <h2>Web Battle Console</h2>
+        <p class="subtitle">{console_note}</p>
+        <form method="post" action="/league/web/action">
+          {csrf_input}
+          <input type="hidden" name="matrix_user_id" value="@alice:local.dev" />
+          <select name="action"><option value="join">Join Match</option><option value="guild">Join Guild</option><option value="team">Join Raid Team</option><option value="draft">Draft Loadout</option><option value="raid">Contribute Raid</option><option value="submit">Submit Result</option></select>
+          <input name="match_id" value="daily-dungeon-001" aria-label="match id" />
+          <input name="guild_id" value="guild-prompt-forge" aria-label="guild id" />
+          <input name="role" value="scout" aria-label="raid role" />
+          <input name="heroes" value="oracle_scout forge_builder mirror_auditor courier_closer" aria-label="heroes" />
+          <textarea name="body">Web clear: deliverable, evidence, risk, self-review, next action. Raid option: scout evidence, assign builder, define boss risk gate.</textarea>
+          <button type="submit">Play Action</button>
+        </form>
+      </div>
+      <div class="panel">
+        <h2>Battle Timeline / Replay</h2>
+        <p class="subtitle">Current loadout: {loadout_line}</p>
+        <p class="subtitle">Top loot: {top_loot}</p>
+        <ul class="timeline">{timeline}</ul>
+      </div>
+    </section>
+    <section class="panel">
+      <h2>Guild Halls</h2>
+      <div class="mini-grid">{guild_cards}</div>
+    </section>
+    <section class="panel">
+      <h2>Leaderboard</h2>
+      <table><thead><tr><th>#</th><th>Player</th><th>Rank</th><th>RP</th><th>Earned</th></tr></thead><tbody>{leaderboard}</tbody></table>
+    </section>
+    <section class="panel">
+      <h2>Playable Commands</h2>
+      <div class="commands"><code>/arena</code><code>/join daily-dungeon-001</code><code>/battle daily-dungeon-001 &lt;action&gt;</code><code>/submit daily-dungeon-001 &lt;result&gt;</code><code>/rank</code><code>/profile</code><code>/rewards</code><code>/history</code></div>
+    </section>
+  </main>
+</body>
+</html>"#,
+        players = league.players_by_matrix_user.len(),
+        matches = league.matches.len(),
+        battles = league.battles.len(),
+        rewards = total_rewards,
+        items = player_items.len(),
+        match_cards = match_cards,
+        guild_cards = guild_cards,
+        timeline = timeline,
+        loadout_line = loadout_line,
+        top_loot = escape_html_text(&top_loot),
+        leaderboard = leaderboard,
+        console_note = escape_html_text(console_note),
+        csrf_input = csrf_input,
+    ))
+}
+
+async fn post_league_web_session(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<LeagueWebSessionRequest>,
+) -> Response {
+    let matrix_user_id = match normalize_league_matrix_user(&payload.matrix_user_id) {
+        Some(value) => value,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "matrix_user_id is required" })),
+            )
+                .into_response()
+        }
+    };
+    let Some(secret) = league_web_session_secret(state.config()) else {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "league web session secret is not configured" })),
+        )
+            .into_response();
+    };
+    if !matches!(state.config().runtime_profile, RuntimeProfile::LocalDev) {
+        let scope = IdentityScope {
+            source_kind: "league_web_session",
+            user_id: Some(matrix_user_id.clone()),
+            room_id: payload.room_id.clone(),
+            session_id: payload.session_id.clone(),
+            org_id: None,
+            account_id: None,
+        };
+        let fingerprint = format!(
+            "league-web-session:{}:{}:{}",
+            matrix_user_id,
+            payload.room_id.as_deref().unwrap_or_default(),
+            payload.session_id.as_deref().unwrap_or_default(),
+        );
+        if let Err(response) = authorize_user_session(&state, &headers, &scope, &fingerprint) {
+            return response;
+        }
+    }
+    let now = Utc::now().timestamp();
+    let csrf = payload
+        .csrf
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| {
+            league_web_csrf(secret, &matrix_user_id, payload.room_id.as_deref(), now)
+        });
+    let claims = LeagueWebSessionClaims {
+        version: 1,
+        matrix_user_id: matrix_user_id.clone(),
+        room_id: payload.room_id.clone(),
+        session_id: payload.session_id.clone(),
+        csrf,
+        issued_at_epoch: now,
+        expires_at_epoch: now + state.config().league_web_session_ttl_secs as i64,
+    };
+    let token = match encode_league_web_session(&claims, secret) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let secure = if matches!(state.config().runtime_profile, RuntimeProfile::LocalDev) {
+        ""
+    } else {
+        "; Secure"
+    };
+    let cookie = format!(
+        "{}={}; Path=/; HttpOnly; SameSite=Lax; Max-Age={}{}",
+        state.config().league_web_session_cookie_name,
+        token,
+        state.config().league_web_session_ttl_secs,
+        secure,
+    );
+    (
+        StatusCode::OK,
+        [(header::SET_COOKIE, cookie)],
+        Json(json!({
+            "kind": "league_web_session",
+            "league": "trillionnium_league",
+            "matrix_user_id": matrix_user_id,
+            "room_id": payload.room_id,
+            "session_id": payload.session_id,
+            "csrf": claims.csrf,
+            "expires_at_epoch": claims.expires_at_epoch,
+        })),
+    )
+        .into_response()
+}
+
+async fn post_league_web_action(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(payload): Form<LeagueWebActionRequest>,
+) -> Response {
+    let web_session = match authorize_league_web_session(&state, &headers, payload.csrf.as_deref())
+    {
+        Ok(value) => value,
+        Err(response) => {
+            if matches!(state.config().runtime_profile, RuntimeProfile::LocalDev)
+                && cookie_value(&headers, &state.config().league_web_session_cookie_name).is_none()
+            {
+                None
+            } else {
+                return response;
+            }
+        }
+    };
+
+    let matrix_user_id = web_session
+        .as_ref()
+        .map(|session| session.matrix_user_id.clone())
+        .or_else(|| {
+            normalize_league_matrix_user(
+                payload
+                    .matrix_user_id
+                    .as_deref()
+                    .unwrap_or("@alice:local.dev"),
+            )
+        })
+        .unwrap_or_else(|| "@alice:local.dev".to_string());
+    let action = payload.action.trim().to_ascii_lowercase();
+
+    let snapshot = match action.as_str() {
+        "join" => {
+            let match_id = payload
+                .match_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("daily-dungeon-001")
+                .to_string();
+            let mut league = state.inner.league_state.lock().await;
+            if !league.matches.contains_key(&match_id) {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(json!({ "error": "league match not found", "match_id": match_id })),
+                )
+                    .into_response();
+            }
+            let player = ensure_league_player(&mut league, &matrix_user_id, None);
+            ensure_league_entry(&mut league, &match_id, &matrix_user_id, &player.player_id);
+            league.clone()
+        }
+        "guild" => {
+            let guild_id = payload
+                .guild_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("guild-prompt-forge")
+                .to_string();
+            let mut league = state.inner.league_state.lock().await;
+            if !league.guilds.contains_key(&guild_id) {
+                return (
+                    StatusCode::NOT_FOUND,
+                    Json(json!({ "error": "league guild not found", "guild_id": guild_id })),
+                )
+                    .into_response();
+            }
+            let player = ensure_league_player(&mut league, &matrix_user_id, None);
+            league.guild_memberships.insert(
+                matrix_user_id.clone(),
+                LeagueGuildMembership {
+                    guild_id,
+                    player_id: player.player_id.clone(),
+                    matrix_user_id: matrix_user_id.clone(),
+                    role: "member".to_string(),
+                    joined_at_epoch: Utc::now().timestamp(),
+                },
+            );
+            league.clone()
+        }
+        "draft" => {
+            let heroes = normalize_hero_draft(
+                payload
+                    .heroes
+                    .as_deref()
+                    .unwrap_or("oracle_scout forge_builder mirror_auditor courier_closer")
+                    .split_whitespace()
+                    .map(ToString::to_string)
+                    .collect(),
+            );
+            if heroes.len() < 3 {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({
+                        "error": "draft requires at least 3 unique heroes",
+                        "examples": "oracle_scout forge_builder mirror_auditor courier_closer"
+                    })),
+                )
+                    .into_response();
+            }
+            let mut league = state.inner.league_state.lock().await;
+            ensure_league_player(&mut league, &matrix_user_id, None);
+            league
+                .player_loadouts
+                .insert(matrix_user_id.clone(), heroes);
+            league.clone()
+        }
+        "submit" => {
+            let match_id = payload
+                .match_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("daily-dungeon-001")
+                .to_string();
+            let body = match validate_text_payload(
+                payload
+                    .body
+                    .as_deref()
+                    .unwrap_or("Web action: evidence, risk, deliverable, next step."),
+                state.config().max_text_chars,
+            ) {
+                Ok(value) => value,
+                Err(response) => return response,
+            };
+            let league_match_mode = {
+                let league = state.inner.league_state.lock().await;
+                let Some(league_match) = league.matches.get(&match_id).cloned() else {
+                    return (
+                        StatusCode::NOT_FOUND,
+                        Json(json!({ "error": "league match not found", "match_id": match_id })),
+                    )
+                        .into_response();
+                };
+                league_match.mode
+            };
+            let judgement =
+                judge_league_submission_with_pipeline(&state, &body, &league_match_mode).await;
+            let (submission, mut reward) = {
+                let mut league = state.inner.league_state.lock().await;
+                if !league.matches.contains_key(&match_id) {
+                    return (
+                        StatusCode::NOT_FOUND,
+                        Json(json!({ "error": "league match not found", "match_id": match_id })),
+                    )
+                        .into_response();
+                }
+                let mut player = ensure_league_player(&mut league, &matrix_user_id, None);
+                let mut entry =
+                    ensure_league_entry(&mut league, &match_id, &matrix_user_id, &player.player_id);
+                let score = judgement.score;
+                let grade = judgement.grade.clone();
+                let reward_amount = judgement.reward_amount;
+                let now = Utc::now().timestamp();
+                let submission_id = league_hash_id(
+                    "submission",
+                    &format!("web:{}:{}:{}:{}", match_id, entry.entry_id, now, body),
+                );
+                let submission = LeagueSubmission {
+                    submission_id: submission_id.clone(),
+                    match_id: match_id.clone(),
+                    entry_id: entry.entry_id.clone(),
+                    player_id: player.player_id.clone(),
+                    matrix_user_id: matrix_user_id.clone(),
+                    task_id: None,
+                    body: body.clone(),
+                    score,
+                    grade: grade.clone(),
+                    reward_amount,
+                    judge_status: Some(judgement.judge_status.clone()),
+                    payout_status: Some(judgement.payout_status.clone()),
+                    anti_cheat_flags: judgement.anti_cheat_flags.clone(),
+                    score_events: judgement.score_events.clone(),
+                    created_at_epoch: now,
+                };
+                let reward = LeagueReward {
+                    reward_id: league_hash_id("reward", &submission_id),
+                    match_id: match_id.clone(),
+                    entry_id: entry.entry_id.clone(),
+                    player_id: player.player_id.clone(),
+                    matrix_user_id: matrix_user_id.clone(),
+                    amount: reward_amount,
+                    currency_unit: "credit".to_string(),
+                    reason: format!("league_web_submission_score_{score:.1}_{grade}"),
+                    ledger_status: Some("pending".to_string()),
+                    ledger_account_id: None,
+                    ledger_entry_id: None,
+                    ledger_balance_after: None,
+                    ledger_error: None,
+                    review_status: if judgement.payout_status == "review_hold" {
+                        Some("pending_review".to_string())
+                    } else {
+                        None
+                    },
+                    reviewed_by: None,
+                    review_note: None,
+                    reviewed_at_epoch: None,
+                    created_at_epoch: now,
+                };
+                player.submissions += 1;
+                player.xp += score.round() as i64;
+                player.reputation += (score / 10.0).round() as i64;
+                player.rating += ((score - 50.0) / 2.0).round() as i64;
+                if judgement.payout_status == "eligible" {
+                    player.earned_credits += reward_amount;
+                }
+                if score >= 80.0 {
+                    player.wins += 1;
+                }
+                entry.submissions += 1;
+                entry.best_score = entry.best_score.max(score);
+                if judgement.payout_status == "eligible" {
+                    entry.rewards_earned += reward_amount;
+                }
+                league
+                    .players_by_matrix_user
+                    .insert(matrix_user_id.clone(), player.clone());
+                league
+                    .entries
+                    .insert(league_entry_key(&match_id, &matrix_user_id), entry.clone());
+                league
+                    .submissions
+                    .insert(submission_id.clone(), submission.clone());
+                league.rewards.push(reward.clone());
+                if judgement.payout_status == "eligible" {
+                    league
+                        .inventory_items
+                        .push(league_item_for_submission(&submission));
+                }
+                (submission, reward)
+            };
+            let submit_payload = LeagueSubmitRequest {
+                matrix_user_id: matrix_user_id.clone(),
+                room_id: Some("!web-local:local.dev".to_string()),
+                task_id: None,
+                body: submission.body.clone(),
+            };
+            let settlement = settle_league_reward_with_ledger(
+                &state,
+                &submit_payload,
+                &matrix_user_id,
+                &submission,
+                &reward,
+            )
+            .await;
+            reward.ledger_status = Some(settlement.status);
+            reward.ledger_account_id = settlement.account_id;
+            reward.ledger_entry_id = settlement.entry_id;
+            reward.ledger_balance_after = settlement.balance_after;
+            reward.ledger_error = settlement.error;
+
+            let mut league = state.inner.league_state.lock().await;
+            if let Some(stored_reward) = league
+                .rewards
+                .iter_mut()
+                .find(|stored| stored.reward_id == reward.reward_id)
+            {
+                *stored_reward = reward;
+            }
+            league.clone()
+        }
+        "raid" => {
+            let match_id = payload
+                .match_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("guild-raid-001")
+                .to_string();
+            let body = match validate_text_payload(
+                payload.body.as_deref().unwrap_or(
+                    "Raid contribution: scout evidence, assign builder, define risk gate.",
+                ),
+                state.config().max_text_chars,
+            ) {
+                Ok(value) => value,
+                Err(response) => return response,
+            };
+            let request = LeagueRaidContributionRequest {
+                matrix_user_id: matrix_user_id.clone(),
+                room_id: Some("!web-local:local.dev".to_string()),
+                role: Some("web_raider".to_string()),
+                body,
+            };
+            let snapshot = match record_league_raid_contribution(&state, &match_id, request).await {
+                Ok((snapshot, _contribution, _progress)) => snapshot,
+                Err(response) => return response,
+            };
+            snapshot
+        }
+        "team" => {
+            let match_id = payload
+                .match_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("guild-raid-001")
+                .to_string();
+            let hero_id = payload
+                .heroes
+                .as_deref()
+                .and_then(|heroes| heroes.split_whitespace().next())
+                .map(ToString::to_string)
+                .or_else(|| Some("oracle_scout".to_string()));
+            let request = LeagueRaidRosterRequest {
+                matrix_user_id: matrix_user_id.clone(),
+                room_id: Some("!web-local:local.dev".to_string()),
+                role: payload.role.clone().or_else(|| Some("scout".to_string())),
+                hero_id,
+            };
+            let snapshot = match record_league_raid_roster_slot(&state, &match_id, request).await {
+                Ok((snapshot, _slot, _roster)) => snapshot,
+                Err(response) => return response,
+            };
+            snapshot
+        }
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "error": "unsupported league web action",
+                    "allowed": ["join", "guild", "draft", "submit", "raid", "team"]
+                })),
+            )
+                .into_response()
+        }
+    };
+
+    if let Err(response) = persist_league_state(&state, &snapshot).await {
+        return response;
+    }
+
+    Redirect::to("/league?played=1").into_response()
+}
+
+async fn get_league_raids(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Err(response) = authorize_ingress(&headers, state.config()) {
+        state.inner.metrics.inc_ingress_auth_failures();
+        return response;
+    }
+    let league = state.inner.league_state.lock().await;
+    let raids: Vec<LeagueMatch> = league
+        .matches
+        .values()
+        .filter(|league_match| league_match.mode == "guild_raid")
+        .cloned()
+        .collect();
+    let progress: Vec<Value> = raids
+        .iter()
+        .map(|raid| league_raid_progress(&league, &raid.match_id))
+        .collect();
+    (
+        StatusCode::OK,
+        Json(json!({
+            "kind": "league_raids",
+            "league": "trillionnium_league",
+            "raids": raids,
+            "progress": progress,
+            "guilds": league_guild_standings(&league),
+        })),
+    )
+        .into_response()
+}
+
+async fn contribute_league_raid(
+    Path(match_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<LeagueRaidContributionRequest>,
+) -> Response {
+    if let Err(response) = authorize_ingress(&headers, state.config()) {
+        state.inner.metrics.inc_ingress_auth_failures();
+        return response;
+    }
+    let (snapshot, contribution, progress) =
+        match record_league_raid_contribution(&state, &match_id, payload).await {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    if let Err(response) = persist_league_state(&state, &snapshot).await {
+        return response;
+    }
+    (
+        StatusCode::OK,
+        Json(json!({
+            "kind": "league_raid_contribution",
+            "league": "trillionnium_league",
+            "contribution": contribution,
+            "progress": progress,
+        })),
+    )
+        .into_response()
+}
+
+async fn get_league_raid_roster(
+    Path(match_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(response) = authorize_ingress(&headers, state.config()) {
+        state.inner.metrics.inc_ingress_auth_failures();
+        return response;
+    }
+    let league = state.inner.league_state.lock().await;
+    if !league
+        .matches
+        .get(&match_id)
+        .is_some_and(|league_match| league_match.mode == "guild_raid")
+    {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "league raid not found", "match_id": match_id })),
+        )
+            .into_response();
+    }
+    let roster = league_raid_roster_summary(&league, &match_id);
+    (
+        StatusCode::OK,
+        Json(json!({
+            "kind": "league_raid_roster",
+            "league": "trillionnium_league",
+            "match_id": match_id,
+            "roster": roster,
+        })),
+    )
+        .into_response()
+}
+
+async fn join_league_raid_roster(
+    Path(match_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<LeagueRaidRosterRequest>,
+) -> Response {
+    if let Err(response) = authorize_ingress(&headers, state.config()) {
+        state.inner.metrics.inc_ingress_auth_failures();
+        return response;
+    }
+    let (snapshot, slot, roster) =
+        match record_league_raid_roster_slot(&state, &match_id, payload).await {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    if let Err(response) = persist_league_state(&state, &snapshot).await {
+        return response;
+    }
+    (
+        StatusCode::OK,
+        Json(json!({
+            "kind": "league_raid_roster_joined",
+            "league": "trillionnium_league",
+            "slot": slot,
+            "roster": roster,
+        })),
+    )
+        .into_response()
+}
+
+fn league_submission_for_reward<'a>(
+    league: &'a LeagueState,
+    reward: &LeagueReward,
+) -> Option<&'a LeagueSubmission> {
+    league
+        .submissions
+        .values()
+        .find(|submission| league_hash_id("reward", &submission.submission_id) == reward.reward_id)
+}
+
+async fn get_league_held_reviews(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Err(response) = authorize_ingress(&headers, state.config()) {
+        state.inner.metrics.inc_ingress_auth_failures();
+        return response;
+    }
+    let league = state.inner.league_state.lock().await;
+    let held: Vec<Value> = league
+        .rewards
+        .iter()
+        .filter(|reward| {
+            reward
+                .ledger_status
+                .as_deref()
+                .is_some_and(|status| status == "held_review")
+                || reward
+                    .review_status
+                    .as_deref()
+                    .is_some_and(|status| status == "pending_review")
+        })
+        .map(|reward| {
+            json!({
+                "reward": reward,
+                "submission": league_submission_for_reward(&league, reward),
+            })
+        })
+        .collect();
+    (
+        StatusCode::OK,
+        Json(json!({
+            "kind": "league_review_queue",
+            "league": "trillionnium_league",
+            "held_count": held.len(),
+            "held": held,
+        })),
+    )
+        .into_response()
+}
+
+async fn approve_league_review(
+    Path(reward_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<LeagueReviewRequest>,
+) -> Response {
+    if let Err(response) = authorize_ingress(&headers, state.config()) {
+        state.inner.metrics.inc_ingress_auth_failures();
+        return response;
+    }
+    let reviewer_id = payload
+        .reviewer_id
+        .clone()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "local-reviewer".to_string());
+    let review_note = payload
+        .note
+        .clone()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let (reward, mut submission) = {
+        let league = state.inner.league_state.lock().await;
+        let Some(reward) = league
+            .rewards
+            .iter()
+            .find(|reward| reward.reward_id == reward_id)
+            .cloned()
+        else {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "league reward not found", "reward_id": reward_id })),
+            )
+                .into_response();
+        };
+        if reward.ledger_status.as_deref() == Some("settled") {
+            return (
+                StatusCode::CONFLICT,
+                Json(json!({ "error": "league reward already settled", "reward_id": reward_id })),
+            )
+                .into_response();
+        }
+        let Some(submission) = league_submission_for_reward(&league, &reward).cloned() else {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "league submission for reward not found", "reward_id": reward_id })),
+            )
+                .into_response();
+        };
+        (reward, submission)
+    };
+    submission.payout_status = Some("approved_release".to_string());
+    let submit_payload = LeagueSubmitRequest {
+        matrix_user_id: reward.matrix_user_id.clone(),
+        room_id: payload
+            .room_id
+            .clone()
+            .or_else(|| Some("!web-local:local.dev".to_string())),
+        task_id: submission.task_id.clone(),
+        body: submission.body.clone(),
+    };
+    let settlement = settle_league_reward_with_ledger(
+        &state,
+        &submit_payload,
+        &reward.matrix_user_id,
+        &submission,
+        &reward,
+    )
+    .await;
+    let now = Utc::now().timestamp();
+    let released = settlement.status == "settled" || settlement.status == "duplicate";
+    let snapshot = {
+        let mut league = state.inner.league_state.lock().await;
+        if let Some(stored_submission) = league.submissions.get_mut(&submission.submission_id) {
+            stored_submission.payout_status = Some("approved_release".to_string());
+            stored_submission.score_events.push(LeagueScoreEvent {
+                dimension: "human_review_release".to_string(),
+                score: stored_submission.score,
+                weight: 0.0,
+                judge_kind: "review_admin_v1".to_string(),
+                evidence: json!({"reviewer_id": reviewer_id.clone(), "note": review_note.clone()}),
+            });
+        }
+        if released {
+            if let Some(player) = league
+                .players_by_matrix_user
+                .get_mut(&reward.matrix_user_id)
+            {
+                player.earned_credits += reward.amount;
+            }
+            if let Some(entry) = league
+                .entries
+                .get_mut(&league_entry_key(&reward.match_id, &reward.matrix_user_id))
+            {
+                entry.rewards_earned += reward.amount;
+            }
+        }
+        if let Some(stored_reward) = league
+            .rewards
+            .iter_mut()
+            .find(|stored| stored.reward_id == reward.reward_id)
+        {
+            stored_reward.ledger_status = Some(settlement.status.clone());
+            stored_reward.ledger_account_id = settlement.account_id.clone();
+            stored_reward.ledger_entry_id = settlement.entry_id.clone();
+            stored_reward.ledger_balance_after = settlement.balance_after;
+            stored_reward.ledger_error = settlement.error.clone();
+            stored_reward.review_status = Some(
+                if released {
+                    "approved"
+                } else {
+                    "approval_failed"
+                }
+                .to_string(),
+            );
+            stored_reward.reviewed_by = Some(reviewer_id.clone());
+            stored_reward.review_note = review_note.clone();
+            stored_reward.reviewed_at_epoch = Some(now);
+        }
+        league.clone()
+    };
+    if let Err(response) = persist_league_state(&state, &snapshot).await {
+        return response;
+    }
+    (
+        StatusCode::OK,
+        Json(json!({
+            "kind": "league_review_approved",
+            "league": "trillionnium_league",
+            "reward_id": reward.reward_id,
+            "review_status": if released { "approved" } else { "approval_failed" },
+            "ledger_status": settlement.status,
+            "ledger_entry_id": settlement.entry_id,
+            "ledger_error": settlement.error,
+        })),
+    )
+        .into_response()
+}
+
+async fn reject_league_review(
+    Path(reward_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<LeagueReviewRequest>,
+) -> Response {
+    if let Err(response) = authorize_ingress(&headers, state.config()) {
+        state.inner.metrics.inc_ingress_auth_failures();
+        return response;
+    }
+    let reviewer_id = payload
+        .reviewer_id
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "local-reviewer".to_string());
+    let review_note = payload
+        .note
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let now = Utc::now().timestamp();
+    let snapshot = {
+        let mut league = state.inner.league_state.lock().await;
+        let Some(reward_index) = league
+            .rewards
+            .iter()
+            .position(|reward| reward.reward_id == reward_id)
+        else {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "league reward not found", "reward_id": reward_id })),
+            )
+                .into_response();
+        };
+        let reward = league.rewards[reward_index].clone();
+        let submission_id = league_submission_for_reward(&league, &reward)
+            .map(|submission| submission.submission_id.clone());
+        if let Some(submission_id) = submission_id {
+            if let Some(submission) = league.submissions.get_mut(&submission_id) {
+                submission.payout_status = Some("rejected".to_string());
+                submission.score_events.push(LeagueScoreEvent {
+                    dimension: "human_review_reject".to_string(),
+                    score: submission.score,
+                    weight: 0.0,
+                    judge_kind: "review_admin_v1".to_string(),
+                    evidence: json!({"reviewer_id": reviewer_id.clone(), "note": review_note.clone()}),
+                });
+            }
+        }
+        let reward = &mut league.rewards[reward_index];
+        reward.ledger_status = Some("rejected".to_string());
+        reward.review_status = Some("rejected".to_string());
+        reward.reviewed_by = Some(reviewer_id);
+        reward.review_note = review_note;
+        reward.reviewed_at_epoch = Some(now);
+        league.clone()
+    };
+    if let Err(response) = persist_league_state(&state, &snapshot).await {
+        return response;
+    }
+    (
+        StatusCode::OK,
+        Json(json!({
+            "kind": "league_review_rejected",
+            "league": "trillionnium_league",
+            "reward_id": reward_id,
+            "review_status": "rejected",
+            "ledger_status": "rejected",
+        })),
+    )
+        .into_response()
+}
+
+async fn get_league_matches(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Err(response) = authorize_ingress(&headers, state.config()) {
+        state.inner.metrics.inc_ingress_auth_failures();
+        return response;
+    }
+
+    let league = state.inner.league_state.lock().await;
+    let mut matches: Vec<LeagueMatch> = league.matches.values().cloned().collect();
+    matches.sort_by(|left, right| left.match_id.cmp(&right.match_id));
+    (
+        StatusCode::OK,
+        Json(json!({
+            "kind": "league_matches",
+            "league": "trillionnium_league",
+            "matches": matches,
+        })),
+    )
+        .into_response()
+}
+
+async fn get_league_state_snapshot(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Err(response) = authorize_ingress(&headers, state.config()) {
+        state.inner.metrics.inc_ingress_auth_failures();
+        return response;
+    }
+    let league = state.inner.league_state.lock().await;
+    let hash = match league_state_hash(&league) {
+        Ok(value) => value,
+        Err(err) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("failed to hash league state: {err}") })),
+            )
+                .into_response()
+        }
+    };
+    (
+        StatusCode::OK,
+        Json(json!({
+            "kind": "league_state_snapshot",
+            "league": "trillionnium_league",
+            "repository": "json_file_with_sql_snapshot",
+            "state_hash": hash,
+            "json_state_path_configured": state.config().league_state_path.is_some(),
+            "sql_snapshot_path_configured": state.config().league_sql_snapshot_path.is_some(),
+            "counts": {
+                "players": league.players_by_matrix_user.len(),
+                "matches": league.matches.len(),
+                "entries": league.entries.len(),
+                "battles": league.battles.len(),
+                "submissions": league.submissions.len(),
+                "rewards": league.rewards.len(),
+                "inventory_items": league.inventory_items.len(),
+                "raid_contributions": league.raid_contributions.len(),
+                "raid_rosters": league.raid_rosters.len(),
+            },
+        })),
+    )
+        .into_response()
+}
+
+async fn get_league_guilds(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Err(response) = authorize_ingress(&headers, state.config()) {
+        state.inner.metrics.inc_ingress_auth_failures();
+        return response;
+    }
+    let league = state.inner.league_state.lock().await;
+    let mut guilds: Vec<LeagueGuild> = league.guilds.values().cloned().collect();
+    guilds.sort_by(|left, right| {
+        right
+            .rating
+            .cmp(&left.rating)
+            .then_with(|| left.guild_id.cmp(&right.guild_id))
+    });
+    let standings = league_guild_standings(&league);
+    (
+        StatusCode::OK,
+        Json(json!({
+            "kind": "league_guilds",
+            "league": "trillionnium_league",
+            "guilds": guilds,
+            "standings": standings,
+        })),
+    )
+        .into_response()
+}
+
+async fn join_league_guild(
+    Path(guild_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<LeagueJoinRequest>,
+) -> Response {
+    if let Err(response) = authorize_ingress(&headers, state.config()) {
+        state.inner.metrics.inc_ingress_auth_failures();
+        return response;
+    }
+    let matrix_user_id = match normalize_league_matrix_user(&payload.matrix_user_id) {
+        Some(value) => value,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "matrix_user_id is required" })),
+            )
+                .into_response()
+        }
+    };
+    let (guild, player, membership, snapshot) = {
+        let mut league = state.inner.league_state.lock().await;
+        let Some(guild) = league.guilds.get(&guild_id).cloned() else {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "league guild not found", "guild_id": guild_id })),
+            )
+                .into_response();
+        };
+        let player = ensure_league_player(
+            &mut league,
+            &matrix_user_id,
+            payload.display_name.as_deref(),
+        );
+        let membership = LeagueGuildMembership {
+            guild_id: guild_id.clone(),
+            player_id: player.player_id.clone(),
+            matrix_user_id: matrix_user_id.clone(),
+            role: "member".to_string(),
+            joined_at_epoch: Utc::now().timestamp(),
+        };
+        league
+            .guild_memberships
+            .insert(matrix_user_id.clone(), membership.clone());
+        let snapshot = league.clone();
+        (guild, player, membership, snapshot)
+    };
+    if let Err(response) = persist_league_state(&state, &snapshot).await {
+        return response;
+    }
+    (
+        StatusCode::OK,
+        Json(json!({
+            "kind": "league_guild_joined",
+            "league": "trillionnium_league",
+            "guild": guild,
+            "player": player,
+            "membership": membership,
+            "room_id": payload.room_id,
+        })),
+    )
+        .into_response()
+}
+
+async fn join_league_match(
+    Path(match_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<LeagueJoinRequest>,
+) -> Response {
+    if let Err(response) = authorize_ingress(&headers, state.config()) {
+        state.inner.metrics.inc_ingress_auth_failures();
+        return response;
+    }
+    let matrix_user_id = match normalize_league_matrix_user(&payload.matrix_user_id) {
+        Some(value) => value,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "matrix_user_id is required" })),
+            )
+                .into_response()
+        }
+    };
+
+    let (league_match, player, entry, snapshot) = {
+        let mut league = state.inner.league_state.lock().await;
+        let Some(league_match) = league.matches.get(&match_id).cloned() else {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "league match not found", "match_id": match_id })),
+            )
+                .into_response();
+        };
+        let player = ensure_league_player(
+            &mut league,
+            &matrix_user_id,
+            payload.display_name.as_deref(),
+        );
+        let entry = ensure_league_entry(&mut league, &match_id, &matrix_user_id, &player.player_id);
+        let snapshot = league.clone();
+        (league_match, player, entry, snapshot)
+    };
+    if let Err(response) = persist_league_state(&state, &snapshot).await {
+        return response;
+    }
+    (
+        StatusCode::OK,
+        Json(json!({
+            "kind": "league_joined",
+            "league": "trillionnium_league",
+            "match": league_match,
+            "player": player,
+            "entry": entry,
+            "room_id": payload.room_id,
+        })),
+    )
+        .into_response()
+}
+
+async fn create_league_battle(
+    Path(match_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<LeagueBattleRequest>,
+) -> Response {
+    state.inner.metrics.inc_task_create_requests();
+    if let Err(response) = authorize_ingress(&headers, state.config()) {
+        state.inner.metrics.inc_ingress_auth_failures();
+        return response;
+    }
+    let matrix_user_id = match normalize_league_matrix_user(&payload.matrix_user_id) {
+        Some(value) => value,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "matrix_user_id is required" })),
+            )
+                .into_response()
+        }
+    };
+
+    let (league_match, player, entry) = {
+        let mut league = state.inner.league_state.lock().await;
+        let Some(league_match) = league.matches.get(&match_id).cloned() else {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "league match not found", "match_id": match_id })),
+            )
+                .into_response();
+        };
+        let player = ensure_league_player(&mut league, &matrix_user_id, None);
+        let mut entry =
+            ensure_league_entry(&mut league, &match_id, &matrix_user_id, &player.player_id);
+        entry.battles_started += 1;
+        league
+            .entries
+            .insert(league_entry_key(&match_id, &matrix_user_id), entry.clone());
+        (league_match, player, entry)
+    };
+
+    let metadata = merge_league_battle_metadata(payload.metadata, &match_id, &entry.entry_id);
+    let matrix_payload = MatrixMessageRequest {
+        matrix_user_id: matrix_user_id.clone(),
+        room_id: payload.room_id,
+        session_id: None,
+        org_id: None,
+        message: payload.message,
+        capability_id: payload.capability_id,
+        account_id: payload.account_id,
+        event_id: payload.event_id,
+        idempotency_key: None,
+        metadata: Some(metadata),
+    };
+
+    let resolved_identity = match resolve_matrix_identity(&state, &matrix_payload).await {
+        Ok(identity) => identity,
+        Err(response) => return response,
+    };
+    let request_fingerprint = build_matrix_request_fingerprint(&matrix_payload);
+    let authorized_session = match authorize_user_session(
+        &state,
+        &headers,
+        &resolved_identity.scope,
+        request_fingerprint.as_str(),
+    ) {
+        Ok(session) => session,
+        Err(response) => return response,
+    };
+    let prompt = match validate_text_payload(&matrix_payload.message, state.config().max_text_chars)
+    {
+        Ok(prompt) => prompt,
+        Err(response) => return response,
+    };
+    let resolved_account_id = resolved_identity.scope.account_id.clone();
+    let source = json!({
+        "kind": "league_battle",
+        "league": "trillionnium_league",
+        "match_id": match_id,
+        "entry_id": entry.entry_id,
+        "player_id": player.player_id,
+        "identity_scope": resolved_identity.scope,
+        "identity_resolution": resolved_identity.resolution,
+        "matrix_user_id": matrix_user_id,
+        "room_id": matrix_payload.room_id,
+        "event_id": matrix_payload.event_id,
+        "metadata": matrix_payload.metadata,
+        "session_auth": authorized_session,
+    });
+
+    let task = match forward_to_cex_task(
+        state.clone(),
+        matrix_payload.capability_id,
+        resolved_account_id,
+        source,
+        prompt,
+    )
+    .await
+    {
+        Ok(response) => response,
+        Err(response) => return response,
+    };
+
+    let (player, entry, battle, snapshot) = {
+        let mut league = state.inner.league_state.lock().await;
+        let mut player = ensure_league_player(&mut league, &matrix_user_id, None);
+        player.battles += 1;
+        let mut entry =
+            ensure_league_entry(&mut league, &match_id, &matrix_user_id, &player.player_id);
+        let task_id = task.task_id.clone();
+        let battle_key = league_hash_id(
+            "battle",
+            &format!("{}:{}:{}", match_id, entry.entry_id, task_id),
+        );
+        let battle = LeagueBattle {
+            battle_id: battle_key.clone(),
+            match_id: match_id.clone(),
+            entry_id: entry.entry_id.clone(),
+            player_id: player.player_id.clone(),
+            matrix_user_id: matrix_user_id.clone(),
+            task_id,
+            prompt: task
+                .request
+                .as_ref()
+                .and_then(|value| value.get("prompt"))
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            status: "created".to_string(),
+            created_at_epoch: Utc::now().timestamp(),
+        };
+        entry.battles_started = entry.battles_started.max(1);
+        league
+            .players_by_matrix_user
+            .insert(matrix_user_id.clone(), player.clone());
+        league
+            .entries
+            .insert(league_entry_key(&match_id, &matrix_user_id), entry.clone());
+        league.battles.insert(battle_key, battle.clone());
+        let snapshot = league.clone();
+        (player, entry, battle, snapshot)
+    };
+    if let Err(response) = persist_league_state(&state, &snapshot).await {
+        return response;
+    }
+
+    (
+        StatusCode::ACCEPTED,
+        Json(json!({
+            "kind": "league_battle",
+            "league": "trillionnium_league",
+            "match": league_match,
+            "player": player,
+            "entry": entry,
+            "battle": battle,
+            "task": task,
+        })),
+    )
+        .into_response()
+}
+
+async fn submit_league_match(
+    Path(match_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<LeagueSubmitRequest>,
+) -> Response {
+    if let Err(response) = authorize_ingress(&headers, state.config()) {
+        state.inner.metrics.inc_ingress_auth_failures();
+        return response;
+    }
+    let matrix_user_id = match normalize_league_matrix_user(&payload.matrix_user_id) {
+        Some(value) => value,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "matrix_user_id is required" })),
+            )
+                .into_response()
+        }
+    };
+    let body = match validate_text_payload(&payload.body, state.config().max_text_chars) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+
+    let league_match = {
+        let league = state.inner.league_state.lock().await;
+        let Some(league_match) = league.matches.get(&match_id).cloned() else {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "league match not found", "match_id": match_id })),
+            )
+                .into_response();
+        };
+        league_match
+    };
+    let judgement = judge_league_submission_with_pipeline(&state, &body, &league_match.mode).await;
+
+    let (player, entry, submission, reward, _snapshot) = {
+        let mut league = state.inner.league_state.lock().await;
+        if !league.matches.contains_key(&match_id) {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "league match not found", "match_id": match_id })),
+            )
+                .into_response();
+        }
+        let mut player = ensure_league_player(&mut league, &matrix_user_id, None);
+        let mut entry =
+            ensure_league_entry(&mut league, &match_id, &matrix_user_id, &player.player_id);
+        let score = judgement.score;
+        let grade = judgement.grade.clone();
+        let reward_amount = judgement.reward_amount;
+        let now = Utc::now().timestamp();
+        let submission_id = league_hash_id(
+            "submission",
+            &format!("{}:{}:{}:{}", match_id, entry.entry_id, now, body),
+        );
+        let submission = LeagueSubmission {
+            submission_id: submission_id.clone(),
+            match_id: match_id.clone(),
+            entry_id: entry.entry_id.clone(),
+            player_id: player.player_id.clone(),
+            matrix_user_id: matrix_user_id.clone(),
+            task_id: payload.task_id.clone(),
+            body: body.clone(),
+            score,
+            grade: grade.clone(),
+            reward_amount,
+            judge_status: Some(judgement.judge_status.clone()),
+            payout_status: Some(judgement.payout_status.clone()),
+            anti_cheat_flags: judgement.anti_cheat_flags.clone(),
+            score_events: judgement.score_events.clone(),
+            created_at_epoch: now,
+        };
+        let reward = LeagueReward {
+            reward_id: league_hash_id("reward", &submission_id),
+            match_id: match_id.clone(),
+            entry_id: entry.entry_id.clone(),
+            player_id: player.player_id.clone(),
+            matrix_user_id: matrix_user_id.clone(),
+            amount: reward_amount,
+            currency_unit: "credit".to_string(),
+            reason: format!("league_submission_score_{score:.1}_{grade}"),
+            ledger_status: Some("pending".to_string()),
+            ledger_account_id: None,
+            ledger_entry_id: None,
+            ledger_balance_after: None,
+            ledger_error: None,
+            review_status: if judgement.payout_status == "review_hold" {
+                Some("pending_review".to_string())
+            } else {
+                None
+            },
+            reviewed_by: None,
+            review_note: None,
+            reviewed_at_epoch: None,
+            created_at_epoch: now,
+        };
+        player.submissions += 1;
+        player.xp += score.round() as i64;
+        player.reputation += (score / 10.0).round() as i64;
+        player.rating += ((score - 50.0) / 2.0).round() as i64;
+        if judgement.payout_status == "eligible" {
+            player.earned_credits += reward_amount;
+        }
+        if score >= 80.0 {
+            player.wins += 1;
+        }
+        entry.submissions += 1;
+        entry.best_score = entry.best_score.max(score);
+        if judgement.payout_status == "eligible" {
+            entry.rewards_earned += reward_amount;
+        }
+        league
+            .players_by_matrix_user
+            .insert(matrix_user_id.clone(), player.clone());
+        league
+            .entries
+            .insert(league_entry_key(&match_id, &matrix_user_id), entry.clone());
+        league.submissions.insert(submission_id, submission.clone());
+        league.rewards.push(reward.clone());
+        if judgement.payout_status == "eligible" {
+            league
+                .inventory_items
+                .push(league_item_for_submission(&submission));
+        }
+        let snapshot = league.clone();
+        (player, entry, submission, reward, snapshot)
+    };
+
+    let mut reward = reward;
+    let settlement =
+        settle_league_reward_with_ledger(&state, &payload, &matrix_user_id, &submission, &reward)
+            .await;
+    reward.ledger_status = Some(settlement.status);
+    reward.ledger_account_id = settlement.account_id;
+    reward.ledger_entry_id = settlement.entry_id;
+    reward.ledger_balance_after = settlement.balance_after;
+    reward.ledger_error = settlement.error;
+
+    let snapshot = {
+        let mut league = state.inner.league_state.lock().await;
+        if let Some(stored_reward) = league
+            .rewards
+            .iter_mut()
+            .find(|stored| stored.reward_id == reward.reward_id)
+        {
+            *stored_reward = reward.clone();
+        }
+        league.clone()
+    };
+
+    if let Err(response) = persist_league_state(&state, &snapshot).await {
+        return response;
+    }
+
+    (
+        StatusCode::OK,
+        Json(json!({
+            "kind": "league_submission",
+            "league": "trillionnium_league",
+            "match": league_match,
+            "player": player,
+            "entry": entry,
+            "submission": submission,
+            "reward": reward,
+            "room_id": payload.room_id,
+        })),
+    )
+        .into_response()
+}
+
+#[derive(Debug, Clone, Default)]
+struct LeagueLedgerSettlement {
+    status: String,
+    account_id: Option<String>,
+    entry_id: Option<String>,
+    balance_after: Option<f64>,
+    error: Option<String>,
+}
+
+async fn settle_league_reward_with_ledger(
+    state: &AppState,
+    payload: &LeagueSubmitRequest,
+    matrix_user_id: &str,
+    submission: &LeagueSubmission,
+    reward: &LeagueReward,
+) -> LeagueLedgerSettlement {
+    if reward.amount <= 0.0 {
+        return LeagueLedgerSettlement {
+            status: "skipped_zero_reward".to_string(),
+            ..Default::default()
+        };
+    }
+    let payout_status = submission.payout_status.as_deref().unwrap_or("eligible");
+    let approved_release = payout_status == "approved_release";
+    if !(payout_status == "eligible" || approved_release)
+        || (!approved_release && !submission.anti_cheat_flags.is_empty())
+    {
+        return LeagueLedgerSettlement {
+            status: "held_review".to_string(),
+            error: Some(format!(
+                "payout held by review gate: status={payout_status} flags={}",
+                submission.anti_cheat_flags.join(",")
+            )),
+            ..Default::default()
+        };
+    }
+
+    let Some(room_id) = payload
+        .room_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return LeagueLedgerSettlement {
+            status: "skipped_missing_room".to_string(),
+            ..Default::default()
+        };
+    };
+
+    let matrix_payload = MatrixMessageRequest {
+        matrix_user_id: matrix_user_id.to_string(),
+        room_id: room_id.to_string(),
+        session_id: None,
+        org_id: None,
+        message: "league reward settlement".to_string(),
+        capability_id: None,
+        account_id: None,
+        event_id: None,
+        idempotency_key: None,
+        metadata: None,
+    };
+    let resolved_identity = match resolve_matrix_identity(state, &matrix_payload).await {
+        Ok(identity) => identity,
+        Err(_) => {
+            return LeagueLedgerSettlement {
+                status: "failed_identity".to_string(),
+                error: Some(
+                    "matrix identity could not be resolved for reward settlement".to_string(),
+                ),
+                ..Default::default()
+            }
+        }
+    };
+
+    let Some(account_id) = resolved_identity.scope.account_id.clone() else {
+        return LeagueLedgerSettlement {
+            status: "skipped_missing_account".to_string(),
+            error: Some("matrix identity did not resolve a ledger account_id".to_string()),
+            ..Default::default()
+        };
+    };
+    let Some(ledger_admin_token) = state.config().ledger_admin_token.clone() else {
+        return LeagueLedgerSettlement {
+            status: "skipped_missing_ledger_token".to_string(),
+            account_id: Some(account_id),
+            error: Some("consumer-entry ledger admin token is not configured".to_string()),
+            ..Default::default()
+        };
+    };
+
+    let url = format!(
+        "{}/v1/ledger/grant",
+        state.config().ledger_base_url.trim_end_matches('/')
+    );
+    let mut body = json!({
+        "account_id": account_id,
+        "amount": reward.amount,
+        "idempotency_key": format!("league_reward:{}", reward.reward_id),
+    });
+    if let Some(task_id) = submission
+        .task_id
+        .as_deref()
+        .filter(|value| !value.is_empty())
+    {
+        body["reference_id"] = json!(task_id);
+    }
+
+    let response = match state
+        .inner
+        .http
+        .post(url)
+        .header("x-admin-token", ledger_admin_token)
+        .json(&body)
+        .send()
+        .await
+    {
+        Ok(response) => response,
+        Err(err) => {
+            return LeagueLedgerSettlement {
+                status: "failed_network".to_string(),
+                account_id: body
+                    .get("account_id")
+                    .and_then(Value::as_str)
+                    .map(ToString::to_string),
+                error: Some(format!("failed to reach ledger-service: {err}")),
+                ..Default::default()
+            }
+        }
+    };
+
+    let status = response.status();
+    let value = match response.json::<Value>().await {
+        Ok(value) => value,
+        Err(err) => {
+            return LeagueLedgerSettlement {
+                status: "failed_bad_response".to_string(),
+                account_id: body
+                    .get("account_id")
+                    .and_then(Value::as_str)
+                    .map(ToString::to_string),
+                error: Some(format!("ledger-service returned non-json response: {err}")),
+                ..Default::default()
+            }
+        }
+    };
+
+    if !status.is_success() {
+        let error = value
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or("ledger grant failed");
+        return LeagueLedgerSettlement {
+            status: if status.as_u16() == 409 {
+                "duplicate".to_string()
+            } else {
+                "failed_ledger".to_string()
+            },
+            account_id: body
+                .get("account_id")
+                .and_then(Value::as_str)
+                .map(ToString::to_string),
+            error: Some(format!("{}: {error}", status.as_u16())),
+            ..Default::default()
+        };
+    }
+
+    LeagueLedgerSettlement {
+        status: "settled".to_string(),
+        account_id: value
+            .get("account")
+            .and_then(|account| account.get("account_id"))
+            .and_then(Value::as_str)
+            .or_else(|| body.get("account_id").and_then(Value::as_str))
+            .map(ToString::to_string),
+        entry_id: value
+            .get("entry")
+            .and_then(|entry| entry.get("entry_id"))
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+        balance_after: value
+            .get("account")
+            .and_then(|account| account.get("balance"))
+            .and_then(Value::as_f64),
+        error: None,
+    }
+}
+
+async fn get_league_rankings(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Err(response) = authorize_ingress(&headers, state.config()) {
+        state.inner.metrics.inc_ingress_auth_failures();
+        return response;
+    }
+    let league = state.inner.league_state.lock().await;
+    let mut players: Vec<LeaguePlayer> = league.players_by_matrix_user.values().cloned().collect();
+    players.sort_by(|left, right| {
+        right
+            .rating
+            .cmp(&left.rating)
+            .then_with(|| right.xp.cmp(&left.xp))
+            .then_with(|| left.matrix_user_id.cmp(&right.matrix_user_id))
+    });
+    let guild_standings = league_guild_standings(&league);
+    (
+        StatusCode::OK,
+        Json(json!({
+            "kind": "league_rankings",
+            "league": "trillionnium_league",
+            "season": "preseason-zero",
+            "players": players,
+            "guilds": guild_standings,
+        })),
+    )
+        .into_response()
+}
+
+async fn get_league_player_profile(
+    Path(matrix_user_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(response) = authorize_ingress(&headers, state.config()) {
+        state.inner.metrics.inc_ingress_auth_failures();
+        return response;
+    }
+    let mut league = state.inner.league_state.lock().await;
+    let Some(matrix_user_id) = normalize_league_matrix_user(&matrix_user_id) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "matrix_user_id is required" })),
+        )
+            .into_response();
+    };
+    let player = ensure_league_player(&mut league, &matrix_user_id, None);
+    let loadout = league_loadout_for_player(&league, &matrix_user_id);
+    let guild = league
+        .guild_memberships
+        .get(&matrix_user_id)
+        .and_then(|membership| league.guilds.get(&membership.guild_id))
+        .cloned();
+    (
+        StatusCode::OK,
+        Json(json!({
+            "kind": "league_player_profile",
+            "league": "trillionnium_league",
+            "player": player,
+            "guild": guild,
+            "loadout": loadout,
+        })),
+    )
+        .into_response()
+}
+
+async fn get_league_player_loadout(
+    Path(matrix_user_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(response) = authorize_ingress(&headers, state.config()) {
+        state.inner.metrics.inc_ingress_auth_failures();
+        return response;
+    }
+    let mut league = state.inner.league_state.lock().await;
+    let Some(matrix_user_id) = normalize_league_matrix_user(&matrix_user_id) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "matrix_user_id is required" })),
+        )
+            .into_response();
+    };
+    let player = ensure_league_player(&mut league, &matrix_user_id, None);
+    let loadout = league_loadout_for_player(&league, &matrix_user_id);
+    (
+        StatusCode::OK,
+        Json(json!({
+            "kind": "league_loadout",
+            "league": "trillionnium_league",
+            "player": player,
+            "loadout": loadout,
+        })),
+    )
+        .into_response()
+}
+
+async fn update_league_player_draft(
+    Path(matrix_user_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<LeagueDraftRequest>,
+) -> Response {
+    if let Err(response) = authorize_ingress(&headers, state.config()) {
+        state.inner.metrics.inc_ingress_auth_failures();
+        return response;
+    }
+    let Some(path_matrix_user_id) = normalize_league_matrix_user(&matrix_user_id) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "matrix_user_id is required" })),
+        )
+            .into_response();
+    };
+    let request_matrix_user_id = normalize_league_matrix_user(&payload.matrix_user_id)
+        .unwrap_or_else(|| path_matrix_user_id.clone());
+    if request_matrix_user_id != path_matrix_user_id {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "draft matrix_user_id does not match path" })),
+        )
+            .into_response();
+    }
+    let heroes = normalize_hero_draft(payload.heroes);
+    if heroes.len() < 3 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "draft requires at least 3 unique heroes" })),
+        )
+            .into_response();
+    }
+    let (player, loadout, snapshot) = {
+        let mut league = state.inner.league_state.lock().await;
+        let player = ensure_league_player(&mut league, &path_matrix_user_id, None);
+        league
+            .player_loadouts
+            .insert(path_matrix_user_id.clone(), heroes.clone());
+        let loadout = league_loadout_for_player(&league, &path_matrix_user_id);
+        let snapshot = league.clone();
+        (player, loadout, snapshot)
+    };
+    if let Err(response) = persist_league_state(&state, &snapshot).await {
+        return response;
+    }
+    (
+        StatusCode::OK,
+        Json(json!({
+            "kind": "league_draft",
+            "league": "trillionnium_league",
+            "player": player,
+            "loadout": loadout,
+        })),
+    )
+        .into_response()
+}
+
+async fn get_league_player_rewards(
+    Path(matrix_user_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(response) = authorize_ingress(&headers, state.config()) {
+        state.inner.metrics.inc_ingress_auth_failures();
+        return response;
+    }
+    let Some(matrix_user_id) = normalize_league_matrix_user(&matrix_user_id) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "matrix_user_id is required" })),
+        )
+            .into_response();
+    };
+    let league = state.inner.league_state.lock().await;
+    let rewards: Vec<LeagueReward> = league
+        .rewards
+        .iter()
+        .filter(|reward| reward.matrix_user_id == matrix_user_id)
+        .cloned()
+        .collect();
+    let total_earned: f64 = rewards.iter().map(|reward| reward.amount).sum();
+    (
+        StatusCode::OK,
+        Json(json!({
+            "kind": "league_rewards",
+            "league": "trillionnium_league",
+            "matrix_user_id": matrix_user_id,
+            "total_earned": total_earned,
+            "currency_unit": "credit",
+            "rewards": rewards,
+        })),
+    )
+        .into_response()
+}
+
+async fn get_league_player_inventory(
+    Path(matrix_user_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(response) = authorize_ingress(&headers, state.config()) {
+        state.inner.metrics.inc_ingress_auth_failures();
+        return response;
+    }
+    let Some(matrix_user_id) = normalize_league_matrix_user(&matrix_user_id) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "matrix_user_id is required" })),
+        )
+            .into_response();
+    };
+    let league = state.inner.league_state.lock().await;
+    let mut items: Vec<LeagueInventoryItem> = league
+        .inventory_items
+        .iter()
+        .filter(|item| item.matrix_user_id == matrix_user_id)
+        .cloned()
+        .collect();
+    items.sort_by(|left, right| {
+        right
+            .power
+            .cmp(&left.power)
+            .then_with(|| right.created_at_epoch.cmp(&left.created_at_epoch))
+    });
+    let total_power: i64 = items.iter().map(|item| item.power).sum();
+    (
+        StatusCode::OK,
+        Json(json!({
+            "kind": "league_inventory",
+            "league": "trillionnium_league",
+            "matrix_user_id": matrix_user_id,
+            "item_count": items.len(),
+            "total_power": total_power,
+            "items": items,
+        })),
+    )
+        .into_response()
+}
+
+async fn get_league_player_history(
+    Path(matrix_user_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(response) = authorize_ingress(&headers, state.config()) {
+        state.inner.metrics.inc_ingress_auth_failures();
+        return response;
+    }
+    let Some(matrix_user_id) = normalize_league_matrix_user(&matrix_user_id) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "matrix_user_id is required" })),
+        )
+            .into_response();
+    };
+    let league = state.inner.league_state.lock().await;
+    let battles: Vec<LeagueBattle> = league
+        .battles
+        .values()
+        .filter(|battle| battle.matrix_user_id == matrix_user_id)
+        .cloned()
+        .collect();
+    let submissions: Vec<LeagueSubmission> = league
+        .submissions
+        .values()
+        .filter(|submission| submission.matrix_user_id == matrix_user_id)
+        .cloned()
+        .collect();
+    (
+        StatusCode::OK,
+        Json(json!({
+            "kind": "league_history",
+            "league": "trillionnium_league",
+            "matrix_user_id": matrix_user_id,
+            "battles": battles,
+            "submissions": submissions,
+        })),
+    )
+        .into_response()
+}
+
+fn normalize_league_matrix_user(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn escape_html_text(input: &str) -> String {
+    input
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
+fn league_web_session_secret(config: &ConsumerEntryConfig) -> Option<&str> {
+    config
+        .league_web_session_secret
+        .as_deref()
+        .or(config.session_auth_secret.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn league_web_csrf(
+    secret: &str,
+    matrix_user_id: &str,
+    room_id: Option<&str>,
+    issued_at: i64,
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(secret.as_bytes());
+    hasher.update(b":league-web-csrf:");
+    hasher.update(matrix_user_id.as_bytes());
+    hasher.update(b":");
+    hasher.update(room_id.unwrap_or_default().as_bytes());
+    hasher.update(b":");
+    hasher.update(issued_at.to_string().as_bytes());
+    URL_SAFE_NO_PAD.encode(hasher.finalize())
+}
+
+fn encode_league_web_session(
+    claims: &LeagueWebSessionClaims,
+    secret: &str,
+) -> Result<String, Response> {
+    let assertion = URL_SAFE_NO_PAD.encode(serde_json::to_vec(claims).map_err(|err| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("failed to serialize web session: {err}") })),
+        )
+            .into_response()
+    })?);
+    let signature = sign_user_session_assertion(&assertion, secret)?;
+    Ok(format!("{assertion}.{signature}"))
+}
+
+fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
+    headers
+        .get(header::COOKIE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|cookie_header| {
+            cookie_header.split(';').find_map(|part| {
+                let (key, value) = part.trim().split_once('=')?;
+                (key == name).then(|| value.to_string())
+            })
+        })
+}
+
+fn authorize_league_web_session(
+    state: &AppState,
+    headers: &HeaderMap,
+    csrf: Option<&str>,
+) -> Result<Option<LeagueWebSessionClaims>, Response> {
+    let Some(raw_cookie) = cookie_value(headers, &state.config().league_web_session_cookie_name)
+    else {
+        if state.config().league_web_session_required {
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                Json(json!({
+                    "error": "missing league web session cookie",
+                    "session_endpoint": "/league/web/session",
+                })),
+            )
+                .into_response());
+        }
+        return Ok(None);
+    };
+    let Some((assertion, signature)) = raw_cookie.split_once('.') else {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "invalid league web session cookie format" })),
+        )
+            .into_response());
+    };
+    let Some(secret) = league_web_session_secret(state.config()) else {
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "league web session is required but no secret is configured" })),
+        )
+            .into_response());
+    };
+    let expected_signature = sign_user_session_assertion(assertion, secret)?;
+    if expected_signature != signature {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "invalid league web session signature" })),
+        )
+            .into_response());
+    }
+    let bytes = URL_SAFE_NO_PAD.decode(assertion).map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "league web session assertion must be base64url JSON" })),
+        )
+            .into_response()
+    })?;
+    let claims = serde_json::from_slice::<LeagueWebSessionClaims>(&bytes).map_err(|err| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": format!("invalid league web session payload: {err}") })),
+        )
+            .into_response()
+    })?;
+    let now = Utc::now().timestamp();
+    if claims.expires_at_epoch < now {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "league web session expired" })),
+        )
+            .into_response());
+    }
+    if let Some(provided_csrf) = csrf.map(str::trim).filter(|value| !value.is_empty()) {
+        if provided_csrf != claims.csrf {
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(json!({ "error": "league web csrf mismatch" })),
+            )
+                .into_response());
+        }
+    } else if state.config().league_web_session_required {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": "league web csrf token is required" })),
+        )
+            .into_response());
+    }
+    Ok(Some(claims))
+}
+
+fn league_hash_id(prefix: &str, value: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(value.as_bytes());
+    let encoded = URL_SAFE_NO_PAD.encode(hasher.finalize());
+    format!("{prefix}-{}", &encoded[..16])
+}
+
+fn league_entry_key(match_id: &str, matrix_user_id: &str) -> String {
+    format!("{match_id}\u{1f}{matrix_user_id}")
+}
+
+fn league_raid_roster_summary(league: &LeagueState, match_id: &str) -> Value {
+    let mut slots: Vec<LeagueRaidRosterSlot> = league
+        .raid_rosters
+        .iter()
+        .filter(|slot| slot.match_id == match_id && slot.status == "active")
+        .cloned()
+        .collect();
+    slots.sort_by(|left, right| {
+        left.role
+            .cmp(&right.role)
+            .then_with(|| left.matrix_user_id.cmp(&right.matrix_user_id))
+    });
+    let required_roles = ["scout", "builder", "auditor", "closer"];
+    let filled_roles: Vec<String> = slots.iter().map(|slot| slot.role.clone()).collect();
+    let missing_roles: Vec<&str> = required_roles
+        .iter()
+        .copied()
+        .filter(|role| !filled_roles.iter().any(|filled| filled == role))
+        .collect();
+    json!({
+        "match_id": match_id,
+        "slots": slots,
+        "slot_count": filled_roles.len(),
+        "required_roles": required_roles,
+        "missing_roles": missing_roles,
+        "ready": missing_roles.is_empty(),
+    })
+}
+
+async fn record_league_raid_roster_slot(
+    state: &AppState,
+    match_id: &str,
+    payload: LeagueRaidRosterRequest,
+) -> Result<(LeagueState, LeagueRaidRosterSlot, Value), Response> {
+    let matrix_user_id = match normalize_league_matrix_user(&payload.matrix_user_id) {
+        Some(value) => value,
+        None => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "matrix_user_id is required" })),
+            )
+                .into_response())
+        }
+    };
+    let role = payload
+        .role
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("scout")
+        .to_ascii_lowercase()
+        .replace('-', "_");
+    let hero_id = payload
+        .hero_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("oracle_scout")
+        .to_ascii_lowercase()
+        .replace('-', "_");
+    let (snapshot, slot, roster) = {
+        let mut league = state.inner.league_state.lock().await;
+        let Some(raid_match) = league.matches.get(match_id).cloned() else {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "league raid not found", "match_id": match_id })),
+            )
+                .into_response());
+        };
+        if raid_match.mode != "guild_raid" {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "match is not a guild raid", "match_id": match_id })),
+            )
+                .into_response());
+        }
+        let player = ensure_league_player(&mut league, &matrix_user_id, None);
+        let guild_id = league
+            .guild_memberships
+            .get(&matrix_user_id)
+            .map(|membership| membership.guild_id.clone());
+        for existing in &mut league.raid_rosters {
+            if existing.match_id == match_id && existing.matrix_user_id == matrix_user_id {
+                existing.status = "replaced".to_string();
+            }
+        }
+        let now = Utc::now().timestamp();
+        let slot = LeagueRaidRosterSlot {
+            slot_id: league_hash_id(
+                "slot",
+                &format!("{}:{}:{}:{}", match_id, matrix_user_id, role, now),
+            ),
+            match_id: match_id.to_string(),
+            guild_id,
+            player_id: player.player_id.clone(),
+            matrix_user_id: matrix_user_id.clone(),
+            room_id: payload.room_id.clone(),
+            role,
+            hero_id,
+            status: "active".to_string(),
+            joined_at_epoch: now,
+        };
+        league.raid_rosters.push(slot.clone());
+        let roster = league_raid_roster_summary(&league, match_id);
+        (league.clone(), slot, roster)
+    };
+    Ok((snapshot, slot, roster))
+}
+
+fn league_raid_progress(league: &LeagueState, match_id: &str) -> Value {
+    let contributions: Vec<&LeagueRaidContribution> = league
+        .raid_contributions
+        .iter()
+        .filter(|contribution| contribution.match_id == match_id)
+        .collect();
+    let total_progress: f64 = contributions
+        .iter()
+        .map(|contribution| contribution.progress_delta)
+        .sum::<f64>()
+        .min(100.0);
+    let average_score = if contributions.is_empty() {
+        0.0
+    } else {
+        contributions
+            .iter()
+            .map(|contribution| contribution.contribution_score)
+            .sum::<f64>()
+            / contributions.len() as f64
+    };
+    let mut roles: Vec<String> = contributions
+        .iter()
+        .map(|contribution| contribution.role.clone())
+        .collect();
+    roles.sort();
+    roles.dedup();
+    json!({
+        "match_id": match_id,
+        "phase": if total_progress >= 100.0 { "cleared" } else if total_progress >= 60.0 { "boss" } else if total_progress >= 25.0 { "mid" } else { "opening" },
+        "progress_percent": (total_progress * 10.0).round() / 10.0,
+        "contribution_count": contributions.len(),
+        "average_score": (average_score * 10.0).round() / 10.0,
+        "roles": roles,
+        "target_percent": 100.0,
+    })
+}
+
+async fn record_league_raid_contribution(
+    state: &AppState,
+    match_id: &str,
+    payload: LeagueRaidContributionRequest,
+) -> Result<(LeagueState, LeagueRaidContribution, Value), Response> {
+    let matrix_user_id = match normalize_league_matrix_user(&payload.matrix_user_id) {
+        Some(value) => value,
+        None => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "matrix_user_id is required" })),
+            )
+                .into_response())
+        }
+    };
+    let body = validate_text_payload(&payload.body, state.config().max_text_chars)?;
+    let role = payload
+        .role
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("raider")
+        .to_string();
+    let raid_mode = {
+        let league = state.inner.league_state.lock().await;
+        let Some(raid_match) = league.matches.get(match_id).cloned() else {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "league raid not found", "match_id": match_id })),
+            )
+                .into_response());
+        };
+        if raid_match.mode != "guild_raid" {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "match is not a guild raid", "match_id": match_id })),
+            )
+                .into_response());
+        }
+        raid_match.mode
+    };
+    let judgement = judge_league_submission_with_pipeline(state, &body, &raid_mode).await;
+    let (snapshot, contribution, progress) = {
+        let mut league = state.inner.league_state.lock().await;
+        if !league
+            .matches
+            .get(match_id)
+            .is_some_and(|league_match| league_match.mode == "guild_raid")
+        {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "league raid not found", "match_id": match_id })),
+            )
+                .into_response());
+        }
+        let mut player = ensure_league_player(&mut league, &matrix_user_id, None);
+        let mut entry =
+            ensure_league_entry(&mut league, match_id, &matrix_user_id, &player.player_id);
+        let guild_id = league
+            .guild_memberships
+            .get(&matrix_user_id)
+            .map(|membership| membership.guild_id.clone());
+        let progress_delta = (judgement.score / 8.0).clamp(4.0, 14.0);
+        let now = Utc::now().timestamp();
+        let contribution = LeagueRaidContribution {
+            contribution_id: league_hash_id(
+                "raid",
+                &format!("{}:{}:{}:{}", match_id, matrix_user_id, now, body),
+            ),
+            match_id: match_id.to_string(),
+            guild_id,
+            player_id: player.player_id.clone(),
+            matrix_user_id: matrix_user_id.clone(),
+            room_id: payload.room_id.clone(),
+            role,
+            body: body.clone(),
+            contribution_score: judgement.score,
+            progress_delta,
+            created_at_epoch: now,
+        };
+        player.xp += (judgement.score / 2.0).round() as i64;
+        player.reputation += (judgement.score / 20.0).round() as i64;
+        player.rating += ((judgement.score - 50.0) / 6.0).round() as i64;
+        entry.battles_started += 1;
+        league
+            .players_by_matrix_user
+            .insert(matrix_user_id.clone(), player);
+        league
+            .entries
+            .insert(league_entry_key(match_id, &matrix_user_id), entry);
+        league.raid_contributions.push(contribution.clone());
+        let progress = league_raid_progress(&league, match_id);
+        (league.clone(), contribution, progress)
+    };
+    Ok((snapshot, contribution, progress))
+}
+
+fn league_guild_standings(league: &LeagueState) -> Vec<Value> {
+    let mut standings: Vec<Value> = league
+        .guilds
+        .values()
+        .map(|guild| {
+            let members: Vec<&LeagueGuildMembership> = league
+                .guild_memberships
+                .values()
+                .filter(|membership| membership.guild_id == guild.guild_id)
+                .collect();
+            let member_count = members.len();
+            let mut total_rating = guild.rating as f64;
+            let mut total_earned = guild.treasury_credits;
+            let mut submissions = 0_i64;
+            for membership in members {
+                if let Some(player) = league
+                    .players_by_matrix_user
+                    .get(&membership.matrix_user_id)
+                {
+                    total_rating += player.rating as f64;
+                    total_earned += player.earned_credits;
+                    submissions += player.submissions;
+                }
+            }
+            let power_score = total_rating + total_earned * 10.0 + submissions as f64 * 25.0;
+            json!({
+                "guild_id": guild.guild_id,
+                "name": guild.name,
+                "member_count": member_count,
+                "rating": guild.rating,
+                "power_score": (power_score * 10.0).round() / 10.0,
+                "earned_credits": (total_earned * 100.0).round() / 100.0,
+                "submissions": submissions,
+            })
+        })
+        .collect();
+    standings.sort_by(|left, right| {
+        let left_score = left
+            .get("power_score")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0);
+        let right_score = right
+            .get("power_score")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0);
+        right_score
+            .partial_cmp(&left_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| {
+                left.get("guild_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .cmp(
+                        right
+                            .get("guild_id")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default(),
+                    )
+            })
+    });
+    standings
+}
+
+fn ensure_league_player(
+    league: &mut LeagueState,
+    matrix_user_id: &str,
+    display_name: Option<&str>,
+) -> LeaguePlayer {
+    if let Some(player) = league.players_by_matrix_user.get(matrix_user_id) {
+        return player.clone();
+    }
+    let now = Utc::now().timestamp();
+    let display_name = display_name
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(matrix_user_id)
+        .to_string();
+    let player = LeaguePlayer {
+        player_id: league_hash_id("player", matrix_user_id),
+        matrix_user_id: matrix_user_id.to_string(),
+        display_name,
+        class_tag: "summoner".to_string(),
+        rank_tier: "Bronze I".to_string(),
+        rating: 1000,
+        xp: 0,
+        reputation: 0,
+        battles: 0,
+        submissions: 0,
+        wins: 0,
+        earned_credits: 0.0,
+        created_at_epoch: now,
+    };
+    league
+        .players_by_matrix_user
+        .insert(matrix_user_id.to_string(), player.clone());
+    player
+}
+
+fn ensure_league_entry(
+    league: &mut LeagueState,
+    match_id: &str,
+    matrix_user_id: &str,
+    player_id: &str,
+) -> LeagueMatchEntry {
+    let key = league_entry_key(match_id, matrix_user_id);
+    if let Some(entry) = league.entries.get(&key) {
+        return entry.clone();
+    }
+    let entry = LeagueMatchEntry {
+        entry_id: league_hash_id("entry", &key),
+        match_id: match_id.to_string(),
+        player_id: player_id.to_string(),
+        matrix_user_id: matrix_user_id.to_string(),
+        status: "joined".to_string(),
+        battles_started: 0,
+        submissions: 0,
+        best_score: 0.0,
+        rewards_earned: 0.0,
+        joined_at_epoch: Utc::now().timestamp(),
+    };
+    league.entries.insert(key, entry.clone());
+    entry
+}
+
+fn merge_league_battle_metadata(metadata: Option<Value>, match_id: &str, entry_id: &str) -> Value {
+    let mut value = metadata.unwrap_or_else(|| json!({}));
+    if !value.is_object() {
+        value = json!({ "original_metadata": value });
+    }
+    if let Some(map) = value.as_object_mut() {
+        map.insert(
+            "trillionnium_league".to_string(),
+            json!({
+                "version": 1,
+                "match_id": match_id,
+                "entry_id": entry_id,
+                "action": "battle",
+            }),
+        );
+    }
+    value
+}
+
+fn league_item_for_submission(submission: &LeagueSubmission) -> LeagueInventoryItem {
+    let (rarity, item_kind, name, power) = if submission.score >= 90.0 {
+        ("mythic", "sigil", "Mythic Forge Sigil", 95)
+    } else if submission.score >= 80.0 {
+        ("epic", "badge", "Epic Quest Badge", 82)
+    } else if submission.score >= 70.0 {
+        ("rare", "charm", "Rare Evidence Charm", 68)
+    } else {
+        ("common", "token", "League Practice Token", 45)
+    };
+    LeagueInventoryItem {
+        item_id: league_hash_id("item", &submission.submission_id),
+        player_id: submission.player_id.clone(),
+        matrix_user_id: submission.matrix_user_id.clone(),
+        source_submission_id: submission.submission_id.clone(),
+        item_kind: item_kind.to_string(),
+        name: name.to_string(),
+        rarity: rarity.to_string(),
+        power,
+        cosmetic: true,
+        created_at_epoch: submission.created_at_epoch,
+    }
+}
+
+fn judge_league_submission(body: &str, mode: &str) -> LeagueJudgement {
+    let chars = body.chars().count() as f64;
+    let lower = body.to_ascii_lowercase();
+    let has_deliver = lower.contains("deliver")
+        || lower.contains("customer")
+        || body.contains("客户")
+        || body.contains("交付")
+        || body.contains("方案");
+    let has_evidence = lower.contains("evidence")
+        || lower.contains("source")
+        || lower.contains("data")
+        || body.contains("证据")
+        || body.contains("依据");
+    let has_risk = lower.contains("risk") || body.contains("风险");
+    let has_review = lower.contains("review") || body.contains("自评") || body.contains("复盘");
+    let has_next = lower.contains("next") || body.contains("下一步") || body.contains("计划");
+
+    let delivery_score = if has_deliver { 86.0 } else { 54.0 };
+    let evidence_score = if has_evidence { 82.0 } else { 48.0 };
+    let risk_score = if has_risk { 80.0 } else { 46.0 };
+    let action_score = if has_next { 84.0 } else { 52.0 };
+    let polish_score =
+        ((chars / 1.4).clamp(40.0, 88.0) + if has_review { 8.0 } else { 0.0 }).min(96.0);
+
+    let events = vec![
+        LeagueScoreEvent {
+            dimension: "delivery_fit".to_string(),
+            score: delivery_score,
+            weight: 0.30,
+            judge_kind: "rubric_v1".to_string(),
+            evidence: json!({"has_deliverable": has_deliver}),
+        },
+        LeagueScoreEvent {
+            dimension: "evidence_grounding".to_string(),
+            score: evidence_score,
+            weight: 0.24,
+            judge_kind: "rubric_v1".to_string(),
+            evidence: json!({"has_evidence": has_evidence}),
+        },
+        LeagueScoreEvent {
+            dimension: "risk_control".to_string(),
+            score: risk_score,
+            weight: 0.18,
+            judge_kind: "rubric_v1".to_string(),
+            evidence: json!({"has_risk": has_risk}),
+        },
+        LeagueScoreEvent {
+            dimension: "actionability".to_string(),
+            score: action_score,
+            weight: 0.16,
+            judge_kind: "rubric_v1".to_string(),
+            evidence: json!({"has_next_step": has_next}),
+        },
+        LeagueScoreEvent {
+            dimension: "craft_polish".to_string(),
+            score: polish_score,
+            weight: 0.12,
+            judge_kind: "rubric_v1".to_string(),
+            evidence: json!({"chars": chars, "has_self_review": has_review}),
+        },
+    ];
+    let score = events
+        .iter()
+        .map(|event| event.score * event.weight)
+        .sum::<f64>()
+        .clamp(0.0, 100.0);
+    let score = (score * 10.0).round() / 10.0;
+    let grade = league_judgement_grade(score);
+    let mut anti_cheat_flags = Vec::new();
+    if chars < 24.0 {
+        anti_cheat_flags.push("too_short".to_string());
+    }
+    if lower.matches("copy").count() >= 3 || body.matches('复').count() >= 12 {
+        anti_cheat_flags.push("repetition_suspected".to_string());
+    }
+    let mode_multiplier = match mode {
+        "bounty_arena" => 1.5,
+        "guild_raid" => 1.25,
+        _ => 1.0,
+    };
+    let reward_amount = ((score / 20.0) * mode_multiplier * 100.0).round() / 100.0;
+    LeagueJudgement {
+        score,
+        grade,
+        reward_amount,
+        judge_status: "rubric_scored".to_string(),
+        payout_status: if anti_cheat_flags.is_empty() {
+            "eligible".to_string()
+        } else {
+            "review_hold".to_string()
+        },
+        anti_cheat_flags,
+        score_events: events,
+    }
+}
+
+fn league_judgement_grade(score: f64) -> String {
+    if score >= 90.0 {
+        "S"
+    } else if score >= 80.0 {
+        "A"
+    } else if score >= 70.0 {
+        "B"
+    } else if score >= 60.0 {
+        "C"
+    } else {
+        "D"
+    }
+    .to_string()
+}
+
+fn league_hidden_test_event(body: &str, mode: &str) -> (LeagueScoreEvent, Vec<String>) {
+    let lower = body.to_ascii_lowercase();
+    let mut tests = vec![
+        json!({"id": "deliverable_anchor", "passed": lower.contains("deliver") || lower.contains("customer") || body.contains("客户") || body.contains("交付") || body.contains("方案")}),
+        json!({"id": "evidence_anchor", "passed": lower.contains("evidence") || lower.contains("source") || lower.contains("data") || body.contains("证据") || body.contains("依据")}),
+        json!({"id": "risk_gate", "passed": lower.contains("risk") || body.contains("风险")}),
+        json!({"id": "next_action", "passed": lower.contains("next") || body.contains("下一步") || body.contains("计划")}),
+        json!({"id": "substance_length", "passed": body.chars().count() >= 40}),
+        json!({"id": "not_repetitive", "passed": lower.matches("copy").count() < 3 && body.matches('复').count() < 12}),
+    ];
+    if mode == "guild_raid" {
+        tests.push(json!({"id": "raid_coordination", "passed": lower.contains("scout") || lower.contains("builder") || lower.contains("team") || lower.contains("gate") || body.contains("团队") || body.contains("分工")}));
+    }
+    let passed = tests
+        .iter()
+        .filter(|test| test.get("passed").and_then(Value::as_bool).unwrap_or(false))
+        .count();
+    let score = ((passed as f64 / tests.len() as f64) * 1000.0).round() / 10.0;
+    let mut flags = Vec::new();
+    if score < 70.0 {
+        flags.push("hidden_tests_failed".to_string());
+    }
+    if tests.iter().any(|test| {
+        test.get("id").and_then(Value::as_str) == Some("evidence_anchor")
+            && !test.get("passed").and_then(Value::as_bool).unwrap_or(false)
+    }) {
+        flags.push("hidden_missing_evidence".to_string());
+    }
+    (
+        LeagueScoreEvent {
+            dimension: "hidden_tests".to_string(),
+            score,
+            weight: 0.0,
+            judge_kind: "hidden_tests_v1".to_string(),
+            evidence: json!({
+                "mode": mode,
+                "passed": passed,
+                "total": tests.len(),
+                "tests": tests,
+            }),
+        },
+        flags,
+    )
+}
+
+async fn call_league_llm_judge_adapter(
+    state: &AppState,
+    body: &str,
+    mode: &str,
+    judgement: &LeagueJudgement,
+) -> LeagueExternalJudgeOutcome {
+    let Some(url) = state.config().league_llm_judge_url.clone() else {
+        return LeagueExternalJudgeOutcome {
+            event: LeagueScoreEvent {
+                dimension: "llm_judge_adapter".to_string(),
+                score: judgement.score,
+                weight: 0.0,
+                judge_kind: "llm_adapter_v1".to_string(),
+                evidence: json!({"status": "not_configured"}),
+            },
+            flags: Vec::new(),
+            grade_override: None,
+        };
+    };
+    let mut request = state
+        .inner
+        .http
+        .post(url.trim())
+        .timeout(Duration::from_millis(
+            state.config().league_llm_judge_timeout_ms,
+        ))
+        .json(&json!({
+            "league": "trillionnium_league",
+            "mode": mode,
+            "submission": {"body": body},
+            "rubric": {
+                "score": judgement.score,
+                "grade": &judgement.grade,
+                "events": &judgement.score_events,
+            }
+        }));
+    if let Some(token) = state.config().league_llm_judge_token.as_deref() {
+        request = request.bearer_auth(token);
+    }
+    let required = state.config().league_llm_judge_required;
+    let response = match request.send().await {
+        Ok(response) => response,
+        Err(err) => {
+            return LeagueExternalJudgeOutcome {
+                event: LeagueScoreEvent {
+                    dimension: "llm_judge_adapter".to_string(),
+                    score: judgement.score,
+                    weight: 0.0,
+                    judge_kind: "llm_adapter_v1".to_string(),
+                    evidence: json!({"status": "network_error", "error": err.to_string()}),
+                },
+                flags: if required {
+                    vec!["judge_adapter_unavailable".to_string()]
+                } else {
+                    Vec::new()
+                },
+                grade_override: None,
+            }
+        }
+    };
+    let status = response.status();
+    if !status.is_success() {
+        return LeagueExternalJudgeOutcome {
+            event: LeagueScoreEvent {
+                dimension: "llm_judge_adapter".to_string(),
+                score: judgement.score,
+                weight: 0.0,
+                judge_kind: "llm_adapter_v1".to_string(),
+                evidence: json!({"status": "http_error", "http_status": status.as_u16()}),
+            },
+            flags: if required {
+                vec!["judge_adapter_unavailable".to_string()]
+            } else {
+                Vec::new()
+            },
+            grade_override: None,
+        };
+    }
+    let parsed = match response.json::<LeagueExternalJudgeResponse>().await {
+        Ok(value) => value,
+        Err(err) => {
+            return LeagueExternalJudgeOutcome {
+                event: LeagueScoreEvent {
+                    dimension: "llm_judge_adapter".to_string(),
+                    score: judgement.score,
+                    weight: 0.0,
+                    judge_kind: "llm_adapter_v1".to_string(),
+                    evidence: json!({"status": "bad_json", "error": err.to_string()}),
+                },
+                flags: if required {
+                    vec!["judge_adapter_unavailable".to_string()]
+                } else {
+                    Vec::new()
+                },
+                grade_override: None,
+            }
+        }
+    };
+    let adapter_score = parsed.score.unwrap_or(judgement.score).clamp(0.0, 100.0);
+    let delta = ((adapter_score - judgement.score).abs() * 10.0).round() / 10.0;
+    let mut flags = parsed.flags.unwrap_or_default();
+    if delta >= 18.0 {
+        flags.push("judge_disagreement".to_string());
+    }
+    LeagueExternalJudgeOutcome {
+        event: LeagueScoreEvent {
+            dimension: "llm_judge_adapter".to_string(),
+            score: (adapter_score * 10.0).round() / 10.0,
+            weight: 0.0,
+            judge_kind: "llm_adapter_v1".to_string(),
+            evidence: json!({
+                "status": "scored",
+                "delta_from_rubric": delta,
+                "verdict": parsed.verdict,
+                "explanation": parsed.explanation,
+                "evidence": parsed.evidence,
+            }),
+        },
+        flags,
+        grade_override: parsed.grade,
+    }
+}
+
+async fn judge_league_submission_with_pipeline(
+    state: &AppState,
+    body: &str,
+    mode: &str,
+) -> LeagueJudgement {
+    let mut judgement = judge_league_submission(body, mode);
+    if state.config().league_hidden_tests_enabled {
+        let (event, mut flags) = league_hidden_test_event(body, mode);
+        judgement.score_events.push(event);
+        judgement.anti_cheat_flags.append(&mut flags);
+    }
+    let external = call_league_llm_judge_adapter(state, body, mode, &judgement).await;
+    judgement.score_events.push(external.event);
+    judgement.anti_cheat_flags.extend(external.flags);
+    if let Some(grade) = external
+        .grade_override
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    {
+        judgement.grade = grade;
+    }
+    judgement.anti_cheat_flags.sort();
+    judgement.anti_cheat_flags.dedup();
+    judgement.payout_status = if judgement.anti_cheat_flags.is_empty() {
+        "eligible".to_string()
+    } else {
+        "review_hold".to_string()
+    };
+    judgement.judge_status = if state.config().league_llm_judge_url.is_some() {
+        "rubric_hidden_llm_pipeline_v2".to_string()
+    } else {
+        "rubric_hidden_pipeline_v2".to_string()
+    };
+    judgement
+}
+
+fn default_league_loadout() -> Value {
+    loadout_json_from_heroes(&[
+        "oracle_scout".to_string(),
+        "forge_builder".to_string(),
+        "mirror_auditor".to_string(),
+        "courier_closer".to_string(),
+    ])
+}
+
+fn league_loadout_for_player(league: &LeagueState, matrix_user_id: &str) -> Value {
+    league
+        .player_loadouts
+        .get(matrix_user_id)
+        .map(|heroes| loadout_json_from_heroes(heroes))
+        .unwrap_or_else(default_league_loadout)
+}
+
+fn normalize_hero_draft(values: Vec<String>) -> Vec<String> {
+    let mut heroes = Vec::new();
+    for value in values {
+        let hero = value.trim().to_ascii_lowercase().replace('-', "_");
+        if hero.is_empty() || heroes.contains(&hero) {
+            continue;
+        }
+        heroes.push(hero);
+        if heroes.len() >= 5 {
+            break;
+        }
+    }
+    heroes
+}
+
+fn loadout_json_from_heroes(heroes: &[String]) -> Value {
+    let hero_values: Vec<Value> = heroes
+        .iter()
+        .map(|hero| {
+            let (name, role) = match hero.as_str() {
+                "oracle_scout" => ("Oracle Scout", "侦察/调研"),
+                "forge_builder" => ("Forge Builder", "生成/构建"),
+                "mirror_auditor" => ("Mirror Auditor", "审核/测试"),
+                "courier_closer" => ("Courier Closer", "交付/包装"),
+                "ledger_warden" => ("Ledger Warden", "成本/风控"),
+                "muse_designer" => ("Muse Designer", "视觉/设计"),
+                _ => (hero.as_str(), "自定义英雄"),
+            };
+            json!({"hero_id": hero, "name": name, "role": role})
+        })
+        .collect();
+    json!({
+        "heroes": hero_values,
+        "draft_unlocked": true,
+        "max_slots": 5,
+    })
+}
+
 async fn forward_to_cex_task(
     state: AppState,
     capability_id: Option<String>,
@@ -5544,6 +9363,146 @@ async fn get_chat_task(
             source: json!({ "kind": "task_lookup" }),
             raw: value,
         }),
+    )
+        .into_response()
+}
+
+async fn get_matrix_wallet(
+    Path(matrix_user_id): Path<String>,
+    Query(query): Query<HashMap<String, String>>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(response) = authorize_ingress(&headers, state.config()) {
+        state.inner.metrics.inc_ingress_auth_failures();
+        return response;
+    }
+
+    let room_id = query.get("room_id").cloned().unwrap_or_default();
+    let payload = MatrixMessageRequest {
+        matrix_user_id: matrix_user_id.clone(),
+        room_id: room_id.clone(),
+        session_id: query.get("session_id").cloned(),
+        org_id: query.get("org_id").cloned(),
+        message: "wallet lookup".to_string(),
+        capability_id: None,
+        account_id: query.get("account_id").cloned(),
+        event_id: None,
+        idempotency_key: None,
+        metadata: None,
+    };
+
+    let resolved_identity = match resolve_matrix_identity(&state, &payload).await {
+        Ok(identity) => identity,
+        Err(response) => return response,
+    };
+
+    let Some(account_id) = resolved_identity.scope.account_id.clone() else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "error": "wallet account not resolved",
+                "identity_scope": resolved_identity.scope,
+                "identity_resolution": resolved_identity.resolution,
+            })),
+        )
+            .into_response();
+    };
+
+    let Some(ledger_admin_token) = state.config().ledger_admin_token.clone() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({
+                "error": "consumer-entry ledger admin token not configured",
+                "message": "set CONSUMER_ENTRY_LEDGER_ADMIN_TOKEN or LEDGER_ADMIN_TOKENS_JSON to enable wallet projection",
+            })),
+        )
+            .into_response();
+    };
+
+    let url = format!(
+        "{}/v1/accounts/{}",
+        state.config().ledger_base_url.trim_end_matches('/'),
+        account_id
+    );
+    let response = match state
+        .inner
+        .http
+        .get(url)
+        .header("x-admin-token", ledger_admin_token)
+        .send()
+        .await
+    {
+        Ok(response) => response,
+        Err(err) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({ "error": format!("failed to reach ledger-service: {err}") })),
+            )
+                .into_response()
+        }
+    };
+
+    let status = response.status();
+    let account =
+        match response.json::<Value>().await {
+            Ok(value) => value,
+            Err(err) => return (
+                StatusCode::BAD_GATEWAY,
+                Json(
+                    json!({ "error": format!("ledger-service returned non-json response: {err}") }),
+                ),
+            )
+                .into_response(),
+        };
+
+    if !status.is_success() {
+        return (status, Json(account)).into_response();
+    }
+
+    let balance = account
+        .get("balance")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
+    let reserved = account
+        .get("reserved")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
+    let available = balance - reserved;
+    let currency_unit = account
+        .get("currency_unit")
+        .and_then(Value::as_str)
+        .unwrap_or("credit");
+
+    (
+        StatusCode::OK,
+        Json(json!({
+            "kind": "wallet_projection",
+            "matrix_user_id": matrix_user_id,
+            "room_id": room_id,
+            "identity_scope": resolved_identity.scope,
+            "identity_resolution": resolved_identity.resolution,
+            "account": {
+                "account_id": account_id,
+                "account_type": account.get("account_type").cloned().unwrap_or(Value::Null),
+                "currency_unit": currency_unit,
+                "balance": balance,
+                "reserved": reserved,
+                "available": available,
+                "raw": account,
+            },
+            "package": {
+                "code": "local-production-basic",
+                "name": "Local Production Credits",
+                "status": "active",
+                "billing_model": "credit_wallet",
+                "features": ["chat_tasks", "matrix_entry", "provider_dispatch"]
+            },
+            "display": {
+                "title": "CEX 钱包 / 套餐",
+                "summary": format!("可用 {available:.2} {currency_unit}，已预留 {reserved:.2}，总额 {balance:.2}"),
+            }
+        })),
     )
         .into_response()
 }
@@ -5793,18 +9752,21 @@ fn authorize_user_session(
                 .into_response()
         })?;
 
-        issuer_keys.get(&key_id).map(|value| value.as_str()).ok_or_else(|| {
-            state.inner.metrics.inc_session_auth_failures();
-            (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({
-                    "error": "unknown signed session key_id for issuer-managed keys",
-                    "issuer": issuer,
-                    "key_id": key_id,
-                })),
-            )
-                .into_response()
-        })?
+        issuer_keys
+            .get(&key_id)
+            .map(|value| value.as_str())
+            .ok_or_else(|| {
+                state.inner.metrics.inc_session_auth_failures();
+                (
+                    StatusCode::UNAUTHORIZED,
+                    Json(json!({
+                        "error": "unknown signed session key_id for issuer-managed keys",
+                        "issuer": issuer,
+                        "key_id": key_id,
+                    })),
+                )
+                    .into_response()
+            })?
     } else {
         state
             .config()
@@ -5886,8 +9848,8 @@ fn authorize_user_session(
         }
     }
 
-    let claimed_request_fingerprint = normalize_identity_value(claims.request_fingerprint.as_deref())
-        .ok_or_else(|| {
+    let claimed_request_fingerprint =
+        normalize_identity_value(claims.request_fingerprint.as_deref()).ok_or_else(|| {
             state.inner.metrics.inc_session_auth_failures();
             (
                 StatusCode::BAD_REQUEST,
@@ -6005,11 +9967,9 @@ fn authorize_user_session(
         state.inner.metrics.inc_session_auth_failures();
         return Err(response);
     }
-    if let Err(response) = verify_session_auth_claim_field(
-        "org_id",
-        claims.org_id.as_deref(),
-        scope.org_id.as_deref(),
-    ) {
+    if let Err(response) =
+        verify_session_auth_claim_field("org_id", claims.org_id.as_deref(), scope.org_id.as_deref())
+    {
         state.inner.metrics.inc_session_auth_failures();
         return Err(response);
     }
@@ -6618,24 +10578,24 @@ mod tests {
     use super::{
         authorize_user_session, build_chat_identity_scope, build_chat_org_rate_limit_key,
         build_chat_rate_limit_key, build_chat_replay_key, build_chat_request_fingerprint,
-        build_chat_room_rate_limit_key,
-        build_chat_session_rate_limit_key, build_chat_user_rate_limit_key,
-        build_matrix_identity_scope, build_matrix_org_rate_limit_key,
-        build_matrix_rate_limit_key, build_matrix_replay_key, build_matrix_room_rate_limit_key,
-        build_matrix_session_rate_limit_key, build_matrix_user_rate_limit_key, build_router,
+        build_chat_room_rate_limit_key, build_chat_session_rate_limit_key,
+        build_chat_user_rate_limit_key, build_matrix_identity_scope,
+        build_matrix_org_rate_limit_key, build_matrix_rate_limit_key, build_matrix_replay_key,
+        build_matrix_room_rate_limit_key, build_matrix_session_rate_limit_key,
+        build_matrix_user_rate_limit_key, build_router, default_league_state,
         evaluate_identity_binding_reload_governance, load_identity_binding_revision_approval_state,
-        load_identity_binding_store, load_rate_limit_cache,
-        load_session_auth_issuer_registry, load_session_auth_issuer_registry_revision_approval_state,
-        parse_csv_list, project_consumer_status, prune_rate_limit_cache, resolve_chat_identity,
-        session_auth_issuer_registry_active_key_diff_json,
-        sign_user_session_assertion, validate_text_payload, AppState, AppStateInner,
-        ConsumerEntryConfig, ConsumerEntryMetrics, CreateChatTaskRequest,
-        IdentityBindingAuditState, IdentityBindingEntry, IdentityBindingMetadata,
-        IdentityBindingRevisionApprovalState, IdentityBindingStore, IdentityBindings,
-        MatrixMessageRequest, ProductUserIdentity, RateLimitCache, ReplayCache, RuntimeProfile,
-        SessionAuthIssuerRegistryIssuer, SessionAuthIssuerRegistryMetadata,
-        SessionAuthIssuerRegistryRuntimeState, UserSessionAuthClaims, DEFAULT_MAX_TEXT_CHARS,
-        USER_SESSION_ASSERTION_HEADER, USER_SESSION_SIGNATURE_HEADER,
+        load_identity_binding_store, load_rate_limit_cache, load_session_auth_issuer_registry,
+        load_session_auth_issuer_registry_revision_approval_state, parse_csv_list,
+        project_consumer_status, prune_rate_limit_cache, resolve_chat_identity,
+        session_auth_issuer_registry_active_key_diff_json, sign_user_session_assertion,
+        validate_text_payload, AppState, AppStateInner, ConsumerEntryConfig, ConsumerEntryMetrics,
+        CreateChatTaskRequest, IdentityBindingAuditState, IdentityBindingEntry,
+        IdentityBindingMetadata, IdentityBindingRevisionApprovalState, IdentityBindingStore,
+        IdentityBindings, MatrixMessageRequest, ProductUserIdentity, RateLimitCache, ReplayCache,
+        RuntimeProfile, SessionAuthIssuerRegistryIssuer, SessionAuthIssuerRegistryMetadata,
+        SessionAuthIssuerRegistryRuntimeState, UserSessionAuthClaims,
+        DEFAULT_LEAGUE_LLM_JUDGE_TIMEOUT_MS, DEFAULT_LEAGUE_WEB_SESSION_TTL_SECS,
+        DEFAULT_MAX_TEXT_CHARS, USER_SESSION_ASSERTION_HEADER, USER_SESSION_SIGNATURE_HEADER,
     };
     use axum::{
         body::{to_bytes, Body},
@@ -6790,6 +10750,8 @@ mod tests {
             bind_addr: "127.0.0.1:8090".to_string(),
             cex_gateway_base_url: "http://127.0.0.1:8080".to_string(),
             cex_gateway_api_key: "local-dev-key".to_string(),
+            ledger_base_url: "http://127.0.0.1:7002".to_string(),
+            ledger_admin_token: None,
             default_capability_id: None,
             default_account_id: None,
             ingress_token: None,
@@ -6806,7 +10768,8 @@ mod tests {
             session_auth_issuer_registry_approved_revisions_path: None,
             session_auth_issuer_registry_require_approved_revision: false,
             session_auth_issuer_registry_require_actor: false,
-            session_auth_issuer_registry_actor_header: "x-session-auth-issuer-registry-actor".to_string(),
+            session_auth_issuer_registry_actor_header: "x-session-auth-issuer-registry-actor"
+                .to_string(),
             session_auth_issuer_registry_allowed_actors: Vec::new(),
             session_auth_max_clock_skew_secs: 300,
             session_auth_max_ttl_secs: 900,
@@ -6834,6 +10797,17 @@ mod tests {
             replay_window_secs: 600,
             replay_cache_size: 2048,
             replay_store_path: None,
+            league_state_path: None,
+            league_sql_snapshot_path: None,
+            league_hidden_tests_enabled: true,
+            league_llm_judge_url: None,
+            league_llm_judge_token: None,
+            league_llm_judge_required: false,
+            league_llm_judge_timeout_ms: DEFAULT_LEAGUE_LLM_JUDGE_TIMEOUT_MS,
+            league_web_session_required: false,
+            league_web_session_secret: None,
+            league_web_session_cookie_name: "cex_league_session".to_string(),
+            league_web_session_ttl_secs: DEFAULT_LEAGUE_WEB_SESSION_TTL_SECS,
         }
     }
 
@@ -6866,7 +10840,10 @@ mod tests {
                     product_users,
                 }),
                 identity_binding_audit_state: RwLock::new(IdentityBindingAuditState::default()),
-                session_auth_issuer_registry_state: StdRwLock::new(session_auth_issuer_registry_state),
+                session_auth_issuer_registry_state: StdRwLock::new(
+                    session_auth_issuer_registry_state,
+                ),
+                league_state: Mutex::new(default_league_state()),
                 rate_limits: Mutex::new(RateLimitCache::default()),
                 replay_cache: Mutex::new(ReplayCache::default()),
                 metrics: ConsumerEntryMetrics::default(),
@@ -6971,7 +10948,10 @@ mod tests {
         .unwrap();
         assert_eq!(authorized.claims.subject, "user-1");
         assert_eq!(authorized.claims.source_kind, "chat_task");
-        assert_eq!(authorized.claims.audience.as_deref(), Some("consumer-entry-api"));
+        assert_eq!(
+            authorized.claims.audience.as_deref(),
+            Some("consumer-entry-api")
+        );
     }
 
     #[test]
@@ -7073,8 +11053,7 @@ mod tests {
         };
         let assertion = base64::engine::general_purpose::URL_SAFE_NO_PAD
             .encode(serde_json::to_vec(&claims).unwrap());
-        let signature =
-            sign_user_session_assertion(&assertion, "issuer-key-secret").unwrap();
+        let signature = sign_user_session_assertion(&assertion, "issuer-key-secret").unwrap();
         let mut headers = HeaderMap::new();
         headers.insert(USER_SESSION_ASSERTION_HEADER, assertion.parse().unwrap());
         headers.insert(USER_SESSION_SIGNATURE_HEADER, signature.parse().unwrap());
@@ -7136,8 +11115,7 @@ mod tests {
         };
         let assertion = base64::engine::general_purpose::URL_SAFE_NO_PAD
             .encode(serde_json::to_vec(&claims).unwrap());
-        let signature =
-            sign_user_session_assertion(&assertion, "issuer-registry-secret").unwrap();
+        let signature = sign_user_session_assertion(&assertion, "issuer-registry-secret").unwrap();
         let mut headers = HeaderMap::new();
         headers.insert(USER_SESSION_ASSERTION_HEADER, assertion.parse().unwrap());
         headers.insert(USER_SESSION_SIGNATURE_HEADER, signature.parse().unwrap());
@@ -7199,9 +11177,7 @@ mod tests {
         assert_eq!(diff["matches"], Value::Bool(false));
         assert_eq!(diff["changed_active_key_count"], Value::from(2));
         assert_eq!(
-            diff.get("changes")
-                .and_then(Value::as_array)
-                .map(Vec::len),
+            diff.get("changes").and_then(Value::as_array).map(Vec::len),
             Some(2)
         );
     }
@@ -7219,8 +11195,7 @@ mod tests {
         )
         .expect("write issuer registry");
 
-        let (metadata, registry) =
-            load_session_auth_issuer_registry(temp_path.to_str());
+        let (metadata, registry) = load_session_auth_issuer_registry(temp_path.to_str());
         assert_eq!(metadata.load_status, "invalid_active_key");
         assert_eq!(metadata.revision.as_deref(), Some("rev-a"));
         assert!(metadata
@@ -7527,8 +11502,14 @@ mod tests {
 
         let approval_state = load_session_auth_issuer_registry_revision_approval_state(&config);
         assert_eq!(approval_state.load_status, "loaded");
-        assert_eq!(approval_state.revision.as_deref(), Some("session-approval-a"));
-        assert_eq!(approval_state.approved_revisions, vec!["sess-reg-a", "sess-reg-b"]);
+        assert_eq!(
+            approval_state.revision.as_deref(),
+            Some("session-approval-a")
+        );
+        assert_eq!(
+            approval_state.approved_revisions,
+            vec!["sess-reg-a", "sess-reg-b"]
+        );
 
         let _ = std::fs::remove_file(path);
     }
@@ -8578,8 +12559,7 @@ mod tests {
         )
         .expect("write session auth issuer registry approval");
 
-        let (metadata, registry) =
-            load_session_auth_issuer_registry(temp_registry_path.to_str());
+        let (metadata, registry) = load_session_auth_issuer_registry(temp_registry_path.to_str());
         let mut config = test_config();
         config.ingress_token = Some("admin-token".to_string());
         config.require_session_auth = true;
@@ -8616,7 +12596,10 @@ mod tests {
                 .and_then(Value::as_str),
             Some("sess-reg-a")
         );
-        assert_eq!(registry.get("issuer_count").and_then(Value::as_u64), Some(2));
+        assert_eq!(
+            registry.get("issuer_count").and_then(Value::as_u64),
+            Some(2)
+        );
         assert_eq!(registry.get("key_count").and_then(Value::as_u64), Some(3));
         assert_eq!(
             registry
@@ -8675,8 +12658,7 @@ mod tests {
         )
         .expect("write session auth approval state");
 
-        let (metadata, registry) =
-            load_session_auth_issuer_registry(temp_registry_path.to_str());
+        let (metadata, registry) = load_session_auth_issuer_registry(temp_registry_path.to_str());
         let mut config = test_config();
         config.ingress_token = Some("admin-token".to_string());
         config.require_session_auth = true;
@@ -8736,7 +12718,8 @@ mod tests {
 
     #[tokio::test]
     async fn session_auth_issuer_registry_validate_endpoint_reports_active_key_diff() {
-        let temp_registry_path = temp_identity_bindings_path("session-auth-registry-active-key-diff");
+        let temp_registry_path =
+            temp_identity_bindings_path("session-auth-registry-active-key-diff");
         std::fs::write(
             &temp_registry_path,
             r#"{"version":1,"revision":"sess-reg-diff-a","issuers":{"matrix-entry-adapter":{"activeKeyId":"v2","keys":{"v1":"secret-a","v2":"secret-b"}}}}"#,
@@ -8806,15 +12789,15 @@ mod tests {
 
     #[tokio::test]
     async fn session_auth_issuer_registry_validate_endpoint_requires_authorized_actor() {
-        let temp_registry_path = temp_identity_bindings_path("session-auth-registry-validate-actor");
+        let temp_registry_path =
+            temp_identity_bindings_path("session-auth-registry-validate-actor");
         std::fs::write(
             &temp_registry_path,
             r#"{"version":1,"revision":"sess-reg-actor-a","issuers":{"matrix-entry-adapter":{"activeKeyId":"v1","keys":{"v1":"secret-a"}}}}"#,
         )
         .expect("write session auth issuer registry");
 
-        let (metadata, registry) =
-            load_session_auth_issuer_registry(temp_registry_path.to_str());
+        let (metadata, registry) = load_session_auth_issuer_registry(temp_registry_path.to_str());
         let mut config = test_config();
         config.ingress_token = Some("admin-token".to_string());
         config.require_session_auth = true;
@@ -8838,7 +12821,10 @@ mod tests {
         .await;
 
         assert_eq!(status_missing, StatusCode::CONFLICT);
-        assert_eq!(body_missing.get("status").and_then(Value::as_str), Some("actor_missing"));
+        assert_eq!(
+            body_missing.get("status").and_then(Value::as_str),
+            Some("actor_missing")
+        );
         assert_eq!(
             body_missing
                 .get("session_auth_issuer_registry_actor_request")
@@ -8885,8 +12871,7 @@ mod tests {
         )
         .expect("write session auth approval state");
 
-        let (metadata, registry) =
-            load_session_auth_issuer_registry(temp_registry_path.to_str());
+        let (metadata, registry) = load_session_auth_issuer_registry(temp_registry_path.to_str());
         let mut config = test_config();
         config.ingress_token = Some("admin-token".to_string());
         config.require_session_auth = true;
@@ -9082,15 +13067,18 @@ mod tests {
 
         assert_eq!(status, StatusCode::CONFLICT);
         assert_eq!(body.get("valid").and_then(Value::as_bool), Some(false));
-        assert_eq!(body.get("status").and_then(Value::as_str), Some("no_allowed_actors_configured"));
+        assert_eq!(
+            body.get("status").and_then(Value::as_str),
+            Some("no_allowed_actors_configured")
+        );
     }
 
     #[tokio::test]
     async fn session_auth_issuer_registry_approval_validate_endpoint_rejects_unapproved_revision() {
-        let temp_registry_path = temp_identity_bindings_path("session-auth-registry-approval-validate");
-        let temp_approval_path = temp_identity_bindings_path(
-            "session-auth-registry-approval-validate-source",
-        );
+        let temp_registry_path =
+            temp_identity_bindings_path("session-auth-registry-approval-validate");
+        let temp_approval_path =
+            temp_identity_bindings_path("session-auth-registry-approval-validate-source");
         std::fs::write(
             &temp_registry_path,
             r#"{"version":1,"revision":"sess-reg-c","issuers":{"matrix-entry-adapter":{"activeKeyId":"v1","keys":{"v1":"secret-a"}}}}"#,
@@ -9102,8 +13090,7 @@ mod tests {
         )
         .expect("write session auth approval state");
 
-        let (metadata, registry) =
-            load_session_auth_issuer_registry(temp_registry_path.to_str());
+        let (metadata, registry) = load_session_auth_issuer_registry(temp_registry_path.to_str());
         let mut config = test_config();
         config.ingress_token = Some("admin-token".to_string());
         config.require_session_auth = true;
@@ -9127,7 +13114,10 @@ mod tests {
         .await;
 
         assert_eq!(status, StatusCode::CONFLICT);
-        assert_eq!(body.get("status").and_then(Value::as_str), Some("current_revision_not_approved"));
+        assert_eq!(
+            body.get("status").and_then(Value::as_str),
+            Some("current_revision_not_approved")
+        );
         assert_eq!(
             body.get("session_auth_issuer_registry_approval")
                 .and_then(|value| value.get("current_revision_approved"))
@@ -9147,10 +13137,10 @@ mod tests {
 
     #[tokio::test]
     async fn session_auth_issuer_registry_approval_status_endpoint_reports_source() {
-        let temp_registry_path = temp_identity_bindings_path("session-auth-registry-approval-status");
-        let temp_approval_path = temp_identity_bindings_path(
-            "session-auth-registry-approval-status-source",
-        );
+        let temp_registry_path =
+            temp_identity_bindings_path("session-auth-registry-approval-status");
+        let temp_approval_path =
+            temp_identity_bindings_path("session-auth-registry-approval-status-source");
         std::fs::write(
             &temp_registry_path,
             r#"{"version":1,"revision":"sess-reg-d","issuers":{"matrix-entry-adapter":{"activeKeyId":"v1","keys":{"v1":"secret-a"}}}}"#,
@@ -9162,8 +13152,7 @@ mod tests {
         )
         .expect("write session auth approval state");
 
-        let (metadata, registry) =
-            load_session_auth_issuer_registry(temp_registry_path.to_str());
+        let (metadata, registry) = load_session_auth_issuer_registry(temp_registry_path.to_str());
         let mut config = test_config();
         config.ingress_token = Some("admin-token".to_string());
         config.require_session_auth = true;
@@ -9963,8 +13952,7 @@ mod tests {
         )
         .expect("write session auth approval state");
 
-        let (metadata, registry) =
-            load_session_auth_issuer_registry(temp_registry_path.to_str());
+        let (metadata, registry) = load_session_auth_issuer_registry(temp_registry_path.to_str());
         let mut config = test_config();
         config.require_session_auth = true;
         config.session_auth_allowed_issuers = vec!["matrix-entry-adapter".to_string()];
@@ -10013,8 +14001,7 @@ mod tests {
         )
         .expect("write session auth approval state");
 
-        let (metadata, registry) =
-            load_session_auth_issuer_registry(temp_registry_path.to_str());
+        let (metadata, registry) = load_session_auth_issuer_registry(temp_registry_path.to_str());
         let mut config = test_config();
         config.require_session_auth = true;
         config.session_auth_allowed_issuers = vec!["matrix-entry-adapter".to_string()];
@@ -10032,8 +14019,10 @@ mod tests {
         let (status, body) = send_metrics_request(&app).await;
         assert_eq!(status, StatusCode::OK);
         assert!(body.contains("cex_consumer_entry_session_auth_issuer_registry_governance_valid 0"));
-        assert!(body.contains("cex_consumer_entry_session_auth_issuer_registry_approval_source_valid 0"));
-        assert!(body.contains("cex_consumer_entry_session_auth_issuer_registry_approval_coverage_valid 0"));
+        assert!(body
+            .contains("cex_consumer_entry_session_auth_issuer_registry_approval_source_valid 0"));
+        assert!(body
+            .contains("cex_consumer_entry_session_auth_issuer_registry_approval_coverage_valid 0"));
 
         let _ = std::fs::remove_file(&temp_registry_path);
         let _ = std::fs::remove_file(&temp_approval_path);

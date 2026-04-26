@@ -173,6 +173,19 @@ pub async fn refund_credits(
     apply_action(state, req, "refund").await
 }
 
+pub async fn grant_credits(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<LedgerActionRequest>,
+) -> impl IntoResponse {
+    if let Err(response) =
+        require_account_access(&state, &headers, req.account_id, &["ledger:manage"]).await
+    {
+        return response;
+    }
+    apply_action(state, req, "grant").await
+}
+
 async fn apply_action(state: AppState, req: LedgerActionRequest, action: &str) -> Response {
     if req.amount <= 0.0 {
         return (
@@ -291,6 +304,7 @@ async fn apply_action_via_repository(
         "reserve" => state.repository.reserve_credits(entry).await?,
         "consume" => state.repository.consume_credits(entry).await?,
         "refund" => state.repository.refund_credits(entry).await?,
+        "grant" => state.repository.grant_credits(entry).await?,
         _ => {
             return Err(LedgerActionError::Other(
                 "unsupported ledger action".to_string(),
@@ -450,6 +464,9 @@ async fn apply_action_in_memory(state: AppState, entry: LedgerEntryRecord) -> Re
                         .into_response();
                 }
                 account.reserved -= entry.amount;
+            }
+            "grant" => {
+                account.balance += entry.amount;
             }
             _ => {
                 return (

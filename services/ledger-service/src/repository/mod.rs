@@ -39,4 +39,8 @@ pub trait LedgerRepository {
         &self,
         entry: &LedgerEntryRecord,
     ) -> Result<AccountRecord, LedgerActionError>;
+    async fn grant_credits(
+        &self,
+        entry: &LedgerEntryRecord,
+    ) -> Result<AccountRecord, LedgerActionError>;
 }

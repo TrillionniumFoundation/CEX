@@ -17,5 +17,6 @@ pub fn build_router(state: AppState) -> Router {
         .route("/v1/ledger/reserve", post(api::reserve_credits))
         .route("/v1/ledger/consume", post(api::consume_credits))
         .route("/v1/ledger/refund", post(api::refund_credits))
+        .route("/v1/ledger/grant", post(api::grant_credits))
         .with_state(state)
 }

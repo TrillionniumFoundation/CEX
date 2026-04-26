@@ -5,19 +5,11 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOG_DIR="$ROOT_DIR/logs/matrix-bot-entry"
 RUN_DIR="$ROOT_DIR/run/matrix-bot-entry"
-ENV_FILE="$ROOT_DIR/.env"
+ENV_FILE="${CEX_ENV_FILE:-$ROOT_DIR/.env}"
 
-if [[ -f "$ENV_FILE" ]]; then
-  set -a
-  while IFS='' read -r line || [[ -n "$line" ]]; do
-    line="${line%$'\r'}"
-    if [[ -z "$line" || "$line" == \#* ]]; then
-      continue
-    fi
-    export "$line"
-  done < "$ENV_FILE"
-  set +a
-fi
+# shellcheck source=scripts/_dev-helpers.sh
+source "$ROOT_DIR/scripts/_dev-helpers.sh"
+cex_load_env "$ENV_FILE"
 
 : "${CONSUMER_ENTRY_BIND_ADDR:=127.0.0.1:8090}"
 : "${MATRIX_ENTRY_ADAPTER_BIND_ADDR:=127.0.0.1:8091}"

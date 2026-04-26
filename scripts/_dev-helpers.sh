@@ -166,5 +166,21 @@ set org_id = excluded.org_id,
     status = excluded.status,
     revoked_at = null,
     expires_at = null;
+
+insert into accounts (account_id, org_id, account_type, currency_unit, status, balance, reserved)
+values (
+  '00000000-0000-0000-0000-00000000ce31',
+  '00000000-0000-0000-0000-00000000ce01',
+  'org_wallet',
+  'credit',
+  'active',
+  1000,
+  0
+)
+on conflict (account_id) do update
+set org_id = excluded.org_id,
+    account_type = excluded.account_type,
+    currency_unit = excluded.currency_unit,
+    status = excluded.status;
 SQL
 }

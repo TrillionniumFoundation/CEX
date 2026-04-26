@@ -478,28 +478,24 @@ curl -s -X POST http://127.0.0.1:8090/v1/matrix/messages \
 
 ## What this is NOT yet
 
-This is not a full Matrix appservice or bot integration yet.
+This is still not a full Matrix appservice integration, but the local Matrix/Element bot path now has a real-room loop: `matrix-bot-poller` reads Synapse `/sync`, `matrix-bot-relay` forwards events to `matrix-entry-adapter`, and replies are sent back to the same Matrix room.
 
-Still missing:
+Current local Matrix/Element frontend slice:
 
-- real Matrix event ingestion / auth
+- `/task ...` creates a CEX task and projects a structured `🧾 CEX 任务卡`
+- `/status <task-id>` reads the CEX task projection and returns the same status card shape
+- `/balance` / `/wallet` / `/余额` / `/钱包` calls `GET /v1/matrix/users/:matrix_user_id/wallet` and projects a wallet card
+- `/plans` / `/package` / `/套餐` projects the package/plan metadata
+- `scripts/start-matrix-live-stack.sh` can start local Synapse + Element Web + relay + poller, and `scripts/check-matrix-live-room-e2e.sh` validates the real room loop end-to-end
+
+Still missing beyond this local production frontend slice:
+
+- Matrix appservice registration
 - a shared multi-service identity source-of-truth service, instead of the current repo-local `product_users` registry inside the binding document
-- task persistence
 - confirmation callbacks
-- credits page
-- product session model
 - attachment handling
-- push / live updates
+- richer Element customization beyond HTML-compatible Matrix message cards
 - ingress auth beyond shared edge token
 - durable replay protection and quota enforcement are still incomplete: `consumer-entry-api` now supports persisted replay for Matrix `event_id` and generic chat `idempotency_key`, exposes user / room / session / org scoped rate-limit buckets with optional local persistence, and can optionally resolve caller identity through a local binding file plus repo-local `product_users` registry into a normalized `identity_scope`, but richer identity-bound quota policy, distributed anti-abuse state, and a shared identity source still remain beyond the current local-file layer
 
-## Recommended next step after this slice
-
-Build a minimal Matrix adapter that:
-
-1. listens for room message events
-2. parses mobile command (`/help`, `/task`, `/status`) for v1 移动端直接体验
-3. calls `consumer-entry-api /v1/matrix/messages` for task creation
-4. sends projected task updates back into the room
-
-移动端交互规范见：`docs/matrix-mobile-command-spec-v1.md`.
+移动端交互规范见：`docs/matrix-mobile-command-spec-v1.md`；真实房间验收见：`docs/matrix-bot-entry-e2e-checklist-v1.md`.

@@ -212,6 +212,34 @@ async fn ledger_endpoints_reject_admin_token_for_other_org() {
 }
 
 #[tokio::test]
+async fn grant_adds_balance_without_reserved_funds() {
+    let app = build_router(test_state());
+    let (account_id, _) = create_account(app.clone(), 100.0).await;
+
+    let (grant_status, grant_json) = send_json(
+        app.clone(),
+        "POST",
+        "/v1/ledger/grant",
+        json!({
+            "account_id": account_id,
+            "amount": 3.15,
+            "reference_id": "league-reward-test",
+            "idempotency_key": "league-reward-key-1"
+        }),
+    )
+    .await;
+    assert_eq!(grant_status, StatusCode::OK);
+    assert_eq!(grant_json["account"]["balance"], 103.15);
+    assert_eq!(grant_json["account"]["reserved"], 0.0);
+    assert_eq!(grant_json["entry"]["action"], "grant");
+
+    let (get_status, fetched) = get_json(app, &format!("/v1/accounts/{account_id}")).await;
+    assert_eq!(get_status, StatusCode::OK);
+    assert_eq!(fetched["balance"], 103.15);
+    assert_eq!(fetched["reserved"], 0.0);
+}
+
+#[tokio::test]
 async fn reserve_then_consume_updates_reserved_and_balance() {
     let app = build_router(test_state());
     let (account_id, _) = create_account(app.clone(), 100.0).await;

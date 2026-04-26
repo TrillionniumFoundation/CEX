@@ -4,6 +4,27 @@
 
 ## 一键快速复现
 
+### 真实 Matrix/Element 房间闭环（推荐本地验收）
+
+```bash
+cd /data/home-data/CEX
+CEX_ENV_FILE=run/local-production/.env ./scripts/start-matrix-live-stack.sh
+./scripts/check-matrix-live-room-e2e.sh
+```
+
+`start-matrix-live-stack.sh` 会用 Docker 启动本地 Synapse 与 Element Web，创建/复用 `@alice:local.dev`、`@cex-bot:local.dev`、`CEX Frontend E2E` 房间，登录 bot、启动 `matrix-bot-relay` 与 `matrix-bot-poller`，并把 Element Web 暴露在 `http://127.0.0.1:8081`。脚本会把 Matrix token 写入 `run/matrix-live/tokens.json` / `live-env.sh`，这些文件权限为 `0600`，不要提交或打印 token。
+
+`check-matrix-live-room-e2e.sh` 会从真实房间发送并等待 bot 回房间：
+
+1. `/task ...` -> CEX 任务卡
+2. `/status <task-id>` -> 同任务执行状态卡
+3. `/balance` -> 钱包卡片
+4. `/plans` -> 套餐卡片
+
+验收摘要保存到 `run/matrix-live/e2e-summary-<epoch>.json`，只记录房间 ID、事件 ID、任务 ID 与回复内容，不记录 token。
+
+### 无真实 homeserver 的链路冒烟
+
 ```bash
 cd /data/home-data/CEX
 ./scripts/start-matrix-bot-chain.sh
@@ -41,7 +62,21 @@ cd /data/home-data/CEX
    - `/help` 命中帮助投影，不创建任务
    - `/status <id>` 返回该任务投影
    - `/task cap=... account=... 文本` 透传可选参数
+   - `/balance` / `/wallet` / `/余额` / `/钱包` 返回钱包卡片
+   - `/plans` / `/plan` / `/package` / `/套餐` 返回套餐卡片
    - 未知命令返回 `/help` 提示
+
+5. **真实 Matrix/Element 前端闭环**
+   - Synapse `GET /_matrix/client/versions` 正常
+   - Element Web `GET /config.json` 指向同一 homeserver
+   - `matrix-bot-relay /health` 中 `has_access_token=true`
+   - 真实房间内用户发送 `/task` 后，bot 回同房间 `🧾 CEX 任务卡`
+   - 同房间继续发送 `/status`、`/balance`、`/plans`，均可收到带 `formatted_body` 与 `cex_card` 的投影回复
+   - Trillionnium League 命令也应闭环：`/league`、`/world`、`/season`、`/arena`、`/guild`、`/guild guild-prompt-forge`、`/raid`、`/team guild-raid-001 scout`、`/raid guild-raid-001 ...`、`/draft ...`、`/join daily-dungeon-001`、`/battle ...`、`/submit ...`、提交卡 `ledger_status=settled`、再次 `/balance` 余额变化、`/profile`、`/rewards`、`/inventory`、`/history`、`/rank`、`/loadout`
+   - `/submit ...` 的 `league_submission` 卡片应包含 `ledger_status=settled`，且 `judge_status` 走 `rubric_hidden_*`、`score_event_count >= 7`，证明本地 reward 已走 ledger grant 结算且 Judge Pipeline v2 已启用。
+   - review/admin API 应能列出 `held_review` 奖励，并通过 approve/reject 把 `review_status` 写回；approve 成功时应触发同一条 ledger grant 释放路径。
+   - Web 游戏壳应通过 `scripts/check-trillionnium-league-web-e2e.sh` 验证：`GET /league`、`/league/web/session` 签发 HttpOnly web session、带 cookie+CSRF 的 action、join/guild/team/raid/draft/submit 表单、Battle Timeline、settled reward、以及 anti-cheat `held_review` 展示。
+   - SQL cutover bridge 应通过 `scripts/check-trillionnium-league-sql-snapshot.sh` 验证：生成 `league-state-snapshot.sql`，包含 `league_state_snapshots` insert、`sha256:` state hash，并且 `/v1/league/state/snapshot` 返回 object counts。
 
 ## 关键日志文件（默认）
 
@@ -61,4 +96,5 @@ cd /data/home-data/CEX
 ```bash
 curl -sS http://127.0.0.1:8091/v1/matrix/tasks/<task-id>/projection | jq
 ./scripts/check-matrix-bot-entry-v1.sh
+./scripts/check-matrix-live-room-e2e.sh
 ```

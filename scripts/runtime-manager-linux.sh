@@ -94,11 +94,13 @@ ensure_entry_runtime_config() {
   fi
 
   mkdir -p "$ENTRY_CONFIG_DIR"
-  local bindings_path registry_path approvals_path audit_path
+  local bindings_path registry_path approvals_path audit_path league_state_path league_sql_snapshot_path
   bindings_path="${CONSUMER_ENTRY_IDENTITY_BINDINGS_PATH:-$ENTRY_CONFIG_DIR/identity-bindings.json}"
   registry_path="${CONSUMER_ENTRY_IDENTITY_REGISTRY_PATH:-$ENTRY_CONFIG_DIR/identity-registry.json}"
   approvals_path="${CONSUMER_ENTRY_IDENTITY_BINDING_APPROVED_REVISIONS_PATH:-$ENTRY_CONFIG_DIR/identity-approved-revisions.json}"
   audit_path="${CONSUMER_ENTRY_IDENTITY_BINDING_AUDIT_LOG_PATH:-$ENTRY_CONFIG_DIR/identity-binding-audit.jsonl}"
+  league_state_path="${CONSUMER_ENTRY_LEAGUE_STATE_PATH:-$ENTRY_CONFIG_DIR/league-state.json}"
+  league_sql_snapshot_path="${CONSUMER_ENTRY_LEAGUE_SQL_SNAPSHOT_PATH:-$ENTRY_CONFIG_DIR/league-state-snapshot.sql}"
 
   if [[ ! -f "$bindings_path" ]]; then
     cat > "$bindings_path" <<'JSON'
@@ -129,13 +131,13 @@ JSON
   "revision": "local-dev-entry-registry-v1",
   "product_users": {
     "pu-local-dev": {
-      "org_id": "org-local-dev",
-      "account_id": "acct-local-dev",
+      "org_id": "00000000-0000-0000-0000-00000000ce01",
+      "account_id": "00000000-0000-0000-0000-00000000ce31",
       "status": "active"
     },
     "pu-local-bot": {
-      "org_id": "org-local-dev",
-      "account_id": "acct-local-bot",
+      "org_id": "00000000-0000-0000-0000-00000000ce01",
+      "account_id": "00000000-0000-0000-0000-00000000ce31",
       "status": "active"
     }
   }
@@ -160,6 +162,8 @@ JSON
   export CONSUMER_ENTRY_IDENTITY_REGISTRY_PATH="$registry_path"
   export CONSUMER_ENTRY_IDENTITY_BINDING_APPROVED_REVISIONS_PATH="$approvals_path"
   export CONSUMER_ENTRY_IDENTITY_BINDING_AUDIT_LOG_PATH="$audit_path"
+  export CONSUMER_ENTRY_LEAGUE_STATE_PATH="$league_state_path"
+  export CONSUMER_ENTRY_LEAGUE_SQL_SNAPSHOT_PATH="$league_sql_snapshot_path"
   export CONSUMER_ENTRY_REQUIRE_IDENTITY_BINDING="${CONSUMER_ENTRY_REQUIRE_IDENTITY_BINDING:-true}"
   export CONSUMER_ENTRY_IDENTITY_BINDING_RELOAD_REQUIRE_REVISION="${CONSUMER_ENTRY_IDENTITY_BINDING_RELOAD_REQUIRE_REVISION:-true}"
   export CONSUMER_ENTRY_IDENTITY_BINDING_RELOAD_REQUIRE_APPROVED_REVISION="${CONSUMER_ENTRY_IDENTITY_BINDING_RELOAD_REQUIRE_APPROVED_REVISION:-true}"

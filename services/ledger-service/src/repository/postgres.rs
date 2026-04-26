@@ -118,7 +118,7 @@ impl PostgresLedgerRepository {
         tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
         entry: &LedgerEntryRecord,
     ) -> Result<(), LedgerActionError> {
-        let direction = if entry.action == "refund" {
+        let direction = if entry.action == "refund" || entry.action == "grant" {
             "credit"
         } else {
             "debit"
@@ -231,6 +231,30 @@ impl PostgresLedgerRepository {
             });
         }
         account.reserved -= entry.amount;
+        Self::update_account_summary(&mut tx, &account).await?;
+        Self::append_entry_in_tx(&mut tx, entry).await?;
+
+        tx.commit()
+            .await
+            .map_err(|e| LedgerActionError::Other(format!("commit tx failed: {e}")))?;
+
+        Ok(account)
+    }
+
+    pub async fn grant_transaction_skeleton(
+        &self,
+        entry: &LedgerEntryRecord,
+    ) -> Result<AccountRecord, LedgerActionError> {
+        let pool = self.pool_or_unavailable()?;
+        let mut tx = pool
+            .begin()
+            .await
+            .map_err(|e| LedgerActionError::Other(format!("begin tx failed: {e}")))?;
+
+        Self::check_duplicate_idempotency(&mut tx, entry.idempotency_key.as_deref()).await?;
+
+        let mut account = Self::load_account_for_update(&mut tx, entry.account_id).await?;
+        account.balance += entry.amount;
         Self::update_account_summary(&mut tx, &account).await?;
         Self::append_entry_in_tx(&mut tx, entry).await?;
 
@@ -377,5 +401,12 @@ impl LedgerRepository for PostgresLedgerRepository {
         entry: &LedgerEntryRecord,
     ) -> Result<AccountRecord, LedgerActionError> {
         self.refund_transaction_skeleton(entry).await
+    }
+
+    async fn grant_credits(
+        &self,
+        entry: &LedgerEntryRecord,
+    ) -> Result<AccountRecord, LedgerActionError> {
+        self.grant_transaction_skeleton(entry).await
     }
 }

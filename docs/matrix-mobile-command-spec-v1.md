@@ -7,7 +7,8 @@
 移动端消息 = 用户输入文本（消息）
 
 - 纯文本消息：直接当作任务 prompt 创建任务。
-- 斜杠命令：`/help`、`/task`、`/status` 触发专用行为。
+- 斜杠命令：`/help`、`/task`、`/status`、`/balance`、`/plans` 触发专用行为。
+- Trillionnium League 游戏化命令：`/league`、`/world`、`/season`、`/arena`、`/quest`、`/guild`、`/draft`、`/join`、`/battle`、`/submit`、`/profile`、`/rewards`、`/history`、`/rank`、`/loadout`。
 
 默认链路：
 
@@ -45,6 +46,44 @@ Element 消息 -> matrix-bot-poller -> matrix-bot-relay -> matrix-entry-adapter
   - `/status 8d6e019b-a9dd-4b1c-aa69-dfd3183fd6fd`
 - 回复：同状态投影文本。
 - 说明：v1 版本仅支持按任务 ID 查询，不支持 `latest`。
+
+### Trillionnium League 游戏化入口
+
+- `/league` / `/tl`：进入 Trillionnium League 首页卡。
+- `/world` / `/map`：查看 Trillionnium 世界地图区域。
+- `/season`：查看当前赛季。
+- `/arena`：查看当前赛场。
+- `/quest`：查看今日副本。
+- `/guild`：查看公会列表；`/guild <guild-id>` 加入公会。
+- `/raid`：查看公会团本；`/raid <raid-id> <行动>` 贡献团队进度。
+- `/team`：查看默认团本队伍；`/team <raid-id> <role>` 认领 Scout/Builder/Auditor/Closer 等团本职责。
+- `/draft <hero...>`：锁定 Agent 英雄阵容，至少 3 个英雄。
+- `/join <match-id>`：加入赛场，例如 `/join daily-dungeon-001`。
+- `/battle <match-id> <行动>`：在赛场里出招，并创建带 League metadata 的 CEX 执行任务。
+- `/rank`：查看排行榜。
+- `/loadout`：查看当前 Agent 阵容。
+- `/submit <match-id> <提交内容>`：提交赛果，获得评分和奖励；奖励会尝试通过 ledger grant 真结算，并在卡片里显示 `ledger_status`。
+- `/profile`：查看玩家档案。
+- `/rewards`：查看奖励记录和累计收益。
+- `/inventory` / `/items` / `/bag` / `/背包`：查看 League 背包、装备/徽章和战利品 power。
+- `/history`：查看战斗/提交历史。
+
+### `/balance` / `/wallet` / `/余额` / `/钱包`
+
+- 语义：查询当前 Matrix 用户映射到的 CEX 钱包。
+- 示例：
+  - `/balance`
+  - `/钱包`
+- 回复：Matrix `m.text` + `formatted_body` 钱包卡片，包含可用余额、预留余额、总额、币种、套餐名、账户 ID。
+- 说明：由 `matrix-entry-adapter` 调用 `consumer-entry-api /v1/matrix/users/:matrix_user_id/wallet`；consumer 侧通过 Matrix identity registry 解析账户，再用 ledger admin token 只读查询 ledger account。回复中的 `cex_card` 使用 Matrix homeserver 接受的 JSON-safe 字段值，避免把浮点值直接作为自定义 event content 发送到 Synapse。
+
+### `/plans` / `/plan` / `/package` / `/套餐`
+
+- 语义：展示当前本地套餐/计费模型。
+- 示例：
+  - `/plans`
+  - `/套餐`
+- 回复：Matrix `m.text` + `formatted_body` 套餐卡片，包含套餐名、计费方式、能力列表、余额查询入口。
 
 ### 未识别命令
 
@@ -88,4 +127,10 @@ Element 消息 -> matrix-bot-poller -> matrix-bot-relay -> matrix-entry-adapter
   - `/task` 走任务创建
   - `/task cap=...` 带参数
   - `/status <id>` 返回对应投影
+  - `/balance` / `/wallet` 返回钱包卡片
+  - `/plans` / `/package` 返回套餐卡片
+  - `/league` / `/world` / `/season` / `/arena` / `/quest` / `/guild` / `/raid` / `/team` / `/draft` / `/join` / `/rank` / `/loadout` 返回 Trillionnium League 游戏卡片
+  - `/battle <match-id> <行动>` 透传到 CEX task，并携带 League metadata
+  - `/submit <match-id> <提交内容>` 返回 `league_submission` 评分/奖励卡，并校验本地真房间链路里 `ledger_status=settled`
+  - `/profile` / `/rewards` / `/inventory` / `/history` 返回玩家档案、奖励、背包、历史卡
   - 未知命令返回 `/help` 提示
