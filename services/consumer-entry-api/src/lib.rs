@@ -796,6 +796,25 @@ struct WorldEvent {
     body: String,
     result: String,
     impact_score: i64,
+    #[serde(default)]
+    cex_task_id: Option<String>,
+    #[serde(default)]
+    cex_status: Option<String>,
+    created_at_epoch: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WorldContract {
+    contract_id: String,
+    event_id: String,
+    actor_matrix_user_id: String,
+    location_id: String,
+    task_id: String,
+    title: String,
+    body: String,
+    status: String,
+    cex_status: Option<String>,
+    value_score: i64,
     created_at_epoch: i64,
 }
 
@@ -815,6 +834,12 @@ struct WorldActionRequest {
     room_id: Option<String>,
     location_id: Option<String>,
     body: String,
+    message: Option<String>,
+    event_id: Option<String>,
+    capability_id: Option<String>,
+    account_id: Option<String>,
+    cex_task_id: Option<String>,
+    cex_status: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -859,6 +884,8 @@ struct LeagueState {
     world_assets: Vec<WorldAsset>,
     #[serde(default)]
     world_events: Vec<WorldEvent>,
+    #[serde(default)]
+    world_contracts: Vec<WorldContract>,
     #[serde(default)]
     world_relationships: Vec<WorldRelationship>,
 }
@@ -1150,6 +1177,7 @@ fn default_league_state() -> LeagueState {
         world_entities,
         world_assets: Vec::new(),
         world_events: Vec::new(),
+        world_contracts: Vec::new(),
         world_relationships: Vec::new(),
     }
 }
@@ -6304,7 +6332,19 @@ async fn get_league_world(State(state): State<AppState>, headers: HeaderMap) -> 
 
 fn world_action_kind(body: &str) -> (&'static str, &'static str, i64) {
     let lower = body.to_ascii_lowercase();
-    if lower.contains("company")
+    if lower.contains("contract")
+        || lower.contains("bounty")
+        || lower.contains("commission")
+        || body.contains("委托")
+        || body.contains("悬赏")
+        || body.contains("任务")
+    {
+        (
+            "contract",
+            "把现实需求登记成 World Contract，并生成可执行的 CEX 委托任务。",
+            20,
+        )
+    } else if lower.contains("company")
         || lower.contains("shop")
         || lower.contains("studio")
         || body.contains("公司")
@@ -6359,7 +6399,7 @@ fn world_action_kind(body: &str) -> (&'static str, &'static str, i64) {
 
 fn world_default_location_for_kind(kind: &str) -> &'static str {
     match kind {
-        "venture" | "market" => "zbj-market-gate",
+        "venture" | "market" | "contract" => "zbj-market-gate",
         "craft" => "starter-studio",
         "recruit" => "mirror-city-square",
         _ => "mirror-city-square",
@@ -6389,12 +6429,14 @@ fn world_home_json(league: &LeagueState) -> Value {
         "locations": locations,
         "entities": entities,
         "assets": league.world_assets,
+        "contracts": league.world_contracts,
         "recent_events": recent_events,
         "counts": {
             "zones": league.world_zones.len(),
             "locations": league.world_locations.len(),
             "entities": league.world_entities.len(),
             "assets": league.world_assets.len(),
+            "contracts": league.world_contracts.len(),
             "events": league.world_events.len(),
             "relationships": league.world_relationships.len(),
         }
@@ -6408,6 +6450,68 @@ async fn get_world_home(State(state): State<AppState>, headers: HeaderMap) -> Re
     }
     let league = state.inner.league_state.lock().await;
     (StatusCode::OK, Json(world_home_json(&league))).into_response()
+}
+
+async fn create_world_contract_task(
+    state: &AppState,
+    headers: &HeaderMap,
+    payload: &WorldActionRequest,
+    matrix_user_id: &str,
+    body: &str,
+) -> Result<ConsumerTaskResponse, Response> {
+    let room_id = payload
+        .room_id
+        .clone()
+        .unwrap_or_else(|| "!world-contract:local.dev".to_string());
+    let contract_prompt = format!(
+        "Trillionnium World Contract: {body}\n\n请把这条现实镜像委托转成可执行交付计划，包含目标、证据、风险、下一步和验收标准。"
+    );
+    let matrix_payload = MatrixMessageRequest {
+        matrix_user_id: matrix_user_id.to_string(),
+        room_id,
+        session_id: None,
+        org_id: None,
+        message: contract_prompt,
+        capability_id: payload.capability_id.clone(),
+        account_id: payload.account_id.clone(),
+        event_id: payload.event_id.clone(),
+        idempotency_key: None,
+        metadata: Some(json!({
+            "world": "trillionnium_world",
+            "module": "world_contract",
+            "location_id": payload.location_id,
+            "source_body": body,
+        })),
+    };
+    let resolved_identity = resolve_matrix_identity(state, &matrix_payload).await?;
+    let request_fingerprint = build_world_action_request_fingerprint(payload);
+    let authorized_session = authorize_user_session(
+        state,
+        headers,
+        &resolved_identity.scope,
+        request_fingerprint.as_str(),
+    )?;
+    let prompt = validate_text_payload(&matrix_payload.message, state.config().max_text_chars)?;
+    let resolved_account_id = resolved_identity.scope.account_id.clone();
+    let source = json!({
+        "kind": "trillionnium_world_contract",
+        "world": "trillionnium_world",
+        "identity_scope": resolved_identity.scope,
+        "identity_resolution": resolved_identity.resolution,
+        "matrix_user_id": matrix_user_id,
+        "room_id": matrix_payload.room_id,
+        "event_id": matrix_payload.event_id,
+        "metadata": matrix_payload.metadata,
+        "session_auth": authorized_session,
+    });
+    forward_to_cex_task(
+        state.clone(),
+        matrix_payload.capability_id,
+        resolved_account_id,
+        source,
+        prompt,
+    )
+    .await
 }
 
 async fn record_world_action(
@@ -6451,8 +6555,25 @@ async fn record_world_action(
             body: body.clone(),
             result: result.to_string(),
             impact_score: impact,
+            cex_task_id: payload.cex_task_id.clone(),
+            cex_status: payload.cex_status.clone(),
             created_at_epoch: now,
         };
+        if let Some(task_id) = payload.cex_task_id.clone() {
+            league.world_contracts.push(WorldContract {
+                contract_id: league_hash_id("world-contract", &event.event_id),
+                event_id: event.event_id.clone(),
+                actor_matrix_user_id: matrix_user_id.clone(),
+                location_id: location_id.clone(),
+                task_id,
+                title: "World Contract".to_string(),
+                body: body.clone(),
+                status: "task_created".to_string(),
+                cex_status: payload.cex_status.clone(),
+                value_score: impact,
+                created_at_epoch: now,
+            });
+        }
         if matches!(kind, "venture" | "craft") {
             league.world_assets.push(WorldAsset {
                 asset_id: league_hash_id(
@@ -6499,12 +6620,39 @@ async fn record_world_action(
 async fn post_world_action(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(payload): Json<WorldActionRequest>,
+    Json(mut payload): Json<WorldActionRequest>,
 ) -> Response {
     if let Err(response) = authorize_ingress(&headers, state.config()) {
         state.inner.metrics.inc_ingress_auth_failures();
         return response;
     }
+    let matrix_user_id = match normalize_league_matrix_user(&payload.matrix_user_id) {
+        Some(value) => value,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "matrix_user_id is required" })),
+            )
+                .into_response()
+        }
+    };
+    let body = match validate_text_payload(&payload.body, state.config().max_text_chars) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let (kind, _result, _impact) = world_action_kind(&body);
+    let task = if kind == "contract" && payload.cex_task_id.is_none() {
+        match create_world_contract_task(&state, &headers, &payload, &matrix_user_id, &body).await {
+            Ok(task) => {
+                payload.cex_task_id = Some(task.task_id.clone());
+                payload.cex_status = Some(task.consumer_status.clone());
+                Some(task)
+            }
+            Err(response) => return response,
+        }
+    } else {
+        None
+    };
     let snapshot = match record_world_action(&state, payload).await {
         Ok(value) => value,
         Err(response) => return response,
@@ -6518,6 +6666,7 @@ async fn post_world_action(
             "kind": "trillionnium_world_action",
             "world": "trillionnium_world",
             "event": snapshot.1,
+            "task": task,
             "home": snapshot.2,
         })),
     )
@@ -6631,6 +6780,29 @@ async fn get_world_web_shell(State(state): State<AppState>, headers: HeaderMap) 
     } else {
         asset_cards
     };
+    let contract_cards = league
+        .world_contracts
+        .iter()
+        .rev()
+        .take(8)
+        .map(|contract| {
+            format!(
+                "<article class=\"mini contract\"><strong>{}</strong><span>{} · value {}</span><code>{}</code><small>task {} · {}</small></article>",
+                escape_html_text(&contract.title),
+                escape_html_text(&contract.status),
+                contract.value_score,
+                escape_html_text(&contract.location_id),
+                escape_html_text(&contract.task_id),
+                escape_html_text(contract.cex_status.as_deref().unwrap_or("created")),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let contract_cards = if contract_cards.is_empty() {
+        "<article class=\"mini contract\"><strong>No World contracts yet</strong><span>Use /contract to mirror a real need into CEX execution.</span><code>/contract</code></article>".to_string()
+    } else {
+        contract_cards
+    };
     let event_items = league
         .world_events
         .iter()
@@ -6638,11 +6810,12 @@ async fn get_world_web_shell(State(state): State<AppState>, headers: HeaderMap) 
         .take(12)
         .map(|event| {
             format!(
-                "<li><b>🌍 {}</b><span>{}</span><small>{} · +{}</small><em>{}</em></li>",
+                "<li><b>🌍 {}</b><span>{}</span><small>{} · +{} · {}</small><em>{}</em></li>",
                 escape_html_text(&event.event_kind),
                 escape_html_text(&event.body),
                 escape_html_text(&event.location_id),
                 event.impact_score,
+                escape_html_text(event.cex_task_id.as_deref().unwrap_or("no-task")),
                 escape_html_text(&event.result),
             )
         })
@@ -6671,7 +6844,7 @@ async fn get_world_web_shell(State(state): State<AppState>, headers: HeaderMap) 
     .subtitle {{ color:var(--muted); font-size:18px; max-width:840px; line-height:1.55; }}
     .hero-card,.card,.panel {{ border:1px solid rgba(255,255,255,.11); background:linear-gradient(145deg,rgba(255,255,255,.09),rgba(255,255,255,.035)); box-shadow:0 24px 80px rgba(0,0,0,.35); backdrop-filter: blur(14px); border-radius:24px; }}
     .hero-card,.panel,.card {{ padding:24px; }}
-    .stats {{ display:grid; grid-template-columns:repeat(6,1fr); gap:14px; margin-top:22px; }}
+    .stats {{ display:grid; grid-template-columns:repeat(7,1fr); gap:14px; margin-top:22px; }}
     .stat {{ padding:18px; background:rgba(255,255,255,.06); border-radius:18px; }}
     .stat b {{ display:block; font-size:26px; color:var(--gold); }}
     main {{ padding:20px min(6vw,72px) 60px; display:grid; gap:24px; }}
@@ -6716,6 +6889,7 @@ async fn get_world_web_shell(State(state): State<AppState>, headers: HeaderMap) 
       <div class="stat"><span>Locations</span><b>{locations}</b></div>
       <div class="stat"><span>Agents</span><b>{entities}</b></div>
       <div class="stat"><span>Assets</span><b>{assets}</b></div>
+      <div class="stat"><span>Contracts</span><b>{contracts}</b></div>
       <div class="stat"><span>Events</span><b>{events}</b></div>
       <div class="stat"><span>Relations</span><b>{relationships}</b></div>
     </section>
@@ -6753,6 +6927,10 @@ async fn get_world_web_shell(State(state): State<AppState>, headers: HeaderMap) 
       <div class="mini-grid">{asset_cards}</div>
     </section>
     <section class="panel">
+      <h2>World Contracts</h2>
+      <div class="mini-grid">{contract_cards}</div>
+    </section>
+    <section class="panel">
       <h2>Playable Commands</h2>
       <p class="subtitle"><code>/world</code> <code>/world action 我要开一家 AI 设计公司</code> <code>/league</code> <code>/arena</code> <code>/guild</code> <code>/raid</code></p>
     </section>
@@ -6763,6 +6941,7 @@ async fn get_world_web_shell(State(state): State<AppState>, headers: HeaderMap) 
         locations = league.world_locations.len(),
         entities = league.world_entities.len(),
         assets = league.world_assets.len(),
+        contracts = league.world_contracts.len(),
         events = league.world_events.len(),
         relationships = league.world_relationships.len(),
         zone_cards = zone_cards,
@@ -6770,6 +6949,7 @@ async fn get_world_web_shell(State(state): State<AppState>, headers: HeaderMap) 
         location_options = location_options,
         entity_cards = entity_cards,
         asset_cards = asset_cards,
+        contract_cards = contract_cards,
         event_items = event_items,
         console_note = escape_html_text(console_note),
         csrf_input = csrf_input,
@@ -6826,6 +7006,12 @@ async fn post_world_web_action(
             .filter(|value| !value.is_empty())
             .map(ToString::to_string),
         body,
+        message: None,
+        event_id: None,
+        capability_id: None,
+        account_id: None,
+        cex_task_id: None,
+        cex_status: None,
     };
     let snapshot = match record_world_action(&state, request).await {
         Ok(value) => value,
@@ -10333,6 +10519,21 @@ fn build_matrix_request_fingerprint(payload: &MatrixMessageRequest) -> String {
         normalize_request_fingerprint_value(payload.event_id.as_deref()),
         normalize_request_fingerprint_value(payload.idempotency_key.as_deref()),
         normalize_request_fingerprint_text(&payload.message),
+    ])
+}
+
+fn build_world_action_request_fingerprint(payload: &WorldActionRequest) -> String {
+    build_request_fingerprint(&[
+        "matrix_message".to_string(),
+        normalize_request_fingerprint_value(Some(payload.matrix_user_id.as_str())),
+        normalize_request_fingerprint_value(payload.room_id.as_deref()),
+        normalize_request_fingerprint_value(None),
+        normalize_request_fingerprint_value(None),
+        normalize_request_fingerprint_value(payload.account_id.as_deref()),
+        normalize_request_fingerprint_value(payload.capability_id.as_deref()),
+        normalize_request_fingerprint_value(payload.event_id.as_deref()),
+        normalize_request_fingerprint_value(None),
+        normalize_request_fingerprint_text(payload.message.as_deref().unwrap_or("")),
     ])
 }
 

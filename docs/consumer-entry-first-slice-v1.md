@@ -32,9 +32,9 @@ This first slice is intentionally small:
 
 `GET /league` exposes the Trillionnium League server-rendered game shell.
 
-`GET /world` exposes the Trillionnium World server-rendered open-world shell with zones, locations, Agent residents/NPCs, player assets, and world event timeline.
+`GET /world` exposes the Trillionnium World server-rendered open-world shell with zones, locations, Agent residents/NPCs, player assets, World Contracts, and world event timeline.
 
-`POST /league/web/action` supports interactive League actions (`join`, `guild`, `team`, `raid`, `draft`, `submit`). `POST /world/web/action` records free-form World actions. Outside local-dev, both mutation paths use signed web session + CSRF protection.
+`POST /league/web/action` supports interactive League actions (`join`, `guild`, `team`, `raid`, `draft`, `submit`). `POST /world/web/action` records free-form World actions. Matrix `/contract` records a task-backed World Contract through the signed Matrix identity path. Outside local-dev, browser mutation paths use signed web session + CSRF protection.
 
 ### Create a task from a generic chat payload
 

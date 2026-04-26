@@ -32,7 +32,7 @@ Already available:
 - A server-rendered web game shell is available at `GET /league` on `consumer-entry-api`, showing the Trillionnium League lobby, match cards, live stats, leaderboard, rewards, playable commands, guild halls, current loadout, replay timeline, and a local-dev Web Battle Console.
 - The web shell now has local-dev playable forms via `POST /league/web/action` for join/guild/team/raid/draft/submit, plus a battle timeline/replay panel that shows ledger settlement state.
 - Production Web session gate is active: `/league/web/session` can mint an HttpOnly SameSite web session cookie from signed upstream auth, and `/league/web/action` uses signed session + CSRF outside local-dev while preserving the local-dev playable shell.
-- Trillionnium World first slice is active: `GET /v1/world/home` returns zones/locations/Agent residents/assets/events, `POST /v1/world/action` records free-form reality-mirror actions, Matrix `/world action <自由行动>` mutates world state, and `GET /world` exposes a playable web World shell with a CSRF-protected `/world/web/action` console.
+- Trillionnium World first slice is active: `GET /v1/world/home` returns zones/locations/Agent residents/assets/events/contracts, `POST /v1/world/action` records free-form reality-mirror actions, Matrix `/world action <自由行动>` mutates world state, `GET /world` exposes a playable web World shell with a CSRF-protected `/world/web/action` console, and `/contract <委托内容>` now creates a real CEX task-backed World Contract.
 
 This is enough to build the first League MVP inside Matrix before creating a custom web game shell.
 
@@ -175,7 +175,8 @@ Implemented first-slice concepts:
 - locations: city square, starter studio, ZBJ market gate, League coliseum
 - entities: Agent residents and NPC-style helpers
 - assets: player-created ventures/builds from free-form actions
-- events: durable world action log with impact score
+- contracts: task-backed real-world commissions linked to CEX invocation IDs
+- events: durable world action log with impact score and optional CEX task link
 - relationships: player-to-location/entity/asset relationship changes
 
 Endpoints:
@@ -190,6 +191,7 @@ Matrix:
 - `/world` returns the Trillionnium World card.
 - `/world action <free text>` records a sandbox action such as opening an AI design company, building a shop, hiring an Agent, exploring a market, or mapping a real-world task into the world.
 - `/craft <build text>` records a Trillionnium Craft build action and creates a reusable asset seed.
+- `/contract <commission text>` records a World Contract and creates a real CEX task/invocation through the same signed Matrix identity path used by League battles.
 
 Web shell:
 
@@ -199,6 +201,7 @@ Web shell:
 SQL shape:
 
 - `migrations/0012_add_trillionnium_world_tables.sql`
+- `migrations/0013_add_trillionnium_world_contracts.sql`
 
 ## Phase 2: Durable League Domain
 
