@@ -79,6 +79,8 @@ The adapter will:
 15. for `/upgrade <asset-id|latest> <upgrade text>` it posts a judged asset upgrade and returns level/value delta
 16. for `/companies` / `/company <asset-id|latest> <company text>` it lists or launches World companies from owned assets; company creation also opens a shop, creates a starter listing, and records an economy event
 17. for `/shops` / `/sell <company-id|latest> <listing text>` it lists storefronts/listings or publishes a judged priced service listing
+18. for `/buy <listing-id|latest> <brief>` it buys/hires a listing, opens a work order, grants seller ledger revenue when configured, and updates World faction standing
+19. for `/work` and `/factions` it projects World commerce/work orders and the faction reputation map back into Matrix cards
 
 ### Read a projected reply for a task
 

@@ -865,6 +865,58 @@ struct WorldEconomyEvent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+struct WorldPurchase {
+    purchase_id: String,
+    listing_id: String,
+    shop_id: String,
+    company_id: String,
+    buyer_matrix_user_id: String,
+    seller_matrix_user_id: String,
+    price_credits: i64,
+    status: String,
+    ledger_status: Option<String>,
+    ledger_account_id: Option<String>,
+    ledger_entry_id: Option<String>,
+    ledger_balance_after: Option<f64>,
+    ledger_error: Option<String>,
+    created_at_epoch: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WorldWorkOrder {
+    work_order_id: String,
+    purchase_id: String,
+    listing_id: String,
+    buyer_matrix_user_id: String,
+    seller_matrix_user_id: String,
+    company_id: String,
+    status: String,
+    brief: String,
+    value_score: i64,
+    created_at_epoch: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WorldFaction {
+    faction_id: String,
+    zone_id: String,
+    name: String,
+    faction_kind: String,
+    status: String,
+    reputation_score: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WorldFactionStanding {
+    standing_id: String,
+    matrix_user_id: String,
+    faction_id: String,
+    reputation_score: i64,
+    rank: String,
+    updated_at_epoch: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct WorldEvent {
     event_id: String,
     actor_matrix_user_id: String,
@@ -991,6 +1043,14 @@ struct LeagueState {
     world_listings: Vec<WorldListing>,
     #[serde(default)]
     world_economy_events: Vec<WorldEconomyEvent>,
+    #[serde(default)]
+    world_purchases: Vec<WorldPurchase>,
+    #[serde(default)]
+    world_work_orders: Vec<WorldWorkOrder>,
+    #[serde(default)]
+    world_factions: HashMap<String, WorldFaction>,
+    #[serde(default)]
+    world_faction_standings: Vec<WorldFactionStanding>,
     #[serde(default)]
     world_events: Vec<WorldEvent>,
     #[serde(default)]
@@ -1123,10 +1183,25 @@ struct WorldListingRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct WorldListingBuyRequest {
+    matrix_user_id: String,
+    room_id: Option<String>,
+    body: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct WorldWebListingRequest {
     matrix_user_id: Option<String>,
     csrf: Option<String>,
     company_id: Option<String>,
+    body: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorldWebListingBuyRequest {
+    matrix_user_id: Option<String>,
+    csrf: Option<String>,
+    listing_id: Option<String>,
     body: Option<String>,
 }
 
@@ -1330,6 +1405,44 @@ fn default_league_state() -> LeagueState {
     .map(|entity| (entity.entity_id.clone(), entity))
     .collect();
 
+    let world_factions = [
+        WorldFaction {
+            faction_id: "faction-city-clerks".to_string(),
+            zone_id: "reality-mirror-city".to_string(),
+            name: "City Clerks".to_string(),
+            faction_kind: "governance".to_string(),
+            status: "open".to_string(),
+            reputation_score: 0,
+        },
+        WorldFaction {
+            faction_id: "faction-craft-union".to_string(),
+            zone_id: "craft-district".to_string(),
+            name: "Craft Union".to_string(),
+            faction_kind: "builder".to_string(),
+            status: "open".to_string(),
+            reputation_score: 0,
+        },
+        WorldFaction {
+            faction_id: "faction-market-guild".to_string(),
+            zone_id: "market-bazaar".to_string(),
+            name: "Market Guild".to_string(),
+            faction_kind: "commerce".to_string(),
+            status: "open".to_string(),
+            reputation_score: 0,
+        },
+        WorldFaction {
+            faction_id: "faction-league-order".to_string(),
+            zone_id: "league-arena".to_string(),
+            name: "League Order".to_string(),
+            faction_kind: "competition".to_string(),
+            status: "open".to_string(),
+            reputation_score: 0,
+        },
+    ]
+    .into_iter()
+    .map(|faction| (faction.faction_id.clone(), faction))
+    .collect();
+
     LeagueState {
         matches,
         players_by_matrix_user: HashMap::new(),
@@ -1352,6 +1465,10 @@ fn default_league_state() -> LeagueState {
         world_shops: Vec::new(),
         world_listings: Vec::new(),
         world_economy_events: Vec::new(),
+        world_purchases: Vec::new(),
+        world_work_orders: Vec::new(),
+        world_factions,
+        world_faction_standings: Vec::new(),
         world_events: Vec::new(),
         world_contracts: Vec::new(),
         world_contract_completions: Vec::new(),
@@ -1382,6 +1499,9 @@ fn load_league_state(config: &ConsumerEntryConfig) -> LeagueState {
     }
     for (entity_id, entity) in defaults.world_entities {
         state.world_entities.entry(entity_id).or_insert(entity);
+    }
+    for (faction_id, faction) in defaults.world_factions {
+        state.world_factions.entry(faction_id).or_insert(faction);
     }
     state
 }
@@ -3305,6 +3425,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/world/web/asset", post(post_world_web_asset_upgrade))
         .route("/world/web/company", post(post_world_web_company))
         .route("/world/web/listing", post(post_world_web_listing))
+        .route("/world/web/buy", post(post_world_web_listing_buy))
         .route("/v1/chat/tasks", post(create_chat_task))
         .route("/v1/chat/tasks/:id", get(get_chat_task))
         .route("/v1/matrix/messages", post(create_matrix_message_task))
@@ -3323,6 +3444,12 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/v1/world/shops", get(get_world_shops))
         .route("/v1/world/listings", post(create_world_listing))
+        .route("/v1/world/commerce", get(get_world_commerce))
+        .route("/v1/world/factions", get(get_world_factions))
+        .route(
+            "/v1/world/listings/:listing_id/buy",
+            post(buy_world_listing),
+        )
         .route("/v1/world/contracts", get(get_world_contracts))
         .route(
             "/v1/world/contracts/:contract_id/complete",
@@ -6606,6 +6733,67 @@ fn world_default_location_for_kind(kind: &str) -> &'static str {
     }
 }
 
+fn world_faction_for_location(location_id: &str) -> &'static str {
+    match location_id {
+        "starter-studio" => "faction-craft-union",
+        "zbj-market-gate" => "faction-market-guild",
+        "league-coliseum" => "faction-league-order",
+        _ => "faction-city-clerks",
+    }
+}
+
+fn world_faction_rank(reputation_score: i64) -> &'static str {
+    if reputation_score >= 500 {
+        "legend"
+    } else if reputation_score >= 220 {
+        "trusted_partner"
+    } else if reputation_score >= 80 {
+        "known_operator"
+    } else if reputation_score >= 20 {
+        "new_contact"
+    } else {
+        "stranger"
+    }
+}
+
+fn upsert_world_faction_standing(
+    league: &mut LeagueState,
+    matrix_user_id: &str,
+    faction_id: &str,
+    delta: i64,
+    now: i64,
+) -> WorldFactionStanding {
+    let standing_id = league_hash_id(
+        "world-standing",
+        &format!("{}:{}", matrix_user_id, faction_id),
+    );
+    let standing = if let Some(index) = league.world_faction_standings.iter().position(|standing| {
+        standing.matrix_user_id == matrix_user_id && standing.faction_id == faction_id
+    }) {
+        let standing = &mut league.world_faction_standings[index];
+        standing.reputation_score = (standing.reputation_score + delta).max(0);
+        standing.rank = world_faction_rank(standing.reputation_score).to_string();
+        standing.updated_at_epoch = now;
+        standing.clone()
+    } else {
+        let reputation_score = delta.max(0);
+        let standing = WorldFactionStanding {
+            standing_id,
+            matrix_user_id: matrix_user_id.to_string(),
+            faction_id: faction_id.to_string(),
+            reputation_score,
+            rank: world_faction_rank(reputation_score).to_string(),
+            updated_at_epoch: now,
+        };
+        league.world_faction_standings.push(standing.clone());
+        standing
+    };
+    if let Some(faction) = league.world_factions.get_mut(faction_id) {
+        faction.reputation_score = (faction.reputation_score + delta).max(0);
+    }
+    standing
+}
+
 fn world_home_json(league: &LeagueState) -> Value {
     let mut zones: Vec<WorldZone> = league.world_zones.values().cloned().collect();
     zones.sort_by(|left, right| left.zone_id.cmp(&right.zone_id));
@@ -6613,6 +6801,8 @@ fn world_home_json(league: &LeagueState) -> Value {
     locations.sort_by(|left, right| left.location_id.cmp(&right.location_id));
     let mut entities: Vec<WorldEntity> = league.world_entities.values().cloned().collect();
     entities.sort_by(|left, right| left.entity_id.cmp(&right.entity_id));
+    let mut factions: Vec<WorldFaction> = league.world_factions.values().cloned().collect();
+    factions.sort_by(|left, right| left.faction_id.cmp(&right.faction_id));
     let recent_events: Vec<WorldEvent> =
         league.world_events.iter().rev().take(8).cloned().collect();
     json!({
@@ -6634,6 +6824,10 @@ fn world_home_json(league: &LeagueState) -> Value {
         "shops": league.world_shops,
         "listings": league.world_listings,
         "economy_events": league.world_economy_events,
+        "purchases": league.world_purchases,
+        "work_orders": league.world_work_orders,
+        "factions": factions,
+        "faction_standings": league.world_faction_standings,
         "contracts": league.world_contracts,
         "contract_completions": league.world_contract_completions,
         "recent_events": recent_events,
@@ -6647,6 +6841,10 @@ fn world_home_json(league: &LeagueState) -> Value {
             "shops": league.world_shops.len(),
             "listings": league.world_listings.len(),
             "economy_events": league.world_economy_events.len(),
+            "purchases": league.world_purchases.len(),
+            "work_orders": league.world_work_orders.len(),
+            "factions": league.world_factions.len(),
+            "faction_standings": league.world_faction_standings.len(),
             "contracts": league.world_contracts.len(),
             "contract_completions": league.world_contract_completions.len(),
             "events": league.world_events.len(),
@@ -7086,6 +7284,97 @@ async fn get_world_web_shell(State(state): State<AppState>, headers: HeaderMap) 
     } else {
         listing_cards
     };
+    let latest_listing_id = league
+        .world_listings
+        .iter()
+        .rev()
+        .find(|listing| listing.status == "listed")
+        .map(|listing| listing.listing_id.clone())
+        .unwrap_or_else(|| "latest".to_string());
+    let purchase_cards = league
+        .world_purchases
+        .iter()
+        .rev()
+        .take(8)
+        .map(|purchase| {
+            format!(
+                "<article class=\"mini purchase\"><strong>{}</strong><span>{} credits · {}</span><code>{}</code><small>listing {} · ledger {}</small></article>",
+                escape_html_text(&purchase.buyer_matrix_user_id),
+                purchase.price_credits,
+                escape_html_text(&purchase.status),
+                escape_html_text(&purchase.purchase_id),
+                escape_html_text(&purchase.listing_id),
+                escape_html_text(purchase.ledger_status.as_deref().unwrap_or("pending")),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let purchase_cards = if purchase_cards.is_empty() {
+        "<article class=\"mini purchase\"><strong>No purchases yet</strong><span>Buy a listing to create seller revenue and a work order.</span><code>/buy latest</code></article>".to_string()
+    } else {
+        purchase_cards
+    };
+    let work_order_cards = league
+        .world_work_orders
+        .iter()
+        .rev()
+        .take(8)
+        .map(|work_order| {
+            format!(
+                "<article class=\"mini work\"><strong>{}</strong><span>{} · value {}</span><code>{}</code><small>buyer {} · seller {}</small></article>",
+                escape_html_text(&work_order.status),
+                escape_html_text(&work_order.brief.chars().take(48).collect::<String>()),
+                work_order.value_score,
+                escape_html_text(&work_order.work_order_id),
+                escape_html_text(&work_order.buyer_matrix_user_id),
+                escape_html_text(&work_order.seller_matrix_user_id),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let work_order_cards = if work_order_cards.is_empty() {
+        "<article class=\"mini work\"><strong>No work orders yet</strong><span>Purchases open jobs that sellers can fulfill next.</span><code>/work</code></article>".to_string()
+    } else {
+        work_order_cards
+    };
+    let mut factions: Vec<WorldFaction> = league.world_factions.values().cloned().collect();
+    factions.sort_by(|left, right| left.faction_id.cmp(&right.faction_id));
+    let faction_cards = factions
+        .iter()
+        .map(|faction| {
+            format!(
+                "<article class=\"mini faction\"><strong>{}</strong><span>{} · rep {}</span><code>{}</code><small>{}</small></article>",
+                escape_html_text(&faction.name),
+                escape_html_text(&faction.faction_kind),
+                faction.reputation_score,
+                escape_html_text(&faction.faction_id),
+                escape_html_text(&faction.zone_id),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let standing_cards = league
+        .world_faction_standings
+        .iter()
+        .rev()
+        .take(8)
+        .map(|standing| {
+            format!(
+                "<article class=\"mini standing\"><strong>{}</strong><span>{} rep · {}</span><code>{}</code><small>{}</small></article>",
+                escape_html_text(&standing.matrix_user_id),
+                standing.reputation_score,
+                escape_html_text(&standing.rank),
+                escape_html_text(&standing.faction_id),
+                escape_html_text(&standing.standing_id),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let standing_cards = if standing_cards.is_empty() {
+        "<article class=\"mini standing\"><strong>No faction standings yet</strong><span>Commerce and work will build reputation with city factions.</span><code>/factions</code></article>".to_string()
+    } else {
+        standing_cards
+    };
     let latest_contract_id = league
         .world_contracts
         .iter()
@@ -7206,6 +7495,9 @@ async fn get_world_web_shell(State(state): State<AppState>, headers: HeaderMap) 
       <div class="stat"><span>Companies</span><b>{companies}</b></div>
       <div class="stat"><span>Shops</span><b>{shops}</b></div>
       <div class="stat"><span>Listings</span><b>{listings}</b></div>
+      <div class="stat"><span>Purchases</span><b>{purchases}</b></div>
+      <div class="stat"><span>Work</span><b>{work_orders}</b></div>
+      <div class="stat"><span>Factions</span><b>{factions}</b></div>
       <div class="stat"><span>Contracts</span><b>{contracts}</b></div>
       <div class="stat"><span>Done</span><b>{completions}</b></div>
       <div class="stat"><span>Events</span><b>{events}</b></div>
@@ -7275,6 +7567,23 @@ async fn get_world_web_shell(State(state): State<AppState>, headers: HeaderMap) 
       </form>
     </section>
     <section class="panel">
+      <h2>Commerce / Work Orders</h2>
+      <div class="mini-grid">{purchase_cards}</div>
+      <div class="mini-grid" style="margin-top:12px">{work_order_cards}</div>
+      <form method="post" action="/world/web/buy" style="margin-top:16px">
+        {csrf_input}
+        <input type="hidden" name="matrix_user_id" value="@alice:local.dev" />
+        <input name="listing_id" value="{latest_listing_id}" placeholder="latest or world-listing-id" />
+        <textarea name="body">Buy this service and open a work order with deliverable, evidence package, acceptance standard, risk controls, and next action.</textarea>
+        <button type="submit">Buy / Hire Listing</button>
+      </form>
+    </section>
+    <section class="panel">
+      <h2>Faction Reputation Map</h2>
+      <div class="mini-grid">{faction_cards}</div>
+      <div class="mini-grid" style="margin-top:12px">{standing_cards}</div>
+    </section>
+    <section class="panel">
       <h2>World Contracts</h2>
       <div class="mini-grid">{contract_cards}</div>
       <form method="post" action="/world/web/contract" style="margin-top:16px">
@@ -7300,6 +7609,9 @@ async fn get_world_web_shell(State(state): State<AppState>, headers: HeaderMap) 
         companies = league.world_companies.len(),
         shops = league.world_shops.len(),
         listings = league.world_listings.len(),
+        purchases = league.world_purchases.len(),
+        work_orders = league.world_work_orders.len(),
+        factions = league.world_factions.len(),
         contracts = league.world_contracts.len(),
         completions = league.world_contract_completions.len(),
         events = league.world_events.len(),
@@ -7312,8 +7624,13 @@ async fn get_world_web_shell(State(state): State<AppState>, headers: HeaderMap) 
         latest_asset_id = escape_html_text(&latest_asset_id),
         company_cards = company_cards,
         latest_company_id = escape_html_text(&latest_company_id),
+        latest_listing_id = escape_html_text(&latest_listing_id),
         shop_cards = shop_cards,
         listing_cards = listing_cards,
+        purchase_cards = purchase_cards,
+        work_order_cards = work_order_cards,
+        faction_cards = faction_cards,
+        standing_cards = standing_cards,
         contract_cards = contract_cards,
         latest_contract_id = escape_html_text(&latest_contract_id),
         event_items = event_items,
@@ -8142,6 +8459,509 @@ async fn post_world_web_listing(
     let response = create_world_listing_inner(state, request).await;
     if response.status().is_success() {
         Redirect::to("/world?listing=created").into_response()
+    } else {
+        response
+    }
+}
+
+async fn get_world_commerce(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Err(response) = authorize_ingress(&headers, state.config()) {
+        state.inner.metrics.inc_ingress_auth_failures();
+        return response;
+    }
+    let league = state.inner.league_state.lock().await;
+    (
+        StatusCode::OK,
+        Json(json!({
+            "kind": "trillionnium_world_commerce",
+            "world": "trillionnium_world",
+            "purchases": league.world_purchases,
+            "work_orders": league.world_work_orders,
+            "economy_events": league.world_economy_events,
+        })),
+    )
+        .into_response()
+}
+
+async fn get_world_factions(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Err(response) = authorize_ingress(&headers, state.config()) {
+        state.inner.metrics.inc_ingress_auth_failures();
+        return response;
+    }
+    let league = state.inner.league_state.lock().await;
+    let mut factions: Vec<WorldFaction> = league.world_factions.values().cloned().collect();
+    factions.sort_by(|left, right| left.faction_id.cmp(&right.faction_id));
+    (
+        StatusCode::OK,
+        Json(json!({
+            "kind": "trillionnium_world_factions",
+            "world": "trillionnium_world",
+            "factions": factions,
+            "standings": league.world_faction_standings,
+        })),
+    )
+        .into_response()
+}
+
+async fn settle_world_purchase_with_ledger(
+    state: &AppState,
+    payload: &WorldListingBuyRequest,
+    purchase: &WorldPurchase,
+) -> LeagueLedgerSettlement {
+    if purchase.price_credits <= 0 {
+        return LeagueLedgerSettlement {
+            status: "skipped_zero_price".to_string(),
+            ..Default::default()
+        };
+    }
+    let Some(room_id) = payload
+        .room_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return LeagueLedgerSettlement {
+            status: "skipped_missing_room".to_string(),
+            ..Default::default()
+        };
+    };
+    let matrix_payload = MatrixMessageRequest {
+        matrix_user_id: purchase.seller_matrix_user_id.clone(),
+        room_id: room_id.to_string(),
+        session_id: None,
+        org_id: None,
+        message: "world listing purchase settlement".to_string(),
+        capability_id: None,
+        account_id: None,
+        event_id: None,
+        idempotency_key: None,
+        metadata: None,
+    };
+    let resolved_identity = match resolve_matrix_identity(state, &matrix_payload).await {
+        Ok(identity) => identity,
+        Err(_) => {
+            return LeagueLedgerSettlement {
+                status: "failed_identity".to_string(),
+                error: Some(
+                    "matrix identity could not be resolved for world purchase settlement"
+                        .to_string(),
+                ),
+                ..Default::default()
+            }
+        }
+    };
+    let Some(account_id) = resolved_identity.scope.account_id.clone() else {
+        return LeagueLedgerSettlement {
+            status: "skipped_missing_account".to_string(),
+            error: Some("matrix identity did not resolve a ledger account_id".to_string()),
+            ..Default::default()
+        };
+    };
+    let Some(ledger_admin_token) = state.config().ledger_admin_token.clone() else {
+        return LeagueLedgerSettlement {
+            status: "skipped_missing_ledger_token".to_string(),
+            account_id: Some(account_id),
+            error: Some("consumer-entry ledger admin token is not configured".to_string()),
+            ..Default::default()
+        };
+    };
+    let url = format!(
+        "{}/v1/ledger/grant",
+        state.config().ledger_base_url.trim_end_matches('/')
+    );
+    let body = json!({
+        "account_id": account_id,
+        "amount": purchase.price_credits as f64,
+        "idempotency_key": format!("world_purchase:{}", purchase.purchase_id),
+        "reference_id": purchase.listing_id,
+    });
+    let response = match state
+        .inner
+        .http
+        .post(url)
+        .header("x-admin-token", ledger_admin_token)
+        .json(&body)
+        .send()
+        .await
+    {
+        Ok(response) => response,
+        Err(err) => {
+            return LeagueLedgerSettlement {
+                status: "failed_network".to_string(),
+                account_id: body
+                    .get("account_id")
+                    .and_then(Value::as_str)
+                    .map(ToString::to_string),
+                error: Some(format!("failed to reach ledger-service: {err}")),
+                ..Default::default()
+            }
+        }
+    };
+    let status = response.status();
+    let value = match response.json::<Value>().await {
+        Ok(value) => value,
+        Err(err) => {
+            return LeagueLedgerSettlement {
+                status: "failed_bad_response".to_string(),
+                account_id: body
+                    .get("account_id")
+                    .and_then(Value::as_str)
+                    .map(ToString::to_string),
+                error: Some(format!("ledger-service returned non-json response: {err}")),
+                ..Default::default()
+            }
+        }
+    };
+    if !status.is_success() {
+        let error = value
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or("ledger grant failed");
+        return LeagueLedgerSettlement {
+            status: if status.as_u16() == 409 {
+                "duplicate".to_string()
+            } else {
+                "failed_ledger".to_string()
+            },
+            account_id: body
+                .get("account_id")
+                .and_then(Value::as_str)
+                .map(ToString::to_string),
+            error: Some(format!("{}: {error}", status.as_u16())),
+            ..Default::default()
+        };
+    }
+    LeagueLedgerSettlement {
+        status: "settled".to_string(),
+        account_id: value
+            .get("account")
+            .and_then(|account| account.get("account_id"))
+            .and_then(Value::as_str)
+            .or_else(|| body.get("account_id").and_then(Value::as_str))
+            .map(ToString::to_string),
+        entry_id: value
+            .get("entry")
+            .and_then(|entry| entry.get("entry_id"))
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+        balance_after: value
+            .get("account")
+            .and_then(|account| account.get("balance"))
+            .and_then(Value::as_f64),
+        error: None,
+    }
+}
+
+async fn buy_world_listing_inner(
+    state: AppState,
+    listing_id: String,
+    payload: WorldListingBuyRequest,
+) -> Response {
+    let buyer_matrix_user_id = match normalize_league_matrix_user(&payload.matrix_user_id) {
+        Some(value) => value,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "matrix_user_id is required" })),
+            )
+                .into_response()
+        }
+    };
+    let brief = match validate_text_payload(
+        payload
+            .body
+            .as_deref()
+            .unwrap_or("Buy this listing and open a work order with deliverable, evidence, acceptance standard, and next action."),
+        state.config().max_text_chars,
+    ) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let snapshot = {
+        let now = Utc::now().timestamp();
+        let mut league = state.inner.league_state.lock().await;
+        let Some(listing_index) = (if listing_id == "latest" {
+            league
+                .world_listings
+                .iter()
+                .rposition(|listing| listing.status == "listed")
+        } else {
+            league
+                .world_listings
+                .iter()
+                .position(|listing| listing.listing_id == listing_id)
+        }) else {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "world listing not found", "listing_id": listing_id })),
+            )
+                .into_response();
+        };
+        let listing = league.world_listings[listing_index].clone();
+        if listing.status != "listed" {
+            return (
+                StatusCode::CONFLICT,
+                Json(json!({
+                    "error": "world listing is not open for purchase",
+                    "listing_id": listing.listing_id,
+                    "status": listing.status,
+                })),
+            )
+                .into_response();
+        }
+        let company_index = league
+            .world_companies
+            .iter()
+            .position(|company| company.company_id == listing.company_id);
+        let shop_index = league
+            .world_shops
+            .iter()
+            .position(|shop| shop.shop_id == listing.shop_id);
+        let location_id = company_index
+            .and_then(|index| league.world_companies.get(index))
+            .map(|company| company.location_id.as_str())
+            .or_else(|| {
+                shop_index
+                    .and_then(|index| league.world_shops.get(index))
+                    .map(|shop| shop.location_id.as_str())
+            })
+            .unwrap_or("zbj-market-gate");
+        let faction_id = world_faction_for_location(location_id);
+        let price_credits = listing.price_credits.max(1);
+        let reputation_delta = (listing.quality_score / 5).max(1);
+        let purchase = WorldPurchase {
+            purchase_id: league_hash_id(
+                "world-purchase",
+                &format!(
+                    "{}:{}:{}:{}",
+                    buyer_matrix_user_id, listing.listing_id, price_credits, now
+                ),
+            ),
+            listing_id: listing.listing_id.clone(),
+            shop_id: listing.shop_id.clone(),
+            company_id: listing.company_id.clone(),
+            buyer_matrix_user_id: buyer_matrix_user_id.clone(),
+            seller_matrix_user_id: listing.owner_matrix_user_id.clone(),
+            price_credits,
+            status: "pending_ledger".to_string(),
+            ledger_status: Some("pending".to_string()),
+            ledger_account_id: None,
+            ledger_entry_id: None,
+            ledger_balance_after: None,
+            ledger_error: None,
+            created_at_epoch: now,
+        };
+        let work_order = WorldWorkOrder {
+            work_order_id: league_hash_id(
+                "world-work",
+                &format!("{}:{}:{}", purchase.purchase_id, listing.listing_id, now),
+            ),
+            purchase_id: purchase.purchase_id.clone(),
+            listing_id: listing.listing_id.clone(),
+            buyer_matrix_user_id: buyer_matrix_user_id.clone(),
+            seller_matrix_user_id: listing.owner_matrix_user_id.clone(),
+            company_id: listing.company_id.clone(),
+            status: "open".to_string(),
+            brief: brief.clone(),
+            value_score: price_credits + listing.quality_score.max(0),
+            created_at_epoch: now,
+        };
+        if let Some(index) = shop_index {
+            league.world_shops[index].gross_merchandise_score += price_credits;
+        }
+        if let Some(index) = company_index {
+            league.world_companies[index].revenue_score += price_credits;
+            league.world_companies[index].reputation_score += reputation_delta;
+            league.world_companies[index].level =
+                1 + (league.world_companies[index].revenue_score / 100).max(0);
+        }
+        let mut buyer = ensure_league_player(&mut league, &buyer_matrix_user_id, None);
+        buyer.xp += (listing.quality_score / 10).max(1);
+        buyer.reputation += 1;
+        buyer.rating += 1;
+        league
+            .players_by_matrix_user
+            .insert(buyer_matrix_user_id.clone(), buyer);
+        let mut seller = ensure_league_player(&mut league, &listing.owner_matrix_user_id, None);
+        seller.xp += (listing.quality_score / 2).max(1);
+        seller.reputation += reputation_delta;
+        seller.rating += (listing.quality_score / 10).max(1);
+        league
+            .players_by_matrix_user
+            .insert(listing.owner_matrix_user_id.clone(), seller);
+        let economy_event = WorldEconomyEvent {
+            economy_event_id: league_hash_id(
+                "world-econ",
+                &format!("{}:{}:{}", buyer_matrix_user_id, purchase.purchase_id, now),
+            ),
+            matrix_user_id: listing.owner_matrix_user_id.clone(),
+            event_kind: "listing_purchase".to_string(),
+            subject_id: purchase.purchase_id.clone(),
+            credits_delta: price_credits,
+            reputation_delta,
+            created_at_epoch: now,
+        };
+        league.world_relationships.push(WorldRelationship {
+            relationship_id: league_hash_id(
+                "world-rel",
+                &format!("{}:{}:{}", buyer_matrix_user_id, listing.company_id, now),
+            ),
+            from_id: buyer_matrix_user_id.clone(),
+            to_id: listing.company_id.clone(),
+            relation_kind: "customer".to_string(),
+            strength: reputation_delta,
+            updated_at_epoch: now,
+        });
+        let seller_standing = upsert_world_faction_standing(
+            &mut league,
+            &listing.owner_matrix_user_id,
+            faction_id,
+            reputation_delta,
+            now,
+        );
+        let buyer_standing =
+            upsert_world_faction_standing(&mut league, &buyer_matrix_user_id, faction_id, 1, now);
+        league.world_purchases.push(purchase.clone());
+        league.world_work_orders.push(work_order.clone());
+        league.world_economy_events.push(economy_event.clone());
+        let company = company_index.map(|index| league.world_companies[index].clone());
+        let shop = shop_index.map(|index| league.world_shops[index].clone());
+        (
+            league.clone(),
+            purchase,
+            work_order,
+            listing,
+            company,
+            shop,
+            economy_event,
+            seller_standing,
+            buyer_standing,
+        )
+    };
+    let settlement = settle_world_purchase_with_ledger(&state, &payload, &snapshot.1).await;
+    let final_snapshot = {
+        let mut league = state.inner.league_state.lock().await;
+        let mut purchase = snapshot.1.clone();
+        let released = settlement.status == "settled" || settlement.status == "duplicate";
+        purchase.status = if released {
+            "settled".to_string()
+        } else if settlement.status.starts_with("skipped") {
+            "ledger_pending".to_string()
+        } else {
+            "settlement_failed".to_string()
+        };
+        purchase.ledger_status = Some(settlement.status.clone());
+        purchase.ledger_account_id = settlement.account_id.clone();
+        purchase.ledger_entry_id = settlement.entry_id.clone();
+        purchase.ledger_balance_after = settlement.balance_after;
+        purchase.ledger_error = settlement.error.clone();
+        if let Some(stored_purchase) = league
+            .world_purchases
+            .iter_mut()
+            .find(|stored| stored.purchase_id == purchase.purchase_id)
+        {
+            *stored_purchase = purchase.clone();
+        }
+        if released {
+            if let Some(player) = league
+                .players_by_matrix_user
+                .get_mut(&purchase.seller_matrix_user_id)
+            {
+                player.earned_credits += purchase.price_credits as f64;
+            }
+        }
+        (league.clone(), purchase)
+    };
+    if let Err(response) = persist_league_state(&state, &final_snapshot.0).await {
+        return response;
+    }
+    (
+        StatusCode::OK,
+        Json(json!({
+            "kind": "trillionnium_world_listing_purchase",
+            "world": "trillionnium_world",
+            "purchase": final_snapshot.1,
+            "work_order": snapshot.2,
+            "listing": snapshot.3,
+            "company": snapshot.4,
+            "shop": snapshot.5,
+            "economy_event": snapshot.6,
+            "seller_standing": snapshot.7,
+            "buyer_standing": snapshot.8,
+            "ledger_status": settlement.status,
+            "ledger_entry_id": settlement.entry_id,
+            "ledger_error": settlement.error,
+        })),
+    )
+        .into_response()
+}
+
+async fn buy_world_listing(
+    Path(listing_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<WorldListingBuyRequest>,
+) -> Response {
+    if let Err(response) = authorize_ingress(&headers, state.config()) {
+        state.inner.metrics.inc_ingress_auth_failures();
+        return response;
+    }
+    buy_world_listing_inner(state, listing_id, payload).await
+}
+
+async fn post_world_web_listing_buy(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(payload): Form<WorldWebListingBuyRequest>,
+) -> Response {
+    let web_session = match authorize_league_web_session(&state, &headers, payload.csrf.as_deref())
+    {
+        Ok(value) => value,
+        Err(response) => {
+            if matches!(state.config().runtime_profile, RuntimeProfile::LocalDev)
+                && cookie_value(&headers, &state.config().league_web_session_cookie_name).is_none()
+            {
+                None
+            } else {
+                return response;
+            }
+        }
+    };
+    let matrix_user_id = web_session
+        .as_ref()
+        .map(|session| session.matrix_user_id.clone())
+        .or_else(|| {
+            normalize_league_matrix_user(
+                payload
+                    .matrix_user_id
+                    .as_deref()
+                    .unwrap_or("@alice:local.dev"),
+            )
+        })
+        .unwrap_or_else(|| "@alice:local.dev".to_string());
+    let listing_id = payload
+        .listing_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("latest")
+        .to_string();
+    let request = WorldListingBuyRequest {
+        matrix_user_id,
+        room_id: web_session
+            .as_ref()
+            .and_then(|session| session.room_id.clone())
+            .or_else(|| Some("!web-local:local.dev".to_string())),
+        body: payload
+            .body
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string),
+    };
+    let response = buy_world_listing_inner(state, listing_id, request).await;
+    if response.status().is_success() {
+        Redirect::to("/world?purchase=created").into_response()
     } else {
         response
     }

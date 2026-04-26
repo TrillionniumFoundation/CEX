@@ -59,7 +59,7 @@ for needle in ['Trillionnium League', 'Trillionnium World', 'Web Battle Console'
 
 world_status, world_html = get('/world')
 assert world_status == 200, world_status
-for needle in ['Trillionnium World', 'World Action Console', 'Reality Mirror Sandbox', 'Player Assets', 'Upgrade Asset', 'Companies / Shops', 'Launch Company', 'Shops / Listings', 'Publish Listing', 'World Contracts', 'Complete Contract']:
+for needle in ['Trillionnium World', 'World Action Console', 'Reality Mirror Sandbox', 'Player Assets', 'Upgrade Asset', 'Companies / Shops', 'Launch Company', 'Shops / Listings', 'Publish Listing', 'Commerce / Work Orders', 'Buy / Hire Listing', 'Faction Reputation Map', 'World Contracts', 'Complete Contract']:
     assert needle in world_html, needle
 
 matrix_user_id = '@alice:local.dev'
@@ -96,6 +96,42 @@ code, url, body = post_form('/world/web/action', headers=cookie_header, **{
 assert code == 200, ('world_action', code, url)
 assert 'Trillionnium World' in body and world_marker in body, ('world_action_body', url)
 actions.append({'action': 'world', 'status': code, 'url': url})
+
+code, url, body = post_form('/world/web/asset', headers=cookie_header, **{
+    'matrix_user_id': matrix_user_id,
+    'csrf': csrf,
+    'asset_id': 'latest',
+    'body': f'Web asset upgrade {marker}: offer, evidence package, risk control checklist, operating cadence, acceptance standard, next customer path, and self-review.',
+})
+assert code == 200 and 'Trillionnium World' in body, ('world_asset', code, url)
+actions.append({'action': 'world_asset', 'status': code, 'url': url})
+
+code, url, body = post_form('/world/web/company', headers=cookie_header, **{
+    'matrix_user_id': matrix_user_id,
+    'csrf': csrf,
+    'asset_id': 'latest',
+    'body': f'Web company launch {marker}: offer, target customer, revenue path, operating loop, evidence, risk controls, acceptance standard, and next sale.',
+})
+assert code == 200 and 'Trillionnium World' in body, ('world_company', code, url)
+actions.append({'action': 'world_company', 'status': code, 'url': url})
+
+code, url, body = post_form('/world/web/listing', headers=cookie_header, **{
+    'matrix_user_id': matrix_user_id,
+    'csrf': csrf,
+    'company_id': 'latest',
+    'body': f'Web listing {marker}: AI service package with deliverable, price logic, evidence package, customer promise, risk controls, self-review, acceptance standard, revision policy, and next action.',
+})
+assert code == 200 and 'Trillionnium World' in body, ('world_listing', code, url)
+actions.append({'action': 'world_listing', 'status': code, 'url': url})
+
+code, url, body = post_form('/world/web/buy', headers=cookie_header, **{
+    'matrix_user_id': matrix_user_id,
+    'csrf': csrf,
+    'listing_id': 'latest',
+    'body': f'Web purchase {marker}: buy the listing, open work order, define deliverable, evidence, acceptance standard, risk controls, and next action.',
+})
+assert code == 200 and 'Trillionnium World' in body, ('world_buy', code, url)
+actions.append({'action': 'world_buy', 'status': code, 'url': url})
 
 for fields in [
     {'action': 'join', 'matrix_user_id': matrix_user_id, 'match_id': 'daily-dungeon-001'},
@@ -149,6 +185,9 @@ summary = {
     'has_world_asset_upgrade_form': 'Upgrade Asset' in world_html_after,
     'has_world_company_form': 'Launch Company' in world_html_after,
     'has_world_listing_form': 'Publish Listing' in world_html_after,
+    'has_world_buy_form': 'Buy / Hire Listing' in world_html_after,
+    'has_world_factions_panel': 'Faction Reputation Map' in world_html_after,
+    'has_world_work_orders': 'Work Orders' in world_html_after,
     'has_timeline': 'Battle Timeline' in html_after,
     'has_settled_reward': 'settled' in html_after,
     'has_held_review': 'held_review' in html_after,

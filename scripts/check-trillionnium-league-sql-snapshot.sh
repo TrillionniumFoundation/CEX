@@ -46,9 +46,24 @@ assert match, 'snapshot insert format changed'
 state_hash, sql_json = match.groups()
 json_text = sql_json.replace("''", "'")
 state = json.loads(json_text)
-for key in ['matches', 'players_by_matrix_user', 'entries', 'submissions', 'rewards']:
+for key in [
+    'matches',
+    'players_by_matrix_user',
+    'entries',
+    'submissions',
+    'rewards',
+    'world_companies',
+    'world_shops',
+    'world_listings',
+    'world_economy_events',
+    'world_purchases',
+    'world_work_orders',
+    'world_factions',
+    'world_faction_standings',
+]:
     assert key in state, f'missing state key {key}'
 assert state['matches'], 'expected seeded league matches'
+assert state['world_factions'], 'expected seeded world factions'
 
 token = env_value('CONSUMER_ENTRY_INGRESS_TOKEN')
 endpoint = None
@@ -68,6 +83,12 @@ summary = {
     'players': len(state.get('players_by_matrix_user') or {}),
     'submissions': len(state.get('submissions') or {}),
     'rewards': len(state.get('rewards') or []),
+    'world_companies': len(state.get('world_companies') or []),
+    'world_listings': len(state.get('world_listings') or []),
+    'world_purchases': len(state.get('world_purchases') or []),
+    'world_work_orders': len(state.get('world_work_orders') or []),
+    'world_factions': len(state.get('world_factions') or {}),
+    'world_faction_standings': len(state.get('world_faction_standings') or []),
     'endpoint_checked': endpoint is not None,
 }
 print(json.dumps(summary, ensure_ascii=False, indent=2))

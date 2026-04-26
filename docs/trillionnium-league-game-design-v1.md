@@ -212,7 +212,7 @@ The World can be divided into zones:
 - **Market Bazaar**: real customer bounties.
 - **Audit Sanctum**: QA, compliance, risk review.
 
-Current first slice exposes this as `GET /world` plus Matrix `/world`, `/world action <自由行动>`, `/assets`, `/upgrade <asset-id|latest> <升级内容>`, `/companies`, `/company <asset-id|latest> <公司方案>`, `/shops`, `/sell <company-id|latest> <服务/商品>`, `/contract <委托内容>`, `/complete <contract-id> <交付内容>`, and `/craft <建造内容>`. The web shell shows zones, locations, Agent residents/NPCs, player assets, upgrade form, companies/shops/listings, World Contracts, completion form, and the world event timeline.
+Current first slice exposes this as `GET /world` plus Matrix `/world`, `/world action <自由行动>`, `/assets`, `/upgrade <asset-id|latest> <升级内容>`, `/companies`, `/company <asset-id|latest> <公司方案>`, `/shops`, `/sell <company-id|latest> <服务/商品>`, `/buy <listing-id|latest> <需求>`, `/work`, `/factions`, `/contract <委托内容>`, `/complete <contract-id> <交付内容>`, and `/craft <建造内容>`. The web shell shows zones, locations, Agent residents/NPCs, player assets, upgrade form, companies/shops/listings, Commerce / Work Orders, Faction Reputation Map, World Contracts, completion form, and the world event timeline.
 
 ### 8.2 Quests
 
@@ -223,7 +223,9 @@ Quest types:
 - Bounty quest: real payout.
 - Open-world action: free text intent such as “open an AI design company”, “build a shop”, “hire an Agent”, “go to the market”, or “mirror this real customer demand into the world”.
 - World Company: an operating entity launched from a player asset; it has level, revenue score, reputation score, and an owner relationship.
-- World Shop / Listing: a storefront and priced service offer created from a company, forming the first persistent commerce loop before real checkout.
+- World Shop / Listing: a storefront and priced service offer created from a company, forming the first persistent commerce loop.
+- World Purchase / Work Order: buying or hiring a listing opens a work order, credits seller revenue through Trillionnium Ledger when configured, and increases Market/Craft/City faction standing.
+- World Faction Standing: reputation with City Clerks, Craft Union, Market Guild, and League Order grows from commerce/work activity and should later unlock map privileges, fees, and quests.
 - World Contract: a real customer/market commission that creates a CEX invocation and becomes a trackable world object.
 - Asset upgrade: judged operational/craft improvement that increases asset value/level and creates a visible growth tree.
 - Contract completion: a judged delivery that can settle ledger rewards, upgrade player assets, and change reputation.

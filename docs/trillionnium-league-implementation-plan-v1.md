@@ -32,7 +32,7 @@ Already available:
 - A server-rendered web game shell is available at `GET /league` on `consumer-entry-api`, showing the Trillionnium League lobby, match cards, live stats, leaderboard, rewards, playable commands, guild halls, current loadout, replay timeline, and a local-dev Web Battle Console.
 - The web shell now has local-dev playable forms via `POST /league/web/action` for join/guild/team/raid/draft/submit, plus a battle timeline/replay panel that shows ledger settlement state.
 - Production Web session gate is active: `/league/web/session` can mint an HttpOnly SameSite web session cookie from signed upstream auth, and `/league/web/action` uses signed session + CSRF outside local-dev while preserving the local-dev playable shell.
-- Trillionnium World first slice is active: `GET /v1/world/home` returns zones/locations/Agent residents/assets/upgrades/companies/shops/listings/economy events/contracts/completions, `POST /v1/world/action` records free-form reality-mirror actions, Matrix `/world action <自由行动>` mutates world state, `GET /world` exposes a playable web World shell with CSRF-protected action/asset/company/listing/contract consoles, `/contract <委托内容>` creates a real CEX task-backed World Contract, `/complete <contract-id> <交付内容>` scores/settles/upgrades World state, `/upgrade <asset-id|latest> <升级内容>` grows persistent World assets, `/company <asset-id|latest> <公司方案>` launches an operating company/shop from an asset, and `/sell <company-id|latest> <服务/商品>` publishes a priced listing.
+- Trillionnium World first slice is active: `GET /v1/world/home` returns zones/locations/Agent residents/assets/upgrades/companies/shops/listings/purchases/work orders/factions/economy events/contracts/completions, `POST /v1/world/action` records free-form reality-mirror actions, Matrix `/world action <自由行动>` mutates world state, `GET /world` exposes a playable web World shell with CSRF-protected action/asset/company/listing/buy/contract consoles, `/contract <委托内容>` creates a real CEX task-backed World Contract, `/complete <contract-id> <交付内容>` scores/settles/upgrades World state, `/upgrade <asset-id|latest> <升级内容>` grows persistent World assets, `/company <asset-id|latest> <公司方案>` launches an operating company/shop from an asset, `/sell <company-id|latest> <服务/商品>` publishes a priced listing, and `/buy <listing-id|latest> <需求>` creates a purchase + work order with ledger-backed seller revenue and faction standing.
 
 This is enough to build the first League MVP inside Matrix before creating a custom web game shell.
 
@@ -178,7 +178,9 @@ Implemented first-slice concepts:
 - asset upgrades: judged work that increases asset value/level and records an upgrade tree
 - companies: judged operating entities launched from owned assets with level/revenue/reputation scores
 - shops/listings: storefronts and priced service offers that form the first persistent commerce loop
-- economy events: durable revenue/reputation deltas for launches and listings
+- purchases/work orders: buying or hiring a listing creates durable commerce/work state and credits seller revenue through Ledger when configured
+- factions/standings: Market Guild, Craft Union, City Clerks, and League Order reputation grows from commerce/work activity
+- economy events: durable revenue/reputation deltas for launches, listings, and purchases
 - contracts: task-backed real-world commissions linked to CEX invocation IDs
 - completions: judged delivery records with hidden-test scoring, ledger settlement status, payout hold gates, and asset/reputation growth
 - events: durable world action log with impact score and optional CEX task link
@@ -199,13 +201,15 @@ Matrix:
 - `/upgrade <asset-id|latest> <upgrade text>` judges and applies a World asset upgrade.
 - `/companies` lists player companies; `/company <asset-id|latest> <company text>` turns an owned asset into an operating company, shop, starter listing, owner relationship, and economy event.
 - `/shops` lists storefronts/listings; `/sell <company-id|latest> <listing text>` publishes a priced service listing and updates company/shop economy scores.
+- `/buy <listing-id|latest> <brief>` buys/hires a listing, creates a purchase + work order, settles seller ledger revenue when configured, and updates faction standings.
+- `/work` lists purchases/work orders; `/factions` lists factions and player standings.
 - `/craft <build text>` records a Trillionnium Craft build action and creates a reusable asset seed.
 - `/contract <commission text>` records a World Contract and creates a real CEX task/invocation through the same signed Matrix identity path used by League battles.
 - `/complete <contract-id> <delivery text>` submits the delivery, runs Judge Pipeline v2, grants ledger rewards when eligible, updates contract status, and upgrades the player's World assets/reputation.
 
 Web shell:
 
-- `GET /world` renders World zones, locations, Agent residents/NPCs, player assets, asset upgrade form, company launch form, shop/listing publish form, World Contracts, completion form, and the world event timeline.
+- `GET /world` renders World zones, locations, Agent residents/NPCs, player assets, asset upgrade form, company launch form, shop/listing publish form, buy/work-order form, faction reputation map, World Contracts, completion form, and the world event timeline.
 - `POST /world/web/action` uses the same signed web session + CSRF model as League web actions outside local-dev, while local-dev remains playable.
 
 SQL shape:
@@ -215,6 +219,7 @@ SQL shape:
 - `migrations/0014_add_trillionnium_world_contract_completions.sql`
 - `migrations/0015_add_trillionnium_world_asset_upgrades.sql`
 - `migrations/0016_add_trillionnium_world_companies.sql`
+- `migrations/0017_add_trillionnium_world_commerce.sql`
 
 ## Phase 2: Durable League Domain
 

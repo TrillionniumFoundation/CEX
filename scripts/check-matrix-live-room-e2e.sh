@@ -112,6 +112,9 @@ world_companies_result = send_and_wait('/companies', 'trillionnium_world_compani
 world_company_result = send_and_wait('/company latest Company launch plan: offer, target customer, revenue path, operating loop, evidence, risk controls, acceptance standard, and next sale.', 'trillionnium_world_company_created', lambda content, card: int(card.get('company_level') or 0) >= 1 and int(card.get('revenue_score') or 0) >= 1)
 world_shops_result = send_and_wait('/shops', 'trillionnium_world_shops', lambda content, card: int(card.get('shop_count') or 0) >= 1 and int(card.get('listing_count') or 0) >= 1)
 world_listing_result = send_and_wait('/sell latest Service listing: AI design delivery package with scope, price logic, evidence package, customer deliverable, risk controls, self-review, acceptance standard, revision policy, and next action.', 'trillionnium_world_listing_created', lambda content, card: int(card.get('price_credits') or 0) >= 1 and int(card.get('quality_score') or 0) >= 1 and card.get('status') == 'listed')
+world_purchase_result = send_and_wait('/buy latest Purchase brief: hire this AI design package, define deliverable, evidence package, acceptance standard, risk controls, and next action.', 'trillionnium_world_listing_purchase', lambda content, card: int(card.get('price_credits') or 0) >= 1 and bool(card.get('work_order_id')) and card.get('ledger_status') == 'settled')
+world_work_result = send_and_wait('/work', 'trillionnium_world_commerce', lambda content, card: int(card.get('work_order_count') or 0) >= 1)
+world_factions_result = send_and_wait('/factions', 'trillionnium_world_factions', lambda content, card: int(card.get('faction_count') or 0) >= 4 and int(card.get('standing_count') or 0) >= 1)
 season_result = send_and_wait('/season', 'league_season', lambda content, card: bool(card.get('top_guild')))
 arena_result = send_and_wait('/arena', 'league_arena')
 guilds_result = send_and_wait('/guild', 'league_guilds', lambda content, card: bool(card.get('top_guild')))
@@ -156,6 +159,9 @@ summary = {
     'world_company_reply': world_company_result['reply'],
     'world_shops_reply': world_shops_result['reply'],
     'world_listing_reply': world_listing_result['reply'],
+    'world_purchase_reply': world_purchase_result['reply'],
+    'world_work_reply': world_work_result['reply'],
+    'world_factions_reply': world_factions_result['reply'],
     'season_reply': season_result['reply'],
     'arena_reply': arena_result['reply'],
     'guilds_reply': guilds_result['reply'],
@@ -206,6 +212,15 @@ print(json.dumps({
     'world_shops_event_id': world_shops_result['reply']['event_id'],
     'world_listing_event_id': world_listing_result['reply']['event_id'],
     'world_listing_id': world_listing_result['reply']['card'].get('listing_id'),
+    'world_purchase_event_id': world_purchase_result['reply']['event_id'],
+    'world_purchase_id': world_purchase_result['reply']['card'].get('purchase_id'),
+    'world_work_order_id': world_purchase_result['reply']['card'].get('work_order_id'),
+    'world_purchase_ledger_status': world_purchase_result['reply']['card'].get('ledger_status'),
+    'world_work_event_id': world_work_result['reply']['event_id'],
+    'world_work_order_count': world_work_result['reply']['card'].get('work_order_count'),
+    'world_factions_event_id': world_factions_result['reply']['event_id'],
+    'world_faction_count': world_factions_result['reply']['card'].get('faction_count'),
+    'world_faction_standing_count': world_factions_result['reply']['card'].get('standing_count'),
     'season_event_id': season_result['reply']['event_id'],
     'arena_event_id': arena_result['reply']['event_id'],
     'guilds_event_id': guilds_result['reply']['event_id'],
