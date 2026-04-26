@@ -810,6 +810,61 @@ struct WorldAssetUpgrade {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+struct WorldCompany {
+    company_id: String,
+    owner_matrix_user_id: String,
+    asset_id: String,
+    location_id: String,
+    name: String,
+    company_kind: String,
+    status: String,
+    revenue_score: i64,
+    reputation_score: i64,
+    level: i64,
+    created_at_epoch: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WorldShop {
+    shop_id: String,
+    company_id: String,
+    owner_matrix_user_id: String,
+    location_id: String,
+    name: String,
+    shop_kind: String,
+    status: String,
+    listing_count: i64,
+    gross_merchandise_score: i64,
+    created_at_epoch: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WorldListing {
+    listing_id: String,
+    shop_id: String,
+    company_id: String,
+    owner_matrix_user_id: String,
+    asset_id: String,
+    title: String,
+    listing_kind: String,
+    status: String,
+    price_credits: i64,
+    quality_score: i64,
+    created_at_epoch: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WorldEconomyEvent {
+    economy_event_id: String,
+    matrix_user_id: String,
+    event_kind: String,
+    subject_id: String,
+    credits_delta: i64,
+    reputation_delta: i64,
+    created_at_epoch: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct WorldEvent {
     event_id: String,
     actor_matrix_user_id: String,
@@ -929,6 +984,14 @@ struct LeagueState {
     #[serde(default)]
     world_asset_upgrades: Vec<WorldAssetUpgrade>,
     #[serde(default)]
+    world_companies: Vec<WorldCompany>,
+    #[serde(default)]
+    world_shops: Vec<WorldShop>,
+    #[serde(default)]
+    world_listings: Vec<WorldListing>,
+    #[serde(default)]
+    world_economy_events: Vec<WorldEconomyEvent>,
+    #[serde(default)]
     world_events: Vec<WorldEvent>,
     #[serde(default)]
     world_contracts: Vec<WorldContract>,
@@ -1034,6 +1097,36 @@ struct WorldWebAssetUpgradeRequest {
     matrix_user_id: Option<String>,
     csrf: Option<String>,
     asset_id: Option<String>,
+    body: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorldCompanyRequest {
+    matrix_user_id: String,
+    asset_id: Option<String>,
+    body: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorldWebCompanyRequest {
+    matrix_user_id: Option<String>,
+    csrf: Option<String>,
+    asset_id: Option<String>,
+    body: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorldListingRequest {
+    matrix_user_id: String,
+    company_id: Option<String>,
+    body: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorldWebListingRequest {
+    matrix_user_id: Option<String>,
+    csrf: Option<String>,
+    company_id: Option<String>,
     body: Option<String>,
 }
 
@@ -1255,6 +1348,10 @@ fn default_league_state() -> LeagueState {
         world_entities,
         world_assets: Vec::new(),
         world_asset_upgrades: Vec::new(),
+        world_companies: Vec::new(),
+        world_shops: Vec::new(),
+        world_listings: Vec::new(),
+        world_economy_events: Vec::new(),
         world_events: Vec::new(),
         world_contracts: Vec::new(),
         world_contract_completions: Vec::new(),
@@ -3206,6 +3303,8 @@ pub fn build_router(state: AppState) -> Router {
             post(post_world_web_contract_complete),
         )
         .route("/world/web/asset", post(post_world_web_asset_upgrade))
+        .route("/world/web/company", post(post_world_web_company))
+        .route("/world/web/listing", post(post_world_web_listing))
         .route("/v1/chat/tasks", post(create_chat_task))
         .route("/v1/chat/tasks/:id", get(get_chat_task))
         .route("/v1/matrix/messages", post(create_matrix_message_task))
@@ -3218,6 +3317,12 @@ pub fn build_router(state: AppState) -> Router {
             "/v1/world/assets/:asset_id/upgrade",
             post(upgrade_world_asset),
         )
+        .route(
+            "/v1/world/companies",
+            get(get_world_companies).post(create_world_company),
+        )
+        .route("/v1/world/shops", get(get_world_shops))
+        .route("/v1/world/listings", post(create_world_listing))
         .route("/v1/world/contracts", get(get_world_contracts))
         .route(
             "/v1/world/contracts/:contract_id/complete",
@@ -6525,6 +6630,10 @@ fn world_home_json(league: &LeagueState) -> Value {
         "entities": entities,
         "assets": league.world_assets,
         "asset_upgrades": league.world_asset_upgrades,
+        "companies": league.world_companies,
+        "shops": league.world_shops,
+        "listings": league.world_listings,
+        "economy_events": league.world_economy_events,
         "contracts": league.world_contracts,
         "contract_completions": league.world_contract_completions,
         "recent_events": recent_events,
@@ -6534,6 +6643,10 @@ fn world_home_json(league: &LeagueState) -> Value {
             "entities": league.world_entities.len(),
             "assets": league.world_assets.len(),
             "asset_upgrades": league.world_asset_upgrades.len(),
+            "companies": league.world_companies.len(),
+            "shops": league.world_shops.len(),
+            "listings": league.world_listings.len(),
+            "economy_events": league.world_economy_events.len(),
             "contracts": league.world_contracts.len(),
             "contract_completions": league.world_contract_completions.len(),
             "events": league.world_events.len(),
@@ -6894,6 +7007,85 @@ async fn get_world_web_shell(State(state): State<AppState>, headers: HeaderMap) 
     } else {
         asset_cards
     };
+    let company_cards = league
+        .world_companies
+        .iter()
+        .rev()
+        .take(8)
+        .map(|company| {
+            format!(
+                "<article class=\"mini company\"><strong>{}</strong><span>{} · Lv {} · revenue {}</span><code>{}</code><small>asset {} · rep {}</small></article>",
+                escape_html_text(&company.name),
+                escape_html_text(&company.company_kind),
+                company.level,
+                company.revenue_score,
+                escape_html_text(&company.company_id),
+                escape_html_text(&company.asset_id),
+                company.reputation_score,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let company_cards = if company_cards.is_empty() {
+        "<article class=\"mini company\"><strong>No companies yet</strong><span>Use /company latest to turn an asset into an operating company.</span><code>/company latest</code></article>".to_string()
+    } else {
+        company_cards
+    };
+    let latest_company_id = league
+        .world_companies
+        .iter()
+        .rev()
+        .find(|company| company.owner_matrix_user_id == "@alice:local.dev")
+        .map(|company| company.company_id.clone())
+        .unwrap_or_else(|| "latest".to_string());
+    let shop_cards = league
+        .world_shops
+        .iter()
+        .rev()
+        .take(8)
+        .map(|shop| {
+            format!(
+                "<article class=\"mini shop\"><strong>{}</strong><span>{} · listings {} · GMV {}</span><code>{}</code><small>company {} · {}</small></article>",
+                escape_html_text(&shop.name),
+                escape_html_text(&shop.shop_kind),
+                shop.listing_count,
+                shop.gross_merchandise_score,
+                escape_html_text(&shop.shop_id),
+                escape_html_text(&shop.company_id),
+                escape_html_text(&shop.status),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let shop_cards = if shop_cards.is_empty() {
+        "<article class=\"mini shop\"><strong>No shops yet</strong><span>Launch a company to open the first storefront.</span><code>/company latest</code></article>".to_string()
+    } else {
+        shop_cards
+    };
+    let listing_cards = league
+        .world_listings
+        .iter()
+        .rev()
+        .take(8)
+        .map(|listing| {
+            format!(
+                "<article class=\"mini listing\"><strong>{}</strong><span>{} · {} credits · quality {}</span><code>{}</code><small>shop {} · {}</small></article>",
+                escape_html_text(&listing.title),
+                escape_html_text(&listing.listing_kind),
+                listing.price_credits,
+                listing.quality_score,
+                escape_html_text(&listing.listing_id),
+                escape_html_text(&listing.shop_id),
+                escape_html_text(&listing.status),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let listing_cards = if listing_cards.is_empty() {
+        "<article class=\"mini listing\"><strong>No listings yet</strong><span>Use /sell latest to publish an offer.</span><code>/sell latest</code></article>".to_string()
+    } else {
+        listing_cards
+    };
     let latest_contract_id = league
         .world_contracts
         .iter()
@@ -6965,7 +7157,7 @@ async fn get_world_web_shell(State(state): State<AppState>, headers: HeaderMap) 
     .subtitle {{ color:var(--muted); font-size:18px; max-width:840px; line-height:1.55; }}
     .hero-card,.card,.panel {{ border:1px solid rgba(255,255,255,.11); background:linear-gradient(145deg,rgba(255,255,255,.09),rgba(255,255,255,.035)); box-shadow:0 24px 80px rgba(0,0,0,.35); backdrop-filter: blur(14px); border-radius:24px; }}
     .hero-card,.panel,.card {{ padding:24px; }}
-    .stats {{ display:grid; grid-template-columns:repeat(8,1fr); gap:14px; margin-top:22px; }}
+    .stats {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:14px; margin-top:22px; }}
     .stat {{ padding:18px; background:rgba(255,255,255,.06); border-radius:18px; }}
     .stat b {{ display:block; font-size:26px; color:var(--gold); }}
     main {{ padding:20px min(6vw,72px) 60px; display:grid; gap:24px; }}
@@ -7011,6 +7203,9 @@ async fn get_world_web_shell(State(state): State<AppState>, headers: HeaderMap) 
       <div class="stat"><span>Agents</span><b>{entities}</b></div>
       <div class="stat"><span>Assets</span><b>{assets}</b></div>
       <div class="stat"><span>Upgrades</span><b>{asset_upgrades}</b></div>
+      <div class="stat"><span>Companies</span><b>{companies}</b></div>
+      <div class="stat"><span>Shops</span><b>{shops}</b></div>
+      <div class="stat"><span>Listings</span><b>{listings}</b></div>
       <div class="stat"><span>Contracts</span><b>{contracts}</b></div>
       <div class="stat"><span>Done</span><b>{completions}</b></div>
       <div class="stat"><span>Events</span><b>{events}</b></div>
@@ -7057,6 +7252,29 @@ async fn get_world_web_shell(State(state): State<AppState>, headers: HeaderMap) 
       </form>
     </section>
     <section class="panel">
+      <h2>Companies / Shops</h2>
+      <div class="mini-grid">{company_cards}</div>
+      <form method="post" action="/world/web/company" style="margin-top:16px">
+        {csrf_input}
+        <input type="hidden" name="matrix_user_id" value="@alice:local.dev" />
+        <input name="asset_id" value="{latest_asset_id}" placeholder="latest or world-asset-id" />
+        <textarea name="body">Launch a shop/company from this asset with offer, customer segment, operating loop, proof, and first revenue path.</textarea>
+        <button type="submit">Launch Company</button>
+      </form>
+    </section>
+    <section class="panel">
+      <h2>Shops / Listings</h2>
+      <div class="mini-grid">{shop_cards}</div>
+      <div class="mini-grid" style="margin-top:12px">{listing_cards}</div>
+      <form method="post" action="/world/web/listing" style="margin-top:16px">
+        {csrf_input}
+        <input type="hidden" name="matrix_user_id" value="@alice:local.dev" />
+        <input name="company_id" value="{latest_company_id}" placeholder="latest or world-company-id" />
+        <textarea name="body">Publish a service listing with clear deliverable, price logic, evidence package, customer promise, risk controls, self-review, and next action.</textarea>
+        <button type="submit">Publish Listing</button>
+      </form>
+    </section>
+    <section class="panel">
       <h2>World Contracts</h2>
       <div class="mini-grid">{contract_cards}</div>
       <form method="post" action="/world/web/contract" style="margin-top:16px">
@@ -7079,6 +7297,9 @@ async fn get_world_web_shell(State(state): State<AppState>, headers: HeaderMap) 
         entities = league.world_entities.len(),
         assets = league.world_assets.len(),
         asset_upgrades = league.world_asset_upgrades.len(),
+        companies = league.world_companies.len(),
+        shops = league.world_shops.len(),
+        listings = league.world_listings.len(),
         contracts = league.world_contracts.len(),
         completions = league.world_contract_completions.len(),
         events = league.world_events.len(),
@@ -7089,6 +7310,10 @@ async fn get_world_web_shell(State(state): State<AppState>, headers: HeaderMap) 
         entity_cards = entity_cards,
         asset_cards = asset_cards,
         latest_asset_id = escape_html_text(&latest_asset_id),
+        company_cards = company_cards,
+        latest_company_id = escape_html_text(&latest_company_id),
+        shop_cards = shop_cards,
+        listing_cards = listing_cards,
         contract_cards = contract_cards,
         latest_contract_id = escape_html_text(&latest_contract_id),
         event_items = event_items,
@@ -7385,6 +7610,538 @@ async fn post_world_web_asset_upgrade(
     let response = upgrade_world_asset_inner(state, asset_id, request).await;
     if response.status().is_success() {
         Redirect::to("/world?asset=upgraded").into_response()
+    } else {
+        response
+    }
+}
+
+async fn get_world_companies(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Err(response) = authorize_ingress(&headers, state.config()) {
+        state.inner.metrics.inc_ingress_auth_failures();
+        return response;
+    }
+    let league = state.inner.league_state.lock().await;
+    (
+        StatusCode::OK,
+        Json(json!({
+            "kind": "trillionnium_world_companies",
+            "world": "trillionnium_world",
+            "companies": league.world_companies,
+        })),
+    )
+        .into_response()
+}
+
+async fn create_world_company_inner(state: AppState, payload: WorldCompanyRequest) -> Response {
+    let matrix_user_id = match normalize_league_matrix_user(&payload.matrix_user_id) {
+        Some(value) => value,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "matrix_user_id is required" })),
+            )
+                .into_response()
+        }
+    };
+    let body = match validate_text_payload(&payload.body, state.config().max_text_chars) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let requested_asset_id = payload
+        .asset_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("latest")
+        .to_string();
+    let judgement = judge_league_submission_with_pipeline(&state, &body, "world_company").await;
+    let snapshot = {
+        let now = Utc::now().timestamp();
+        let mut league = state.inner.league_state.lock().await;
+        let Some(asset) = (if requested_asset_id == "latest" {
+            league
+                .world_assets
+                .iter()
+                .rev()
+                .find(|asset| asset.owner_matrix_user_id == matrix_user_id)
+                .cloned()
+        } else {
+            league
+                .world_assets
+                .iter()
+                .find(|asset| asset.asset_id == requested_asset_id)
+                .cloned()
+        }) else {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "world asset not found", "asset_id": requested_asset_id })),
+            )
+                .into_response();
+        };
+        if asset.owner_matrix_user_id != matrix_user_id {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({ "error": "world asset belongs to another player", "asset_id": asset.asset_id })),
+            )
+                .into_response();
+        }
+        let mut player = ensure_league_player(&mut league, &matrix_user_id, None);
+        let revenue_score = ((asset.value_score as f64) * 0.6 + judgement.score).round() as i64;
+        let reputation_score =
+            ((asset.upgrade_level.max(1) * 10) as f64 + judgement.score / 2.0).round() as i64;
+        let level = 1 + (revenue_score / 100).max(0);
+        let company_kind = if body.contains("店") || body.to_ascii_lowercase().contains("shop") {
+            "shop"
+        } else if body.contains("工坊") || body.to_ascii_lowercase().contains("studio") {
+            "studio"
+        } else {
+            "company"
+        };
+        let company = WorldCompany {
+            company_id: league_hash_id(
+                "world-company",
+                &format!("{}:{}:{}", matrix_user_id, asset.asset_id, now),
+            ),
+            owner_matrix_user_id: matrix_user_id.clone(),
+            asset_id: asset.asset_id.clone(),
+            location_id: asset.location_id.clone(),
+            name: if company_kind == "shop" {
+                "Mirror Market Shop".to_string()
+            } else if company_kind == "studio" {
+                "Trillionnium Craft Studio".to_string()
+            } else {
+                "Reality Venture Company".to_string()
+            },
+            company_kind: company_kind.to_string(),
+            status: if judgement.payout_status == "eligible" {
+                "operating".to_string()
+            } else {
+                "review_hold".to_string()
+            },
+            revenue_score,
+            reputation_score,
+            level,
+            created_at_epoch: now,
+        };
+        let shop = WorldShop {
+            shop_id: league_hash_id(
+                "world-shop",
+                &format!("{}:{}:{}", matrix_user_id, company.company_id, now),
+            ),
+            company_id: company.company_id.clone(),
+            owner_matrix_user_id: matrix_user_id.clone(),
+            location_id: company.location_id.clone(),
+            name: format!("{} Storefront", company.name),
+            shop_kind: company_kind.to_string(),
+            status: company.status.clone(),
+            listing_count: 1,
+            gross_merchandise_score: revenue_score.max(0),
+            created_at_epoch: now,
+        };
+        let listing = WorldListing {
+            listing_id: league_hash_id(
+                "world-listing",
+                &format!("{}:{}:{}", matrix_user_id, shop.shop_id, now),
+            ),
+            shop_id: shop.shop_id.clone(),
+            company_id: company.company_id.clone(),
+            owner_matrix_user_id: matrix_user_id.clone(),
+            asset_id: asset.asset_id.clone(),
+            title: body.chars().take(42).collect::<String>(),
+            listing_kind: "service_offer".to_string(),
+            status: company.status.clone(),
+            price_credits: (revenue_score / 2).max(10),
+            quality_score: judgement.score.round() as i64,
+            created_at_epoch: now,
+        };
+        let economy_event = WorldEconomyEvent {
+            economy_event_id: league_hash_id(
+                "world-econ",
+                &format!("{}:{}:{}", matrix_user_id, listing.listing_id, now),
+            ),
+            matrix_user_id: matrix_user_id.clone(),
+            event_kind: "company_launch".to_string(),
+            subject_id: company.company_id.clone(),
+            credits_delta: listing.price_credits,
+            reputation_delta: reputation_score,
+            created_at_epoch: now,
+        };
+        if judgement.payout_status == "eligible" {
+            player.xp += judgement.score.round() as i64;
+            player.reputation += (judgement.score / 6.0).round() as i64;
+            player.rating += ((judgement.score - 50.0) / 4.0).round() as i64;
+        }
+        league
+            .players_by_matrix_user
+            .insert(matrix_user_id.clone(), player);
+        league.world_relationships.push(WorldRelationship {
+            relationship_id: league_hash_id(
+                "world-rel",
+                &format!("{}:{}:{}", matrix_user_id, company.company_id, now),
+            ),
+            from_id: matrix_user_id.clone(),
+            to_id: company.company_id.clone(),
+            relation_kind: "owner".to_string(),
+            strength: reputation_score,
+            updated_at_epoch: now,
+        });
+        league.world_companies.push(company.clone());
+        league.world_shops.push(shop.clone());
+        league.world_listings.push(listing.clone());
+        league.world_economy_events.push(economy_event.clone());
+        (
+            league.clone(),
+            company,
+            shop,
+            listing,
+            economy_event,
+            judgement,
+        )
+    };
+    if let Err(response) = persist_league_state(&state, &snapshot.0).await {
+        return response;
+    }
+    (
+        StatusCode::OK,
+        Json(json!({
+            "kind": "trillionnium_world_company_created",
+            "world": "trillionnium_world",
+            "company": snapshot.1,
+            "shop": snapshot.2,
+            "listing": snapshot.3,
+            "economy_event": snapshot.4,
+            "judge_status": snapshot.5.judge_status,
+            "payout_status": snapshot.5.payout_status,
+        })),
+    )
+        .into_response()
+}
+
+async fn create_world_company(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<WorldCompanyRequest>,
+) -> Response {
+    if let Err(response) = authorize_ingress(&headers, state.config()) {
+        state.inner.metrics.inc_ingress_auth_failures();
+        return response;
+    }
+    create_world_company_inner(state, payload).await
+}
+
+async fn post_world_web_company(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(payload): Form<WorldWebCompanyRequest>,
+) -> Response {
+    let web_session = match authorize_league_web_session(&state, &headers, payload.csrf.as_deref())
+    {
+        Ok(value) => value,
+        Err(response) => {
+            if matches!(state.config().runtime_profile, RuntimeProfile::LocalDev)
+                && cookie_value(&headers, &state.config().league_web_session_cookie_name).is_none()
+            {
+                None
+            } else {
+                return response;
+            }
+        }
+    };
+    let matrix_user_id = web_session
+        .as_ref()
+        .map(|session| session.matrix_user_id.clone())
+        .or_else(|| {
+            normalize_league_matrix_user(
+                payload
+                    .matrix_user_id
+                    .as_deref()
+                    .unwrap_or("@alice:local.dev"),
+            )
+        })
+        .unwrap_or_else(|| "@alice:local.dev".to_string());
+    let body = payload
+        .body
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("Launch a Trillionnium World company from this asset with offer, market, operating loop, proof, and next revenue path.")
+        .to_string();
+    let request = WorldCompanyRequest {
+        matrix_user_id,
+        asset_id: payload
+            .asset_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string),
+        body,
+    };
+    let response = create_world_company_inner(state, request).await;
+    if response.status().is_success() {
+        Redirect::to("/world?company=created").into_response()
+    } else {
+        response
+    }
+}
+
+async fn get_world_shops(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Err(response) = authorize_ingress(&headers, state.config()) {
+        state.inner.metrics.inc_ingress_auth_failures();
+        return response;
+    }
+    let league = state.inner.league_state.lock().await;
+    (
+        StatusCode::OK,
+        Json(json!({
+            "kind": "trillionnium_world_shops",
+            "world": "trillionnium_world",
+            "companies": league.world_companies,
+            "shops": league.world_shops,
+            "listings": league.world_listings,
+            "economy_events": league.world_economy_events,
+        })),
+    )
+        .into_response()
+}
+
+async fn create_world_listing_inner(state: AppState, payload: WorldListingRequest) -> Response {
+    let matrix_user_id = match normalize_league_matrix_user(&payload.matrix_user_id) {
+        Some(value) => value,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "matrix_user_id is required" })),
+            )
+                .into_response()
+        }
+    };
+    let body = match validate_text_payload(&payload.body, state.config().max_text_chars) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let requested_company_id = payload
+        .company_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("latest")
+        .to_string();
+    let judgement = judge_league_submission_with_pipeline(&state, &body, "world_listing").await;
+    let snapshot = {
+        let now = Utc::now().timestamp();
+        let mut league = state.inner.league_state.lock().await;
+        let Some(company_index) = (if requested_company_id == "latest" {
+            league
+                .world_companies
+                .iter()
+                .rposition(|company| company.owner_matrix_user_id == matrix_user_id)
+        } else {
+            league
+                .world_companies
+                .iter()
+                .position(|company| company.company_id == requested_company_id)
+        }) else {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "world company not found", "company_id": requested_company_id })),
+            )
+                .into_response();
+        };
+        let company_seed = league.world_companies[company_index].clone();
+        if company_seed.owner_matrix_user_id != matrix_user_id {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({ "error": "world company belongs to another player", "company_id": company_seed.company_id })),
+            )
+                .into_response();
+        }
+        let shop_index = match league
+            .world_shops
+            .iter()
+            .position(|shop| shop.company_id == company_seed.company_id)
+        {
+            Some(index) => index,
+            None => {
+                league.world_shops.push(WorldShop {
+                    shop_id: league_hash_id(
+                        "world-shop",
+                        &format!("{}:{}:{}", matrix_user_id, company_seed.company_id, now),
+                    ),
+                    company_id: company_seed.company_id.clone(),
+                    owner_matrix_user_id: matrix_user_id.clone(),
+                    location_id: company_seed.location_id.clone(),
+                    name: format!("{} Storefront", company_seed.name),
+                    shop_kind: company_seed.company_kind.clone(),
+                    status: company_seed.status.clone(),
+                    listing_count: 0,
+                    gross_merchandise_score: 0,
+                    created_at_epoch: now,
+                });
+                league.world_shops.len() - 1
+            }
+        };
+        let quality_score = judgement.score.round() as i64;
+        let price_credits =
+            (((company_seed.revenue_score.max(10) as f64) * 0.35) + judgement.score).round() as i64;
+        let listing = WorldListing {
+            listing_id: league_hash_id(
+                "world-listing",
+                &format!(
+                    "{}:{}:{}",
+                    matrix_user_id, league.world_shops[shop_index].shop_id, now
+                ),
+            ),
+            shop_id: league.world_shops[shop_index].shop_id.clone(),
+            company_id: company_seed.company_id.clone(),
+            owner_matrix_user_id: matrix_user_id.clone(),
+            asset_id: company_seed.asset_id.clone(),
+            title: body.chars().take(48).collect::<String>(),
+            listing_kind: if body.contains("订阅")
+                || body.to_ascii_lowercase().contains("subscription")
+            {
+                "subscription_offer".to_string()
+            } else {
+                "service_offer".to_string()
+            },
+            status: if judgement.payout_status == "eligible" {
+                "listed".to_string()
+            } else {
+                "review_hold".to_string()
+            },
+            price_credits: price_credits.max(10),
+            quality_score,
+            created_at_epoch: now,
+        };
+        let economy_event = WorldEconomyEvent {
+            economy_event_id: league_hash_id(
+                "world-econ",
+                &format!("{}:{}:{}", matrix_user_id, listing.listing_id, now),
+            ),
+            matrix_user_id: matrix_user_id.clone(),
+            event_kind: "listing_published".to_string(),
+            subject_id: listing.listing_id.clone(),
+            credits_delta: if judgement.payout_status == "eligible" {
+                listing.price_credits
+            } else {
+                0
+            },
+            reputation_delta: if judgement.payout_status == "eligible" {
+                (judgement.score / 5.0).round() as i64
+            } else {
+                0
+            },
+            created_at_epoch: now,
+        };
+        if judgement.payout_status == "eligible" {
+            league.world_shops[shop_index].listing_count += 1;
+            league.world_shops[shop_index].gross_merchandise_score += listing.price_credits;
+            league.world_companies[company_index].revenue_score += listing.price_credits;
+            league.world_companies[company_index].reputation_score +=
+                economy_event.reputation_delta;
+            league.world_companies[company_index].level =
+                1 + (league.world_companies[company_index].revenue_score / 100).max(0);
+            let mut player = ensure_league_player(&mut league, &matrix_user_id, None);
+            player.xp += quality_score;
+            player.reputation += economy_event.reputation_delta;
+            player.rating += ((judgement.score - 50.0) / 5.0).round() as i64;
+            league
+                .players_by_matrix_user
+                .insert(matrix_user_id.clone(), player);
+        }
+        league.world_listings.push(listing.clone());
+        league.world_economy_events.push(economy_event.clone());
+        let company = league.world_companies[company_index].clone();
+        let shop = league.world_shops[shop_index].clone();
+        (
+            league.clone(),
+            company,
+            shop,
+            listing,
+            economy_event,
+            judgement,
+        )
+    };
+    if let Err(response) = persist_league_state(&state, &snapshot.0).await {
+        return response;
+    }
+    (
+        StatusCode::OK,
+        Json(json!({
+            "kind": "trillionnium_world_listing_created",
+            "world": "trillionnium_world",
+            "company": snapshot.1,
+            "shop": snapshot.2,
+            "listing": snapshot.3,
+            "economy_event": snapshot.4,
+            "judge_status": snapshot.5.judge_status,
+            "payout_status": snapshot.5.payout_status,
+        })),
+    )
+        .into_response()
+}
+
+async fn create_world_listing(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<WorldListingRequest>,
+) -> Response {
+    if let Err(response) = authorize_ingress(&headers, state.config()) {
+        state.inner.metrics.inc_ingress_auth_failures();
+        return response;
+    }
+    create_world_listing_inner(state, payload).await
+}
+
+async fn post_world_web_listing(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(payload): Form<WorldWebListingRequest>,
+) -> Response {
+    let web_session = match authorize_league_web_session(&state, &headers, payload.csrf.as_deref())
+    {
+        Ok(value) => value,
+        Err(response) => {
+            if matches!(state.config().runtime_profile, RuntimeProfile::LocalDev)
+                && cookie_value(&headers, &state.config().league_web_session_cookie_name).is_none()
+            {
+                None
+            } else {
+                return response;
+            }
+        }
+    };
+    let matrix_user_id = web_session
+        .as_ref()
+        .map(|session| session.matrix_user_id.clone())
+        .or_else(|| {
+            normalize_league_matrix_user(
+                payload
+                    .matrix_user_id
+                    .as_deref()
+                    .unwrap_or("@alice:local.dev"),
+            )
+        })
+        .unwrap_or_else(|| "@alice:local.dev".to_string());
+    let body = payload
+        .body
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("Publish a Trillionnium World service listing with deliverable, price logic, evidence package, customer promise, risk controls, self-review, and next action.")
+        .to_string();
+    let request = WorldListingRequest {
+        matrix_user_id,
+        company_id: payload
+            .company_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string),
+        body,
+    };
+    let response = create_world_listing_inner(state, request).await;
+    if response.status().is_success() {
+        Redirect::to("/world?listing=created").into_response()
     } else {
         response
     }

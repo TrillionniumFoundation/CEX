@@ -108,6 +108,10 @@ world_contract_id = world_contract_result['reply']['card'].get('contract_id')
 world_contract_completion_result = send_and_wait('/complete ' + world_contract_id + ' 交付方案：包含 deliverable、evidence、risk review、acceptance standard、next step 和自检记录。', 'trillionnium_world_contract_completion', lambda content, card: card.get('contract_id') == world_contract_id and card.get('ledger_status') == 'settled' and 'hidden' in str(card.get('judge_status')))
 world_assets_result = send_and_wait('/assets', 'trillionnium_world_assets', lambda content, card: int(card.get('asset_count') or 0) >= 1)
 world_asset_upgrade_result = send_and_wait('/upgrade latest Asset upgrade deliverable: service package, evidence template, risk control checklist, operating cadence, acceptance standard, next customer path, and self-review notes.', 'trillionnium_world_asset_upgrade', lambda content, card: int(card.get('asset_level') or 0) >= 1 and int(card.get('value_delta') or 0) >= 1)
+world_companies_result = send_and_wait('/companies', 'trillionnium_world_companies')
+world_company_result = send_and_wait('/company latest Company launch plan: offer, target customer, revenue path, operating loop, evidence, risk controls, acceptance standard, and next sale.', 'trillionnium_world_company_created', lambda content, card: int(card.get('company_level') or 0) >= 1 and int(card.get('revenue_score') or 0) >= 1)
+world_shops_result = send_and_wait('/shops', 'trillionnium_world_shops', lambda content, card: int(card.get('shop_count') or 0) >= 1 and int(card.get('listing_count') or 0) >= 1)
+world_listing_result = send_and_wait('/sell latest Service listing: AI design delivery package with scope, price logic, evidence package, customer deliverable, risk controls, self-review, acceptance standard, revision policy, and next action.', 'trillionnium_world_listing_created', lambda content, card: int(card.get('price_credits') or 0) >= 1 and int(card.get('quality_score') or 0) >= 1 and card.get('status') == 'listed')
 season_result = send_and_wait('/season', 'league_season', lambda content, card: bool(card.get('top_guild')))
 arena_result = send_and_wait('/arena', 'league_arena')
 guilds_result = send_and_wait('/guild', 'league_guilds', lambda content, card: bool(card.get('top_guild')))
@@ -148,6 +152,10 @@ summary = {
     'world_contract_completion_reply': world_contract_completion_result['reply'],
     'world_assets_reply': world_assets_result['reply'],
     'world_asset_upgrade_reply': world_asset_upgrade_result['reply'],
+    'world_companies_reply': world_companies_result['reply'],
+    'world_company_reply': world_company_result['reply'],
+    'world_shops_reply': world_shops_result['reply'],
+    'world_listing_reply': world_listing_result['reply'],
     'season_reply': season_result['reply'],
     'arena_reply': arena_result['reply'],
     'guilds_reply': guilds_result['reply'],
@@ -192,6 +200,12 @@ print(json.dumps({
     'world_assets_event_id': world_assets_result['reply']['event_id'],
     'world_asset_upgrade_event_id': world_asset_upgrade_result['reply']['event_id'],
     'world_asset_upgrade_delta': world_asset_upgrade_result['reply']['card'].get('value_delta'),
+    'world_companies_event_id': world_companies_result['reply']['event_id'],
+    'world_company_event_id': world_company_result['reply']['event_id'],
+    'world_company_id': world_company_result['reply']['card'].get('company_id'),
+    'world_shops_event_id': world_shops_result['reply']['event_id'],
+    'world_listing_event_id': world_listing_result['reply']['event_id'],
+    'world_listing_id': world_listing_result['reply']['card'].get('listing_id'),
     'season_event_id': season_result['reply']['event_id'],
     'arena_event_id': arena_result['reply']['event_id'],
     'guilds_event_id': guilds_result['reply']['event_id'],

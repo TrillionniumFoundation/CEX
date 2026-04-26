@@ -1937,6 +1937,16 @@ enum ParsedCommand {
         asset_id: String,
         body: String,
     },
+    WorldCompanies,
+    WorldCompanyCreate {
+        asset_id: String,
+        body: String,
+    },
+    WorldShops,
+    WorldListingCreate {
+        company_id: String,
+        body: String,
+    },
     CraftAction {
         body: String,
     },
@@ -2343,6 +2353,62 @@ async fn handle_matrix_event(
                     event,
                     value.clone(),
                     build_trillionnium_world_asset_upgrade_matrix_reply(&value),
+                ),
+                Err(response) => response,
+            }
+        }
+        ParsedCommand::WorldCompanies => {
+            match fetch_consumer_entry_get(&state, "/v1/world/companies").await {
+                Ok(value) => league_response(
+                    "trillionnium_world_companies",
+                    event,
+                    value.clone(),
+                    build_trillionnium_world_companies_matrix_reply(&value),
+                ),
+                Err(response) => response,
+            }
+        }
+        ParsedCommand::WorldCompanyCreate { asset_id, body } => {
+            let request = json!({
+                "matrix_user_id": &event.sender,
+                "room_id": &event.room_id,
+                "asset_id": asset_id,
+                "body": body,
+            });
+            match fetch_consumer_entry_post(&state, "/v1/world/companies", request).await {
+                Ok(value) => league_response(
+                    "trillionnium_world_company_created",
+                    event,
+                    value.clone(),
+                    build_trillionnium_world_company_matrix_reply(&value),
+                ),
+                Err(response) => response,
+            }
+        }
+        ParsedCommand::WorldShops => {
+            match fetch_consumer_entry_get(&state, "/v1/world/shops").await {
+                Ok(value) => league_response(
+                    "trillionnium_world_shops",
+                    event,
+                    value.clone(),
+                    build_trillionnium_world_shops_matrix_reply(&value),
+                ),
+                Err(response) => response,
+            }
+        }
+        ParsedCommand::WorldListingCreate { company_id, body } => {
+            let request = json!({
+                "matrix_user_id": &event.sender,
+                "room_id": &event.room_id,
+                "company_id": company_id,
+                "body": body,
+            });
+            match fetch_consumer_entry_post(&state, "/v1/world/listings", request).await {
+                Ok(value) => league_response(
+                    "trillionnium_world_listing_created",
+                    event,
+                    value.clone(),
+                    build_trillionnium_world_listing_matrix_reply(&value),
                 ),
                 Err(response) => response,
             }
@@ -2912,6 +2978,10 @@ fn parse_matrix_command(text: &str) -> ParsedCommand {
         "/world" | "/map" => parse_world_command(parts),
         "/assets" | "/asset" | "/worldassets" => ParsedCommand::WorldAssets,
         "/upgrade" | "/升级" => parse_world_asset_upgrade_command(parts),
+        "/companies" | "/companys" => ParsedCommand::WorldCompanies,
+        "/company" | "/公司" => parse_world_company_command(parts),
+        "/shops" | "/shop" | "/店铺" => ParsedCommand::WorldShops,
+        "/sell" | "/listing" | "/上架" => parse_world_listing_command(parts),
         "/craft" | "/build" | "/create" => parse_craft_command(parts),
         "/contract" | "/bounty" | "/委托" => parse_world_contract_command(parts),
         "/complete" | "/deliver" | "/交付" => parse_world_contract_complete_command(parts),
@@ -3011,6 +3081,42 @@ fn parse_world_asset_upgrade_command(parts: Vec<&str>) -> ParsedCommand {
     }
     ParsedCommand::WorldAssetUpgrade {
         asset_id: asset_id.to_string(),
+        body,
+    }
+}
+
+fn parse_world_company_command(parts: Vec<&str>) -> ParsedCommand {
+    let Some(asset_id) = parts
+        .first()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    else {
+        return ParsedCommand::WorldCompanies;
+    };
+    let body = parts.into_iter().skip(1).collect::<Vec<_>>().join(" ");
+    if body.trim().is_empty() {
+        return ParsedCommand::WorldCompanies;
+    }
+    ParsedCommand::WorldCompanyCreate {
+        asset_id: asset_id.to_string(),
+        body,
+    }
+}
+
+fn parse_world_listing_command(parts: Vec<&str>) -> ParsedCommand {
+    let Some(company_id) = parts
+        .first()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    else {
+        return ParsedCommand::WorldShops;
+    };
+    let body = parts.into_iter().skip(1).collect::<Vec<_>>().join(" ");
+    if body.trim().is_empty() {
+        return ParsedCommand::WorldShops;
+    }
+    ParsedCommand::WorldListingCreate {
+        company_id: company_id.to_string(),
         body,
     }
 }
@@ -4009,19 +4115,22 @@ fn build_trillionnium_world_matrix_reply(value: &Value) -> Value {
     let zone_count = counts.get("zones").and_then(Value::as_u64).unwrap_or(4);
     let location_count = counts.get("locations").and_then(Value::as_u64).unwrap_or(4);
     let asset_count = counts.get("assets").and_then(Value::as_u64).unwrap_or(0);
+    let company_count = counts.get("companies").and_then(Value::as_u64).unwrap_or(0);
+    let shop_count = counts.get("shops").and_then(Value::as_u64).unwrap_or(0);
+    let listing_count = counts.get("listings").and_then(Value::as_u64).unwrap_or(0);
     let event_count = counts.get("events").and_then(Value::as_u64).unwrap_or(0);
     let body = format!(
-        "🌍 Trillionnium World\n开放世界总层：现实镜像城市 + Craft 工坊 + Market + League。\nZones: {zone_count} · Locations: {location_count} · Assets: {asset_count} · Events: {event_count}\n自由行动：/world action 我要开一家 AI 设计公司"
+        "🌍 Trillionnium World\n开放世界总层：现实镜像城市 + Craft 工坊 + Market + League。\nZones: {zone_count} · Locations: {location_count} · Assets: {asset_count} · Companies: {company_count} · Shops: {shop_count} · Listings: {listing_count} · Events: {event_count}\n自由行动：/world action 我要开一家 AI 设计公司"
     );
     json!({
         "msgtype": "m.text",
         "body": body,
         "format": "org.matrix.custom.html",
         "formatted_body": format!(
-            "<blockquote><h3>🌍 Trillionnium World</h3><p>现实镜像城市 + Craft 工坊 + Market + League。</p><p><strong>Zones</strong>: {} · <strong>Locations</strong>: {} · <strong>Assets</strong>: {} · <strong>Events</strong>: {}</p><p><code>/world action 我要开一家 AI 设计公司</code></p></blockquote>",
-            zone_count, location_count, asset_count, event_count,
+            "<blockquote><h3>🌍 Trillionnium World</h3><p>现实镜像城市 + Craft 工坊 + Market + League。</p><p><strong>Zones</strong>: {} · <strong>Locations</strong>: {} · <strong>Assets</strong>: {} · <strong>Companies</strong>: {} · <strong>Shops</strong>: {} · <strong>Listings</strong>: {} · <strong>Events</strong>: {}</p><p><code>/world action 我要开一家 AI 设计公司</code></p></blockquote>",
+            zone_count, location_count, asset_count, company_count, shop_count, listing_count, event_count,
         ),
-        "cex_card": {"type": "trillionnium_world", "version": 1, "world": "trillionnium_world", "zone_count": zone_count, "location_count": location_count, "asset_count": asset_count, "event_count": event_count}
+        "cex_card": {"type": "trillionnium_world", "version": 1, "world": "trillionnium_world", "zone_count": zone_count, "location_count": location_count, "asset_count": asset_count, "company_count": company_count, "shop_count": shop_count, "listing_count": listing_count, "event_count": event_count}
     })
 }
 
@@ -4064,6 +4173,130 @@ fn build_trillionnium_world_assets_matrix_reply(value: &Value) -> Value {
             asset_count, upgrade_count, escape_html(top_asset),
         ),
         "cex_card": {"type": "trillionnium_world_assets", "version": 1, "world": "trillionnium_world", "asset_count": asset_count, "upgrade_count": upgrade_count, "top_asset_id": top_asset}
+    })
+}
+
+fn build_trillionnium_world_companies_matrix_reply(value: &Value) -> Value {
+    let company_count = value
+        .get("companies")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    let top_company = value
+        .get("companies")
+        .and_then(Value::as_array)
+        .and_then(|companies| companies.last())
+        .and_then(|company| company.get("company_id"))
+        .and_then(Value::as_str)
+        .unwrap_or("latest");
+    let body = format!(
+        "🏢 World Companies\nCompanies: {company_count}\nTop Company: {top_company}\n开公司：/company latest <方案>"
+    );
+    json!({
+        "msgtype": "m.text",
+        "body": body,
+        "format": "org.matrix.custom.html",
+        "formatted_body": format!(
+            "<blockquote><h3>🏢 World Companies</h3><p><strong>Companies</strong>: {}</p><p><strong>Top</strong>: <code>{}</code></p><p><code>/company latest &lt;方案&gt;</code></p></blockquote>",
+            company_count, escape_html(top_company),
+        ),
+        "cex_card": {"type": "trillionnium_world_companies", "version": 1, "world": "trillionnium_world", "company_count": company_count, "top_company_id": top_company}
+    })
+}
+
+fn build_trillionnium_world_company_matrix_reply(value: &Value) -> Value {
+    let company = value.get("company").unwrap_or(value);
+    let company_id = company
+        .get("company_id")
+        .and_then(Value::as_str)
+        .unwrap_or("world-company");
+    let level = company.get("level").and_then(Value::as_i64).unwrap_or(1);
+    let revenue = company
+        .get("revenue_score")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let reputation = company
+        .get("reputation_score")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let body = format!(
+        "🏢 Company Launched\nCompany: {company_id}\nLevel: {level}\nRevenue: {revenue}\nReputation: {reputation}\n查看：/companies"
+    );
+    json!({
+        "msgtype": "m.text",
+        "body": body,
+        "format": "org.matrix.custom.html",
+        "formatted_body": format!(
+            "<blockquote><h3>🏢 Company Launched</h3><p><strong>Company</strong>: <code>{}</code></p><p><strong>Level</strong>: {} · <strong>Revenue</strong>: {} · <strong>Rep</strong>: {}</p><p><code>/companies</code></p></blockquote>",
+            escape_html(company_id), level, revenue, reputation,
+        ),
+        "cex_card": {"type": "trillionnium_world_company_created", "version": 1, "world": "trillionnium_world", "company_id": company_id, "company_level": level, "revenue_score": revenue, "reputation_score": reputation}
+    })
+}
+
+fn build_trillionnium_world_shops_matrix_reply(value: &Value) -> Value {
+    let shop_count = value
+        .get("shops")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    let listing_count = value
+        .get("listings")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    let top_shop = value
+        .get("shops")
+        .and_then(Value::as_array)
+        .and_then(|shops| shops.last())
+        .and_then(|shop| shop.get("shop_id"))
+        .and_then(Value::as_str)
+        .unwrap_or("latest");
+    let body = format!(
+        "🛒 World Shops\nShops: {shop_count}\nListings: {listing_count}\nTop Shop: {top_shop}\n上架：/sell latest <商品/服务>"
+    );
+    json!({
+        "msgtype": "m.text",
+        "body": body,
+        "format": "org.matrix.custom.html",
+        "formatted_body": format!(
+            "<blockquote><h3>🛒 World Shops</h3><p><strong>Shops</strong>: {} · <strong>Listings</strong>: {}</p><p><strong>Top</strong>: <code>{}</code></p><p><code>/sell latest &lt;商品/服务&gt;</code></p></blockquote>",
+            shop_count, listing_count, escape_html(top_shop),
+        ),
+        "cex_card": {"type": "trillionnium_world_shops", "version": 1, "world": "trillionnium_world", "shop_count": shop_count, "listing_count": listing_count, "top_shop_id": top_shop}
+    })
+}
+
+fn build_trillionnium_world_listing_matrix_reply(value: &Value) -> Value {
+    let listing = value.get("listing").unwrap_or(value);
+    let listing_id = listing
+        .get("listing_id")
+        .and_then(Value::as_str)
+        .unwrap_or("world-listing");
+    let price = listing
+        .get("price_credits")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let quality = listing
+        .get("quality_score")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let status = listing
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("listed");
+    let body = format!(
+        "🛒 Listing Published\nListing: {listing_id}\nPrice: {price}\nQuality: {quality}\nStatus: {status}\n查看：/shops"
+    );
+    json!({
+        "msgtype": "m.text",
+        "body": body,
+        "format": "org.matrix.custom.html",
+        "formatted_body": format!(
+            "<blockquote><h3>🛒 Listing Published</h3><p><strong>Listing</strong>: <code>{}</code></p><p><strong>Price</strong>: {} · <strong>Quality</strong>: {} · <strong>Status</strong>: {}</p><p><code>/shops</code></p></blockquote>",
+            escape_html(listing_id), price, quality, escape_html(status),
+        ),
+        "cex_card": {"type": "trillionnium_world_listing_created", "version": 1, "world": "trillionnium_world", "listing_id": listing_id, "price_credits": price, "quality_score": quality, "status": status}
     })
 }
 
@@ -4848,7 +5081,7 @@ fn build_plain_matrix_reply(body: &str) -> Value {
 
 fn build_help_matrix_reply() -> Value {
     build_plain_matrix_reply(
-        "可用命令:\n/league - 进入 Trillionnium League\n/world - 进入 Trillionnium World 开放世界\n/world action <自由行动> - 在现实镜像世界里行动/建造/经营\n/assets - 查看 World 资产\n/upgrade <asset-id|latest> <升级内容> - 升级 World 资产\n/contract <委托内容> - 把现实需求登记成 World Contract 并创建 CEX 任务\n/complete <contract-id> <交付内容> - 完成 World Contract、评分并结算\n/craft <建造内容> - 进入 Trillionnium Craft 工坊建造\n/season - 赛季\n/arena - 查看赛场\n/quest - 今日副本\n/guild - 公会列表，/guild <guild-id> 加入\n/raid - 团本列表，/raid <raid-id> <行动> 贡献团本\n/team - 团本队伍，/team <raid-id> <role> 认领职责\n/draft <hero...> - 锁定 Agent 英雄阵容\n/join <match-id> - 加入赛场\n/battle <match-id> <行动> - 在赛场中出招并创建 CEX 执行\n/submit <match-id> <提交内容> - 交卷评分并领取奖励\n/profile - 玩家档案\n/rank - 排行榜\n/loadout - Agent 阵容\n/rewards - 奖励记录\n/inventory - 背包/装备\n/history - 战斗历史\n/task <内容> [cap=<能力id>] [account=<账户id>] - 创建普通任务\n/status <task-id> - 查询任务状态\n/balance 或 /wallet - 查看余额\n/plans 或 /套餐 - 查看套餐",
+        "可用命令:\n/league - 进入 Trillionnium League\n/world - 进入 Trillionnium World 开放世界\n/world action <自由行动> - 在现实镜像世界里行动/建造/经营\n/assets - 查看 World 资产\n/upgrade <asset-id|latest> <升级内容> - 升级 World 资产\n/companies - 查看公司\n/company <asset-id|latest> <公司方案> - 把资产变成公司/店铺\n/shops - 查看店铺和货架\n/sell <company-id|latest> <服务/商品> - 上架服务\n/contract <委托内容> - 把现实需求登记成 World Contract 并创建 CEX 任务\n/complete <contract-id> <交付内容> - 完成 World Contract、评分并结算\n/craft <建造内容> - 进入 Trillionnium Craft 工坊建造\n/season - 赛季\n/arena - 查看赛场\n/quest - 今日副本\n/guild - 公会列表，/guild <guild-id> 加入\n/raid - 团本列表，/raid <raid-id> <行动> 贡献团本\n/team - 团本队伍，/team <raid-id> <role> 认领职责\n/draft <hero...> - 锁定 Agent 英雄阵容\n/join <match-id> - 加入赛场\n/battle <match-id> <行动> - 在赛场中出招并创建 CEX 执行\n/submit <match-id> <提交内容> - 交卷评分并领取奖励\n/profile - 玩家档案\n/rank - 排行榜\n/loadout - Agent 阵容\n/rewards - 奖励记录\n/inventory - 背包/装备\n/history - 战斗历史\n/task <内容> [cap=<能力id>] [account=<账户id>] - 创建普通任务\n/status <task-id> - 查询任务状态\n/balance 或 /wallet - 查看余额\n/plans 或 /套餐 - 查看套餐",
     )
 }
 
@@ -5655,6 +5888,21 @@ mod tests {
             ParsedCommand::WorldAssetUpgrade {
                 asset_id: "latest".to_string(),
                 body: "增强交付证据和商业闭环".to_string()
+            }
+        );
+        assert_eq!(
+            parse_matrix_command("/company latest 开一家 AI 交付公司"),
+            ParsedCommand::WorldCompanyCreate {
+                asset_id: "latest".to_string(),
+                body: "开一家 AI 交付公司".to_string()
+            }
+        );
+        assert_eq!(parse_matrix_command("/shops"), ParsedCommand::WorldShops);
+        assert_eq!(
+            parse_matrix_command("/sell latest 上架一套 AI 设计服务"),
+            ParsedCommand::WorldListingCreate {
+                company_id: "latest".to_string(),
+                body: "上架一套 AI 设计服务".to_string()
             }
         );
         assert_eq!(parse_matrix_command("/season"), ParsedCommand::Season);

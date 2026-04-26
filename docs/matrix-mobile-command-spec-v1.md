@@ -54,6 +54,8 @@ Element 消息 -> matrix-bot-poller -> matrix-bot-relay -> matrix-entry-adapter
 - `/world action <自由行动>`：在开放世界里自由行动，例如开公司、建工坊、招募 Agent、探索市场、把现实任务映射为世界事件。
 - `/assets`：查看 **Trillionnium World** 资产和升级次数。
 - `/upgrade <asset-id|latest> <升级内容>`：提交资产升级方案，触发 Judge Pipeline v2 并提高资产等级/价值。
+- `/companies` / `/company <asset-id|latest> <公司方案>`：查看公司，或把已有资产启动成公司/店铺/初始服务货架。
+- `/shops` / `/sell <company-id|latest> <服务/商品>`：查看店铺和货架，或发布带价格/质量分的服务 listing。
 - `/contract <委托内容>` / `/bounty <委托内容>`：把现实客户需求登记成 **World Contract**，并通过 CEX 创建真实任务/调用。
 - `/complete <contract-id> <交付内容>` / `/deliver ...`：提交 World Contract 交付，触发 Judge Pipeline v2、Ledger 结算、资产升级和声望成长。
 - `/craft <建造内容>`：进入 **Trillionnium Craft** 工坊建造，把创作/自动化/服务方案变成可升级资产。
@@ -135,7 +137,7 @@ Element 消息 -> matrix-bot-poller -> matrix-bot-relay -> matrix-entry-adapter
   - `/status <id>` 返回对应投影
   - `/balance` / `/wallet` 返回钱包卡片
   - `/plans` / `/package` 返回套餐卡片
-  - `/league` / `/world` / `/world action ...` / `/assets` / `/upgrade ...` / `/contract ...` / `/complete ...` / `/craft ...` / `/season` / `/arena` / `/quest` / `/guild` / `/raid` / `/team` / `/draft` / `/join` / `/rank` / `/loadout` 返回 Trillionnium League / World / Craft 游戏卡片
+  - `/league` / `/world` / `/world action ...` / `/assets` / `/upgrade ...` / `/companies` / `/company ...` / `/shops` / `/sell ...` / `/contract ...` / `/complete ...` / `/craft ...` / `/season` / `/arena` / `/quest` / `/guild` / `/raid` / `/team` / `/draft` / `/join` / `/rank` / `/loadout` 返回 Trillionnium League / World / Craft 游戏卡片
   - `/battle <match-id> <行动>` 透传到 CEX task，并携带 League metadata
   - `/submit <match-id> <提交内容>` 返回 `league_submission` 评分/奖励卡，并校验本地真房间链路里 `ledger_status=settled`
   - `/profile` / `/rewards` / `/inventory` / `/history` 返回玩家档案、奖励、背包、历史卡

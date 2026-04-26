@@ -59,7 +59,7 @@ for needle in ['Trillionnium League', 'Trillionnium World', 'Web Battle Console'
 
 world_status, world_html = get('/world')
 assert world_status == 200, world_status
-for needle in ['Trillionnium World', 'World Action Console', 'Reality Mirror Sandbox', 'Player Assets', 'Upgrade Asset', 'World Contracts', 'Complete Contract']:
+for needle in ['Trillionnium World', 'World Action Console', 'Reality Mirror Sandbox', 'Player Assets', 'Upgrade Asset', 'Companies / Shops', 'Launch Company', 'Shops / Listings', 'Publish Listing', 'World Contracts', 'Complete Contract']:
     assert needle in world_html, needle
 
 matrix_user_id = '@alice:local.dev'
@@ -147,6 +147,8 @@ summary = {
     'has_world_contracts_panel': 'World Contracts' in world_html_after,
     'has_world_contract_completion_form': 'Complete Contract' in world_html_after,
     'has_world_asset_upgrade_form': 'Upgrade Asset' in world_html_after,
+    'has_world_company_form': 'Launch Company' in world_html_after,
+    'has_world_listing_form': 'Publish Listing' in world_html_after,
     'has_timeline': 'Battle Timeline' in html_after,
     'has_settled_reward': 'settled' in html_after,
     'has_held_review': 'held_review' in html_after,

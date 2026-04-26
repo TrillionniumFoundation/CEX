@@ -77,6 +77,8 @@ The adapter will:
 13. for `/complete <contract-id> <delivery text>` it posts a World Contract completion, returning score, reward, ledger status, and judge status
 14. for `/assets` it fetches `consumer-entry-api /v1/world/assets` and returns asset/upgrade counts
 15. for `/upgrade <asset-id|latest> <upgrade text>` it posts a judged asset upgrade and returns level/value delta
+16. for `/companies` / `/company <asset-id|latest> <company text>` it lists or launches World companies from owned assets; company creation also opens a shop, creates a starter listing, and records an economy event
+17. for `/shops` / `/sell <company-id|latest> <listing text>` it lists storefronts/listings or publishes a judged priced service listing
 
 ### Read a projected reply for a task
 
