@@ -1932,6 +1932,11 @@ enum ParsedCommand {
     WorldAction {
         body: String,
     },
+    WorldAssets,
+    WorldAssetUpgrade {
+        asset_id: String,
+        body: String,
+    },
     CraftAction {
         body: String,
     },
@@ -2310,6 +2315,34 @@ async fn handle_matrix_event(
                     event,
                     value.clone(),
                     build_trillionnium_world_action_matrix_reply(&value),
+                ),
+                Err(response) => response,
+            }
+        }
+        ParsedCommand::WorldAssets => {
+            match fetch_consumer_entry_get(&state, "/v1/world/assets").await {
+                Ok(value) => league_response(
+                    "trillionnium_world_assets",
+                    event,
+                    value.clone(),
+                    build_trillionnium_world_assets_matrix_reply(&value),
+                ),
+                Err(response) => response,
+            }
+        }
+        ParsedCommand::WorldAssetUpgrade { asset_id, body } => {
+            let request = json!({
+                "matrix_user_id": &event.sender,
+                "room_id": &event.room_id,
+                "body": body,
+            });
+            let path = format!("/v1/world/assets/{asset_id}/upgrade");
+            match fetch_consumer_entry_post(&state, &path, request).await {
+                Ok(value) => league_response(
+                    "trillionnium_world_asset_upgrade",
+                    event,
+                    value.clone(),
+                    build_trillionnium_world_asset_upgrade_matrix_reply(&value),
                 ),
                 Err(response) => response,
             }
@@ -2877,6 +2910,8 @@ fn parse_matrix_command(text: &str) -> ParsedCommand {
         "/arena" | "/matches" => ParsedCommand::Arena,
         "/quest" | "/quests" | "/daily" => ParsedCommand::Quest,
         "/world" | "/map" => parse_world_command(parts),
+        "/assets" | "/asset" | "/worldassets" => ParsedCommand::WorldAssets,
+        "/upgrade" | "/升级" => parse_world_asset_upgrade_command(parts),
         "/craft" | "/build" | "/create" => parse_craft_command(parts),
         "/contract" | "/bounty" | "/委托" => parse_world_contract_command(parts),
         "/complete" | "/deliver" | "/交付" => parse_world_contract_complete_command(parts),
@@ -2960,6 +2995,24 @@ fn parse_craft_command(parts: Vec<&str>) -> ParsedCommand {
         return ParsedCommand::World;
     }
     ParsedCommand::CraftAction { body }
+}
+
+fn parse_world_asset_upgrade_command(parts: Vec<&str>) -> ParsedCommand {
+    let Some(asset_id) = parts
+        .first()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    else {
+        return ParsedCommand::WorldAssets;
+    };
+    let body = parts.into_iter().skip(1).collect::<Vec<_>>().join(" ");
+    if body.trim().is_empty() {
+        return ParsedCommand::WorldAssets;
+    }
+    ParsedCommand::WorldAssetUpgrade {
+        asset_id: asset_id.to_string(),
+        body,
+    }
 }
 
 fn parse_world_contract_complete_command(parts: Vec<&str>) -> ParsedCommand {
@@ -3981,6 +4034,77 @@ fn build_trillionnium_craft_action_matrix_reply(value: &Value) -> Value {
     reply
 }
 
+fn build_trillionnium_world_assets_matrix_reply(value: &Value) -> Value {
+    let asset_count = value
+        .get("assets")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    let upgrade_count = value
+        .get("upgrades")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    let top_asset = value
+        .get("assets")
+        .and_then(Value::as_array)
+        .and_then(|assets| assets.last())
+        .and_then(|asset| asset.get("asset_id"))
+        .and_then(Value::as_str)
+        .unwrap_or("latest");
+    let body = format!(
+        "🏗️ World Assets\nAssets: {asset_count}\nUpgrades: {upgrade_count}\nTop Asset: {top_asset}\n升级：/upgrade latest <方案>"
+    );
+    json!({
+        "msgtype": "m.text",
+        "body": body,
+        "format": "org.matrix.custom.html",
+        "formatted_body": format!(
+            "<blockquote><h3>🏗️ World Assets</h3><p><strong>Assets</strong>: {} · <strong>Upgrades</strong>: {}</p><p><strong>Top</strong>: <code>{}</code></p><p><code>/upgrade latest &lt;方案&gt;</code></p></blockquote>",
+            asset_count, upgrade_count, escape_html(top_asset),
+        ),
+        "cex_card": {"type": "trillionnium_world_assets", "version": 1, "world": "trillionnium_world", "asset_count": asset_count, "upgrade_count": upgrade_count, "top_asset_id": top_asset}
+    })
+}
+
+fn build_trillionnium_world_asset_upgrade_matrix_reply(value: &Value) -> Value {
+    let asset = value.get("asset").unwrap_or(value);
+    let upgrade = value.get("upgrade").unwrap_or(value);
+    let asset_id = asset
+        .get("asset_id")
+        .and_then(Value::as_str)
+        .unwrap_or("world-asset");
+    let level = asset
+        .get("upgrade_level")
+        .and_then(Value::as_i64)
+        .unwrap_or(1);
+    let value_score = asset
+        .get("value_score")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let delta = upgrade
+        .get("value_delta")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let judge_status = upgrade
+        .get("judge_status")
+        .and_then(Value::as_str)
+        .unwrap_or("rubric_scored");
+    let body = format!(
+        "🏗️ Asset Upgraded\nAsset: {asset_id}\nLevel: {level}\nValue: {value_score} (+{delta})\nJudge: {judge_status}\n查看资产：/assets"
+    );
+    json!({
+        "msgtype": "m.text",
+        "body": body,
+        "format": "org.matrix.custom.html",
+        "formatted_body": format!(
+            "<blockquote><h3>🏗️ Asset Upgraded</h3><p><strong>Asset</strong>: <code>{}</code></p><p><strong>Level</strong>: {} · <strong>Value</strong>: {} (+{})</p><p><strong>Judge</strong>: {}</p><p><code>/assets</code></p></blockquote>",
+            escape_html(asset_id), level, value_score, delta, escape_html(judge_status),
+        ),
+        "cex_card": {"type": "trillionnium_world_asset_upgrade", "version": 1, "world": "trillionnium_world", "asset_id": asset_id, "asset_level": level, "value_score": value_score, "value_delta": delta, "judge_status": judge_status}
+    })
+}
+
 fn build_trillionnium_world_contract_matrix_reply(value: &Value) -> Value {
     let mut reply = build_trillionnium_world_action_matrix_reply(value);
     if let Some(card) = reply.get_mut("cex_card").and_then(Value::as_object_mut) {
@@ -4724,7 +4848,7 @@ fn build_plain_matrix_reply(body: &str) -> Value {
 
 fn build_help_matrix_reply() -> Value {
     build_plain_matrix_reply(
-        "可用命令:\n/league - 进入 Trillionnium League\n/world - 进入 Trillionnium World 开放世界\n/world action <自由行动> - 在现实镜像世界里行动/建造/经营\n/contract <委托内容> - 把现实需求登记成 World Contract 并创建 CEX 任务\n/complete <contract-id> <交付内容> - 完成 World Contract、评分并结算\n/craft <建造内容> - 进入 Trillionnium Craft 工坊建造\n/season - 赛季\n/arena - 查看赛场\n/quest - 今日副本\n/guild - 公会列表，/guild <guild-id> 加入\n/raid - 团本列表，/raid <raid-id> <行动> 贡献团本\n/team - 团本队伍，/team <raid-id> <role> 认领职责\n/draft <hero...> - 锁定 Agent 英雄阵容\n/join <match-id> - 加入赛场\n/battle <match-id> <行动> - 在赛场中出招并创建 CEX 执行\n/submit <match-id> <提交内容> - 交卷评分并领取奖励\n/profile - 玩家档案\n/rank - 排行榜\n/loadout - Agent 阵容\n/rewards - 奖励记录\n/inventory - 背包/装备\n/history - 战斗历史\n/task <内容> [cap=<能力id>] [account=<账户id>] - 创建普通任务\n/status <task-id> - 查询任务状态\n/balance 或 /wallet - 查看余额\n/plans 或 /套餐 - 查看套餐",
+        "可用命令:\n/league - 进入 Trillionnium League\n/world - 进入 Trillionnium World 开放世界\n/world action <自由行动> - 在现实镜像世界里行动/建造/经营\n/assets - 查看 World 资产\n/upgrade <asset-id|latest> <升级内容> - 升级 World 资产\n/contract <委托内容> - 把现实需求登记成 World Contract 并创建 CEX 任务\n/complete <contract-id> <交付内容> - 完成 World Contract、评分并结算\n/craft <建造内容> - 进入 Trillionnium Craft 工坊建造\n/season - 赛季\n/arena - 查看赛场\n/quest - 今日副本\n/guild - 公会列表，/guild <guild-id> 加入\n/raid - 团本列表，/raid <raid-id> <行动> 贡献团本\n/team - 团本队伍，/team <raid-id> <role> 认领职责\n/draft <hero...> - 锁定 Agent 英雄阵容\n/join <match-id> - 加入赛场\n/battle <match-id> <行动> - 在赛场中出招并创建 CEX 执行\n/submit <match-id> <提交内容> - 交卷评分并领取奖励\n/profile - 玩家档案\n/rank - 排行榜\n/loadout - Agent 阵容\n/rewards - 奖励记录\n/inventory - 背包/装备\n/history - 战斗历史\n/task <内容> [cap=<能力id>] [account=<账户id>] - 创建普通任务\n/status <task-id> - 查询任务状态\n/balance 或 /wallet - 查看余额\n/plans 或 /套餐 - 查看套餐",
     )
 }
 
@@ -5523,6 +5647,14 @@ mod tests {
             ParsedCommand::WorldContractComplete {
                 contract_id: "world-contract-1".to_string(),
                 body: "交付方案和证据".to_string()
+            }
+        );
+        assert_eq!(parse_matrix_command("/assets"), ParsedCommand::WorldAssets);
+        assert_eq!(
+            parse_matrix_command("/upgrade latest 增强交付证据和商业闭环"),
+            ParsedCommand::WorldAssetUpgrade {
+                asset_id: "latest".to_string(),
+                body: "增强交付证据和商业闭环".to_string()
             }
         );
         assert_eq!(parse_matrix_command("/season"), ParsedCommand::Season);

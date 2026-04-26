@@ -783,6 +783,29 @@ struct WorldAsset {
     name: String,
     status: String,
     value_score: i64,
+    #[serde(default)]
+    upgrade_level: i64,
+    #[serde(default)]
+    upgrade_points: i64,
+    #[serde(default)]
+    last_upgrade_kind: Option<String>,
+    created_at_epoch: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WorldAssetUpgrade {
+    upgrade_id: String,
+    asset_id: String,
+    matrix_user_id: String,
+    body: String,
+    upgrade_kind: String,
+    score: f64,
+    grade: String,
+    judge_status: String,
+    status: String,
+    value_delta: i64,
+    level_before: i64,
+    level_after: i64,
     created_at_epoch: i64,
 }
 
@@ -904,6 +927,8 @@ struct LeagueState {
     #[serde(default)]
     world_assets: Vec<WorldAsset>,
     #[serde(default)]
+    world_asset_upgrades: Vec<WorldAssetUpgrade>,
+    #[serde(default)]
     world_events: Vec<WorldEvent>,
     #[serde(default)]
     world_contracts: Vec<WorldContract>,
@@ -994,6 +1019,21 @@ struct WorldWebContractCompleteRequest {
     matrix_user_id: Option<String>,
     csrf: Option<String>,
     contract_id: Option<String>,
+    body: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorldAssetUpgradeRequest {
+    matrix_user_id: String,
+    room_id: Option<String>,
+    body: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorldWebAssetUpgradeRequest {
+    matrix_user_id: Option<String>,
+    csrf: Option<String>,
+    asset_id: Option<String>,
     body: Option<String>,
 }
 
@@ -1214,6 +1254,7 @@ fn default_league_state() -> LeagueState {
         world_locations,
         world_entities,
         world_assets: Vec::new(),
+        world_asset_upgrades: Vec::new(),
         world_events: Vec::new(),
         world_contracts: Vec::new(),
         world_contract_completions: Vec::new(),
@@ -3164,6 +3205,7 @@ pub fn build_router(state: AppState) -> Router {
             "/world/web/contract",
             post(post_world_web_contract_complete),
         )
+        .route("/world/web/asset", post(post_world_web_asset_upgrade))
         .route("/v1/chat/tasks", post(create_chat_task))
         .route("/v1/chat/tasks/:id", get(get_chat_task))
         .route("/v1/matrix/messages", post(create_matrix_message_task))
@@ -3171,6 +3213,11 @@ pub fn build_router(state: AppState) -> Router {
         .route("/v1/league/world", get(get_league_world))
         .route("/v1/world/home", get(get_world_home))
         .route("/v1/world/action", post(post_world_action))
+        .route("/v1/world/assets", get(get_world_assets))
+        .route(
+            "/v1/world/assets/:asset_id/upgrade",
+            post(upgrade_world_asset),
+        )
         .route("/v1/world/contracts", get(get_world_contracts))
         .route(
             "/v1/world/contracts/:contract_id/complete",
@@ -6477,6 +6524,7 @@ fn world_home_json(league: &LeagueState) -> Value {
         "locations": locations,
         "entities": entities,
         "assets": league.world_assets,
+        "asset_upgrades": league.world_asset_upgrades,
         "contracts": league.world_contracts,
         "contract_completions": league.world_contract_completions,
         "recent_events": recent_events,
@@ -6485,6 +6533,7 @@ fn world_home_json(league: &LeagueState) -> Value {
             "locations": league.world_locations.len(),
             "entities": league.world_entities.len(),
             "assets": league.world_assets.len(),
+            "asset_upgrades": league.world_asset_upgrades.len(),
             "contracts": league.world_contracts.len(),
             "contract_completions": league.world_contract_completions.len(),
             "events": league.world_events.len(),
@@ -6643,6 +6692,9 @@ async fn record_world_action(
                 },
                 status: "active".to_string(),
                 value_score: impact,
+                upgrade_level: 1,
+                upgrade_points: impact,
+                last_upgrade_kind: Some(kind.to_string()),
                 created_at_epoch: now,
             });
         }
@@ -6812,6 +6864,13 @@ async fn get_world_web_shell(State(state): State<AppState>, headers: HeaderMap) 
     } else {
         entity_cards
     };
+    let latest_asset_id = league
+        .world_assets
+        .iter()
+        .rev()
+        .find(|asset| asset.owner_matrix_user_id == "@alice:local.dev")
+        .map(|asset| asset.asset_id.clone())
+        .unwrap_or_else(|| "latest".to_string());
     let asset_cards = league
         .world_assets
         .iter()
@@ -6819,12 +6878,13 @@ async fn get_world_web_shell(State(state): State<AppState>, headers: HeaderMap) 
         .take(8)
         .map(|asset| {
             format!(
-                "<article class=\"mini asset\"><strong>{}</strong><span>{} · value {}</span><code>{}</code><small>{}</small></article>",
+                "<article class=\"mini asset\"><strong>{}</strong><span>{} · Lv {} · value {}</span><code>{}</code><small>{}</small></article>",
                 escape_html_text(&asset.name),
                 escape_html_text(&asset.asset_kind),
+                asset.upgrade_level.max(1),
                 asset.value_score,
-                escape_html_text(&asset.location_id),
-                escape_html_text(&asset.owner_matrix_user_id),
+                escape_html_text(&asset.asset_id),
+                escape_html_text(&asset.status),
             )
         })
         .collect::<Vec<_>>()
@@ -6950,6 +7010,7 @@ async fn get_world_web_shell(State(state): State<AppState>, headers: HeaderMap) 
       <div class="stat"><span>Locations</span><b>{locations}</b></div>
       <div class="stat"><span>Agents</span><b>{entities}</b></div>
       <div class="stat"><span>Assets</span><b>{assets}</b></div>
+      <div class="stat"><span>Upgrades</span><b>{asset_upgrades}</b></div>
       <div class="stat"><span>Contracts</span><b>{contracts}</b></div>
       <div class="stat"><span>Done</span><b>{completions}</b></div>
       <div class="stat"><span>Events</span><b>{events}</b></div>
@@ -6987,6 +7048,13 @@ async fn get_world_web_shell(State(state): State<AppState>, headers: HeaderMap) 
     <section class="panel">
       <h2>Player Assets</h2>
       <div class="mini-grid">{asset_cards}</div>
+      <form method="post" action="/world/web/asset" style="margin-top:16px">
+        {csrf_input}
+        <input type="hidden" name="matrix_user_id" value="@alice:local.dev" />
+        <input name="asset_id" value="{latest_asset_id}" placeholder="latest or world-asset-id" />
+        <textarea name="body">Upgrade this World asset with a stronger offer, proof, risk control, operating loop, and next customer path.</textarea>
+        <button type="submit">Upgrade Asset</button>
+      </form>
     </section>
     <section class="panel">
       <h2>World Contracts</h2>
@@ -7010,6 +7078,7 @@ async fn get_world_web_shell(State(state): State<AppState>, headers: HeaderMap) 
         locations = league.world_locations.len(),
         entities = league.world_entities.len(),
         assets = league.world_assets.len(),
+        asset_upgrades = league.world_asset_upgrades.len(),
         contracts = league.world_contracts.len(),
         completions = league.world_contract_completions.len(),
         events = league.world_events.len(),
@@ -7019,6 +7088,7 @@ async fn get_world_web_shell(State(state): State<AppState>, headers: HeaderMap) 
         location_options = location_options,
         entity_cards = entity_cards,
         asset_cards = asset_cards,
+        latest_asset_id = escape_html_text(&latest_asset_id),
         contract_cards = contract_cards,
         latest_contract_id = escape_html_text(&latest_contract_id),
         event_items = event_items,
@@ -7092,6 +7162,232 @@ async fn post_world_web_action(
         return response;
     }
     Redirect::to("/world?played=1").into_response()
+}
+
+async fn get_world_assets(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Err(response) = authorize_ingress(&headers, state.config()) {
+        state.inner.metrics.inc_ingress_auth_failures();
+        return response;
+    }
+    let league = state.inner.league_state.lock().await;
+    (
+        StatusCode::OK,
+        Json(json!({
+            "kind": "trillionnium_world_assets",
+            "world": "trillionnium_world",
+            "assets": league.world_assets,
+            "upgrades": league.world_asset_upgrades,
+        })),
+    )
+        .into_response()
+}
+
+async fn upgrade_world_asset_inner(
+    state: AppState,
+    asset_id: String,
+    payload: WorldAssetUpgradeRequest,
+) -> Response {
+    let matrix_user_id = match normalize_league_matrix_user(&payload.matrix_user_id) {
+        Some(value) => value,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "matrix_user_id is required" })),
+            )
+                .into_response()
+        }
+    };
+    let body = match validate_text_payload(&payload.body, state.config().max_text_chars) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let _room_id = payload.room_id.clone();
+    let resolved_asset_id = {
+        let league = state.inner.league_state.lock().await;
+        if asset_id == "latest" {
+            match league
+                .world_assets
+                .iter()
+                .rev()
+                .find(|asset| asset.owner_matrix_user_id == matrix_user_id)
+                .map(|asset| asset.asset_id.clone())
+            {
+                Some(value) => value,
+                None => {
+                    return (
+                        StatusCode::NOT_FOUND,
+                        Json(json!({ "error": "no world asset found for player" })),
+                    )
+                        .into_response()
+                }
+            }
+        } else {
+            asset_id.clone()
+        }
+    };
+    let judgement =
+        judge_league_submission_with_pipeline(&state, &body, "world_asset_upgrade").await;
+    let snapshot = {
+        let now = Utc::now().timestamp();
+        let mut league = state.inner.league_state.lock().await;
+        let Some(asset_index) = league
+            .world_assets
+            .iter()
+            .position(|asset| asset.asset_id == resolved_asset_id)
+        else {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "world asset not found", "asset_id": resolved_asset_id })),
+            )
+                .into_response();
+        };
+        if league.world_assets[asset_index].owner_matrix_user_id != matrix_user_id {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({ "error": "world asset belongs to another player", "asset_id": resolved_asset_id })),
+            )
+                .into_response();
+        }
+        let mut player = ensure_league_player(&mut league, &matrix_user_id, None);
+        let level_before = league.world_assets[asset_index].upgrade_level.max(1);
+        let points_before = league.world_assets[asset_index].upgrade_points.max(0);
+        let value_delta = if judgement.payout_status == "eligible" {
+            (judgement.score / 4.0).round().max(1.0) as i64
+        } else {
+            0
+        };
+        let points_after = points_before + value_delta;
+        let level_after = level_before.max(1) + (points_after / 80) - (points_before / 80);
+        let upgrade_status = if judgement.payout_status == "eligible" {
+            "applied".to_string()
+        } else {
+            "review_hold".to_string()
+        };
+        if value_delta > 0 {
+            let asset = &mut league.world_assets[asset_index];
+            asset.value_score += value_delta;
+            asset.upgrade_points = points_after;
+            asset.upgrade_level = level_after.max(level_before);
+            asset.last_upgrade_kind = Some("manual_upgrade".to_string());
+            asset.status = "upgraded".to_string();
+        }
+        let upgrade = WorldAssetUpgrade {
+            upgrade_id: league_hash_id(
+                "world-asset-upgrade",
+                &format!("{}:{}:{}", resolved_asset_id, now, body),
+            ),
+            asset_id: resolved_asset_id.clone(),
+            matrix_user_id: matrix_user_id.clone(),
+            body: body.clone(),
+            upgrade_kind: "manual_upgrade".to_string(),
+            score: judgement.score,
+            grade: judgement.grade.clone(),
+            judge_status: judgement.judge_status.clone(),
+            status: upgrade_status,
+            value_delta,
+            level_before,
+            level_after: level_after.max(level_before),
+            created_at_epoch: now,
+        };
+        player.xp += judgement.score.round() as i64;
+        player.reputation += (judgement.score / 10.0).round() as i64;
+        player.rating += ((judgement.score - 50.0) / 4.0).round() as i64;
+        league
+            .players_by_matrix_user
+            .insert(matrix_user_id.clone(), player);
+        league.world_asset_upgrades.push(upgrade.clone());
+        (
+            league.clone(),
+            league.world_assets[asset_index].clone(),
+            upgrade,
+        )
+    };
+    if let Err(response) = persist_league_state(&state, &snapshot.0).await {
+        return response;
+    }
+    (
+        StatusCode::OK,
+        Json(json!({
+            "kind": "trillionnium_world_asset_upgrade",
+            "world": "trillionnium_world",
+            "asset": snapshot.1,
+            "upgrade": snapshot.2,
+        })),
+    )
+        .into_response()
+}
+
+async fn upgrade_world_asset(
+    Path(asset_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<WorldAssetUpgradeRequest>,
+) -> Response {
+    if let Err(response) = authorize_ingress(&headers, state.config()) {
+        state.inner.metrics.inc_ingress_auth_failures();
+        return response;
+    }
+    upgrade_world_asset_inner(state, asset_id, payload).await
+}
+
+async fn post_world_web_asset_upgrade(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(payload): Form<WorldWebAssetUpgradeRequest>,
+) -> Response {
+    let web_session = match authorize_league_web_session(&state, &headers, payload.csrf.as_deref())
+    {
+        Ok(value) => value,
+        Err(response) => {
+            if matches!(state.config().runtime_profile, RuntimeProfile::LocalDev)
+                && cookie_value(&headers, &state.config().league_web_session_cookie_name).is_none()
+            {
+                None
+            } else {
+                return response;
+            }
+        }
+    };
+    let matrix_user_id = web_session
+        .as_ref()
+        .map(|session| session.matrix_user_id.clone())
+        .or_else(|| {
+            normalize_league_matrix_user(
+                payload
+                    .matrix_user_id
+                    .as_deref()
+                    .unwrap_or("@alice:local.dev"),
+            )
+        })
+        .unwrap_or_else(|| "@alice:local.dev".to_string());
+    let asset_id = payload
+        .asset_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("latest")
+        .to_string();
+    let body = payload
+        .body
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("Upgrade this World asset with a stronger offer, proof, risk control, and operating loop.")
+        .to_string();
+    let request = WorldAssetUpgradeRequest {
+        matrix_user_id,
+        room_id: web_session
+            .as_ref()
+            .and_then(|session| session.room_id.clone())
+            .or_else(|| Some("!web-local:local.dev".to_string())),
+        body,
+    };
+    let response = upgrade_world_asset_inner(state, asset_id, request).await;
+    if response.status().is_success() {
+        Redirect::to("/world?asset=upgraded").into_response()
+    } else {
+        response
+    }
 }
 
 async fn get_world_contracts(State(state): State<AppState>, headers: HeaderMap) -> Response {
@@ -7368,6 +7664,9 @@ async fn complete_world_contract_inner(
             .find(|asset| asset.owner_matrix_user_id == matrix_user_id)
         {
             asset.value_score += asset_delta.max(1);
+            asset.upgrade_points += asset_delta.max(1);
+            asset.upgrade_level = asset.upgrade_level.max(1) + (asset.upgrade_points / 60).max(0);
+            asset.last_upgrade_kind = Some("contract_completion".to_string());
             asset.status = "upgraded_by_contract".to_string();
         } else {
             league.world_assets.push(WorldAsset {
@@ -7378,6 +7677,9 @@ async fn complete_world_contract_inner(
                 name: "World Contract Proof".to_string(),
                 status: "active".to_string(),
                 value_score: asset_delta.max(1),
+                upgrade_level: 1,
+                upgrade_points: asset_delta.max(1),
+                last_upgrade_kind: Some("contract_completion".to_string()),
                 created_at_epoch: now,
             });
         }

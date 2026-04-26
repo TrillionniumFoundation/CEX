@@ -75,6 +75,8 @@ The adapter will:
 11. for `/craft <build text>` it posts a `craft build ...` action into `starter-studio` and returns a Trillionnium Craft action card
 12. for `/contract <commission text>` it posts a `contract task ...` action into `zbj-market-gate`; consumer-entry creates a CEX invocation and the Matrix card exposes the linked `task_id` and `contract_id`
 13. for `/complete <contract-id> <delivery text>` it posts a World Contract completion, returning score, reward, ledger status, and judge status
+14. for `/assets` it fetches `consumer-entry-api /v1/world/assets` and returns asset/upgrade counts
+15. for `/upgrade <asset-id|latest> <upgrade text>` it posts a judged asset upgrade and returns level/value delta
 
 ### Read a projected reply for a task
 
