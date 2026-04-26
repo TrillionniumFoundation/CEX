@@ -745,6 +745,78 @@ struct LeagueRaidRosterSlot {
     joined_at_epoch: i64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WorldZone {
+    zone_id: String,
+    name: String,
+    status: String,
+    theme: String,
+    mirror_kind: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WorldLocation {
+    location_id: String,
+    zone_id: String,
+    name: String,
+    location_kind: String,
+    description: String,
+    status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WorldEntity {
+    entity_id: String,
+    location_id: String,
+    name: String,
+    entity_kind: String,
+    role: String,
+    status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WorldAsset {
+    asset_id: String,
+    owner_matrix_user_id: String,
+    location_id: String,
+    asset_kind: String,
+    name: String,
+    status: String,
+    value_score: i64,
+    created_at_epoch: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WorldEvent {
+    event_id: String,
+    actor_matrix_user_id: String,
+    room_id: Option<String>,
+    location_id: String,
+    event_kind: String,
+    body: String,
+    result: String,
+    impact_score: i64,
+    created_at_epoch: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WorldRelationship {
+    relationship_id: String,
+    from_id: String,
+    to_id: String,
+    relation_kind: String,
+    strength: i64,
+    updated_at_epoch: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorldActionRequest {
+    matrix_user_id: String,
+    room_id: Option<String>,
+    location_id: Option<String>,
+    body: String,
+}
+
 #[derive(Debug, Deserialize)]
 struct LeagueDraftRequest {
     matrix_user_id: String,
@@ -777,6 +849,18 @@ struct LeagueState {
     raid_contributions: Vec<LeagueRaidContribution>,
     #[serde(default)]
     raid_rosters: Vec<LeagueRaidRosterSlot>,
+    #[serde(default)]
+    world_zones: HashMap<String, WorldZone>,
+    #[serde(default)]
+    world_locations: HashMap<String, WorldLocation>,
+    #[serde(default)]
+    world_entities: HashMap<String, WorldEntity>,
+    #[serde(default)]
+    world_assets: Vec<WorldAsset>,
+    #[serde(default)]
+    world_events: Vec<WorldEvent>,
+    #[serde(default)]
+    world_relationships: Vec<WorldRelationship>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -837,6 +921,14 @@ struct LeagueWebActionRequest {
     guild_id: Option<String>,
     role: Option<String>,
     heroes: Option<String>,
+    body: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorldWebActionRequest {
+    matrix_user_id: Option<String>,
+    csrf: Option<String>,
+    location_id: Option<String>,
     body: Option<String>,
 }
 
@@ -938,6 +1030,108 @@ fn default_league_state() -> LeagueState {
     .map(|guild| (guild.guild_id.clone(), guild))
     .collect();
 
+    let world_zones = [
+        WorldZone {
+            zone_id: "reality-mirror-city".to_string(),
+            name: "Reality Mirror City".to_string(),
+            status: "open".to_string(),
+            theme: "现实世界映射、身份、关系和城市自由行动".to_string(),
+            mirror_kind: "city".to_string(),
+        },
+        WorldZone {
+            zone_id: "craft-district".to_string(),
+            name: "Trillionnium Craft District".to_string(),
+            status: "open".to_string(),
+            theme: "建造、工坊、资产、店铺和创造系统".to_string(),
+            mirror_kind: "builder_sandbox".to_string(),
+        },
+        WorldZone {
+            zone_id: "market-bazaar".to_string(),
+            name: "Market Bazaar".to_string(),
+            status: "open".to_string(),
+            theme: "真实任务、客户、交易、雇佣和声望".to_string(),
+            mirror_kind: "market".to_string(),
+        },
+        WorldZone {
+            zone_id: "league-arena".to_string(),
+            name: "Trillionnium League Arena".to_string(),
+            status: "open".to_string(),
+            theme: "竞技、团本、赛季和裁判结算".to_string(),
+            mirror_kind: "arena".to_string(),
+        },
+    ]
+    .into_iter()
+    .map(|zone| (zone.zone_id.clone(), zone))
+    .collect();
+
+    let world_locations = [
+        WorldLocation {
+            location_id: "mirror-city-square".to_string(),
+            zone_id: "reality-mirror-city".to_string(),
+            name: "镜像城市广场".to_string(),
+            location_kind: "public_hub".to_string(),
+            description: "玩家、Agent 居民、公会和现实事件进入世界的公共入口。".to_string(),
+            status: "open".to_string(),
+        },
+        WorldLocation {
+            location_id: "starter-studio".to_string(),
+            zone_id: "craft-district".to_string(),
+            name: "Starter Studio".to_string(),
+            location_kind: "workshop".to_string(),
+            description: "自由建造第一间店、工作室、Agent 工坊或公司总部。".to_string(),
+            status: "open".to_string(),
+        },
+        WorldLocation {
+            location_id: "zbj-market-gate".to_string(),
+            zone_id: "market-bazaar".to_string(),
+            name: "ZBJ Market Gate".to_string(),
+            location_kind: "real_task_gateway".to_string(),
+            description: "现实任务和客户需求映射为世界委托的入口。".to_string(),
+            status: "open".to_string(),
+        },
+        WorldLocation {
+            location_id: "league-coliseum".to_string(),
+            zone_id: "league-arena".to_string(),
+            name: "League Coliseum".to_string(),
+            location_kind: "arena".to_string(),
+            description: "League 赛事、团本、评分、奖励与排行榜发生地。".to_string(),
+            status: "open".to_string(),
+        },
+    ]
+    .into_iter()
+    .map(|location| (location.location_id.clone(), location))
+    .collect();
+
+    let world_entities = [
+        WorldEntity {
+            entity_id: "agent-oracle-scout".to_string(),
+            location_id: "mirror-city-square".to_string(),
+            name: "Oracle Scout".to_string(),
+            entity_kind: "agent_resident".to_string(),
+            role: "侦察、现实情报、任务发现".to_string(),
+            status: "available".to_string(),
+        },
+        WorldEntity {
+            entity_id: "agent-forge-builder".to_string(),
+            location_id: "starter-studio".to_string(),
+            name: "Forge Builder".to_string(),
+            entity_kind: "agent_resident".to_string(),
+            role: "建造、生成、工坊资产".to_string(),
+            status: "available".to_string(),
+        },
+        WorldEntity {
+            entity_id: "city-clerk-ledger".to_string(),
+            location_id: "mirror-city-square".to_string(),
+            name: "Ledger Clerk".to_string(),
+            entity_kind: "npc".to_string(),
+            role: "资产登记、声望、合约和结算提示".to_string(),
+            status: "available".to_string(),
+        },
+    ]
+    .into_iter()
+    .map(|entity| (entity.entity_id.clone(), entity))
+    .collect();
+
     LeagueState {
         matches,
         players_by_matrix_user: HashMap::new(),
@@ -951,6 +1145,12 @@ fn default_league_state() -> LeagueState {
         inventory_items: Vec::new(),
         raid_contributions: Vec::new(),
         raid_rosters: Vec::new(),
+        world_zones,
+        world_locations,
+        world_entities,
+        world_assets: Vec::new(),
+        world_events: Vec::new(),
+        world_relationships: Vec::new(),
     }
 }
 
@@ -968,6 +1168,15 @@ fn load_league_state(config: &ConsumerEntryConfig) -> LeagueState {
     }
     for (guild_id, guild) in defaults.guilds {
         state.guilds.entry(guild_id).or_insert(guild);
+    }
+    for (zone_id, zone) in defaults.world_zones {
+        state.world_zones.entry(zone_id).or_insert(zone);
+    }
+    for (location_id, location) in defaults.world_locations {
+        state.world_locations.entry(location_id).or_insert(location);
+    }
+    for (entity_id, entity) in defaults.world_entities {
+        state.world_entities.entry(entity_id).or_insert(entity);
     }
     state
 }
@@ -2880,13 +3089,17 @@ pub fn build_router(state: AppState) -> Router {
         .route("/health", get(health))
         .route("/metrics", get(metrics))
         .route("/league", get(get_league_web_shell))
+        .route("/world", get(get_world_web_shell))
         .route("/league/web/session", post(post_league_web_session))
         .route("/league/web/action", post(post_league_web_action))
+        .route("/world/web/action", post(post_world_web_action))
         .route("/v1/chat/tasks", post(create_chat_task))
         .route("/v1/chat/tasks/:id", get(get_chat_task))
         .route("/v1/matrix/messages", post(create_matrix_message_task))
         .route("/v1/league/home", get(get_league_home))
         .route("/v1/league/world", get(get_league_world))
+        .route("/v1/world/home", get(get_world_home))
+        .route("/v1/world/action", post(post_world_action))
         .route("/v1/league/season", get(get_league_season))
         .route("/v1/league/matches", get(get_league_matches))
         .route("/v1/league/state/snapshot", get(get_league_state_snapshot))
@@ -6089,6 +6302,541 @@ async fn get_league_world(State(state): State<AppState>, headers: HeaderMap) -> 
         .into_response()
 }
 
+fn world_action_kind(body: &str) -> (&'static str, &'static str, i64) {
+    let lower = body.to_ascii_lowercase();
+    if lower.contains("company")
+        || lower.contains("shop")
+        || lower.contains("studio")
+        || body.contains("公司")
+        || body.contains("店")
+        || body.contains("工作室")
+    {
+        (
+            "venture",
+            "创建了一个现实映射经营体，获得资产雏形和声望入口。",
+            18,
+        )
+    } else if lower.contains("build")
+        || lower.contains("craft")
+        || body.contains("建")
+        || body.contains("造")
+        || body.contains("工坊")
+    {
+        (
+            "craft",
+            "在 Craft District 完成一次建造/创造行动，生成可迭代资产。",
+            14,
+        )
+    } else if lower.contains("hire")
+        || lower.contains("agent")
+        || body.contains("招募")
+        || body.contains("雇佣")
+    {
+        (
+            "recruit",
+            "与 Agent 居民建立合作关系，队伍能力获得提升。",
+            12,
+        )
+    } else if lower.contains("market")
+        || lower.contains("client")
+        || body.contains("客户")
+        || body.contains("接单")
+        || body.contains("市场")
+    {
+        (
+            "market",
+            "进入 Market Bazaar，把现实机会映射为世界委托。",
+            16,
+        )
+    } else {
+        (
+            "explore",
+            "完成一次开放世界探索，产生新的线索和关系变化。",
+            10,
+        )
+    }
+}
+
+fn world_default_location_for_kind(kind: &str) -> &'static str {
+    match kind {
+        "venture" | "market" => "zbj-market-gate",
+        "craft" => "starter-studio",
+        "recruit" => "mirror-city-square",
+        _ => "mirror-city-square",
+    }
+}
+
+fn world_home_json(league: &LeagueState) -> Value {
+    let mut zones: Vec<WorldZone> = league.world_zones.values().cloned().collect();
+    zones.sort_by(|left, right| left.zone_id.cmp(&right.zone_id));
+    let mut locations: Vec<WorldLocation> = league.world_locations.values().cloned().collect();
+    locations.sort_by(|left, right| left.location_id.cmp(&right.location_id));
+    let mut entities: Vec<WorldEntity> = league.world_entities.values().cloned().collect();
+    entities.sort_by(|left, right| left.entity_id.cmp(&right.entity_id));
+    let recent_events: Vec<WorldEvent> =
+        league.world_events.iter().rev().take(8).cloned().collect();
+    json!({
+        "kind": "trillionnium_world",
+        "world": "trillionnium_world",
+        "tagline": "现实世界被游戏引擎化：城市、工坊、市场、Agent 居民、资产和自由行动。",
+        "modules": {
+            "league": "Trillionnium League",
+            "craft": "Trillionnium Craft",
+            "ledger": "Trillionnium Ledger",
+            "agents": "Trillionnium Agents"
+        },
+        "zones": zones,
+        "locations": locations,
+        "entities": entities,
+        "assets": league.world_assets,
+        "recent_events": recent_events,
+        "counts": {
+            "zones": league.world_zones.len(),
+            "locations": league.world_locations.len(),
+            "entities": league.world_entities.len(),
+            "assets": league.world_assets.len(),
+            "events": league.world_events.len(),
+            "relationships": league.world_relationships.len(),
+        }
+    })
+}
+
+async fn get_world_home(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Err(response) = authorize_ingress(&headers, state.config()) {
+        state.inner.metrics.inc_ingress_auth_failures();
+        return response;
+    }
+    let league = state.inner.league_state.lock().await;
+    (StatusCode::OK, Json(world_home_json(&league))).into_response()
+}
+
+async fn record_world_action(
+    state: &AppState,
+    payload: WorldActionRequest,
+) -> Result<(LeagueState, WorldEvent, Value), Response> {
+    let matrix_user_id = match normalize_league_matrix_user(&payload.matrix_user_id) {
+        Some(value) => value,
+        None => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "matrix_user_id is required" })),
+            )
+                .into_response())
+        }
+    };
+    let body = match validate_text_payload(&payload.body, state.config().max_text_chars) {
+        Ok(value) => value,
+        Err(response) => return Err(response),
+    };
+    let (kind, result, impact) = world_action_kind(&body);
+    let snapshot = {
+        let mut league = state.inner.league_state.lock().await;
+        let mut player = ensure_league_player(&mut league, &matrix_user_id, None);
+        let location_id = payload
+            .location_id
+            .as_deref()
+            .filter(|location_id| league.world_locations.contains_key(*location_id))
+            .unwrap_or_else(|| world_default_location_for_kind(kind))
+            .to_string();
+        let now = Utc::now().timestamp();
+        let event = WorldEvent {
+            event_id: league_hash_id(
+                "world-event",
+                &format!("{}:{}:{}", matrix_user_id, now, body),
+            ),
+            actor_matrix_user_id: matrix_user_id.clone(),
+            room_id: payload.room_id.clone(),
+            location_id: location_id.clone(),
+            event_kind: kind.to_string(),
+            body: body.clone(),
+            result: result.to_string(),
+            impact_score: impact,
+            created_at_epoch: now,
+        };
+        if matches!(kind, "venture" | "craft") {
+            league.world_assets.push(WorldAsset {
+                asset_id: league_hash_id(
+                    "world-asset",
+                    &format!("{}:{}:{}", matrix_user_id, kind, now),
+                ),
+                owner_matrix_user_id: matrix_user_id.clone(),
+                location_id: location_id.clone(),
+                asset_kind: kind.to_string(),
+                name: if kind == "venture" {
+                    "Reality Venture Seed".to_string()
+                } else {
+                    "Craft Build Seed".to_string()
+                },
+                status: "active".to_string(),
+                value_score: impact,
+                created_at_epoch: now,
+            });
+        }
+        league.world_relationships.push(WorldRelationship {
+            relationship_id: league_hash_id(
+                "world-rel",
+                &format!("{}:{}:{}", matrix_user_id, location_id, now),
+            ),
+            from_id: matrix_user_id.clone(),
+            to_id: location_id.clone(),
+            relation_kind: kind.to_string(),
+            strength: impact,
+            updated_at_epoch: now,
+        });
+        player.xp += impact;
+        player.reputation += (impact / 4).max(1);
+        player.rating += (impact / 3).max(1);
+        league
+            .players_by_matrix_user
+            .insert(matrix_user_id.clone(), player);
+        league.world_events.push(event.clone());
+        let home = world_home_json(&league);
+        (league.clone(), event, home)
+    };
+    Ok(snapshot)
+}
+
+async fn post_world_action(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<WorldActionRequest>,
+) -> Response {
+    if let Err(response) = authorize_ingress(&headers, state.config()) {
+        state.inner.metrics.inc_ingress_auth_failures();
+        return response;
+    }
+    let snapshot = match record_world_action(&state, payload).await {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    if let Err(response) = persist_league_state(&state, &snapshot.0).await {
+        return response;
+    }
+    (
+        StatusCode::OK,
+        Json(json!({
+            "kind": "trillionnium_world_action",
+            "world": "trillionnium_world",
+            "event": snapshot.1,
+            "home": snapshot.2,
+        })),
+    )
+        .into_response()
+}
+
+async fn get_world_web_shell(State(state): State<AppState>, headers: HeaderMap) -> Html<String> {
+    let web_session = authorize_league_web_session(&state, &headers, None)
+        .ok()
+        .flatten();
+    let csrf_input = web_session
+        .as_ref()
+        .map(|session| {
+            format!(
+                "<input type=\"hidden\" name=\"csrf\" value=\"{}\" />",
+                escape_html_text(&session.csrf)
+            )
+        })
+        .unwrap_or_default();
+    let console_note = if web_session.is_some() {
+        "Authenticated web session: world actions are CSRF-protected and bound to the signed player."
+    } else if matches!(state.config().runtime_profile, RuntimeProfile::LocalDev) {
+        "Local-dev World shell: create ventures, craft assets, recruit Agents, and mirror real opportunities without exposing tokens to the browser."
+    } else {
+        "Read-only World shell: request a signed /league/web/session before submitting world actions."
+    };
+    let league = state.inner.league_state.lock().await;
+    let mut zones: Vec<WorldZone> = league.world_zones.values().cloned().collect();
+    zones.sort_by(|left, right| left.zone_id.cmp(&right.zone_id));
+    let mut locations: Vec<WorldLocation> = league.world_locations.values().cloned().collect();
+    locations.sort_by(|left, right| left.location_id.cmp(&right.location_id));
+    let mut entities: Vec<WorldEntity> = league.world_entities.values().cloned().collect();
+    entities.sort_by(|left, right| left.entity_id.cmp(&right.entity_id));
+
+    let zone_cards = zones
+        .iter()
+        .map(|zone| {
+            format!(
+                "<article class=\"card zone\"><div class=\"pill\">{}</div><h3>{}</h3><p>{}</p><footer><code>{}</code><span>{}</span></footer></article>",
+                escape_html_text(&zone.status),
+                escape_html_text(&zone.name),
+                escape_html_text(&zone.theme),
+                escape_html_text(&zone.zone_id),
+                escape_html_text(&zone.mirror_kind),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let location_cards = locations
+        .iter()
+        .map(|location| {
+            format!(
+                "<article class=\"mini\"><strong>{}</strong><span>{}</span><code>{}</code><small>{}</small></article>",
+                escape_html_text(&location.name),
+                escape_html_text(&location.description),
+                escape_html_text(&location.location_id),
+                escape_html_text(&location.location_kind),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let location_options = locations
+        .iter()
+        .map(|location| {
+            format!(
+                "<option value=\"{}\">{} · {}</option>",
+                escape_html_text(&location.location_id),
+                escape_html_text(&location.name),
+                escape_html_text(&location.location_kind),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let entity_cards = entities
+        .iter()
+        .map(|entity| {
+            format!(
+                "<article class=\"mini\"><strong>{}</strong><span>{}</span><code>{}</code><small>{}</small></article>",
+                escape_html_text(&entity.name),
+                escape_html_text(&entity.role),
+                escape_html_text(&entity.entity_id),
+                escape_html_text(&entity.status),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let entity_cards = if entity_cards.is_empty() {
+        "<article class=\"mini\"><strong>No Agent residents yet</strong><span>Use /world action 招募 Agent</span><code>agent</code></article>".to_string()
+    } else {
+        entity_cards
+    };
+    let asset_cards = league
+        .world_assets
+        .iter()
+        .rev()
+        .take(8)
+        .map(|asset| {
+            format!(
+                "<article class=\"mini asset\"><strong>{}</strong><span>{} · value {}</span><code>{}</code><small>{}</small></article>",
+                escape_html_text(&asset.name),
+                escape_html_text(&asset.asset_kind),
+                asset.value_score,
+                escape_html_text(&asset.location_id),
+                escape_html_text(&asset.owner_matrix_user_id),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let asset_cards = if asset_cards.is_empty() {
+        "<article class=\"mini asset\"><strong>No player assets yet</strong><span>Create a venture or craft build to mint the first asset.</span><code>/world action</code></article>".to_string()
+    } else {
+        asset_cards
+    };
+    let event_items = league
+        .world_events
+        .iter()
+        .rev()
+        .take(12)
+        .map(|event| {
+            format!(
+                "<li><b>🌍 {}</b><span>{}</span><small>{} · +{}</small><em>{}</em></li>",
+                escape_html_text(&event.event_kind),
+                escape_html_text(&event.body),
+                escape_html_text(&event.location_id),
+                event.impact_score,
+                escape_html_text(&event.result),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let event_items = if event_items.is_empty() {
+        "<li><b>🌍 World is waiting</b><span>Use the action console to create the first world event.</span><small>/world action</small><em>Reality mirror booting.</em></li>".to_string()
+    } else {
+        event_items
+    };
+
+    Html(format!(
+        r#"<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Trillionnium World</title>
+  <style>
+    :root {{ color-scheme: dark; --bg:#060711; --panel:#111426; --panel2:#171b31; --gold:#f8c35b; --cyan:#64e3ff; --green:#7dff9b; --text:#f6f7fb; --muted:#9aa3b2; }}
+    * {{ box-sizing:border-box; }}
+    body {{ margin:0; min-height:100vh; font-family:Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background:radial-gradient(circle at 22% 0%, #133f38 0, transparent 32rem), radial-gradient(circle at 90% 18%, #3b245c 0, transparent 30rem), var(--bg); color:var(--text); }}
+    header {{ padding:42px min(6vw,72px) 18px; display:grid; gap:22px; grid-template-columns:1.3fr .7fr; align-items:end; }}
+    h1 {{ margin:0; font-size:clamp(44px,7vw,96px); line-height:.88; letter-spacing:-.075em; }}
+    h2 {{ margin:0 0 16px; letter-spacing:-.03em; }}
+    .subtitle {{ color:var(--muted); font-size:18px; max-width:840px; line-height:1.55; }}
+    .hero-card,.card,.panel {{ border:1px solid rgba(255,255,255,.11); background:linear-gradient(145deg,rgba(255,255,255,.09),rgba(255,255,255,.035)); box-shadow:0 24px 80px rgba(0,0,0,.35); backdrop-filter: blur(14px); border-radius:24px; }}
+    .hero-card,.panel,.card {{ padding:24px; }}
+    .stats {{ display:grid; grid-template-columns:repeat(6,1fr); gap:14px; margin-top:22px; }}
+    .stat {{ padding:18px; background:rgba(255,255,255,.06); border-radius:18px; }}
+    .stat b {{ display:block; font-size:26px; color:var(--gold); }}
+    main {{ padding:20px min(6vw,72px) 60px; display:grid; gap:24px; }}
+    .grid {{ display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:18px; }}
+    .mini-grid {{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }}
+    .card h3 {{ margin:12px 0; font-size:24px; }}
+    .card p {{ color:var(--muted); line-height:1.55; }}
+    .card footer {{ display:grid; gap:8px; margin-top:18px; color:var(--gold); }}
+    .pill {{ display:inline-flex; border:1px solid rgba(100,227,255,.35); color:var(--cyan); padding:5px 10px; border-radius:999px; font-size:12px; text-transform:uppercase; letter-spacing:.12em; }}
+    .play {{ display:grid; grid-template-columns:.8fr 1.2fr; gap:18px; }}
+    form {{ display:grid; gap:10px; margin:0; }}
+    input,textarea,select {{ width:100%; color:var(--text); background:rgba(255,255,255,.07); border:1px solid rgba(255,255,255,.14); border-radius:14px; padding:12px 14px; font:inherit; }}
+    textarea {{ min-height:140px; resize:vertical; }}
+    button {{ border:0; cursor:pointer; color:var(--bg); background:linear-gradient(135deg,var(--gold),#7dff9b); padding:12px 16px; border-radius:14px; font-weight:800; }}
+    .mini {{ display:grid; gap:7px; padding:14px; border-radius:16px; background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.08); }}
+    .asset strong {{ color:var(--green); }}
+    .mini span,.mini small,.timeline small,.timeline em {{ color:var(--muted); }}
+    .timeline {{ list-style:none; padding:0; margin:0; display:grid; gap:10px; }}
+    .timeline li {{ display:grid; grid-template-columns:.55fr 1.35fr .55fr; gap:10px; padding:12px; border-radius:14px; background:rgba(255,255,255,.055); }}
+    .timeline em {{ grid-column:1 / -1; font-style:normal; }}
+    code {{ color:var(--cyan); background:rgba(100,227,255,.08); padding:3px 7px; border-radius:8px; }}
+    .cta {{ color:var(--bg); background:linear-gradient(135deg,var(--gold),#7dff9b); padding:14px 18px; border-radius:16px; display:inline-block; font-weight:800; text-decoration:none; }}
+    @media (max-width:1050px) {{ header,.play {{ grid-template-columns:1fr; }} .grid,.stats,.mini-grid {{ grid-template-columns:1fr; }} }}
+  </style>
+</head>
+<body>
+  <header>
+    <section>
+      <div class="pill">Reality Mirror Sandbox</div>
+      <h1>Trillionnium World</h1>
+      <p class="subtitle">开放世界总层：现实镜像城市、Craft 工坊、Market、League 竞技场、Agent 居民、资产、关系与自由行动。League 是竞技模块，Craft 是建造模块，Ledger 是结算层。</p>
+    </section>
+    <aside class="hero-card">
+      <strong>World Shell Online</strong>
+      <p class="subtitle">Build a company, craft an asset, recruit Agents, enter markets, or jump into League competition.</p>
+      <a class="cta" href="/league">Enter League Arena</a>
+    </aside>
+  </header>
+  <main>
+    <section class="stats">
+      <div class="stat"><span>Zones</span><b>{zones}</b></div>
+      <div class="stat"><span>Locations</span><b>{locations}</b></div>
+      <div class="stat"><span>Agents</span><b>{entities}</b></div>
+      <div class="stat"><span>Assets</span><b>{assets}</b></div>
+      <div class="stat"><span>Events</span><b>{events}</b></div>
+      <div class="stat"><span>Relations</span><b>{relationships}</b></div>
+    </section>
+    <section>
+      <h2>World Zones</h2>
+      <div class="grid">{zone_cards}</div>
+    </section>
+    <section class="play">
+      <div class="panel">
+        <h2>World Action Console</h2>
+        <p class="subtitle">{console_note}</p>
+        <form method="post" action="/world/web/action">
+          {csrf_input}
+          <input type="hidden" name="matrix_user_id" value="@alice:local.dev" />
+          <select name="location_id">{location_options}</select>
+          <textarea name="body">我要在镜像城市开一家 AI 设计公司，招募 Agent，服务真实客户，并把客户需求转成 League 任务。</textarea>
+          <button type="submit">Commit World Action</button>
+        </form>
+      </div>
+      <div class="panel">
+        <h2>World Event Timeline</h2>
+        <ul class="timeline">{event_items}</ul>
+      </div>
+    </section>
+    <section class="panel">
+      <h2>Locations</h2>
+      <div class="mini-grid">{location_cards}</div>
+    </section>
+    <section class="panel">
+      <h2>Agent Residents / NPCs</h2>
+      <div class="mini-grid">{entity_cards}</div>
+    </section>
+    <section class="panel">
+      <h2>Player Assets</h2>
+      <div class="mini-grid">{asset_cards}</div>
+    </section>
+    <section class="panel">
+      <h2>Playable Commands</h2>
+      <p class="subtitle"><code>/world</code> <code>/world action 我要开一家 AI 设计公司</code> <code>/league</code> <code>/arena</code> <code>/guild</code> <code>/raid</code></p>
+    </section>
+  </main>
+</body>
+</html>"#,
+        zones = league.world_zones.len(),
+        locations = league.world_locations.len(),
+        entities = league.world_entities.len(),
+        assets = league.world_assets.len(),
+        events = league.world_events.len(),
+        relationships = league.world_relationships.len(),
+        zone_cards = zone_cards,
+        location_cards = location_cards,
+        location_options = location_options,
+        entity_cards = entity_cards,
+        asset_cards = asset_cards,
+        event_items = event_items,
+        console_note = escape_html_text(console_note),
+        csrf_input = csrf_input,
+    ))
+}
+
+async fn post_world_web_action(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(payload): Form<WorldWebActionRequest>,
+) -> Response {
+    let web_session = match authorize_league_web_session(&state, &headers, payload.csrf.as_deref())
+    {
+        Ok(value) => value,
+        Err(response) => {
+            if matches!(state.config().runtime_profile, RuntimeProfile::LocalDev)
+                && cookie_value(&headers, &state.config().league_web_session_cookie_name).is_none()
+            {
+                None
+            } else {
+                return response;
+            }
+        }
+    };
+    let matrix_user_id = web_session
+        .as_ref()
+        .map(|session| session.matrix_user_id.clone())
+        .or_else(|| {
+            normalize_league_matrix_user(
+                payload
+                    .matrix_user_id
+                    .as_deref()
+                    .unwrap_or("@alice:local.dev"),
+            )
+        })
+        .unwrap_or_else(|| "@alice:local.dev".to_string());
+    let body = payload
+        .body
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("我要在镜像城市开一家 AI 设计公司，招募 Agent，服务真实客户。")
+        .to_string();
+    let request = WorldActionRequest {
+        matrix_user_id,
+        room_id: web_session
+            .as_ref()
+            .and_then(|session| session.room_id.clone())
+            .or_else(|| Some("!web-local:local.dev".to_string())),
+        location_id: payload
+            .location_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string),
+        body,
+    };
+    let snapshot = match record_world_action(&state, request).await {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    if let Err(response) = persist_league_state(&state, &snapshot.0).await {
+        return response;
+    }
+    Redirect::to("/world?played=1").into_response()
+}
+
 async fn get_league_season(State(state): State<AppState>, headers: HeaderMap) -> Response {
     if let Err(response) = authorize_ingress(&headers, state.config()) {
         state.inner.metrics.inc_ingress_auth_failures();
@@ -6369,6 +7117,11 @@ async fn get_league_web_shell(State(state): State<AppState>, headers: HeaderMap)
       <h2>Active Game Modes</h2>
       <div class="grid">{match_cards}</div>
     </section>
+    <section class="panel">
+      <h2>Trillionnium World</h2>
+      <p class="subtitle">现实镜像开放世界：城市、Craft 工坊、Market、Agent 居民、资产和自由行动。</p>
+      <div class="commands"><code>/world</code><code>/world action 我要开一家 AI 设计公司</code><code>Assets {world_assets}</code><code>Events {world_events}</code></div>
+    </section>
     <section class="play">
       <div class="panel">
         <h2>Web Battle Console</h2>
@@ -6418,6 +7171,8 @@ async fn get_league_web_shell(State(state): State<AppState>, headers: HeaderMap)
         loadout_line = loadout_line,
         top_loot = escape_html_text(&top_loot),
         leaderboard = leaderboard,
+        world_assets = league.world_assets.len(),
+        world_events = league.world_events.len(),
         console_note = escape_html_text(console_note),
         csrf_input = csrf_input,
     ))

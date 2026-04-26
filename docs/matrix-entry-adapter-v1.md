@@ -70,6 +70,9 @@ The adapter will:
 6. for `/status <invocation-id>` it calls local task projection path and returns latest state
 7. for `/balance` / `/wallet` it calls the consumer wallet projection path and returns a wallet card
 8. for `/plans` / `/package` it returns the current package/plan projection
+9. for `/world` it fetches `consumer-entry-api /v1/world/home` and returns a Trillionnium World card
+10. for `/world action <free text>` it posts to `consumer-entry-api /v1/world/action` and returns a world action card with event kind, location, and impact
+11. for `/craft <build text>` it posts a `craft build ...` action into `starter-studio` and returns a Trillionnium Craft action card
 
 ### Read a projected reply for a task
 

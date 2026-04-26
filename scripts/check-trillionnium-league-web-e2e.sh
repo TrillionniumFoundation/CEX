@@ -20,13 +20,13 @@ def get(path):
         body = resp.read().decode('utf-8', errors='replace')
         return resp.status, body
 
-def post_action(headers=None, **fields):
+def post_form(path, headers=None, **fields):
     data = urllib.parse.urlencode(fields).encode()
     request_headers = {'content-type': 'application/x-www-form-urlencoded'}
     if headers:
         request_headers.update(headers)
     req = urllib.request.Request(
-        base + '/league/web/action',
+        base + path,
         data=data,
         method='POST',
         headers=request_headers,
@@ -34,6 +34,9 @@ def post_action(headers=None, **fields):
     with urllib.request.urlopen(req, timeout=20) as resp:
         body = resp.read().decode('utf-8', errors='replace')
         return resp.status, resp.geturl(), body
+
+def post_action(headers=None, **fields):
+    return post_form('/league/web/action', headers=headers, **fields)
 
 def post_json(path, payload, headers=None):
     request_headers = {'content-type': 'application/json'}
@@ -51,8 +54,13 @@ def post_json(path, payload, headers=None):
 
 status, html = get('/league')
 assert status == 200, status
-for needle in ['Trillionnium League', 'Web Battle Console', 'Guild Halls', 'Battle Timeline', 'Submit Result']:
+for needle in ['Trillionnium League', 'Trillionnium World', 'Web Battle Console', 'Guild Halls', 'Battle Timeline', 'Submit Result']:
     assert needle in html, needle
+
+world_status, world_html = get('/world')
+assert world_status == 200, world_status
+for needle in ['Trillionnium World', 'World Action Console', 'Reality Mirror Sandbox', 'Player Assets']:
+    assert needle in world_html, needle
 
 matrix_user_id = '@alice:local.dev'
 marker = f'web-e2e-{int(time.time())}'
@@ -78,6 +86,16 @@ code, url, body = post_action(**{
     'match_id': 'daily-dungeon-001',
 }, headers=cookie_header)
 assert code == 200, ('session_join', code, url)
+world_marker = f'world-{marker}'
+code, url, body = post_form('/world/web/action', headers=cookie_header, **{
+    'matrix_user_id': matrix_user_id,
+    'csrf': csrf,
+    'location_id': 'zbj-market-gate',
+    'body': f'{world_marker}: 我要在镜像城市开一家 AI 设计公司，招募 Agent，服务真实客户。',
+})
+assert code == 200, ('world_action', code, url)
+assert 'Trillionnium World' in body and world_marker in body, ('world_action_body', url)
+actions.append({'action': 'world', 'status': code, 'url': url})
 
 for fields in [
     {'action': 'join', 'matrix_user_id': matrix_user_id, 'match_id': 'daily-dungeon-001'},
@@ -112,6 +130,9 @@ status, html_after = get('/league')
 assert status == 200, status
 for needle in ['Oracle Scout', 'Forge Builder', 'Mirror Auditor', 'Top loot', 'settled', 'held_review', 'rubric_hidden']:
     assert needle in html_after, needle
+world_status, world_html_after = get('/world')
+assert world_status == 200, world_status
+assert world_marker in world_html_after, world_marker
 
 summary = {
     'ok': True,
@@ -121,6 +142,8 @@ summary = {
     'has_title': 'Trillionnium League' in html_after,
     'has_web_console': 'Web Battle Console' in html_after,
     'has_web_session': bool(session_cookie and csrf),
+    'has_world_shell': 'World Action Console' in world_html_after,
+    'has_world_action': world_marker in world_html_after,
     'has_timeline': 'Battle Timeline' in html_after,
     'has_settled_reward': 'settled' in html_after,
     'has_held_review': 'held_review' in html_after,

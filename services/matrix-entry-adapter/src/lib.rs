@@ -1929,6 +1929,12 @@ enum ParsedCommand {
     Arena,
     Quest,
     World,
+    WorldAction {
+        body: String,
+    },
+    CraftAction {
+        body: String,
+    },
     Season,
     Raid {
         match_id: Option<String>,
@@ -2275,15 +2281,48 @@ async fn handle_matrix_event(
                 Err(response) => response,
             }
         }
-        ParsedCommand::World => match fetch_consumer_entry_get(&state, "/v1/league/world").await {
+        ParsedCommand::World => match fetch_consumer_entry_get(&state, "/v1/world/home").await {
             Ok(value) => league_response(
-                "league_world",
+                "trillionnium_world",
                 event,
                 value.clone(),
-                build_league_world_matrix_reply(&value),
+                build_trillionnium_world_matrix_reply(&value),
             ),
             Err(response) => response,
         },
+        ParsedCommand::WorldAction { body } => {
+            let request = json!({
+                "matrix_user_id": event.sender,
+                "room_id": event.room_id,
+                "body": body,
+            });
+            match fetch_consumer_entry_post(&state, "/v1/world/action", request).await {
+                Ok(value) => league_response(
+                    "trillionnium_world_action",
+                    event,
+                    value.clone(),
+                    build_trillionnium_world_action_matrix_reply(&value),
+                ),
+                Err(response) => response,
+            }
+        }
+        ParsedCommand::CraftAction { body } => {
+            let request = json!({
+                "matrix_user_id": event.sender,
+                "room_id": event.room_id,
+                "location_id": "starter-studio",
+                "body": format!("craft build {}", body),
+            });
+            match fetch_consumer_entry_post(&state, "/v1/world/action", request).await {
+                Ok(value) => league_response(
+                    "trillionnium_craft_action",
+                    event,
+                    value.clone(),
+                    build_trillionnium_craft_action_matrix_reply(&value),
+                ),
+                Err(response) => response,
+            }
+        }
         ParsedCommand::Season => {
             match fetch_consumer_entry_get(&state, "/v1/league/season").await {
                 Ok(value) => league_response(
@@ -2789,7 +2828,8 @@ fn parse_matrix_command(text: &str) -> ParsedCommand {
         "/league" | "/tl" | "/trillionnium" => ParsedCommand::League,
         "/arena" | "/matches" => ParsedCommand::Arena,
         "/quest" | "/quests" | "/daily" => ParsedCommand::Quest,
-        "/world" | "/map" => ParsedCommand::World,
+        "/world" | "/map" => parse_world_command(parts),
+        "/craft" | "/build" | "/create" => parse_craft_command(parts),
         "/season" => ParsedCommand::Season,
         "/raid" | "/raids" => parse_raid_command(parts),
         "/team" | "/party" | "/roster" => parse_team_command(parts),
@@ -2828,6 +2868,33 @@ fn parse_matrix_command(text: &str) -> ParsedCommand {
             text: trimmed.to_string(),
         },
     }
+}
+
+fn parse_world_command(parts: Vec<&str>) -> ParsedCommand {
+    if parts.is_empty() {
+        return ParsedCommand::World;
+    }
+    if parts
+        .first()
+        .is_some_and(|value| value.eq_ignore_ascii_case("action") || *value == "行动")
+    {
+        let body = parts.into_iter().skip(1).collect::<Vec<_>>().join(" ");
+        if body.trim().is_empty() {
+            return ParsedCommand::World;
+        }
+        return ParsedCommand::WorldAction { body };
+    }
+    ParsedCommand::WorldAction {
+        body: parts.join(" "),
+    }
+}
+
+fn parse_craft_command(parts: Vec<&str>) -> ParsedCommand {
+    let body = parts.join(" ");
+    if body.trim().is_empty() {
+        return ParsedCommand::World;
+    }
+    ParsedCommand::CraftAction { body }
 }
 
 fn hero_for_raid_role(role: &str) -> &'static str {
@@ -3801,24 +3868,66 @@ fn build_league_quest_matrix_reply(_matches: Option<&Value>) -> Value {
     })
 }
 
-fn build_league_world_matrix_reply(value: &Value) -> Value {
-    let zone_count = value
-        .get("zones")
-        .and_then(Value::as_array)
-        .map(Vec::len)
-        .unwrap_or(5);
+fn build_trillionnium_world_matrix_reply(value: &Value) -> Value {
+    let counts = value.get("counts").unwrap_or(value);
+    let zone_count = counts.get("zones").and_then(Value::as_u64).unwrap_or(4);
+    let location_count = counts.get("locations").and_then(Value::as_u64).unwrap_or(4);
+    let asset_count = counts.get("assets").and_then(Value::as_u64).unwrap_or(0);
+    let event_count = counts.get("events").and_then(Value::as_u64).unwrap_or(0);
     let body = format!(
-        "🗺️ Trillionnium World Map\n已开放/预告区域：{zone_count}\nPrompt Forge｜Research Wilds｜Code Citadel｜Audit Sanctum｜Market Bazaar\n\n进入赛场：/arena\n加入公会：/guild"
+        "🌍 Trillionnium World\n开放世界总层：现实镜像城市 + Craft 工坊 + Market + League。\nZones: {zone_count} · Locations: {location_count} · Assets: {asset_count} · Events: {event_count}\n自由行动：/world action 我要开一家 AI 设计公司"
     );
     json!({
         "msgtype": "m.text",
         "body": body,
         "format": "org.matrix.custom.html",
         "formatted_body": format!(
-            "<blockquote><h3>🗺️ Trillionnium World Map</h3><p><strong>Zones</strong>: {}</p><p>Prompt Forge｜Research Wilds｜Code Citadel｜Audit Sanctum｜Market Bazaar</p><p><code>/arena</code> · <code>/guild</code></p></blockquote>",
-            zone_count,
+            "<blockquote><h3>🌍 Trillionnium World</h3><p>现实镜像城市 + Craft 工坊 + Market + League。</p><p><strong>Zones</strong>: {} · <strong>Locations</strong>: {} · <strong>Assets</strong>: {} · <strong>Events</strong>: {}</p><p><code>/world action 我要开一家 AI 设计公司</code></p></blockquote>",
+            zone_count, location_count, asset_count, event_count,
         ),
-        "cex_card": {"type": "league_world", "version": 1, "league": "trillionnium_league", "zone_count": zone_count}
+        "cex_card": {"type": "trillionnium_world", "version": 1, "world": "trillionnium_world", "zone_count": zone_count, "location_count": location_count, "asset_count": asset_count, "event_count": event_count}
+    })
+}
+
+fn build_trillionnium_craft_action_matrix_reply(value: &Value) -> Value {
+    let mut reply = build_trillionnium_world_action_matrix_reply(value);
+    if let Some(card) = reply.get_mut("cex_card").and_then(Value::as_object_mut) {
+        card.insert("type".to_string(), json!("trillionnium_craft_action"));
+        card.insert("module".to_string(), json!("trillionnium_craft"));
+    }
+    reply
+}
+
+fn build_trillionnium_world_action_matrix_reply(value: &Value) -> Value {
+    let event = value.get("event").unwrap_or(value);
+    let event_kind = event
+        .get("event_kind")
+        .and_then(Value::as_str)
+        .unwrap_or("explore");
+    let location_id = event
+        .get("location_id")
+        .and_then(Value::as_str)
+        .unwrap_or("mirror-city-square");
+    let result = event
+        .get("result")
+        .and_then(Value::as_str)
+        .unwrap_or("世界发生了变化。");
+    let impact = event
+        .get("impact_score")
+        .and_then(Value::as_i64)
+        .unwrap_or(10);
+    let body = format!(
+        "🌍 World Action\nKind: {event_kind}\nLocation: {location_id}\nImpact: +{impact}\nResult: {result}\n查看世界：/world"
+    );
+    json!({
+        "msgtype": "m.text",
+        "body": body,
+        "format": "org.matrix.custom.html",
+        "formatted_body": format!(
+            "<blockquote><h3>🌍 World Action</h3><p><strong>Kind</strong>: {}</p><p><strong>Location</strong>: <code>{}</code></p><p><strong>Impact</strong>: +{}</p><p>{}</p><p><code>/world</code></p></blockquote>",
+            escape_html(event_kind), escape_html(location_id), impact, escape_html(result),
+        ),
+        "cex_card": {"type": "trillionnium_world_action", "version": 1, "world": "trillionnium_world", "event_kind": event_kind, "location_id": location_id, "impact_score": impact}
     })
 }
 
@@ -4471,7 +4580,7 @@ fn build_plain_matrix_reply(body: &str) -> Value {
 
 fn build_help_matrix_reply() -> Value {
     build_plain_matrix_reply(
-        "可用命令:\n/league - 进入 Trillionnium League\n/world - 世界地图\n/season - 赛季\n/arena - 查看赛场\n/quest - 今日副本\n/guild - 公会列表，/guild <guild-id> 加入\n/raid - 团本列表，/raid <raid-id> <行动> 贡献团本\n/team - 团本队伍，/team <raid-id> <role> 认领职责\n/draft <hero...> - 锁定 Agent 英雄阵容\n/join <match-id> - 加入赛场\n/battle <match-id> <行动> - 在赛场中出招并创建 CEX 执行\n/submit <match-id> <提交内容> - 交卷评分并领取奖励\n/profile - 玩家档案\n/rank - 排行榜\n/loadout - Agent 阵容\n/rewards - 奖励记录\n/inventory - 背包/装备\n/history - 战斗历史\n/task <内容> [cap=<能力id>] [account=<账户id>] - 创建普通任务\n/status <task-id> - 查询任务状态\n/balance 或 /wallet - 查看余额\n/plans 或 /套餐 - 查看套餐",
+        "可用命令:\n/league - 进入 Trillionnium League\n/world - 进入 Trillionnium World 开放世界\n/world action <自由行动> - 在现实镜像世界里行动/建造/经营\n/craft <建造内容> - 进入 Trillionnium Craft 工坊建造\n/season - 赛季\n/arena - 查看赛场\n/quest - 今日副本\n/guild - 公会列表，/guild <guild-id> 加入\n/raid - 团本列表，/raid <raid-id> <行动> 贡献团本\n/team - 团本队伍，/team <raid-id> <role> 认领职责\n/draft <hero...> - 锁定 Agent 英雄阵容\n/join <match-id> - 加入赛场\n/battle <match-id> <行动> - 在赛场中出招并创建 CEX 执行\n/submit <match-id> <提交内容> - 交卷评分并领取奖励\n/profile - 玩家档案\n/rank - 排行榜\n/loadout - Agent 阵容\n/rewards - 奖励记录\n/inventory - 背包/装备\n/history - 战斗历史\n/task <内容> [cap=<能力id>] [account=<账户id>] - 创建普通任务\n/status <task-id> - 查询任务状态\n/balance 或 /wallet - 查看余额\n/plans 或 /套餐 - 查看套餐",
     )
 }
 
@@ -5247,6 +5356,18 @@ mod tests {
         assert_eq!(parse_matrix_command("/arena"), ParsedCommand::Arena);
         assert_eq!(parse_matrix_command("/quest"), ParsedCommand::Quest);
         assert_eq!(parse_matrix_command("/world"), ParsedCommand::World);
+        assert_eq!(
+            parse_matrix_command("/world action 我要开一家 AI 设计公司"),
+            ParsedCommand::WorldAction {
+                body: "我要开一家 AI 设计公司".to_string()
+            }
+        );
+        assert_eq!(
+            parse_matrix_command("/craft 建一个自动交付工坊"),
+            ParsedCommand::CraftAction {
+                body: "建一个自动交付工坊".to_string()
+            }
+        );
         assert_eq!(parse_matrix_command("/season"), ParsedCommand::Season);
         assert_eq!(parse_matrix_command("/rank"), ParsedCommand::Rank);
         assert_eq!(parse_matrix_command("/loadout"), ParsedCommand::Loadout);

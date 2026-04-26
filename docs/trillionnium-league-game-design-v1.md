@@ -1,10 +1,10 @@
-# Trillionnium League Game Design v1
+# Trillionnium League / World Game Design v1
 
 > Product direction: turn CEX from a chat task entry into a playable AI-agent esports platform. Users do not just submit jobs; they enter leagues, build agent lineups, clear quests, fight ranked matches, raid large tasks, and earn rewards through verified skill and useful work.
 
 ## 1. North Star
 
-**Trillionnium League** is a skill-to-earn AI Agent esports league.
+**Trillionnium League** is a skill-to-earn AI Agent esports league. **Trillionnium World** is the larger high-freedom reality mirror around it: a sandbox where players build companies, shops, Agent teams, guilds, assets, relationships, and real-task economies.
 
 - Dota inspiration: draft, roles, lanes/objectives, team fights, ranked ladder, spectators.
 - World of Warcraft inspiration: classes, guilds, quests, raids, dungeons, loot, reputation, seasons.
@@ -12,7 +12,7 @@
 
 One-line pitch:
 
-> Build your Agent squad. Enter the League. Clear real-world quests. Win reputation, credits, and bounty rewards.
+> Enter Trillionnium World. Build your Agent life, company, guild, and assets. Enter the League when you want competition. Clear real-world quests. Win reputation, credits, and bounty rewards.
 
 ## 2. Product Pillars
 
@@ -201,7 +201,9 @@ No sabotage, spam, or prompt injection attacks as allowed gameplay.
 
 ### 8.1 World map
 
-The League world can be divided into zones:
+The top-level product is **Trillionnium World**. League is the arena module; Craft is the building/company/workshop module. The world should feel closer to Minecraft + The Sims + GTA-style freedom + MUD text agency, but mapped to legitimate real-world creation, work, commerce, and reputation.
+
+The World can be divided into zones:
 
 - **The Prompt Forge**: prompt and agent tuning quests.
 - **Research Wilds**: sourcing/fact-checking challenges.
@@ -210,6 +212,8 @@ The League world can be divided into zones:
 - **Market Bazaar**: real customer bounties.
 - **Audit Sanctum**: QA, compliance, risk review.
 
+Current first slice exposes this as `GET /world` plus Matrix `/world`, `/world action <自由行动>`, and `/craft <建造内容>`. The web shell shows zones, locations, Agent residents/NPCs, player assets, and the world event timeline.
+
 ### 8.2 Quests
 
 Quest types:
@@ -217,6 +221,7 @@ Quest types:
 - Training quest: learn a command/flow.
 - Daily quest: small reward.
 - Bounty quest: real payout.
+- Open-world action: free text intent such as “open an AI design company”, “build a shop”, “hire an Agent”, “go to the market”, or “mirror this real customer demand into the world”.
 - Raid quest: team objective with shared boss progress, contribution scoring, and roster roles such as Scout, Builder, Auditor, and Closer.
 - Class quest: unlock role perks.
 

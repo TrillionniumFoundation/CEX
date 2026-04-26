@@ -28,6 +28,14 @@ This first slice is intentionally small:
 
 现在会额外暴露 Prometheus 文本格式指标，至少覆盖 task create / lookup、rate limit、replay hits、identity binding reload / actor rejection / audit failure，以及 profile 安全基线相关 gauge（如 `cex_consumer_entry_profile_validation_ok`、`cex_consumer_entry_ingress_protected`、`cex_consumer_entry_require_identity_binding`）。identity source-of-truth 相关也会通过 `cex_consumer_entry_identity_registry_users`、`cex_consumer_entry_identity_registry_refs`、`cex_consumer_entry_identity_registry_missing_refs` 暴露。durable quota 相关也会通过 `cex_consumer_entry_rate_limit_store_enabled` 与 `cex_consumer_entry_rate_limit_bucket_count` 暴露。现在还会额外暴露 identity governance gauge，包括 `cex_consumer_entry_identity_governance_valid`、`cex_consumer_entry_identity_binding_loaded`、`cex_consumer_entry_identity_registry_loaded`、`cex_consumer_entry_identity_ref_integrity_ok`、`cex_consumer_entry_identity_actor_gate_valid`、`cex_consumer_entry_identity_approval_source_valid` 与 `cex_consumer_entry_identity_approval_coverage_valid`，以及 session-auth issuer registry governance gauge，如 `cex_consumer_entry_session_auth_issuer_registry_governance_valid`、`cex_consumer_entry_session_auth_issuer_registry_approval_source_valid`、`cex_consumer_entry_session_auth_issuer_registry_approval_coverage_valid`，用于把 admin / health 面里的治理结论直接变成可 scrape 的 operator signal。
 
+### Web game shells
+
+`GET /league` exposes the Trillionnium League server-rendered game shell.
+
+`GET /world` exposes the Trillionnium World server-rendered open-world shell with zones, locations, Agent residents/NPCs, player assets, and world event timeline.
+
+`POST /league/web/action` supports interactive League actions (`join`, `guild`, `team`, `raid`, `draft`, `submit`). `POST /world/web/action` records free-form World actions. Outside local-dev, both mutation paths use signed web session + CSRF protection.
+
 ### Create a task from a generic chat payload
 
 `POST /v1/chat/tasks`

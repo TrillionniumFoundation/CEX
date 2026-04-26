@@ -1,8 +1,8 @@
-# Trillionnium League Implementation Plan v1
+# Trillionnium League / World Implementation Plan v1
 
 ## Goal
 
-Make CEX's frontend feel like a real game: a Dota/WoW-inspired AI-agent esports league where players enter matches, draft agent lineups, execute real CEX tasks, score, rank up, and earn rewards.
+Make CEX's frontend feel like a real game: first a Dota/WoW-inspired AI-agent esports league, then **Trillionnium World** — a high-freedom reality-mirror sandbox where players build companies, assets, shops, Agent teams, guilds, and real-task economies.
 
 ## Current Baseline
 
@@ -32,8 +32,17 @@ Already available:
 - A server-rendered web game shell is available at `GET /league` on `consumer-entry-api`, showing the Trillionnium League lobby, match cards, live stats, leaderboard, rewards, playable commands, guild halls, current loadout, replay timeline, and a local-dev Web Battle Console.
 - The web shell now has local-dev playable forms via `POST /league/web/action` for join/guild/team/raid/draft/submit, plus a battle timeline/replay panel that shows ledger settlement state.
 - Production Web session gate is active: `/league/web/session` can mint an HttpOnly SameSite web session cookie from signed upstream auth, and `/league/web/action` uses signed session + CSRF outside local-dev while preserving the local-dev playable shell.
+- Trillionnium World first slice is active: `GET /v1/world/home` returns zones/locations/Agent residents/assets/events, `POST /v1/world/action` records free-form reality-mirror actions, Matrix `/world action <自由行动>` mutates world state, and `GET /world` exposes a playable web World shell with a CSRF-protected `/world/web/action` console.
 
 This is enough to build the first League MVP inside Matrix before creating a custom web game shell.
+
+## Brand Architecture
+
+- **Trillionnium World**: top-level open world and reality mirror.
+- **Trillionnium League**: competitive quests, raids, judging, ranks, and rewards inside World.
+- **Trillionnium Craft**: building/workshop/company/asset creation inside World.
+- **Trillionnium Ledger**: credit, asset, payout, and audit settlement.
+- **Trillionnium Agents**: Agent residents, hirelings, heroes, NPCs, and guild members.
 
 ## Architecture
 
@@ -42,7 +51,7 @@ Element / Web Game Shell
   -> matrix-bot-poller / matrix-bot-relay
   -> matrix-entry-adapter
   -> consumer-entry-api
-  -> league domain read/write endpoints
+  -> world + league domain read/write endpoints
   -> gateway / execution / ledger / audit
 ```
 
@@ -67,7 +76,11 @@ Add to `matrix-entry-adapter`:
 - `/loadout`
   - returns current agent hero lineup.
 - `/world`
-  - returns MMO-style world map zones.
+  - returns Trillionnium World open-world map, locations, residents, assets, and recent events.
+- `/world action <free text>`
+  - records a free-form world action such as opening a company, building a shop, hiring an Agent, exploring a market, or mapping a real-world task into the world.
+- `/craft <build text>`
+  - shortcut into Trillionnium Craft; records a `craft` world action in `starter-studio` and mints a craft-style asset seed.
 - `/season`
   - returns current season stats.
 - `/guild` / `/guild <guild_id>`
@@ -153,6 +166,39 @@ The snapshot file is a replayable SQL insert into `league_state_snapshots(snapsh
 
 - `GET /v1/league/state/snapshot` returns repository status, state hash, and object counts.
 - `scripts/check-trillionnium-league-sql-snapshot.sh` validates the generated SQL snapshot and the status endpoint without exposing ingress tokens.
+
+## Phase 1.5: Trillionnium World Open Sandbox
+
+Implemented first-slice concepts:
+
+- world zones: `reality-mirror-city`, `craft-district`, `market-bazaar`, `league-arena`
+- locations: city square, starter studio, ZBJ market gate, League coliseum
+- entities: Agent residents and NPC-style helpers
+- assets: player-created ventures/builds from free-form actions
+- events: durable world action log with impact score
+- relationships: player-to-location/entity/asset relationship changes
+
+Endpoints:
+
+- `GET /v1/world/home`
+- `POST /v1/world/action`
+- `GET /world`
+- `POST /world/web/action`
+
+Matrix:
+
+- `/world` returns the Trillionnium World card.
+- `/world action <free text>` records a sandbox action such as opening an AI design company, building a shop, hiring an Agent, exploring a market, or mapping a real-world task into the world.
+- `/craft <build text>` records a Trillionnium Craft build action and creates a reusable asset seed.
+
+Web shell:
+
+- `GET /world` renders World zones, locations, Agent residents/NPCs, player assets, and the world event timeline.
+- `POST /world/web/action` uses the same signed web session + CSRF model as League web actions outside local-dev, while local-dev remains playable.
+
+SQL shape:
+
+- `migrations/0012_add_trillionnium_world_tables.sql`
 
 ## Phase 2: Durable League Domain
 
