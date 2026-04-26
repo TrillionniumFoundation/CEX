@@ -1938,6 +1938,10 @@ enum ParsedCommand {
     WorldContract {
         body: String,
     },
+    WorldContractComplete {
+        contract_id: String,
+        body: String,
+    },
     Season,
     Raid {
         match_id: Option<String>,
@@ -2346,6 +2350,23 @@ async fn handle_matrix_event(
                     event,
                     value.clone(),
                     build_trillionnium_world_contract_matrix_reply(&value),
+                ),
+                Err(response) => response,
+            }
+        }
+        ParsedCommand::WorldContractComplete { contract_id, body } => {
+            let request = json!({
+                "matrix_user_id": &event.sender,
+                "room_id": &event.room_id,
+                "body": body,
+            });
+            let path = format!("/v1/world/contracts/{contract_id}/complete");
+            match fetch_consumer_entry_post(&state, &path, request).await {
+                Ok(value) => league_response(
+                    "trillionnium_world_contract_completion",
+                    event,
+                    value.clone(),
+                    build_trillionnium_world_contract_completion_matrix_reply(&value),
                 ),
                 Err(response) => response,
             }
@@ -2858,6 +2879,7 @@ fn parse_matrix_command(text: &str) -> ParsedCommand {
         "/world" | "/map" => parse_world_command(parts),
         "/craft" | "/build" | "/create" => parse_craft_command(parts),
         "/contract" | "/bounty" | "/委托" => parse_world_contract_command(parts),
+        "/complete" | "/deliver" | "/交付" => parse_world_contract_complete_command(parts),
         "/season" => ParsedCommand::Season,
         "/raid" | "/raids" => parse_raid_command(parts),
         "/team" | "/party" | "/roster" => parse_team_command(parts),
@@ -2938,6 +2960,24 @@ fn parse_craft_command(parts: Vec<&str>) -> ParsedCommand {
         return ParsedCommand::World;
     }
     ParsedCommand::CraftAction { body }
+}
+
+fn parse_world_contract_complete_command(parts: Vec<&str>) -> ParsedCommand {
+    let Some(contract_id) = parts
+        .first()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    else {
+        return ParsedCommand::World;
+    };
+    let body = parts.into_iter().skip(1).collect::<Vec<_>>().join(" ");
+    if body.trim().is_empty() {
+        return ParsedCommand::World;
+    }
+    ParsedCommand::WorldContractComplete {
+        contract_id: contract_id.to_string(),
+        body,
+    }
 }
 
 fn hero_for_raid_role(role: &str) -> &'static str {
@@ -3946,8 +3986,52 @@ fn build_trillionnium_world_contract_matrix_reply(value: &Value) -> Value {
     if let Some(card) = reply.get_mut("cex_card").and_then(Value::as_object_mut) {
         card.insert("type".to_string(), json!("trillionnium_world_contract"));
         card.insert("module".to_string(), json!("world_contract"));
+        if let Some(contract_id) = value
+            .get("contract")
+            .and_then(|contract| contract.get("contract_id"))
+            .and_then(Value::as_str)
+        {
+            card.insert("contract_id".to_string(), json!(contract_id));
+        }
     }
     reply
+}
+
+fn build_trillionnium_world_contract_completion_matrix_reply(value: &Value) -> Value {
+    let completion = value.get("completion").unwrap_or(value);
+    let contract_id = completion
+        .get("contract_id")
+        .and_then(Value::as_str)
+        .unwrap_or("world-contract");
+    let score = completion
+        .get("score")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
+    let reward = completion
+        .get("reward_amount")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
+    let ledger_status = completion
+        .get("ledger_status")
+        .and_then(Value::as_str)
+        .unwrap_or("pending");
+    let judge_status = completion
+        .get("judge_status")
+        .and_then(Value::as_str)
+        .unwrap_or("rubric_scored");
+    let body = format!(
+        "✅ World Contract Complete\nContract: {contract_id}\nScore: {score:.1}\nReward: {reward:.2}\nLedger: {ledger_status}\nJudge: {judge_status}\n查看世界：/world"
+    );
+    json!({
+        "msgtype": "m.text",
+        "body": body,
+        "format": "org.matrix.custom.html",
+        "formatted_body": format!(
+            "<blockquote><h3>✅ World Contract Complete</h3><p><strong>Contract</strong>: <code>{}</code></p><p><strong>Score</strong>: {:.1} · <strong>Reward</strong>: {:.2}</p><p><strong>Ledger</strong>: {} · <strong>Judge</strong>: {}</p><p><code>/world</code></p></blockquote>",
+            escape_html(contract_id), score, reward, escape_html(ledger_status), escape_html(judge_status),
+        ),
+        "cex_card": {"type": "trillionnium_world_contract_completion", "version": 1, "world": "trillionnium_world", "contract_id": contract_id, "score": format!("{score:.1}"), "reward": format!("{reward:.2}"), "ledger_status": ledger_status, "judge_status": judge_status}
+    })
 }
 
 fn build_trillionnium_world_action_matrix_reply(value: &Value) -> Value {
@@ -3969,6 +4053,10 @@ fn build_trillionnium_world_action_matrix_reply(value: &Value) -> Value {
         .and_then(Value::as_i64)
         .unwrap_or(10);
     let task_id = event.get("cex_task_id").and_then(Value::as_str);
+    let contract_id = value
+        .get("contract")
+        .and_then(|contract| contract.get("contract_id"))
+        .and_then(Value::as_str);
     let task_line = task_id
         .map(|task_id| format!("\nCEX Task: {task_id}"))
         .unwrap_or_default();
@@ -3983,7 +4071,7 @@ fn build_trillionnium_world_action_matrix_reply(value: &Value) -> Value {
             "<blockquote><h3>🌍 World Action</h3><p><strong>Kind</strong>: {}</p><p><strong>Location</strong>: <code>{}</code></p><p><strong>Impact</strong>: +{}</p><p>{}</p><p><code>/world</code></p></blockquote>",
             escape_html(event_kind), escape_html(location_id), impact, escape_html(result),
         ),
-        "cex_card": {"type": "trillionnium_world_action", "version": 1, "world": "trillionnium_world", "event_kind": event_kind, "location_id": location_id, "impact_score": impact, "task_id": task_id, "cex_status": event.get("cex_status").and_then(Value::as_str)}
+        "cex_card": {"type": "trillionnium_world_action", "version": 1, "world": "trillionnium_world", "event_id": event.get("event_id").and_then(Value::as_str), "event_kind": event_kind, "location_id": location_id, "impact_score": impact, "contract_id": contract_id, "task_id": task_id, "cex_status": event.get("cex_status").and_then(Value::as_str)}
     })
 }
 
@@ -4636,7 +4724,7 @@ fn build_plain_matrix_reply(body: &str) -> Value {
 
 fn build_help_matrix_reply() -> Value {
     build_plain_matrix_reply(
-        "可用命令:\n/league - 进入 Trillionnium League\n/world - 进入 Trillionnium World 开放世界\n/world action <自由行动> - 在现实镜像世界里行动/建造/经营\n/contract <委托内容> - 把现实需求登记成 World Contract 并创建 CEX 任务\n/craft <建造内容> - 进入 Trillionnium Craft 工坊建造\n/season - 赛季\n/arena - 查看赛场\n/quest - 今日副本\n/guild - 公会列表，/guild <guild-id> 加入\n/raid - 团本列表，/raid <raid-id> <行动> 贡献团本\n/team - 团本队伍，/team <raid-id> <role> 认领职责\n/draft <hero...> - 锁定 Agent 英雄阵容\n/join <match-id> - 加入赛场\n/battle <match-id> <行动> - 在赛场中出招并创建 CEX 执行\n/submit <match-id> <提交内容> - 交卷评分并领取奖励\n/profile - 玩家档案\n/rank - 排行榜\n/loadout - Agent 阵容\n/rewards - 奖励记录\n/inventory - 背包/装备\n/history - 战斗历史\n/task <内容> [cap=<能力id>] [account=<账户id>] - 创建普通任务\n/status <task-id> - 查询任务状态\n/balance 或 /wallet - 查看余额\n/plans 或 /套餐 - 查看套餐",
+        "可用命令:\n/league - 进入 Trillionnium League\n/world - 进入 Trillionnium World 开放世界\n/world action <自由行动> - 在现实镜像世界里行动/建造/经营\n/contract <委托内容> - 把现实需求登记成 World Contract 并创建 CEX 任务\n/complete <contract-id> <交付内容> - 完成 World Contract、评分并结算\n/craft <建造内容> - 进入 Trillionnium Craft 工坊建造\n/season - 赛季\n/arena - 查看赛场\n/quest - 今日副本\n/guild - 公会列表，/guild <guild-id> 加入\n/raid - 团本列表，/raid <raid-id> <行动> 贡献团本\n/team - 团本队伍，/team <raid-id> <role> 认领职责\n/draft <hero...> - 锁定 Agent 英雄阵容\n/join <match-id> - 加入赛场\n/battle <match-id> <行动> - 在赛场中出招并创建 CEX 执行\n/submit <match-id> <提交内容> - 交卷评分并领取奖励\n/profile - 玩家档案\n/rank - 排行榜\n/loadout - Agent 阵容\n/rewards - 奖励记录\n/inventory - 背包/装备\n/history - 战斗历史\n/task <内容> [cap=<能力id>] [account=<账户id>] - 创建普通任务\n/status <task-id> - 查询任务状态\n/balance 或 /wallet - 查看余额\n/plans 或 /套餐 - 查看套餐",
     )
 }
 
@@ -5428,6 +5516,13 @@ mod tests {
             parse_matrix_command("/contract 帮客户整理店铺启动方案"),
             ParsedCommand::WorldContract {
                 body: "帮客户整理店铺启动方案".to_string()
+            }
+        );
+        assert_eq!(
+            parse_matrix_command("/complete world-contract-1 交付方案和证据"),
+            ParsedCommand::WorldContractComplete {
+                contract_id: "world-contract-1".to_string(),
+                body: "交付方案和证据".to_string()
             }
         );
         assert_eq!(parse_matrix_command("/season"), ParsedCommand::Season);

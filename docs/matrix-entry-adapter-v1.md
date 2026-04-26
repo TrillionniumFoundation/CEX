@@ -73,7 +73,8 @@ The adapter will:
 9. for `/world` it fetches `consumer-entry-api /v1/world/home` and returns a Trillionnium World card
 10. for `/world action <free text>` it posts to `consumer-entry-api /v1/world/action` and returns a world action card with event kind, location, and impact
 11. for `/craft <build text>` it posts a `craft build ...` action into `starter-studio` and returns a Trillionnium Craft action card
-12. for `/contract <commission text>` it posts a `contract task ...` action into `zbj-market-gate`; consumer-entry creates a CEX invocation and the Matrix card exposes the linked `task_id`
+12. for `/contract <commission text>` it posts a `contract task ...` action into `zbj-market-gate`; consumer-entry creates a CEX invocation and the Matrix card exposes the linked `task_id` and `contract_id`
+13. for `/complete <contract-id> <delivery text>` it posts a World Contract completion, returning score, reward, ledger status, and judge status
 
 ### Read a projected reply for a task
 

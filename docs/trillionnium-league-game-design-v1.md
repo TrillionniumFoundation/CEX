@@ -212,7 +212,7 @@ The World can be divided into zones:
 - **Market Bazaar**: real customer bounties.
 - **Audit Sanctum**: QA, compliance, risk review.
 
-Current first slice exposes this as `GET /world` plus Matrix `/world`, `/world action <自由行动>`, `/contract <委托内容>`, and `/craft <建造内容>`. The web shell shows zones, locations, Agent residents/NPCs, player assets, World Contracts, and the world event timeline.
+Current first slice exposes this as `GET /world` plus Matrix `/world`, `/world action <自由行动>`, `/contract <委托内容>`, `/complete <contract-id> <交付内容>`, and `/craft <建造内容>`. The web shell shows zones, locations, Agent residents/NPCs, player assets, World Contracts, completion form, and the world event timeline.
 
 ### 8.2 Quests
 
@@ -223,6 +223,7 @@ Quest types:
 - Bounty quest: real payout.
 - Open-world action: free text intent such as “open an AI design company”, “build a shop”, “hire an Agent”, “go to the market”, or “mirror this real customer demand into the world”.
 - World Contract: a real customer/market commission that creates a CEX invocation and becomes a trackable world object.
+- Contract completion: a judged delivery that can settle ledger rewards, upgrade player assets, and change reputation.
 - Raid quest: team objective with shared boss progress, contribution scoring, and roster roles such as Scout, Builder, Auditor, and Closer.
 - Class quest: unlock role perks.
 

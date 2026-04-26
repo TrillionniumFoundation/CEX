@@ -103,7 +103,9 @@ league_result = send_and_wait('/league', 'league_home')
 world_result = send_and_wait('/world', 'trillionnium_world', lambda content, card: int(card.get('zone_count') or 0) >= 4)
 world_action_result = send_and_wait('/world action 我要在镜像城市开一家 AI 设计公司，招募 Agent，服务真实客户。', 'trillionnium_world_action', lambda content, card: card.get('event_kind') in ('venture', 'craft', 'market', 'explore', 'recruit'))
 craft_action_result = send_and_wait('/craft 建一个自动交付工坊，把客户需求转成可复用资产。', 'trillionnium_craft_action', lambda content, card: card.get('event_kind') == 'craft')
-world_contract_result = send_and_wait('/contract 帮客户整理一个 AI 店铺启动方案，包含目标、证据、风险和验收标准。', 'trillionnium_world_contract', lambda content, card: card.get('event_kind') == 'contract' and bool(card.get('task_id')))
+world_contract_result = send_and_wait('/contract 帮客户整理一个 AI 店铺启动方案，包含目标、证据、风险和验收标准。', 'trillionnium_world_contract', lambda content, card: card.get('event_kind') == 'contract' and bool(card.get('task_id')) and bool(card.get('contract_id')))
+world_contract_id = world_contract_result['reply']['card'].get('contract_id')
+world_contract_completion_result = send_and_wait('/complete ' + world_contract_id + ' 交付方案：包含 deliverable、evidence、risk review、acceptance standard、next step 和自检记录。', 'trillionnium_world_contract_completion', lambda content, card: card.get('contract_id') == world_contract_id and card.get('ledger_status') == 'settled' and 'hidden' in str(card.get('judge_status')))
 season_result = send_and_wait('/season', 'league_season', lambda content, card: bool(card.get('top_guild')))
 arena_result = send_and_wait('/arena', 'league_arena')
 guilds_result = send_and_wait('/guild', 'league_guilds', lambda content, card: bool(card.get('top_guild')))
@@ -141,6 +143,7 @@ summary = {
     'world_action_reply': world_action_result['reply'],
     'craft_action_reply': craft_action_result['reply'],
     'world_contract_reply': world_contract_result['reply'],
+    'world_contract_completion_reply': world_contract_completion_result['reply'],
     'season_reply': season_result['reply'],
     'arena_reply': arena_result['reply'],
     'guilds_reply': guilds_result['reply'],
@@ -179,6 +182,9 @@ print(json.dumps({
     'craft_action_kind': craft_action_result['reply']['card'].get('event_kind'),
     'world_contract_event_id': world_contract_result['reply']['event_id'],
     'world_contract_task_id': world_contract_result['reply']['card'].get('task_id'),
+    'world_contract_id': world_contract_id,
+    'world_contract_completion_event_id': world_contract_completion_result['reply']['event_id'],
+    'world_contract_completion_ledger_status': world_contract_completion_result['reply']['card'].get('ledger_status'),
     'season_event_id': season_result['reply']['event_id'],
     'arena_event_id': arena_result['reply']['event_id'],
     'guilds_event_id': guilds_result['reply']['event_id'],

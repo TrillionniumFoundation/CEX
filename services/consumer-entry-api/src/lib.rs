@@ -819,6 +819,27 @@ struct WorldContract {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+struct WorldContractCompletion {
+    completion_id: String,
+    contract_id: String,
+    matrix_user_id: String,
+    body: String,
+    score: f64,
+    grade: String,
+    reward_amount: f64,
+    judge_status: String,
+    payout_status: String,
+    anti_cheat_flags: Vec<String>,
+    score_events: Vec<LeagueScoreEvent>,
+    ledger_status: Option<String>,
+    ledger_account_id: Option<String>,
+    ledger_entry_id: Option<String>,
+    ledger_balance_after: Option<f64>,
+    ledger_error: Option<String>,
+    created_at_epoch: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct WorldRelationship {
     relationship_id: String,
     from_id: String,
@@ -886,6 +907,8 @@ struct LeagueState {
     world_events: Vec<WorldEvent>,
     #[serde(default)]
     world_contracts: Vec<WorldContract>,
+    #[serde(default)]
+    world_contract_completions: Vec<WorldContractCompletion>,
     #[serde(default)]
     world_relationships: Vec<WorldRelationship>,
 }
@@ -956,6 +979,21 @@ struct WorldWebActionRequest {
     matrix_user_id: Option<String>,
     csrf: Option<String>,
     location_id: Option<String>,
+    body: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorldContractCompleteRequest {
+    matrix_user_id: String,
+    room_id: Option<String>,
+    body: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorldWebContractCompleteRequest {
+    matrix_user_id: Option<String>,
+    csrf: Option<String>,
+    contract_id: Option<String>,
     body: Option<String>,
 }
 
@@ -1178,6 +1216,7 @@ fn default_league_state() -> LeagueState {
         world_assets: Vec::new(),
         world_events: Vec::new(),
         world_contracts: Vec::new(),
+        world_contract_completions: Vec::new(),
         world_relationships: Vec::new(),
     }
 }
@@ -3121,6 +3160,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/league/web/session", post(post_league_web_session))
         .route("/league/web/action", post(post_league_web_action))
         .route("/world/web/action", post(post_world_web_action))
+        .route(
+            "/world/web/contract",
+            post(post_world_web_contract_complete),
+        )
         .route("/v1/chat/tasks", post(create_chat_task))
         .route("/v1/chat/tasks/:id", get(get_chat_task))
         .route("/v1/matrix/messages", post(create_matrix_message_task))
@@ -3128,6 +3171,11 @@ pub fn build_router(state: AppState) -> Router {
         .route("/v1/league/world", get(get_league_world))
         .route("/v1/world/home", get(get_world_home))
         .route("/v1/world/action", post(post_world_action))
+        .route("/v1/world/contracts", get(get_world_contracts))
+        .route(
+            "/v1/world/contracts/:contract_id/complete",
+            post(complete_world_contract),
+        )
         .route("/v1/league/season", get(get_league_season))
         .route("/v1/league/matches", get(get_league_matches))
         .route("/v1/league/state/snapshot", get(get_league_state_snapshot))
@@ -6430,6 +6478,7 @@ fn world_home_json(league: &LeagueState) -> Value {
         "entities": entities,
         "assets": league.world_assets,
         "contracts": league.world_contracts,
+        "contract_completions": league.world_contract_completions,
         "recent_events": recent_events,
         "counts": {
             "zones": league.world_zones.len(),
@@ -6437,6 +6486,7 @@ fn world_home_json(league: &LeagueState) -> Value {
             "entities": league.world_entities.len(),
             "assets": league.world_assets.len(),
             "contracts": league.world_contracts.len(),
+            "contract_completions": league.world_contract_completions.len(),
             "events": league.world_events.len(),
             "relationships": league.world_relationships.len(),
         }
@@ -6517,7 +6567,7 @@ async fn create_world_contract_task(
 async fn record_world_action(
     state: &AppState,
     payload: WorldActionRequest,
-) -> Result<(LeagueState, WorldEvent, Value), Response> {
+) -> Result<(LeagueState, WorldEvent, Option<WorldContract>, Value), Response> {
     let matrix_user_id = match normalize_league_matrix_user(&payload.matrix_user_id) {
         Some(value) => value,
         None => {
@@ -6559,8 +6609,9 @@ async fn record_world_action(
             cex_status: payload.cex_status.clone(),
             created_at_epoch: now,
         };
+        let mut created_contract = None;
         if let Some(task_id) = payload.cex_task_id.clone() {
-            league.world_contracts.push(WorldContract {
+            let contract = WorldContract {
                 contract_id: league_hash_id("world-contract", &event.event_id),
                 event_id: event.event_id.clone(),
                 actor_matrix_user_id: matrix_user_id.clone(),
@@ -6572,7 +6623,9 @@ async fn record_world_action(
                 cex_status: payload.cex_status.clone(),
                 value_score: impact,
                 created_at_epoch: now,
-            });
+            };
+            league.world_contracts.push(contract.clone());
+            created_contract = Some(contract);
         }
         if matches!(kind, "venture" | "craft") {
             league.world_assets.push(WorldAsset {
@@ -6612,7 +6665,7 @@ async fn record_world_action(
             .insert(matrix_user_id.clone(), player);
         league.world_events.push(event.clone());
         let home = world_home_json(&league);
-        (league.clone(), event, home)
+        (league.clone(), event, created_contract, home)
     };
     Ok(snapshot)
 }
@@ -6666,8 +6719,9 @@ async fn post_world_action(
             "kind": "trillionnium_world_action",
             "world": "trillionnium_world",
             "event": snapshot.1,
+            "contract": snapshot.2,
             "task": task,
-            "home": snapshot.2,
+            "home": snapshot.3,
         })),
     )
         .into_response()
@@ -6780,6 +6834,13 @@ async fn get_world_web_shell(State(state): State<AppState>, headers: HeaderMap) 
     } else {
         asset_cards
     };
+    let latest_contract_id = league
+        .world_contracts
+        .iter()
+        .rev()
+        .find(|contract| contract.actor_matrix_user_id == "@alice:local.dev")
+        .map(|contract| contract.contract_id.clone())
+        .unwrap_or_default();
     let contract_cards = league
         .world_contracts
         .iter()
@@ -6844,7 +6905,7 @@ async fn get_world_web_shell(State(state): State<AppState>, headers: HeaderMap) 
     .subtitle {{ color:var(--muted); font-size:18px; max-width:840px; line-height:1.55; }}
     .hero-card,.card,.panel {{ border:1px solid rgba(255,255,255,.11); background:linear-gradient(145deg,rgba(255,255,255,.09),rgba(255,255,255,.035)); box-shadow:0 24px 80px rgba(0,0,0,.35); backdrop-filter: blur(14px); border-radius:24px; }}
     .hero-card,.panel,.card {{ padding:24px; }}
-    .stats {{ display:grid; grid-template-columns:repeat(7,1fr); gap:14px; margin-top:22px; }}
+    .stats {{ display:grid; grid-template-columns:repeat(8,1fr); gap:14px; margin-top:22px; }}
     .stat {{ padding:18px; background:rgba(255,255,255,.06); border-radius:18px; }}
     .stat b {{ display:block; font-size:26px; color:var(--gold); }}
     main {{ padding:20px min(6vw,72px) 60px; display:grid; gap:24px; }}
@@ -6890,6 +6951,7 @@ async fn get_world_web_shell(State(state): State<AppState>, headers: HeaderMap) 
       <div class="stat"><span>Agents</span><b>{entities}</b></div>
       <div class="stat"><span>Assets</span><b>{assets}</b></div>
       <div class="stat"><span>Contracts</span><b>{contracts}</b></div>
+      <div class="stat"><span>Done</span><b>{completions}</b></div>
       <div class="stat"><span>Events</span><b>{events}</b></div>
       <div class="stat"><span>Relations</span><b>{relationships}</b></div>
     </section>
@@ -6929,6 +6991,13 @@ async fn get_world_web_shell(State(state): State<AppState>, headers: HeaderMap) 
     <section class="panel">
       <h2>World Contracts</h2>
       <div class="mini-grid">{contract_cards}</div>
+      <form method="post" action="/world/web/contract" style="margin-top:16px">
+        {csrf_input}
+        <input type="hidden" name="matrix_user_id" value="@alice:local.dev" />
+        <input name="contract_id" value="{latest_contract_id}" placeholder="world-contract-id" />
+        <textarea name="body">World contract delivery: deliverable, evidence, risk review, next step, acceptance standard.</textarea>
+        <button type="submit">Complete Contract</button>
+      </form>
     </section>
     <section class="panel">
       <h2>Playable Commands</h2>
@@ -6942,6 +7011,7 @@ async fn get_world_web_shell(State(state): State<AppState>, headers: HeaderMap) 
         entities = league.world_entities.len(),
         assets = league.world_assets.len(),
         contracts = league.world_contracts.len(),
+        completions = league.world_contract_completions.len(),
         events = league.world_events.len(),
         relationships = league.world_relationships.len(),
         zone_cards = zone_cards,
@@ -6950,6 +7020,7 @@ async fn get_world_web_shell(State(state): State<AppState>, headers: HeaderMap) 
         entity_cards = entity_cards,
         asset_cards = asset_cards,
         contract_cards = contract_cards,
+        latest_contract_id = escape_html_text(&latest_contract_id),
         event_items = event_items,
         console_note = escape_html_text(console_note),
         csrf_input = csrf_input,
@@ -7021,6 +7092,447 @@ async fn post_world_web_action(
         return response;
     }
     Redirect::to("/world?played=1").into_response()
+}
+
+async fn get_world_contracts(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Err(response) = authorize_ingress(&headers, state.config()) {
+        state.inner.metrics.inc_ingress_auth_failures();
+        return response;
+    }
+    let league = state.inner.league_state.lock().await;
+    (
+        StatusCode::OK,
+        Json(json!({
+            "kind": "trillionnium_world_contracts",
+            "world": "trillionnium_world",
+            "contracts": league.world_contracts,
+            "completions": league.world_contract_completions,
+        })),
+    )
+        .into_response()
+}
+
+async fn settle_world_contract_completion_with_ledger(
+    state: &AppState,
+    payload: &WorldContractCompleteRequest,
+    matrix_user_id: &str,
+    contract: &WorldContract,
+    completion: &WorldContractCompletion,
+) -> LeagueLedgerSettlement {
+    if completion.reward_amount <= 0.0 {
+        return LeagueLedgerSettlement {
+            status: "skipped_zero_reward".to_string(),
+            ..Default::default()
+        };
+    }
+    if completion.payout_status != "eligible" || !completion.anti_cheat_flags.is_empty() {
+        return LeagueLedgerSettlement {
+            status: "held_review".to_string(),
+            error: Some(format!(
+                "world contract payout held: status={} flags={}",
+                completion.payout_status,
+                completion.anti_cheat_flags.join(",")
+            )),
+            ..Default::default()
+        };
+    }
+    let Some(room_id) = payload
+        .room_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return LeagueLedgerSettlement {
+            status: "skipped_missing_room".to_string(),
+            ..Default::default()
+        };
+    };
+    let matrix_payload = MatrixMessageRequest {
+        matrix_user_id: matrix_user_id.to_string(),
+        room_id: room_id.to_string(),
+        session_id: None,
+        org_id: None,
+        message: "world contract reward settlement".to_string(),
+        capability_id: None,
+        account_id: None,
+        event_id: None,
+        idempotency_key: None,
+        metadata: None,
+    };
+    let resolved_identity = match resolve_matrix_identity(state, &matrix_payload).await {
+        Ok(identity) => identity,
+        Err(_) => {
+            return LeagueLedgerSettlement {
+                status: "failed_identity".to_string(),
+                error: Some(
+                    "matrix identity could not be resolved for world contract settlement"
+                        .to_string(),
+                ),
+                ..Default::default()
+            }
+        }
+    };
+    let Some(account_id) = resolved_identity.scope.account_id.clone() else {
+        return LeagueLedgerSettlement {
+            status: "skipped_missing_account".to_string(),
+            error: Some("matrix identity did not resolve a ledger account_id".to_string()),
+            ..Default::default()
+        };
+    };
+    let Some(ledger_admin_token) = state.config().ledger_admin_token.clone() else {
+        return LeagueLedgerSettlement {
+            status: "skipped_missing_ledger_token".to_string(),
+            account_id: Some(account_id),
+            error: Some("consumer-entry ledger admin token is not configured".to_string()),
+            ..Default::default()
+        };
+    };
+    let url = format!(
+        "{}/v1/ledger/grant",
+        state.config().ledger_base_url.trim_end_matches('/')
+    );
+    let body = json!({
+        "account_id": account_id,
+        "amount": completion.reward_amount,
+        "idempotency_key": format!("world_contract_completion:{}", completion.completion_id),
+        "reference_id": contract.task_id,
+    });
+    let response = match state
+        .inner
+        .http
+        .post(url)
+        .header("x-admin-token", ledger_admin_token)
+        .json(&body)
+        .send()
+        .await
+    {
+        Ok(response) => response,
+        Err(err) => {
+            return LeagueLedgerSettlement {
+                status: "failed_network".to_string(),
+                account_id: body
+                    .get("account_id")
+                    .and_then(Value::as_str)
+                    .map(ToString::to_string),
+                error: Some(format!("failed to reach ledger-service: {err}")),
+                ..Default::default()
+            }
+        }
+    };
+    let status = response.status();
+    let value = match response.json::<Value>().await {
+        Ok(value) => value,
+        Err(err) => {
+            return LeagueLedgerSettlement {
+                status: "failed_bad_response".to_string(),
+                account_id: body
+                    .get("account_id")
+                    .and_then(Value::as_str)
+                    .map(ToString::to_string),
+                error: Some(format!("ledger-service returned non-json response: {err}")),
+                ..Default::default()
+            }
+        }
+    };
+    if !status.is_success() {
+        let error = value
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or("ledger grant failed");
+        return LeagueLedgerSettlement {
+            status: if status.as_u16() == 409 {
+                "duplicate".to_string()
+            } else {
+                "failed_ledger".to_string()
+            },
+            account_id: body
+                .get("account_id")
+                .and_then(Value::as_str)
+                .map(ToString::to_string),
+            error: Some(format!("{}: {error}", status.as_u16())),
+            ..Default::default()
+        };
+    }
+    LeagueLedgerSettlement {
+        status: "settled".to_string(),
+        account_id: value
+            .get("account")
+            .and_then(|account| account.get("account_id"))
+            .and_then(Value::as_str)
+            .or_else(|| body.get("account_id").and_then(Value::as_str))
+            .map(ToString::to_string),
+        entry_id: value
+            .get("entry")
+            .and_then(|entry| entry.get("entry_id"))
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+        balance_after: value
+            .get("account")
+            .and_then(|account| account.get("balance"))
+            .and_then(Value::as_f64),
+        error: None,
+    }
+}
+
+async fn complete_world_contract_inner(
+    state: AppState,
+    contract_id: String,
+    payload: WorldContractCompleteRequest,
+) -> Response {
+    let matrix_user_id = match normalize_league_matrix_user(&payload.matrix_user_id) {
+        Some(value) => value,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "matrix_user_id is required" })),
+            )
+                .into_response()
+        }
+    };
+    let body = match validate_text_payload(&payload.body, state.config().max_text_chars) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let contract = {
+        let league = state.inner.league_state.lock().await;
+        let Some(contract) = league
+            .world_contracts
+            .iter()
+            .find(|contract| contract.contract_id == contract_id)
+            .cloned()
+        else {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "world contract not found", "contract_id": contract_id })),
+            )
+                .into_response();
+        };
+        contract
+    };
+    if contract.actor_matrix_user_id != matrix_user_id {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({
+                "error": "world contract can only be completed by its creator",
+                "contract_id": contract.contract_id,
+            })),
+        )
+            .into_response();
+    }
+    let judgement = judge_league_submission_with_pipeline(&state, &body, "world_contract").await;
+    let mut completion = {
+        let now = Utc::now().timestamp();
+        let mut league = state.inner.league_state.lock().await;
+        let mut player = ensure_league_player(&mut league, &matrix_user_id, None);
+        let completion_id = league_hash_id(
+            "world-contract-completion",
+            &format!("{}:{}:{}", contract.contract_id, now, body),
+        );
+        let completion = WorldContractCompletion {
+            completion_id: completion_id.clone(),
+            contract_id: contract.contract_id.clone(),
+            matrix_user_id: matrix_user_id.clone(),
+            body: body.clone(),
+            score: judgement.score,
+            grade: judgement.grade.clone(),
+            reward_amount: judgement.reward_amount,
+            judge_status: judgement.judge_status.clone(),
+            payout_status: judgement.payout_status.clone(),
+            anti_cheat_flags: judgement.anti_cheat_flags.clone(),
+            score_events: judgement.score_events.clone(),
+            ledger_status: Some("pending".to_string()),
+            ledger_account_id: None,
+            ledger_entry_id: None,
+            ledger_balance_after: None,
+            ledger_error: None,
+            created_at_epoch: now,
+        };
+        let asset_delta = (judgement.score / 5.0).round() as i64;
+        if let Some(stored_contract) = league
+            .world_contracts
+            .iter_mut()
+            .find(|stored| stored.contract_id == contract.contract_id)
+        {
+            stored_contract.status = if judgement.payout_status == "eligible" {
+                "completed_pending_settlement".to_string()
+            } else {
+                "review_hold".to_string()
+            };
+            stored_contract.value_score += asset_delta.max(1);
+            stored_contract.cex_status = Some("completed".to_string());
+        }
+        if let Some(asset) = league
+            .world_assets
+            .iter_mut()
+            .rev()
+            .find(|asset| asset.owner_matrix_user_id == matrix_user_id)
+        {
+            asset.value_score += asset_delta.max(1);
+            asset.status = "upgraded_by_contract".to_string();
+        } else {
+            league.world_assets.push(WorldAsset {
+                asset_id: league_hash_id("world-asset", &completion_id),
+                owner_matrix_user_id: matrix_user_id.clone(),
+                location_id: contract.location_id.clone(),
+                asset_kind: "contract_proof".to_string(),
+                name: "World Contract Proof".to_string(),
+                status: "active".to_string(),
+                value_score: asset_delta.max(1),
+                created_at_epoch: now,
+            });
+        }
+        player.xp += judgement.score.round() as i64;
+        player.reputation += (judgement.score / 8.0).round() as i64;
+        player.rating += ((judgement.score - 50.0) / 3.0).round() as i64;
+        if judgement.payout_status == "eligible" {
+            player.earned_credits += judgement.reward_amount;
+        }
+        league
+            .players_by_matrix_user
+            .insert(matrix_user_id.clone(), player);
+        league.world_contract_completions.push(completion.clone());
+        completion
+    };
+    let settlement = settle_world_contract_completion_with_ledger(
+        &state,
+        &payload,
+        &matrix_user_id,
+        &contract,
+        &completion,
+    )
+    .await;
+    completion.ledger_status = Some(settlement.status);
+    completion.ledger_account_id = settlement.account_id;
+    completion.ledger_entry_id = settlement.entry_id;
+    completion.ledger_balance_after = settlement.balance_after;
+    completion.ledger_error = settlement.error;
+    let snapshot = {
+        let mut league = state.inner.league_state.lock().await;
+        if let Some(stored_completion) = league
+            .world_contract_completions
+            .iter_mut()
+            .find(|stored| stored.completion_id == completion.completion_id)
+        {
+            *stored_completion = completion.clone();
+        }
+        if let Some(stored_contract) = league
+            .world_contracts
+            .iter_mut()
+            .find(|stored| stored.contract_id == contract.contract_id)
+        {
+            stored_contract.status = match completion.ledger_status.as_deref() {
+                Some("settled") | Some("duplicate") => "completed_settled".to_string(),
+                Some("held_review") => "review_hold".to_string(),
+                Some(status) => format!("completed_{status}"),
+                None => stored_contract.status.clone(),
+            };
+        }
+        league.clone()
+    };
+    if let Err(response) = persist_league_state(&state, &snapshot).await {
+        return response;
+    }
+    (
+        StatusCode::OK,
+        Json(json!({
+            "kind": "trillionnium_world_contract_completion",
+            "world": "trillionnium_world",
+            "contract": snapshot
+                .world_contracts
+                .iter()
+                .find(|stored| stored.contract_id == contract.contract_id),
+            "completion": completion,
+        })),
+    )
+        .into_response()
+}
+
+async fn complete_world_contract(
+    Path(contract_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<WorldContractCompleteRequest>,
+) -> Response {
+    if let Err(response) = authorize_ingress(&headers, state.config()) {
+        state.inner.metrics.inc_ingress_auth_failures();
+        return response;
+    }
+    complete_world_contract_inner(state, contract_id, payload).await
+}
+
+async fn post_world_web_contract_complete(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(payload): Form<WorldWebContractCompleteRequest>,
+) -> Response {
+    let web_session = match authorize_league_web_session(&state, &headers, payload.csrf.as_deref())
+    {
+        Ok(value) => value,
+        Err(response) => {
+            if matches!(state.config().runtime_profile, RuntimeProfile::LocalDev)
+                && cookie_value(&headers, &state.config().league_web_session_cookie_name).is_none()
+            {
+                None
+            } else {
+                return response;
+            }
+        }
+    };
+    let matrix_user_id = web_session
+        .as_ref()
+        .map(|session| session.matrix_user_id.clone())
+        .or_else(|| {
+            normalize_league_matrix_user(
+                payload
+                    .matrix_user_id
+                    .as_deref()
+                    .unwrap_or("@alice:local.dev"),
+            )
+        })
+        .unwrap_or_else(|| "@alice:local.dev".to_string());
+    let contract_id = match payload
+        .contract_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+    {
+        Some(value) => value,
+        None => {
+            let league = state.inner.league_state.lock().await;
+            match league
+                .world_contracts
+                .iter()
+                .rev()
+                .find(|contract| contract.actor_matrix_user_id == matrix_user_id)
+                .map(|contract| contract.contract_id.clone())
+            {
+                Some(value) => value,
+                None => return Redirect::to("/world?contract=missing").into_response(),
+            }
+        }
+    };
+    let body = payload
+        .body
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("World contract delivery: deliverable, evidence, risk review, next step, acceptance standard.")
+        .to_string();
+    let request = WorldContractCompleteRequest {
+        matrix_user_id,
+        room_id: web_session
+            .as_ref()
+            .and_then(|session| session.room_id.clone())
+            .or_else(|| Some("!web-local:local.dev".to_string())),
+        body,
+    };
+    let response = complete_world_contract_inner(state, contract_id, request).await;
+    if response.status().is_success() {
+        Redirect::to("/world?contract=completed").into_response()
+    } else {
+        response
+    }
 }
 
 async fn get_league_season(State(state): State<AppState>, headers: HeaderMap) -> Response {
