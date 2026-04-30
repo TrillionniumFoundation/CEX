@@ -216,6 +216,7 @@ async fn apply_action(state: AppState, req: LedgerActionRequest, action: &str) -
     apply_action_in_memory(state, entry).await
 }
 
+#[allow(clippy::result_large_err)]
 fn authorize_ledger_admin(
     state: &AppState,
     headers: &HeaderMap,
@@ -225,7 +226,7 @@ fn authorize_ledger_admin(
         headers,
         &state.admin_tokens,
         required_scopes,
-        |admin, scope| admin_principal_has_scope(admin, scope),
+        admin_principal_has_scope,
         "ledger admin token not configured",
         Some(
             "set LEDGER_ADMIN_TOKENS_JSON, LEDGER_ADMIN_TOKEN, or the shared identity admin token env to enable ledger admin access",
@@ -235,6 +236,7 @@ fn authorize_ledger_admin(
     .map_err(|err: AdminAuthorizationFailure| err.into_response().into_response())
 }
 
+#[allow(clippy::result_large_err)]
 fn enforce_org_boundary(admin: &AdminPrincipal, org_id: &str) -> Result<(), Response> {
     if admin.org_ids.is_empty() || admin_principal_allows_org(admin, org_id) {
         return Ok(());

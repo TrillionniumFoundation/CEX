@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 use axum::{
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
@@ -1925,10 +1927,23 @@ enum ParsedCommand {
         text: String,
     },
     Help,
+    ClientApp,
+    ClientFeed {
+        filter: Option<String>,
+    },
+    ClientSocial,
+    ClientDuel {
+        opponent: Option<String>,
+        body: String,
+    },
     League,
     Arena,
     Quest,
     World,
+    WorldMap,
+    WorldMapMove {
+        target: String,
+    },
     WorldAction {
         body: String,
     },
@@ -1952,6 +1967,26 @@ enum ParsedCommand {
         body: String,
     },
     WorldWork,
+    WorldWorkDeliver {
+        work_order_id: String,
+        body: String,
+    },
+    WorldWorkAccept {
+        work_order_id: String,
+        body: String,
+    },
+    WorldWorkReject {
+        work_order_id: String,
+        body: String,
+    },
+    WorldWorkReopen {
+        work_order_id: String,
+        body: String,
+    },
+    WorldWorkCancel {
+        work_order_id: String,
+        body: String,
+    },
     WorldFactions,
     CraftAction {
         body: String,
@@ -1974,6 +2009,10 @@ enum ParsedCommand {
     },
     Rank,
     Loadout,
+    Progression,
+    Skills,
+    Tools,
+    Skins,
     Profile,
     Rewards,
     Inventory,
@@ -2278,6 +2317,67 @@ async fn handle_matrix_event(
             )
                 .into_response()
         }
+        ParsedCommand::ClientApp => {
+            let path = format!("/v1/client/app/{}", url_encode_component(&event.sender));
+            match fetch_consumer_entry_get(&state, &path).await {
+                Ok(value) => league_response(
+                    "trillionnium_client_app",
+                    event,
+                    value.clone(),
+                    build_trillionnium_client_app_matrix_reply(&value),
+                ),
+                Err(response) => response,
+            }
+        }
+        ParsedCommand::ClientFeed { filter } => {
+            let path = format!("/v1/client/feed/{}", url_encode_component(&event.sender));
+            match fetch_consumer_entry_get(&state, &path).await {
+                Ok(value) => league_response(
+                    "trillionnium_client_feed",
+                    event,
+                    value.clone(),
+                    build_trillionnium_client_feed_matrix_reply(&value, filter.as_deref()),
+                ),
+                Err(response) => response,
+            }
+        }
+        ParsedCommand::ClientSocial => {
+            let path = format!("/v1/client/app/{}", url_encode_component(&event.sender));
+            match fetch_consumer_entry_get(&state, &path).await {
+                Ok(value) => league_response(
+                    "trillionnium_client_social",
+                    event,
+                    value.clone(),
+                    build_trillionnium_client_social_matrix_reply(&value),
+                ),
+                Err(response) => response,
+            }
+        }
+        ParsedCommand::ClientDuel { opponent, body } => {
+            let opponent = opponent.unwrap_or_else(|| "nearby".to_string());
+            let message = format!("face-to-face duel vs {opponent}: {body}");
+            let request = json!({
+                "matrix_user_id": &event.sender,
+                "room_id": &event.room_id,
+                "message": message,
+                "event_id": &event.event_id,
+            });
+            match fetch_consumer_entry_post(
+                &state,
+                "/v1/league/matches/face-duel-001/battle",
+                request,
+            )
+            .await
+            {
+                Ok(value) => league_response(
+                    "trillionnium_client_duel",
+                    event,
+                    value.clone(),
+                    build_trillionnium_client_duel_matrix_reply(&value, &opponent),
+                ),
+                Err(response) => response,
+            }
+        }
         ParsedCommand::League => match fetch_consumer_entry_get(&state, "/v1/league/home").await {
             Ok(value) => league_response(
                 "league_home",
@@ -2318,6 +2418,34 @@ async fn handle_matrix_event(
             ),
             Err(response) => response,
         },
+        ParsedCommand::WorldMap => {
+            let path = format!("/v1/world/map/{}", url_encode_component(&event.sender));
+            match fetch_consumer_entry_get(&state, &path).await {
+                Ok(value) => league_response(
+                    "trillionnium_world_map",
+                    event,
+                    value.clone(),
+                    build_trillionnium_world_map_matrix_reply(&value),
+                ),
+                Err(response) => response,
+            }
+        }
+        ParsedCommand::WorldMapMove { target } => {
+            let request = json!({
+                "matrix_user_id": &event.sender,
+                "room_id": &event.room_id,
+                "target": target,
+            });
+            match fetch_consumer_entry_post(&state, "/v1/world/map/move", request).await {
+                Ok(value) => league_response(
+                    "trillionnium_world_map_move",
+                    event,
+                    value.clone(),
+                    build_trillionnium_world_map_move_matrix_reply(&value),
+                ),
+                Err(response) => response,
+            }
+        }
         ParsedCommand::WorldAction { body } => {
             let request = json!({
                 "matrix_user_id": &event.sender,
@@ -2443,6 +2571,106 @@ async fn handle_matrix_event(
                     event,
                     value.clone(),
                     build_trillionnium_world_commerce_matrix_reply(&value),
+                ),
+                Err(response) => response,
+            }
+        }
+        ParsedCommand::WorldWorkDeliver {
+            work_order_id,
+            body,
+        } => {
+            let request = json!({
+                "matrix_user_id": &event.sender,
+                "room_id": &event.room_id,
+                "body": body,
+            });
+            let path = format!("/v1/world/work-orders/{work_order_id}/deliver");
+            match fetch_consumer_entry_post(&state, &path, request).await {
+                Ok(value) => league_response(
+                    "trillionnium_world_work_delivery",
+                    event,
+                    value.clone(),
+                    build_trillionnium_world_work_delivery_matrix_reply(&value),
+                ),
+                Err(response) => response,
+            }
+        }
+        ParsedCommand::WorldWorkAccept {
+            work_order_id,
+            body,
+        } => {
+            let request = json!({
+                "matrix_user_id": &event.sender,
+                "room_id": &event.room_id,
+                "body": body,
+            });
+            let path = format!("/v1/world/work-orders/{work_order_id}/accept");
+            match fetch_consumer_entry_post(&state, &path, request).await {
+                Ok(value) => league_response(
+                    "trillionnium_world_work_acceptance",
+                    event,
+                    value.clone(),
+                    build_trillionnium_world_work_acceptance_matrix_reply(&value),
+                ),
+                Err(response) => response,
+            }
+        }
+        ParsedCommand::WorldWorkReject {
+            work_order_id,
+            body,
+        } => {
+            let request = json!({
+                "matrix_user_id": &event.sender,
+                "room_id": &event.room_id,
+                "body": body,
+            });
+            let path = format!("/v1/world/work-orders/{work_order_id}/reject");
+            match fetch_consumer_entry_post(&state, &path, request).await {
+                Ok(value) => league_response(
+                    "trillionnium_world_work_rejection",
+                    event,
+                    value.clone(),
+                    build_trillionnium_world_work_rejection_matrix_reply(&value),
+                ),
+                Err(response) => response,
+            }
+        }
+        ParsedCommand::WorldWorkReopen {
+            work_order_id,
+            body,
+        } => {
+            let request = json!({
+                "matrix_user_id": &event.sender,
+                "room_id": &event.room_id,
+                "body": body,
+            });
+            let path = format!("/v1/world/work-orders/{work_order_id}/reopen");
+            match fetch_consumer_entry_post(&state, &path, request).await {
+                Ok(value) => league_response(
+                    "trillionnium_world_work_reopen",
+                    event,
+                    value.clone(),
+                    build_trillionnium_world_work_reopen_matrix_reply(&value),
+                ),
+                Err(response) => response,
+            }
+        }
+        ParsedCommand::WorldWorkCancel {
+            work_order_id,
+            body,
+        } => {
+            let request = json!({
+                "matrix_user_id": &event.sender,
+                "room_id": &event.room_id,
+                "body": body,
+            });
+            let path = format!("/v1/world/work-orders/{work_order_id}/cancel");
+            match fetch_consumer_entry_post(&state, &path, request).await {
+                Ok(value) => league_response(
+                    "trillionnium_world_work_cancellation",
+                    event,
+                    value.clone(),
+                    build_trillionnium_world_work_cancellation_matrix_reply(&value),
                 ),
                 Err(response) => response,
             }
@@ -2668,6 +2896,66 @@ async fn handle_matrix_event(
                 Err(response) => response,
             }
         }
+        ParsedCommand::Progression => {
+            let path = format!(
+                "/v1/league/players/{}/progression",
+                url_encode_component(&event.sender)
+            );
+            match fetch_consumer_entry_get(&state, &path).await {
+                Ok(value) => league_response(
+                    "league_progression",
+                    event,
+                    value.clone(),
+                    build_league_progression_matrix_reply(&value),
+                ),
+                Err(response) => response,
+            }
+        }
+        ParsedCommand::Skills => {
+            let path = format!(
+                "/v1/league/players/{}/progression",
+                url_encode_component(&event.sender)
+            );
+            match fetch_consumer_entry_get(&state, &path).await {
+                Ok(value) => league_response(
+                    "league_skills",
+                    event,
+                    value.clone(),
+                    build_league_skills_matrix_reply(&value),
+                ),
+                Err(response) => response,
+            }
+        }
+        ParsedCommand::Tools => {
+            let path = format!(
+                "/v1/league/players/{}/progression",
+                url_encode_component(&event.sender)
+            );
+            match fetch_consumer_entry_get(&state, &path).await {
+                Ok(value) => league_response(
+                    "league_tools",
+                    event,
+                    value.clone(),
+                    build_league_tools_matrix_reply(&value),
+                ),
+                Err(response) => response,
+            }
+        }
+        ParsedCommand::Skins => {
+            let path = format!(
+                "/v1/league/players/{}/progression",
+                url_encode_component(&event.sender)
+            );
+            match fetch_consumer_entry_get(&state, &path).await {
+                Ok(value) => league_response(
+                    "league_skins",
+                    event,
+                    value.clone(),
+                    build_league_skins_matrix_reply(&value),
+                ),
+                Err(response) => response,
+            }
+        }
         ParsedCommand::Profile => {
             let path = format!(
                 "/v1/league/players/{}/profile",
@@ -2847,6 +3135,7 @@ async fn handle_matrix_event(
     }
 }
 
+#[allow(clippy::result_large_err)]
 fn authorize_ingress(headers: &HeaderMap, config: &MatrixAdapterConfig) -> Result<(), Response> {
     let Some(expected) = config.ingress_token.as_deref() else {
         return Ok(());
@@ -2973,6 +3262,7 @@ fn build_matrix_event_rate_limit_key(event: &MatrixEventEnvelope) -> String {
     format!("matrix:{}:{}", event.sender, event.room_id)
 }
 
+#[allow(clippy::result_large_err)]
 fn validate_text_payload(raw: &str, max_text_chars: usize) -> Result<String, Response> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -3017,10 +3307,16 @@ fn parse_matrix_command(text: &str) -> ParsedCommand {
     let command = parts.remove(0);
     match command {
         "/help" | "/h" => ParsedCommand::Help,
+        "/app" | "/client" | "/客户端" => ParsedCommand::ClientApp,
+        "/feed" | "/timeline" | "/动态" => parse_client_feed_command(parts),
+        "/social" | "/contacts" | "/chat" | "/社交" => ParsedCommand::ClientSocial,
+        "/duel" | "/battleface" | "/对战" => parse_client_duel_command(parts),
         "/league" | "/tl" | "/trillionnium" => ParsedCommand::League,
         "/arena" | "/matches" => ParsedCommand::Arena,
         "/quest" | "/quests" | "/daily" => ParsedCommand::Quest,
-        "/world" | "/map" => parse_world_command(parts),
+        "/world" => parse_world_command(parts),
+        "/map" | "/look" | "/地图" => ParsedCommand::WorldMap,
+        "/go" | "/move" | "/walk" | "/走" | "/移动" => parse_world_map_move_command(parts),
         "/assets" | "/asset" | "/worldassets" => ParsedCommand::WorldAssets,
         "/upgrade" | "/升级" => parse_world_asset_upgrade_command(parts),
         "/companies" | "/companys" => ParsedCommand::WorldCompanies,
@@ -3028,7 +3324,7 @@ fn parse_matrix_command(text: &str) -> ParsedCommand {
         "/shops" | "/shop" | "/店铺" => ParsedCommand::WorldShops,
         "/sell" | "/listing" | "/上架" => parse_world_listing_command(parts),
         "/buy" | "/hire" | "/购买" | "/雇佣" => parse_world_buy_command(parts),
-        "/work" | "/orders" | "/工作" => ParsedCommand::WorldWork,
+        "/work" | "/orders" | "/工作" => parse_world_work_command(parts),
         "/factions" | "/rep" | "/reputation" | "/声望" => ParsedCommand::WorldFactions,
         "/craft" | "/build" | "/create" => parse_craft_command(parts),
         "/contract" | "/bounty" | "/委托" => parse_world_contract_command(parts),
@@ -3038,6 +3334,10 @@ fn parse_matrix_command(text: &str) -> ParsedCommand {
         "/team" | "/party" | "/roster" => parse_team_command(parts),
         "/rank" | "/leaderboard" => ParsedCommand::Rank,
         "/loadout" | "/agent" | "/agents" => ParsedCommand::Loadout,
+        "/progression" | "/level" | "/xp" | "/等级" | "/经验" => ParsedCommand::Progression,
+        "/skills" | "/skill" | "/技能" => ParsedCommand::Skills,
+        "/tools" | "/equipment" | "/gear" | "/装备" => ParsedCommand::Tools,
+        "/skins" | "/skin" | "/皮肤" => ParsedCommand::Skins,
         "/profile" | "/me" => ParsedCommand::Profile,
         "/rewards" | "/earnings" => ParsedCommand::Rewards,
         "/inventory" | "/items" | "/bag" | "/背包" => ParsedCommand::Inventory,
@@ -3056,7 +3356,9 @@ fn parse_matrix_command(text: &str) -> ParsedCommand {
         },
         "/battle" => parse_battle_command(parts),
         "/submit" => parse_submit_command(parts),
-        "/balance" | "/wallet" | "/余额" | "/钱包" => ParsedCommand::Wallet,
+        "/balance" | "/wallet" | "/pay" | "/余额" | "/钱包" | "/支付" => {
+            ParsedCommand::Wallet
+        }
         "/plans" | "/plan" | "/package" | "/套餐" => ParsedCommand::Plans,
         "/status" => match parts.first() {
             Some(task_id) if !task_id.trim().is_empty() => ParsedCommand::Status {
@@ -3071,6 +3373,61 @@ fn parse_matrix_command(text: &str) -> ParsedCommand {
             text: trimmed.to_string(),
         },
     }
+}
+
+fn parse_client_duel_command(parts: Vec<&str>) -> ParsedCommand {
+    if parts.is_empty() {
+        return ParsedCommand::ClientDuel {
+            opponent: Some("nearby".to_string()),
+            body: "nearby face-to-face Agent duel: choose loadout, make the first move, and record evidence.".to_string(),
+        };
+    }
+    let opponent = parts.first().map(|value| (*value).to_string());
+    let body = parts.iter().skip(1).copied().collect::<Vec<_>>().join(" ");
+    ParsedCommand::ClientDuel {
+        opponent,
+        body: if body.trim().is_empty() {
+            "nearby face-to-face Agent duel: choose loadout, make the first move, and record evidence.".to_string()
+        } else {
+            body
+        },
+    }
+}
+
+fn parse_client_feed_command(parts: Vec<&str>) -> ParsedCommand {
+    if parts.is_empty() {
+        return ParsedCommand::ClientFeed { filter: None };
+    }
+    let raw_filter = parts.join(" ");
+    let trimmed = raw_filter.trim();
+    if trimmed.is_empty() {
+        return ParsedCommand::ClientFeed { filter: None };
+    }
+    let normalized = trimmed.to_ascii_lowercase();
+    let filter = match normalized.as_str() {
+        "all" | "recommended" => None,
+        "event" | "events" | "live" | "signal" => Some("live_event".to_string()),
+        "task" | "tasks" | "route" | "routes" => Some("route_task".to_string()),
+        "contract" | "contracts" => Some("contract".to_string()),
+        "completion" | "completions" | "complete" => Some("completion".to_string()),
+        "commerce" | "deal" | "deals" | "purchase" | "purchases" | "work" => {
+            Some("commerce".to_string())
+        }
+        "social" | "contact" | "contacts" => Some("social".to_string()),
+        _ if matches!(trimmed, "全部" | "推荐") => None,
+        _ if matches!(trimmed, "事件") => Some("live_event".to_string()),
+        _ if matches!(trimmed, "任务") => Some("route_task".to_string()),
+        _ if matches!(trimmed, "委托") => Some("contract".to_string()),
+        _ if matches!(trimmed, "完成") => Some("completion".to_string()),
+        _ if matches!(trimmed, "成交") => Some("commerce".to_string()),
+        _ if matches!(trimmed, "社交") => Some("social".to_string()),
+        _ => {
+            return ParsedCommand::Unsupported {
+                text: "/feed 仅支持 all/events/tasks/contracts/completion/commerce/social（或 全部/事件/任务/委托/完成/成交/社交）".to_string(),
+            }
+        }
+    };
+    ParsedCommand::ClientFeed { filter }
 }
 
 fn parse_world_command(parts: Vec<&str>) -> ParsedCommand {
@@ -3094,8 +3451,32 @@ fn parse_world_command(parts: Vec<&str>) -> ParsedCommand {
     }) {
         return parse_world_contract_command(parts.into_iter().skip(1).collect());
     }
+    if parts.first().is_some_and(|value| {
+        value.eq_ignore_ascii_case("map") || value.eq_ignore_ascii_case("look") || *value == "地图"
+    }) {
+        return ParsedCommand::WorldMap;
+    }
+    if parts.first().is_some_and(|value| {
+        value.eq_ignore_ascii_case("go")
+            || value.eq_ignore_ascii_case("move")
+            || value.eq_ignore_ascii_case("walk")
+            || *value == "走"
+            || *value == "移动"
+    }) {
+        return parse_world_map_move_command(parts.into_iter().skip(1).collect());
+    }
     ParsedCommand::WorldAction {
         body: parts.join(" "),
+    }
+}
+
+fn parse_world_map_move_command(parts: Vec<&str>) -> ParsedCommand {
+    let target = parts.join(" ");
+    if target.trim().is_empty() {
+        return ParsedCommand::WorldMap;
+    }
+    ParsedCommand::WorldMapMove {
+        target: target.trim().to_string(),
     }
 }
 
@@ -3186,6 +3567,107 @@ fn parse_world_buy_command(parts: Vec<&str>) -> ParsedCommand {
             body
         },
     }
+}
+
+fn parse_world_work_command(parts: Vec<&str>) -> ParsedCommand {
+    if parts.is_empty() {
+        return ParsedCommand::WorldWork;
+    }
+    let action = parts[0].trim();
+    if matches!(action, "deliver" | "交付") {
+        let Some(work_order_id) = parts
+            .get(1)
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+        else {
+            return ParsedCommand::WorldWork;
+        };
+        let body = parts.iter().skip(2).copied().collect::<Vec<_>>().join(" ");
+        return ParsedCommand::WorldWorkDeliver {
+            work_order_id: work_order_id.to_string(),
+            body: if body.trim().is_empty() {
+                "Work delivery package: deliverable, evidence package, acceptance checklist, risk review, next action, and self-review.".to_string()
+            } else {
+                body
+            },
+        };
+    }
+    if matches!(action, "accept" | "验收") {
+        let Some(work_order_id) = parts
+            .get(1)
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+        else {
+            return ParsedCommand::WorldWork;
+        };
+        let body = parts.iter().skip(2).copied().collect::<Vec<_>>().join(" ");
+        return ParsedCommand::WorldWorkAccept {
+            work_order_id: work_order_id.to_string(),
+            body: if body.trim().is_empty() {
+                "Buyer acceptance: delivered work accepted with proof, quality note, next collaboration, and reputation confirmation.".to_string()
+            } else {
+                body
+            },
+        };
+    }
+    if matches!(action, "reject" | "refund" | "拒收" | "退款") {
+        let Some(work_order_id) = parts
+            .get(1)
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+        else {
+            return ParsedCommand::WorldWork;
+        };
+        let body = parts.iter().skip(2).copied().collect::<Vec<_>>().join(" ");
+        return ParsedCommand::WorldWorkReject {
+            work_order_id: work_order_id.to_string(),
+            body: if body.trim().is_empty() {
+                "Buyer rejection: delivery is not accepted, refund reserved buyer funds, reopen with revision requirements, evidence gaps, and next action.".to_string()
+            } else {
+                body
+            },
+        };
+    }
+    if matches!(
+        action,
+        "reopen" | "revise" | "revision" | "返工" | "重开" | "重做"
+    ) {
+        let Some(work_order_id) = parts
+            .get(1)
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+        else {
+            return ParsedCommand::WorldWork;
+        };
+        let body = parts.iter().skip(2).copied().collect::<Vec<_>>().join(" ");
+        return ParsedCommand::WorldWorkReopen {
+            work_order_id: work_order_id.to_string(),
+            body: if body.trim().is_empty() {
+                "Buyer reopen: reserve funds again, list revision requirements, evidence gaps, acceptance standard, and next redelivery action.".to_string()
+            } else {
+                body
+            },
+        };
+    }
+    if matches!(action, "cancel" | "取消" | "撤销" | "关闭") {
+        let Some(work_order_id) = parts
+            .get(1)
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+        else {
+            return ParsedCommand::WorldWork;
+        };
+        let body = parts.iter().skip(2).copied().collect::<Vec<_>>().join(" ");
+        return ParsedCommand::WorldWorkCancel {
+            work_order_id: work_order_id.to_string(),
+            body: if body.trim().is_empty() {
+                "Buyer cancel: cancel this open work before delivery, refund reserved buyer funds, record reason, and close the work order.".to_string()
+            } else {
+                body
+            },
+        };
+    }
+    ParsedCommand::WorldWork
 }
 
 fn parse_world_contract_complete_command(parts: Vec<&str>) -> ParsedCommand {
@@ -3382,6 +3864,7 @@ fn parse_task_command(parts: Vec<&str>) -> ParsedCommand {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_task_request_body(
     sender: &str,
     room_id: &str,
@@ -3413,6 +3896,7 @@ fn build_task_request_body(
     body
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_league_battle_request_body(
     sender: &str,
     room_id: &str,
@@ -3474,6 +3958,7 @@ fn build_matrix_request_fingerprint_from_body(request_body: &Value) -> String {
     ])
 }
 
+#[allow(clippy::result_large_err)]
 fn sign_user_session_assertion(assertion_b64: &str, secret: &str) -> Result<String, Response> {
     let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).map_err(|_| {
         (
@@ -3488,6 +3973,7 @@ fn sign_user_session_assertion(assertion_b64: &str, secret: &str) -> Result<Stri
     Ok(URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes()))
 }
 
+#[allow(clippy::result_large_err)]
 fn build_consumer_entry_session_auth_headers(
     state: &AppState,
     request_body: &Value,
@@ -4177,6 +4663,1060 @@ fn build_league_quest_matrix_reply(_matches: Option<&Value>) -> Value {
     })
 }
 
+fn extract_route_next_hint(
+    route_task_graph: Option<&Value>,
+) -> (
+    u64,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+) {
+    let route_task_graph_count = route_task_graph
+        .and_then(|graph| graph.get("task_count"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let route_next_task = route_task_graph
+        .and_then(|graph| graph.get("tasks"))
+        .and_then(Value::as_array)
+        .and_then(|tasks| tasks.first())
+        .cloned()
+        .unwrap_or(Value::Null);
+    let route_next_task_id = route_next_task
+        .get("task_id")
+        .and_then(Value::as_str)
+        .unwrap_or("none")
+        .to_string();
+    let route_next_action_label = route_next_task
+        .get("suggested_action_label")
+        .and_then(Value::as_str)
+        .unwrap_or("Draft task follow-up")
+        .to_string();
+    let route_next_panel_id = route_next_task
+        .get("suggested_panel_id")
+        .and_then(Value::as_str)
+        .unwrap_or("world-action-console")
+        .to_string();
+    let route_next_command_hint = route_next_task
+        .get("suggested_matrix_command")
+        .and_then(Value::as_str)
+        .unwrap_or("/world action 跟进当前任务并记录证据、阻塞和下一步。")
+        .to_string();
+    let route_next_location_id = route_next_task
+        .get("latest_location_id")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let route_next_node_id = route_next_task
+        .get("suggested_node_id")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let route_next_opportunity_node_id = route_next_task
+        .get("next_opportunity_node_id")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let route_next_stage_summary = route_next_task
+        .get("route_stage_summary")
+        .and_then(Value::as_str)
+        .unwrap_or("0 events → 0 contracts · latest event/pending")
+        .to_string();
+    (
+        route_task_graph_count,
+        route_next_task_id,
+        route_next_action_label,
+        route_next_panel_id,
+        route_next_command_hint,
+        route_next_location_id,
+        route_next_node_id,
+        route_next_opportunity_node_id,
+        route_next_stage_summary,
+    )
+}
+
+fn extract_route_story_slots(
+    route_task_graph: Option<&Value>,
+) -> (String, String, String, String, String, String) {
+    let route_next_task = route_task_graph
+        .and_then(|graph| graph.get("tasks"))
+        .and_then(Value::as_array)
+        .and_then(|tasks| tasks.first())
+        .cloned()
+        .unwrap_or(Value::Null);
+    let route_next_opportunity_kind = route_next_task
+        .get("next_opportunity_kind")
+        .and_then(Value::as_str)
+        .unwrap_or("contract_capture")
+        .to_string();
+    let route_next_outcome_summary = route_next_task
+        .get("outcome_summary")
+        .and_then(Value::as_str)
+        .unwrap_or("No route outcome yet.")
+        .to_string();
+    let route_next_feedback_focus = route_next_task
+        .get("feedback_focus")
+        .and_then(Value::as_str)
+        .unwrap_or("Capture evidence, feedback, and blockers for the next follow-up.")
+        .to_string();
+    let route_next_opportunity_hint = route_next_task
+        .get("next_opportunity_hint")
+        .and_then(Value::as_str)
+        .unwrap_or("Convert the current route into the next contract, listing, or world-action opportunity.")
+        .to_string();
+    let route_next_opportunity_playbook = route_next_task
+        .get("next_opportunity_playbook")
+        .and_then(Value::as_str)
+        .unwrap_or("Qualify the route, capture proof, and turn it into a concrete repeat-order, upsell, reopen, or referral play.")
+        .to_string();
+    let route_next_opportunity_command = route_next_task
+        .get("next_opportunity_command")
+        .and_then(Value::as_str)
+        .unwrap_or("/contract 围绕当前机会整理目标、证据、风险、验收标准和下一步。")
+        .to_string();
+    (
+        route_next_opportunity_kind,
+        route_next_outcome_summary,
+        route_next_feedback_focus,
+        route_next_opportunity_hint,
+        route_next_opportunity_playbook,
+        route_next_opportunity_command,
+    )
+}
+
+struct RouteOpportunityTarget {
+    action_label: String,
+    panel_id: String,
+    input_id: String,
+    input_value: String,
+    textarea_id: String,
+    body: String,
+    node_id: String,
+}
+
+fn route_opportunity_target_from_command(
+    command: &str,
+    opportunity_node_id: &str,
+) -> RouteOpportunityTarget {
+    let trimmed = command.trim();
+    let mut target = RouteOpportunityTarget {
+        action_label: "Open world action lane".to_string(),
+        panel_id: "world-action-console".to_string(),
+        input_id: String::new(),
+        input_value: String::new(),
+        textarea_id: "world-action-body".to_string(),
+        body: trimmed.to_string(),
+        node_id: opportunity_node_id.trim().to_string(),
+    };
+
+    let strip_body = |prefix: &str| {
+        trimmed
+            .strip_prefix(prefix)
+            .map(|body| body.trim().to_string())
+    };
+
+    if let Some(body) = strip_body("/upgrade latest") {
+        target.action_label = "Open asset upgrade lane".to_string();
+        target.panel_id = "world-assets-panel".to_string();
+        target.input_id = "world-asset-id".to_string();
+        target.input_value = "latest".to_string();
+        target.textarea_id = "world-asset-body".to_string();
+        target.body = body;
+    } else if let Some(body) = strip_body("/company latest") {
+        target.action_label = "Open company lane".to_string();
+        target.panel_id = "world-companies-panel".to_string();
+        target.input_id = "world-company-asset-id".to_string();
+        target.input_value = "latest".to_string();
+        target.textarea_id = "world-company-body".to_string();
+        target.body = body;
+    } else if let Some(body) = strip_body("/sell latest") {
+        target.action_label = "Open listing lane".to_string();
+        target.panel_id = "world-listings-panel".to_string();
+        target.input_id = "world-listing-company-id".to_string();
+        target.input_value = "latest".to_string();
+        target.textarea_id = "world-listing-body".to_string();
+        target.body = body;
+    } else if let Some(body) = strip_body("/buy latest") {
+        target.action_label = "Open purchase lane".to_string();
+        target.panel_id = "world-commerce-panel".to_string();
+        target.input_id = "world-buy-listing-id".to_string();
+        target.input_value = "latest".to_string();
+        target.textarea_id = "world-buy-body".to_string();
+        target.body = body;
+    } else if let Some(body) = strip_body("/work deliver latest") {
+        target.action_label = "Open delivery lane".to_string();
+        target.panel_id = "world-commerce-panel".to_string();
+        target.input_id = "world-work-deliver-id".to_string();
+        target.input_value = "latest".to_string();
+        target.textarea_id = "world-work-deliver-body".to_string();
+        target.body = body;
+    } else if let Some(body) = strip_body("/work accept latest") {
+        target.action_label = "Open acceptance lane".to_string();
+        target.panel_id = "world-commerce-panel".to_string();
+        target.input_id = "world-work-accept-id".to_string();
+        target.input_value = "latest".to_string();
+        target.textarea_id = "world-work-accept-body".to_string();
+        target.body = body;
+    } else if let Some(body) = strip_body("/work reject latest") {
+        target.action_label = "Open rejection lane".to_string();
+        target.panel_id = "world-commerce-panel".to_string();
+        target.input_id = "world-work-reject-id".to_string();
+        target.input_value = "latest".to_string();
+        target.textarea_id = "world-work-reject-body".to_string();
+        target.body = body;
+    } else if let Some(body) = strip_body("/work reopen latest") {
+        target.action_label = "Open reopen lane".to_string();
+        target.panel_id = "world-commerce-panel".to_string();
+        target.input_id = "world-work-reopen-id".to_string();
+        target.input_value = "latest".to_string();
+        target.textarea_id = "world-work-reopen-body".to_string();
+        target.body = body;
+    } else if let Some(body) = strip_body("/work cancel latest") {
+        target.action_label = "Open cancellation lane".to_string();
+        target.panel_id = "world-commerce-panel".to_string();
+        target.input_id = "world-work-cancel-id".to_string();
+        target.input_value = "latest".to_string();
+        target.textarea_id = "world-work-cancel-body".to_string();
+        target.body = body;
+    } else if let Some(body) = strip_body("/world action") {
+        target.action_label = "Open world action lane".to_string();
+        target.body = body;
+    } else if let Some(body) = strip_body("/contract") {
+        target.action_label = "Open contract capture lane".to_string();
+        target.body = body;
+    } else if let Some(rest) = trimmed.strip_prefix("/complete ") {
+        let rest = rest.trim();
+        let (contract_id, body) = rest
+            .split_once(' ')
+            .map(|(contract_id, body)| (contract_id.trim(), body.trim().to_string()))
+            .unwrap_or((rest, String::new()));
+        target.action_label = "Open contract completion lane".to_string();
+        target.panel_id = "world-contracts-panel".to_string();
+        target.input_id = "world-contract-completion-id".to_string();
+        target.input_value = contract_id.to_string();
+        target.textarea_id = "world-contract-completion-body".to_string();
+        target.body = body;
+    }
+
+    if target.body.trim().is_empty() {
+        target.body = trimmed.to_string();
+    }
+    if target.node_id.trim().is_empty() {
+        target.node_id = route_focus_panel_default_node_id(&target.panel_id).to_string();
+    }
+
+    target
+}
+
+fn route_opportunity_target_from_story_value(
+    target_value: Option<&Value>,
+    fallback_command: &str,
+    fallback_node_id: &str,
+) -> RouteOpportunityTarget {
+    let fallback = route_opportunity_target_from_command(fallback_command, fallback_node_id);
+    let Some(target_value) = target_value else {
+        return fallback;
+    };
+
+    RouteOpportunityTarget {
+        action_label: target_value
+            .get("action_label")
+            .and_then(Value::as_str)
+            .unwrap_or(&fallback.action_label)
+            .to_string(),
+        panel_id: target_value
+            .get("panel_id")
+            .and_then(Value::as_str)
+            .unwrap_or(&fallback.panel_id)
+            .to_string(),
+        input_id: target_value
+            .get("input_id")
+            .and_then(Value::as_str)
+            .unwrap_or(&fallback.input_id)
+            .to_string(),
+        input_value: target_value
+            .get("input_value")
+            .and_then(Value::as_str)
+            .unwrap_or(&fallback.input_value)
+            .to_string(),
+        textarea_id: target_value
+            .get("textarea_id")
+            .and_then(Value::as_str)
+            .unwrap_or(&fallback.textarea_id)
+            .to_string(),
+        body: target_value
+            .get("body")
+            .and_then(Value::as_str)
+            .unwrap_or(&fallback.body)
+            .to_string(),
+        node_id: target_value
+            .get("node_id")
+            .and_then(Value::as_str)
+            .unwrap_or(&fallback.node_id)
+            .to_string(),
+    }
+}
+
+fn route_focus_panel_default_node_id(route_next_panel_id: &str) -> &'static str {
+    match route_next_panel_id {
+        "world-assets-panel" => "asset-yard",
+        "world-companies-panel" => "starter-studio",
+        "world-listings-panel" => "client-board",
+        "world-commerce-panel" => "delivery-dock",
+        "world-contracts-panel" => "ledger-office",
+        _ => "",
+    }
+}
+
+struct RouteStoryCardContext {
+    route_preview_item_count: u64,
+    route_task_linked_count: u64,
+    route_task_graph_count: u64,
+    route_next_task_id: String,
+    route_next_action_label: String,
+    route_next_panel_id: String,
+    route_next_command_hint: String,
+    route_next_location_id: String,
+    route_next_node_id: String,
+    route_next_opportunity_node_id: String,
+    route_next_stage_summary: String,
+    route_next_opportunity_kind: String,
+    route_next_outcome_summary: String,
+    route_next_feedback_focus: String,
+    route_next_opportunity_hint: String,
+    route_next_opportunity_playbook: String,
+    route_next_opportunity_command: String,
+    route_next_opportunity_target: RouteOpportunityTarget,
+}
+
+impl RouteStoryCardContext {
+    fn from_value(value: &Value, fallback_node_id: &str) -> Self {
+        let route_preview = value.get("route_preview");
+        let route_story = value.get("route_story");
+        let route_preview_item_count = route_story
+            .and_then(|story| story.get("preview_item_count"))
+            .and_then(Value::as_u64)
+            .or_else(|| {
+                route_preview
+                    .and_then(|preview| preview.get("item_count"))
+                    .and_then(Value::as_u64)
+            })
+            .unwrap_or(0);
+        let route_task_linked_count = route_story
+            .and_then(|story| story.get("task_linked_count"))
+            .and_then(Value::as_u64)
+            .or_else(|| {
+                route_preview
+                    .and_then(|preview| preview.get("task_linked_count"))
+                    .and_then(Value::as_u64)
+            })
+            .unwrap_or(0);
+        let (
+            fallback_route_task_graph_count,
+            fallback_route_next_task_id,
+            fallback_route_next_action_label,
+            fallback_route_next_panel_id,
+            fallback_route_next_command_hint,
+            fallback_route_next_location_id,
+            fallback_route_next_node_id,
+            fallback_route_next_opportunity_node_id,
+            fallback_route_next_stage_summary,
+        ) = extract_route_next_hint(value.get("route_task_graph"));
+        let (
+            fallback_route_next_opportunity_kind,
+            fallback_route_next_outcome_summary,
+            fallback_route_next_feedback_focus,
+            fallback_route_next_opportunity_hint,
+            fallback_route_next_opportunity_playbook,
+            fallback_route_next_opportunity_command,
+        ) = extract_route_story_slots(value.get("route_task_graph"));
+        let route_task_graph_count = route_story
+            .and_then(|story| story.get("task_graph_count"))
+            .and_then(Value::as_u64)
+            .unwrap_or(fallback_route_task_graph_count);
+        let route_next_task_id = route_story
+            .and_then(|story| story.get("next_task_id"))
+            .and_then(Value::as_str)
+            .unwrap_or(&fallback_route_next_task_id)
+            .to_string();
+        let route_next_action_label = route_story
+            .and_then(|story| story.get("next_action_label"))
+            .and_then(Value::as_str)
+            .unwrap_or(&fallback_route_next_action_label)
+            .to_string();
+        let route_next_panel_id = route_story
+            .and_then(|story| story.get("next_panel_id"))
+            .and_then(Value::as_str)
+            .unwrap_or(&fallback_route_next_panel_id)
+            .to_string();
+        let route_next_command_hint = route_story
+            .and_then(|story| story.get("next_command_hint"))
+            .and_then(Value::as_str)
+            .unwrap_or(&fallback_route_next_command_hint)
+            .to_string();
+        let route_next_location_id = route_story
+            .and_then(|story| story.get("next_location_id"))
+            .and_then(Value::as_str)
+            .unwrap_or(&fallback_route_next_location_id)
+            .to_string();
+        let route_next_node_id = route_story
+            .and_then(|story| story.get("next_node_id"))
+            .and_then(Value::as_str)
+            .unwrap_or(&fallback_route_next_node_id)
+            .to_string();
+        let route_next_opportunity_node_id = route_story
+            .and_then(|story| story.get("next_opportunity_node_id"))
+            .and_then(Value::as_str)
+            .unwrap_or(&fallback_route_next_opportunity_node_id)
+            .to_string();
+        let route_next_stage_summary = route_story
+            .and_then(|story| story.get("next_stage_summary"))
+            .and_then(Value::as_str)
+            .unwrap_or(&fallback_route_next_stage_summary)
+            .to_string();
+        let route_next_opportunity_kind = route_story
+            .and_then(|story| story.get("next_opportunity_kind"))
+            .and_then(Value::as_str)
+            .unwrap_or(&fallback_route_next_opportunity_kind)
+            .to_string();
+        let route_next_outcome_summary = route_story
+            .and_then(|story| story.get("next_outcome_summary"))
+            .and_then(Value::as_str)
+            .unwrap_or(&fallback_route_next_outcome_summary)
+            .to_string();
+        let route_next_feedback_focus = route_story
+            .and_then(|story| story.get("next_feedback_focus"))
+            .and_then(Value::as_str)
+            .unwrap_or(&fallback_route_next_feedback_focus)
+            .to_string();
+        let route_next_opportunity_hint = route_story
+            .and_then(|story| story.get("next_opportunity_hint"))
+            .and_then(Value::as_str)
+            .unwrap_or(&fallback_route_next_opportunity_hint)
+            .to_string();
+        let route_next_opportunity_playbook = route_story
+            .and_then(|story| story.get("next_opportunity_playbook"))
+            .and_then(Value::as_str)
+            .unwrap_or(&fallback_route_next_opportunity_playbook)
+            .to_string();
+        let route_next_opportunity_command = route_story
+            .and_then(|story| story.get("next_opportunity_command"))
+            .and_then(Value::as_str)
+            .unwrap_or(&fallback_route_next_opportunity_command)
+            .to_string();
+        let (route_next_node_id, route_next_opportunity_node_id) = resolve_route_focus_nodes(
+            &route_next_panel_id,
+            &route_next_node_id,
+            &route_next_opportunity_node_id,
+            fallback_node_id,
+        );
+        let route_next_opportunity_target = route_opportunity_target_from_story_value(
+            route_story.and_then(|story| story.get("next_opportunity_target")),
+            &route_next_opportunity_command,
+            &route_next_opportunity_node_id,
+        );
+        Self {
+            route_preview_item_count,
+            route_task_linked_count,
+            route_task_graph_count,
+            route_next_task_id,
+            route_next_action_label,
+            route_next_panel_id,
+            route_next_command_hint,
+            route_next_location_id,
+            route_next_node_id,
+            route_next_opportunity_node_id,
+            route_next_stage_summary,
+            route_next_opportunity_kind,
+            route_next_outcome_summary,
+            route_next_feedback_focus,
+            route_next_opportunity_hint,
+            route_next_opportunity_playbook,
+            route_next_opportunity_command,
+            route_next_opportunity_target,
+        }
+    }
+
+    fn to_value(&self) -> Value {
+        json!({
+            "preview_item_count": self.route_preview_item_count,
+            "task_linked_count": self.route_task_linked_count,
+            "task_graph_count": self.route_task_graph_count,
+            "next_task_id": &self.route_next_task_id,
+            "next_action_label": &self.route_next_action_label,
+            "next_panel_id": &self.route_next_panel_id,
+            "next_command_hint": &self.route_next_command_hint,
+            "next_location_id": &self.route_next_location_id,
+            "next_node_id": &self.route_next_node_id,
+            "next_opportunity_node_id": &self.route_next_opportunity_node_id,
+            "next_stage_summary": &self.route_next_stage_summary,
+            "next_opportunity_kind": &self.route_next_opportunity_kind,
+            "next_outcome_summary": &self.route_next_outcome_summary,
+            "next_feedback_focus": &self.route_next_feedback_focus,
+            "next_opportunity_hint": &self.route_next_opportunity_hint,
+            "next_opportunity_playbook": &self.route_next_opportunity_playbook,
+            "next_opportunity_command": &self.route_next_opportunity_command,
+            "next_opportunity_target": {
+                "action_label": &self.route_next_opportunity_target.action_label,
+                "panel_id": &self.route_next_opportunity_target.panel_id,
+                "input_id": &self.route_next_opportunity_target.input_id,
+                "input_value": &self.route_next_opportunity_target.input_value,
+                "textarea_id": &self.route_next_opportunity_target.textarea_id,
+                "body": &self.route_next_opportunity_target.body,
+                "node_id": &self.route_next_opportunity_target.node_id,
+            }
+        })
+    }
+
+    fn text_block(&self, headline: &str, include_task_linked: bool) -> String {
+        let linked = if include_task_linked {
+            format!(" · {} task-linked", self.route_task_linked_count)
+        } else {
+            String::new()
+        };
+        format!(
+            "{headline}: {} tasks · {} route items{} · next {} → {}\nNext Route: {} @ {} [{}]\nOutcome: {}\nFeedback: {}\nNext Opportunity: {}\nPlaybook: {}\nOpportunity Command: {}\nCommand: {}",
+            self.route_task_graph_count,
+            self.route_preview_item_count,
+            linked,
+            &self.route_next_task_id,
+            &self.route_next_action_label,
+            &self.route_next_stage_summary,
+            &self.route_next_panel_id,
+            &self.route_next_location_id,
+            &self.route_next_outcome_summary,
+            &self.route_next_feedback_focus,
+            &self.route_next_opportunity_hint,
+            &self.route_next_opportunity_playbook,
+            &self.route_next_opportunity_command,
+            &self.route_next_command_hint,
+        )
+    }
+
+    fn html_block(&self, headline: &str, include_task_linked: bool) -> String {
+        let linked = if include_task_linked {
+            format!(" · {} task-linked", self.route_task_linked_count)
+        } else {
+            String::new()
+        };
+        format!(
+            "<p><strong>{}</strong>: {} tasks · {} route items{} · next <code>{}</code> → {}</p><p><strong>Next Route</strong>: {} @ <code>{}</code> · <code>{}</code></p><p><strong>Outcome</strong>: {}</p><p><strong>Feedback</strong>: {}</p><p><strong>Next Opportunity</strong>: {}</p><p><strong>Playbook</strong>: {}</p><p><strong>Opportunity Command</strong>: <code>{}</code></p><p><strong>Command</strong>: <code>{}</code></p>",
+            escape_html(headline),
+            self.route_task_graph_count,
+            self.route_preview_item_count,
+            linked,
+            escape_html(&self.route_next_task_id),
+            escape_html(&self.route_next_action_label),
+            escape_html(&self.route_next_stage_summary),
+            escape_html(&self.route_next_panel_id),
+            escape_html(&self.route_next_location_id),
+            escape_html(&self.route_next_outcome_summary),
+            escape_html(&self.route_next_feedback_focus),
+            escape_html(&self.route_next_opportunity_hint),
+            escape_html(&self.route_next_opportunity_playbook),
+            escape_html(&self.route_next_opportunity_command),
+            escape_html(&self.route_next_command_hint),
+        )
+    }
+
+    fn specialize_opportunity(mut self, surface: &str) -> Self {
+        (
+            self.route_next_opportunity_hint,
+            self.route_next_opportunity_playbook,
+            self.route_next_opportunity_command,
+        ) = specialize_route_opportunity(
+            surface,
+            &self.route_next_opportunity_kind,
+            &self.route_next_outcome_summary,
+            &self.route_next_feedback_focus,
+            &self.route_next_opportunity_hint,
+            &self.route_next_opportunity_playbook,
+            &self.route_next_opportunity_command,
+            &self.route_next_task_id,
+            &self.route_next_location_id,
+            &self.route_next_stage_summary,
+        );
+        self.route_next_opportunity_target = route_opportunity_target_from_command(
+            &self.route_next_opportunity_command,
+            &self.route_next_opportunity_node_id,
+        );
+        self
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn with_custom_follow_up(
+        mut self,
+        fallback_task_id: &str,
+        action_label: &str,
+        panel_id: &str,
+        command_hint: String,
+        fallback_location_id: &str,
+        node_id: &str,
+        stage_summary: String,
+        opportunity_kind: &str,
+        outcome_summary: String,
+        feedback_focus: &str,
+        opportunity_hint: String,
+        opportunity_playbook: &str,
+    ) -> Self {
+        self.route_next_task_id =
+            route_task_id_or_fallback(&self.route_next_task_id, fallback_task_id);
+        self.route_next_action_label = action_label.to_string();
+        self.route_next_panel_id = panel_id.to_string();
+        self.route_next_command_hint = command_hint;
+        self.route_next_location_id =
+            route_location_or_fallback(&self.route_next_location_id, fallback_location_id);
+        self.route_next_node_id = node_id.to_string();
+        self.route_next_opportunity_node_id = node_id.to_string();
+        self.route_next_stage_summary = stage_summary;
+        self.route_next_opportunity_kind = opportunity_kind.to_string();
+        self.route_next_outcome_summary = outcome_summary;
+        self.route_next_feedback_focus = feedback_focus.to_string();
+        self.route_next_opportunity_hint = opportunity_hint;
+        self.route_next_opportunity_playbook = opportunity_playbook.to_string();
+        self.route_next_opportunity_command = self.route_next_command_hint.clone();
+        self.route_next_opportunity_target = route_opportunity_target_from_command(
+            &self.route_next_opportunity_command,
+            &self.route_next_opportunity_node_id,
+        );
+        self
+    }
+}
+
+fn route_task_id_or_fallback(route_next_task_id: &str, fallback_task_id: &str) -> String {
+    if route_next_task_id.is_empty() || route_next_task_id == "none" {
+        fallback_task_id.to_string()
+    } else {
+        route_next_task_id.to_string()
+    }
+}
+
+fn route_story_card_json(
+    mut card: Value,
+    route: &RouteStoryCardContext,
+    include_task_linked_count: bool,
+) -> Value {
+    let Some(card_object) = card.as_object_mut() else {
+        return card;
+    };
+
+    card_object.insert("route_story".to_string(), route.to_value());
+    card_object.insert(
+        "route_preview_item_count".to_string(),
+        json!(route.route_preview_item_count),
+    );
+    if include_task_linked_count {
+        card_object.insert(
+            "route_task_linked_count".to_string(),
+            json!(route.route_task_linked_count),
+        );
+    }
+    card_object.insert(
+        "route_task_graph_count".to_string(),
+        json!(route.route_task_graph_count),
+    );
+    card_object.insert(
+        "route_next_task_id".to_string(),
+        json!(&route.route_next_task_id),
+    );
+    card_object.insert(
+        "route_next_action_label".to_string(),
+        json!(&route.route_next_action_label),
+    );
+    card_object.insert(
+        "route_next_panel_id".to_string(),
+        json!(&route.route_next_panel_id),
+    );
+    card_object.insert(
+        "route_next_command_hint".to_string(),
+        json!(&route.route_next_command_hint),
+    );
+    card_object.insert(
+        "route_next_location_id".to_string(),
+        json!(&route.route_next_location_id),
+    );
+    card_object.insert(
+        "route_next_node_id".to_string(),
+        json!(&route.route_next_node_id),
+    );
+    card_object.insert(
+        "route_next_opportunity_node_id".to_string(),
+        json!(&route.route_next_opportunity_node_id),
+    );
+    card_object.insert(
+        "route_next_stage_summary".to_string(),
+        json!(&route.route_next_stage_summary),
+    );
+    card_object.insert(
+        "route_next_outcome_summary".to_string(),
+        json!(&route.route_next_outcome_summary),
+    );
+    card_object.insert(
+        "route_next_feedback_focus".to_string(),
+        json!(&route.route_next_feedback_focus),
+    );
+    card_object.insert(
+        "route_next_opportunity_hint".to_string(),
+        json!(&route.route_next_opportunity_hint),
+    );
+    card_object.insert(
+        "route_next_opportunity_playbook".to_string(),
+        json!(&route.route_next_opportunity_playbook),
+    );
+    card_object.insert(
+        "route_next_opportunity_kind".to_string(),
+        json!(&route.route_next_opportunity_kind),
+    );
+    card_object.insert(
+        "route_next_opportunity_command".to_string(),
+        json!(&route.route_next_opportunity_command),
+    );
+    card_object.insert(
+        "route_next_opportunity_action_label".to_string(),
+        json!(&route.route_next_opportunity_target.action_label),
+    );
+    card_object.insert(
+        "route_next_opportunity_panel_id".to_string(),
+        json!(&route.route_next_opportunity_target.panel_id),
+    );
+    card_object.insert(
+        "route_next_opportunity_input_id".to_string(),
+        json!(&route.route_next_opportunity_target.input_id),
+    );
+    card_object.insert(
+        "route_next_opportunity_input_value".to_string(),
+        json!(&route.route_next_opportunity_target.input_value),
+    );
+    card_object.insert(
+        "route_next_opportunity_textarea_id".to_string(),
+        json!(&route.route_next_opportunity_target.textarea_id),
+    );
+    card_object.insert(
+        "route_next_opportunity_body".to_string(),
+        json!(&route.route_next_opportunity_target.body),
+    );
+    card_object.insert(
+        "route_next_opportunity_target_node_id".to_string(),
+        json!(&route.route_next_opportunity_target.node_id),
+    );
+
+    card
+}
+
+fn route_location_or_fallback(route_next_location_id: &str, fallback_location_id: &str) -> String {
+    if route_next_location_id.is_empty() {
+        fallback_location_id.to_string()
+    } else {
+        route_next_location_id.to_string()
+    }
+}
+
+fn world_context_node_id(value: &Value) -> String {
+    value
+        .get("current_node_id")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            value
+                .get("current_node")
+                .and_then(|node| node.get("node_id"))
+                .and_then(Value::as_str)
+        })
+        .or_else(|| {
+            value
+                .get("map")
+                .and_then(|map| map.get("current_node_id"))
+                .and_then(Value::as_str)
+        })
+        .unwrap_or("mirror-city-square")
+        .to_string()
+}
+
+fn resolve_route_focus_nodes(
+    route_next_panel_id: &str,
+    route_next_node_id: &str,
+    route_next_opportunity_node_id: &str,
+    fallback_node_id: &str,
+) -> (String, String) {
+    let panel_default = route_focus_panel_default_node_id(route_next_panel_id);
+    let fallback = if !fallback_node_id.trim().is_empty() {
+        fallback_node_id.trim()
+    } else if !panel_default.is_empty() {
+        panel_default
+    } else {
+        "mirror-city-square"
+    };
+    let route_next_node_id = if route_next_node_id.trim().is_empty() {
+        fallback.to_string()
+    } else {
+        route_next_node_id.to_string()
+    };
+    let route_next_opportunity_node_id = if route_next_opportunity_node_id.trim().is_empty() {
+        if !panel_default.is_empty() {
+            panel_default.to_string()
+        } else {
+            route_next_node_id.clone()
+        }
+    } else {
+        route_next_opportunity_node_id.to_string()
+    };
+    (route_next_node_id, route_next_opportunity_node_id)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn specialize_route_opportunity(
+    surface: &str,
+    route_next_opportunity_kind: &str,
+    route_next_outcome_summary: &str,
+    route_next_feedback_focus: &str,
+    route_next_opportunity_hint: &str,
+    route_next_opportunity_playbook: &str,
+    route_next_opportunity_command: &str,
+    route_next_task_id: &str,
+    route_next_location_id: &str,
+    route_next_stage_summary: &str,
+) -> (String, String, String) {
+    let route_anchor = if route_next_location_id.is_empty() {
+        "the active route"
+    } else {
+        route_next_location_id
+    };
+    let task_ref = if route_next_task_id.is_empty() || route_next_task_id == "none" {
+        "current-route"
+    } else {
+        route_next_task_id
+    };
+    let is_growth_kind = matches!(
+        route_next_opportunity_kind,
+        "repeat_order_upsell_referral" | "acceptance_upsell"
+    );
+    let is_recovery_kind = matches!(
+        route_next_opportunity_kind,
+        "revision_recovery" | "reopen_recovery" | "smaller_scope_requalification"
+    );
+
+    match surface {
+        "assets" => {
+            let hint = if is_growth_kind {
+                format!(
+                    "Assetize {} into the next premium upgrade pack for {}.",
+                    route_next_outcome_summary, route_anchor
+                )
+            } else if is_recovery_kind {
+                format!(
+                    "Turn {} into a safer asset kit with tighter QA and starter scope for {}.",
+                    route_next_outcome_summary, route_anchor
+                )
+            } else {
+                format!(
+                    "Turn {} into reusable templates, proof kits, and delivery assets for {}.",
+                    route_next_outcome_summary, route_anchor
+                )
+            };
+            let playbook = format!(
+                "{} Then assetize it: extract templates, evidence snippets, QA checklists, pricing notes, and a reusable upgrade pack. {}",
+                route_next_opportunity_playbook, route_next_feedback_focus
+            );
+            let command = if is_growth_kind {
+                format!(
+                    "/upgrade latest 资产化升级方案：围绕 {} 沉淀模板、evidence kit、QA checklist、pricing proof、复购钩子和 next action。",
+                    route_next_outcome_summary
+                )
+            } else if is_recovery_kind {
+                format!(
+                    "/upgrade latest 风险收敛资产包：围绕 {} 补齐 QA gate、evidence gap、starter scope、acceptance checklist 和 next action。",
+                    route_next_outcome_summary
+                )
+            } else {
+                format!(
+                    "/upgrade latest 交付资产包：围绕 {} 提炼模板、proof、handoff checklist、pricing note 和下一步。",
+                    route_next_outcome_summary
+                )
+            };
+            (hint, playbook, command)
+        }
+        "companies" => {
+            let hint = if is_growth_kind {
+                format!(
+                    "Turn {} into the next company growth lane for {}.",
+                    route_next_outcome_summary, route_anchor
+                )
+            } else if is_recovery_kind {
+                format!(
+                    "Turn {} into a requalification and repricing plan for {}.",
+                    route_next_outcome_summary, route_anchor
+                )
+            } else {
+                format!(
+                    "Turn {} into the next operating plan, offer ladder, or service motion for {}.",
+                    route_next_outcome_summary, route_anchor
+                )
+            };
+            let playbook = format!(
+                "{} Then route it through the company layer: define ICP, offer ladder, delivery cadence, owner, and referral or retention loop. {}",
+                route_next_opportunity_playbook, route_next_feedback_focus
+            );
+            let command = if is_growth_kind {
+                format!(
+                    "/company latest 公司增长方案：基于 {} 设计 offer、ICP、price ladder、proof、delivery cadence、referral path 和 next step。",
+                    route_next_outcome_summary
+                )
+            } else if is_recovery_kind {
+                format!(
+                    "/company latest 重定价与资格筛选方案：围绕 {} 重做 scope、risk gate、acceptance bar、refund policy 和 next step。",
+                    route_next_outcome_summary
+                )
+            } else {
+                format!(
+                    "/company latest 服务交付经营方案：围绕 {} 设计 owner、offer、ops cadence、proof loop 和 next step。",
+                    route_next_outcome_summary
+                )
+            };
+            (hint, playbook, command)
+        }
+        "shops" | "listing" => {
+            let hint = if is_growth_kind {
+                format!(
+                    "Turn {} into the next market-ready upsell or repeat-order listing for {}.",
+                    route_next_outcome_summary, route_anchor
+                )
+            } else if is_recovery_kind {
+                format!(
+                    "Turn {} into a smaller starter offer or reprice path for {}.",
+                    route_next_outcome_summary, route_anchor
+                )
+            } else {
+                format!(
+                    "Turn {} into the next market-facing listing or add-on package for {}.",
+                    route_next_outcome_summary, route_anchor
+                )
+            };
+            let playbook = format!(
+                "{} Then package it for the market: define scope, evidence, price, acceptance bar, upsell ladder, and the next CTA. Stage: {}.",
+                route_next_opportunity_playbook, route_next_stage_summary
+            );
+            let command = if is_growth_kind {
+                format!(
+                    "/sell latest 复购/升级方案：基于 {} 提供下一阶段 deliverable、evidence、price、acceptance standard、timeline 和推荐理由。",
+                    route_next_outcome_summary
+                )
+            } else if is_recovery_kind {
+                format!(
+                    "/sell latest 小范围试单/重报价方案：围绕 {} 缩 scope、补 evidence、重设 acceptance standard、price 和 next step。",
+                    route_next_outcome_summary
+                )
+            } else {
+                format!(
+                    "/sell latest 商机转化方案：基于 {} 输出 deliverable、evidence、price、acceptance standard、timeline、upsell/repeat angle。",
+                    route_next_outcome_summary
+                )
+            };
+            (hint, playbook, command)
+        }
+        "app" | "world" | "map" | "purchase" | "work" => {
+            let hint = if is_growth_kind {
+                format!(
+                    "Route {} into the next growth lane via World Action for {}.",
+                    route_next_outcome_summary, route_anchor
+                )
+            } else if is_recovery_kind {
+                format!(
+                    "Route {} into a recovery lane via World Action for {}.",
+                    route_next_outcome_summary, route_anchor
+                )
+            } else {
+                format!(
+                    "Route {} into the next execution lane via World Action for {}.",
+                    route_next_outcome_summary, route_anchor
+                )
+            };
+            let playbook = format!(
+                "{} Then push it through World Action: choose asset/company/listing/follow-up lane, assign owner, risk gate, proof pack, and next command. Stage: {}.",
+                route_next_opportunity_playbook, route_next_stage_summary
+            );
+            let command = if is_growth_kind {
+                format!(
+                    "/world action 增长机会推进任务 {}：围绕 {} 选择 repeat order、upsell、referral lane，整理 owner、proof、offer、risk 和 next command。",
+                    task_ref, route_next_outcome_summary
+                )
+            } else if is_recovery_kind {
+                format!(
+                    "/world action 挽回机会推进任务 {}：围绕 {} 重做 qualification、scope、proof、risk gate 和 next command。",
+                    task_ref, route_next_outcome_summary
+                )
+            } else {
+                format!(
+                    "/world action 执行机会推进任务 {}：围绕 {} 选择 asset/company/listing/follow-up lane，整理 owner、proof、offer、risk 和 next command。",
+                    task_ref, route_next_outcome_summary
+                )
+            };
+            (hint, playbook, command)
+        }
+        _ => (
+            route_next_opportunity_hint.to_string(),
+            route_next_opportunity_playbook.to_string(),
+            route_next_opportunity_command.to_string(),
+        ),
+    }
+}
+
+#[derive(Debug, Clone)]
+struct MapRendererAdapterCardContext {
+    adapter_id: String,
+    adapter_contract_version: u64,
+    runtime_handle_name: String,
+    future_engine_candidate: String,
+    supports_future_engine_swap: bool,
+    planned_upgrade_engine_id: String,
+    planned_upgrade_gating_contract: String,
+}
+
+impl MapRendererAdapterCardContext {
+    fn from_engine(map_engine: Option<&Value>) -> Self {
+        let adapter = map_engine.and_then(|engine| engine.get("renderer_adapter"));
+        let adapter_contract = adapter.and_then(|adapter| adapter.get("adapter_contract"));
+        let planned_upgrade = map_engine.and_then(|engine| engine.get("planned_upgrade_engine"));
+        Self {
+            adapter_id: adapter
+                .and_then(|adapter| adapter.get("adapter_id"))
+                .and_then(Value::as_str)
+                .unwrap_or("leaflet_renderer_adapter_v1")
+                .to_string(),
+            adapter_contract_version: adapter
+                .and_then(|adapter| adapter.get("adapter_contract_version"))
+                .and_then(Value::as_u64)
+                .unwrap_or(1),
+            runtime_handle_name: adapter
+                .and_then(|adapter| adapter.get("runtime_handle_name"))
+                .and_then(Value::as_str)
+                .unwrap_or("mapRuntime")
+                .to_string(),
+            future_engine_candidate: adapter
+                .and_then(|adapter| adapter.get("future_engine_candidate"))
+                .and_then(Value::as_str)
+                .unwrap_or("maplibre_gl_v1")
+                .to_string(),
+            supports_future_engine_swap: adapter_contract
+                .and_then(|contract| contract.get("supports_future_engine_swap"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            planned_upgrade_engine_id: planned_upgrade
+                .and_then(|planned| planned.get("engine_id"))
+                .and_then(Value::as_str)
+                .unwrap_or("maplibre_gl_v1")
+                .to_string(),
+            planned_upgrade_gating_contract: planned_upgrade
+                .and_then(|planned| planned.get("gating_contract"))
+                .and_then(Value::as_str)
+                .unwrap_or("renderer_adapter.adapter_contract_version >= 1")
+                .to_string(),
+        }
+    }
+}
+
 fn build_trillionnium_world_matrix_reply(value: &Value) -> Value {
     let counts = value.get("counts").unwrap_or(value);
     let zone_count = counts.get("zones").and_then(Value::as_u64).unwrap_or(4);
@@ -4192,18 +5732,605 @@ fn build_trillionnium_world_matrix_reply(value: &Value) -> Value {
         .unwrap_or(0);
     let faction_count = counts.get("factions").and_then(Value::as_u64).unwrap_or(0);
     let event_count = counts.get("events").and_then(Value::as_u64).unwrap_or(0);
+    let world_context_node_id = world_context_node_id(value);
+    let map_engine = value.get("real_world_map_engine");
+    let renderer_adapter = MapRendererAdapterCardContext::from_engine(map_engine);
+    let route = RouteStoryCardContext::from_value(value, &world_context_node_id)
+        .specialize_opportunity("world");
+    let route_text_block = route.text_block("Route Graph", true);
+    let route_html_block = route.html_block("Route Graph", true);
     let body = format!(
-        "🌍 Trillionnium World\n开放世界总层：现实镜像城市 + Craft 工坊 + Market + League。\nZones: {zone_count} · Locations: {location_count} · Assets: {asset_count} · Companies: {company_count} · Shops: {shop_count} · Listings: {listing_count} · Purchases: {purchase_count} · Work: {work_order_count} · Factions: {faction_count} · Events: {event_count}\n自由行动：/world action 我要开一家 AI 设计公司"
+        "🌍 Trillionnium World\n开放世界总层：现实镜像城市 + Craft 工坊 + Market + League。\nZones: {zone_count} · Locations: {location_count} · Assets: {asset_count} · Companies: {company_count} · Shops: {shop_count} · Listings: {listing_count} · Purchases: {purchase_count} · Work: {work_order_count} · Factions: {faction_count} · Events: {event_count}\nRenderer Adapter: {adapter_id} v{adapter_version} · handle {runtime_handle} · future {future_engine}\n{route_text_block}\n自由行动：/world action 我要开一家 AI 设计公司",
+        adapter_id = &renderer_adapter.adapter_id,
+        adapter_version = renderer_adapter.adapter_contract_version,
+        runtime_handle = &renderer_adapter.runtime_handle_name,
+        future_engine = &renderer_adapter.future_engine_candidate,
+        route_text_block = route_text_block,
     );
     json!({
         "msgtype": "m.text",
         "body": body,
         "format": "org.matrix.custom.html",
         "formatted_body": format!(
-            "<blockquote><h3>🌍 Trillionnium World</h3><p>现实镜像城市 + Craft 工坊 + Market + League。</p><p><strong>Zones</strong>: {} · <strong>Locations</strong>: {} · <strong>Assets</strong>: {} · <strong>Companies</strong>: {} · <strong>Shops</strong>: {} · <strong>Listings</strong>: {} · <strong>Purchases</strong>: {} · <strong>Work</strong>: {} · <strong>Factions</strong>: {} · <strong>Events</strong>: {}</p><p><code>/world action 我要开一家 AI 设计公司</code></p></blockquote>",
-            zone_count, location_count, asset_count, company_count, shop_count, listing_count, purchase_count, work_order_count, faction_count, event_count,
+            "<blockquote><h3>🌍 Trillionnium World</h3><p>现实镜像城市 + Craft 工坊 + Market + League。</p><p><strong>Zones</strong>: {} · <strong>Locations</strong>: {} · <strong>Assets</strong>: {} · <strong>Companies</strong>: {} · <strong>Shops</strong>: {} · <strong>Listings</strong>: {} · <strong>Purchases</strong>: {} · <strong>Work</strong>: {} · <strong>Factions</strong>: {} · <strong>Events</strong>: {}</p><p><strong>Renderer Adapter</strong>: <code>{}</code> v{} · <code>{}</code> · future <code>{}</code></p>{}<p><code>/world action 我要开一家 AI 设计公司</code></p></blockquote>",
+            zone_count, location_count, asset_count, company_count, shop_count, listing_count, purchase_count, work_order_count, faction_count, event_count, escape_html(&renderer_adapter.adapter_id), renderer_adapter.adapter_contract_version, escape_html(&renderer_adapter.runtime_handle_name), escape_html(&renderer_adapter.future_engine_candidate), route_html_block,
         ),
-        "cex_card": {"type": "trillionnium_world", "version": 1, "world": "trillionnium_world", "zone_count": zone_count, "location_count": location_count, "asset_count": asset_count, "company_count": company_count, "shop_count": shop_count, "listing_count": listing_count, "purchase_count": purchase_count, "work_order_count": work_order_count, "faction_count": faction_count, "event_count": event_count}
+        "cex_card": route_story_card_json(json!({"type": "trillionnium_world", "version": 1, "world": "trillionnium_world", "zone_count": zone_count, "location_count": location_count, "asset_count": asset_count, "company_count": company_count, "shop_count": shop_count, "listing_count": listing_count, "purchase_count": purchase_count, "work_order_count": work_order_count, "faction_count": faction_count, "event_count": event_count, "map_renderer_adapter_id": renderer_adapter.adapter_id, "map_renderer_adapter_version": renderer_adapter.adapter_contract_version, "map_runtime_handle_name": renderer_adapter.runtime_handle_name, "map_renderer_future_engine_candidate": renderer_adapter.future_engine_candidate, "map_renderer_supports_future_engine_swap": renderer_adapter.supports_future_engine_swap, "map_planned_upgrade_engine_id": renderer_adapter.planned_upgrade_engine_id, "map_planned_upgrade_gating_contract": renderer_adapter.planned_upgrade_gating_contract}), &route, true)
+    })
+}
+
+fn build_trillionnium_world_map_matrix_reply(value: &Value) -> Value {
+    let counts = value.get("counts").unwrap_or(value);
+    let node_count = counts.get("map_nodes").and_then(Value::as_u64).unwrap_or(0);
+    let current_node = value.get("current_node").unwrap_or(value);
+    let current_node_id = value
+        .get("current_node_id")
+        .and_then(Value::as_str)
+        .or_else(|| current_node.get("node_id").and_then(Value::as_str))
+        .unwrap_or("mirror-city-square");
+    let current_name = current_node
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or("镜像城市广场");
+    let description = current_node
+        .get("description")
+        .and_then(Value::as_str)
+        .unwrap_or("World map is booting.");
+    let x = current_node.get("x").and_then(Value::as_i64).unwrap_or(0);
+    let y = current_node.get("y").and_then(Value::as_i64).unwrap_or(0);
+    let map_engine = value.get("real_world_map_engine");
+    let map_engine_id = map_engine
+        .and_then(|engine| engine.get("engine_id"))
+        .and_then(Value::as_str)
+        .unwrap_or("leaflet_openstreetmap_v1");
+    let tile_provider = map_engine
+        .and_then(|engine| engine.get("tile_provider"))
+        .and_then(Value::as_str)
+        .unwrap_or("OpenStreetMap");
+    let mirror_scope = map_engine
+        .and_then(|engine| engine.get("mirror_scope"))
+        .and_then(Value::as_str)
+        .unwrap_or("global_real_world_tiles");
+    let active_region_id = map_engine
+        .and_then(|engine| engine.get("active_region_id"))
+        .and_then(Value::as_str)
+        .unwrap_or("cn-shanghai-core");
+    let renderer_adapter = MapRendererAdapterCardContext::from_engine(map_engine);
+    let route =
+        RouteStoryCardContext::from_value(value, current_node_id).specialize_opportunity("map");
+    let route_text_block = route.text_block("Route Graph", false);
+    let route_html_block = route.html_block("Route Graph", false);
+    let exits = value
+        .get("exits")
+        .and_then(Value::as_object)
+        .map(|object| {
+            let mut pairs: Vec<String> = object
+                .iter()
+                .map(|(direction, node_id)| {
+                    format!("{}→{}", direction, node_id.as_str().unwrap_or("unknown"))
+                })
+                .collect();
+            pairs.sort();
+            pairs.join(" / ")
+        })
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "none".to_string());
+    let body = format!(
+        "🗺️ Trillionnium World Map\n当前位置：{current_name} ({current_node_id})\n坐标：{x},{y}\n节点：{node_count}\nMap Engine: {map_engine_id} ({tile_provider})\nMirror: {mirror_scope} · Region: {active_region_id}\nRenderer Adapter: {adapter_id} v{adapter_version} · handle {runtime_handle} · future {future_engine}\n{route_text_block}\n出口：{exits}\n{description}\n移动：/go <direction|node-id>",
+        adapter_id = &renderer_adapter.adapter_id,
+        adapter_version = renderer_adapter.adapter_contract_version,
+        runtime_handle = &renderer_adapter.runtime_handle_name,
+        future_engine = &renderer_adapter.future_engine_candidate,
+        route_text_block = route_text_block,
+    );
+    json!({
+        "msgtype": "m.text",
+        "body": body,
+        "format": "org.matrix.custom.html",
+        "formatted_body": format!(
+            "<blockquote><h3>🗺️ Trillionnium World Map</h3><p><strong>当前位置</strong>: {} (<code>{}</code>)</p><p><strong>坐标</strong>: {},{} · <strong>节点</strong>: {}</p><p><strong>Map Engine</strong>: <code>{}</code> · {} · <code>{}</code></p><p><strong>Renderer Adapter</strong>: <code>{}</code> v{} · <code>{}</code> · future <code>{}</code></p>{}<p><strong>出口</strong>: {}</p><p>{}</p><p><code>/go &lt;direction|node-id&gt;</code></p></blockquote>",
+            escape_html(current_name), escape_html(current_node_id), x, y, node_count, escape_html(map_engine_id), escape_html(tile_provider), escape_html(active_region_id), escape_html(&renderer_adapter.adapter_id), renderer_adapter.adapter_contract_version, escape_html(&renderer_adapter.runtime_handle_name), escape_html(&renderer_adapter.future_engine_candidate), route_html_block, escape_html(&exits), escape_html(description),
+        ),
+        "cex_card": route_story_card_json(json!({"type": "trillionnium_world_map", "version": 1, "world": "trillionnium_world", "current_node_id": current_node_id, "current_name": current_name, "node_count": node_count, "x": x, "y": y, "exits": exits, "has_real_world_map_engine": true, "map_engine_id": map_engine_id, "tile_provider": tile_provider, "mirror_scope": mirror_scope, "active_region_id": active_region_id, "map_renderer_adapter_id": renderer_adapter.adapter_id, "map_renderer_adapter_version": renderer_adapter.adapter_contract_version, "map_runtime_handle_name": renderer_adapter.runtime_handle_name, "map_renderer_future_engine_candidate": renderer_adapter.future_engine_candidate, "map_renderer_supports_future_engine_swap": renderer_adapter.supports_future_engine_swap, "map_planned_upgrade_engine_id": renderer_adapter.planned_upgrade_engine_id, "map_planned_upgrade_gating_contract": renderer_adapter.planned_upgrade_gating_contract}), &route, false)
+    })
+}
+
+fn build_trillionnium_world_map_move_matrix_reply(value: &Value) -> Value {
+    let from_node = value.get("from_node").unwrap_or(value);
+    let to_node = value.get("to_node").unwrap_or(value);
+    let position = value.get("position").unwrap_or(value);
+    let from_node_id = from_node
+        .get("node_id")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let to_node_id = to_node
+        .get("node_id")
+        .and_then(Value::as_str)
+        .unwrap_or("mirror-city-square");
+    let to_name = to_node
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or("镜像城市广场");
+    let location_id = position
+        .get("location_id")
+        .and_then(Value::as_str)
+        .or_else(|| to_node.get("location_id").and_then(Value::as_str))
+        .unwrap_or("mirror-city-square");
+    let x = to_node.get("x").and_then(Value::as_i64).unwrap_or(0);
+    let y = to_node.get("y").and_then(Value::as_i64).unwrap_or(0);
+    let body = format!(
+        "🚶 World Move\nFrom: {from_node_id}\nTo: {to_name} ({to_node_id})\nLocation: {location_id}\n坐标：{x},{y}\n查看：/map"
+    );
+    json!({
+        "msgtype": "m.text",
+        "body": body,
+        "format": "org.matrix.custom.html",
+        "formatted_body": format!(
+            "<blockquote><h3>🚶 World Move</h3><p><strong>From</strong>: <code>{}</code></p><p><strong>To</strong>: {} (<code>{}</code>)</p><p><strong>Location</strong>: <code>{}</code> · <strong>坐标</strong>: {},{}</p><p><code>/map</code></p></blockquote>",
+            escape_html(from_node_id), escape_html(to_name), escape_html(to_node_id), escape_html(location_id), x, y,
+        ),
+        "cex_card": {"type": "trillionnium_world_map_move", "version": 1, "world": "trillionnium_world", "from_node_id": from_node_id, "to_node_id": to_node_id, "to_name": to_name, "location_id": location_id, "x": x, "y": y}
+    })
+}
+
+fn build_trillionnium_client_app_matrix_reply(value: &Value) -> Value {
+    let modules = value
+        .get("modules")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let module_count = value
+        .get("module_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(modules.len() as u64);
+    let module_names: Vec<String> = modules
+        .iter()
+        .filter_map(|module| module.get("name").and_then(Value::as_str))
+        .map(ToString::to_string)
+        .collect();
+    let map_node = value
+        .get("map")
+        .and_then(|map| map.get("current_node_id"))
+        .and_then(Value::as_str)
+        .unwrap_or("mirror-city-square");
+    let map_engine = value.get("real_world_map_engine").or_else(|| {
+        value
+            .get("map")
+            .and_then(|map| map.get("real_world_map_engine"))
+    });
+    let map_engine_id = map_engine
+        .and_then(|engine| engine.get("engine_id"))
+        .and_then(Value::as_str)
+        .unwrap_or("leaflet_openstreetmap_v1");
+    let tile_provider = map_engine
+        .and_then(|engine| engine.get("tile_provider"))
+        .and_then(Value::as_str)
+        .unwrap_or("OpenStreetMap");
+    let renderer_adapter = MapRendererAdapterCardContext::from_engine(map_engine);
+    let active_region_id = value
+        .get("map_hub")
+        .and_then(|hub| hub.get("active_region_id"))
+        .and_then(Value::as_str)
+        .unwrap_or("cn-shanghai-core");
+    let nearby_poi_count = value
+        .get("map_hub")
+        .and_then(|hub| hub.get("nearby_poi_count"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let tile_shard_count = value
+        .get("map_hub")
+        .and_then(|hub| hub.get("tile_shard_count"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let prefetch_count = value
+        .get("map_hub")
+        .and_then(|hub| hub.get("prefetch_count"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let live_event_count = value
+        .get("map_hub")
+        .and_then(|hub| hub.get("live_event_count"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let player_density_mode = value
+        .get("map_hub")
+        .and_then(|hub| hub.get("player_density_mode"))
+        .and_then(Value::as_str)
+        .unwrap_or("dense");
+    let map_hub = value.get("map_hub").cloned().unwrap_or(Value::Null);
+    let route = RouteStoryCardContext::from_value(&map_hub, map_node).specialize_opportunity("app");
+    let route_text_block = route.text_block("Route Cockpit", true);
+    let route_html_block = route.html_block("Route Cockpit", true);
+    let primary_entry_module_id = value
+        .get("primary_entry_module_id")
+        .and_then(Value::as_str)
+        .unwrap_or("world_map");
+    let progression = value.get("progression");
+    let progression_level = progression
+        .and_then(|progression| progression.get("level"))
+        .and_then(Value::as_u64)
+        .unwrap_or(1);
+    let progression_rank = progression
+        .and_then(|progression| progression.get("rank_title"))
+        .and_then(Value::as_str)
+        .unwrap_or("Apprentice");
+    let successful_task_count = progression
+        .and_then(|progression| progression.get("successful_task_count"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let unlocked_skill_count = progression
+        .and_then(|progression| progression.get("unlocked_skill_count"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let unlocked_tool_count = progression
+        .and_then(|progression| progression.get("unlocked_tool_count"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let unlocked_skin_count = progression
+        .and_then(|progression| progression.get("unlocked_skin_count"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let onboarding = value.get("onboarding");
+    let onboarding_contract_version = onboarding
+        .and_then(|rail| rail.get("contract_version"))
+        .and_then(Value::as_str)
+        .unwrap_or("trillionnium_first_playable_onboarding_v1");
+    let onboarding_label = onboarding
+        .and_then(|rail| rail.get("rail_label"))
+        .and_then(Value::as_str)
+        .unwrap_or("新手主线：从地图到成交");
+    let onboarding_completion_target = onboarding
+        .and_then(|rail| rail.get("completion_target"))
+        .and_then(Value::as_str)
+        .unwrap_or("first_playable_loop_100");
+    let onboarding_step_count = onboarding
+        .and_then(|rail| rail.get("steps"))
+        .and_then(Value::as_array)
+        .map(|steps| steps.len() as u64)
+        .unwrap_or(0);
+    let body = format!(
+        "📱 Trillionnium Client App\nModules: {module_count}\n{}\nPrimary Entry: {primary_entry_module_id}\nMap Engine: {map_engine_id} ({tile_provider})\nRenderer Adapter: {adapter_id} v{adapter_version} · handle {runtime_handle} · future {future_engine}\nCurrent Map: {map_node}\nActive Region: {active_region_id} · Tiles: {tile_shard_count} · Nearby POIs: {nearby_poi_count}\nMap Stream: {live_event_count} live events · {prefetch_count} prefetch tiles · {player_density_mode} density\nOnboarding: {onboarding_label} · {onboarding_step_count} steps · target {onboarding_completion_target}\n{route_text_block}\nProgression: Lv.{progression_level} {progression_rank} · {successful_task_count} successes · skills/tools/skins {unlocked_skill_count}/{unlocked_tool_count}/{unlocked_skin_count}\n入口：/map /duel nearby /social /wallet /progression",
+        module_names.join(" / "),
+        adapter_id = &renderer_adapter.adapter_id,
+        adapter_version = renderer_adapter.adapter_contract_version,
+        runtime_handle = &renderer_adapter.runtime_handle_name,
+        future_engine = &renderer_adapter.future_engine_candidate,
+        route_text_block = route_text_block,
+    );
+    json!({
+        "msgtype": "m.text",
+        "body": body,
+        "format": "org.matrix.custom.html",
+        "formatted_body": format!(
+            "<blockquote><h3>📱 Trillionnium Client App</h3><p><strong>Modules</strong>: {} · {}</p><p><strong>Primary Entry</strong>: <code>{}</code></p><p><strong>Map Engine</strong>: <code>{}</code> · {} · <code>{}</code></p><p><strong>Renderer Adapter</strong>: <code>{}</code> v{} · <code>{}</code> · future <code>{}</code></p><p><strong>Current Map</strong>: <code>{}</code> · <strong>Tiles</strong>: {} · <strong>Nearby POIs</strong>: {}</p><p><strong>Map Stream</strong>: {} live events · {} prefetch tiles · {} density</p><p><strong>Onboarding</strong>: {} · {} steps · target <code>{}</code></p>{}<p><strong>Progression</strong>: Lv.{} {} · {} successes · skills/tools/skins {}/{}/{}</p><p><code>/map</code> <code>/duel nearby</code> <code>/social</code> <code>/wallet</code> <code>/progression</code></p></blockquote>",
+            module_count, escape_html(&module_names.join(" / ")), escape_html(primary_entry_module_id), escape_html(map_engine_id), escape_html(tile_provider), escape_html(active_region_id), escape_html(&renderer_adapter.adapter_id), renderer_adapter.adapter_contract_version, escape_html(&renderer_adapter.runtime_handle_name), escape_html(&renderer_adapter.future_engine_candidate), escape_html(map_node), tile_shard_count, nearby_poi_count, live_event_count, prefetch_count, escape_html(player_density_mode), escape_html(onboarding_label), onboarding_step_count, escape_html(onboarding_completion_target), route_html_block, progression_level, escape_html(progression_rank), successful_task_count, unlocked_skill_count, unlocked_tool_count, unlocked_skin_count,
+        ),
+        "cex_card": route_story_card_json(json!({
+            "type": "trillionnium_client_app",
+            "version": 1,
+            "client": "trillionnium_mobile_shell",
+            "module_count": module_count,
+            "modules": module_names,
+            "primary_entry_module_id": primary_entry_module_id,
+            "current_node_id": map_node,
+            "has_world_map": true,
+            "has_real_world_map_engine": true,
+            "map_engine_id": map_engine_id,
+            "tile_provider": tile_provider,
+            "active_region_id": active_region_id,
+            "map_renderer_adapter_id": renderer_adapter.adapter_id,
+            "map_renderer_adapter_version": renderer_adapter.adapter_contract_version,
+            "map_runtime_handle_name": renderer_adapter.runtime_handle_name,
+            "map_renderer_future_engine_candidate": renderer_adapter.future_engine_candidate,
+            "map_renderer_supports_future_engine_swap": renderer_adapter.supports_future_engine_swap,
+            "map_planned_upgrade_engine_id": renderer_adapter.planned_upgrade_engine_id,
+            "map_planned_upgrade_gating_contract": renderer_adapter.planned_upgrade_gating_contract,
+            "tile_shard_count": tile_shard_count,
+            "nearby_poi_count": nearby_poi_count,
+            "prefetch_count": prefetch_count,
+            "live_event_count": live_event_count,
+            "player_density_mode": player_density_mode,
+            "has_first_playable_onboarding": true,
+            "onboarding_contract_version": onboarding_contract_version,
+            "onboarding_label": onboarding_label,
+            "onboarding_completion_target": onboarding_completion_target,
+            "onboarding_step_count": onboarding_step_count,
+            "has_face_duel": true,
+            "has_social": true,
+            "has_wallet": true,
+            "has_progression": true,
+            "progression_level": progression_level,
+            "successful_task_count": successful_task_count,
+            "unlocked_skill_count": unlocked_skill_count,
+            "unlocked_tool_count": unlocked_tool_count,
+            "unlocked_skin_count": unlocked_skin_count
+        }), &route, true)
+    })
+}
+
+fn client_feed_group_count(items: &[Value], group: &str) -> usize {
+    items
+        .iter()
+        .filter(|item| item.get("feed_group").and_then(Value::as_str) == Some(group))
+        .count()
+}
+
+fn client_feed_matches_filter(item: &Value, filter: &str) -> bool {
+    item.get("feed_group").and_then(Value::as_str) == Some(filter)
+}
+
+fn client_feed_filter_label(filter: Option<&str>) -> &'static str {
+    match filter {
+        Some("live_event") => "事件",
+        Some("route_task") => "任务",
+        Some("contract") => "委托",
+        Some("completion") => "完成",
+        Some("commerce") => "成交",
+        Some("social") => "社交",
+        _ => "全部",
+    }
+}
+
+fn build_trillionnium_client_feed_matrix_reply(value: &Value, filter: Option<&str>) -> Value {
+    let items = value
+        .get("items")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let item_count = value
+        .get("item_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(items.len() as u64);
+    let source_count = value
+        .get("source_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let filter_label = client_feed_filter_label(filter);
+    let visible_items = filter
+        .map(|group| {
+            items
+                .iter()
+                .filter(|item| client_feed_matches_filter(item, group))
+                .cloned()
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_else(|| items.clone());
+    let visible_item_count = visible_items.len() as u64;
+    let active_region_id = value
+        .get("active_region_id")
+        .and_then(Value::as_str)
+        .unwrap_or("cn-shanghai-core");
+    let live_event_count = client_feed_group_count(&items, "live_event");
+    let route_task_count = client_feed_group_count(&items, "route_task");
+    let contract_count = client_feed_group_count(&items, "contract");
+    let completion_count = client_feed_group_count(&items, "completion");
+    let commerce_count = client_feed_group_count(&items, "commerce");
+    let social_count = client_feed_group_count(&items, "social");
+    let top_item = visible_items.first();
+    let top_feed_kind = top_item
+        .and_then(|item| item.get("feed_kind"))
+        .and_then(Value::as_str)
+        .unwrap_or("update");
+    let top_feed_group = top_item
+        .and_then(|item| item.get("feed_group"))
+        .and_then(Value::as_str)
+        .unwrap_or(top_feed_kind);
+    let top_source = top_item
+        .and_then(|item| item.get("source"))
+        .and_then(Value::as_str)
+        .unwrap_or("feed");
+    let top_title = top_item
+        .and_then(|item| item.get("title"))
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| {
+            if filter.is_some() {
+                "该分组暂时安静"
+            } else {
+                "动态等待中"
+            }
+        });
+    let top_summary = top_item
+        .and_then(|item| item.get("summary"))
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| {
+            if filter.is_some() {
+                "这个 feed 分组暂时没有新动态，先回到 /feed 全部视图或去 /world 推进下一步。"
+            } else {
+                "切到 /app 看完整 timeline，或在 /world 里推进下一个 live event。"
+            }
+        });
+    let top_detail = top_item
+        .and_then(|item| item.get("detail"))
+        .and_then(Value::as_str)
+        .unwrap_or("feed waiting");
+    let top_action_label = top_item
+        .and_then(|item| item.get("action_label"))
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| {
+            if filter.is_some() {
+                "回到 /feed 全部"
+            } else {
+                "打开 /app"
+            }
+        });
+    let top_action_panel_id = top_item
+        .and_then(|item| item.get("action_panel_id"))
+        .and_then(Value::as_str)
+        .unwrap_or("world-action-console");
+    let top_action_input_id = top_item
+        .and_then(|item| item.get("action_input_id"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let top_action_input_value = top_item
+        .and_then(|item| item.get("action_input_value"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let top_action_textarea_id = top_item
+        .and_then(|item| item.get("action_textarea_id"))
+        .and_then(Value::as_str)
+        .unwrap_or("world-action-body");
+    let top_action_location_id = top_item
+        .and_then(|item| item.get("action_location_id"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let top_action_target_node_id = top_item
+        .and_then(|item| item.get("action_target_node_id"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let top_action_task_id = top_item
+        .and_then(|item| item.get("action_task_id"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let top_action_contract_id = top_item
+        .and_then(|item| item.get("action_contract_id"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let top_action_listing_id = top_item
+        .and_then(|item| item.get("action_listing_id"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let top_action_work_order_id = top_item
+        .and_then(|item| item.get("action_work_order_id"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let fallback_node = if top_action_target_node_id.trim().is_empty() {
+        "client-board"
+    } else {
+        top_action_target_node_id
+    };
+    let route =
+        RouteStoryCardContext::from_value(value, fallback_node).specialize_opportunity("app");
+    let route_text_block = route.text_block("Route Cockpit", true);
+    let route_html_block = route.html_block("Route Cockpit", true);
+    let body = format!(
+        "📰 Trillionnium Feed\nView: {filter_label} · Visible {visible_item_count}/{item_count}\nSources: {source_count} · Region: {active_region_id}\n分组：事件 {live_event_count} · 任务 {route_task_count} · 委托 {contract_count} · 完成 {completion_count} · 成交 {commerce_count} · 社交 {social_count}\nTop Signal: {top_title}\nSignal: {top_feed_group} / {top_source} · {top_detail}\nSummary: {top_summary}\nAction: {top_action_label} @ {top_action_panel_id}\n{route_text_block}\n入口：/feed tasks /feed commerce /feed social /app"
+    );
+    json!({
+        "msgtype": "m.text",
+        "body": body,
+        "format": "org.matrix.custom.html",
+        "formatted_body": format!(
+            "<blockquote><h3>📰 Trillionnium Feed</h3><p><strong>View</strong>: {} · <strong>Visible</strong>: {}/{} · <strong>Sources</strong>: {} · <strong>Region</strong>: <code>{}</code></p><p><strong>分组</strong>: 事件 {} · 任务 {} · 委托 {} · 完成 {} · 成交 {} · 社交 {}</p><p><strong>Top Signal</strong>: {}</p><p><strong>Signal</strong>: <code>{}</code> / <code>{}</code> · {}</p><p><strong>Summary</strong>: {}</p><p><strong>Action</strong>: {} @ <code>{}</code></p>{}<p><code>/feed tasks</code> <code>/feed commerce</code> <code>/feed social</code> <code>/app</code></p></blockquote>",
+            escape_html(filter_label),
+            visible_item_count,
+            item_count,
+            source_count,
+            escape_html(active_region_id),
+            live_event_count,
+            route_task_count,
+            contract_count,
+            completion_count,
+            commerce_count,
+            social_count,
+            escape_html(top_title),
+            escape_html(top_feed_group),
+            escape_html(top_source),
+            escape_html(top_detail),
+            escape_html(top_summary),
+            escape_html(top_action_label),
+            escape_html(top_action_panel_id),
+            route_html_block,
+        ),
+        "cex_card": route_story_card_json(json!({
+            "type": "trillionnium_client_feed",
+            "version": 1,
+            "client": "trillionnium_mobile_shell",
+            "feed_filter": filter,
+            "feed_filter_label": filter_label,
+            "item_count": item_count,
+            "visible_item_count": visible_item_count,
+            "source_count": source_count,
+            "active_region_id": active_region_id,
+            "live_event_feed_count": live_event_count,
+            "route_task_feed_count": route_task_count,
+            "contract_feed_count": contract_count,
+            "completion_feed_count": completion_count,
+            "commerce_feed_count": commerce_count,
+            "social_feed_count": social_count,
+            "top_feed_kind": top_feed_kind,
+            "top_feed_group": top_feed_group,
+            "top_source": top_source,
+            "top_title": top_title,
+            "top_summary": top_summary,
+            "top_detail": top_detail,
+            "top_action_label": top_action_label,
+            "top_action_panel_id": top_action_panel_id,
+            "top_action_input_id": top_action_input_id,
+            "top_action_input_value": top_action_input_value,
+            "top_action_textarea_id": top_action_textarea_id,
+            "top_action_location_id": top_action_location_id,
+            "top_action_target_node_id": top_action_target_node_id,
+            "top_action_task_id": top_action_task_id,
+            "top_action_contract_id": top_action_contract_id,
+            "top_action_listing_id": top_action_listing_id,
+            "top_action_work_order_id": top_action_work_order_id
+        }), &route, true)
+    })
+}
+
+fn build_trillionnium_client_social_matrix_reply(value: &Value) -> Value {
+    let social = value.get("social").unwrap_or(value);
+    let contact_count = social
+        .get("contact_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let guild_count = social
+        .get("guild_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let nearby_agents = value
+        .get("nearby_agents")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let top_contact = nearby_agents
+        .first()
+        .and_then(|agent| agent.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or("Oracle Scout");
+    let body = format!(
+        "💬 Trillionnium Social\nContacts: {contact_count}\nGuilds: {guild_count}\nTop Contact: {top_contact}\n风格：WeChat / Telegram rooms + Agent contacts"
+    );
+    json!({
+        "msgtype": "m.text",
+        "body": body,
+        "format": "org.matrix.custom.html",
+        "formatted_body": format!(
+            "<blockquote><h3>💬 Trillionnium Social</h3><p><strong>Contacts</strong>: {} · <strong>Guilds</strong>: {}</p><p><strong>Top Contact</strong>: {}</p><p>WeChat / Telegram rooms + Agent contacts.</p></blockquote>",
+            contact_count, guild_count, escape_html(top_contact),
+        ),
+        "cex_card": {"type": "trillionnium_client_social", "version": 1, "client": "trillionnium_mobile_shell", "contact_count": contact_count, "guild_count": guild_count, "top_contact": top_contact}
+    })
+}
+
+fn build_trillionnium_client_duel_matrix_reply(value: &Value, opponent: &str) -> Value {
+    let task = value.get("task").unwrap_or(value);
+    let match_id = value
+        .get("match")
+        .and_then(|value| value.get("match_id"))
+        .and_then(Value::as_str)
+        .unwrap_or("face-duel-001");
+    let task_id = task
+        .get("task_id")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown-task");
+    let invocation_status = task
+        .get("invocation_status")
+        .and_then(Value::as_str)
+        .unwrap_or("Queued");
+    let body = format!(
+        "⚔️ Face Duel Started\nOpponent: {opponent}\nMatch: {match_id}\nTask: {task_id}\nStatus: {invocation_status}\n下一步：/submit {match_id} <对战结果>"
+    );
+    json!({
+        "msgtype": "m.text",
+        "body": body,
+        "format": "org.matrix.custom.html",
+        "formatted_body": format!(
+            "<blockquote><h3>⚔️ Face Duel Started</h3><p><strong>Opponent</strong>: {}</p><p><strong>Match</strong>: <code>{}</code></p><p><strong>Task</strong>: <code>{}</code> · <strong>Status</strong>: {}</p><p><code>/submit {} &lt;对战结果&gt;</code></p></blockquote>",
+            escape_html(opponent), escape_html(match_id), escape_html(task_id), escape_html(invocation_status), escape_html(match_id),
+        ),
+        "cex_task_id": task_id,
+        "cex_card": {"type": "trillionnium_client_duel", "version": 1, "client": "trillionnium_mobile_shell", "opponent": opponent, "match_id": match_id, "task_id": task_id, "invocation_status": invocation_status}
     })
 }
 
@@ -4234,18 +6361,22 @@ fn build_trillionnium_world_assets_matrix_reply(value: &Value) -> Value {
         .and_then(|asset| asset.get("asset_id"))
         .and_then(Value::as_str)
         .unwrap_or("latest");
+    let route =
+        RouteStoryCardContext::from_value(value, "asset-yard").specialize_opportunity("assets");
+    let route_text_block = route.text_block("Route Follow-up", true);
+    let route_html_block = route.html_block("Route Follow-up", true);
     let body = format!(
-        "🏗️ World Assets\nAssets: {asset_count}\nUpgrades: {upgrade_count}\nTop Asset: {top_asset}\n升级：/upgrade latest <方案>"
+        "🏗️ World Assets\nAssets: {asset_count}\nUpgrades: {upgrade_count}\nTop Asset: {top_asset}\n{route_text_block}\n升级：/upgrade latest <方案>"
     );
     json!({
         "msgtype": "m.text",
         "body": body,
         "format": "org.matrix.custom.html",
         "formatted_body": format!(
-            "<blockquote><h3>🏗️ World Assets</h3><p><strong>Assets</strong>: {} · <strong>Upgrades</strong>: {}</p><p><strong>Top</strong>: <code>{}</code></p><p><code>/upgrade latest &lt;方案&gt;</code></p></blockquote>",
-            asset_count, upgrade_count, escape_html(top_asset),
+            "<blockquote><h3>🏗️ World Assets</h3><p><strong>Assets</strong>: {} · <strong>Upgrades</strong>: {}</p><p><strong>Top</strong>: <code>{}</code></p>{}<p><code>/upgrade latest &lt;方案&gt;</code></p></blockquote>",
+            asset_count, upgrade_count, escape_html(top_asset), route_html_block,
         ),
-        "cex_card": {"type": "trillionnium_world_assets", "version": 1, "world": "trillionnium_world", "asset_count": asset_count, "upgrade_count": upgrade_count, "top_asset_id": top_asset}
+        "cex_card": route_story_card_json(json!({"type": "trillionnium_world_assets", "version": 1, "world": "trillionnium_world", "asset_count": asset_count, "upgrade_count": upgrade_count, "top_asset_id": top_asset}), &route, true)
     })
 }
 
@@ -4262,18 +6393,22 @@ fn build_trillionnium_world_companies_matrix_reply(value: &Value) -> Value {
         .and_then(|company| company.get("company_id"))
         .and_then(Value::as_str)
         .unwrap_or("latest");
+    let route = RouteStoryCardContext::from_value(value, "starter-studio")
+        .specialize_opportunity("companies");
+    let route_text_block = route.text_block("Route Follow-up", true);
+    let route_html_block = route.html_block("Route Follow-up", true);
     let body = format!(
-        "🏢 World Companies\nCompanies: {company_count}\nTop Company: {top_company}\n开公司：/company latest <方案>"
+        "🏢 World Companies\nCompanies: {company_count}\nTop Company: {top_company}\n{route_text_block}\n开公司：/company latest <方案>"
     );
     json!({
         "msgtype": "m.text",
         "body": body,
         "format": "org.matrix.custom.html",
         "formatted_body": format!(
-            "<blockquote><h3>🏢 World Companies</h3><p><strong>Companies</strong>: {}</p><p><strong>Top</strong>: <code>{}</code></p><p><code>/company latest &lt;方案&gt;</code></p></blockquote>",
-            company_count, escape_html(top_company),
+            "<blockquote><h3>🏢 World Companies</h3><p><strong>Companies</strong>: {}</p><p><strong>Top</strong>: <code>{}</code></p>{}<p><code>/company latest &lt;方案&gt;</code></p></blockquote>",
+            company_count, escape_html(top_company), route_html_block,
         ),
-        "cex_card": {"type": "trillionnium_world_companies", "version": 1, "world": "trillionnium_world", "company_count": company_count, "top_company_id": top_company}
+        "cex_card": route_story_card_json(json!({"type": "trillionnium_world_companies", "version": 1, "world": "trillionnium_world", "company_count": company_count, "top_company_id": top_company}), &route, true)
     })
 }
 
@@ -4292,18 +6427,21 @@ fn build_trillionnium_world_company_matrix_reply(value: &Value) -> Value {
         .get("reputation_score")
         .and_then(Value::as_i64)
         .unwrap_or(0);
+    let route = RouteStoryCardContext::from_value(value, "starter-studio");
+    let route_text_block = route.text_block("Route Follow-up", true);
+    let route_html_block = route.html_block("Route Follow-up", true);
     let body = format!(
-        "🏢 Company Launched\nCompany: {company_id}\nLevel: {level}\nRevenue: {revenue}\nReputation: {reputation}\n查看：/companies"
+        "🏢 Company Launched\nCompany: {company_id}\nLevel: {level}\nRevenue: {revenue}\nReputation: {reputation}\n{route_text_block}\n查看：/companies"
     );
     json!({
         "msgtype": "m.text",
         "body": body,
         "format": "org.matrix.custom.html",
         "formatted_body": format!(
-            "<blockquote><h3>🏢 Company Launched</h3><p><strong>Company</strong>: <code>{}</code></p><p><strong>Level</strong>: {} · <strong>Revenue</strong>: {} · <strong>Rep</strong>: {}</p><p><code>/companies</code></p></blockquote>",
-            escape_html(company_id), level, revenue, reputation,
+            "<blockquote><h3>🏢 Company Launched</h3><p><strong>Company</strong>: <code>{}</code></p><p><strong>Level</strong>: {} · <strong>Revenue</strong>: {} · <strong>Rep</strong>: {}</p>{}<p><code>/companies</code></p></blockquote>",
+            escape_html(company_id), level, revenue, reputation, route_html_block,
         ),
-        "cex_card": {"type": "trillionnium_world_company_created", "version": 1, "world": "trillionnium_world", "company_id": company_id, "company_level": level, "revenue_score": revenue, "reputation_score": reputation}
+        "cex_card": route_story_card_json(json!({"type": "trillionnium_world_company_created", "version": 1, "world": "trillionnium_world", "company_id": company_id, "company_level": level, "revenue_score": revenue, "reputation_score": reputation}), &route, true)
     })
 }
 
@@ -4325,18 +6463,22 @@ fn build_trillionnium_world_shops_matrix_reply(value: &Value) -> Value {
         .and_then(|shop| shop.get("shop_id"))
         .and_then(Value::as_str)
         .unwrap_or("latest");
+    let route =
+        RouteStoryCardContext::from_value(value, "client-board").specialize_opportunity("shops");
+    let route_text_block = route.text_block("Route Follow-up", true);
+    let route_html_block = route.html_block("Route Follow-up", true);
     let body = format!(
-        "🛒 World Shops\nShops: {shop_count}\nListings: {listing_count}\nTop Shop: {top_shop}\n上架：/sell latest <商品/服务>"
+        "🛒 World Shops\nShops: {shop_count}\nListings: {listing_count}\nTop Shop: {top_shop}\n{route_text_block}\n上架：/sell latest <商品/服务>"
     );
     json!({
         "msgtype": "m.text",
         "body": body,
         "format": "org.matrix.custom.html",
         "formatted_body": format!(
-            "<blockquote><h3>🛒 World Shops</h3><p><strong>Shops</strong>: {} · <strong>Listings</strong>: {}</p><p><strong>Top</strong>: <code>{}</code></p><p><code>/sell latest &lt;商品/服务&gt;</code></p></blockquote>",
-            shop_count, listing_count, escape_html(top_shop),
+            "<blockquote><h3>🛒 World Shops</h3><p><strong>Shops</strong>: {} · <strong>Listings</strong>: {}</p><p><strong>Top</strong>: <code>{}</code></p>{}<p><code>/sell latest &lt;商品/服务&gt;</code></p></blockquote>",
+            shop_count, listing_count, escape_html(top_shop), route_html_block,
         ),
-        "cex_card": {"type": "trillionnium_world_shops", "version": 1, "world": "trillionnium_world", "shop_count": shop_count, "listing_count": listing_count, "top_shop_id": top_shop}
+        "cex_card": route_story_card_json(json!({"type": "trillionnium_world_shops", "version": 1, "world": "trillionnium_world", "shop_count": shop_count, "listing_count": listing_count, "top_shop_id": top_shop}), &route, true)
     })
 }
 
@@ -4358,18 +6500,22 @@ fn build_trillionnium_world_listing_matrix_reply(value: &Value) -> Value {
         .get("status")
         .and_then(Value::as_str)
         .unwrap_or("listed");
+    let route =
+        RouteStoryCardContext::from_value(value, "client-board").specialize_opportunity("listing");
+    let route_text_block = route.text_block("Route Follow-up", true);
+    let route_html_block = route.html_block("Route Follow-up", true);
     let body = format!(
-        "🛒 Listing Published\nListing: {listing_id}\nPrice: {price}\nQuality: {quality}\nStatus: {status}\n查看：/shops"
+        "🛒 Listing Published\nListing: {listing_id}\nPrice: {price}\nQuality: {quality}\nStatus: {status}\n{route_text_block}\n查看：/shops"
     );
     json!({
         "msgtype": "m.text",
         "body": body,
         "format": "org.matrix.custom.html",
         "formatted_body": format!(
-            "<blockquote><h3>🛒 Listing Published</h3><p><strong>Listing</strong>: <code>{}</code></p><p><strong>Price</strong>: {} · <strong>Quality</strong>: {} · <strong>Status</strong>: {}</p><p><code>/shops</code></p></blockquote>",
-            escape_html(listing_id), price, quality, escape_html(status),
+            "<blockquote><h3>🛒 Listing Published</h3><p><strong>Listing</strong>: <code>{}</code></p><p><strong>Price</strong>: {} · <strong>Quality</strong>: {} · <strong>Status</strong>: {}</p>{}<p><code>/shops</code></p></blockquote>",
+            escape_html(listing_id), price, quality, escape_html(status), route_html_block,
         ),
-        "cex_card": {"type": "trillionnium_world_listing_created", "version": 1, "world": "trillionnium_world", "listing_id": listing_id, "price_credits": price, "quality_score": quality, "status": status}
+        "cex_card": route_story_card_json(json!({"type": "trillionnium_world_listing_created", "version": 1, "world": "trillionnium_world", "listing_id": listing_id, "price_credits": price, "quality_score": quality, "status": status}), &route, true)
     })
 }
 
@@ -4397,23 +6543,32 @@ fn build_trillionnium_world_purchase_matrix_reply(value: &Value) -> Value {
         .and_then(Value::as_str)
         .or_else(|| value.get("ledger_status").and_then(Value::as_str))
         .unwrap_or("pending");
+    let buyer_ledger_status = purchase
+        .get("buyer_ledger_status")
+        .and_then(Value::as_str)
+        .or_else(|| value.get("buyer_ledger_status").and_then(Value::as_str))
+        .unwrap_or("pending");
     let standing_rank = value
         .get("seller_standing")
         .and_then(|standing| standing.get("rank"))
         .and_then(Value::as_str)
         .unwrap_or("new_contact");
+    let route = RouteStoryCardContext::from_value(value, "delivery-dock")
+        .specialize_opportunity("purchase");
+    let route_text_block = route.text_block("Route Follow-up", true);
+    let route_html_block = route.html_block("Route Follow-up", true);
     let body = format!(
-        "💸 Listing Purchased\nPurchase: {purchase_id}\nWork Order: {work_order_id}\nPrice: {price}\nStatus: {status}\nLedger: {ledger_status}\nFaction Rank: {standing_rank}\n查看工作：/work"
+        "💸 Listing Purchased\nPurchase: {purchase_id}\nWork Order: {work_order_id}\nPrice: {price}\nStatus: {status}\nSeller Ledger: {ledger_status}\nBuyer Reserve: {buyer_ledger_status}\nFaction Rank: {standing_rank}\n{route_text_block}\n查看工作：/work"
     );
     json!({
         "msgtype": "m.text",
         "body": body,
         "format": "org.matrix.custom.html",
         "formatted_body": format!(
-            "<blockquote><h3>💸 Listing Purchased</h3><p><strong>Purchase</strong>: <code>{}</code></p><p><strong>Work</strong>: <code>{}</code></p><p><strong>Price</strong>: {} · <strong>Status</strong>: {} · <strong>Ledger</strong>: {}</p><p><strong>Faction</strong>: {}</p><p><code>/work</code> <code>/factions</code></p></blockquote>",
-            escape_html(purchase_id), escape_html(work_order_id), price, escape_html(status), escape_html(ledger_status), escape_html(standing_rank),
+            "<blockquote><h3>💸 Listing Purchased</h3><p><strong>Purchase</strong>: <code>{}</code></p><p><strong>Work</strong>: <code>{}</code></p><p><strong>Price</strong>: {} · <strong>Status</strong>: {}</p><p><strong>Seller Ledger</strong>: {} · <strong>Buyer Reserve</strong>: {}</p><p><strong>Faction</strong>: {}</p>{}<p><code>/work</code> <code>/factions</code></p></blockquote>",
+            escape_html(purchase_id), escape_html(work_order_id), price, escape_html(status), escape_html(ledger_status), escape_html(buyer_ledger_status), escape_html(standing_rank), route_html_block,
         ),
-        "cex_card": {"type": "trillionnium_world_listing_purchase", "version": 1, "world": "trillionnium_world", "purchase_id": purchase_id, "work_order_id": work_order_id, "price_credits": price, "status": status, "ledger_status": ledger_status, "seller_faction_rank": standing_rank}
+        "cex_card": route_story_card_json(json!({"type": "trillionnium_world_listing_purchase", "version": 1, "world": "trillionnium_world", "purchase_id": purchase_id, "work_order_id": work_order_id, "price_credits": price, "status": status, "ledger_status": ledger_status, "buyer_ledger_status": buyer_ledger_status, "seller_faction_rank": standing_rank}), &route, true)
     })
 }
 
@@ -4428,6 +6583,31 @@ fn build_trillionnium_world_commerce_matrix_reply(value: &Value) -> Value {
         .and_then(Value::as_array)
         .map(Vec::len)
         .unwrap_or(0);
+    let delivery_count = value
+        .get("work_deliveries")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    let acceptance_count = value
+        .get("work_acceptances")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    let rejection_count = value
+        .get("work_rejections")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    let reopen_count = value
+        .get("work_reopens")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    let cancellation_count = value
+        .get("work_cancellations")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
     let latest_work = value
         .get("work_orders")
         .and_then(Value::as_array)
@@ -4435,18 +6615,310 @@ fn build_trillionnium_world_commerce_matrix_reply(value: &Value) -> Value {
         .and_then(|work| work.get("work_order_id"))
         .and_then(Value::as_str)
         .unwrap_or("none");
+    let route =
+        RouteStoryCardContext::from_value(value, "delivery-dock").specialize_opportunity("work");
+    let route_text_block = route.text_block("Route Follow-up", true);
+    let route_html_block = route.html_block("Route Follow-up", true);
     let body = format!(
-        "🧾 World Commerce\nPurchases: {purchase_count}\nWork Orders: {work_count}\nLatest Work: {latest_work}\n购买：/buy latest <需求>"
+        "🧾 World Commerce\nPurchases: {purchase_count}\nWork Orders: {work_count}\nDeliveries: {delivery_count}\nAcceptances: {acceptance_count}\nRejections: {rejection_count}\nReopens: {reopen_count}\nCancellations: {cancellation_count}\nLatest Work: {latest_work}\n{route_text_block}\n购买：/buy latest <需求>"
     );
     json!({
         "msgtype": "m.text",
         "body": body,
         "format": "org.matrix.custom.html",
         "formatted_body": format!(
-            "<blockquote><h3>🧾 World Commerce</h3><p><strong>Purchases</strong>: {} · <strong>Work Orders</strong>: {}</p><p><strong>Latest</strong>: <code>{}</code></p><p><code>/buy latest &lt;需求&gt;</code></p></blockquote>",
-            purchase_count, work_count, escape_html(latest_work),
+            "<blockquote><h3>🧾 World Commerce</h3><p><strong>Purchases</strong>: {} · <strong>Work Orders</strong>: {} · <strong>Deliveries</strong>: {} · <strong>Acceptances</strong>: {} · <strong>Rejections</strong>: {} · <strong>Reopens</strong>: {} · <strong>Cancellations</strong>: {}</p><p><strong>Latest</strong>: <code>{}</code></p>{}<p><code>/buy latest &lt;需求&gt;</code> <code>/work deliver latest</code> <code>/work reject latest</code> <code>/work reopen latest</code> <code>/work cancel latest</code></p></blockquote>",
+            purchase_count, work_count, delivery_count, acceptance_count, rejection_count, reopen_count, cancellation_count, escape_html(latest_work), route_html_block,
         ),
-        "cex_card": {"type": "trillionnium_world_commerce", "version": 1, "world": "trillionnium_world", "purchase_count": purchase_count, "work_order_count": work_count, "latest_work_order_id": latest_work}
+        "cex_card": route_story_card_json(json!({"type": "trillionnium_world_commerce", "version": 1, "world": "trillionnium_world", "purchase_count": purchase_count, "work_order_count": work_count, "delivery_count": delivery_count, "acceptance_count": acceptance_count, "rejection_count": rejection_count, "reopen_count": reopen_count, "cancellation_count": cancellation_count, "latest_work_order_id": latest_work}), &route, true)
+    })
+}
+
+fn build_trillionnium_world_work_delivery_matrix_reply(value: &Value) -> Value {
+    let work_order = value.get("work_order").unwrap_or(value);
+    let delivery = value.get("delivery").unwrap_or(value);
+    let work_order_id = work_order
+        .get("work_order_id")
+        .and_then(Value::as_str)
+        .unwrap_or("world-work");
+    let delivery_id = delivery
+        .get("delivery_id")
+        .and_then(Value::as_str)
+        .unwrap_or("world-delivery");
+    let score = delivery.get("score").and_then(Value::as_f64).unwrap_or(0.0);
+    let status = delivery
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("delivered");
+    let judge_status = delivery
+        .get("judge_status")
+        .and_then(Value::as_str)
+        .unwrap_or("rubric_scored");
+    let route = RouteStoryCardContext::from_value(value, "delivery-dock");
+    let route_text_block = route.text_block("Route Follow-up", true);
+    let route_html_block = route.html_block("Route Follow-up", true);
+    let body = format!(
+        "📮 Work Delivered\nWork Order: {work_order_id}\nDelivery: {delivery_id}\nScore: {score:.1}\nStatus: {status}\nJudge: {judge_status}\n{route_text_block}\n下一步：/work accept {work_order_id} <验收>"
+    );
+    json!({
+        "msgtype": "m.text",
+        "body": body,
+        "format": "org.matrix.custom.html",
+        "formatted_body": format!(
+            "<blockquote><h3>📮 Work Delivered</h3><p><strong>Work</strong>: <code>{}</code></p><p><strong>Delivery</strong>: <code>{}</code></p><p><strong>Score</strong>: {:.1} · <strong>Status</strong>: {} · <strong>Judge</strong>: {}</p>{}<p><code>/work accept {}</code></p></blockquote>",
+            escape_html(work_order_id), escape_html(delivery_id), score, escape_html(status), escape_html(judge_status), route_html_block, escape_html(work_order_id),
+        ),
+        "cex_card": route_story_card_json(json!({"type": "trillionnium_world_work_delivery", "version": 1, "world": "trillionnium_world", "work_order_id": work_order_id, "delivery_id": delivery_id, "score": format!("{score:.1}"), "status": status, "judge_status": judge_status}), &route, true)
+    })
+}
+
+fn build_trillionnium_world_work_acceptance_matrix_reply(value: &Value) -> Value {
+    let work_order = value.get("work_order").unwrap_or(value);
+    let acceptance = value.get("acceptance").unwrap_or(value);
+    let purchase = value.get("purchase").unwrap_or(value);
+    let work_order_id = work_order
+        .get("work_order_id")
+        .and_then(Value::as_str)
+        .unwrap_or("world-work");
+    let acceptance_id = acceptance
+        .get("acceptance_id")
+        .and_then(Value::as_str)
+        .unwrap_or("world-acceptance");
+    let status = acceptance
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("accepted");
+    let reputation_delta = acceptance
+        .get("reputation_delta")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let buyer_consume_status = purchase
+        .get("buyer_consume_status")
+        .and_then(Value::as_str)
+        .or_else(|| value.get("buyer_consume_status").and_then(Value::as_str))
+        .unwrap_or("pending");
+    let route = RouteStoryCardContext::from_value(value, "delivery-dock");
+    let route_text_block = route.text_block("Route Follow-up", true);
+    let route_html_block = route.html_block("Route Follow-up", true);
+    let body = format!(
+        "✅ Work Accepted\nWork Order: {work_order_id}\nAcceptance: {acceptance_id}\nStatus: {status}\nBuyer Consume: {buyer_consume_status}\nReputation: +{reputation_delta}\n{route_text_block}\n查看：/work /factions"
+    );
+    json!({
+        "msgtype": "m.text",
+        "body": body,
+        "format": "org.matrix.custom.html",
+        "formatted_body": format!(
+            "<blockquote><h3>✅ Work Accepted</h3><p><strong>Work</strong>: <code>{}</code></p><p><strong>Acceptance</strong>: <code>{}</code></p><p><strong>Status</strong>: {} · <strong>Buyer Consume</strong>: {} · <strong>Reputation</strong>: +{}</p>{}<p><code>/work</code> <code>/factions</code></p></blockquote>",
+            escape_html(work_order_id), escape_html(acceptance_id), escape_html(status), escape_html(buyer_consume_status), reputation_delta, route_html_block,
+        ),
+        "cex_card": route_story_card_json(json!({"type": "trillionnium_world_work_acceptance", "version": 1, "world": "trillionnium_world", "work_order_id": work_order_id, "acceptance_id": acceptance_id, "status": status, "reputation_delta": reputation_delta, "buyer_consume_status": buyer_consume_status}), &route, true)
+    })
+}
+
+fn build_trillionnium_world_work_rejection_matrix_reply(value: &Value) -> Value {
+    let work_order = value.get("work_order").unwrap_or(value);
+    let rejection = value.get("rejection").unwrap_or(value);
+    let purchase = value.get("purchase").unwrap_or(value);
+    let work_order_id = work_order
+        .get("work_order_id")
+        .and_then(Value::as_str)
+        .unwrap_or("world-work");
+    let rejection_id = rejection
+        .get("rejection_id")
+        .and_then(Value::as_str)
+        .unwrap_or("world-rejection");
+    let status = rejection
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("rejected_refunded");
+    let refund_status = rejection
+        .get("refund_status")
+        .and_then(Value::as_str)
+        .or_else(|| value.get("buyer_refund_status").and_then(Value::as_str))
+        .unwrap_or("pending");
+    let purchase_status = purchase
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("rejected_refunded");
+    let route = RouteStoryCardContext::from_value(value, "delivery-dock").with_custom_follow_up(
+        work_order_id,
+        "Prepare revision redelivery",
+        "world-commerce-panel",
+        format!(
+            "/work deliver latest 修订交付：围绕 {} 补齐 evidence、修复 gap、重申 acceptance standard、timeline 和 next action。",
+            work_order_id
+        ),
+        "zbj-market-gate",
+        "delivery-dock",
+        format!(
+            "Work {} · {} → patch evidence gaps → redeliver",
+            work_order_id, status
+        ),
+        "revision_recovery",
+        format!("Work order {} · {}", work_order_id, status),
+        "Capture the buyer objections, patch missing proof, relock acceptance criteria, and stage a cleaner redelivery package.",
+        format!(
+            "Recover {} with a tighter revision pass before reopening any growth or upsell lane.",
+            work_order_id
+        ),
+        "List the rejection reasons, close each evidence gap, reset the acceptance bar, and redeliver with explicit proof checkpoints.",
+    );
+    let route_text_block = route.text_block("Route Follow-up", true);
+    let route_html_block = route.html_block("Route Follow-up", true);
+    let body = format!(
+        "↩️ Work Rejected / Refunded\nWork Order: {work_order_id}\nRejection: {rejection_id}\nStatus: {status}\nBuyer Refund: {refund_status}\nPurchase: {purchase_status}\n{route_text_block}\n查看：/work /factions"
+    );
+    json!({
+        "msgtype": "m.text",
+        "body": body,
+        "format": "org.matrix.custom.html",
+        "formatted_body": format!(
+            "<blockquote><h3>↩️ Work Rejected / Refunded</h3><p><strong>Work</strong>: <code>{}</code></p><p><strong>Rejection</strong>: <code>{}</code></p><p><strong>Status</strong>: {} · <strong>Buyer Refund</strong>: {} · <strong>Purchase</strong>: {}</p>{}<p><code>/work</code> <code>/factions</code></p></blockquote>",
+            escape_html(work_order_id), escape_html(rejection_id), escape_html(status), escape_html(refund_status), escape_html(purchase_status), route_html_block,
+        ),
+        "cex_card": route_story_card_json(json!({"type": "trillionnium_world_work_rejection", "version": 1, "world": "trillionnium_world", "work_order_id": work_order_id, "rejection_id": rejection_id, "status": status, "buyer_refund_status": refund_status, "purchase_status": purchase_status}), &route, true)
+    })
+}
+
+fn build_trillionnium_world_work_reopen_matrix_reply(value: &Value) -> Value {
+    let work_order = value.get("work_order").unwrap_or(value);
+    let reopen = value.get("reopen").unwrap_or(value);
+    let purchase = value.get("purchase").unwrap_or(value);
+    let work_order_id = work_order
+        .get("work_order_id")
+        .and_then(Value::as_str)
+        .unwrap_or("world-work");
+    let reopen_id = reopen
+        .get("reopen_id")
+        .and_then(Value::as_str)
+        .unwrap_or("world-reopen");
+    let status = reopen
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("reopened");
+    let reserve_status = reopen
+        .get("reserve_status")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            value
+                .get("buyer_reopen_reserve_status")
+                .and_then(Value::as_str)
+        })
+        .unwrap_or("pending");
+    let purchase_status = purchase
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("reopened_reserved");
+    let work_status = work_order
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("open");
+    let route = RouteStoryCardContext::from_value(value, "delivery-dock").with_custom_follow_up(
+        work_order_id,
+        "Lock reopen redelivery",
+        "world-commerce-panel",
+        format!(
+            "/work deliver latest 重开返工交付：围绕 {} 更新 revision scope、evidence、acceptance checklist、owner 和 next action。",
+            work_order_id
+        ),
+        "zbj-market-gate",
+        "delivery-dock",
+        format!(
+            "Work {} · {} → relock scope and proof → redeliver",
+            work_order_id, status
+        ),
+        "reopen_recovery",
+        format!("Work order {} · {}", work_order_id, status),
+        "Close the evidence gap, re-lock the revised scope, and make the next redelivery criteria unambiguous.",
+        format!(
+            "Recover {} through a controlled reopen loop with a tighter redelivery package.",
+            work_order_id
+        ),
+        "Restate scope, owner, deadline, and acceptance checks, then redeliver with explicit proof and revision tracking.",
+    );
+    let route_text_block = route.text_block("Route Follow-up", true);
+    let route_html_block = route.html_block("Route Follow-up", true);
+    let body = format!(
+        "🔁 Work Reopened / Reserved\nWork Order: {work_order_id}\nReopen: {reopen_id}\nStatus: {status}\nBuyer Reserve: {reserve_status}\nWork: {work_status}\nPurchase: {purchase_status}\n{route_text_block}\n下一步：/work deliver {work_order_id} <返工交付>"
+    );
+    json!({
+        "msgtype": "m.text",
+        "body": body,
+        "format": "org.matrix.custom.html",
+        "formatted_body": format!(
+            "<blockquote><h3>🔁 Work Reopened / Reserved</h3><p><strong>Work</strong>: <code>{}</code></p><p><strong>Reopen</strong>: <code>{}</code></p><p><strong>Status</strong>: {} · <strong>Buyer Reserve</strong>: {} · <strong>Work</strong>: {} · <strong>Purchase</strong>: {}</p>{}<p><code>/work deliver {} &lt;返工交付&gt;</code></p></blockquote>",
+            escape_html(work_order_id), escape_html(reopen_id), escape_html(status), escape_html(reserve_status), escape_html(work_status), escape_html(purchase_status), route_html_block, escape_html(work_order_id),
+        ),
+        "cex_card": route_story_card_json(json!({"type": "trillionnium_world_work_reopen", "version": 1, "world": "trillionnium_world", "work_order_id": work_order_id, "reopen_id": reopen_id, "status": status, "buyer_reopen_reserve_status": reserve_status, "work_status": work_status, "purchase_status": purchase_status}), &route, true)
+    })
+}
+
+fn build_trillionnium_world_work_cancellation_matrix_reply(value: &Value) -> Value {
+    let work_order = value.get("work_order").unwrap_or(value);
+    let cancellation = value.get("cancellation").unwrap_or(value);
+    let purchase = value.get("purchase").unwrap_or(value);
+    let work_order_id = work_order
+        .get("work_order_id")
+        .and_then(Value::as_str)
+        .unwrap_or("world-work");
+    let cancellation_id = cancellation
+        .get("cancellation_id")
+        .and_then(Value::as_str)
+        .unwrap_or("world-cancel");
+    let status = cancellation
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("cancelled_refunded");
+    let refund_status = cancellation
+        .get("refund_status")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            value
+                .get("buyer_cancel_refund_status")
+                .and_then(Value::as_str)
+        })
+        .unwrap_or("pending");
+    let purchase_status = purchase
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("cancelled_refunded");
+    let route = RouteStoryCardContext::from_value(value, "client-board").with_custom_follow_up(
+        work_order_id,
+        "Launch smaller-scope requal",
+        "world-listings-panel",
+        format!(
+            "/sell latest 小范围试单方案：围绕 {} 重做更小 scope、deliverable、evidence、risk gate、price 和 next action。",
+            work_order_id
+        ),
+        "zbj-market-gate",
+        "client-board",
+        format!(
+            "Work {} · {} → shrink scope and risk → relist",
+            work_order_id, status
+        ),
+        "smaller_scope_requalification",
+        format!("Work order {} · {}", work_order_id, status),
+        "Reduce risk, tighten the starter deliverable, and relaunch only with proof the buyer can validate quickly.",
+        format!(
+            "Recover {} with a smaller-scoped or better-qualified offer before restarting the work lane.",
+            work_order_id
+        ),
+        "Re-scope the offer, lower the commitment surface, clarify evidence and acceptance, then relist a safer starter package.",
+    );
+    let route_text_block = route.text_block("Route Follow-up", true);
+    let route_html_block = route.html_block("Route Follow-up", true);
+    let body = format!(
+        "🛑 Work Cancelled / Refunded\nWork Order: {work_order_id}\nCancellation: {cancellation_id}\nStatus: {status}\nBuyer Refund: {refund_status}\nPurchase: {purchase_status}\n{route_text_block}\n查看：/work /factions"
+    );
+    json!({
+        "msgtype": "m.text",
+        "body": body,
+        "format": "org.matrix.custom.html",
+        "formatted_body": format!(
+            "<blockquote><h3>🛑 Work Cancelled / Refunded</h3><p><strong>Work</strong>: <code>{}</code></p><p><strong>Cancellation</strong>: <code>{}</code></p><p><strong>Status</strong>: {} · <strong>Buyer Refund</strong>: {} · <strong>Purchase</strong>: {}</p>{}<p><code>/work</code> <code>/factions</code></p></blockquote>",
+            escape_html(work_order_id), escape_html(cancellation_id), escape_html(status), escape_html(refund_status), escape_html(purchase_status), route_html_block,
+        ),
+        "cex_card": route_story_card_json(json!({"type": "trillionnium_world_work_cancellation", "version": 1, "world": "trillionnium_world", "work_order_id": work_order_id, "cancellation_id": cancellation_id, "status": status, "buyer_cancel_refund_status": refund_status, "purchase_status": purchase_status}), &route, true)
     })
 }
 
@@ -4506,18 +6978,21 @@ fn build_trillionnium_world_asset_upgrade_matrix_reply(value: &Value) -> Value {
         .get("judge_status")
         .and_then(Value::as_str)
         .unwrap_or("rubric_scored");
+    let route = RouteStoryCardContext::from_value(value, "asset-yard");
+    let route_text_block = route.text_block("Route Follow-up", true);
+    let route_html_block = route.html_block("Route Follow-up", true);
     let body = format!(
-        "🏗️ Asset Upgraded\nAsset: {asset_id}\nLevel: {level}\nValue: {value_score} (+{delta})\nJudge: {judge_status}\n查看资产：/assets"
+        "🏗️ Asset Upgraded\nAsset: {asset_id}\nLevel: {level}\nValue: {value_score} (+{delta})\nJudge: {judge_status}\n{route_text_block}\n查看资产：/assets"
     );
     json!({
         "msgtype": "m.text",
         "body": body,
         "format": "org.matrix.custom.html",
         "formatted_body": format!(
-            "<blockquote><h3>🏗️ Asset Upgraded</h3><p><strong>Asset</strong>: <code>{}</code></p><p><strong>Level</strong>: {} · <strong>Value</strong>: {} (+{})</p><p><strong>Judge</strong>: {}</p><p><code>/assets</code></p></blockquote>",
-            escape_html(asset_id), level, value_score, delta, escape_html(judge_status),
+            "<blockquote><h3>🏗️ Asset Upgraded</h3><p><strong>Asset</strong>: <code>{}</code></p><p><strong>Level</strong>: {} · <strong>Value</strong>: {} (+{})</p><p><strong>Judge</strong>: {}</p>{}<p><code>/assets</code></p></blockquote>",
+            escape_html(asset_id), level, value_score, delta, escape_html(judge_status), route_html_block,
         ),
-        "cex_card": {"type": "trillionnium_world_asset_upgrade", "version": 1, "world": "trillionnium_world", "asset_id": asset_id, "asset_level": level, "value_score": value_score, "value_delta": delta, "judge_status": judge_status}
+        "cex_card": route_story_card_json(json!({"type": "trillionnium_world_asset_upgrade", "version": 1, "world": "trillionnium_world", "asset_id": asset_id, "asset_level": level, "value_score": value_score, "value_delta": delta, "judge_status": judge_status}), &route, true)
     })
 }
 
@@ -5221,6 +7696,209 @@ fn build_league_inventory_matrix_reply(value: &Value) -> Value {
     })
 }
 
+fn progression_item_names(value: &Value, key: &str, only_unlocked: bool) -> Vec<String> {
+    value
+        .get(key)
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter(|item| {
+                    !only_unlocked
+                        || item
+                            .get("unlocked")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false)
+                })
+                .filter_map(|item| item.get("name").and_then(Value::as_str))
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+fn build_league_progression_matrix_reply(value: &Value) -> Value {
+    let player = value.get("player").unwrap_or(value);
+    let display_name = player
+        .get("display_name")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown-player");
+    let level = value.get("level").and_then(Value::as_i64).unwrap_or(1);
+    let rank_title = value
+        .get("rank_title")
+        .and_then(Value::as_str)
+        .unwrap_or("Apprentice");
+    let successes = value
+        .get("successful_task_count")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let to_next = value
+        .get("successes_to_next_level")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let data_points = value
+        .get("experience_data_points")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let current_school = value
+        .get("current_school")
+        .and_then(|school| school.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or("City Clerks");
+    let unlocked_skill_count = value
+        .get("unlocked_skill_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let unlocked_tool_count = value
+        .get("unlocked_tool_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let unlocked_skin_count = value
+        .get("unlocked_skin_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let body = format!(
+        "🧭 League Progression\nPlayer: {display_name}\n门派: {current_school}\nLevel: {level} / {rank_title}\n成功任务: {successes} · 下一级还需 {to_next}\n经验数据点: {data_points}\nSkills/Tools/Skins: {unlocked_skill_count}/{unlocked_tool_count}/{unlocked_skin_count}\n/skills · /tools · /skins"
+    );
+    json!({
+        "msgtype": "m.text",
+        "body": body,
+        "format": "org.matrix.custom.html",
+        "formatted_body": format!(
+            "<blockquote><h3>🧭 League Progression</h3><p><strong>Player</strong>: {}</p><p><strong>门派</strong>: {}</p><p><strong>Level</strong>: {} / {}</p><p><strong>成功任务</strong>: {} · 下一级还需 {}</p><p><strong>经验数据点</strong>: {}</p><p><strong>Unlocks</strong>: Skills {} · Tools {} · Skins {}</p><p><code>/skills</code> · <code>/tools</code> · <code>/skins</code></p></blockquote>",
+            escape_html(display_name),
+            escape_html(current_school),
+            level,
+            escape_html(rank_title),
+            successes,
+            to_next,
+            data_points,
+            unlocked_skill_count,
+            unlocked_tool_count,
+            unlocked_skin_count,
+        ),
+        "cex_card": {
+            "type": "league_progression",
+            "version": 1,
+            "league": "trillionnium_league",
+            "display_name": display_name,
+            "current_school": current_school,
+            "level": level,
+            "rank_title": rank_title,
+            "successful_task_count": successes,
+            "successes_to_next_level": to_next,
+            "experience_data_points": data_points,
+            "unlocked_skill_count": unlocked_skill_count,
+            "unlocked_tool_count": unlocked_tool_count,
+            "unlocked_skin_count": unlocked_skin_count,
+        }
+    })
+}
+
+fn build_league_skills_matrix_reply(value: &Value) -> Value {
+    let total = value
+        .get("skill_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let unlocked = value
+        .get("unlocked_skill_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let names = progression_item_names(value, "skills", true);
+    let top = names
+        .first()
+        .map(String::as_str)
+        .unwrap_or("Reality Scouting");
+    let list = if names.is_empty() {
+        "暂无已解锁技能".to_string()
+    } else {
+        names.join(" / ")
+    };
+    let body = format!("✨ League Skills\nUnlocked: {unlocked}/{total}\n已解锁：{list}\nTop Skill: {top}\n/progression 查看等级");
+    json!({
+        "msgtype": "m.text",
+        "body": body,
+        "format": "org.matrix.custom.html",
+        "formatted_body": format!(
+            "<blockquote><h3>✨ League Skills</h3><p><strong>Unlocked</strong>: {}/{}</p><p>{}</p><p><strong>Top Skill</strong>: {}</p><p><code>/progression</code></p></blockquote>",
+            unlocked,
+            total,
+            escape_html(&list),
+            escape_html(top),
+        ),
+        "cex_card": {"type": "league_skills", "version": 1, "league": "trillionnium_league", "skill_count": total, "unlocked_skill_count": unlocked, "top_skill": top}
+    })
+}
+
+fn build_league_tools_matrix_reply(value: &Value) -> Value {
+    let total = value.get("tool_count").and_then(Value::as_u64).unwrap_or(0);
+    let unlocked = value
+        .get("unlocked_tool_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let earned_items = value
+        .get("earned_item_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let earned_power = value
+        .get("earned_item_power")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let names = progression_item_names(value, "tools", true);
+    let list = if names.is_empty() {
+        "暂无已解锁装备".to_string()
+    } else {
+        names.join(" / ")
+    };
+    let body = format!("🧰 League Tools / 装备\nCatalog: {unlocked}/{total}\nLoot Items: {earned_items} · Power {earned_power}\n已解锁：{list}\n/inventory 查看掉落");
+    json!({
+        "msgtype": "m.text",
+        "body": body,
+        "format": "org.matrix.custom.html",
+        "formatted_body": format!(
+            "<blockquote><h3>🧰 League Tools / 装备</h3><p><strong>Catalog</strong>: {}/{}</p><p><strong>Loot Items</strong>: {} · Power {}</p><p>{}</p><p><code>/inventory</code></p></blockquote>",
+            unlocked,
+            total,
+            earned_items,
+            earned_power,
+            escape_html(&list),
+        ),
+        "cex_card": {"type": "league_tools", "version": 1, "league": "trillionnium_league", "tool_count": total, "unlocked_tool_count": unlocked, "earned_item_count": earned_items, "earned_item_power": earned_power}
+    })
+}
+
+fn build_league_skins_matrix_reply(value: &Value) -> Value {
+    let total = value.get("skin_count").and_then(Value::as_u64).unwrap_or(0);
+    let unlocked = value
+        .get("unlocked_skin_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let loadout_agent_count = value
+        .get("loadout_agent_count")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let names = progression_item_names(value, "skins", true);
+    let list = if names.is_empty() {
+        "暂无已解锁皮肤".to_string()
+    } else {
+        names.join(" / ")
+    };
+    let body = format!("🎭 League Skins / Multi-Agent 能力\nUnlocked: {unlocked}/{total}\nLoadout Agents: {loadout_agent_count}\n已解锁：{list}\n/draft 可以改变 multi-agent 形态");
+    json!({
+        "msgtype": "m.text",
+        "body": body,
+        "format": "org.matrix.custom.html",
+        "formatted_body": format!(
+            "<blockquote><h3>🎭 League Skins / Multi-Agent 能力</h3><p><strong>Unlocked</strong>: {}/{}</p><p><strong>Loadout Agents</strong>: {}</p><p>{}</p><p><code>/draft</code></p></blockquote>",
+            unlocked,
+            total,
+            loadout_agent_count,
+            escape_html(&list),
+        ),
+        "cex_card": {"type": "league_skins", "version": 1, "league": "trillionnium_league", "skin_count": total, "unlocked_skin_count": unlocked, "loadout_agent_count": loadout_agent_count}
+    })
+}
+
 fn build_league_history_matrix_reply(value: &Value) -> Value {
     let battles = value
         .get("battles")
@@ -5264,7 +7942,7 @@ fn build_plain_matrix_reply(body: &str) -> Value {
 
 fn build_help_matrix_reply() -> Value {
     build_plain_matrix_reply(
-        "可用命令:\n/league - 进入 Trillionnium League\n/world - 进入 Trillionnium World 开放世界\n/world action <自由行动> - 在现实镜像世界里行动/建造/经营\n/assets - 查看 World 资产\n/upgrade <asset-id|latest> <升级内容> - 升级 World 资产\n/companies - 查看公司\n/company <asset-id|latest> <公司方案> - 把资产变成公司/店铺\n/shops - 查看店铺和货架\n/sell <company-id|latest> <服务/商品> - 上架服务\n/buy <listing-id|latest> <需求> - 购买/雇佣货架服务并生成 work order\n/work - 查看购买与 work orders\n/factions - 查看 World 阵营声望\n/contract <委托内容> - 把现实需求登记成 World Contract 并创建 CEX 任务\n/complete <contract-id> <交付内容> - 完成 World Contract、评分并结算\n/craft <建造内容> - 进入 Trillionnium Craft 工坊建造\n/season - 赛季\n/arena - 查看赛场\n/quest - 今日副本\n/guild - 公会列表，/guild <guild-id> 加入\n/raid - 团本列表，/raid <raid-id> <行动> 贡献团本\n/team - 团本队伍，/team <raid-id> <role> 认领职责\n/draft <hero...> - 锁定 Agent 英雄阵容\n/join <match-id> - 加入赛场\n/battle <match-id> <行动> - 在赛场中出招并创建 CEX 执行\n/submit <match-id> <提交内容> - 交卷评分并领取奖励\n/profile - 玩家档案\n/rank - 排行榜\n/loadout - Agent 阵容\n/rewards - 奖励记录\n/inventory - 背包/装备\n/history - 战斗历史\n/task <内容> [cap=<能力id>] [account=<账户id>] - 创建普通任务\n/status <task-id> - 查询任务状态\n/balance 或 /wallet - 查看余额\n/plans 或 /套餐 - 查看套餐",
+        "可用命令:\n/app - 打开客户端超级入口（地图/对战/社交/钱包）\n/feed [all|events|tasks|contracts|completion|commerce|social] - 查看 Unified Feed Timeline 的 Matrix 动态投影\n/duel nearby <出招> - 面对面 Agent 对战\n/social - 社交联系人/房间\n/league - 进入 Trillionnium League\n/world - 进入 Trillionnium World 开放世界\n/map 或 /look - 查看细地图和当前位置\n/go <direction|node-id> - 在地图上移动\n/world action <自由行动> - 在现实镜像世界里行动/建造/经营\n/assets - 查看 World 资产\n/upgrade <asset-id|latest> <升级内容> - 升级 World 资产\n/companies - 查看公司\n/company <asset-id|latest> <公司方案> - 把资产变成公司/店铺\n/shops - 查看店铺和货架\n/sell <company-id|latest> <服务/商品> - 上架服务\n/buy <listing-id|latest> <需求> - 购买/雇佣货架服务并生成 work order\n/work - 查看购买与 work orders\n/work deliver <work-id|latest> <交付内容> - 卖方提交 work order 交付\n/work accept <work-id|latest> <验收内容> - 买方验收完成 work order\n/work reject <work-id|latest> <拒收原因> - 买方拒收并退回预留款\n/work reopen <work-id|latest> <返工要求> - 买方重新预留资金并打开返工/重交付\n/work cancel <work-id|latest> <取消原因> - 买方在交付前取消并退回预留款\n/factions - 查看 World 阵营声望\n/contract <委托内容> - 把现实需求登记成 World Contract 并创建 CEX 任务\n/complete <contract-id> <交付内容> - 完成 World Contract、评分并结算\n/craft <建造内容> - 进入 Trillionnium Craft 工坊建造\n/season - 赛季\n/arena - 查看赛场\n/quest - 今日副本\n/guild - 公会列表，/guild <guild-id> 加入\n/raid - 团本列表，/raid <raid-id> <行动> 贡献团本\n/team - 团本队伍，/team <raid-id> <role> 认领职责\n/draft <hero...> - 锁定 Agent 英雄阵容\n/join <match-id> - 加入赛场\n/battle <match-id> <行动> - 在赛场中出招并创建 CEX 执行\n/submit <match-id> <提交内容> - 交卷评分并领取奖励\n/profile - 玩家档案\n/progression 或 /level - 门派/等级/经验总览\n/skills - 技能树\n/tools - 装备/工具\n/skins - 皮肤/multi-agent 能力\n/rank - 排行榜\n/loadout - Agent 阵容\n/rewards - 奖励记录\n/inventory - 背包/装备\n/history - 战斗历史\n/task <内容> [cap=<能力id>] [account=<账户id>] - 创建普通任务\n/status <task-id> - 查询任务状态\n/balance 或 /wallet - 查看余额\n/plans 或 /套餐 - 查看套餐",
     )
 }
 
@@ -5308,6 +7986,1300 @@ mod tests {
     use std::collections::{HashMap, VecDeque};
     use std::sync::{Arc, RwLock as StdRwLock};
     use tokio::sync::Mutex;
+
+    #[test]
+    fn specialize_route_opportunity_uses_surface_specific_commands() {
+        let base = super::specialize_route_opportunity(
+            "world",
+            "repeat_order_upsell_referral",
+            "Completion world-contract-completion-001 · settled",
+            "Capture client feedback and archive final delivery evidence.",
+            "Use this completion as a springboard for the next route.",
+            "Archive proof, ask for testimonial, and package the next offer.",
+            "/sell latest generic",
+            "task-route-001",
+            "zbj-market-gate",
+            "1 events → 1 contracts → 1 completions · latest completion/settled",
+        );
+        let assets = super::specialize_route_opportunity(
+            "assets",
+            "repeat_order_upsell_referral",
+            "Completion world-contract-completion-001 · settled",
+            "Capture client feedback and archive final delivery evidence.",
+            "Use this completion as a springboard for the next route.",
+            "Archive proof, ask for testimonial, and package the next offer.",
+            "/sell latest generic",
+            "task-route-001",
+            "zbj-market-gate",
+            "1 events → 1 contracts → 1 completions · latest completion/settled",
+        );
+        let companies = super::specialize_route_opportunity(
+            "companies",
+            "repeat_order_upsell_referral",
+            "Completion world-contract-completion-001 · settled",
+            "Capture client feedback and archive final delivery evidence.",
+            "Use this completion as a springboard for the next route.",
+            "Archive proof, ask for testimonial, and package the next offer.",
+            "/sell latest generic",
+            "task-route-001",
+            "zbj-market-gate",
+            "1 events → 1 contracts → 1 completions · latest completion/settled",
+        );
+        let shops = super::specialize_route_opportunity(
+            "shops",
+            "repeat_order_upsell_referral",
+            "Completion world-contract-completion-001 · settled",
+            "Capture client feedback and archive final delivery evidence.",
+            "Use this completion as a springboard for the next route.",
+            "Archive proof, ask for testimonial, and package the next offer.",
+            "/sell latest generic",
+            "task-route-001",
+            "zbj-market-gate",
+            "1 events → 1 contracts → 1 completions · latest completion/settled",
+        );
+
+        assert!(base.2.starts_with("/world action "));
+        assert!(assets.2.starts_with("/upgrade latest "));
+        assert!(companies.2.starts_with("/company latest "));
+        assert!(shops.2.starts_with("/sell latest "));
+        assert!(assets.0.contains("Asset") || assets.0.contains("asset"));
+        assert!(companies.0.contains("company") || companies.0.contains("Company"));
+        assert!(shops.0.contains("listing") || shops.0.contains("market"));
+    }
+
+    #[test]
+    fn specialize_route_opportunity_uses_recovery_specific_copy() {
+        let world = super::specialize_route_opportunity(
+            "world",
+            "reopen_recovery",
+            "Work order world-work-order-001 · reopened",
+            "Close the evidence gap and relock acceptance criteria.",
+            "Recover the route with a tighter revision pass.",
+            "Capture revision scope, owner, deadline, and next command.",
+            "/sell latest generic",
+            "task-route-002",
+            "zbj-market-gate",
+            "2 events → 1 work orders → reopened",
+        );
+        let listing = super::specialize_route_opportunity(
+            "listing",
+            "smaller_scope_requalification",
+            "Work order world-work-order-002 · rejected",
+            "Reduce scope and rebuild buyer confidence.",
+            "Recover the route with a smaller scope offer.",
+            "Reset deliverable size, evidence bar, and next command.",
+            "/sell latest generic",
+            "task-route-003",
+            "zbj-market-gate",
+            "2 events → 1 work orders → rejected",
+        );
+
+        assert!(
+            world.0.contains("recover")
+                || world.0.contains("Recovery")
+                || world.0.contains("revision")
+        );
+        assert!(
+            world.1.contains("revision")
+                || world.1.contains("reopen")
+                || world.1.contains("evidence gap")
+        );
+        assert!(world.2.starts_with("/world action "));
+        assert!(
+            listing.0.contains("scope")
+                || listing.0.contains("listing")
+                || listing.0.contains("offer")
+        );
+        assert!(
+            listing.1.contains("smaller")
+                || listing.1.contains("requal")
+                || listing.1.contains("scope")
+        );
+        assert!(listing.2.starts_with("/sell latest "));
+    }
+
+    #[test]
+    fn route_cards_preserve_focus_node_fields() {
+        let reply = super::build_trillionnium_client_app_matrix_reply(&json!({
+            "module_count": 1,
+            "modules": [{"name": "World Map"}],
+            "real_world_map_engine": {
+                "engine_id": "leaflet_openstreetmap_v1",
+                "tile_provider": "OpenStreetMap",
+                "renderer_adapter": {
+                    "adapter_id": "leaflet_renderer_adapter_v1",
+                    "adapter_contract_version": 1,
+                    "runtime_handle_name": "mapRuntime",
+                    "future_engine_candidate": "maplibre_gl_v1",
+                    "adapter_contract": {"supports_future_engine_swap": true}
+                },
+                "planned_upgrade_engine": {
+                    "engine_id": "maplibre_gl_v1",
+                    "gating_contract": "renderer_adapter.adapter_contract_version >= 1"
+                }
+            },
+            "map": {"current_node_id": "mirror-city-square"},
+            "map_hub": {
+                "route_preview": {"item_count": 1, "task_linked_count": 1},
+                "route_story": {
+                    "preview_item_count": 4,
+                    "task_linked_count": 2,
+                    "task_graph_count": 1,
+                    "next_task_id": "task-route-focus-story",
+                    "next_action_label": "Prepare delivery lane from story",
+                    "next_panel_id": "world-commerce-panel",
+                    "next_command_hint": "/world action story follow-up",
+                    "next_location_id": "zbj-market-gate-story",
+                    "next_node_id": "delivery-dock-story",
+                    "next_opportunity_node_id": "client-board-story",
+                    "next_stage_summary": "story stage summary",
+                    "next_opportunity_kind": "repeat_order_upsell_referral",
+                    "next_outcome_summary": "Story outcome summary",
+                    "next_feedback_focus": "Story feedback focus",
+                    "next_opportunity_hint": "Story opportunity hint",
+                    "next_opportunity_playbook": "Story opportunity playbook",
+                    "next_opportunity_command": "/sell latest Story route offer",
+                    "next_opportunity_target": {
+                        "action_label": "Open listing lane",
+                        "panel_id": "world-listings-panel",
+                        "input_id": "world-listing-company-id",
+                        "input_value": "latest",
+                        "textarea_id": "world-listing-body",
+                        "body": "Story route offer",
+                        "node_id": "client-board-story"
+                    }
+                },
+                "route_task_graph": {"task_count": 1, "tasks": [{
+                    "task_id": "task-route-focus-raw",
+                    "suggested_action_label": "Prepare delivery lane raw",
+                    "suggested_panel_id": "world-commerce-panel",
+                    "suggested_matrix_command": "/world action raw follow-up",
+                    "latest_location_id": "zbj-market-gate-raw",
+                    "suggested_node_id": "delivery-dock-raw",
+                    "next_opportunity_node_id": "client-board-raw",
+                    "route_stage_summary": "raw stage summary",
+                    "outcome_summary": "Work order world-work-focus-raw · delivered",
+                    "feedback_focus": "Raw feedback focus.",
+                    "next_opportunity_kind": "repeat_order_upsell_referral",
+                    "next_opportunity_hint": "Raw opportunity hint.",
+                    "next_opportunity_playbook": "Raw opportunity playbook.",
+                    "next_opportunity_command": "/sell latest 原始复购方案"
+                }]}
+            }
+        }));
+
+        let card = reply.get("cex_card").unwrap();
+        assert_eq!(
+            card.get("route_next_task_id").and_then(Value::as_str),
+            Some("task-route-focus-story")
+        );
+        assert_eq!(
+            card.get("route_next_node_id").and_then(Value::as_str),
+            Some("delivery-dock-story")
+        );
+        assert_eq!(
+            card.get("route_next_location_id").and_then(Value::as_str),
+            Some("zbj-market-gate-story")
+        );
+        assert_eq!(
+            card.get("route_next_opportunity_node_id")
+                .and_then(Value::as_str),
+            Some("client-board-story")
+        );
+        assert_eq!(
+            card.get("route_next_opportunity_action_label")
+                .and_then(Value::as_str),
+            Some("Open world action lane")
+        );
+        assert_eq!(
+            card.get("route_next_opportunity_panel_id")
+                .and_then(Value::as_str),
+            Some("world-action-console")
+        );
+        assert_eq!(
+            card.get("route_next_opportunity_textarea_id")
+                .and_then(Value::as_str),
+            Some("world-action-body")
+        );
+        assert_eq!(
+            card.get("route_next_command_hint").and_then(Value::as_str),
+            Some("/world action story follow-up")
+        );
+        assert_eq!(
+            card.get("route_story")
+                .and_then(|story| story.get("next_task_id"))
+                .and_then(Value::as_str),
+            Some("task-route-focus-story")
+        );
+        assert_eq!(
+            card.get("route_story")
+                .and_then(|story| story.get("next_opportunity_target"))
+                .and_then(|target| target.get("node_id"))
+                .and_then(Value::as_str),
+            Some("client-board-story")
+        );
+        assert_eq!(
+            card.get("route_next_opportunity_target_node_id")
+                .and_then(Value::as_str),
+            Some("client-board-story")
+        );
+        assert_eq!(
+            card.get("map_renderer_adapter_id").and_then(Value::as_str),
+            Some("leaflet_renderer_adapter_v1")
+        );
+        assert_eq!(
+            card.get("has_first_playable_onboarding")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            card.get("onboarding_contract_version")
+                .and_then(Value::as_str),
+            Some("trillionnium_first_playable_onboarding_v1")
+        );
+        assert_eq!(
+            card.get("onboarding_completion_target")
+                .and_then(Value::as_str),
+            Some("first_playable_loop_100")
+        );
+        assert!(reply
+            .get("body")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("Onboarding:"));
+        assert_eq!(
+            card.get("map_runtime_handle_name").and_then(Value::as_str),
+            Some("mapRuntime")
+        );
+        assert_eq!(
+            card.get("map_renderer_supports_future_engine_swap")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert!(card
+            .get("route_next_opportunity_body")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .contains("增长机会推进任务 task-route-focus-story"));
+
+        let route_task_graph = json!({"task_count": 1, "tasks": [{
+            "task_id": "task-route-focus-002",
+            "suggested_action_label": "Prepare delivery lane",
+            "suggested_panel_id": "world-commerce-panel",
+            "suggested_matrix_command": "/world action 记录交付准备、证据包和下一步。",
+            "latest_location_id": "zbj-market-gate",
+            "suggested_node_id": "delivery-dock",
+            "next_opportunity_node_id": "client-board",
+            "route_stage_summary": "2 events → 1 work orders → delivered",
+            "outcome_summary": "Work order world-work-focus-002 · delivered",
+            "feedback_focus": "Capture the delivery proof and decide the next lane.",
+            "next_opportunity_kind": "repeat_order_upsell_referral",
+            "next_opportunity_hint": "Use the result to tee up a tighter next offer.",
+            "next_opportunity_playbook": "Archive proof, extract testimonial hooks, and line up the next proposal.",
+            "next_opportunity_command": "/sell latest 复购方案：围绕本次交付补齐升级包、推荐语和下一步。"
+        }]});
+        let world_reply = super::build_trillionnium_world_matrix_reply(&json!({
+            "counts": {"zones": 4, "locations": 4, "assets": 1, "companies": 1, "shops": 1, "listings": 1, "purchases": 1, "work_orders": 1, "factions": 4, "events": 1},
+            "current_node_id": "mirror-city-square",
+            "route_preview": {"item_count": 1, "task_linked_count": 1},
+            "route_task_graph": route_task_graph.clone()
+        }));
+        let map_reply = super::build_trillionnium_world_map_matrix_reply(&json!({
+            "counts": {"map_nodes": 8},
+            "current_node": {"node_id": "mirror-city-square", "name": "镜像城市广场", "description": "map"},
+            "real_world_map_engine": {
+                "engine_id": "leaflet_openstreetmap_v1",
+                "tile_provider": "OpenStreetMap",
+                "mirror_scope": "global_real_world_tiles",
+                "active_region_id": "cn-shanghai-core",
+                "renderer_adapter": {
+                    "adapter_id": "leaflet_renderer_adapter_v1",
+                    "adapter_contract_version": 1,
+                    "runtime_handle_name": "mapRuntime",
+                    "future_engine_candidate": "maplibre_gl_v1",
+                    "adapter_contract": {"supports_future_engine_swap": true}
+                },
+                "planned_upgrade_engine": {
+                    "engine_id": "maplibre_gl_v1",
+                    "gating_contract": "renderer_adapter.adapter_contract_version >= 1"
+                }
+            },
+            "route_preview": {"item_count": 1, "task_linked_count": 1},
+            "route_task_graph": route_task_graph
+        }));
+
+        for reply in [&world_reply, &map_reply] {
+            let card = reply.get("cex_card").unwrap();
+            assert_eq!(
+                card.get("route_next_opportunity_action_label")
+                    .and_then(Value::as_str),
+                Some("Open world action lane")
+            );
+            assert_eq!(
+                card.get("route_next_opportunity_panel_id")
+                    .and_then(Value::as_str),
+                Some("world-action-console")
+            );
+            assert_eq!(
+                card.get("route_next_opportunity_textarea_id")
+                    .and_then(Value::as_str),
+                Some("world-action-body")
+            );
+            assert_eq!(
+                card.get("route_next_opportunity_target_node_id")
+                    .and_then(Value::as_str),
+                Some("client-board")
+            );
+            assert_eq!(
+                card.get("map_renderer_adapter_id").and_then(Value::as_str),
+                Some("leaflet_renderer_adapter_v1")
+            );
+            assert_eq!(
+                card.get("map_runtime_handle_name").and_then(Value::as_str),
+                Some("mapRuntime")
+            );
+            assert!(card
+                .get("route_next_opportunity_body")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .contains("增长机会推进任务 task-route-focus-002"));
+        }
+    }
+
+    #[test]
+    fn client_feed_reply_exposes_top_signal_and_route_story() {
+        let feed_value = json!({
+            "item_count": 4,
+            "source_count": 6,
+            "active_region_id": "cn-shanghai-core",
+            "items": [
+                {
+                    "feed_kind": "route_task",
+                    "feed_group": "route_task",
+                    "source": "route_task_graph",
+                    "title": "Route task for premium repeat order",
+                    "summary": "Push the current completion into a repeat-order offer.",
+                    "detail": "completion/settled · zbj-market-gate",
+                    "action_label": "Open listing lane",
+                    "action_panel_id": "world-listings-panel",
+                    "action_input_id": "world-listing-company-id",
+                    "action_input_value": "latest",
+                    "action_textarea_id": "world-listing-body",
+                    "action_location_id": "zbj-market-gate",
+                    "action_target_node_id": "client-board",
+                    "action_task_id": "task-feed-001",
+                    "action_contract_id": "world-contract-feed-001",
+                    "action_listing_id": "world-listing-feed-001",
+                    "action_work_order_id": "world-work-feed-001"
+                },
+                {
+                    "feed_kind": "live_event",
+                    "feed_group": "live_event",
+                    "source": "live_event_stream",
+                    "title": "world_contract",
+                    "summary": "A new client brief just landed.",
+                    "detail": "Mirror City Square · queued · impact +6",
+                    "action_label": "继续推进",
+                    "action_panel_id": "world-action-console"
+                },
+                {
+                    "feed_kind": "commerce_purchase",
+                    "feed_group": "commerce",
+                    "source": "commerce_snapshot",
+                    "title": "Purchase world-purchase-1",
+                    "summary": "listing premium-design-pack",
+                    "detail": "52 credits · reserved",
+                    "action_label": "打开成交",
+                    "action_panel_id": "world-commerce-panel"
+                },
+                {
+                    "feed_kind": "social_agent",
+                    "feed_group": "social",
+                    "source": "social_snapshot",
+                    "title": "Ledger Clerk",
+                    "summary": "agent · available",
+                    "detail": "available near zbj-market-gate",
+                    "action_label": "去世界",
+                    "action_panel_id": "world-action-console"
+                }
+            ],
+            "route_story": {
+                "preview_item_count": 4,
+                "task_linked_count": 2,
+                "task_graph_count": 1,
+                "next_task_id": "task-feed-story-001",
+                "next_action_label": "Draft completion follow-up",
+                "next_panel_id": "world-action-console",
+                "next_command_hint": "/world action 围绕 feed 跟进完成后的下一步。",
+                "next_location_id": "zbj-market-gate",
+                "next_node_id": "zbj-market-gate",
+                "next_opportunity_node_id": "client-board",
+                "next_stage_summary": "1 events → 1 contracts → 1 completions · latest completion/settled",
+                "next_opportunity_kind": "repeat_order_upsell_referral",
+                "next_outcome_summary": "Completion world-contract-completion-feed-1 · settled · score 80.9 · reward 4.05",
+                "next_feedback_focus": "Capture the delivery proof and customer feedback before opening the next lane.",
+                "next_opportunity_hint": "Turn the current completion into a repeat-order or upsell offer.",
+                "next_opportunity_playbook": "Archive proof, extract the buyer quote, and draft the next premium offer.",
+                "next_opportunity_command": "/sell latest Feed premium repeat-order package"
+            }
+        });
+        let reply = super::build_trillionnium_client_feed_matrix_reply(&feed_value, None);
+
+        let card = reply.get("cex_card").unwrap();
+        assert_eq!(
+            card.get("type").and_then(Value::as_str),
+            Some("trillionnium_client_feed")
+        );
+        assert_eq!(card.get("feed_filter"), Some(&Value::Null));
+        assert_eq!(
+            card.get("feed_filter_label").and_then(Value::as_str),
+            Some("全部")
+        );
+        assert_eq!(card.get("item_count").and_then(Value::as_u64), Some(4));
+        assert_eq!(
+            card.get("visible_item_count").and_then(Value::as_u64),
+            Some(4)
+        );
+        assert_eq!(card.get("source_count").and_then(Value::as_u64), Some(6));
+        assert_eq!(
+            card.get("route_task_feed_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            card.get("live_event_feed_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            card.get("commerce_feed_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            card.get("social_feed_count").and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            card.get("top_title").and_then(Value::as_str),
+            Some("Route task for premium repeat order")
+        );
+        assert_eq!(
+            card.get("top_action_label").and_then(Value::as_str),
+            Some("Open listing lane")
+        );
+        assert_eq!(
+            card.get("top_action_panel_id").and_then(Value::as_str),
+            Some("world-listings-panel")
+        );
+        assert_eq!(
+            card.get("top_action_input_id").and_then(Value::as_str),
+            Some("world-listing-company-id")
+        );
+        assert_eq!(
+            card.get("top_action_input_value").and_then(Value::as_str),
+            Some("latest")
+        );
+        assert_eq!(
+            card.get("top_action_textarea_id").and_then(Value::as_str),
+            Some("world-listing-body")
+        );
+        assert_eq!(
+            card.get("top_action_target_node_id")
+                .and_then(Value::as_str),
+            Some("client-board")
+        );
+        assert_eq!(
+            card.get("route_next_task_id").and_then(Value::as_str),
+            Some("task-feed-story-001")
+        );
+        assert_eq!(
+            card.get("route_next_opportunity_action_label")
+                .and_then(Value::as_str),
+            Some("Open world action lane")
+        );
+        assert_eq!(
+            card.get("route_next_opportunity_panel_id")
+                .and_then(Value::as_str),
+            Some("world-action-console")
+        );
+        assert_eq!(
+            card.get("route_story")
+                .and_then(|story| story.get("next_task_id"))
+                .and_then(Value::as_str),
+            Some("task-feed-story-001")
+        );
+
+        let filtered =
+            super::build_trillionnium_client_feed_matrix_reply(&feed_value, Some("commerce"));
+        let filtered_card = filtered.get("cex_card").unwrap();
+        assert_eq!(
+            filtered_card.get("feed_filter").and_then(Value::as_str),
+            Some("commerce")
+        );
+        assert_eq!(
+            filtered_card
+                .get("feed_filter_label")
+                .and_then(Value::as_str),
+            Some("成交")
+        );
+        assert_eq!(
+            filtered_card
+                .get("visible_item_count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            filtered_card.get("top_feed_group").and_then(Value::as_str),
+            Some("commerce")
+        );
+        assert_eq!(
+            filtered_card.get("top_title").and_then(Value::as_str),
+            Some("Purchase world-purchase-1")
+        );
+        assert_eq!(
+            filtered_card
+                .get("top_action_label")
+                .and_then(Value::as_str),
+            Some("打开成交")
+        );
+        assert_eq!(
+            filtered_card
+                .get("top_action_panel_id")
+                .and_then(Value::as_str),
+            Some("world-commerce-panel")
+        );
+    }
+
+    #[test]
+    fn route_opportunity_target_mapping_covers_world_command_families() {
+        for (
+            command,
+            expected_action_label,
+            expected_panel_id,
+            expected_input_id,
+            expected_input_value,
+            expected_textarea_id,
+            expected_body,
+        ) in [
+            (
+                "/upgrade latest 资产化升级包",
+                "Open asset upgrade lane",
+                "world-assets-panel",
+                "world-asset-id",
+                "latest",
+                "world-asset-body",
+                "资产化升级包",
+            ),
+            (
+                "/company latest 公司经营方案",
+                "Open company lane",
+                "world-companies-panel",
+                "world-company-asset-id",
+                "latest",
+                "world-company-body",
+                "公司经营方案",
+            ),
+            (
+                "/sell latest 市场上架方案",
+                "Open listing lane",
+                "world-listings-panel",
+                "world-listing-company-id",
+                "latest",
+                "world-listing-body",
+                "市场上架方案",
+            ),
+            (
+                "/buy latest 采购需求摘要",
+                "Open purchase lane",
+                "world-commerce-panel",
+                "world-buy-listing-id",
+                "latest",
+                "world-buy-body",
+                "采购需求摘要",
+            ),
+            (
+                "/work deliver latest 交付包",
+                "Open delivery lane",
+                "world-commerce-panel",
+                "world-work-deliver-id",
+                "latest",
+                "world-work-deliver-body",
+                "交付包",
+            ),
+            (
+                "/work accept latest 验收确认",
+                "Open acceptance lane",
+                "world-commerce-panel",
+                "world-work-accept-id",
+                "latest",
+                "world-work-accept-body",
+                "验收确认",
+            ),
+            (
+                "/work reject latest 驳回说明",
+                "Open rejection lane",
+                "world-commerce-panel",
+                "world-work-reject-id",
+                "latest",
+                "world-work-reject-body",
+                "驳回说明",
+            ),
+            (
+                "/work reopen latest 重开返工要求",
+                "Open reopen lane",
+                "world-commerce-panel",
+                "world-work-reopen-id",
+                "latest",
+                "world-work-reopen-body",
+                "重开返工要求",
+            ),
+            (
+                "/work cancel latest 取消原因",
+                "Open cancellation lane",
+                "world-commerce-panel",
+                "world-work-cancel-id",
+                "latest",
+                "world-work-cancel-body",
+                "取消原因",
+            ),
+            (
+                "/world action 记录新的增长机会",
+                "Open world action lane",
+                "world-action-console",
+                "",
+                "",
+                "world-action-body",
+                "记录新的增长机会",
+            ),
+            (
+                "/contract 整理成交委托",
+                "Open contract capture lane",
+                "world-action-console",
+                "",
+                "",
+                "world-action-body",
+                "整理成交委托",
+            ),
+            (
+                "/complete world-contract-001 交付总结",
+                "Open contract completion lane",
+                "world-contracts-panel",
+                "world-contract-completion-id",
+                "world-contract-001",
+                "world-contract-completion-body",
+                "交付总结",
+            ),
+        ] {
+            let target = super::route_opportunity_target_from_command(command, "client-board");
+            assert_eq!(target.action_label, expected_action_label);
+            assert_eq!(target.panel_id, expected_panel_id);
+            assert_eq!(target.input_id, expected_input_id);
+            assert_eq!(target.input_value, expected_input_value);
+            assert_eq!(target.textarea_id, expected_textarea_id);
+            assert_eq!(target.body, expected_body);
+            assert_eq!(target.node_id, "client-board");
+        }
+    }
+
+    #[test]
+    fn world_adjacent_route_cards_preserve_target_fields() {
+        let route_preview = json!({"item_count": 2, "task_linked_count": 1});
+        let route_task_graph = json!({"task_count": 1, "tasks": [{
+            "task_id": "task-route-world-017",
+            "suggested_action_label": "Prepare delivery lane",
+            "suggested_panel_id": "world-commerce-panel",
+            "suggested_matrix_command": "/world action 记录交付结果、证据和下一步。",
+            "latest_location_id": "zbj-market-gate",
+            "suggested_node_id": "delivery-dock",
+            "next_opportunity_node_id": "client-board",
+            "route_stage_summary": "2 events → 1 work orders → delivered",
+            "outcome_summary": "Work order world-work-world-017 · delivered",
+            "feedback_focus": "Capture proof, pick the best follow-up lane, and keep the next action concrete.",
+            "next_opportunity_kind": "repeat_order_upsell_referral",
+            "next_opportunity_hint": "Use the completed route to open the next upsell lane.",
+            "next_opportunity_playbook": "Archive proof, pull out offer hooks, and draft the next move.",
+            "next_opportunity_command": "/world action 记录复购机会、proof 包和下一步。"
+        }]});
+
+        let assets = super::build_trillionnium_world_assets_matrix_reply(&json!({
+            "assets": [{"asset_id": "world-asset-001"}],
+            "upgrades": [{"upgrade_id": "world-asset-upgrade-001"}],
+            "route_preview": route_preview.clone(),
+            "route_task_graph": route_task_graph.clone()
+        }));
+        let companies = super::build_trillionnium_world_companies_matrix_reply(&json!({
+            "companies": [{"company_id": "world-company-001"}],
+            "route_preview": route_preview.clone(),
+            "route_task_graph": route_task_graph.clone()
+        }));
+        let shops = super::build_trillionnium_world_shops_matrix_reply(&json!({
+            "shops": [{"shop_id": "world-shop-001"}],
+            "listings": [{"listing_id": "world-listing-001"}],
+            "route_preview": route_preview.clone(),
+            "route_task_graph": route_task_graph.clone()
+        }));
+        let listing = super::build_trillionnium_world_listing_matrix_reply(&json!({
+            "listing": {
+                "listing_id": "world-listing-001",
+                "price_credits": 12,
+                "quality_score": 88,
+                "status": "listed"
+            },
+            "route_preview": route_preview.clone(),
+            "route_task_graph": route_task_graph.clone()
+        }));
+        let purchase = super::build_trillionnium_world_purchase_matrix_reply(&json!({
+            "purchase": {
+                "purchase_id": "world-purchase-001",
+                "price_credits": 18,
+                "status": "reserved",
+                "ledger_status": "settled",
+                "buyer_ledger_status": "reserved"
+            },
+            "work_order": {"work_order_id": "world-work-001"},
+            "seller_standing": {"rank_label": "Guild Ally"},
+            "route_preview": route_preview.clone(),
+            "route_task_graph": route_task_graph.clone()
+        }));
+        let work = super::build_trillionnium_world_commerce_matrix_reply(&json!({
+            "purchases": [{"purchase_id": "world-purchase-001"}],
+            "work_orders": [{"work_order_id": "world-work-001"}],
+            "work_deliveries": [{"delivery_id": "world-delivery-001"}],
+            "work_acceptances": [{"acceptance_id": "world-acceptance-001"}],
+            "work_rejections": [{"rejection_id": "world-rejection-001"}],
+            "work_reopens": [{"reopen_id": "world-reopen-001"}],
+            "work_cancellations": [{"cancellation_id": "world-cancel-001"}],
+            "route_preview": route_preview,
+            "route_task_graph": route_task_graph
+        }));
+
+        for (
+            reply,
+            expected_task_id,
+            expected_prefix,
+            expected_action_label,
+            expected_panel_id,
+            expected_input_id,
+            expected_input_value,
+            expected_textarea_id,
+        ) in [
+            (
+                &assets,
+                "task-route-world-017",
+                "/upgrade latest",
+                "Open asset upgrade lane",
+                "world-assets-panel",
+                "world-asset-id",
+                "latest",
+                "world-asset-body",
+            ),
+            (
+                &companies,
+                "task-route-world-017",
+                "/company latest",
+                "Open company lane",
+                "world-companies-panel",
+                "world-company-asset-id",
+                "latest",
+                "world-company-body",
+            ),
+            (
+                &shops,
+                "task-route-world-017",
+                "/sell latest",
+                "Open listing lane",
+                "world-listings-panel",
+                "world-listing-company-id",
+                "latest",
+                "world-listing-body",
+            ),
+            (
+                &listing,
+                "task-route-world-017",
+                "/sell latest",
+                "Open listing lane",
+                "world-listings-panel",
+                "world-listing-company-id",
+                "latest",
+                "world-listing-body",
+            ),
+            (
+                &purchase,
+                "task-route-world-017",
+                "/world action",
+                "Open world action lane",
+                "world-action-console",
+                "",
+                "",
+                "world-action-body",
+            ),
+            (
+                &work,
+                "task-route-world-017",
+                "/world action",
+                "Open world action lane",
+                "world-action-console",
+                "",
+                "",
+                "world-action-body",
+            ),
+        ] {
+            let card = reply.get("cex_card").unwrap();
+            assert!(card
+                .get("route_next_opportunity_command")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .starts_with(expected_prefix));
+            assert_eq!(
+                card.get("route_next_opportunity_action_label")
+                    .and_then(Value::as_str),
+                Some(expected_action_label)
+            );
+            assert_eq!(
+                card.get("route_next_opportunity_panel_id")
+                    .and_then(Value::as_str),
+                Some(expected_panel_id)
+            );
+            assert_eq!(
+                card.get("route_next_opportunity_input_id")
+                    .and_then(Value::as_str),
+                Some(expected_input_id)
+            );
+            assert_eq!(
+                card.get("route_next_opportunity_input_value")
+                    .and_then(Value::as_str),
+                Some(expected_input_value)
+            );
+            assert_eq!(
+                card.get("route_next_opportunity_textarea_id")
+                    .and_then(Value::as_str),
+                Some(expected_textarea_id)
+            );
+            assert_eq!(
+                card.get("route_next_opportunity_target_node_id")
+                    .and_then(Value::as_str),
+                Some("client-board")
+            );
+            assert_eq!(
+                card.get("route_story")
+                    .and_then(|story| story.get("next_task_id"))
+                    .and_then(Value::as_str),
+                Some(expected_task_id)
+            );
+            assert_eq!(
+                card.get("route_story")
+                    .and_then(|story| story.get("next_opportunity_target"))
+                    .and_then(|target| target.get("node_id"))
+                    .and_then(Value::as_str),
+                Some("client-board")
+            );
+            assert!(card
+                .get("route_next_opportunity_body")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .contains("world-work-world-017"));
+        }
+    }
+
+    #[test]
+    fn world_result_route_cards_preserve_target_fields() {
+        let route_preview = json!({"item_count": 3, "task_linked_count": 1});
+        let asset_upgrade = super::build_trillionnium_world_asset_upgrade_matrix_reply(&json!({
+            "asset": {
+                "asset_id": "world-asset-777",
+                "upgrade_level": 4,
+                "value_score": 91
+            },
+            "upgrade": {
+                "value_delta": 12,
+                "judge_status": "rubric_hidden_pipeline_v2"
+            },
+            "route_preview": route_preview.clone(),
+            "route_task_graph": {"task_count": 1, "tasks": [{
+                "task_id": "task-upgrade-001",
+                "suggested_action_label": "Route asset launch",
+                "suggested_panel_id": "world-assets-panel",
+                "suggested_matrix_command": "/upgrade latest 把升级包整理成标准套餐。",
+                "latest_location_id": "asset-yard",
+                "suggested_node_id": "asset-yard",
+                "next_opportunity_node_id": "asset-yard",
+                "route_stage_summary": "1 events → 1 assets → upgraded",
+                "outcome_summary": "Asset world-asset-777 · upgraded",
+                "feedback_focus": "Capture what changed in the upgrade and what proof now exists.",
+                "next_opportunity_kind": "asset_upgrade_scaling",
+                "next_opportunity_hint": "Turn the stronger asset into a reusable package.",
+                "next_opportunity_playbook": "Package the asset, attach evidence, and prepare the next publishable version.",
+                "next_opportunity_command": "/upgrade latest 把升级包整理成标准套餐。"
+            }]}
+        }));
+        let company = super::build_trillionnium_world_company_matrix_reply(&json!({
+            "company": {
+                "company_id": "world-company-777",
+                "level": 3,
+                "revenue_score": 28,
+                "reputation_score": 16
+            },
+            "route_preview": route_preview.clone(),
+            "route_task_graph": {"task_count": 1, "tasks": [{
+                "task_id": "task-company-001",
+                "suggested_action_label": "Route company expansion",
+                "suggested_panel_id": "world-companies-panel",
+                "suggested_matrix_command": "/company latest 把这家公司的运营闭环写成 SOP。",
+                "latest_location_id": "starter-studio",
+                "suggested_node_id": "starter-studio",
+                "next_opportunity_node_id": "starter-studio",
+                "route_stage_summary": "1 assets → 1 companies → launched",
+                "outcome_summary": "Company world-company-777 · launched",
+                "feedback_focus": "Capture why the company launch works and what operating proof exists.",
+                "next_opportunity_kind": "company_operating_loop",
+                "next_opportunity_hint": "Lock the operating loop before scaling sales.",
+                "next_opportunity_playbook": "Document the offer, owner cadence, and proof loop for the next team member.",
+                "next_opportunity_command": "/company latest 把这家公司的运营闭环写成 SOP。"
+            }]}
+        }));
+        let delivery = super::build_trillionnium_world_work_delivery_matrix_reply(&json!({
+            "work_order": {"work_order_id": "world-work-777"},
+            "delivery": {
+                "delivery_id": "world-delivery-777",
+                "score": 87.5,
+                "status": "delivered",
+                "judge_status": "rubric_hidden_pipeline_v2"
+            },
+            "route_preview": route_preview.clone(),
+            "route_task_graph": {"task_count": 1, "tasks": [{
+                "task_id": "task-delivery-001",
+                "suggested_action_label": "Route buyer review",
+                "suggested_panel_id": "world-commerce-panel",
+                "suggested_matrix_command": "/work accept latest 买家验收总结与后续合作建议。",
+                "latest_location_id": "delivery-dock",
+                "suggested_node_id": "delivery-dock",
+                "next_opportunity_node_id": "delivery-dock",
+                "route_stage_summary": "1 purchases → 1 work orders → delivered",
+                "outcome_summary": "Work world-work-777 · delivered",
+                "feedback_focus": "Push the buyer review with proof and close any gaps quickly.",
+                "next_opportunity_kind": "acceptance_closeout",
+                "next_opportunity_hint": "Secure acceptance while the proof is still hot.",
+                "next_opportunity_playbook": "Highlight deliverables, evidence, and the next collaboration angle during review.",
+                "next_opportunity_command": "/work accept latest 买家验收总结与后续合作建议。"
+            }]}
+        }));
+        let acceptance = super::build_trillionnium_world_work_acceptance_matrix_reply(&json!({
+            "work_order": {"work_order_id": "world-work-888"},
+            "acceptance": {
+                "acceptance_id": "world-acceptance-888",
+                "status": "accepted",
+                "reputation_delta": 7
+            },
+            "purchase": {"buyer_consume_status": "consumed"},
+            "route_preview": route_preview,
+            "route_task_graph": {"task_count": 1, "tasks": [{
+                "task_id": "task-acceptance-001",
+                "suggested_action_label": "Route upsell follow-up",
+                "suggested_panel_id": "world-listings-panel",
+                "suggested_matrix_command": "/sell latest 验收后升级方案与复购路径。",
+                "latest_location_id": "client-board",
+                "suggested_node_id": "client-board",
+                "next_opportunity_node_id": "client-board",
+                "route_stage_summary": "1 deliveries → 1 acceptances → settled",
+                "outcome_summary": "Work world-work-888 · accepted",
+                "feedback_focus": "Capture why the delivery worked and what the buyer loved.",
+                "next_opportunity_kind": "acceptance_upsell",
+                "next_opportunity_hint": "Use acceptance proof to tee up the premium next step.",
+                "next_opportunity_playbook": "Turn the acceptance into a testimonial, upgrade offer, and referral ask.",
+                "next_opportunity_command": "/sell latest 验收后升级方案与复购路径。"
+            }]}
+        }));
+
+        for (
+            reply,
+            expected_task_id,
+            expected_prefix,
+            expected_action_label,
+            expected_panel_id,
+            expected_input_id,
+            expected_input_value,
+            expected_textarea_id,
+            expected_target_node_id,
+        ) in [
+            (
+                &asset_upgrade,
+                "task-upgrade-001",
+                "/upgrade latest",
+                "Open asset upgrade lane",
+                "world-assets-panel",
+                "world-asset-id",
+                "latest",
+                "world-asset-body",
+                "asset-yard",
+            ),
+            (
+                &company,
+                "task-company-001",
+                "/company latest",
+                "Open company lane",
+                "world-companies-panel",
+                "world-company-asset-id",
+                "latest",
+                "world-company-body",
+                "starter-studio",
+            ),
+            (
+                &delivery,
+                "task-delivery-001",
+                "/work accept latest",
+                "Open acceptance lane",
+                "world-commerce-panel",
+                "world-work-accept-id",
+                "latest",
+                "world-work-accept-body",
+                "delivery-dock",
+            ),
+            (
+                &acceptance,
+                "task-acceptance-001",
+                "/sell latest",
+                "Open listing lane",
+                "world-listings-panel",
+                "world-listing-company-id",
+                "latest",
+                "world-listing-body",
+                "client-board",
+            ),
+        ] {
+            let card = reply.get("cex_card").unwrap();
+            assert!(card
+                .get("route_next_opportunity_command")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .starts_with(expected_prefix));
+            assert_eq!(
+                card.get("route_next_opportunity_action_label")
+                    .and_then(Value::as_str),
+                Some(expected_action_label)
+            );
+            assert_eq!(
+                card.get("route_next_opportunity_panel_id")
+                    .and_then(Value::as_str),
+                Some(expected_panel_id)
+            );
+            assert_eq!(
+                card.get("route_next_opportunity_input_id")
+                    .and_then(Value::as_str),
+                Some(expected_input_id)
+            );
+            assert_eq!(
+                card.get("route_next_opportunity_input_value")
+                    .and_then(Value::as_str),
+                Some(expected_input_value)
+            );
+            assert_eq!(
+                card.get("route_next_opportunity_textarea_id")
+                    .and_then(Value::as_str),
+                Some(expected_textarea_id)
+            );
+            assert_eq!(
+                card.get("route_next_opportunity_target_node_id")
+                    .and_then(Value::as_str),
+                Some(expected_target_node_id)
+            );
+            assert_eq!(
+                card.get("route_story")
+                    .and_then(|story| story.get("next_task_id"))
+                    .and_then(Value::as_str),
+                Some(expected_task_id)
+            );
+            assert_eq!(
+                card.get("route_story")
+                    .and_then(|story| story.get("next_opportunity_target"))
+                    .and_then(|target| target.get("node_id"))
+                    .and_then(Value::as_str),
+                Some(expected_target_node_id)
+            );
+            assert!(!card
+                .get("route_next_opportunity_body")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .is_empty());
+        }
+    }
+
+    #[test]
+    fn work_recovery_reply_cards_preserve_route_story_fields() {
+        let rejection = super::build_trillionnium_world_work_rejection_matrix_reply(&json!({
+            "work_order": {"work_order_id": "world-work-order-001", "status": "rejected_refunded"},
+            "purchase": {"status": "rejected_refunded"},
+            "rejection": {"rejection_id": "world-rejection-001", "status": "rejected_refunded", "refund_status": "refunded"},
+            "route_preview": {"item_count": 2, "task_linked_count": 1},
+            "route_task_graph": {"task_count": 1, "tasks": [{
+                "task_id": "task-route-010",
+                "suggested_action_label": "Patch revision evidence",
+                "suggested_panel_id": "world-action-console",
+                "suggested_matrix_command": "/world action 记录修订范围、证据缺口和下一步。",
+                "latest_location_id": "zbj-market-gate",
+                "route_stage_summary": "2 events → 1 work orders → rejected",
+                "outcome_summary": "Work order world-work-order-001 · rejected",
+                "feedback_focus": "Capture objections, patch evidence, and reset acceptance criteria.",
+                "next_opportunity_kind": "repeat_order_upsell_referral",
+                "next_opportunity_hint": "Use the completion lane to tee up the next offer at zbj-market-gate.",
+                "next_opportunity_playbook": "Archive proof, ask for feedback, and tee up the next upsell path.",
+                "next_opportunity_command": "/sell latest 复购方案：延续上一次完成结果，补充 deliverable、proof、price 和 next action。"
+            }]}
+        }));
+        let reopen = super::build_trillionnium_world_work_reopen_matrix_reply(&json!({
+            "work_order": {"work_order_id": "world-work-order-002", "status": "open"},
+            "purchase": {"status": "reopened_reserved"},
+            "reopen": {"reopen_id": "world-reopen-001", "status": "reopened", "reserve_status": "reserved"},
+            "route_preview": {"item_count": 2, "task_linked_count": 1},
+            "route_task_graph": {"task_count": 1, "tasks": [{
+                "task_id": "task-route-011",
+                "suggested_action_label": "Lock redelivery loop",
+                "suggested_panel_id": "world-action-console",
+                "suggested_matrix_command": "/world action 记录 reopen 要求、证据缺口和下一步。",
+                "latest_location_id": "zbj-market-gate",
+                "route_stage_summary": "2 events → 1 work orders → reopened",
+                "outcome_summary": "Work order world-work-order-002 · reopened",
+                "feedback_focus": "Close the evidence gap and relock acceptance criteria.",
+                "next_opportunity_kind": "repeat_order_upsell_referral",
+                "next_opportunity_hint": "Use the completion lane to tee up the next offer at zbj-market-gate.",
+                "next_opportunity_playbook": "Archive proof, ask for feedback, and tee up the next upsell path.",
+                "next_opportunity_command": "/sell latest 复购方案：延续上一次完成结果，补充 deliverable、proof、price 和 next action。"
+            }]}
+        }));
+        let cancellation = super::build_trillionnium_world_work_cancellation_matrix_reply(&json!({
+            "work_order": {"work_order_id": "world-work-order-003", "status": "cancelled_refunded"},
+            "purchase": {"status": "cancelled_refunded"},
+            "cancellation": {"cancellation_id": "world-cancel-001", "status": "cancelled_refunded", "refund_status": "refunded"},
+            "route_preview": {"item_count": 2, "task_linked_count": 1},
+            "route_task_graph": {"task_count": 1, "tasks": [{
+                "task_id": "task-route-012",
+                "suggested_action_label": "Launch smaller pilot",
+                "suggested_panel_id": "world-action-console",
+                "suggested_matrix_command": "/world action 记录重资格筛选、starter scope 和下一步。",
+                "latest_location_id": "zbj-market-gate",
+                "route_stage_summary": "2 events → 1 work orders → cancelled",
+                "outcome_summary": "Work order world-work-order-003 · cancelled",
+                "feedback_focus": "Reduce scope, lower risk, and clarify starter proof.",
+                "next_opportunity_kind": "repeat_order_upsell_referral",
+                "next_opportunity_hint": "Use the completion lane to tee up the next offer at zbj-market-gate.",
+                "next_opportunity_playbook": "Archive proof, ask for feedback, and tee up the next upsell path.",
+                "next_opportunity_command": "/world action 记录复购机会、proof 包和下一步。"
+            }]}
+        }));
+
+        for (
+            reply,
+            expected_task_id,
+            expected_kind,
+            expected_prefix,
+            expected_node_id,
+            expected_action_label,
+            expected_panel_id,
+            expected_input_id,
+            expected_textarea_id,
+        ) in [
+            (
+                &rejection,
+                "task-route-010",
+                "revision_recovery",
+                "/work deliver latest",
+                "delivery-dock",
+                "Open delivery lane",
+                "world-commerce-panel",
+                "world-work-deliver-id",
+                "world-work-deliver-body",
+            ),
+            (
+                &reopen,
+                "task-route-011",
+                "reopen_recovery",
+                "/work deliver latest",
+                "delivery-dock",
+                "Open delivery lane",
+                "world-commerce-panel",
+                "world-work-deliver-id",
+                "world-work-deliver-body",
+            ),
+            (
+                &cancellation,
+                "task-route-012",
+                "smaller_scope_requalification",
+                "/sell latest",
+                "client-board",
+                "Open listing lane",
+                "world-listings-panel",
+                "world-listing-company-id",
+                "world-listing-body",
+            ),
+        ] {
+            let card = reply.get("cex_card").unwrap();
+            assert_eq!(
+                card.get("route_next_opportunity_kind")
+                    .and_then(Value::as_str),
+                Some(expected_kind)
+            );
+            assert!(card
+                .get("route_next_opportunity_command")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .starts_with(expected_prefix));
+            assert_eq!(
+                card.get("route_next_node_id").and_then(Value::as_str),
+                Some(expected_node_id)
+            );
+            assert_eq!(
+                card.get("route_next_opportunity_node_id")
+                    .and_then(Value::as_str),
+                Some(expected_node_id)
+            );
+            assert_eq!(
+                card.get("route_next_opportunity_action_label")
+                    .and_then(Value::as_str),
+                Some(expected_action_label)
+            );
+            assert_eq!(
+                card.get("route_next_opportunity_panel_id")
+                    .and_then(Value::as_str),
+                Some(expected_panel_id)
+            );
+            assert_eq!(
+                card.get("route_next_opportunity_input_id")
+                    .and_then(Value::as_str),
+                Some(expected_input_id)
+            );
+            assert_eq!(
+                card.get("route_next_opportunity_input_value")
+                    .and_then(Value::as_str),
+                Some("latest")
+            );
+            assert_eq!(
+                card.get("route_next_opportunity_textarea_id")
+                    .and_then(Value::as_str),
+                Some(expected_textarea_id)
+            );
+            assert_eq!(
+                card.get("route_next_opportunity_target_node_id")
+                    .and_then(Value::as_str),
+                Some(expected_node_id)
+            );
+            assert_eq!(
+                card.get("route_story")
+                    .and_then(|story| story.get("next_task_id"))
+                    .and_then(Value::as_str),
+                Some(expected_task_id)
+            );
+            assert_eq!(
+                card.get("route_story")
+                    .and_then(|story| story.get("next_opportunity_target"))
+                    .and_then(|target| target.get("node_id"))
+                    .and_then(Value::as_str),
+                Some(expected_node_id)
+            );
+            assert!(
+                card.get("route_task_graph_count")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0)
+                    >= 1
+            );
+        }
+    }
 
     fn test_config() -> MatrixAdapterConfig {
         MatrixAdapterConfig {
@@ -6037,9 +10009,42 @@ mod tests {
     fn parse_trillionnium_league_commands() {
         assert_eq!(parse_matrix_command("/league"), ParsedCommand::League);
         assert_eq!(parse_matrix_command("/tl"), ParsedCommand::League);
+        assert_eq!(parse_matrix_command("/app"), ParsedCommand::ClientApp);
+        assert_eq!(
+            parse_matrix_command("/feed"),
+            ParsedCommand::ClientFeed { filter: None }
+        );
+        assert_eq!(
+            parse_matrix_command("/feed tasks"),
+            ParsedCommand::ClientFeed {
+                filter: Some("route_task".to_string())
+            }
+        );
+        assert_eq!(
+            parse_matrix_command("/feed 成交"),
+            ParsedCommand::ClientFeed {
+                filter: Some("commerce".to_string())
+            }
+        );
+        assert_eq!(parse_matrix_command("/social"), ParsedCommand::ClientSocial);
+        assert_eq!(
+            parse_matrix_command("/duel nearby 用 Forge Builder 发起开局出招"),
+            ParsedCommand::ClientDuel {
+                opponent: Some("nearby".to_string()),
+                body: "用 Forge Builder 发起开局出招".to_string()
+            }
+        );
         assert_eq!(parse_matrix_command("/arena"), ParsedCommand::Arena);
         assert_eq!(parse_matrix_command("/quest"), ParsedCommand::Quest);
         assert_eq!(parse_matrix_command("/world"), ParsedCommand::World);
+        assert_eq!(parse_matrix_command("/map"), ParsedCommand::WorldMap);
+        assert_eq!(parse_matrix_command("/world map"), ParsedCommand::WorldMap);
+        assert_eq!(
+            parse_matrix_command("/go east"),
+            ParsedCommand::WorldMapMove {
+                target: "east".to_string()
+            }
+        );
         assert_eq!(
             parse_matrix_command("/world action 我要开一家 AI 设计公司"),
             ParsedCommand::WorldAction {
@@ -6097,12 +10102,51 @@ mod tests {
         );
         assert_eq!(parse_matrix_command("/work"), ParsedCommand::WorldWork);
         assert_eq!(
+            parse_matrix_command("/work deliver latest 交付证据包和下一步计划"),
+            ParsedCommand::WorldWorkDeliver {
+                work_order_id: "latest".to_string(),
+                body: "交付证据包和下一步计划".to_string()
+            }
+        );
+        assert_eq!(
+            parse_matrix_command("/work accept latest 验收通过并进入复购"),
+            ParsedCommand::WorldWorkAccept {
+                work_order_id: "latest".to_string(),
+                body: "验收通过并进入复购".to_string()
+            }
+        );
+        assert_eq!(
+            parse_matrix_command("/work reject latest 拒收并退回预留款"),
+            ParsedCommand::WorldWorkReject {
+                work_order_id: "latest".to_string(),
+                body: "拒收并退回预留款".to_string()
+            }
+        );
+        assert_eq!(
+            parse_matrix_command("/work reopen latest 补齐证据后重新交付"),
+            ParsedCommand::WorldWorkReopen {
+                work_order_id: "latest".to_string(),
+                body: "补齐证据后重新交付".to_string()
+            }
+        );
+        assert_eq!(
+            parse_matrix_command("/work cancel latest 交付前取消并退回预留款"),
+            ParsedCommand::WorldWorkCancel {
+                work_order_id: "latest".to_string(),
+                body: "交付前取消并退回预留款".to_string()
+            }
+        );
+        assert_eq!(
             parse_matrix_command("/factions"),
             ParsedCommand::WorldFactions
         );
         assert_eq!(parse_matrix_command("/season"), ParsedCommand::Season);
         assert_eq!(parse_matrix_command("/rank"), ParsedCommand::Rank);
         assert_eq!(parse_matrix_command("/loadout"), ParsedCommand::Loadout);
+        assert_eq!(parse_matrix_command("/level"), ParsedCommand::Progression);
+        assert_eq!(parse_matrix_command("/技能"), ParsedCommand::Skills);
+        assert_eq!(parse_matrix_command("/装备"), ParsedCommand::Tools);
+        assert_eq!(parse_matrix_command("/皮肤"), ParsedCommand::Skins);
         assert_eq!(parse_matrix_command("/profile"), ParsedCommand::Profile);
         assert_eq!(parse_matrix_command("/rewards"), ParsedCommand::Rewards);
         assert_eq!(parse_matrix_command("/history"), ParsedCommand::History);

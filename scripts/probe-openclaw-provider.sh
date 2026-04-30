@@ -15,17 +15,19 @@ MODEL="${CEX_PROVIDER_PROBE_MODEL:-}"
 PROMPT="${CEX_PROVIDER_PROBE_PROMPT:-Return exactly: CEX_PROVIDER_PROBE_OK}"
 EXPECTED_TEXT="${CEX_PROVIDER_PROBE_EXPECTED_TEXT:-CEX_PROVIDER_PROBE_OK}"
 TIMEOUT_SECONDS="${CEX_PROVIDER_PROBE_TIMEOUT_SECONDS:-90}"
+TRANSPORT="${CEX_PROVIDER_PROBE_TRANSPORT:-local}"
 OUTPUT_MODE="pretty"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/probe-openclaw-provider.sh --model <provider/model> [--compact]
+Usage: scripts/probe-openclaw-provider.sh --model <provider/model> [--local|--gateway] [--compact]
 
 Runs a repo-local OpenClaw provider smoke probe and returns JSON. This is a live
 provider call; it may consume provider quota if the selected model succeeds.
 
 Env:
   CEX_PROVIDER_PROBE_MODEL
+  CEX_PROVIDER_PROBE_TRANSPORT=local|gateway
   CEX_PROVIDER_PROBE_PROMPT
   CEX_PROVIDER_PROBE_EXPECTED_TEXT
   CEX_PROVIDER_PROBE_TIMEOUT_SECONDS
@@ -41,6 +43,12 @@ while (($#)); do
       ;;
     --compact)
       OUTPUT_MODE="compact"
+      ;;
+    --gateway)
+      TRANSPORT="gateway"
+      ;;
+    --local)
+      TRANSPORT="local"
       ;;
     --pretty)
       OUTPUT_MODE="pretty"
@@ -66,15 +74,23 @@ if ! [[ "$TIMEOUT_SECONDS" =~ ^[0-9]+$ ]] || [[ "$TIMEOUT_SECONDS" -eq 0 ]]; the
   jq -n --arg value "$TIMEOUT_SECONDS" '{ok:false,status:"invalid_timeout",error:("invalid CEX_PROVIDER_PROBE_TIMEOUT_SECONDS: " + $value)}'
   exit 64
 fi
+if [[ "$TRANSPORT" != "local" && "$TRANSPORT" != "gateway" ]]; then
+  jq -n --arg value "$TRANSPORT" '{ok:false,status:"invalid_transport",error:("invalid CEX_PROVIDER_PROBE_TRANSPORT: " + $value)}'
+  exit 64
+fi
 
-if [[ -z "${OPENCLAW_STATE_DIR:-}" && -f "$OPENCLAW_SCOPE_CONFIG_DEFAULT" ]]; then
-  export OPENCLAW_STATE_DIR="$OPENCLAW_SCOPE_ROOT_DEFAULT"
-fi
-if [[ -z "${OPENCLAW_CONFIG_PATH:-}" && -f "$OPENCLAW_SCOPE_CONFIG_DEFAULT" ]]; then
-  export OPENCLAW_CONFIG_PATH="$OPENCLAW_SCOPE_CONFIG_DEFAULT"
-fi
-if [[ -z "${OPENCLAW_AGENT_DIR:-}" && -d "$OPENCLAW_SCOPE_AGENT_DIR_DEFAULT" ]]; then
-  export OPENCLAW_AGENT_DIR="$OPENCLAW_SCOPE_AGENT_DIR_DEFAULT"
+if [[ "$TRANSPORT" == "local" ]]; then
+  if [[ -z "${OPENCLAW_STATE_DIR:-}" && -f "$OPENCLAW_SCOPE_CONFIG_DEFAULT" ]]; then
+    export OPENCLAW_STATE_DIR="$OPENCLAW_SCOPE_ROOT_DEFAULT"
+  fi
+  if [[ -z "${OPENCLAW_CONFIG_PATH:-}" && -f "$OPENCLAW_SCOPE_CONFIG_DEFAULT" ]]; then
+    export OPENCLAW_CONFIG_PATH="$OPENCLAW_SCOPE_CONFIG_DEFAULT"
+  fi
+  if [[ -z "${OPENCLAW_AGENT_DIR:-}" && -d "$OPENCLAW_SCOPE_AGENT_DIR_DEFAULT" ]]; then
+    export OPENCLAW_AGENT_DIR="$OPENCLAW_SCOPE_AGENT_DIR_DEFAULT"
+  fi
+elif [[ "${CEX_PROVIDER_PROBE_USE_SCOPED_OPENCLAW:-0}" != "1" ]]; then
+  unset OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH OPENCLAW_AGENT_DIR
 fi
 
 cex_require_cmd openclaw jq timeout
@@ -87,8 +103,12 @@ cleanup() {
 trap cleanup EXIT
 
 set +e
+transport_flag="--local"
+if [[ "$TRANSPORT" == "gateway" ]]; then
+  transport_flag="--gateway"
+fi
 timeout --signal=TERM --kill-after=5s "${TIMEOUT_SECONDS}s" \
-  openclaw infer model run --local --json --model "$MODEL" --prompt "$PROMPT" \
+  openclaw infer model run "$transport_flag" --json --model "$MODEL" --prompt "$PROMPT" \
   >"$stdout_file" 2>"$stderr_file"
 exit_code=$?
 set -e
@@ -104,8 +124,9 @@ render() {
 if [[ "$exit_code" -eq 124 || "$exit_code" -eq 137 ]]; then
   jq -n \
     --arg model "$MODEL" \
+    --arg transport "$TRANSPORT" \
     --argjson timeout "$TIMEOUT_SECONDS" \
-    '{ok:false,status:"timeout",model:$model,timeout_seconds:$timeout,error:("provider probe timed out after " + ($timeout|tostring) + "s")}' | render
+    '{ok:false,status:"timeout",model:$model,transport:$transport,timeout_seconds:$timeout,error:("provider probe timed out after " + ($timeout|tostring) + "s")}' | render
   exit 2
 fi
 
@@ -114,10 +135,11 @@ if ! jq empty "$stdout_file" >/dev/null 2>&1; then
   stdout_excerpt="$(head -c 800 "$stdout_file" | tr '\n' ' ' | sed 's/[[:space:]][[:space:]]*/ /g')"
   jq -n \
     --arg model "$MODEL" \
+    --arg transport "$TRANSPORT" \
     --argjson exit_code "$exit_code" \
     --arg stdout "$stdout_excerpt" \
     --arg stderr "$stderr_excerpt" \
-    '{ok:false,status:"invalid_json",model:$model,exit_code:$exit_code,error:"openclaw provider probe did not return valid JSON",stdout_excerpt:$stdout,stderr_excerpt:$stderr}' | render
+    '{ok:false,status:"invalid_json",model:$model,transport:$transport,exit_code:$exit_code,error:"openclaw provider probe did not return valid JSON",stdout_excerpt:$stdout,stderr_excerpt:$stderr}' | render
   exit 2
 fi
 
@@ -135,9 +157,10 @@ if grep -Eiq "$bad_pattern" <<<"$combined_text"; then
   fi
   jq -n \
     --arg model "$MODEL" \
+    --arg transport "$TRANSPORT" \
     --argjson exit_code "$exit_code" \
     --arg error "$surface_error" \
-    '{ok:false,status:"provider_error",model:$model,exit_code:$exit_code,error:$error}' | render
+    '{ok:false,status:"provider_error",model:$model,transport:$transport,exit_code:$exit_code,error:$error}' | render
   exit 2
 fi
 
@@ -145,13 +168,15 @@ if ! grep -Fq "$EXPECTED_TEXT" <<<"$output_text"; then
   excerpt="$(printf '%s' "$output_text" | head -c 800 | tr '\n' ' ' | sed 's/[[:space:]][[:space:]]*/ /g')"
   jq -n \
     --arg model "$MODEL" \
+    --arg transport "$TRANSPORT" \
     --arg expected "$EXPECTED_TEXT" \
     --arg output "$excerpt" \
-    '{ok:false,status:"unexpected_output",model:$model,expected:$expected,error:"provider probe completed but did not return expected sentinel text",output_excerpt:$output}' | render
+    '{ok:false,status:"unexpected_output",model:$model,transport:$transport,expected:$expected,error:"provider probe completed but did not return expected sentinel text",output_excerpt:$output}' | render
   exit 2
 fi
 
 jq -n \
   --arg model "$MODEL" \
+  --arg transport "$TRANSPORT" \
   --arg expected "$EXPECTED_TEXT" \
-  '{ok:true,status:"provider_success",model:$model,expected:$expected}' | render
+  '{ok:true,status:"provider_success",model:$model,transport:$transport,expected:$expected}' | render

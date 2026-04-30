@@ -17,7 +17,7 @@ cex_load_env "$ENV_FILE"
 : "${MATRIX_ACCESS_TOKEN:=}"
 : "${MATRIX_ENTRY_INGRESS_TOKEN:=}"
 : "${MATRIX_POLL_STATE_FILE:=/tmp/matrix-bot-poller.state}"
-: "${MATRIX_BOT_USER_ID:=@cex-bot:localhost}"
+: "${MATRIX_BOT_USER_ID:=@cex-bot:local.dev}"
 
 PASS=0
 FAIL=0
@@ -168,18 +168,19 @@ fi
 
 TASK_TEXT="/task 验证移动端命令闭环测试 $(date +%s)"
 EVENT_ID="event-$(date +%s)-${RANDOM}"
-if [[ -n "${MATRIX_BOT_USER_ID}" ]]; then
-  ROOM_ID="!e2e-room:localhost"
-else
-  ROOM_ID="!e2e-room:local.dev"
+MATRIX_DOMAIN="${MATRIX_BOT_USER_ID##*:}"
+if [[ -z "$MATRIX_DOMAIN" || "$MATRIX_DOMAIN" == "$MATRIX_BOT_USER_ID" ]]; then
+  MATRIX_DOMAIN="local.dev"
 fi
+ROOM_ID="!e2e-room:${MATRIX_DOMAIN}"
+SENDER_ID="@alice:${MATRIX_DOMAIN}"
 
 payload=$(cat <<JSON
 {
   "event_id": "${EVENT_ID}",
   "event_type": "m.room.message",
   "room_id": "${ROOM_ID}",
-  "sender": "@alice:localhost",
+  "sender": "${SENDER_ID}",
   "text": "${TASK_TEXT}"
 }
 JSON

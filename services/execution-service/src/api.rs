@@ -1868,7 +1868,7 @@ fn authorize_execution_admin(
         headers,
         &state.admin_tokens,
         required_scopes,
-        |admin, scope| admin_principal_has_scope(admin, scope),
+        admin_principal_has_scope,
         "execution admin token not configured",
         Some(
             "set EXECUTION_ADMIN_TOKENS_JSON, EXECUTION_ADMIN_TOKEN, or the shared identity admin token env to enable execution admin access",
@@ -4917,6 +4917,7 @@ async fn load_locked_invocation_state(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn update_invocation_after_refunding_action(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     invocation_id: Uuid,
@@ -5166,6 +5167,7 @@ async fn emit_simple_transition_audits(
     .await;
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn emit_refundish_invocation_audit(
     state: &AppState,
     trace_id: Uuid,

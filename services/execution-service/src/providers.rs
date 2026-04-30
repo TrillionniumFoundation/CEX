@@ -626,19 +626,6 @@ fn extract_openclaw_stderr_surface_error(stderr: &str) -> Option<String> {
     None
 }
 
-#[cfg(test)]
-mod tests {
-    use super::extract_openclaw_stderr_surface_error;
-
-    #[test]
-    fn extract_openclaw_stderr_surface_error_prefers_embedded_error_field() {
-        let stderr = r#"[agent/embedded] embedded run agent end: runId=abc isError=true model=MiniMax-M2.5 provider=minimax error=⚠️ minimax (MiniMax-M2.5) returned a billing error — your API key has run out of credits or has an insufficient balance. Check your minimax billing dashboard and top up or switch to a different API key. rawError=500 {"type":"error","error":{"type":"api_error","message":"insufficient balance (1008)"}}"#;
-        let extracted = extract_openclaw_stderr_surface_error(stderr).expect("surface error");
-        assert!(extracted.contains("returned a billing error"));
-        assert!(!extracted.contains("rawError="));
-    }
-}
-
 pub async fn dispatch_via_provider(
     http: &Client,
     ollama_base_url: &str,
@@ -688,5 +675,18 @@ fn canonical_openclaw_provider(provider: &str) -> &str {
         "codex" => "openai-codex",
         "minimax-cn" => "minimax",
         other => other,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::extract_openclaw_stderr_surface_error;
+
+    #[test]
+    fn extract_openclaw_stderr_surface_error_prefers_embedded_error_field() {
+        let stderr = r#"[agent/embedded] embedded run agent end: runId=abc isError=true model=MiniMax-M2.5 provider=minimax error=⚠️ minimax (MiniMax-M2.5) returned a billing error — your API key has run out of credits or has an insufficient balance. Check your minimax billing dashboard and top up or switch to a different API key. rawError=500 {"type":"error","error":{"type":"api_error","message":"insufficient balance (1008)"}}"#;
+        let extracted = extract_openclaw_stderr_surface_error(stderr).expect("surface error");
+        assert!(extracted.contains("returned a billing error"));
+        assert!(!extracted.contains("rawError="));
     }
 }

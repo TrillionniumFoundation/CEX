@@ -94,7 +94,7 @@ fn authorize_audit_read(
         headers,
         &state.admin_tokens,
         &["audit:read"],
-        |admin, scope| admin_principal_has_scope(admin, scope),
+        admin_principal_has_scope,
         "audit admin token not configured",
         Some("set AUDIT_ADMIN_TOKENS_JSON, AUDIT_ADMIN_TOKEN, or the shared identity admin token env to enable audit reads"),
     )

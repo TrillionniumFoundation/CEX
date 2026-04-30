@@ -1,0 +1,3254 @@
+use super::*;
+
+pub(super) async fn get_world_assets(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(response) = authorize_ingress(&headers, state.config()) {
+        state.inner.metrics.inc_ingress_auth_failures();
+        return response;
+    }
+    let league = state.inner.league_state.lock().await;
+    let WorldRouteArtifacts {
+        preview: route_preview,
+        task_graph: route_task_graph,
+        ..
+    } = build_world_route_artifacts(&league.world);
+    (
+        StatusCode::OK,
+        Json(json!({
+            "kind": "trillionnium_world_assets",
+            "world": "trillionnium_world",
+            "assets": league.world.world_assets,
+            "upgrades": league.world.world_asset_upgrades,
+            "route_preview": route_preview,
+            "route_task_graph": route_task_graph,
+        })),
+    )
+        .into_response()
+}
+
+pub(super) async fn upgrade_world_asset_inner(
+    state: AppState,
+    asset_id: String,
+    payload: WorldAssetUpgradeRequest,
+) -> Response {
+    let matrix_user_id = match normalize_league_matrix_user(&payload.matrix_user_id) {
+        Some(value) => value,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "matrix_user_id is required" })),
+            )
+                .into_response()
+        }
+    };
+    let body = match validate_text_payload(&payload.body, state.config().max_text_chars) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let _room_id = payload.room_id.clone();
+    let resolved_asset_id = {
+        let league = state.inner.league_state.lock().await;
+        let indexes = build_world_indexes(&league.world);
+        let Some(asset_index) = indexes.resolve_asset_index(&asset_id, &matrix_user_id) else {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "no world asset found for player", "asset_id": asset_id })),
+            )
+                .into_response();
+        };
+        league
+            .world
+            .world_assets
+            .get(asset_index)
+            .map(|asset| asset.asset_id.clone())
+            .unwrap_or_else(|| asset_id.clone())
+    };
+    let judgement =
+        judge_league_submission_with_pipeline(&state, &body, "world_asset_upgrade").await;
+    let snapshot = {
+        let now = Utc::now().timestamp();
+        let mut league = state.inner.league_state.lock().await;
+        let indexes = build_world_indexes(&league.world);
+        let Some(asset_index) = indexes.asset_index(&resolved_asset_id) else {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "world asset not found", "asset_id": resolved_asset_id })),
+            )
+                .into_response();
+        };
+        if league.world.world_assets[asset_index].owner_matrix_user_id != matrix_user_id {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({ "error": "world asset belongs to another player", "asset_id": resolved_asset_id })),
+            )
+                .into_response();
+        }
+        let mut player = ensure_league_player(&mut league, &matrix_user_id, None);
+        let level_before = league.world.world_assets[asset_index].upgrade_level.max(1);
+        let points_before = league.world.world_assets[asset_index].upgrade_points.max(0);
+        let value_delta = if judgement.payout_status == "eligible" {
+            (judgement.score / 4.0).round().max(1.0) as i64
+        } else {
+            0
+        };
+        let points_after = points_before + value_delta;
+        let level_after = level_before.max(1) + (points_after / 80) - (points_before / 80);
+        let upgrade_status = if judgement.payout_status == "eligible" {
+            "applied".to_string()
+        } else {
+            "review_hold".to_string()
+        };
+        if value_delta > 0 {
+            let asset = &mut league.world.world_assets[asset_index];
+            asset.value_score += value_delta;
+            asset.upgrade_points = points_after;
+            asset.upgrade_level = level_after.max(level_before);
+            asset.last_upgrade_kind = Some("manual_upgrade".to_string());
+            asset.status = "upgraded".to_string();
+        }
+        let upgrade = WorldAssetUpgrade {
+            upgrade_id: league_hash_id(
+                "world-asset-upgrade",
+                &format!("{}:{}:{}", resolved_asset_id, now, body),
+            ),
+            asset_id: resolved_asset_id.clone(),
+            matrix_user_id: matrix_user_id.clone(),
+            body: body.clone(),
+            upgrade_kind: "manual_upgrade".to_string(),
+            score: judgement.score,
+            grade: judgement.grade.clone(),
+            judge_status: judgement.judge_status.clone(),
+            status: upgrade_status,
+            value_delta,
+            level_before,
+            level_after: level_after.max(level_before),
+            created_at_epoch: now,
+        };
+        player.xp += judgement.score.round() as i64;
+        player.reputation += (judgement.score / 10.0).round() as i64;
+        player.rating += ((judgement.score - 50.0) / 4.0).round() as i64;
+        league
+            .players_by_matrix_user
+            .insert(matrix_user_id.clone(), player);
+        league.world.world_asset_upgrades.push(upgrade.clone());
+        (
+            league.clone(),
+            league.world.world_assets[asset_index].clone(),
+            upgrade,
+        )
+    };
+    if let Err(response) =
+        persist_league_state_after_command(&state, &snapshot.0, "world_asset_upgrade").await
+    {
+        return response;
+    }
+    let WorldRouteArtifacts {
+        preview: route_preview,
+        task_graph: route_task_graph,
+        ..
+    } = build_world_route_artifacts(&snapshot.0.world);
+    (
+        StatusCode::OK,
+        Json(json!({
+            "kind": "trillionnium_world_asset_upgrade",
+            "world": "trillionnium_world",
+            "asset": snapshot.1,
+            "upgrade": snapshot.2,
+            "route_preview": route_preview,
+            "route_task_graph": route_task_graph,
+        })),
+    )
+        .into_response()
+}
+
+pub(super) async fn upgrade_world_asset(
+    Path(asset_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<WorldAssetUpgradeRequest>,
+) -> Response {
+    if let Err(response) = authorize_ingress(&headers, state.config()) {
+        state.inner.metrics.inc_ingress_auth_failures();
+        return response;
+    }
+    upgrade_world_asset_inner(state, asset_id, payload).await
+}
+
+pub(super) async fn post_world_web_asset_upgrade(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(payload): Form<WorldWebAssetUpgradeRequest>,
+) -> Response {
+    let web_session = match authorize_league_web_session(&state, &headers, payload.csrf.as_deref())
+    {
+        Ok(value) => value,
+        Err(response) => {
+            if matches!(state.config().runtime_profile, RuntimeProfile::LocalDev)
+                && cookie_value(&headers, &state.config().league_web_session_cookie_name).is_none()
+            {
+                None
+            } else {
+                return response;
+            }
+        }
+    };
+    let matrix_user_id = web_session
+        .as_ref()
+        .map(|session| session.matrix_user_id.clone())
+        .or_else(|| {
+            normalize_league_matrix_user(
+                payload
+                    .matrix_user_id
+                    .as_deref()
+                    .unwrap_or("@alice:local.dev"),
+            )
+        })
+        .unwrap_or_else(|| "@alice:local.dev".to_string());
+    let asset_id = payload
+        .asset_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("latest")
+        .to_string();
+    let body = payload
+        .body
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("Upgrade this World asset with a stronger offer, proof, risk control, and operating loop.")
+        .to_string();
+    let request = WorldAssetUpgradeRequest {
+        matrix_user_id,
+        room_id: web_session
+            .as_ref()
+            .and_then(|session| session.room_id.clone())
+            .or_else(|| Some("!web-local:local.dev".to_string())),
+        body,
+    };
+    let response = upgrade_world_asset_inner(state, asset_id, request).await;
+    if response.status().is_success() {
+        Redirect::to("/world?asset=upgraded").into_response()
+    } else {
+        response
+    }
+}
+
+pub(super) async fn get_world_companies(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(response) = authorize_ingress(&headers, state.config()) {
+        state.inner.metrics.inc_ingress_auth_failures();
+        return response;
+    }
+    let league = state.inner.league_state.lock().await;
+    let WorldRouteArtifacts {
+        preview: route_preview,
+        task_graph: route_task_graph,
+        ..
+    } = build_world_route_artifacts(&league.world);
+    (
+        StatusCode::OK,
+        Json(json!({
+            "kind": "trillionnium_world_companies",
+            "world": "trillionnium_world",
+            "companies": league.world.world_companies,
+            "route_preview": route_preview,
+            "route_task_graph": route_task_graph,
+        })),
+    )
+        .into_response()
+}
+
+pub(super) async fn create_world_company_inner(
+    state: AppState,
+    payload: WorldCompanyRequest,
+) -> Response {
+    let matrix_user_id = match normalize_league_matrix_user(&payload.matrix_user_id) {
+        Some(value) => value,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "matrix_user_id is required" })),
+            )
+                .into_response()
+        }
+    };
+    let body = match validate_text_payload(&payload.body, state.config().max_text_chars) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let requested_asset_id = payload
+        .asset_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("latest")
+        .to_string();
+    let judgement = judge_league_submission_with_pipeline(&state, &body, "world_company").await;
+    let snapshot = {
+        let now = Utc::now().timestamp();
+        let mut league = state.inner.league_state.lock().await;
+        let indexes = build_world_indexes(&league.world);
+        let Some(asset) = indexes
+            .resolve_asset_index(&requested_asset_id, &matrix_user_id)
+            .and_then(|asset_index| league.world.world_assets.get(asset_index))
+            .cloned()
+        else {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "world asset not found", "asset_id": requested_asset_id })),
+            )
+                .into_response();
+        };
+        if asset.owner_matrix_user_id != matrix_user_id {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({ "error": "world asset belongs to another player", "asset_id": asset.asset_id })),
+            )
+                .into_response();
+        }
+        let mut player = ensure_league_player(&mut league, &matrix_user_id, None);
+        let revenue_score = ((asset.value_score as f64) * 0.6 + judgement.score).round() as i64;
+        let reputation_score =
+            ((asset.upgrade_level.max(1) * 10) as f64 + judgement.score / 2.0).round() as i64;
+        let level = 1 + (revenue_score / 100).max(0);
+        let company_kind = if body.contains("店") || body.to_ascii_lowercase().contains("shop") {
+            "shop"
+        } else if body.contains("工坊") || body.to_ascii_lowercase().contains("studio") {
+            "studio"
+        } else {
+            "company"
+        };
+        let company = WorldCompany {
+            company_id: league_hash_id(
+                "world-company",
+                &format!("{}:{}:{}", matrix_user_id, asset.asset_id, now),
+            ),
+            owner_matrix_user_id: matrix_user_id.clone(),
+            asset_id: asset.asset_id.clone(),
+            location_id: asset.location_id.clone(),
+            name: if company_kind == "shop" {
+                "Mirror Market Shop".to_string()
+            } else if company_kind == "studio" {
+                "Trillionnium Craft Studio".to_string()
+            } else {
+                "Reality Venture Company".to_string()
+            },
+            company_kind: company_kind.to_string(),
+            status: if judgement.payout_status == "eligible" {
+                "operating".to_string()
+            } else {
+                "review_hold".to_string()
+            },
+            revenue_score,
+            reputation_score,
+            level,
+            created_at_epoch: now,
+        };
+        let shop = WorldShop {
+            shop_id: league_hash_id(
+                "world-shop",
+                &format!("{}:{}:{}", matrix_user_id, company.company_id, now),
+            ),
+            company_id: company.company_id.clone(),
+            owner_matrix_user_id: matrix_user_id.clone(),
+            location_id: company.location_id.clone(),
+            name: format!("{} Storefront", company.name),
+            shop_kind: company_kind.to_string(),
+            status: company.status.clone(),
+            listing_count: 1,
+            gross_merchandise_score: revenue_score.max(0),
+            created_at_epoch: now,
+        };
+        let listing = WorldListing {
+            listing_id: league_hash_id(
+                "world-listing",
+                &format!("{}:{}:{}", matrix_user_id, shop.shop_id, now),
+            ),
+            shop_id: shop.shop_id.clone(),
+            company_id: company.company_id.clone(),
+            owner_matrix_user_id: matrix_user_id.clone(),
+            asset_id: asset.asset_id.clone(),
+            title: body.chars().take(42).collect::<String>(),
+            listing_kind: "service_offer".to_string(),
+            status: company.status.clone(),
+            price_credits: (revenue_score / 2).max(10),
+            quality_score: judgement.score.round() as i64,
+            created_at_epoch: now,
+        };
+        let economy_event = WorldEconomyEvent {
+            economy_event_id: league_hash_id(
+                "world-econ",
+                &format!("{}:{}:{}", matrix_user_id, listing.listing_id, now),
+            ),
+            matrix_user_id: matrix_user_id.clone(),
+            event_kind: "company_launch".to_string(),
+            subject_id: company.company_id.clone(),
+            credits_delta: listing.price_credits,
+            reputation_delta: reputation_score,
+            created_at_epoch: now,
+        };
+        if judgement.payout_status == "eligible" {
+            player.xp += judgement.score.round() as i64;
+            player.reputation += (judgement.score / 6.0).round() as i64;
+            player.rating += ((judgement.score - 50.0) / 4.0).round() as i64;
+        }
+        league
+            .players_by_matrix_user
+            .insert(matrix_user_id.clone(), player);
+        league.world.world_relationships.push(WorldRelationship {
+            relationship_id: league_hash_id(
+                "world-rel",
+                &format!("{}:{}:{}", matrix_user_id, company.company_id, now),
+            ),
+            from_id: matrix_user_id.clone(),
+            to_id: company.company_id.clone(),
+            relation_kind: "owner".to_string(),
+            strength: reputation_score,
+            updated_at_epoch: now,
+        });
+        league.world.world_companies.push(company.clone());
+        league.world.world_shops.push(shop.clone());
+        league.world.world_listings.push(listing.clone());
+        league
+            .world
+            .world_economy_events
+            .push(economy_event.clone());
+        (
+            league.clone(),
+            company,
+            shop,
+            listing,
+            economy_event,
+            judgement,
+        )
+    };
+    if let Err(response) =
+        persist_league_state_after_command(&state, &snapshot.0, "world_company").await
+    {
+        return response;
+    }
+    let WorldRouteArtifacts {
+        preview: route_preview,
+        task_graph: route_task_graph,
+        ..
+    } = build_world_route_artifacts(&snapshot.0.world);
+    (
+        StatusCode::OK,
+        Json(json!({
+            "kind": "trillionnium_world_company_created",
+            "world": "trillionnium_world",
+            "company": snapshot.1,
+            "shop": snapshot.2,
+            "listing": snapshot.3,
+            "economy_event": snapshot.4,
+            "judge_status": snapshot.5.judge_status,
+            "payout_status": snapshot.5.payout_status,
+            "route_preview": route_preview,
+            "route_task_graph": route_task_graph,
+        })),
+    )
+        .into_response()
+}
+
+pub(super) async fn create_world_company(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<WorldCompanyRequest>,
+) -> Response {
+    if let Err(response) = authorize_ingress(&headers, state.config()) {
+        state.inner.metrics.inc_ingress_auth_failures();
+        return response;
+    }
+    create_world_company_inner(state, payload).await
+}
+
+pub(super) async fn post_world_web_company(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(payload): Form<WorldWebCompanyRequest>,
+) -> Response {
+    let web_session = match authorize_league_web_session(&state, &headers, payload.csrf.as_deref())
+    {
+        Ok(value) => value,
+        Err(response) => {
+            if matches!(state.config().runtime_profile, RuntimeProfile::LocalDev)
+                && cookie_value(&headers, &state.config().league_web_session_cookie_name).is_none()
+            {
+                None
+            } else {
+                return response;
+            }
+        }
+    };
+    let matrix_user_id = web_session
+        .as_ref()
+        .map(|session| session.matrix_user_id.clone())
+        .or_else(|| {
+            normalize_league_matrix_user(
+                payload
+                    .matrix_user_id
+                    .as_deref()
+                    .unwrap_or("@alice:local.dev"),
+            )
+        })
+        .unwrap_or_else(|| "@alice:local.dev".to_string());
+    let body = payload
+        .body
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("Launch a Trillionnium World company from this asset with offer, market, operating loop, proof, and next revenue path.")
+        .to_string();
+    let request = WorldCompanyRequest {
+        matrix_user_id,
+        asset_id: payload
+            .asset_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string),
+        body,
+    };
+    let response = create_world_company_inner(state, request).await;
+    if response.status().is_success() {
+        Redirect::to("/world?company=created").into_response()
+    } else {
+        response
+    }
+}
+
+pub(super) async fn get_world_shops(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Err(response) = authorize_ingress(&headers, state.config()) {
+        state.inner.metrics.inc_ingress_auth_failures();
+        return response;
+    }
+    let league = state.inner.league_state.lock().await;
+    let WorldRouteArtifacts {
+        preview: route_preview,
+        task_graph: route_task_graph,
+        ..
+    } = build_world_route_artifacts(&league.world);
+    (
+        StatusCode::OK,
+        Json(json!({
+            "kind": "trillionnium_world_shops",
+            "world": "trillionnium_world",
+            "companies": league.world.world_companies,
+            "shops": league.world.world_shops,
+            "listings": league.world.world_listings,
+            "economy_events": league.world.world_economy_events,
+            "route_preview": route_preview,
+            "route_task_graph": route_task_graph,
+        })),
+    )
+        .into_response()
+}
+
+pub(super) async fn create_world_listing_inner(
+    state: AppState,
+    payload: WorldListingRequest,
+) -> Response {
+    let matrix_user_id = match normalize_league_matrix_user(&payload.matrix_user_id) {
+        Some(value) => value,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "matrix_user_id is required" })),
+            )
+                .into_response()
+        }
+    };
+    let body = match validate_text_payload(&payload.body, state.config().max_text_chars) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let requested_company_id = payload
+        .company_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("latest")
+        .to_string();
+    let judgement = judge_league_submission_with_pipeline(&state, &body, "world_listing").await;
+    let snapshot = {
+        let now = Utc::now().timestamp();
+        let mut league = state.inner.league_state.lock().await;
+        let indexes = build_world_indexes(&league.world);
+        let Some(company_index) =
+            indexes.resolve_company_index(&requested_company_id, &matrix_user_id)
+        else {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "world company not found", "company_id": requested_company_id })),
+            )
+                .into_response();
+        };
+        let company_seed = league.world.world_companies[company_index].clone();
+        if company_seed.owner_matrix_user_id != matrix_user_id {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({ "error": "world company belongs to another player", "company_id": company_seed.company_id })),
+            )
+                .into_response();
+        }
+        let shop_index = match indexes
+            .shop_index_by_company_id
+            .get(&company_seed.company_id)
+            .copied()
+        {
+            Some(index) => index,
+            None => {
+                league.world.world_shops.push(WorldShop {
+                    shop_id: league_hash_id(
+                        "world-shop",
+                        &format!("{}:{}:{}", matrix_user_id, company_seed.company_id, now),
+                    ),
+                    company_id: company_seed.company_id.clone(),
+                    owner_matrix_user_id: matrix_user_id.clone(),
+                    location_id: company_seed.location_id.clone(),
+                    name: format!("{} Storefront", company_seed.name),
+                    shop_kind: company_seed.company_kind.clone(),
+                    status: company_seed.status.clone(),
+                    listing_count: 0,
+                    gross_merchandise_score: 0,
+                    created_at_epoch: now,
+                });
+                league.world.world_shops.len() - 1
+            }
+        };
+        let quality_score = judgement.score.round() as i64;
+        let price_credits =
+            (((company_seed.revenue_score.max(10) as f64) * 0.35) + judgement.score).round() as i64;
+        let listing = WorldListing {
+            listing_id: league_hash_id(
+                "world-listing",
+                &format!(
+                    "{}:{}:{}",
+                    matrix_user_id, league.world.world_shops[shop_index].shop_id, now
+                ),
+            ),
+            shop_id: league.world.world_shops[shop_index].shop_id.clone(),
+            company_id: company_seed.company_id.clone(),
+            owner_matrix_user_id: matrix_user_id.clone(),
+            asset_id: company_seed.asset_id.clone(),
+            title: body.chars().take(48).collect::<String>(),
+            listing_kind: if body.contains("订阅")
+                || body.to_ascii_lowercase().contains("subscription")
+            {
+                "subscription_offer".to_string()
+            } else {
+                "service_offer".to_string()
+            },
+            status: if judgement.payout_status == "eligible" {
+                "listed".to_string()
+            } else {
+                "review_hold".to_string()
+            },
+            price_credits: price_credits.max(10),
+            quality_score,
+            created_at_epoch: now,
+        };
+        let economy_event = WorldEconomyEvent {
+            economy_event_id: league_hash_id(
+                "world-econ",
+                &format!("{}:{}:{}", matrix_user_id, listing.listing_id, now),
+            ),
+            matrix_user_id: matrix_user_id.clone(),
+            event_kind: "listing_published".to_string(),
+            subject_id: listing.listing_id.clone(),
+            credits_delta: if judgement.payout_status == "eligible" {
+                listing.price_credits
+            } else {
+                0
+            },
+            reputation_delta: if judgement.payout_status == "eligible" {
+                (judgement.score / 5.0).round() as i64
+            } else {
+                0
+            },
+            created_at_epoch: now,
+        };
+        if judgement.payout_status == "eligible" {
+            league.world.world_shops[shop_index].listing_count += 1;
+            league.world.world_shops[shop_index].gross_merchandise_score += listing.price_credits;
+            league.world.world_companies[company_index].revenue_score += listing.price_credits;
+            league.world.world_companies[company_index].reputation_score +=
+                economy_event.reputation_delta;
+            league.world.world_companies[company_index].level =
+                1 + (league.world.world_companies[company_index].revenue_score / 100).max(0);
+            let mut player = ensure_league_player(&mut league, &matrix_user_id, None);
+            player.xp += quality_score;
+            player.reputation += economy_event.reputation_delta;
+            player.rating += ((judgement.score - 50.0) / 5.0).round() as i64;
+            league
+                .players_by_matrix_user
+                .insert(matrix_user_id.clone(), player);
+        }
+        league.world.world_listings.push(listing.clone());
+        league
+            .world
+            .world_economy_events
+            .push(economy_event.clone());
+        let company = league.world.world_companies[company_index].clone();
+        let shop = league.world.world_shops[shop_index].clone();
+        (
+            league.clone(),
+            company,
+            shop,
+            listing,
+            economy_event,
+            judgement,
+        )
+    };
+    if let Err(response) =
+        persist_league_state_after_command(&state, &snapshot.0, "world_listing").await
+    {
+        return response;
+    }
+    let WorldRouteArtifacts {
+        preview: route_preview,
+        task_graph: route_task_graph,
+        ..
+    } = build_world_route_artifacts(&snapshot.0.world);
+    (
+        StatusCode::OK,
+        Json(json!({
+            "kind": "trillionnium_world_listing_created",
+            "world": "trillionnium_world",
+            "company": snapshot.1,
+            "shop": snapshot.2,
+            "listing": snapshot.3,
+            "economy_event": snapshot.4,
+            "judge_status": snapshot.5.judge_status,
+            "payout_status": snapshot.5.payout_status,
+            "route_preview": route_preview,
+            "route_task_graph": route_task_graph,
+        })),
+    )
+        .into_response()
+}
+
+pub(super) async fn create_world_listing(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<WorldListingRequest>,
+) -> Response {
+    if let Err(response) = authorize_ingress(&headers, state.config()) {
+        state.inner.metrics.inc_ingress_auth_failures();
+        return response;
+    }
+    create_world_listing_inner(state, payload).await
+}
+
+pub(super) async fn post_world_web_listing(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(payload): Form<WorldWebListingRequest>,
+) -> Response {
+    let web_session = match authorize_league_web_session(&state, &headers, payload.csrf.as_deref())
+    {
+        Ok(value) => value,
+        Err(response) => {
+            if matches!(state.config().runtime_profile, RuntimeProfile::LocalDev)
+                && cookie_value(&headers, &state.config().league_web_session_cookie_name).is_none()
+            {
+                None
+            } else {
+                return response;
+            }
+        }
+    };
+    let matrix_user_id = web_session
+        .as_ref()
+        .map(|session| session.matrix_user_id.clone())
+        .or_else(|| {
+            normalize_league_matrix_user(
+                payload
+                    .matrix_user_id
+                    .as_deref()
+                    .unwrap_or("@alice:local.dev"),
+            )
+        })
+        .unwrap_or_else(|| "@alice:local.dev".to_string());
+    let body = payload
+        .body
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("Publish a Trillionnium World service listing with deliverable, price logic, evidence package, customer promise, risk controls, self-review, and next action.")
+        .to_string();
+    let request = WorldListingRequest {
+        matrix_user_id,
+        company_id: payload
+            .company_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string),
+        body,
+    };
+    let response = create_world_listing_inner(state, request).await;
+    if response.status().is_success() {
+        Redirect::to("/world?listing=created").into_response()
+    } else {
+        response
+    }
+}
+
+pub(super) async fn get_world_commerce(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(response) = authorize_ingress(&headers, state.config()) {
+        state.inner.metrics.inc_ingress_auth_failures();
+        return response;
+    }
+    let league = state.inner.league_state.lock().await;
+    let WorldRouteArtifacts {
+        preview: route_preview,
+        task_graph: route_task_graph,
+        ..
+    } = build_world_route_artifacts(&league.world);
+    (
+        StatusCode::OK,
+        Json(json!({
+            "kind": "trillionnium_world_commerce",
+            "world": "trillionnium_world",
+            "purchases": league.world.world_purchases,
+            "work_orders": league.world.world_work_orders,
+            "work_deliveries": league.world.world_work_deliveries,
+            "work_acceptances": league.world.world_work_acceptances,
+            "work_rejections": league.world.world_work_rejections,
+            "work_reopens": league.world.world_work_reopens,
+            "work_cancellations": league.world.world_work_cancellations,
+            "economy_events": league.world.world_economy_events,
+            "route_preview": route_preview,
+            "route_task_graph": route_task_graph,
+        })),
+    )
+        .into_response()
+}
+
+pub(super) async fn get_world_factions(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(response) = authorize_ingress(&headers, state.config()) {
+        state.inner.metrics.inc_ingress_auth_failures();
+        return response;
+    }
+    let league = state.inner.league_state.lock().await;
+    let world_indexes = build_world_indexes(&league.world);
+    let factions: Vec<WorldFaction> = world_indexes
+        .sorted_faction_ids
+        .iter()
+        .filter_map(|faction_id| league.world.world_factions.get(faction_id).cloned())
+        .collect();
+    (
+        StatusCode::OK,
+        Json(json!({
+            "kind": "trillionnium_world_factions",
+            "world": "trillionnium_world",
+            "index_layer": "WorldIndexes::sorted_faction_ids_v1",
+            "factions": factions,
+            "standings": league.world.world_faction_standings,
+        })),
+    )
+        .into_response()
+}
+
+pub(super) async fn settle_world_purchase_ledger_action(
+    state: &AppState,
+    room_id: Option<&str>,
+    matrix_user_id: &str,
+    purchase: &WorldPurchase,
+    action: &str,
+    success_status: &str,
+    idempotency_key: String,
+    reference_id: String,
+    message: &str,
+    failure_context: &str,
+) -> LeagueLedgerSettlement {
+    if purchase.price_credits <= 0 {
+        return LeagueLedgerSettlement {
+            status: "skipped_zero_price".to_string(),
+            ..Default::default()
+        };
+    }
+    let Some(room_id) = room_id.map(str::trim).filter(|value| !value.is_empty()) else {
+        return LeagueLedgerSettlement {
+            status: "skipped_missing_room".to_string(),
+            ..Default::default()
+        };
+    };
+    let matrix_payload = MatrixMessageRequest {
+        matrix_user_id: matrix_user_id.to_string(),
+        room_id: room_id.to_string(),
+        session_id: None,
+        org_id: None,
+        message: message.to_string(),
+        capability_id: None,
+        account_id: None,
+        event_id: None,
+        idempotency_key: None,
+        metadata: None,
+    };
+    let resolved_identity = match resolve_matrix_identity(state, &matrix_payload).await {
+        Ok(identity) => identity,
+        Err(_) => {
+            return LeagueLedgerSettlement {
+                status: "failed_identity".to_string(),
+                error: Some(failure_context.to_string()),
+                ..Default::default()
+            }
+        }
+    };
+    let Some(account_id) = resolved_identity.scope.account_id.clone() else {
+        return LeagueLedgerSettlement {
+            status: "skipped_missing_account".to_string(),
+            error: Some("matrix identity did not resolve a ledger account_id".to_string()),
+            ..Default::default()
+        };
+    };
+    let Some(ledger_admin_token) = state.config().ledger_admin_token.clone() else {
+        return LeagueLedgerSettlement {
+            status: "skipped_missing_ledger_token".to_string(),
+            account_id: Some(account_id),
+            error: Some("consumer-entry ledger admin token is not configured".to_string()),
+            ..Default::default()
+        };
+    };
+    let url = format!(
+        "{}/v1/ledger/{action}",
+        state.config().ledger_base_url.trim_end_matches('/')
+    );
+    let body = json!({
+        "account_id": account_id,
+        "amount": purchase.price_credits as f64,
+        "idempotency_key": idempotency_key,
+        "reference_id": reference_id,
+    });
+    let response = match state
+        .inner
+        .http
+        .post(url)
+        .header("x-admin-token", ledger_admin_token)
+        .json(&body)
+        .send()
+        .await
+    {
+        Ok(response) => response,
+        Err(err) => {
+            return LeagueLedgerSettlement {
+                status: "failed_network".to_string(),
+                account_id: body
+                    .get("account_id")
+                    .and_then(Value::as_str)
+                    .map(ToString::to_string),
+                error: Some(format!("failed to reach ledger-service: {err}")),
+                ..Default::default()
+            }
+        }
+    };
+    let status = response.status();
+    let value = match response.json::<Value>().await {
+        Ok(value) => value,
+        Err(err) => {
+            return LeagueLedgerSettlement {
+                status: "failed_bad_response".to_string(),
+                account_id: body
+                    .get("account_id")
+                    .and_then(Value::as_str)
+                    .map(ToString::to_string),
+                error: Some(format!("ledger-service returned non-json response: {err}")),
+                ..Default::default()
+            }
+        }
+    };
+    if !status.is_success() {
+        let error = value
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or("ledger action failed");
+        return LeagueLedgerSettlement {
+            status: if status.as_u16() == 409 {
+                "duplicate".to_string()
+            } else {
+                "failed_ledger".to_string()
+            },
+            account_id: body
+                .get("account_id")
+                .and_then(Value::as_str)
+                .map(ToString::to_string),
+            error: Some(format!("{}: {error}", status.as_u16())),
+            ..Default::default()
+        };
+    }
+    LeagueLedgerSettlement {
+        status: success_status.to_string(),
+        account_id: value
+            .get("account")
+            .and_then(|account| account.get("account_id"))
+            .and_then(Value::as_str)
+            .or_else(|| body.get("account_id").and_then(Value::as_str))
+            .map(ToString::to_string),
+        entry_id: value
+            .get("entry")
+            .and_then(|entry| entry.get("entry_id"))
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+        balance_after: value
+            .get("account")
+            .and_then(|account| account.get("balance"))
+            .and_then(Value::as_f64),
+        error: None,
+    }
+}
+
+pub(super) async fn reserve_world_purchase_with_ledger(
+    state: &AppState,
+    payload: &WorldListingBuyRequest,
+    purchase: &WorldPurchase,
+) -> LeagueLedgerSettlement {
+    settle_world_purchase_ledger_action(
+        state,
+        payload.room_id.as_deref(),
+        &purchase.buyer_matrix_user_id,
+        purchase,
+        "reserve",
+        "reserved",
+        format!("world_purchase_reserve:{}", purchase.purchase_id),
+        purchase.purchase_id.clone(),
+        "world listing purchase reserve",
+        "matrix identity could not be resolved for world purchase reserve",
+    )
+    .await
+}
+
+pub(super) async fn settle_world_purchase_with_ledger(
+    state: &AppState,
+    payload: &WorldListingBuyRequest,
+    purchase: &WorldPurchase,
+) -> LeagueLedgerSettlement {
+    settle_world_purchase_ledger_action(
+        state,
+        payload.room_id.as_deref(),
+        &purchase.seller_matrix_user_id,
+        purchase,
+        "grant",
+        "settled",
+        format!("world_purchase:{}", purchase.purchase_id),
+        purchase.listing_id.clone(),
+        "world listing purchase settlement",
+        "matrix identity could not be resolved for world purchase settlement",
+    )
+    .await
+}
+
+pub(super) async fn consume_world_purchase_with_ledger(
+    state: &AppState,
+    room_id: Option<&str>,
+    purchase: &WorldPurchase,
+) -> LeagueLedgerSettlement {
+    settle_world_purchase_ledger_action(
+        state,
+        room_id,
+        &purchase.buyer_matrix_user_id,
+        purchase,
+        "consume",
+        "consumed",
+        format!("world_purchase_consume:{}", purchase.purchase_id),
+        purchase.purchase_id.clone(),
+        "world listing purchase consume",
+        "matrix identity could not be resolved for world purchase consume",
+    )
+    .await
+}
+
+pub(super) async fn refund_world_purchase_with_ledger(
+    state: &AppState,
+    room_id: Option<&str>,
+    purchase: &WorldPurchase,
+    refund_scope: &str,
+) -> LeagueLedgerSettlement {
+    settle_world_purchase_ledger_action(
+        state,
+        room_id,
+        &purchase.buyer_matrix_user_id,
+        purchase,
+        "refund",
+        "refunded",
+        format!(
+            "world_purchase_refund:{}:{}",
+            purchase.purchase_id, refund_scope
+        ),
+        purchase.purchase_id.clone(),
+        "world listing purchase refund",
+        "matrix identity could not be resolved for world purchase refund",
+    )
+    .await
+}
+
+pub(super) async fn reserve_reopened_world_purchase_with_ledger(
+    state: &AppState,
+    room_id: Option<&str>,
+    purchase: &WorldPurchase,
+    reopen: &WorldWorkReopen,
+) -> LeagueLedgerSettlement {
+    settle_world_purchase_ledger_action(
+        state,
+        room_id,
+        &purchase.buyer_matrix_user_id,
+        purchase,
+        "reserve",
+        "reserved",
+        format!(
+            "world_purchase_reopen_reserve:{}:{}",
+            purchase.purchase_id, reopen.reopen_id
+        ),
+        purchase.purchase_id.clone(),
+        "world listing purchase reopen reserve",
+        "matrix identity could not be resolved for world purchase reopen reserve",
+    )
+    .await
+}
+
+pub(super) async fn buy_world_listing_inner(
+    state: AppState,
+    listing_id: String,
+    payload: WorldListingBuyRequest,
+) -> Response {
+    let buyer_matrix_user_id = match normalize_league_matrix_user(&payload.matrix_user_id) {
+        Some(value) => value,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "matrix_user_id is required" })),
+            )
+                .into_response()
+        }
+    };
+    let brief = match validate_text_payload(
+        payload
+            .body
+            .as_deref()
+            .unwrap_or("Buy this listing and open a work order with deliverable, evidence, acceptance standard, and next action."),
+        state.config().max_text_chars,
+    ) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let snapshot = {
+        let now = Utc::now().timestamp();
+        let mut league = state.inner.league_state.lock().await;
+        let indexes = build_world_indexes(&league.world);
+        let Some(listing_index) = indexes.resolve_listing_index(&listing_id) else {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "world listing not found", "listing_id": listing_id })),
+            )
+                .into_response();
+        };
+        let listing = league.world.world_listings[listing_index].clone();
+        if listing.status != "listed" {
+            return (
+                StatusCode::CONFLICT,
+                Json(json!({
+                    "error": "world listing is not open for purchase",
+                    "listing_id": listing.listing_id,
+                    "status": listing.status,
+                })),
+            )
+                .into_response();
+        }
+        let company_index = indexes.company_index(&listing.company_id);
+        let shop_index = indexes.shop_index(&listing.shop_id);
+        let location_id = indexes
+            .company_location_id(&listing.company_id)
+            .or_else(|| indexes.shop_location_id(&listing.shop_id))
+            .unwrap_or("zbj-market-gate");
+        let faction_id = world_faction_for_location(location_id);
+        let price_credits = listing.price_credits.max(1);
+        let reputation_delta = (listing.quality_score / 5).max(1);
+        let purchase_nonce = league.world.world_purchases.len();
+        let work_order_nonce = league.world.world_work_orders.len();
+        let purchase = WorldPurchase {
+            purchase_id: league_hash_id(
+                "world-purchase",
+                &format!(
+                    "{}:{}:{}:{}:{}",
+                    buyer_matrix_user_id, listing.listing_id, price_credits, now, purchase_nonce
+                ),
+            ),
+            listing_id: listing.listing_id.clone(),
+            shop_id: listing.shop_id.clone(),
+            company_id: listing.company_id.clone(),
+            buyer_matrix_user_id: buyer_matrix_user_id.clone(),
+            seller_matrix_user_id: listing.owner_matrix_user_id.clone(),
+            price_credits,
+            status: "pending_payment".to_string(),
+            ledger_status: Some("pending".to_string()),
+            ledger_account_id: None,
+            ledger_entry_id: None,
+            ledger_balance_after: None,
+            ledger_error: None,
+            buyer_ledger_status: Some("pending".to_string()),
+            buyer_ledger_account_id: None,
+            buyer_ledger_entry_id: None,
+            buyer_ledger_balance_after: None,
+            buyer_ledger_error: None,
+            buyer_consume_status: Some("pending_acceptance".to_string()),
+            buyer_consume_entry_id: None,
+            buyer_consume_balance_after: None,
+            buyer_consume_error: None,
+            created_at_epoch: now,
+        };
+        let work_order = WorldWorkOrder {
+            work_order_id: league_hash_id(
+                "world-work",
+                &format!(
+                    "{}:{}:{}:{}",
+                    purchase.purchase_id, listing.listing_id, now, work_order_nonce
+                ),
+            ),
+            purchase_id: purchase.purchase_id.clone(),
+            listing_id: listing.listing_id.clone(),
+            buyer_matrix_user_id: buyer_matrix_user_id.clone(),
+            seller_matrix_user_id: listing.owner_matrix_user_id.clone(),
+            company_id: listing.company_id.clone(),
+            status: "open".to_string(),
+            brief: brief.clone(),
+            value_score: price_credits + listing.quality_score.max(0),
+            created_at_epoch: now,
+        };
+        if let Some(index) = shop_index {
+            league.world.world_shops[index].gross_merchandise_score += price_credits;
+        }
+        if let Some(index) = company_index {
+            league.world.world_companies[index].revenue_score += price_credits;
+            league.world.world_companies[index].reputation_score += reputation_delta;
+            league.world.world_companies[index].level =
+                1 + (league.world.world_companies[index].revenue_score / 100).max(0);
+        }
+        let mut buyer = ensure_league_player(&mut league, &buyer_matrix_user_id, None);
+        buyer.xp += (listing.quality_score / 10).max(1);
+        buyer.reputation += 1;
+        buyer.rating += 1;
+        league
+            .players_by_matrix_user
+            .insert(buyer_matrix_user_id.clone(), buyer);
+        let mut seller = ensure_league_player(&mut league, &listing.owner_matrix_user_id, None);
+        seller.xp += (listing.quality_score / 2).max(1);
+        seller.reputation += reputation_delta;
+        seller.rating += (listing.quality_score / 10).max(1);
+        league
+            .players_by_matrix_user
+            .insert(listing.owner_matrix_user_id.clone(), seller);
+        let economy_event = WorldEconomyEvent {
+            economy_event_id: league_hash_id(
+                "world-econ",
+                &format!("{}:{}:{}", buyer_matrix_user_id, purchase.purchase_id, now),
+            ),
+            matrix_user_id: listing.owner_matrix_user_id.clone(),
+            event_kind: "listing_purchase".to_string(),
+            subject_id: purchase.purchase_id.clone(),
+            credits_delta: price_credits,
+            reputation_delta,
+            created_at_epoch: now,
+        };
+        league.world.world_relationships.push(WorldRelationship {
+            relationship_id: league_hash_id(
+                "world-rel",
+                &format!("{}:{}:{}", buyer_matrix_user_id, listing.company_id, now),
+            ),
+            from_id: buyer_matrix_user_id.clone(),
+            to_id: listing.company_id.clone(),
+            relation_kind: "customer".to_string(),
+            strength: reputation_delta,
+            updated_at_epoch: now,
+        });
+        let seller_standing = upsert_world_faction_standing(
+            &mut league,
+            &listing.owner_matrix_user_id,
+            faction_id,
+            reputation_delta,
+            now,
+        );
+        let buyer_standing =
+            upsert_world_faction_standing(&mut league, &buyer_matrix_user_id, faction_id, 1, now);
+        league.world.world_purchases.push(purchase.clone());
+        league.world.world_work_orders.push(work_order.clone());
+        league
+            .world
+            .world_economy_events
+            .push(economy_event.clone());
+        let company = company_index.map(|index| league.world.world_companies[index].clone());
+        let shop = shop_index.map(|index| league.world.world_shops[index].clone());
+        (
+            league.clone(),
+            purchase,
+            work_order,
+            listing,
+            company,
+            shop,
+            economy_event,
+            seller_standing,
+            buyer_standing,
+        )
+    };
+    let buyer_reserve = reserve_world_purchase_with_ledger(&state, &payload, &snapshot.1).await;
+    let local_dev_ledger_bypass =
+        matches!(state.config().runtime_profile, RuntimeProfile::LocalDev)
+            && buyer_reserve.status.starts_with("skipped");
+    let buyer_reserved = buyer_reserve.status == "reserved"
+        || buyer_reserve.status == "duplicate"
+        || local_dev_ledger_bypass;
+    let settlement = if buyer_reserved {
+        settle_world_purchase_with_ledger(&state, &payload, &snapshot.1).await
+    } else {
+        LeagueLedgerSettlement {
+            status: "skipped_buyer_reserve".to_string(),
+            error: Some(
+                "seller settlement skipped because buyer reserve did not complete".to_string(),
+            ),
+            ..Default::default()
+        }
+    };
+    let final_snapshot = {
+        let mut league = state.inner.league_state.lock().await;
+        let indexes = build_world_indexes(&league.world);
+        let mut purchase = snapshot.1.clone();
+        let mut work_order = snapshot.2.clone();
+        let released = settlement.status == "settled" || settlement.status == "duplicate";
+        purchase.buyer_ledger_status = Some(buyer_reserve.status.clone());
+        purchase.buyer_ledger_account_id = buyer_reserve.account_id.clone();
+        purchase.buyer_ledger_entry_id = buyer_reserve.entry_id.clone();
+        purchase.buyer_ledger_balance_after = buyer_reserve.balance_after;
+        purchase.buyer_ledger_error = buyer_reserve.error.clone();
+        purchase.status = if buyer_reserved {
+            if released {
+                "reserved".to_string()
+            } else if settlement.status.starts_with("skipped") {
+                "seller_settlement_pending".to_string()
+            } else {
+                "seller_settlement_failed".to_string()
+            }
+        } else if buyer_reserve.status.starts_with("skipped") {
+            "payment_hold".to_string()
+        } else {
+            "buyer_reserve_failed".to_string()
+        };
+        purchase.ledger_status = Some(settlement.status.clone());
+        purchase.ledger_account_id = settlement.account_id.clone();
+        purchase.ledger_entry_id = settlement.entry_id.clone();
+        purchase.ledger_balance_after = settlement.balance_after;
+        purchase.ledger_error = settlement.error.clone();
+        work_order.status = if buyer_reserved {
+            "open".to_string()
+        } else {
+            "payment_hold".to_string()
+        };
+        indexes.replace_purchase_by_id(&mut league.world, &purchase);
+        indexes.replace_work_order_by_id(&mut league.world, &work_order);
+        if released {
+            if let Some(player) = league
+                .players_by_matrix_user
+                .get_mut(&purchase.seller_matrix_user_id)
+            {
+                player.earned_credits += purchase.price_credits as f64;
+            }
+        }
+        (league.clone(), purchase, work_order)
+    };
+    if let Err(response) =
+        persist_league_state_after_command(&state, &final_snapshot.0, "world_buy").await
+    {
+        return response;
+    }
+    let WorldRouteArtifacts {
+        preview: route_preview,
+        task_graph: route_task_graph,
+        ..
+    } = build_world_route_artifacts(&final_snapshot.0.world);
+    (
+        StatusCode::OK,
+        Json(json!({
+            "kind": "trillionnium_world_listing_purchase",
+            "world": "trillionnium_world",
+            "purchase": final_snapshot.1,
+            "work_order": final_snapshot.2,
+            "listing": snapshot.3,
+            "company": snapshot.4,
+            "shop": snapshot.5,
+            "economy_event": snapshot.6,
+            "seller_standing": snapshot.7,
+            "buyer_standing": snapshot.8,
+            "buyer_ledger_status": buyer_reserve.status,
+            "buyer_ledger_entry_id": buyer_reserve.entry_id,
+            "buyer_ledger_error": buyer_reserve.error,
+            "ledger_status": settlement.status,
+            "ledger_entry_id": settlement.entry_id,
+            "ledger_error": settlement.error,
+            "route_preview": route_preview,
+            "route_task_graph": route_task_graph,
+        })),
+    )
+        .into_response()
+}
+
+pub(super) async fn buy_world_listing(
+    Path(listing_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<WorldListingBuyRequest>,
+) -> Response {
+    if let Err(response) = authorize_ingress(&headers, state.config()) {
+        state.inner.metrics.inc_ingress_auth_failures();
+        return response;
+    }
+    buy_world_listing_inner(state, listing_id, payload).await
+}
+
+pub(super) async fn post_world_web_listing_buy(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(payload): Form<WorldWebListingBuyRequest>,
+) -> Response {
+    let web_session = match authorize_league_web_session(&state, &headers, payload.csrf.as_deref())
+    {
+        Ok(value) => value,
+        Err(response) => {
+            if matches!(state.config().runtime_profile, RuntimeProfile::LocalDev)
+                && cookie_value(&headers, &state.config().league_web_session_cookie_name).is_none()
+            {
+                None
+            } else {
+                return response;
+            }
+        }
+    };
+    let matrix_user_id = web_session
+        .as_ref()
+        .map(|session| session.matrix_user_id.clone())
+        .or_else(|| {
+            normalize_league_matrix_user(
+                payload
+                    .matrix_user_id
+                    .as_deref()
+                    .unwrap_or("@alice:local.dev"),
+            )
+        })
+        .unwrap_or_else(|| "@alice:local.dev".to_string());
+    let listing_id = payload
+        .listing_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("latest")
+        .to_string();
+    let request = WorldListingBuyRequest {
+        matrix_user_id,
+        room_id: web_session
+            .as_ref()
+            .and_then(|session| session.room_id.clone())
+            .or_else(|| Some("!web-local:local.dev".to_string())),
+        body: payload
+            .body
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string),
+    };
+    let response = buy_world_listing_inner(state, listing_id, request).await;
+    if response.status().is_success() {
+        Redirect::to("/world?purchase=created").into_response()
+    } else {
+        response
+    }
+}
+
+pub(super) async fn deliver_world_work_order_inner(
+    state: AppState,
+    work_order_id: String,
+    payload: WorldWorkDeliverRequest,
+) -> Response {
+    let matrix_user_id = match normalize_league_matrix_user(&payload.matrix_user_id) {
+        Some(value) => value,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "matrix_user_id is required" })),
+            )
+                .into_response()
+        }
+    };
+    let body = match validate_text_payload(&payload.body, state.config().max_text_chars) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let _room_id = payload.room_id.as_deref();
+    let judgement =
+        judge_league_submission_with_pipeline(&state, &body, "world_work_delivery").await;
+    let snapshot = {
+        let now = Utc::now().timestamp();
+        let mut league = state.inner.league_state.lock().await;
+        let indexes = build_world_indexes(&league.world);
+        let Some(work_index) =
+            indexes.resolve_deliverable_work_order_index(&work_order_id, &matrix_user_id)
+        else {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "world work order not found", "work_order_id": work_order_id })),
+            )
+                .into_response();
+        };
+        if league.world.world_work_orders[work_index].seller_matrix_user_id != matrix_user_id {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({ "error": "work order belongs to another seller", "work_order_id": work_order_id })),
+            )
+                .into_response();
+        }
+        if !matches!(
+            league.world.world_work_orders[work_index].status.as_str(),
+            "open" | "delivery_review_hold"
+        ) {
+            return (
+                StatusCode::CONFLICT,
+                Json(json!({ "error": "work order is not deliverable", "status": league.world.world_work_orders[work_index].status, "work_order_id": work_order_id })),
+            )
+                .into_response();
+        }
+        let work_order_seed = league.world.world_work_orders[work_index].clone();
+        let faction_id = "faction-market-guild";
+        let delivery_status = if judgement.payout_status == "eligible" {
+            "delivered"
+        } else {
+            "review_hold"
+        };
+        let delivery = WorldWorkDelivery {
+            delivery_id: league_hash_id(
+                "world-delivery",
+                &format!(
+                    "{}:{}:{}",
+                    work_order_seed.work_order_id, matrix_user_id, now
+                ),
+            ),
+            work_order_id: work_order_seed.work_order_id.clone(),
+            matrix_user_id: matrix_user_id.clone(),
+            body: body.clone(),
+            score: judgement.score,
+            judge_status: judgement.judge_status.clone(),
+            status: delivery_status.to_string(),
+            created_at_epoch: now,
+        };
+        league.world.world_work_orders[work_index].status = if delivery_status == "delivered" {
+            "delivered".to_string()
+        } else {
+            "delivery_review_hold".to_string()
+        };
+        let reputation_delta = if delivery_status == "delivered" {
+            (judgement.score / 10.0).round() as i64
+        } else {
+            0
+        };
+        if reputation_delta > 0 {
+            if let Some(company_index) = indexes
+                .company_index_by_id
+                .get(&work_order_seed.company_id)
+                .copied()
+            {
+                if let Some(company) = league.world.world_companies.get_mut(company_index) {
+                    company.reputation_score += reputation_delta;
+                }
+            }
+            let mut seller = ensure_league_player(&mut league, &matrix_user_id, None);
+            seller.xp += judgement.score.round() as i64;
+            seller.reputation += reputation_delta;
+            seller.rating += ((judgement.score - 50.0) / 6.0).round() as i64;
+            league
+                .players_by_matrix_user
+                .insert(matrix_user_id.clone(), seller);
+        }
+        let standing = upsert_world_faction_standing(
+            &mut league,
+            &matrix_user_id,
+            faction_id,
+            reputation_delta.max(1),
+            now,
+        );
+        let economy_event = WorldEconomyEvent {
+            economy_event_id: league_hash_id(
+                "world-econ",
+                &format!(
+                    "{}:{}:{}",
+                    matrix_user_id, work_order_seed.work_order_id, now
+                ),
+            ),
+            matrix_user_id: matrix_user_id.clone(),
+            event_kind: "work_delivered".to_string(),
+            subject_id: work_order_seed.work_order_id.clone(),
+            credits_delta: 0,
+            reputation_delta,
+            created_at_epoch: now,
+        };
+        league.world.world_work_deliveries.push(delivery.clone());
+        league
+            .world
+            .world_economy_events
+            .push(economy_event.clone());
+        (
+            league.clone(),
+            league.world.world_work_orders[work_index].clone(),
+            delivery,
+            economy_event,
+            standing,
+        )
+    };
+    if let Err(response) =
+        persist_league_state_after_command(&state, &snapshot.0, "world_work_deliver").await
+    {
+        return response;
+    }
+    let WorldRouteArtifacts {
+        preview: route_preview,
+        task_graph: route_task_graph,
+        ..
+    } = build_world_route_artifacts(&snapshot.0.world);
+    (
+        StatusCode::OK,
+        Json(json!({
+            "kind": "trillionnium_world_work_delivery",
+            "world": "trillionnium_world",
+            "work_order": snapshot.1,
+            "delivery": snapshot.2,
+            "economy_event": snapshot.3,
+            "standing": snapshot.4,
+            "route_preview": route_preview,
+            "route_task_graph": route_task_graph,
+        })),
+    )
+        .into_response()
+}
+
+pub(super) async fn deliver_world_work_order(
+    Path(work_order_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<WorldWorkDeliverRequest>,
+) -> Response {
+    if let Err(response) = authorize_ingress(&headers, state.config()) {
+        state.inner.metrics.inc_ingress_auth_failures();
+        return response;
+    }
+    deliver_world_work_order_inner(state, work_order_id, payload).await
+}
+
+pub(super) async fn post_world_web_work_deliver(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(payload): Form<WorldWebWorkDeliverRequest>,
+) -> Response {
+    let web_session = match authorize_league_web_session(&state, &headers, payload.csrf.as_deref())
+    {
+        Ok(value) => value,
+        Err(response) => {
+            if matches!(state.config().runtime_profile, RuntimeProfile::LocalDev)
+                && cookie_value(&headers, &state.config().league_web_session_cookie_name).is_none()
+            {
+                None
+            } else {
+                return response;
+            }
+        }
+    };
+    let matrix_user_id = web_session
+        .as_ref()
+        .map(|session| session.matrix_user_id.clone())
+        .or_else(|| {
+            normalize_league_matrix_user(
+                payload
+                    .matrix_user_id
+                    .as_deref()
+                    .unwrap_or("@alice:local.dev"),
+            )
+        })
+        .unwrap_or_else(|| "@alice:local.dev".to_string());
+    let work_order_id = payload
+        .work_order_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("latest")
+        .to_string();
+    let response = deliver_world_work_order_inner(
+        state,
+        work_order_id,
+        WorldWorkDeliverRequest {
+            matrix_user_id,
+            room_id: web_session
+                .as_ref()
+                .and_then(|session| session.room_id.clone())
+                .or_else(|| Some("!web-local:local.dev".to_string())),
+            body: payload
+                .body
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("Work delivery package: deliverable, evidence, acceptance checklist, risk review, next action, and self-review.")
+                .to_string(),
+        },
+    )
+    .await;
+    if response.status().is_success() {
+        Redirect::to("/world?work=delivered").into_response()
+    } else {
+        response
+    }
+}
+
+pub(super) async fn accept_world_work_order_inner(
+    state: AppState,
+    work_order_id: String,
+    payload: WorldWorkAcceptRequest,
+) -> Response {
+    let matrix_user_id = match normalize_league_matrix_user(&payload.matrix_user_id) {
+        Some(value) => value,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "matrix_user_id is required" })),
+            )
+                .into_response()
+        }
+    };
+    let body = match validate_text_payload(&payload.body, state.config().max_text_chars) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let snapshot = {
+        let now = Utc::now().timestamp();
+        let mut league = state.inner.league_state.lock().await;
+        let indexes = build_world_indexes(&league.world);
+        let Some(work_index) =
+            indexes.resolve_acceptable_work_order_index(&work_order_id, &matrix_user_id)
+        else {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "world work order not found", "work_order_id": work_order_id })),
+            )
+                .into_response();
+        };
+        if league.world.world_work_orders[work_index].buyer_matrix_user_id != matrix_user_id {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({ "error": "work order belongs to another buyer", "work_order_id": work_order_id })),
+            )
+                .into_response();
+        }
+        if league.world.world_work_orders[work_index].status != "delivered" {
+            return (
+                StatusCode::CONFLICT,
+                Json(json!({ "error": "work order is not ready for acceptance", "status": league.world.world_work_orders[work_index].status, "work_order_id": work_order_id })),
+            )
+                .into_response();
+        }
+        let work_order_seed = league.world.world_work_orders[work_index].clone();
+        let Some(purchase_index) = indexes
+            .purchase_index_by_id
+            .get(&work_order_seed.purchase_id)
+            .copied()
+        else {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "world purchase not found for work order", "work_order_id": work_order_id })),
+            )
+                .into_response();
+        };
+        let purchase_seed = league.world.world_purchases[purchase_index].clone();
+        let reputation_delta = (work_order_seed.value_score / 20).max(1);
+        let acceptance = WorldWorkAcceptance {
+            acceptance_id: league_hash_id(
+                "world-acceptance",
+                &format!(
+                    "{}:{}:{}",
+                    work_order_seed.work_order_id, matrix_user_id, now
+                ),
+            ),
+            work_order_id: work_order_seed.work_order_id.clone(),
+            matrix_user_id: matrix_user_id.clone(),
+            body,
+            status: "pending_consume".to_string(),
+            reputation_delta,
+            created_at_epoch: now,
+        };
+        league.world.world_work_orders[work_index].status = "accepted_pending_payment".to_string();
+        if let Some(company_index) = indexes
+            .company_index_by_id
+            .get(&work_order_seed.company_id)
+            .copied()
+        {
+            if let Some(company) = league.world.world_companies.get_mut(company_index) {
+                company.reputation_score += reputation_delta;
+                company.level = 1 + (company.revenue_score / 100).max(0);
+            }
+        }
+        let mut buyer = ensure_league_player(&mut league, &matrix_user_id, None);
+        buyer.xp += 3;
+        buyer.reputation += 1;
+        league
+            .players_by_matrix_user
+            .insert(matrix_user_id.clone(), buyer);
+        let mut seller =
+            ensure_league_player(&mut league, &work_order_seed.seller_matrix_user_id, None);
+        seller.xp += reputation_delta;
+        seller.reputation += reputation_delta;
+        seller.rating += (reputation_delta / 2).max(1);
+        league
+            .players_by_matrix_user
+            .insert(work_order_seed.seller_matrix_user_id.clone(), seller);
+        let standing = upsert_world_faction_standing(
+            &mut league,
+            &work_order_seed.seller_matrix_user_id,
+            "faction-market-guild",
+            reputation_delta,
+            now,
+        );
+        let economy_event = WorldEconomyEvent {
+            economy_event_id: league_hash_id(
+                "world-econ",
+                &format!("{}:{}:{}", matrix_user_id, acceptance.acceptance_id, now),
+            ),
+            matrix_user_id: work_order_seed.seller_matrix_user_id.clone(),
+            event_kind: "work_accepted".to_string(),
+            subject_id: work_order_seed.work_order_id.clone(),
+            credits_delta: 0,
+            reputation_delta,
+            created_at_epoch: now,
+        };
+        league.world.world_work_acceptances.push(acceptance.clone());
+        league
+            .world
+            .world_economy_events
+            .push(economy_event.clone());
+        (
+            league.clone(),
+            league.world.world_work_orders[work_index].clone(),
+            purchase_seed,
+            acceptance,
+            economy_event,
+            standing,
+        )
+    };
+    let buyer_consume =
+        consume_world_purchase_with_ledger(&state, payload.room_id.as_deref(), &snapshot.2).await;
+    let final_snapshot = {
+        let mut league = state.inner.league_state.lock().await;
+        let indexes = build_world_indexes(&league.world);
+        let mut work_order = snapshot.1.clone();
+        let mut purchase = snapshot.2.clone();
+        let mut acceptance = snapshot.3.clone();
+        let buyer_consumed =
+            buyer_consume.status == "consumed" || buyer_consume.status == "duplicate";
+        purchase.buyer_consume_status = Some(buyer_consume.status.clone());
+        purchase.buyer_consume_entry_id = buyer_consume.entry_id.clone();
+        purchase.buyer_consume_balance_after = buyer_consume.balance_after;
+        purchase.buyer_consume_error = buyer_consume.error.clone();
+        purchase.status = if buyer_consumed {
+            "completed".to_string()
+        } else if buyer_consume.status.starts_with("skipped") {
+            "accepted_payment_hold".to_string()
+        } else {
+            "accepted_payment_failed".to_string()
+        };
+        work_order.status = if buyer_consumed {
+            "completed".to_string()
+        } else if buyer_consume.status.starts_with("skipped") {
+            "accepted_payment_hold".to_string()
+        } else {
+            "accepted_payment_failed".to_string()
+        };
+        acceptance.status = if buyer_consumed {
+            "accepted".to_string()
+        } else if buyer_consume.status.starts_with("skipped") {
+            "accepted_payment_hold".to_string()
+        } else {
+            "accepted_payment_failed".to_string()
+        };
+        indexes.replace_purchase_by_id(&mut league.world, &purchase);
+        indexes.replace_work_order_by_id(&mut league.world, &work_order);
+        indexes.replace_acceptance_by_id(&mut league.world, &acceptance);
+        (
+            league.clone(),
+            work_order,
+            purchase,
+            acceptance,
+            snapshot.4.clone(),
+            snapshot.5.clone(),
+        )
+    };
+    if let Err(response) =
+        persist_league_state_after_command(&state, &final_snapshot.0, "world_work_accept").await
+    {
+        return response;
+    }
+    let WorldRouteArtifacts {
+        preview: route_preview,
+        task_graph: route_task_graph,
+        ..
+    } = build_world_route_artifacts(&final_snapshot.0.world);
+    (
+        StatusCode::OK,
+        Json(json!({
+            "kind": "trillionnium_world_work_acceptance",
+            "world": "trillionnium_world",
+            "work_order": final_snapshot.1,
+            "purchase": final_snapshot.2,
+            "acceptance": final_snapshot.3,
+            "economy_event": final_snapshot.4,
+            "standing": final_snapshot.5,
+            "buyer_consume_status": buyer_consume.status,
+            "buyer_consume_entry_id": buyer_consume.entry_id,
+            "buyer_consume_error": buyer_consume.error,
+            "route_preview": route_preview,
+            "route_task_graph": route_task_graph,
+        })),
+    )
+        .into_response()
+}
+
+pub(super) async fn accept_world_work_order(
+    Path(work_order_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<WorldWorkAcceptRequest>,
+) -> Response {
+    if let Err(response) = authorize_ingress(&headers, state.config()) {
+        state.inner.metrics.inc_ingress_auth_failures();
+        return response;
+    }
+    accept_world_work_order_inner(state, work_order_id, payload).await
+}
+
+pub(super) async fn post_world_web_work_accept(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(payload): Form<WorldWebWorkAcceptRequest>,
+) -> Response {
+    let web_session = match authorize_league_web_session(&state, &headers, payload.csrf.as_deref())
+    {
+        Ok(value) => value,
+        Err(response) => {
+            if matches!(state.config().runtime_profile, RuntimeProfile::LocalDev)
+                && cookie_value(&headers, &state.config().league_web_session_cookie_name).is_none()
+            {
+                None
+            } else {
+                return response;
+            }
+        }
+    };
+    let matrix_user_id = web_session
+        .as_ref()
+        .map(|session| session.matrix_user_id.clone())
+        .or_else(|| {
+            normalize_league_matrix_user(
+                payload
+                    .matrix_user_id
+                    .as_deref()
+                    .unwrap_or("@alice:local.dev"),
+            )
+        })
+        .unwrap_or_else(|| "@alice:local.dev".to_string());
+    let work_order_id = payload
+        .work_order_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("latest")
+        .to_string();
+    let response = accept_world_work_order_inner(
+        state,
+        work_order_id,
+        WorldWorkAcceptRequest {
+            matrix_user_id,
+            room_id: web_session
+                .as_ref()
+                .and_then(|session| session.room_id.clone())
+                .or_else(|| Some("!web-local:local.dev".to_string())),
+            body: payload
+                .body
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("Buyer acceptance: delivered work accepted with proof, quality note, next collaboration, and reputation confirmation.")
+                .to_string(),
+        },
+    )
+    .await;
+    if response.status().is_success() {
+        Redirect::to("/world?work=accepted").into_response()
+    } else {
+        response
+    }
+}
+
+pub(super) async fn reject_world_work_order_inner(
+    state: AppState,
+    work_order_id: String,
+    payload: WorldWorkRejectRequest,
+) -> Response {
+    let matrix_user_id = match normalize_league_matrix_user(&payload.matrix_user_id) {
+        Some(value) => value,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "matrix_user_id is required" })),
+            )
+                .into_response()
+        }
+    };
+    let body = match validate_text_payload(&payload.body, state.config().max_text_chars) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let snapshot = {
+        let now = Utc::now().timestamp();
+        let mut league = state.inner.league_state.lock().await;
+        let indexes = build_world_indexes(&league.world);
+        let Some(work_index) =
+            indexes.resolve_rejectable_work_order_index(&work_order_id, &matrix_user_id)
+        else {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "world work order not found", "work_order_id": work_order_id })),
+            )
+                .into_response();
+        };
+        if league.world.world_work_orders[work_index].buyer_matrix_user_id != matrix_user_id {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({ "error": "work order belongs to another buyer", "work_order_id": work_order_id })),
+            )
+                .into_response();
+        }
+        if !matches!(
+            league.world.world_work_orders[work_index].status.as_str(),
+            "delivered" | "delivery_review_hold"
+        ) {
+            return (
+                StatusCode::CONFLICT,
+                Json(json!({ "error": "work order is not rejectable", "status": league.world.world_work_orders[work_index].status, "work_order_id": work_order_id })),
+            )
+                .into_response();
+        }
+        let work_order_seed = league.world.world_work_orders[work_index].clone();
+        let Some(purchase_index) = indexes
+            .purchase_index_by_id
+            .get(&work_order_seed.purchase_id)
+            .copied()
+        else {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "world purchase not found for work order", "work_order_id": work_order_id })),
+            )
+                .into_response();
+        };
+        let purchase_seed = league.world.world_purchases[purchase_index].clone();
+        let rejection = WorldWorkRejection {
+            rejection_id: league_hash_id(
+                "world-rejection",
+                &format!(
+                    "{}:{}:{}",
+                    work_order_seed.work_order_id, matrix_user_id, now
+                ),
+            ),
+            work_order_id: work_order_seed.work_order_id.clone(),
+            matrix_user_id: matrix_user_id.clone(),
+            body,
+            status: "pending_refund".to_string(),
+            refund_status: "pending".to_string(),
+            created_at_epoch: now,
+        };
+        league.world.world_work_orders[work_index].status = "rejected_pending_refund".to_string();
+        let economy_event = WorldEconomyEvent {
+            economy_event_id: league_hash_id(
+                "world-econ",
+                &format!("{}:{}:{}", matrix_user_id, rejection.rejection_id, now),
+            ),
+            matrix_user_id: matrix_user_id.clone(),
+            event_kind: "work_rejected".to_string(),
+            subject_id: work_order_seed.work_order_id.clone(),
+            credits_delta: -purchase_seed.price_credits,
+            reputation_delta: 0,
+            created_at_epoch: now,
+        };
+        let standing = upsert_world_faction_standing(
+            &mut league,
+            &matrix_user_id,
+            "faction-market-guild",
+            1,
+            now,
+        );
+        league.world.world_work_rejections.push(rejection.clone());
+        league
+            .world
+            .world_economy_events
+            .push(economy_event.clone());
+        (
+            league.clone(),
+            league.world.world_work_orders[work_index].clone(),
+            purchase_seed,
+            rejection,
+            economy_event,
+            standing,
+        )
+    };
+    let buyer_refund = refund_world_purchase_with_ledger(
+        &state,
+        payload.room_id.as_deref(),
+        &snapshot.2,
+        &snapshot.3.rejection_id,
+    )
+    .await;
+    let final_snapshot = {
+        let mut league = state.inner.league_state.lock().await;
+        let indexes = build_world_indexes(&league.world);
+        let mut work_order = snapshot.1.clone();
+        let mut purchase = snapshot.2.clone();
+        let mut rejection = snapshot.3.clone();
+        let buyer_refunded =
+            buyer_refund.status == "refunded" || buyer_refund.status == "duplicate";
+        purchase.buyer_consume_status = Some(if buyer_refunded {
+            "refunded".to_string()
+        } else {
+            buyer_refund.status.clone()
+        });
+        purchase.buyer_consume_entry_id = buyer_refund.entry_id.clone();
+        purchase.buyer_consume_balance_after = buyer_refund.balance_after;
+        purchase.buyer_consume_error = buyer_refund.error.clone();
+        purchase.status = if buyer_refunded {
+            "rejected_refunded".to_string()
+        } else if buyer_refund.status.starts_with("skipped") {
+            "rejected_refund_hold".to_string()
+        } else {
+            "rejected_refund_failed".to_string()
+        };
+        work_order.status = purchase.status.clone();
+        rejection.refund_status = buyer_refund.status.clone();
+        rejection.status = if buyer_refunded {
+            "rejected_refunded".to_string()
+        } else if buyer_refund.status.starts_with("skipped") {
+            "rejected_refund_hold".to_string()
+        } else {
+            "rejected_refund_failed".to_string()
+        };
+        indexes.replace_purchase_by_id(&mut league.world, &purchase);
+        indexes.replace_work_order_by_id(&mut league.world, &work_order);
+        indexes.replace_rejection_by_id(&mut league.world, &rejection);
+        (
+            league.clone(),
+            work_order,
+            purchase,
+            rejection,
+            snapshot.4.clone(),
+            snapshot.5.clone(),
+        )
+    };
+    if let Err(response) =
+        persist_league_state_after_command(&state, &final_snapshot.0, "world_work_reject").await
+    {
+        return response;
+    }
+    let WorldRouteArtifacts {
+        preview: route_preview,
+        task_graph: route_task_graph,
+        ..
+    } = build_world_route_artifacts(&final_snapshot.0.world);
+    (
+        StatusCode::OK,
+        Json(json!({
+            "kind": "trillionnium_world_work_rejection",
+            "world": "trillionnium_world",
+            "work_order": final_snapshot.1,
+            "purchase": final_snapshot.2,
+            "rejection": final_snapshot.3,
+            "economy_event": final_snapshot.4,
+            "standing": final_snapshot.5,
+            "buyer_refund_status": buyer_refund.status,
+            "buyer_refund_entry_id": buyer_refund.entry_id,
+            "buyer_refund_error": buyer_refund.error,
+            "route_preview": route_preview,
+            "route_task_graph": route_task_graph,
+        })),
+    )
+        .into_response()
+}
+
+pub(super) async fn reject_world_work_order(
+    Path(work_order_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<WorldWorkRejectRequest>,
+) -> Response {
+    if let Err(response) = authorize_ingress(&headers, state.config()) {
+        state.inner.metrics.inc_ingress_auth_failures();
+        return response;
+    }
+    reject_world_work_order_inner(state, work_order_id, payload).await
+}
+
+pub(super) async fn post_world_web_work_reject(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(payload): Form<WorldWebWorkRejectRequest>,
+) -> Response {
+    let web_session = match authorize_league_web_session(&state, &headers, payload.csrf.as_deref())
+    {
+        Ok(value) => value,
+        Err(response) => {
+            if matches!(state.config().runtime_profile, RuntimeProfile::LocalDev)
+                && cookie_value(&headers, &state.config().league_web_session_cookie_name).is_none()
+            {
+                None
+            } else {
+                return response;
+            }
+        }
+    };
+    let matrix_user_id = web_session
+        .as_ref()
+        .map(|session| session.matrix_user_id.clone())
+        .or_else(|| {
+            normalize_league_matrix_user(
+                payload
+                    .matrix_user_id
+                    .as_deref()
+                    .unwrap_or("@alice:local.dev"),
+            )
+        })
+        .unwrap_or_else(|| "@alice:local.dev".to_string());
+    let work_order_id = payload
+        .work_order_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("latest")
+        .to_string();
+    let response = reject_world_work_order_inner(
+        state,
+        work_order_id,
+        WorldWorkRejectRequest {
+            matrix_user_id,
+            room_id: web_session
+                .as_ref()
+                .and_then(|session| session.room_id.clone())
+                .or_else(|| Some("!web-local:local.dev".to_string())),
+            body: payload
+                .body
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("Buyer rejection: delivery is not accepted, refund the reserved buyer funds, reopen the relationship with revision requirements and evidence gaps.")
+                .to_string(),
+        },
+    )
+    .await;
+    if response.status().is_success() {
+        Redirect::to("/world?work=rejected").into_response()
+    } else {
+        response
+    }
+}
+
+pub(super) async fn reopen_world_work_order_inner(
+    state: AppState,
+    work_order_id: String,
+    payload: WorldWorkReopenRequest,
+) -> Response {
+    let matrix_user_id = match normalize_league_matrix_user(&payload.matrix_user_id) {
+        Some(value) => value,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "matrix_user_id is required" })),
+            )
+                .into_response()
+        }
+    };
+    let body = match validate_text_payload(&payload.body, state.config().max_text_chars) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let snapshot = {
+        let now = Utc::now().timestamp();
+        let mut league = state.inner.league_state.lock().await;
+        let indexes = build_world_indexes(&league.world);
+        let Some(work_index) =
+            indexes.resolve_reopenable_work_order_index(&work_order_id, &matrix_user_id)
+        else {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "world work order not found", "work_order_id": work_order_id })),
+            )
+                .into_response();
+        };
+        if league.world.world_work_orders[work_index].buyer_matrix_user_id != matrix_user_id {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({ "error": "work order belongs to another buyer", "work_order_id": work_order_id })),
+            )
+                .into_response();
+        }
+        if !matches!(
+            league.world.world_work_orders[work_index].status.as_str(),
+            "rejected_refunded" | "rejected_refund_hold" | "rejected_refund_failed"
+        ) {
+            let status = league.world.world_work_orders[work_index].status.clone();
+            return (
+                StatusCode::CONFLICT,
+                Json(json!({ "error": "work order is not reopenable", "status": status, "work_order_id": work_order_id })),
+            )
+                .into_response();
+        }
+        let work_order_seed = league.world.world_work_orders[work_index].clone();
+        let Some(purchase_index) = indexes
+            .purchase_index_by_id
+            .get(&work_order_seed.purchase_id)
+            .copied()
+        else {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "world purchase not found for work order", "work_order_id": work_order_id })),
+            )
+                .into_response();
+        };
+        let purchase_seed = league.world.world_purchases[purchase_index].clone();
+        let reopen = WorldWorkReopen {
+            reopen_id: league_hash_id(
+                "world-reopen",
+                &format!(
+                    "{}:{}:{}:{}",
+                    work_order_seed.work_order_id, matrix_user_id, now, body
+                ),
+            ),
+            work_order_id: work_order_seed.work_order_id.clone(),
+            matrix_user_id: matrix_user_id.clone(),
+            body,
+            status: "pending_reopen_reserve".to_string(),
+            reserve_status: "pending".to_string(),
+            created_at_epoch: now,
+        };
+        league.world.world_work_orders[work_index].status = "reopen_pending_reserve".to_string();
+        let economy_event = WorldEconomyEvent {
+            economy_event_id: league_hash_id(
+                "world-econ",
+                &format!("{}:{}:{}", matrix_user_id, reopen.reopen_id, now),
+            ),
+            matrix_user_id: matrix_user_id.clone(),
+            event_kind: "work_reopened".to_string(),
+            subject_id: work_order_seed.work_order_id.clone(),
+            credits_delta: 0,
+            reputation_delta: 1,
+            created_at_epoch: now,
+        };
+        let standing = upsert_world_faction_standing(
+            &mut league,
+            &matrix_user_id,
+            "faction-market-guild",
+            1,
+            now,
+        );
+        league.world.world_work_reopens.push(reopen.clone());
+        league
+            .world
+            .world_economy_events
+            .push(economy_event.clone());
+        (
+            league.clone(),
+            league.world.world_work_orders[work_index].clone(),
+            purchase_seed,
+            reopen,
+            economy_event,
+            standing,
+        )
+    };
+    let buyer_reopen_reserve = reserve_reopened_world_purchase_with_ledger(
+        &state,
+        payload.room_id.as_deref(),
+        &snapshot.2,
+        &snapshot.3,
+    )
+    .await;
+    let final_snapshot = {
+        let mut league = state.inner.league_state.lock().await;
+        let indexes = build_world_indexes(&league.world);
+        let mut work_order = snapshot.1.clone();
+        let mut purchase = snapshot.2.clone();
+        let mut reopen = snapshot.3.clone();
+        let buyer_reserved =
+            buyer_reopen_reserve.status == "reserved" || buyer_reopen_reserve.status == "duplicate";
+        purchase.buyer_ledger_status = Some(if buyer_reserved {
+            "reopened_reserved".to_string()
+        } else {
+            buyer_reopen_reserve.status.clone()
+        });
+        purchase.buyer_ledger_entry_id = buyer_reopen_reserve.entry_id.clone();
+        purchase.buyer_ledger_balance_after = buyer_reopen_reserve.balance_after;
+        purchase.buyer_ledger_error = buyer_reopen_reserve.error.clone();
+        purchase.status = if buyer_reserved {
+            "reopened_reserved".to_string()
+        } else if buyer_reopen_reserve.status.starts_with("skipped") {
+            "reopen_reserve_hold".to_string()
+        } else {
+            "reopen_reserve_failed".to_string()
+        };
+        work_order.status = if buyer_reserved {
+            "open".to_string()
+        } else {
+            purchase.status.clone()
+        };
+        reopen.reserve_status = buyer_reopen_reserve.status.clone();
+        reopen.status = if buyer_reserved {
+            "reopened".to_string()
+        } else if buyer_reopen_reserve.status.starts_with("skipped") {
+            "reopen_reserve_hold".to_string()
+        } else {
+            "reopen_reserve_failed".to_string()
+        };
+        indexes.replace_purchase_by_id(&mut league.world, &purchase);
+        indexes.replace_work_order_by_id(&mut league.world, &work_order);
+        indexes.replace_reopen_by_id(&mut league.world, &reopen);
+        (
+            league.clone(),
+            work_order,
+            purchase,
+            reopen,
+            snapshot.4.clone(),
+            snapshot.5.clone(),
+        )
+    };
+    if let Err(response) =
+        persist_league_state_after_command(&state, &final_snapshot.0, "world_work_reopen").await
+    {
+        return response;
+    }
+    let WorldRouteArtifacts {
+        preview: route_preview,
+        task_graph: route_task_graph,
+        ..
+    } = build_world_route_artifacts(&final_snapshot.0.world);
+    (
+        StatusCode::OK,
+        Json(json!({
+            "kind": "trillionnium_world_work_reopen",
+            "world": "trillionnium_world",
+            "work_order": final_snapshot.1,
+            "purchase": final_snapshot.2,
+            "reopen": final_snapshot.3,
+            "economy_event": final_snapshot.4,
+            "standing": final_snapshot.5,
+            "buyer_reopen_reserve_status": buyer_reopen_reserve.status,
+            "buyer_reopen_reserve_entry_id": buyer_reopen_reserve.entry_id,
+            "buyer_reopen_reserve_error": buyer_reopen_reserve.error,
+            "route_preview": route_preview,
+            "route_task_graph": route_task_graph,
+        })),
+    )
+        .into_response()
+}
+
+pub(super) async fn reopen_world_work_order(
+    Path(work_order_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<WorldWorkReopenRequest>,
+) -> Response {
+    if let Err(response) = authorize_ingress(&headers, state.config()) {
+        state.inner.metrics.inc_ingress_auth_failures();
+        return response;
+    }
+    reopen_world_work_order_inner(state, work_order_id, payload).await
+}
+
+pub(super) async fn post_world_web_work_reopen(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(payload): Form<WorldWebWorkReopenRequest>,
+) -> Response {
+    let web_session = match authorize_league_web_session(&state, &headers, payload.csrf.as_deref())
+    {
+        Ok(value) => value,
+        Err(response) => {
+            if matches!(state.config().runtime_profile, RuntimeProfile::LocalDev)
+                && cookie_value(&headers, &state.config().league_web_session_cookie_name).is_none()
+            {
+                None
+            } else {
+                return response;
+            }
+        }
+    };
+    let matrix_user_id = web_session
+        .as_ref()
+        .map(|session| session.matrix_user_id.clone())
+        .or_else(|| {
+            normalize_league_matrix_user(
+                payload
+                    .matrix_user_id
+                    .as_deref()
+                    .unwrap_or("@alice:local.dev"),
+            )
+        })
+        .unwrap_or_else(|| "@alice:local.dev".to_string());
+    let work_order_id = payload
+        .work_order_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("latest")
+        .to_string();
+    let response = reopen_world_work_order_inner(
+        state,
+        work_order_id,
+        WorldWorkReopenRequest {
+            matrix_user_id,
+            room_id: web_session
+                .as_ref()
+                .and_then(|session| session.room_id.clone())
+                .or_else(|| Some("!web-local:local.dev".to_string())),
+            body: payload
+                .body
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("Buyer reopen: reserve funds again, list revision requirements, evidence gaps, acceptance standard, and next redelivery action.")
+                .to_string(),
+        },
+    )
+    .await;
+    if response.status().is_success() {
+        Redirect::to("/world?work=reopened").into_response()
+    } else {
+        response
+    }
+}
+
+pub(super) async fn cancel_world_work_order_inner(
+    state: AppState,
+    work_order_id: String,
+    payload: WorldWorkCancelRequest,
+) -> Response {
+    let matrix_user_id = match normalize_league_matrix_user(&payload.matrix_user_id) {
+        Some(value) => value,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "matrix_user_id is required" })),
+            )
+                .into_response()
+        }
+    };
+    let body = match validate_text_payload(&payload.body, state.config().max_text_chars) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let snapshot = {
+        let now = Utc::now().timestamp();
+        let mut league = state.inner.league_state.lock().await;
+        let indexes = build_world_indexes(&league.world);
+        let Some(work_index) =
+            indexes.resolve_cancellable_work_order_index(&work_order_id, &matrix_user_id)
+        else {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "world work order not found", "work_order_id": work_order_id })),
+            )
+                .into_response();
+        };
+        if league.world.world_work_orders[work_index].buyer_matrix_user_id != matrix_user_id {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({ "error": "work order belongs to another buyer", "work_order_id": work_order_id })),
+            )
+                .into_response();
+        }
+        if !matches!(
+            league.world.world_work_orders[work_index].status.as_str(),
+            "open"
+                | "payment_hold"
+                | "seller_settlement_pending"
+                | "seller_settlement_failed"
+                | "reopen_reserve_hold"
+                | "reopen_reserve_failed"
+        ) {
+            let status = league.world.world_work_orders[work_index].status.clone();
+            return (
+                StatusCode::CONFLICT,
+                Json(json!({ "error": "work order is not cancellable before delivery", "status": status, "work_order_id": work_order_id })),
+            )
+                .into_response();
+        }
+        let work_order_seed = league.world.world_work_orders[work_index].clone();
+        let Some(purchase_index) = indexes
+            .purchase_index_by_id
+            .get(&work_order_seed.purchase_id)
+            .copied()
+        else {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "world purchase not found for work order", "work_order_id": work_order_id })),
+            )
+                .into_response();
+        };
+        let purchase_seed = league.world.world_purchases[purchase_index].clone();
+        let cancellation = WorldWorkCancellation {
+            cancellation_id: league_hash_id(
+                "world-cancel",
+                &format!(
+                    "{}:{}:{}:{}",
+                    work_order_seed.work_order_id, matrix_user_id, now, body
+                ),
+            ),
+            work_order_id: work_order_seed.work_order_id.clone(),
+            matrix_user_id: matrix_user_id.clone(),
+            body,
+            status: "pending_refund".to_string(),
+            refund_status: "pending".to_string(),
+            created_at_epoch: now,
+        };
+        league.world.world_work_orders[work_index].status = "cancel_pending_refund".to_string();
+        let economy_event = WorldEconomyEvent {
+            economy_event_id: league_hash_id(
+                "world-econ",
+                &format!(
+                    "{}:{}:{}",
+                    matrix_user_id, cancellation.cancellation_id, now
+                ),
+            ),
+            matrix_user_id: matrix_user_id.clone(),
+            event_kind: "work_cancelled".to_string(),
+            subject_id: work_order_seed.work_order_id.clone(),
+            credits_delta: -purchase_seed.price_credits,
+            reputation_delta: 0,
+            created_at_epoch: now,
+        };
+        let standing = upsert_world_faction_standing(
+            &mut league,
+            &matrix_user_id,
+            "faction-market-guild",
+            1,
+            now,
+        );
+        league
+            .world
+            .world_work_cancellations
+            .push(cancellation.clone());
+        league
+            .world
+            .world_economy_events
+            .push(economy_event.clone());
+        (
+            league.clone(),
+            league.world.world_work_orders[work_index].clone(),
+            purchase_seed,
+            cancellation,
+            economy_event,
+            standing,
+        )
+    };
+    let buyer_cancel_refund = refund_world_purchase_with_ledger(
+        &state,
+        payload.room_id.as_deref(),
+        &snapshot.2,
+        &snapshot.3.cancellation_id,
+    )
+    .await;
+    let final_snapshot = {
+        let mut league = state.inner.league_state.lock().await;
+        let indexes = build_world_indexes(&league.world);
+        let mut work_order = snapshot.1.clone();
+        let mut purchase = snapshot.2.clone();
+        let mut cancellation = snapshot.3.clone();
+        let buyer_refunded =
+            buyer_cancel_refund.status == "refunded" || buyer_cancel_refund.status == "duplicate";
+        purchase.buyer_consume_status = Some(if buyer_refunded {
+            "refunded".to_string()
+        } else {
+            buyer_cancel_refund.status.clone()
+        });
+        purchase.buyer_consume_entry_id = buyer_cancel_refund.entry_id.clone();
+        purchase.buyer_consume_balance_after = buyer_cancel_refund.balance_after;
+        purchase.buyer_consume_error = buyer_cancel_refund.error.clone();
+        purchase.status = if buyer_refunded {
+            "cancelled_refunded".to_string()
+        } else if buyer_cancel_refund.status.starts_with("skipped") {
+            "cancelled_refund_hold".to_string()
+        } else {
+            "cancelled_refund_failed".to_string()
+        };
+        work_order.status = purchase.status.clone();
+        cancellation.refund_status = buyer_cancel_refund.status.clone();
+        cancellation.status = purchase.status.clone();
+        indexes.replace_purchase_by_id(&mut league.world, &purchase);
+        indexes.replace_work_order_by_id(&mut league.world, &work_order);
+        indexes.replace_cancellation_by_id(&mut league.world, &cancellation);
+        (
+            league.clone(),
+            work_order,
+            purchase,
+            cancellation,
+            snapshot.4.clone(),
+            snapshot.5.clone(),
+        )
+    };
+    if let Err(response) =
+        persist_league_state_after_command(&state, &final_snapshot.0, "world_work_cancel").await
+    {
+        return response;
+    }
+    let WorldRouteArtifacts {
+        preview: route_preview,
+        task_graph: route_task_graph,
+        ..
+    } = build_world_route_artifacts(&final_snapshot.0.world);
+    (
+        StatusCode::OK,
+        Json(json!({
+            "kind": "trillionnium_world_work_cancellation",
+            "world": "trillionnium_world",
+            "work_order": final_snapshot.1,
+            "purchase": final_snapshot.2,
+            "cancellation": final_snapshot.3,
+            "economy_event": final_snapshot.4,
+            "standing": final_snapshot.5,
+            "buyer_cancel_refund_status": buyer_cancel_refund.status,
+            "buyer_cancel_refund_entry_id": buyer_cancel_refund.entry_id,
+            "buyer_cancel_refund_error": buyer_cancel_refund.error,
+            "route_preview": route_preview,
+            "route_task_graph": route_task_graph,
+        })),
+    )
+        .into_response()
+}
+
+pub(super) async fn cancel_world_work_order(
+    Path(work_order_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<WorldWorkCancelRequest>,
+) -> Response {
+    if let Err(response) = authorize_ingress(&headers, state.config()) {
+        state.inner.metrics.inc_ingress_auth_failures();
+        return response;
+    }
+    cancel_world_work_order_inner(state, work_order_id, payload).await
+}
+
+pub(super) async fn post_world_web_work_cancel(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(payload): Form<WorldWebWorkCancelRequest>,
+) -> Response {
+    let web_session = match authorize_league_web_session(&state, &headers, payload.csrf.as_deref())
+    {
+        Ok(value) => value,
+        Err(response) => {
+            if matches!(state.config().runtime_profile, RuntimeProfile::LocalDev)
+                && cookie_value(&headers, &state.config().league_web_session_cookie_name).is_none()
+            {
+                None
+            } else {
+                return response;
+            }
+        }
+    };
+    let matrix_user_id = web_session
+        .as_ref()
+        .map(|session| session.matrix_user_id.clone())
+        .or_else(|| {
+            normalize_league_matrix_user(
+                payload
+                    .matrix_user_id
+                    .as_deref()
+                    .unwrap_or("@alice:local.dev"),
+            )
+        })
+        .unwrap_or_else(|| "@alice:local.dev".to_string());
+    let work_order_id = payload
+        .work_order_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("latest")
+        .to_string();
+    let response = cancel_world_work_order_inner(
+        state,
+        work_order_id,
+        WorldWorkCancelRequest {
+            matrix_user_id,
+            room_id: web_session
+                .as_ref()
+                .and_then(|session| session.room_id.clone())
+                .or_else(|| Some("!web-local:local.dev".to_string())),
+            body: payload
+                .body
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("Buyer cancel: cancel this open work before delivery, refund reserved buyer funds, record reason, and close the work order.")
+                .to_string(),
+        },
+    )
+    .await;
+    if response.status().is_success() {
+        Redirect::to("/world?work=cancelled").into_response()
+    } else {
+        response
+    }
+}
+
+pub(super) async fn get_world_contracts(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(response) = authorize_ingress(&headers, state.config()) {
+        state.inner.metrics.inc_ingress_auth_failures();
+        return response;
+    }
+    let league = state.inner.league_state.lock().await;
+    (
+        StatusCode::OK,
+        Json(json!({
+            "kind": "trillionnium_world_contracts",
+            "world": "trillionnium_world",
+            "contracts": league.world.world_contracts,
+            "completions": league.world.world_contract_completions,
+        })),
+    )
+        .into_response()
+}
+
+pub(super) async fn settle_world_contract_completion_with_ledger(
+    state: &AppState,
+    payload: &WorldContractCompleteRequest,
+    matrix_user_id: &str,
+    contract: &WorldContract,
+    completion: &WorldContractCompletion,
+) -> LeagueLedgerSettlement {
+    if completion.reward_amount <= 0.0 {
+        return LeagueLedgerSettlement {
+            status: "skipped_zero_reward".to_string(),
+            ..Default::default()
+        };
+    }
+    if completion.payout_status != "eligible" || !completion.anti_cheat_flags.is_empty() {
+        return LeagueLedgerSettlement {
+            status: "held_review".to_string(),
+            error: Some(format!(
+                "world contract payout held: status={} flags={}",
+                completion.payout_status,
+                completion.anti_cheat_flags.join(",")
+            )),
+            ..Default::default()
+        };
+    }
+    let Some(room_id) = payload
+        .room_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return LeagueLedgerSettlement {
+            status: "skipped_missing_room".to_string(),
+            ..Default::default()
+        };
+    };
+    let matrix_payload = MatrixMessageRequest {
+        matrix_user_id: matrix_user_id.to_string(),
+        room_id: room_id.to_string(),
+        session_id: None,
+        org_id: None,
+        message: "world contract reward settlement".to_string(),
+        capability_id: None,
+        account_id: None,
+        event_id: None,
+        idempotency_key: None,
+        metadata: None,
+    };
+    let resolved_identity = match resolve_matrix_identity(state, &matrix_payload).await {
+        Ok(identity) => identity,
+        Err(_) => {
+            return LeagueLedgerSettlement {
+                status: "failed_identity".to_string(),
+                error: Some(
+                    "matrix identity could not be resolved for world contract settlement"
+                        .to_string(),
+                ),
+                ..Default::default()
+            }
+        }
+    };
+    let Some(account_id) = resolved_identity.scope.account_id.clone() else {
+        return LeagueLedgerSettlement {
+            status: "skipped_missing_account".to_string(),
+            error: Some("matrix identity did not resolve a ledger account_id".to_string()),
+            ..Default::default()
+        };
+    };
+    let Some(ledger_admin_token) = state.config().ledger_admin_token.clone() else {
+        return LeagueLedgerSettlement {
+            status: "skipped_missing_ledger_token".to_string(),
+            account_id: Some(account_id),
+            error: Some("consumer-entry ledger admin token is not configured".to_string()),
+            ..Default::default()
+        };
+    };
+    let url = format!(
+        "{}/v1/ledger/grant",
+        state.config().ledger_base_url.trim_end_matches('/')
+    );
+    let body = json!({
+        "account_id": account_id,
+        "amount": completion.reward_amount,
+        "idempotency_key": format!("world_contract_completion:{}", completion.completion_id),
+        "reference_id": contract.task_id,
+    });
+    let response = match state
+        .inner
+        .http
+        .post(url)
+        .header("x-admin-token", ledger_admin_token)
+        .json(&body)
+        .send()
+        .await
+    {
+        Ok(response) => response,
+        Err(err) => {
+            return LeagueLedgerSettlement {
+                status: "failed_network".to_string(),
+                account_id: body
+                    .get("account_id")
+                    .and_then(Value::as_str)
+                    .map(ToString::to_string),
+                error: Some(format!("failed to reach ledger-service: {err}")),
+                ..Default::default()
+            }
+        }
+    };
+    let status = response.status();
+    let value = match response.json::<Value>().await {
+        Ok(value) => value,
+        Err(err) => {
+            return LeagueLedgerSettlement {
+                status: "failed_bad_response".to_string(),
+                account_id: body
+                    .get("account_id")
+                    .and_then(Value::as_str)
+                    .map(ToString::to_string),
+                error: Some(format!("ledger-service returned non-json response: {err}")),
+                ..Default::default()
+            }
+        }
+    };
+    if !status.is_success() {
+        let error = value
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or("ledger grant failed");
+        return LeagueLedgerSettlement {
+            status: if status.as_u16() == 409 {
+                "duplicate".to_string()
+            } else {
+                "failed_ledger".to_string()
+            },
+            account_id: body
+                .get("account_id")
+                .and_then(Value::as_str)
+                .map(ToString::to_string),
+            error: Some(format!("{}: {error}", status.as_u16())),
+            ..Default::default()
+        };
+    }
+    LeagueLedgerSettlement {
+        status: "settled".to_string(),
+        account_id: value
+            .get("account")
+            .and_then(|account| account.get("account_id"))
+            .and_then(Value::as_str)
+            .or_else(|| body.get("account_id").and_then(Value::as_str))
+            .map(ToString::to_string),
+        entry_id: value
+            .get("entry")
+            .and_then(|entry| entry.get("entry_id"))
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+        balance_after: value
+            .get("account")
+            .and_then(|account| account.get("balance"))
+            .and_then(Value::as_f64),
+        error: None,
+    }
+}
+
+pub(super) async fn complete_world_contract_inner(
+    state: AppState,
+    contract_id: String,
+    payload: WorldContractCompleteRequest,
+) -> Response {
+    let matrix_user_id = match normalize_league_matrix_user(&payload.matrix_user_id) {
+        Some(value) => value,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "matrix_user_id is required" })),
+            )
+                .into_response()
+        }
+    };
+    let body = match validate_text_payload(&payload.body, state.config().max_text_chars) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let contract = {
+        let league = state.inner.league_state.lock().await;
+        let indexes = build_world_indexes(&league.world);
+        let Some(contract) = indexes.contract(&league.world, &contract_id).cloned() else {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "world contract not found", "contract_id": contract_id })),
+            )
+                .into_response();
+        };
+        contract
+    };
+    if contract.actor_matrix_user_id != matrix_user_id {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({
+                "error": "world contract can only be completed by its creator",
+                "contract_id": contract.contract_id,
+            })),
+        )
+            .into_response();
+    }
+    let judgement = judge_league_submission_with_pipeline(&state, &body, "world_contract").await;
+    let mut completion = {
+        let now = Utc::now().timestamp();
+        let mut league = state.inner.league_state.lock().await;
+        let indexes = build_world_indexes(&league.world);
+        let mut player = ensure_league_player(&mut league, &matrix_user_id, None);
+        let completion_id = league_hash_id(
+            "world-contract-completion",
+            &format!("{}:{}:{}", contract.contract_id, now, body),
+        );
+        let completion = WorldContractCompletion {
+            completion_id: completion_id.clone(),
+            contract_id: contract.contract_id.clone(),
+            matrix_user_id: matrix_user_id.clone(),
+            body: body.clone(),
+            score: judgement.score,
+            grade: judgement.grade.clone(),
+            reward_amount: judgement.reward_amount,
+            judge_status: judgement.judge_status.clone(),
+            payout_status: judgement.payout_status.clone(),
+            anti_cheat_flags: judgement.anti_cheat_flags.clone(),
+            score_events: judgement.score_events.clone(),
+            ledger_status: Some("pending".to_string()),
+            ledger_account_id: None,
+            ledger_entry_id: None,
+            ledger_balance_after: None,
+            ledger_error: None,
+            created_at_epoch: now,
+        };
+        let asset_delta = (judgement.score / 5.0).round() as i64;
+        if let Some(contract_index) = indexes.contract_index(&contract.contract_id) {
+            let stored_contract = &mut league.world.world_contracts[contract_index];
+            stored_contract.status = if judgement.payout_status == "eligible" {
+                "completed_pending_settlement".to_string()
+            } else {
+                "review_hold".to_string()
+            };
+            stored_contract.value_score += asset_delta.max(1);
+            stored_contract.cex_status = Some("completed".to_string());
+        }
+        if let Some(asset_index) = indexes.latest_asset_index_for_owner(&matrix_user_id) {
+            let asset = &mut league.world.world_assets[asset_index];
+            asset.value_score += asset_delta.max(1);
+            asset.upgrade_points += asset_delta.max(1);
+            asset.upgrade_level = asset.upgrade_level.max(1) + (asset.upgrade_points / 60).max(0);
+            asset.last_upgrade_kind = Some("contract_completion".to_string());
+            asset.status = "upgraded_by_contract".to_string();
+        } else {
+            league.world.world_assets.push(WorldAsset {
+                asset_id: league_hash_id("world-asset", &completion_id),
+                owner_matrix_user_id: matrix_user_id.clone(),
+                location_id: contract.location_id.clone(),
+                asset_kind: "contract_proof".to_string(),
+                name: "World Contract Proof".to_string(),
+                status: "active".to_string(),
+                value_score: asset_delta.max(1),
+                upgrade_level: 1,
+                upgrade_points: asset_delta.max(1),
+                last_upgrade_kind: Some("contract_completion".to_string()),
+                created_at_epoch: now,
+            });
+        }
+        player.xp += judgement.score.round() as i64;
+        player.reputation += (judgement.score / 8.0).round() as i64;
+        player.rating += ((judgement.score - 50.0) / 3.0).round() as i64;
+        if judgement.payout_status == "eligible" {
+            player.earned_credits += judgement.reward_amount;
+        }
+        league
+            .players_by_matrix_user
+            .insert(matrix_user_id.clone(), player);
+        league
+            .world
+            .world_contract_completions
+            .push(completion.clone());
+        completion
+    };
+    let settlement = settle_world_contract_completion_with_ledger(
+        &state,
+        &payload,
+        &matrix_user_id,
+        &contract,
+        &completion,
+    )
+    .await;
+    completion.ledger_status = Some(settlement.status);
+    completion.ledger_account_id = settlement.account_id;
+    completion.ledger_entry_id = settlement.entry_id;
+    completion.ledger_balance_after = settlement.balance_after;
+    completion.ledger_error = settlement.error;
+    let snapshot = {
+        let mut league = state.inner.league_state.lock().await;
+        let indexes = build_world_indexes(&league.world);
+        indexes.replace_contract_completion_by_id(&mut league.world, &completion);
+        if let Some(contract_index) = indexes.contract_index(&contract.contract_id) {
+            let mut stored_contract = league.world.world_contracts[contract_index].clone();
+            stored_contract.status = match completion.ledger_status.as_deref() {
+                Some("settled") | Some("duplicate") => "completed_settled".to_string(),
+                Some("held_review") => "review_hold".to_string(),
+                Some(status) => format!("completed_{status}"),
+                None => stored_contract.status.clone(),
+            };
+            indexes.replace_contract_by_id(&mut league.world, &stored_contract);
+        }
+        league.clone()
+    };
+    if let Err(response) =
+        persist_league_state_after_command(&state, &snapshot, "world_contract_completion").await
+    {
+        return response;
+    }
+    let response_contract = {
+        let indexes = build_world_indexes(&snapshot.world);
+        indexes
+            .contract(&snapshot.world, &contract.contract_id)
+            .cloned()
+    };
+    (
+        StatusCode::OK,
+        Json(json!({
+            "kind": "trillionnium_world_contract_completion",
+            "world": "trillionnium_world",
+            "contract": response_contract,
+            "completion": completion,
+        })),
+    )
+        .into_response()
+}
+
+pub(super) async fn complete_world_contract(
+    Path(contract_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<WorldContractCompleteRequest>,
+) -> Response {
+    if let Err(response) = authorize_ingress(&headers, state.config()) {
+        state.inner.metrics.inc_ingress_auth_failures();
+        return response;
+    }
+    complete_world_contract_inner(state, contract_id, payload).await
+}
+
+pub(super) async fn post_world_web_contract_complete(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(payload): Form<WorldWebContractCompleteRequest>,
+) -> Response {
+    let web_session = match authorize_league_web_session(&state, &headers, payload.csrf.as_deref())
+    {
+        Ok(value) => value,
+        Err(response) => {
+            if matches!(state.config().runtime_profile, RuntimeProfile::LocalDev)
+                && cookie_value(&headers, &state.config().league_web_session_cookie_name).is_none()
+            {
+                None
+            } else {
+                return response;
+            }
+        }
+    };
+    let matrix_user_id = web_session
+        .as_ref()
+        .map(|session| session.matrix_user_id.clone())
+        .or_else(|| {
+            normalize_league_matrix_user(
+                payload
+                    .matrix_user_id
+                    .as_deref()
+                    .unwrap_or("@alice:local.dev"),
+            )
+        })
+        .unwrap_or_else(|| "@alice:local.dev".to_string());
+    let contract_id = match payload
+        .contract_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+    {
+        Some(value) => value,
+        None => {
+            let league = state.inner.league_state.lock().await;
+            let indexes = build_world_indexes(&league.world);
+            match indexes
+                .latest_contract_index_for_actor(&matrix_user_id)
+                .and_then(|index| league.world.world_contracts.get(index))
+                .map(|contract| contract.contract_id.clone())
+            {
+                Some(value) => value,
+                None => return Redirect::to("/world?contract=missing").into_response(),
+            }
+        }
+    };
+    let body = payload
+        .body
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("World contract delivery: deliverable, evidence, risk review, next step, acceptance standard.")
+        .to_string();
+    let request = WorldContractCompleteRequest {
+        matrix_user_id,
+        room_id: web_session
+            .as_ref()
+            .and_then(|session| session.room_id.clone())
+            .or_else(|| Some("!web-local:local.dev".to_string())),
+        body,
+    };
+    let response = complete_world_contract_inner(state, contract_id, request).await;
+    if response.status().is_success() {
+        Redirect::to("/world?contract=completed").into_response()
+    } else {
+        response
+    }
+}

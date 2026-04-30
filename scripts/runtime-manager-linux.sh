@@ -24,6 +24,41 @@ if [[ -z "${CAPABILITY_OPENCLAW_MODELS_JSON_PATH:-}" && -n "${OPENCLAW_AGENT_DIR
   export CAPABILITY_OPENCLAW_MODELS_JSON_PATH="$OPENCLAW_AGENT_DIR/models.json"
 fi
 
+cex_first_token_from_json_env() {
+  local env_name="$1"
+  python3 - "$env_name" <<'PY'
+import json
+import os
+import sys
+
+raw = os.environ.get(sys.argv[1], "").strip()
+if not raw:
+    raise SystemExit(0)
+try:
+    parsed = json.loads(raw)
+except Exception:
+    raise SystemExit(0)
+items = parsed if isinstance(parsed, list) else [parsed]
+for item in items:
+    if isinstance(item, dict) and str(item.get("token") or "").strip():
+        print(str(item["token"]).strip())
+        break
+PY
+}
+
+if [[ -z "${IDENTITY_ADMIN_TOKEN:-}" ]]; then
+  CEX_FIRST_IDENTITY_ADMIN_TOKEN="$(cex_first_token_from_json_env IDENTITY_ADMIN_TOKENS_JSON || true)"
+  if [[ -n "$CEX_FIRST_IDENTITY_ADMIN_TOKEN" ]]; then
+    export IDENTITY_ADMIN_TOKEN="$CEX_FIRST_IDENTITY_ADMIN_TOKEN"
+  fi
+fi
+if [[ -z "${LEDGER_ADMIN_TOKEN:-}" ]]; then
+  CEX_FIRST_LEDGER_ADMIN_TOKEN="$(cex_first_token_from_json_env LEDGER_ADMIN_TOKENS_JSON || true)"
+  if [[ -n "$CEX_FIRST_LEDGER_ADMIN_TOKEN" ]]; then
+    export LEDGER_ADMIN_TOKEN="$CEX_FIRST_LEDGER_ADMIN_TOKEN"
+  fi
+fi
+
 export RUST_LOG="${RUST_LOG:-info}"
 export APP_ENV="${APP_ENV:-dev}"
 export GATEWAY_HOST="${GATEWAY_HOST:-127.0.0.1}"
@@ -39,6 +74,8 @@ export CONSUMER_ENTRY_BASE_URL="${CONSUMER_ENTRY_BASE_URL:-http://127.0.0.1:8090
 export CEX_GATEWAY_BASE_URL="${CEX_GATEWAY_BASE_URL:-http://127.0.0.1:8080}"
 export CEX_GATEWAY_API_KEY="${CEX_GATEWAY_API_KEY:-local-dev-key}"
 export CONSUMER_ENTRY_API_KEY="${CONSUMER_ENTRY_API_KEY:-local-dev-key}"
+export CONSUMER_ENTRY_LEAGUE_WEB_SESSION_REQUIRED="${CONSUMER_ENTRY_LEAGUE_WEB_SESSION_REQUIRED:-true}"
+export CONSUMER_ENTRY_LEAGUE_WEB_SESSION_SECRET="${CONSUMER_ENTRY_LEAGUE_WEB_SESSION_SECRET:-local-dev-league-web-session-secret}"
 export OLLAMA_BASE_URL="${OLLAMA_BASE_URL:-http://127.0.0.1:11434}"
 export EXECUTION_CLAIM_LEASE_SECONDS="${EXECUTION_CLAIM_LEASE_SECONDS:-300}"
 export EXECUTION_DEFAULT_MAX_ATTEMPTS="${EXECUTION_DEFAULT_MAX_ATTEMPTS:-1}"
@@ -50,6 +87,7 @@ export CEX_RUNTIME_SKIP_BUILD="${CEX_RUNTIME_SKIP_BUILD:-0}"
 export EXECUTION_WORKER_ID="${EXECUTION_WORKER_ID:-cex-linux-worker}"
 export EXECUTION_WORKER_IDLE_SECS="${EXECUTION_WORKER_IDLE_SECS:-2}"
 export IDENTITY_ADMIN_TOKEN="${IDENTITY_ADMIN_TOKEN:-local-dev-admin-token}"
+export LEDGER_ADMIN_TOKEN="${LEDGER_ADMIN_TOKEN:-local-dev-admin-token}"
 export LEDGER_FAIL_FAST="${LEDGER_FAIL_FAST:-false}"
 export DATABASE_URL="$(cex_effective_database_url)"
 export REDIS_URL="${REDIS_URL:-redis://127.0.0.1:6379}"
@@ -94,13 +132,15 @@ ensure_entry_runtime_config() {
   fi
 
   mkdir -p "$ENTRY_CONFIG_DIR"
-  local bindings_path registry_path approvals_path audit_path league_state_path league_sql_snapshot_path
+  local bindings_path registry_path approvals_path audit_path league_state_path league_sql_snapshot_path matrix_recent_event_store_path matrix_rate_limit_store_path
   bindings_path="${CONSUMER_ENTRY_IDENTITY_BINDINGS_PATH:-$ENTRY_CONFIG_DIR/identity-bindings.json}"
   registry_path="${CONSUMER_ENTRY_IDENTITY_REGISTRY_PATH:-$ENTRY_CONFIG_DIR/identity-registry.json}"
   approvals_path="${CONSUMER_ENTRY_IDENTITY_BINDING_APPROVED_REVISIONS_PATH:-$ENTRY_CONFIG_DIR/identity-approved-revisions.json}"
   audit_path="${CONSUMER_ENTRY_IDENTITY_BINDING_AUDIT_LOG_PATH:-$ENTRY_CONFIG_DIR/identity-binding-audit.jsonl}"
   league_state_path="${CONSUMER_ENTRY_LEAGUE_STATE_PATH:-$ENTRY_CONFIG_DIR/league-state.json}"
   league_sql_snapshot_path="${CONSUMER_ENTRY_LEAGUE_SQL_SNAPSHOT_PATH:-$ENTRY_CONFIG_DIR/league-state-snapshot.sql}"
+  matrix_recent_event_store_path="${MATRIX_ENTRY_RECENT_EVENT_STORE_PATH:-$ENTRY_CONFIG_DIR/matrix-entry-recent-events.json}"
+  matrix_rate_limit_store_path="${MATRIX_ENTRY_RATE_LIMIT_STORE_PATH:-$ENTRY_CONFIG_DIR/matrix-entry-rate-limit.json}"
 
   if [[ ! -f "$bindings_path" ]]; then
     cat > "$bindings_path" <<'JSON'
@@ -164,6 +204,24 @@ JSON
   export CONSUMER_ENTRY_IDENTITY_BINDING_AUDIT_LOG_PATH="$audit_path"
   export CONSUMER_ENTRY_LEAGUE_STATE_PATH="$league_state_path"
   export CONSUMER_ENTRY_LEAGUE_SQL_SNAPSHOT_PATH="$league_sql_snapshot_path"
+  export MATRIX_ENTRY_RECENT_EVENT_STORE_PATH="$matrix_recent_event_store_path"
+  export MATRIX_ENTRY_RATE_LIMIT_STORE_PATH="$matrix_rate_limit_store_path"
+  export CONSUMER_ENTRY_INGRESS_TOKEN="${CONSUMER_ENTRY_INGRESS_TOKEN:-local-dev-entry-ingress-token}"
+  export MATRIX_ENTRY_INGRESS_TOKEN="${MATRIX_ENTRY_INGRESS_TOKEN:-local-dev-matrix-entry-ingress-token}"
+  export CONSUMER_ENTRY_REQUIRE_SESSION_AUTH="${CONSUMER_ENTRY_REQUIRE_SESSION_AUTH:-true}"
+  export CONSUMER_ENTRY_SESSION_AUTH_SECRET="${CONSUMER_ENTRY_SESSION_AUTH_SECRET:-local-dev-consumer-session-auth-secret}"
+  export MATRIX_ENTRY_CONSUMER_SESSION_AUTH_SECRET="${MATRIX_ENTRY_CONSUMER_SESSION_AUTH_SECRET:-$CONSUMER_ENTRY_SESSION_AUTH_SECRET}"
+  export CONSUMER_ENTRY_SESSION_AUTH_ALLOWED_ISSUERS="${CONSUMER_ENTRY_SESSION_AUTH_ALLOWED_ISSUERS:-matrix-entry-adapter}"
+  export CONSUMER_ENTRY_SESSION_AUTH_EXPECTED_AUDIENCE="${CONSUMER_ENTRY_SESSION_AUTH_EXPECTED_AUDIENCE:-consumer-entry-api}"
+  export CONSUMER_ENTRY_REPLAY_STORE_PATH="${CONSUMER_ENTRY_REPLAY_STORE_PATH:-$ENTRY_CONFIG_DIR/consumer-entry-replay.json}"
+  export CONSUMER_ENTRY_RATE_LIMIT_STORE_PATH="${CONSUMER_ENTRY_RATE_LIMIT_STORE_PATH:-$ENTRY_CONFIG_DIR/consumer-entry-rate-limit.json}"
+  export CONSUMER_ENTRY_RATE_LIMIT_USER_MAX_REQUESTS="${CONSUMER_ENTRY_RATE_LIMIT_USER_MAX_REQUESTS:-20}"
+  export CONSUMER_ENTRY_RATE_LIMIT_ROOM_MAX_REQUESTS="${CONSUMER_ENTRY_RATE_LIMIT_ROOM_MAX_REQUESTS:-80}"
+  export CONSUMER_ENTRY_RATE_LIMIT_SESSION_MAX_REQUESTS="${CONSUMER_ENTRY_RATE_LIMIT_SESSION_MAX_REQUESTS:-30}"
+  export CONSUMER_ENTRY_RATE_LIMIT_ORG_MAX_REQUESTS="${CONSUMER_ENTRY_RATE_LIMIT_ORG_MAX_REQUESTS:-200}"
+  export CONSUMER_ENTRY_LEAGUE_NORMALIZED_DATABASE_URL="${CONSUMER_ENTRY_LEAGUE_NORMALIZED_DATABASE_URL:-$DATABASE_URL}"
+  export CONSUMER_ENTRY_LEAGUE_NORMALIZED_DUAL_WRITE_ENABLED="${CONSUMER_ENTRY_LEAGUE_NORMALIZED_DUAL_WRITE_ENABLED:-true}"
+  export CONSUMER_ENTRY_LEAGUE_NORMALIZED_READ_SWITCH_ENABLED="${CONSUMER_ENTRY_LEAGUE_NORMALIZED_READ_SWITCH_ENABLED:-true}"
   export CONSUMER_ENTRY_REQUIRE_IDENTITY_BINDING="${CONSUMER_ENTRY_REQUIRE_IDENTITY_BINDING:-true}"
   export CONSUMER_ENTRY_IDENTITY_BINDING_RELOAD_REQUIRE_REVISION="${CONSUMER_ENTRY_IDENTITY_BINDING_RELOAD_REQUIRE_REVISION:-true}"
   export CONSUMER_ENTRY_IDENTITY_BINDING_RELOAD_REQUIRE_APPROVED_REVISION="${CONSUMER_ENTRY_IDENTITY_BINDING_RELOAD_REQUIRE_APPROVED_REVISION:-true}"

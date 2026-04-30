@@ -543,9 +543,7 @@ async fn blackbox_runtime_happy_path_matches_api_regression() {
         .iter()
         .filter_map(|event| event["event_type"].as_str())
         .collect();
-    assert!(audit_event_types
-        .iter()
-        .any(|event| *event == "invocation.created"));
+    assert!(audit_event_types.contains(&"invocation.created"));
     assert!(audit_event_types
         .iter()
         .any(|event| *event == "invocation.accepted" || *event == "execution.auto_approved"));
@@ -652,9 +650,7 @@ async fn blackbox_runtime_approval_flow_matches_regression() {
         .iter()
         .any(|event| *event == "invocation.awaiting_approval"
             || *event == "execution.awaiting_approval"));
-    assert!(audit_after_types
-        .iter()
-        .any(|event| *event == "execution.approved"));
+    assert!(audit_after_types.contains(&"execution.approved"));
 }
 
 #[tokio::test]

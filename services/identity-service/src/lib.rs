@@ -638,7 +638,7 @@ fn authorize_admin_with_any_scope(
         headers,
         &state.admin_tokens,
         required_scopes,
-        |admin, scope| admin_principal_has_scope(admin, scope),
+        admin_principal_has_scope,
         "identity admin token not configured",
         Some("set IDENTITY_ADMIN_TOKENS_JSON or IDENTITY_ADMIN_TOKEN to enable key management endpoints"),
     )
