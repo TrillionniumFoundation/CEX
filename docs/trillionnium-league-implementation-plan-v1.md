@@ -27,14 +27,22 @@ Already available:
 - Anti-cheat payout hold is active: submissions flagged by rubric, hidden tests, repetition checks, or judge-disagreement gates are marked `payout_status=review_hold`, ledger settlement is skipped with `ledger_status=held_review`, and normal eligible submissions continue to settle.
 - Review/admin release flow is active: held rewards can be listed and approved/rejected through `/v1/league/reviews/*`; approval marks the submission `approved_release` and performs the ledger grant through the same idempotent settlement path.
 - Player inventory/loot is active: eligible submissions mint cosmetic League items, `/inventory` returns the player's bag, and the web shell shows item count/top loot.
+- Player progression systems are active: `/progression|/level`, `/skills`, `/tools`, and `/skins` expose 门派/guild-school alignment, skills, equipment/tools, multi-agent skins, experience data points, and level computed from successful task count.
 - Guild raid contribution is active: `/raid` lists guild raids, `/raid <raid-id> <action>` records team progress, and the web shell can contribute to `guild-raid-001`.
 - Raid team roster is active: `/team` shows the `guild-raid-001` roster, `/team <raid-id> <role>` claims a Scout/Builder/Auditor/Closer-style team role, and the backend records active raid slots with hero IDs.
 - A server-rendered web game shell is available at `GET /league` on `consumer-entry-api`, showing the Trillionnium League lobby, match cards, live stats, leaderboard, rewards, playable commands, guild halls, current loadout, replay timeline, and a local-dev Web Battle Console.
 - The web shell now has local-dev playable forms via `POST /league/web/action` for join/guild/team/raid/draft/submit, plus a battle timeline/replay panel that shows ledger settlement state.
 - Production Web session gate is active: `/league/web/session` can mint an HttpOnly SameSite web session cookie from signed upstream auth, and `/league/web/action` uses signed session + CSRF outside local-dev while preserving the local-dev playable shell.
-- Trillionnium World first slice is active: `GET /v1/world/home` returns zones/locations/Agent residents/assets/upgrades/companies/shops/listings/purchases/work orders/factions/economy events/contracts/completions, `POST /v1/world/action` records free-form reality-mirror actions, Matrix `/world action <自由行动>` mutates world state, `GET /world` exposes a playable web World shell with CSRF-protected action/asset/company/listing/buy/contract consoles, `/contract <委托内容>` creates a real CEX task-backed World Contract, `/complete <contract-id> <交付内容>` scores/settles/upgrades World state, `/upgrade <asset-id|latest> <升级内容>` grows persistent World assets, `/company <asset-id|latest> <公司方案>` launches an operating company/shop from an asset, `/sell <company-id|latest> <服务/商品>` publishes a priced listing, and `/buy <listing-id|latest> <需求>` creates a purchase + work order with ledger-backed seller revenue and faction standing.
+- Trillionnium Client App first slice is active: `GET /app` and `GET /v1/client/app/:matrix_user_id` expose a mobile-style shell that integrates World Map (global real-world Leaflet/OpenStreetMap mirror with lightweight Hero's Tale + Gather LOD overlays), Face Duel (Pokémon-like nearby battle via `face-duel-001`), Social (WeChat/Telegram-like room/contact layer), Wallet (Alipay-like credit wallet), and Progression (门派/skills/tools/skins/XP/level). Matrix `/app`, `/duel nearby <出招>`, `/social`, `/pay`, `/progression`, `/skills`, `/tools`, and `/skins` project these modules back into the room.
+- Trillionnium World first slice is active: `GET /v1/world/home` returns zones/locations/detailed map nodes/player positions/Agent residents/assets/upgrades/companies/shops/listings/purchases/work orders/work deliveries/work acceptances/work rejections/work reopens/work cancellations/factions/economy events/contracts/completions, `GET /v1/world/map/:matrix_user_id` and `POST /v1/world/map/move` power a Hero's Tale + Gather style text map, `GET /v1/world/map/:matrix_user_id/viewport` now exposes the map-engine viewport contract for active region shards / Web Mercator tile shards / LOD / nearby POIs, `/world/web/map-viewport` mirrors that viewport stream into the signed web shell for live Leaflet hydration, `POST /v1/world/action` records free-form reality-mirror actions, Matrix `/world action <自由行动>` mutates world state, `GET /world` exposes a playable web World shell with a real-world Leaflet/OpenStreetMap map panel plus live tile/region/POI viewport hydration and CSRF-protected map-move/action/asset/company/listing/buy/work-deliver/work-accept/work-reject/work-reopen/work-cancel/contract consoles, `/contract <委托内容>` creates a real CEX task-backed World Contract, `/complete <contract-id> <交付内容>` scores/settles/upgrades World state, `/upgrade <asset-id|latest> <升级内容>` grows persistent World assets, `/company <asset-id|latest> <公司方案>` launches an operating company/shop from an asset, `/sell <company-id|latest> <服务/商品>` publishes a priced listing, `/buy <listing-id|latest> <需求>` creates a purchase + work order with buyer ledger reserve plus seller ledger settlement/faction standing, `/work deliver <work-id|latest> <交付内容>` records fulfillment proof, `/work accept <work-id|latest> <验收内容>` closes the service loop while attempting buyer ledger consume, `/work reject <work-id|latest> <拒收原因>` rejects delivered work while attempting buyer ledger refund, `/work reopen <work-id|latest> <返工要求>` re-reserves buyer funds so a rejected order can be redelivered, and `/work cancel <work-id|latest> <取消原因>` cancels open work before delivery while attempting buyer ledger refund; `/map` and `/go <direction|node-id>` expose fine-grained map exploration and position persistence.
 
 This is enough to build the first League MVP inside Matrix before creating a custom web game shell.
+
+Companion architecture notes for the current World evolution path:
+
+- `docs/trillionnium-real-world-map-engine-evaluation-v1.md`
+- `docs/trillionnium-open-source-stack-reference-v1.md`
+- `docs/trillionnium-world-ecs-refactor-v1.md`
 
 ## Brand Architecture
 
@@ -95,6 +103,14 @@ Add to `matrix-entry-adapter`:
   - creates a scored submission and reward event.
 - `/profile`
   - returns player rank, XP, reputation, and earned credits.
+- `/progression` / `/level`
+  - returns 门派、successful-task-count level, experience data points, and unlock counts.
+- `/skills`
+  - returns the player's skill tree unlocks.
+- `/tools`
+  - returns equipment/tools plus earned item power.
+- `/skins`
+  - returns multi-agent skin/capability unlocks.
 - `/rewards`
   - returns accumulated League rewards.
 - `/inventory`
@@ -109,6 +125,7 @@ Implemented behavior:
 - `/battle <match_id> <prompt>` calls the backend battle endpoint, which creates a CEX task with League metadata and returns a League battle card.
 - `/submit <match_id> <body>` calls the backend submit endpoint, which calculates a first deterministic score, updates player XP/rating/earned credits, persists the event, grants the reward through ledger when account resolution/admin token are available, and returns a reward card with settlement status.
 - `/world`, `/season`, `/guild`, `/raid`, `/team`, and `/draft` call backend game-state endpoints and make the Matrix MVP feel closer to an MMO/MOBA loop.
+- `/progression`, `/skills`, `/tools`, and `/skins` call the player progression endpoint and turn guild/faction, data accumulation, successful task counts, tools, and multi-agent capacity into Matrix cards.
 
 ### Consumer endpoints
 
@@ -134,6 +151,7 @@ Add to `consumer-entry-api`:
 
 Also added:
 
+- `GET /v1/league/players/:matrix_user_id/progression`
 - `GET /v1/league/players/:matrix_user_id/loadout`
 - `POST /v1/league/players/:matrix_user_id/draft`
 - `GET /v1/league/players/:matrix_user_id/rewards`
@@ -201,15 +219,20 @@ Matrix:
 - `/upgrade <asset-id|latest> <upgrade text>` judges and applies a World asset upgrade.
 - `/companies` lists player companies; `/company <asset-id|latest> <company text>` turns an owned asset into an operating company, shop, starter listing, owner relationship, and economy event.
 - `/shops` lists storefronts/listings; `/sell <company-id|latest> <listing text>` publishes a priced service listing and updates company/shop economy scores.
-- `/buy <listing-id|latest> <brief>` buys/hires a listing, creates a purchase + work order, settles seller ledger revenue when configured, and updates faction standings.
-- `/work` lists purchases/work orders; `/factions` lists factions and player standings.
+- `/buy <listing-id|latest> <brief>` buys/hires a listing, creates a purchase + work order, attempts buyer ledger reserve, settles seller ledger revenue when configured, and updates faction standings.
+- `/work deliver <work-id|latest> <brief>` records seller delivery evidence and Judge Pipeline scoring.
+- `/work accept <work-id|latest> <brief>` records buyer acceptance, attempts buyer ledger consume, completes the work order, and increases company/player/faction reputation.
+- `/work reject <work-id|latest> <brief>` records buyer rejection, attempts buyer ledger refund, marks purchase/work as rejected/refunded, and keeps an economy-event audit trail.
+- `/work reopen <work-id|latest> <brief>` records buyer reopen/revision requirements, attempts a fresh buyer ledger reserve, returns the work order to `open`, and allows seller redelivery plus later buyer consume.
+- `/work cancel <work-id|latest> <brief>` records buyer cancellation before delivery, attempts buyer ledger refund, and closes the purchase/work order as cancelled/refunded.
+- `/work` lists purchases/work orders/deliveries/acceptances; `/factions` lists factions and player standings.
 - `/craft <build text>` records a Trillionnium Craft build action and creates a reusable asset seed.
 - `/contract <commission text>` records a World Contract and creates a real CEX task/invocation through the same signed Matrix identity path used by League battles.
 - `/complete <contract-id> <delivery text>` submits the delivery, runs Judge Pipeline v2, grants ledger rewards when eligible, updates contract status, and upgrades the player's World assets/reputation.
 
 Web shell:
 
-- `GET /world` renders World zones, locations, Agent residents/NPCs, player assets, asset upgrade form, company launch form, shop/listing publish form, buy/work-order form, faction reputation map, World Contracts, completion form, and the world event timeline.
+- `GET /world` renders World zones, locations, Agent residents/NPCs, player assets, asset upgrade form, company launch form, shop/listing publish form, buy/work-order form, delivery/acceptance forms, faction reputation map, World Contracts, completion form, and the world event timeline.
 - `POST /world/web/action` uses the same signed web session + CSRF model as League web actions outside local-dev, while local-dev remains playable.
 
 SQL shape:

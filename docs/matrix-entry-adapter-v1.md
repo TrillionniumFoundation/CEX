@@ -70,17 +70,29 @@ The adapter will:
 6. for `/status <invocation-id>` it calls local task projection path and returns latest state
 7. for `/balance` / `/wallet` it calls the consumer wallet projection path and returns a wallet card
 8. for `/plans` / `/package` it returns the current package/plan projection
-9. for `/world` it fetches `consumer-entry-api /v1/world/home` and returns a Trillionnium World card
-10. for `/world action <free text>` it posts to `consumer-entry-api /v1/world/action` and returns a world action card with event kind, location, and impact
-11. for `/craft <build text>` it posts a `craft build ...` action into `starter-studio` and returns a Trillionnium Craft action card
-12. for `/contract <commission text>` it posts a `contract task ...` action into `zbj-market-gate`; consumer-entry creates a CEX invocation and the Matrix card exposes the linked `task_id` and `contract_id`
-13. for `/complete <contract-id> <delivery text>` it posts a World Contract completion, returning score, reward, ledger status, and judge status
-14. for `/assets` it fetches `consumer-entry-api /v1/world/assets` and returns asset/upgrade counts
-15. for `/upgrade <asset-id|latest> <upgrade text>` it posts a judged asset upgrade and returns level/value delta
-16. for `/companies` / `/company <asset-id|latest> <company text>` it lists or launches World companies from owned assets; company creation also opens a shop, creates a starter listing, and records an economy event
-17. for `/shops` / `/sell <company-id|latest> <listing text>` it lists storefronts/listings or publishes a judged priced service listing
-18. for `/buy <listing-id|latest> <brief>` it buys/hires a listing, opens a work order, grants seller ledger revenue when configured, and updates World faction standing
-19. for `/work` and `/factions` it projects World commerce/work orders and the faction reputation map back into Matrix cards
+9. for `/app` / `/client` it fetches `consumer-entry-api /v1/client/app/:matrix_user_id` and returns the mobile client hub card with map/duel/social/wallet/progression modules, including `map_engine_id=leaflet_openstreetmap_v1` plus the renderer-neutral adapter contract (`map_renderer_adapter_id=leaflet_renderer_adapter_v1`, `map_runtime_handle_name=mapRuntime`, future candidate `maplibre_gl_v1`) for the real-world Leaflet/OpenStreetMap engine and level/unlock counts for the progression hub
+10. for `/feed` / `/timeline` (optionally `/feed events|tasks|contracts|completion|commerce|social`) it fetches `consumer-entry-api /v1/client/feed/:matrix_user_id` and returns a Matrix-safe projection of the Unified Feed Timeline, including grouped feed counts, the top actionable signal for the selected view, and the shared route-story / next-opportunity contract
+11. for `/duel nearby <body>` it posts to `face-duel-001` as a Pokémon-like nearby battle and returns a client duel card linked to a CEX task
+12. for `/social` it projects WeChat/Telegram-like contacts, Agent/NPC presence, and guild counts
+13. for `/world` it fetches `consumer-entry-api /v1/world/home` and returns a Trillionnium World card
+14. for `/world action <free text>` it posts to `consumer-entry-api /v1/world/action` and returns a world action card with event kind, location, and impact
+15. for `/map` / `/look` it calls `/v1/world/map/:matrix_user_id` and returns the current detailed map node, exits, map-node count, plus real-map engine metadata (`map_engine_id`, tile provider, mirror scope, active region) and the shared renderer adapter contract (`map_renderer_adapter_id`, `map_renderer_adapter_version`, `map_runtime_handle_name`, `map_renderer_future_engine_candidate`, planned-upgrade gate); `/world` and `/app` cards expose the same adapter seam so Matrix/mobile clients can stay renderer-neutral while Leaflet remains active
+16. for `/go <direction|node-id>` it posts to `/v1/world/map/move` and returns the updated location / node card
+17. for `/craft <build text>` it posts a `craft build ...` action into `starter-studio` and returns a Trillionnium Craft action card
+18. for `/contract <commission text>` it posts a `contract task ...` action into `zbj-market-gate`; consumer-entry creates a CEX invocation and the Matrix card exposes the linked `task_id` and `contract_id`
+19. for `/complete <contract-id> <delivery text>` it posts a World Contract completion, returning score, reward, ledger status, and judge status
+20. for `/assets` it fetches `consumer-entry-api /v1/world/assets` and returns asset/upgrade counts
+21. for `/upgrade <asset-id|latest> <upgrade text>` it posts a judged asset upgrade and returns level/value delta
+22. for `/companies` / `/company <asset-id|latest> <company text>` it lists or launches World companies from owned assets; company creation also opens a shop, creates a starter listing, and records an economy event
+23. for `/shops` / `/sell <company-id|latest> <listing text>` it lists storefronts/listings or publishes a judged priced service listing
+24. for `/buy <listing-id|latest> <brief>` it buys/hires a listing, opens a work order, grants seller ledger revenue when configured, and updates World faction standing
+25. for `/work deliver <work-id|latest> <body>` it submits seller fulfillment proof through consumer-entry, scores it with Judge Pipeline, and returns a delivery card
+26. for `/work accept <work-id|latest> <body>` it lets the buyer accept a delivered work order, consumes reserved buyer funds, closes the service loop, and returns acceptance/faction progression
+27. for `/work reject <work-id|latest> <body>` it lets the buyer reject a delivered work order, refunds reserved buyer funds, and returns rejection/refund state
+28. for `/work reopen <work-id|latest> <body>` it lets the buyer reopen a rejected work order, reserves buyer funds again, and returns reopen/redelivery state
+29. for `/work cancel <work-id|latest> <body>` it lets the buyer cancel open work before delivery, refunds reserved buyer funds, and returns cancellation/refund state
+30. for `/work` and `/factions` it projects World commerce/work orders/deliveries/acceptances and the faction reputation map back into Matrix cards
+31. for `/progression|/level`, `/skills`, `/tools`, and `/skins` it calls `consumer-entry-api /v1/league/players/:matrix_user_id/progression` and returns Matrix-safe cards for 门派、success-count level, skill tree, equipment/tools, and multi-agent skins
 
 ### Read a projected reply for a task
 

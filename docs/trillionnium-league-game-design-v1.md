@@ -97,7 +97,18 @@ Repeatable PvE challenge.
 - Gives XP, credits, small rewards, loot boxes/items.
 - Helps users learn the system without risking big credits.
 
-### 4.6 Tournament / Season Finals
+### 4.6 Progression Systems
+
+The early RPG layer maps product capabilities into game affordances:
+
+- **门派 / Schools**: guild-school or faction alignment; starts with Prompt Forge / Audit Sanctum and World factions.
+- **Skills**: ability tree such as Reality Scouting, Prompt Forging, Evidence Audit, Commerce Closing, and World Routing.
+- **Tools / 装备**: equipped tools plus earned inventory loot that improves task/world play.
+- **Skins**: visible multi-agent capability forms, from solo Agent to raid cell / guild caravan.
+- **Experience**: accumulated data points from battles, submissions, world actions, assets, companies, listings, purchases, deliveries, and acceptances.
+- **Level**: primarily computed from successful task count, so progression reflects proven outcomes rather than passive time.
+
+### 4.7 Tournament / Season Finals
 
 Scheduled event.
 
@@ -212,7 +223,7 @@ The World can be divided into zones:
 - **Market Bazaar**: real customer bounties.
 - **Audit Sanctum**: QA, compliance, risk review.
 
-Current first slice exposes this as `GET /world` plus Matrix `/world`, `/world action <自由行动>`, `/assets`, `/upgrade <asset-id|latest> <升级内容>`, `/companies`, `/company <asset-id|latest> <公司方案>`, `/shops`, `/sell <company-id|latest> <服务/商品>`, `/buy <listing-id|latest> <需求>`, `/work`, `/factions`, `/contract <委托内容>`, `/complete <contract-id> <交付内容>`, and `/craft <建造内容>`. The web shell shows zones, locations, Agent residents/NPCs, player assets, upgrade form, companies/shops/listings, Commerce / Work Orders, Faction Reputation Map, World Contracts, completion form, and the world event timeline.
+Current first slice exposes this as `GET /app`, `GET /world` plus Matrix `/app`, `/duel nearby <出招>`, `/social`, `/pay`, `/progression|/level`, `/skills`, `/tools`, `/skins`, `/world`, `/map`, `/go <direction|node-id>`, `/world action <自由行动>`, `/assets`, `/upgrade <asset-id|latest> <升级内容>`, `/companies`, `/company <asset-id|latest> <公司方案>`, `/shops`, `/sell <company-id|latest> <服务/商品>`, `/buy <listing-id|latest> <需求>`, `/work`, `/work deliver <work-id|latest> <交付内容>`, `/work accept <work-id|latest> <验收内容>`, `/work reject <work-id|latest> <拒收原因>`, `/work reopen <work-id|latest> <返工要求>`, `/work cancel <work-id|latest> <取消原因>`, `/factions`, `/contract <委托内容>`, `/complete <contract-id> <交付内容>`, and `/craft <建造内容>`. The app shell shows map / face-duel / social / wallet modules. The map module must be a real-world map engine (`leaflet_openstreetmap_v1`: Leaflet + OpenStreetMap tiles) that treats the global OSM tile layer as the full reality-mirror base, then uses Gather/Hero's-Tale-style LOD nodes/routes as lightweight overlays so more players can coexist; Matrix text map remains the fallback; the web shell shows zones, detailed map nodes/player movement, locations, Agent residents/NPCs, player assets, upgrade form, companies/shops/listings, Commerce / Work Orders, delivery/acceptance/rejection/reopen/cancel forms, Faction Reputation Map, World Contracts, completion form, and the world event timeline.
 
 ### 8.2 Quests
 
@@ -337,6 +348,7 @@ Main screens:
 8. Guild Hall
 9. Wallet / Rewards
 10. Agent Loadout
+11. Progression Hub（门派 / skills / tools / skins / XP / level）
 
 Visual style:
 

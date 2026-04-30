@@ -8,7 +8,7 @@
 
 - 纯文本消息：直接当作任务 prompt 创建任务。
 - 斜杠命令：`/help`、`/task`、`/status`、`/balance`、`/plans` 触发专用行为。
-- Trillionnium League 游戏化命令：`/league`、`/world`、`/season`、`/arena`、`/quest`、`/guild`、`/draft`、`/join`、`/battle`、`/submit`、`/profile`、`/rewards`、`/history`、`/rank`、`/loadout`。
+- Trillionnium League 游戏化命令：`/league`、`/world`、`/season`、`/arena`、`/quest`、`/guild`、`/draft`、`/join`、`/battle`、`/submit`、`/profile`、`/progression`、`/skills`、`/tools`、`/skins`、`/rewards`、`/history`、`/rank`、`/loadout`。
 
 默认链路：
 
@@ -50,14 +50,30 @@ Element 消息 -> matrix-bot-poller -> matrix-bot-relay -> matrix-entry-adapter
 ### Trillionnium League 游戏化入口
 
 - `/league` / `/tl`：进入 Trillionnium League 首页卡。
+- `/app` / `/client`：打开客户端超级入口，集成 World Map（真实世界地图引擎 `leaflet_openstreetmap_v1` / Leaflet + OpenStreetMap 全球真实地图镜像，叠加英雄坛说+Gather LOD 节点；同时暴露 renderer adapter seam：`map_renderer_adapter_id=leaflet_renderer_adapter_v1`、`map_runtime_handle_name=mapRuntime`、future candidate `maplibre_gl_v1`）、Face Duel（Pokémon-like 面对面对战）、Social（WeChat/Telegram 风格）、Wallet（Alipay-like 余额/支付）和 Progression（门派/技能/装备/皮肤/经验/等级）。
+- `/feed` / `/timeline` / `/动态`：查看 `/app` Unified Feed Timeline 的 Matrix 动态投影，返回 feed group 计数、top signal、top action target，以及 route-story / next-opportunity follow-up。支持 `/feed events|tasks|contracts|completion|commerce|social`（或中文同义词）切到单个 feed 分组视图。
+- `/duel nearby <出招>`：进入面对面 Agent 对战，当前映射到 `face-duel-001` 赛场并创建可评分 CEX battle task。
+- `/social`：查看社交联系人、Agent/NPC 和 guild presence。
+- `/pay`：钱包/支付入口，等同余额钱包卡。
+- `/progression` / `/level` / `/等级`：玩家成长总览，展示当前门派、等级、成功任务数量、经验数据点、skills/tools/skins 解锁数量。
+- `/skills` / `/技能`：技能树，技能随等级和门派/阵营路线解锁。
+- `/tools` / `/equipment` / `/装备`：装备/工具目录，结合 `/inventory` 的掉落装备和工具能力。
+- `/skins` / `/皮肤`：皮肤与 multi-agent 能力形态，随等级和 `/draft` Agent 数量解锁。
 - `/world` / `/map`：查看 **Trillionnium World** 开放世界，包括现实镜像城市、Craft 工坊、市场、League 竞技场、Agent 居民、资产和最近事件。
 - `/world action <自由行动>`：在开放世界里自由行动，例如开公司、建工坊、招募 Agent、探索市场、把现实任务映射为世界事件。
+- `/map` / `/look`：查看英雄坛说 + Gather 风格的细地图、当前位置、坐标和出口；卡片必须携带与 `/app` / `/world` 一致的 renderer adapter contract，移动端只依赖 `mapRuntime`/adapter 字段，不依赖 Leaflet 私有命名。
+- `/go <direction|node-id>`：沿出口或相邻节点移动，形成更高自由度的文字地图探索循环。
 - `/assets`：查看 **Trillionnium World** 资产和升级次数。
 - `/upgrade <asset-id|latest> <升级内容>`：提交资产升级方案，触发 Judge Pipeline v2 并提高资产等级/价值。
 - `/companies` / `/company <asset-id|latest> <公司方案>`：查看公司，或把已有资产启动成公司/店铺/初始服务货架。
 - `/shops` / `/sell <company-id|latest> <服务/商品>`：查看店铺和货架，或发布带价格/质量分的服务 listing。
-- `/buy <listing-id|latest> <需求>` / `/hire ...`：购买/雇佣货架服务，生成 purchase + work order，卖方收入会尽量通过 Ledger grant 结算，并提升相关 World 阵营声望。
-- `/work`：查看 World commerce purchases 与 work orders。
+- `/buy <listing-id|latest> <需求>` / `/hire ...`：购买/雇佣货架服务，生成 purchase + work order，优先尝试买方 Ledger reserve，同时卖方收入会尽量通过 Ledger grant 结算，并提升相关 World 阵营声望。
+- `/work`：查看 World commerce purchases、work orders、deliveries、acceptances。
+- `/work deliver <work-id|latest> <交付内容>`：卖方提交 work order 交付包，走 Judge Pipeline 评分并写入交付记录。
+- `/work accept <work-id|latest> <验收内容>`：买方验收已交付的 work order，尝试执行买方 Ledger consume，完成闭环并增加 reputation/faction standing。
+- `/work reject <work-id|latest> <拒收原因>` / `/work refund ...`：买方拒收已交付的 work order，尝试执行买方 Ledger refund，记录拒收/退款状态。
+- `/work reopen <work-id|latest> <返工要求>`：买方在拒收退款后重新预留资金，把 work order 打回 open，允许卖方返工/重交付。
+- `/work cancel <work-id|latest> <取消原因>`：买方在交付前取消 open work order，尝试执行买方 Ledger refund，关闭该工作单。
 - `/factions` / `/声望`：查看 World 阵营与玩家 faction standing。
 - `/contract <委托内容>` / `/bounty <委托内容>`：把现实客户需求登记成 **World Contract**，并通过 CEX 创建真实任务/调用。
 - `/complete <contract-id> <交付内容>` / `/deliver ...`：提交 World Contract 交付，触发 Judge Pipeline v2、Ledger 结算、资产升级和声望成长。
@@ -75,6 +91,10 @@ Element 消息 -> matrix-bot-poller -> matrix-bot-relay -> matrix-entry-adapter
 - `/loadout`：查看当前 Agent 阵容。
 - `/submit <match-id> <提交内容>`：提交赛果，获得评分和奖励；奖励会尝试通过 ledger grant 真结算，并在卡片里显示 `ledger_status`。
 - `/profile`：查看玩家档案。
+- `/progression`：查看门派/等级/经验/解锁总览。
+- `/skills`：查看技能树。
+- `/tools`：查看工具/装备目录。
+- `/skins`：查看 multi-agent 皮肤/能力形态。
 - `/rewards`：查看奖励记录和累计收益。
 - `/inventory` / `/items` / `/bag` / `/背包`：查看 League 背包、装备/徽章和战利品 power。
 - `/history`：查看战斗/提交历史。
@@ -140,7 +160,7 @@ Element 消息 -> matrix-bot-poller -> matrix-bot-relay -> matrix-entry-adapter
   - `/status <id>` 返回对应投影
   - `/balance` / `/wallet` 返回钱包卡片
   - `/plans` / `/package` 返回套餐卡片
-  - `/league` / `/world` / `/world action ...` / `/assets` / `/upgrade ...` / `/companies` / `/company ...` / `/shops` / `/sell ...` / `/buy ...` / `/work` / `/factions` / `/contract ...` / `/complete ...` / `/craft ...` / `/season` / `/arena` / `/quest` / `/guild` / `/raid` / `/team` / `/draft` / `/join` / `/rank` / `/loadout` 返回 Trillionnium League / World / Craft 游戏卡片
+  - `/app` / `/feed` / `/duel ...` / `/social` / `/pay` / `/league` / `/world` / `/map` / `/go ...` / `/world action ...` / `/assets` / `/upgrade ...` / `/companies` / `/company ...` / `/shops` / `/sell ...` / `/buy ...` / `/work` / `/work deliver ...` / `/work accept ...` / `/work reject ...` / `/work reopen ...` / `/work cancel ...` / `/factions` / `/contract ...` / `/complete ...` / `/craft ...` / `/season` / `/arena` / `/quest` / `/guild` / `/raid` / `/team` / `/draft` / `/join` / `/rank` / `/loadout` 返回 Trillionnium League / World / Craft 游戏卡片
   - `/battle <match-id> <行动>` 透传到 CEX task，并携带 League metadata
   - `/submit <match-id> <提交内容>` 返回 `league_submission` 评分/奖励卡，并校验本地真房间链路里 `ledger_status=settled`
   - `/profile` / `/rewards` / `/inventory` / `/history` 返回玩家档案、奖励、背包、历史卡
