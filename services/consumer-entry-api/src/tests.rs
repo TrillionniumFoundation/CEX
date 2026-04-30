@@ -38,6 +38,10 @@ use axum::{
 };
 use base64::Engine as _;
 use chrono::Utc;
+use ledger_service::{
+    build_router as build_ledger_router, repository::postgres::PostgresLedgerRepository,
+    state::AppState as LedgerAppState,
+};
 use reqwest::Client;
 use serde_json::{json, Value};
 use std::{
@@ -656,6 +660,8 @@ fn normalized_repository_runtime_dual_write_scopes_world_tables_to_command() {
     let repository_snapshot = LeagueStateRepositorySnapshot::from_league(&league).unwrap();
     let full_sql = String::from_utf8(repository_snapshot.sql_snapshot_bytes().unwrap()).unwrap();
     assert!(full_sql.contains("insert into world_map_nodes"));
+    assert!(full_sql.contains("begin;"));
+    assert!(full_sql.contains("commit;"));
 
     let runtime_sql = String::from_utf8(
         repository_snapshot
@@ -671,6 +677,8 @@ fn normalized_repository_runtime_dual_write_scopes_world_tables_to_command() {
     assert!(runtime_sql.contains("insert into world_map_nodes"));
     assert!(runtime_sql.contains("\"dependency_world_tables\""));
     assert!(!runtime_sql.contains("insert into world_events"));
+    assert!(!runtime_sql.contains("begin;"));
+    assert!(!runtime_sql.contains("commit;"));
 }
 
 #[test]
@@ -781,6 +789,8 @@ fn normalized_repository_direct_write_audit_bridge_omits_generated_world_upserts
     assert!(bridge_sql.contains("execute_normalized_repository_direct_command_write"));
     assert!(!bridge_sql.contains("insert into world_events"));
     assert!(!bridge_sql.contains("insert into world_map_nodes"));
+    assert!(!bridge_sql.contains("begin;"));
+    assert!(!bridge_sql.contains("commit;"));
 }
 
 #[test]
@@ -3215,6 +3225,295 @@ async fn chat_identity_binding_rejects_unknown_product_user_registry_ref() {
     assert!(resolve_chat_identity(&state, &payload).await.is_err());
 }
 
+#[tokio::test]
+async fn world_commerce_e2e_uses_real_configured_ledger_for_consume_refund_reopen_and_cancel() {
+    let (ledger_base_url, ledger_admin_token) = start_real_ledger_service_for_world_e2e().await;
+    let http = Client::new();
+    let buyer_account_id =
+        create_real_ledger_account(&http, &ledger_base_url, &ledger_admin_token, 1_000.0).await;
+    let seller_account_id =
+        create_real_ledger_account(&http, &ledger_base_url, &ledger_admin_token, 0.0).await;
+
+    let buyer_matrix_user_id = "@world-ledger-buyer:local.dev";
+    let seller_matrix_user_id = "@world-ledger-seller:local.dev";
+    let room_id = "!world-commerce-real-ledger:local.dev";
+    let mut bindings = IdentityBindings::default();
+    bindings.matrix_users.insert(
+        buyer_matrix_user_id.to_string(),
+        IdentityBindingEntry {
+            product_user_id: None,
+            org_id: Some("world-commerce-org".to_string()),
+            account_id: Some(buyer_account_id.clone()),
+        },
+    );
+    bindings.matrix_users.insert(
+        seller_matrix_user_id.to_string(),
+        IdentityBindingEntry {
+            product_user_id: None,
+            org_id: Some("world-commerce-org".to_string()),
+            account_id: Some(seller_account_id.clone()),
+        },
+    );
+    let mut config = test_config();
+    config.ledger_base_url = ledger_base_url.clone();
+    config.ledger_admin_token = Some(ledger_admin_token.clone());
+    let state = test_state(config, bindings, HashMap::new());
+    let app = build_router(state.clone());
+
+    let (status, action) = send_json_request(
+        &app,
+        "POST",
+        "/v1/world/action",
+        &[],
+        json!({
+            "matrix_user_id": seller_matrix_user_id,
+            "room_id": room_id,
+            "location_id": "starter-studio",
+            "body": "craft a real commerce seed with customer deliverable, evidence checklist, risk control, next action, self review, and durable world business plan for the market ledger test."
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "world action failed: {action}");
+
+    let (status, company) = send_json_request(
+        &app,
+        "POST",
+        "/v1/world/companies",
+        &[],
+        json!({
+            "matrix_user_id": seller_matrix_user_id,
+            "asset_id": "latest",
+            "body": "Launch a craft studio company with clear customer deliverables, evidence source pack, risk checklist, next action plan, and self review for real ledger commerce."
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "world company failed: {company}");
+
+    let (status, listing) = send_json_request(
+        &app,
+        "POST",
+        "/v1/world/listings",
+        &[],
+        json!({
+            "matrix_user_id": seller_matrix_user_id,
+            "company_id": "latest",
+            "body": "Published service listing with customer deliverable, acceptance evidence, source notes, risk controls, next action, and self review for ledger-backed world commerce."
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "world listing failed: {listing}");
+    assert_eq!(listing["listing"]["status"], "listed");
+    let listing_id = listing["listing"]["listing_id"]
+        .as_str()
+        .expect("listing id")
+        .to_string();
+
+    let buy_world_listing = |app: axum::Router, listing_id: String| async move {
+        send_json_request(
+            &app,
+            "POST",
+            &format!("/v1/world/listings/{listing_id}/buy"),
+            &[],
+            json!({
+                "matrix_user_id": buyer_matrix_user_id,
+                "room_id": room_id,
+                "body": "Buyer opens a ledger-backed work order with deliverable, evidence, acceptance standard, risk note, and next action."
+            }),
+        )
+        .await
+    };
+
+    let (status, buy_one) = buy_world_listing(app.clone(), listing_id.clone()).await;
+    assert_eq!(status, StatusCode::OK, "world buy one failed: {buy_one}");
+    assert_eq!(buy_one["buyer_ledger_status"], "reserved");
+    assert_eq!(buy_one["ledger_status"], "settled");
+    assert!(buy_one["buyer_ledger_entry_id"].as_str().is_some());
+    assert!(buy_one["ledger_entry_id"].as_str().is_some());
+    let price_credits = buy_one["purchase"]["price_credits"]
+        .as_i64()
+        .expect("price credits") as f64;
+    let work_one_id = buy_one["work_order"]["work_order_id"]
+        .as_str()
+        .expect("work order one id")
+        .to_string();
+
+    let (status, deliver_one) = send_json_request(
+        &app,
+        "POST",
+        &format!("/v1/world/work-orders/{work_one_id}/deliver"),
+        &[],
+        json!({
+            "matrix_user_id": seller_matrix_user_id,
+            "room_id": room_id,
+            "body": "Seller delivery includes final deliverable, acceptance evidence, source notes, risk resolution, next action, and self review."
+        }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "world deliver one failed: {deliver_one}"
+    );
+    assert_eq!(deliver_one["work_order"]["status"], "delivered");
+
+    let (status, accept_one) = send_json_request(
+        &app,
+        "POST",
+        &format!("/v1/world/work-orders/{work_one_id}/accept"),
+        &[],
+        json!({
+            "matrix_user_id": buyer_matrix_user_id,
+            "room_id": room_id,
+            "body": "Buyer accepts the delivered work with evidence reviewed, risk closed, quality approved, and next collaboration action."
+        }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "world accept one failed: {accept_one}"
+    );
+    assert_eq!(accept_one["buyer_consume_status"], "consumed");
+    assert_eq!(accept_one["purchase"]["status"], "completed");
+    assert_eq!(accept_one["work_order"]["status"], "completed");
+    assert!(accept_one["buyer_consume_entry_id"].as_str().is_some());
+
+    let (status, buy_two) = buy_world_listing(app.clone(), listing_id.clone()).await;
+    assert_eq!(status, StatusCode::OK, "world buy two failed: {buy_two}");
+    assert_eq!(buy_two["buyer_ledger_status"], "reserved");
+    assert_eq!(buy_two["ledger_status"], "settled");
+    let work_two_id = buy_two["work_order"]["work_order_id"]
+        .as_str()
+        .expect("work order two id")
+        .to_string();
+
+    let (status, deliver_two) = send_json_request(
+        &app,
+        "POST",
+        &format!("/v1/world/work-orders/{work_two_id}/deliver"),
+        &[],
+        json!({
+            "matrix_user_id": seller_matrix_user_id,
+            "room_id": room_id,
+            "body": "Second seller delivery includes deliverable, evidence, source notes, risk handling, next action, and self review."
+        }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "world deliver two failed: {deliver_two}"
+    );
+
+    let (status, reject_two) = send_json_request(
+        &app,
+        "POST",
+        &format!("/v1/world/work-orders/{work_two_id}/reject"),
+        &[],
+        json!({
+            "matrix_user_id": buyer_matrix_user_id,
+            "room_id": room_id,
+            "body": "Buyer rejects because evidence gaps remain; refund reserved funds, document risk, request next revision, and self review."
+        }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "world reject two failed: {reject_two}"
+    );
+    assert_eq!(reject_two["buyer_refund_status"], "refunded");
+    assert_eq!(reject_two["purchase"]["status"], "rejected_refunded");
+    assert!(reject_two["buyer_refund_entry_id"].as_str().is_some());
+
+    let (status, reopen_two) = send_json_request(
+        &app,
+        "POST",
+        &format!("/v1/world/work-orders/{work_two_id}/reopen"),
+        &[],
+        json!({
+            "matrix_user_id": buyer_matrix_user_id,
+            "room_id": room_id,
+            "body": "Buyer reopens with revised acceptance evidence, risk checklist, next action, reserved funds again, and clear self review."
+        }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "world reopen two failed: {reopen_two}"
+    );
+    assert_eq!(reopen_two["buyer_reopen_reserve_status"], "reserved");
+    assert_eq!(reopen_two["purchase"]["status"], "reopened_reserved");
+    assert_eq!(reopen_two["work_order"]["status"], "open");
+    assert!(reopen_two["buyer_reopen_reserve_entry_id"]
+        .as_str()
+        .is_some());
+
+    let (status, cancel_two) = send_json_request(
+        &app,
+        "POST",
+        &format!("/v1/world/work-orders/{work_two_id}/cancel"),
+        &[],
+        json!({
+            "matrix_user_id": buyer_matrix_user_id,
+            "room_id": room_id,
+            "body": "Buyer cancels before redelivery; refund reserve, record evidence gap, risk rationale, next action, and self review."
+        }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "world cancel two failed: {cancel_two}"
+    );
+    assert_eq!(cancel_two["buyer_cancel_refund_status"], "refunded");
+    assert_eq!(cancel_two["purchase"]["status"], "cancelled_refunded");
+    assert!(cancel_two["buyer_cancel_refund_entry_id"]
+        .as_str()
+        .is_some());
+
+    let buyer_account = get_real_ledger_account(
+        &http,
+        &ledger_base_url,
+        &ledger_admin_token,
+        &buyer_account_id,
+    )
+    .await;
+    let seller_account = get_real_ledger_account(
+        &http,
+        &ledger_base_url,
+        &ledger_admin_token,
+        &seller_account_id,
+    )
+    .await;
+    assert_eq!(buyer_account["reserved"].as_f64().unwrap(), 0.0);
+    assert_eq!(seller_account["reserved"].as_f64().unwrap(), 0.0);
+    assert_eq!(
+        buyer_account["balance"].as_f64().unwrap(),
+        1_000.0 - price_credits
+    );
+    assert_eq!(
+        seller_account["balance"].as_f64().unwrap(),
+        price_credits * 2.0
+    );
+
+    let league = state.inner.league_state.lock().await;
+    assert!(league.world.world_purchases.iter().any(|purchase| purchase
+        .buyer_ledger_status
+        .as_deref()
+        == Some("reserved")
+        && purchase.ledger_status.as_deref() == Some("settled")
+        && purchase.buyer_consume_status.as_deref() == Some("consumed")));
+    assert!(league
+        .world
+        .world_purchases
+        .iter()
+        .any(|purchase| purchase.status == "cancelled_refunded"
+            && purchase.buyer_ledger_status.as_deref() == Some("reopened_reserved")
+            && purchase.buyer_consume_status.as_deref() == Some("refunded")));
+}
+
 async fn send_text_request(
     app: &axum::Router,
     method: &str,
@@ -3240,6 +3539,109 @@ async fn send_text_request(
     let body = String::from_utf8(bytes.to_vec()).expect("decode response body as utf8");
 
     (status, body)
+}
+
+async fn send_json_request(
+    app: &axum::Router,
+    method: &str,
+    uri: &str,
+    headers: &[(&str, &str)],
+    body: Value,
+) -> (StatusCode, Value) {
+    let mut request = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("content-type", "application/json");
+
+    for (name, value) in headers {
+        request = request.header(*name, *value);
+    }
+
+    let request = request
+        .body(Body::from(
+            serde_json::to_vec(&body).expect("serialize request body"),
+        ))
+        .expect("build request body");
+    let response = app
+        .clone()
+        .oneshot(request)
+        .await
+        .expect("request response");
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read response body bytes");
+    let body: Value = serde_json::from_slice(&bytes).expect("decode json response body");
+
+    (status, body)
+}
+
+async fn start_real_ledger_service_for_world_e2e() -> (String, String) {
+    let admin_token = "world-commerce-real-ledger-token".to_string();
+    let state = LedgerAppState::new_for_tests(
+        PostgresLedgerRepository::new_placeholder(),
+        false,
+        Some(admin_token.clone()),
+        vec!["ledger:manage".to_string(), "ledger:read".to_string()],
+        Vec::new(),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind real ledger test service");
+    let addr = listener.local_addr().expect("ledger test local addr");
+    tokio::spawn(async move {
+        axum::serve(listener, build_ledger_router(state))
+            .await
+            .expect("serve ledger test router");
+    });
+    (format!("http://{addr}"), admin_token)
+}
+
+async fn create_real_ledger_account(
+    http: &Client,
+    ledger_base_url: &str,
+    admin_token: &str,
+    initial_balance: f64,
+) -> String {
+    let response = http
+        .post(format!("{}/v1/accounts", ledger_base_url))
+        .header("x-admin-token", admin_token)
+        .json(&json!({
+            "org_id": "world-commerce-org",
+            "account_type": "world_player",
+            "currency_unit": "credit",
+            "initial_balance": initial_balance,
+        }))
+        .send()
+        .await
+        .expect("create real ledger account");
+    assert_eq!(response.status(), reqwest::StatusCode::CREATED);
+    response
+        .json::<Value>()
+        .await
+        .expect("decode created ledger account")["account_id"]
+        .as_str()
+        .expect("created ledger account id")
+        .to_string()
+}
+
+async fn get_real_ledger_account(
+    http: &Client,
+    ledger_base_url: &str,
+    admin_token: &str,
+    account_id: &str,
+) -> Value {
+    let response = http
+        .get(format!("{}/v1/accounts/{account_id}", ledger_base_url))
+        .header("x-admin-token", admin_token)
+        .send()
+        .await
+        .expect("get real ledger account");
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    response
+        .json::<Value>()
+        .await
+        .expect("decode real ledger account")
 }
 
 async fn send_identity_request(

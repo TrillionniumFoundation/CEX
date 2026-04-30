@@ -9,6 +9,7 @@ const baseUrl = (process.env.CONSUMER_ENTRY_BASE_URL || process.env.BASE_URL || 
 const rootDir = process.env.CEX_PROJECT_ROOT || process.cwd();
 const outDir = process.env.TRILLIONNIUM_BROWSER_E2E_OUT_DIR || path.join(rootDir, 'run', 'league-browser');
 const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE || process.env.CHROME_BIN || '/usr/bin/google-chrome-stable';
+const expectFinalCutover = process.env.TRILLIONNIUM_BROWSER_E2E_EXPECT_FINAL_CUTOVER !== '0';
 const runId = `${Math.floor(Date.now() / 1000)}-${process.pid}`;
 const summaryPath = path.join(outDir, `browser-e2e-summary-${runId}.json`);
 const screenshotDir = path.join(outDir, `screenshots-${runId}`);
@@ -74,9 +75,27 @@ async function count(page, selector) {
 async function clickAndWaitForNavigationOrSettle(page, locator) {
   await Promise.all([
     page.waitForLoadState('domcontentloaded').catch(() => null),
-    locator.click({ timeout: 15_000 }),
+    clickOrDomActivate(locator),
   ]);
   await page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => null);
+}
+
+async function clickOrDomActivate(locator) {
+  try {
+    await locator.click({ timeout: 10_000 });
+  } catch (error) {
+    // The current mobile/game shells have dense HUD cards that can visually overlap
+    // a target in WebKit/Chromium mobile emulation. For browser E2E we still want
+    // the real DOM event path, so fall back to dispatching a click on the resolved
+    // element instead of silently downgrading to an API-only check.
+    await locator.dispatchEvent('click', {}, { timeout: 5_000 });
+  }
+}
+
+async function activateTab(page, tab) {
+  const tabButton = page.locator(`nav.app-bottom-tabs [data-app-tab="${tab}"]`).first();
+  await clickOrDomActivate(tabButton);
+  await page.waitForSelector(`#app-tab-${tab}.is-active`, { timeout: 10_000 });
 }
 
 async function submitWorldForm(page, formSelector, marker, expectedUrlFragment) {
@@ -89,7 +108,14 @@ async function submitWorldForm(page, formSelector, marker, expectedUrlFragment) 
   }
   const [response] = await Promise.all([
     page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 20_000 }).catch(() => null),
-    form.locator('button[type="submit"], button').first().click({ timeout: 10_000, force: true }),
+    form.evaluate((node) => {
+      const submitter = node.querySelector('button[type="submit"], button');
+      if (typeof node.requestSubmit === 'function') {
+        node.requestSubmit(submitter || undefined);
+      } else {
+        node.submit();
+      }
+    }),
   ]);
   await page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => null);
   assert(page.url().includes(expectedUrlFragment), `expected ${formSelector} navigation to include ${expectedUrlFragment}`, page.url());
@@ -145,13 +171,11 @@ async function main() {
   steps.push({ name: 'app_boot_mobile_map_feed_shell', ok: true });
 
   for (const tab of ['messages', 'feed', 'me', 'map']) {
-    await page.locator(`nav.app-bottom-tabs [data-app-tab="${tab}"]`).first().click({ timeout: 10_000, force: true });
-    await page.waitForSelector(`#app-tab-${tab}.is-active`, { timeout: 10_000 });
+    await activateTab(page, tab);
     steps.push({ name: `app_mobile_tab_${tab}`, ok: true });
   }
 
-  await page.locator('nav.app-bottom-tabs [data-app-tab="feed"]').first().click({ force: true });
-  await page.waitForSelector('#app-tab-feed.is-active', { timeout: 10_000 });
+  await activateTab(page, 'feed');
   await page.waitForFunction(() => {
     const status = document.querySelector('#app-feed-api-status')?.textContent || '';
     return /Feed API (synced|fallback)|Embedded feed snapshot/.test(status);
@@ -159,15 +183,14 @@ async function main() {
   assert(await count(page, '#app-feed-items-live .app-feed-item, #app-feed-items-live article') >= 1, 'feed cards missing after API hydration');
   const filterCount = await count(page, '.trillionnium-app-feed-filter');
   if (filterCount > 0) {
-    await page.locator('.trillionnium-app-feed-filter').first().click();
+    await clickOrDomActivate(page.locator('.trillionnium-app-feed-filter').first());
   }
   steps.push({ name: 'app_feed_api_hydration_and_filter', ok: true, filters: filterCount });
 
-  await page.locator('nav.app-bottom-tabs [data-app-tab="map"]').first().click({ force: true });
-  await page.waitForSelector('#app-tab-map.is-active', { timeout: 10_000 });
+  await activateTab(page, 'map');
   const focusButtons = await count(page, '.trillionnium-map-focus');
   if (focusButtons > 0) {
-    await page.locator('.trillionnium-map-focus').first().click({ timeout: 10_000, force: true });
+    await clickOrDomActivate(page.locator('.trillionnium-map-focus').first());
     await page.waitForFunction(() => {
       const text = document.querySelector('#app-map-focus-summary')?.textContent || '';
       return text && !/Waiting|Pick/i.test(text);
@@ -187,10 +210,22 @@ async function main() {
 
   const worldFocusButtons = await count(page, '.trillionnium-map-focus');
   if (worldFocusButtons > 0) {
-    await page.locator('.trillionnium-map-focus').first().click({ timeout: 10_000, force: true });
+    await clickOrDomActivate(page.locator('.trillionnium-map-focus').first());
   }
   await submitWorldForm(page, '#world-map-move-panel form', marker, 'map=moved');
   steps.push({ name: 'world_map_move_form_browser_submit', ok: true });
+
+  await page.locator('#world-action-body').fill('craft a real customer-facing studio asset with deliverable, evidence package, risk controls, operating loop, next action, and self review for browser commerce E2E.');
+  await submitWorldForm(page, 'form[action="/world/web/action"]', marker, 'played=1');
+  steps.push({ name: 'world_action_browser_submit', ok: true });
+
+  await page.locator('#world-company-body').fill('Launch a craft studio company with customer segment, deliverable offer, evidence source pack, risk controls, operating loop, next revenue action, and self review.');
+  await submitWorldForm(page, 'form[action="/world/web/company"]', marker, 'company=created');
+  steps.push({ name: 'world_company_browser_submit', ok: true });
+
+  await page.locator('#world-listing-body').fill('Publish a service listing with clear deliverable, price logic, evidence package, customer promise, risk controls, next action, and self review.');
+  await submitWorldForm(page, 'form[action="/world/web/listing"]', marker, 'listing=created');
+  steps.push({ name: 'world_listing_browser_submit', ok: true });
 
   await submitWorldForm(page, '#world-buy-form', marker, 'purchase=created');
   const purchaseCards = await count(page, '#world-purchase-cards-live article, #world-purchase-cards-live .mini');
@@ -210,9 +245,19 @@ async function main() {
   const health = await page.request.get(`${baseUrl}/health`, { timeout: 20_000 });
   assert(health.ok(), `health failed after browser flow: ${health.status()}`);
   const healthJson = await health.json();
-  assert(healthJson?.league_repository_runtime?.effective_repository === 'normalized_sql_direct_write_final', 'browser e2e did not run against final repository', healthJson?.league_repository_runtime);
-  assert(healthJson?.league_repository_runtime?.repository_cutover_status === 'normalized_sql_direct_write_final_cutover_active', 'browser e2e did not run against final cutover', healthJson?.league_repository_runtime);
-  steps.push({ name: 'health_final_cutover_after_browser_flow', ok: true });
+  if (expectFinalCutover) {
+    assert(healthJson?.league_repository_runtime?.effective_repository === 'normalized_sql_direct_write_final', 'browser e2e did not run against final repository', healthJson?.league_repository_runtime);
+    assert(healthJson?.league_repository_runtime?.repository_cutover_status === 'normalized_sql_direct_write_final_cutover_active', 'browser e2e did not run against final cutover', healthJson?.league_repository_runtime);
+    steps.push({ name: 'health_final_cutover_after_browser_flow', ok: true });
+  } else {
+    steps.push({
+      name: 'health_final_cutover_after_browser_flow',
+      ok: true,
+      mode: 'not_required_by_TRILLIONNIUM_BROWSER_E2E_EXPECT_FINAL_CUTOVER',
+      effective_repository: healthJson?.league_repository_runtime?.effective_repository,
+      repository_cutover_status: healthJson?.league_repository_runtime?.repository_cutover_status,
+    });
+  }
 
   await page.screenshot({ path: path.join(screenshotDir, 'world-commerce-accepted.png'), fullPage: true }).catch((error) => {
     consoleMessages.push({ type: 'warning', text: `world screenshot skipped: ${error.message || error}` });

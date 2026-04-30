@@ -19,4 +19,5 @@ sqlx.workspace = true
 shared-tracing = { path = "../../crates/shared-tracing" }
 
 [dev-dependencies]
+ledger-service = { path = "../ledger-service" }
 tower = { version = "0.5", features = ["util"] }
