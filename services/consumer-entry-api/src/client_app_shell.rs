@@ -743,7 +743,6 @@ pub(super) async fn get_client_app_web_shell(
       let feedFilterMode = 'all';
       let feedLoadedViaApi = false;
       let feedRequestInFlight = null;
-      const worldHandoffKey = routeHandoffStorageKey();
       const applyAppSearchFilter = () => {{
         const query = String((appSearchInput && appSearchInput.value) || '').trim().toLowerCase();
         const activePanel = appPanels.find((panel) => panel.dataset.appPanel === activeAppTab) || null;
@@ -767,13 +766,14 @@ pub(super) async fn get_client_app_web_shell(
         if (activeAppTab === 'map') requestAnimationFrame(() => mapAdapter.invalidateSize(mapRuntime));
       }};
       {shared_map_runtime_primitives_js}
+      const worldHandoffKey = () => routeHandoffStorageKey();
 
       const writeWorldHandoff = (payload) => {{
         try {{
           if (!window.sessionStorage || !payload) return;
           const record = buildRouteHandoffRecord(payload);
           record[routeHandoffFieldName('saved_at_epoch', 'saved_at_epoch')] = Date.now();
-          window.sessionStorage.setItem(worldHandoffKey, JSON.stringify(record));
+          window.sessionStorage.setItem(worldHandoffKey(), JSON.stringify(record));
         }} catch (_error) {{}}
       }};
       const buildWorldHandoff = (nodeId, actionId) => {{

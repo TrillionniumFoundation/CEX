@@ -284,8 +284,8 @@ for axis_id in ['public_launch_surface', 'commercial_engine', 'trust_safety', 'd
     axis = public_commercial_axes.get(axis_id) or {}
     assert axis.get('percent') == 100, (axis_id, axis)
     assert axis.get('status') == 'converged', (axis_id, axis)
-assert health.get('league_repository_runtime', {}).get('effective_repository') == 'normalized_sql_dual_write', health.get('league_repository_runtime')
-assert health.get('league_repository_runtime', {}).get('repository_cutover_status') == 'normalized_sql_dual_write_read_switch_active', health.get('league_repository_runtime')
+assert health.get('league_repository_runtime', {}).get('effective_repository') == 'normalized_sql_direct_write_final', health.get('league_repository_runtime')
+assert health.get('league_repository_runtime', {}).get('repository_cutover_status') == 'normalized_sql_direct_write_final_cutover_active', health.get('league_repository_runtime')
 
 summary = {
     'ok': True,

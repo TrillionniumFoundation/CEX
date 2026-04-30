@@ -68,7 +68,7 @@ json_text = sql_json.replace("''", "'")
 state = json.loads(json_text)
 repo_match = re.search(
     r"insert into league_state_repository_snapshots\s*\([\s\S]*?\)\s*values\s*\(\s*"
-    r"'([^']+)',\s*'consumer_entry_json_v1',\s*'shadow_snapshot',\s*"
+    r"'([^']+)',\s*'consumer_entry_json_v1',\s*'final_cutover',\s*"
     r"'json_file_with_sql_snapshot',\s*'normalized_sql_dual_write',\s*"
     r"'([^']+)',\s*'((?:''|[^'])*)'::jsonb,\s*'((?:''|[^'])*)'::jsonb\s*\)\s*"
     r"on conflict \(state_hash, cutover_phase\)",
@@ -119,7 +119,7 @@ if direct_write_contract:
     if all(command in supported for command in expected_direct_commands):
         raw_direct_write_contract_checked = True
     if direct_write_contract.get('transaction_mode') is not None:
-        assert direct_write_contract.get('transaction_mode') == 'single_pg_transaction_bridge_sql_plus_direct_upserts', repository_contract
+        assert direct_write_contract.get('transaction_mode') == 'single_pg_transaction_direct_sql_primary_plus_snapshot_export', repository_contract
         assert 'atomically' in (direct_write_contract.get('transaction_boundary') or ''), repository_contract
 raw_read_model_contract_checked = False
 if state_boundary.get('runtime_read_model_sql_helper') is not None:
@@ -308,7 +308,7 @@ if endpoint is not None:
             for command in expected_direct_commands:
                 assert command in endpoint_supported_direct_commands, endpoint
         if endpoint_direct_write_contract.get('transaction_mode') is not None:
-            assert endpoint_direct_write_contract.get('transaction_mode') == 'single_pg_transaction_bridge_sql_plus_direct_upserts', endpoint
+            assert endpoint_direct_write_contract.get('transaction_mode') == 'single_pg_transaction_direct_sql_primary_plus_snapshot_export', endpoint
             assert 'atomically' in (endpoint_direct_write_contract.get('transaction_boundary') or ''), endpoint
         if endpoint_direct_write_contract.get('index_reuse') is not None:
             assert 'one WorldIndexes snapshot' in endpoint_direct_write_contract.get('index_reuse'), endpoint
@@ -326,7 +326,7 @@ if endpoint is not None:
         assert endpoint_normalized_world_shadow.get('sorted_vector_index_layer') == 'WorldIndexes::normalized_shadow_sorted_vector_indices_v1', endpoint
     assert 'world_work_acceptances' in (endpoint_normalized_world_shadow.get('tables') or []), endpoint
     assert endpoint_audit.get('audit_version') == 'trillionnium_repository_cutover_audit_v1', endpoint
-    assert endpoint_audit.get('cutover_phase') == 'shadow_snapshot', endpoint
+    assert endpoint_audit.get('cutover_phase') == 'final_cutover', endpoint
     assert endpoint_audit.get('next_repository') == 'normalized_sql_dual_write', endpoint
     assert endpoint_audit.get('dual_write_plan_version') == 'trillionnium_repository_dual_write_plan_v1', endpoint
     assert 'dual_write_active' in endpoint_repository, endpoint

@@ -497,7 +497,7 @@ fn league_sql_cutover_plan_exposes_normalized_world_tables() {
         repository_audit
             .get("cutover_phase")
             .and_then(Value::as_str),
-        Some("shadow_snapshot")
+        Some("final_cutover")
     );
     assert_eq!(
         repository_audit
@@ -686,13 +686,13 @@ fn normalized_repository_direct_write_contract_declares_command_helpers() {
     );
     assert_eq!(
         contract.get("transaction_mode").and_then(Value::as_str),
-        Some("single_pg_transaction_bridge_sql_plus_direct_upserts")
+        Some("single_pg_transaction_direct_sql_primary_plus_snapshot_export")
     );
     assert!(contract
         .get("transaction_boundary")
         .and_then(Value::as_str)
         .unwrap_or_default()
-        .contains("atomically"));
+        .contains("direct typed SQLx upserts first"));
     let supported_commands = contract
         .get("supported_commands")
         .and_then(Value::as_array)
@@ -735,7 +735,7 @@ fn normalized_repository_direct_write_contract_declares_command_helpers() {
         .any(|command| command.as_str() == Some("world_work_cancel")));
     assert_eq!(
         contract.get("fallback_helper").and_then(Value::as_str),
-        Some("normalized_repository_command_shadow_sql")
+        Some("snapshot_export_only")
     );
 
     let repository_contract = crate::league_state_repository_contract_json();
@@ -907,6 +907,7 @@ fn test_config() -> ConsumerEntryConfig {
         league_normalized_database_url: None,
         league_normalized_dual_write_enabled: false,
         league_normalized_read_switch_enabled: false,
+        league_normalized_final_cutover_enabled: false,
         league_hidden_tests_enabled: true,
         league_llm_judge_url: None,
         league_llm_judge_token: None,
@@ -1751,6 +1752,7 @@ fn normalized_repository_runtime_modes_require_database_url() {
     let mut config = test_config();
     config.league_normalized_dual_write_enabled = true;
     config.league_normalized_read_switch_enabled = true;
+    config.league_normalized_final_cutover_enabled = true;
 
     let errors = config.validate_runtime_profile().unwrap_err();
     assert!(errors
@@ -1759,6 +1761,9 @@ fn normalized_repository_runtime_modes_require_database_url() {
     assert!(errors
         .iter()
         .any(|item| item.contains("CONSUMER_ENTRY_LEAGUE_NORMALIZED_READ_SWITCH_ENABLED=true")));
+    assert!(errors
+        .iter()
+        .any(|item| item.contains("CONSUMER_ENTRY_LEAGUE_NORMALIZED_FINAL_CUTOVER_ENABLED=true")));
 
     config.league_normalized_database_url = Some("postgres://local/cex".to_string());
     assert!(config.validate_runtime_profile().is_ok());
@@ -4766,6 +4771,7 @@ async fn health_endpoint_exposes_identity_governance_overview() {
     config.league_normalized_database_url = Some("postgres://local/cex".to_string());
     config.league_normalized_dual_write_enabled = true;
     config.league_normalized_read_switch_enabled = true;
+    config.league_normalized_final_cutover_enabled = true;
 
     let app = build_router(AppState::new(config));
     let (status, body) = send_health_request(&app).await;
@@ -4790,11 +4796,15 @@ async fn health_endpoint_exposes_identity_governance_overview() {
     );
     assert_eq!(
         body["league_repository_runtime"]["effective_repository"],
-        "normalized_sql_dual_write"
+        "normalized_sql_direct_write_final"
     );
     assert_eq!(
         body["league_repository_runtime"]["repository_cutover_status"],
-        "normalized_sql_dual_write_read_switch_active"
+        "normalized_sql_direct_write_final_cutover_active"
+    );
+    assert_eq!(
+        body["league_repository_runtime"]["normalized_final_cutover_active"],
+        true
     );
     assert_eq!(
         body["profile_validation"]["checks"]["league_normalized_read_switch_active"],

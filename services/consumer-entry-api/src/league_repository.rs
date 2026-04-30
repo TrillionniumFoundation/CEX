@@ -744,8 +744,8 @@ pub(super) async fn load_league_state_from_normalized_repository(
     };
     let read_switch_gate_counts = sqlx::query_as::<_, (i64, i64)>(
         "select
-            (select count(*)::bigint from league_state_repository_snapshots where state_hash = $1 and cutover_phase = 'shadow_snapshot') as repository_audit_rows,
-            (select count(*)::bigint from league_state_repository_write_set_audits where state_hash = $1 and cutover_phase = 'shadow_snapshot') as write_set_audit_rows",
+            (select count(*)::bigint from league_state_repository_snapshots where state_hash = $1 and cutover_phase in ('final_cutover', 'shadow_snapshot')) as repository_audit_rows,
+            (select count(*)::bigint from league_state_repository_write_set_audits where state_hash = $1 and cutover_phase in ('final_cutover', 'shadow_snapshot')) as write_set_audit_rows",
     )
     .bind(&state_hash)
     .fetch_one(&pool)
@@ -1588,16 +1588,16 @@ pub(super) fn normalized_repository_direct_write_supports_command(command: &str)
 pub(super) fn normalized_repository_direct_write_contract_json() -> Value {
     json!({
         "contract_version": "trillionnium_normalized_repository_direct_write_v1",
-        "phase": "direct_write_shadow",
-        "purpose": "start replacing generated command-scoped SQL execution with explicit typed SQLx upsert helpers while preserving the JSON snapshot/export rollback bridge",
+        "phase": "direct_write_final_cutover",
+        "purpose": "make explicit typed SQLx upsert helpers the primary normalized SQL write path for supported world commands while preserving JSON/snapshot only as export, audit, and rollback artifacts",
         "runtime_helper": "execute_normalized_repository_direct_command_write",
-        "transaction_mode": "single_pg_transaction_bridge_sql_plus_direct_upserts",
+        "transaction_mode": "single_pg_transaction_direct_sql_primary_plus_snapshot_export",
         "index_reuse": "execute_normalized_repository_direct_command_write builds one WorldIndexes snapshot per hydrated repository state and reuses sorted vector indices across typed SQLx upserts",
         "supported_commands": normalized_repository_direct_write_supported_commands(),
-        "fallback_helper": "normalized_repository_command_shadow_sql",
-        "fallback_mode": "unsupported commands still use command-scoped generated normalized SQL; unknown commands remain audit-only",
-        "bridge": "league_state_snapshots, league_state_repository_snapshots, and league_state_repository_write_set_audits remain written for rollback, parity, and read-switch gates",
-        "transaction_boundary": "write_normalized_repository_snapshot_to_database commits the snapshot/export/audit bridge and direct typed SQLx upserts atomically in one PostgreSQL transaction",
+        "fallback_helper": "snapshot_export_only",
+        "fallback_mode": "unsupported world commands are rejected in final cutover instead of falling back to generated command-scoped SQL; non-world snapshot exports remain rollback/audit-only",
+        "bridge": "league_state_snapshots, league_state_repository_snapshots, and league_state_repository_write_set_audits remain written only for rollback, parity, audit, and read-switch recovery gates",
+        "transaction_boundary": "write_normalized_repository_snapshot_to_database commits direct typed SQLx upserts first, then writes JSON/snapshot export and audit artifacts, atomically in one PostgreSQL transaction",
         "command_helpers": [
             {
                 "command": "world_action",
@@ -3195,9 +3195,10 @@ pub(super) async fn execute_normalized_repository_direct_command_write(
 
 pub(super) const TRILLIONNIUM_REPOSITORY_MIGRATION_FLOOR: &str =
     "0020_add_trillionnium_repository_write_set_audit.sql";
-const TRILLIONNIUM_REPOSITORY_SHADOW_PHASE: &str = "shadow_snapshot";
+const TRILLIONNIUM_REPOSITORY_FINAL_CUTOVER_PHASE: &str = "final_cutover";
 const TRILLIONNIUM_CURRENT_REPOSITORY: &str = "json_file_with_sql_snapshot";
 const TRILLIONNIUM_NEXT_REPOSITORY: &str = "normalized_sql_dual_write";
+const TRILLIONNIUM_FINAL_REPOSITORY: &str = "normalized_sql_direct_write_final";
 
 pub(super) fn league_state_hash(league: &LeagueState) -> Result<String, serde_json::Error> {
     let bytes = serde_json::to_vec(league)?;
@@ -3585,7 +3586,7 @@ pub(super) fn league_state_sql_cutover_plan_json(
         "next_repository": TRILLIONNIUM_NEXT_REPOSITORY,
         "migration_floor": TRILLIONNIUM_REPOSITORY_MIGRATION_FLOOR,
         "repository_contract": league_state_repository_contract_json(),
-        "cutover_mode": "shadow_snapshot_then_dual_write_then_read_switch",
+        "cutover_mode": "shadow_snapshot_then_dual_write_then_read_switch_then_final_direct_write_cutover",
         "write_order": [
             "league_core",
             "world_reference",
@@ -3620,14 +3621,14 @@ pub(super) fn league_state_repository_write_set_json(
 pub(super) fn league_state_repository_dual_write_plan_json() -> Value {
     json!({
         "plan_version": "trillionnium_repository_dual_write_plan_v1",
-        "mode": "json_first_shadow_dual_write",
+        "mode": "normalized_sql_final_cutover_with_json_export_rollback",
         "write_order": [
             "validate_command",
-            "mutate_json_state",
-            "rebuild_world_indexes",
-            "emit_repository_snapshot",
-            "write_command_scoped_normalized_sql_tables",
-            "run_shadow_row_count_validation",
+            "mutate_in_memory_world_state",
+            "rebuild_world_indexes_once",
+            "write_typed_normalized_sql_command_tables",
+            "emit_json_snapshot_export_and_repository_audit",
+            "validate_normalized_read_models",
             "keep_json_snapshot_as_rollback_artifact"
         ],
         "write_sets": [
@@ -3873,11 +3874,11 @@ pub(super) fn league_state_repository_write_set_audit_contract_json() -> Value {
         "audit_version": "trillionnium_repository_write_set_audit_v1",
         "table": "league_state_repository_write_set_audits",
         "migration_floor": TRILLIONNIUM_REPOSITORY_MIGRATION_FLOOR,
-        "cutover_phase": TRILLIONNIUM_REPOSITORY_SHADOW_PHASE,
+        "cutover_phase": TRILLIONNIUM_REPOSITORY_FINAL_CUTOVER_PHASE,
         "unique_key": ["state_hash", "cutover_phase", "command"],
         "write_set_count": write_sets.len(),
         "commands": commands,
-        "purpose": "materialize every command write-set boundary before replacing snapshot-backed normalized dual-write with direct repository writes",
+        "purpose": "materialize every command write-set boundary after replacing snapshot-backed normalized dual-write with direct normalized SQL repository writes",
     })
 }
 
@@ -3900,11 +3901,11 @@ pub(super) fn league_state_repository_contract_json() -> Value {
                 "ClientAppProjectionContext"
             ],
             "world_index_boundary": "WorldIndexes rebuilt from WorldState per projection/command batch",
-            "world_write_boundary": "world command handlers mutate LeagueState.world until normalized dual-write owns persistence",
-            "runtime_dual_write_seam": "persist_league_state can apply direct typed SQLx command helpers for declared commands, falling back to generated command-scoped normalized WorldState SQL, to CONSUMER_ENTRY_LEAGUE_NORMALIZED_DATABASE_URL after JSON persistence when CONSUMER_ENTRY_LEAGUE_NORMALIZED_DUAL_WRITE_ENABLED=true",
+            "world_write_boundary": "world command handlers mutate in-memory LeagueState.world and persist supported world commands through normalized SQL typed direct writes as the primary repository path",
+            "runtime_dual_write_seam": "persist_league_state applies direct typed SQLx command helpers for declared world commands to CONSUMER_ENTRY_LEAGUE_NORMALIZED_DATABASE_URL when CONSUMER_ENTRY_LEAGUE_NORMALIZED_FINAL_CUTOVER_ENABLED=true, while JSON/snapshot artifacts remain export and rollback outputs",
             "runtime_read_switch_seam": "startup can hydrate LeagueState from the latest normalized repository league_state_snapshots JSON export after repository audit, write-set audit, normalized world-home read-model, and normalized client-feed read-model gates pass when CONSUMER_ENTRY_LEAGUE_NORMALIZED_READ_SWITCH_ENABLED=true",
-            "runtime_command_write_sql_helper": "normalized_repository_command_shadow_sql can emit command-scoped normalized WorldState table upserts plus FK dependency closure from the repository write-set contract before the final direct-write cutover; unknown command names are audit-only and never fall back to a full world snapshot write",
-            "runtime_direct_write_helper": "execute_normalized_repository_direct_command_write applies typed SQLx upserts for supported commands while the snapshot/export/audit bridge remains intact",
+            "runtime_command_write_sql_helper": "normalized_repository_command_shadow_sql is retained only as legacy rollback/export test support; final cutover rejects unsupported world commands instead of generated-SQL fallback",
+            "runtime_direct_write_helper": "execute_normalized_repository_direct_command_write applies typed SQLx upserts for supported commands while snapshot/export/audit artifacts remain rollback-only",
             "runtime_read_model_sql_helper": "normalized_repository_world_home_read_model_sql and normalized_repository_client_feed_read_model_sql expose direct normalized SQL read-model seams for world home/feed parity before projections leave the JSON export snapshot"
         },
         "runtime_validation": {
@@ -3952,6 +3953,12 @@ pub(super) fn league_state_repository_contract_json() -> Value {
                 "read_repository": "normalized_sql_snapshot_export",
                 "write_repository": "json_file_and_normalized_sql",
                 "sql_behavior": "hydrate startup state from normalized repository snapshots while keeping json snapshot as rollback/export artifact"
+            },
+            {
+                "phase": "final_cutover",
+                "read_repository": "normalized_sql_direct_write_with_snapshot_export",
+                "write_repository": "normalized_sql_direct_write_primary",
+                "sql_behavior": "supported world commands commit typed SQLx upserts first-class in the normalized repository; JSON and SQL snapshots are export, audit, and rollback artifacts only"
             }
         ],
         "read_switch_gates": [
@@ -4051,7 +4058,7 @@ impl LeagueStateRepositoryCutoverAudit {
         Self {
             state_hash: state_hash.to_string(),
             generated_at: generated_at.to_string(),
-            cutover_phase: TRILLIONNIUM_REPOSITORY_SHADOW_PHASE.to_string(),
+            cutover_phase: TRILLIONNIUM_REPOSITORY_FINAL_CUTOVER_PHASE.to_string(),
             current_repository,
             next_repository,
             migration_floor,
@@ -4352,7 +4359,9 @@ pub(super) async fn write_normalized_repository_snapshot_to_database(
     repository_snapshot: &LeagueStateRepositorySnapshot,
     command: Option<&str>,
 ) -> Result<(), Response> {
-    if !config.league_normalized_dual_write_enabled {
+    let normalized_write_enabled = config.league_normalized_dual_write_enabled
+        || config.league_normalized_final_cutover_enabled;
+    if !normalized_write_enabled {
         return Ok(());
     }
 
@@ -4360,7 +4369,7 @@ pub(super) async fn write_normalized_repository_snapshot_to_database(
         return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({
-                "error": "normalized repository dual-write is enabled but no normalized database URL is configured",
+                "error": "normalized repository write path is enabled but no normalized database URL is configured",
             })),
         )
             .into_response());
@@ -4368,7 +4377,23 @@ pub(super) async fn write_normalized_repository_snapshot_to_database(
 
     let direct_command =
         command.filter(|command| normalized_repository_direct_write_supports_command(command));
-    let sql_bytes = if direct_command.is_some() {
+    if config.league_normalized_final_cutover_enabled
+        && command.is_some_and(|command| command.starts_with("world_"))
+        && direct_command.is_none()
+    {
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "error": format!(
+                    "normalized repository final cutover is enabled but command={} has no typed direct-write helper",
+                    command.unwrap_or_default()
+                ),
+            })),
+        )
+            .into_response());
+    }
+
+    let sql_bytes = if direct_command.is_some() || config.league_normalized_final_cutover_enabled {
         repository_snapshot.runtime_audit_bridge_sql_bytes(command)
     } else {
         repository_snapshot.runtime_dual_write_sql_bytes(command)
@@ -4419,12 +4444,6 @@ pub(super) async fn write_normalized_repository_snapshot_to_database(
                     })?;
 
                 let transaction_result = async {
-                    sqlx::raw_sql(&sql)
-                        .execute(&mut *conn)
-                        .await
-                        .map_err(|err| {
-                            format!("failed to dual-write normalized repository snapshot: {err}")
-                        })?;
                     if let Some(command) = direct_command.as_deref() {
                         execute_normalized_repository_direct_command_write(
                             &mut conn,
@@ -4434,6 +4453,12 @@ pub(super) async fn write_normalized_repository_snapshot_to_database(
                         .await
                         .map(|_| ())?;
                     }
+                    sqlx::raw_sql(&sql)
+                        .execute(&mut *conn)
+                        .await
+                        .map_err(|err| {
+                            format!("failed to write normalized repository snapshot export/audit artifacts: {err}")
+                        })?;
                     Ok::<(), String>(())
                 }
                 .await;
@@ -4489,7 +4514,11 @@ pub(super) fn league_repository_runtime_json(config: &ConsumerEntryConfig) -> Va
         config.league_normalized_dual_write_enabled && database_configured;
     let normalized_read_switch_active =
         config.league_normalized_read_switch_enabled && database_configured;
-    let effective_repository = if normalized_read_switch_active {
+    let normalized_final_cutover_active =
+        config.league_normalized_final_cutover_enabled && normalized_dual_write_active;
+    let effective_repository = if normalized_final_cutover_active {
+        TRILLIONNIUM_FINAL_REPOSITORY
+    } else if normalized_read_switch_active {
         TRILLIONNIUM_NEXT_REPOSITORY
     } else {
         TRILLIONNIUM_CURRENT_REPOSITORY
@@ -4498,7 +4527,9 @@ pub(super) fn league_repository_runtime_json(config: &ConsumerEntryConfig) -> Va
         "current_repository": TRILLIONNIUM_CURRENT_REPOSITORY,
         "next_repository": TRILLIONNIUM_NEXT_REPOSITORY,
         "effective_repository": effective_repository,
-        "repository_cutover_status": if normalized_read_switch_active {
+        "repository_cutover_status": if normalized_final_cutover_active {
+            "normalized_sql_direct_write_final_cutover_active"
+        } else if normalized_read_switch_active {
             "normalized_sql_dual_write_read_switch_active"
         } else if normalized_dual_write_active {
             "normalized_sql_dual_write_dual_write_active"
@@ -4515,24 +4546,47 @@ pub(super) fn league_repository_runtime_json(config: &ConsumerEntryConfig) -> Va
         "normalized_dual_write_active": normalized_dual_write_active,
         "normalized_read_switch_enabled": config.league_normalized_read_switch_enabled,
         "normalized_read_switch_active": normalized_read_switch_active,
+        "normalized_final_cutover_enabled": config.league_normalized_final_cutover_enabled,
+        "normalized_final_cutover_active": normalized_final_cutover_active,
         "normalized_source_of_truth_read_models": if normalized_read_switch_active {
             "world_home_and_client_feed"
         } else {
             "not_active"
         },
-        "normalized_runtime_write_mode": "command_scoped_normalized_world_upserts_with_full_snapshot_export",
-        "normalized_command_scoped_helper": "normalized_repository_command_shadow_sql",
-        "normalized_direct_write_mode": "typed_sqlx_command_helpers_for_supported_commands_with_generated_sql_fallback",
+        "normalized_runtime_write_mode": if normalized_final_cutover_active {
+            "normalized_sql_primary_world_command_writes_with_snapshot_export_rollback"
+        } else {
+            "command_scoped_normalized_world_upserts_with_full_snapshot_export"
+        },
+        "normalized_command_scoped_helper": if normalized_final_cutover_active {
+            "legacy_rollback_export_only"
+        } else {
+            "normalized_repository_command_shadow_sql"
+        },
+        "normalized_direct_write_mode": if normalized_final_cutover_active {
+            "typed_sqlx_command_helpers_primary_for_supported_world_commands"
+        } else {
+            "typed_sqlx_command_helpers_for_supported_commands_with_generated_sql_fallback"
+        },
         "normalized_direct_write_helper": "execute_normalized_repository_direct_command_write",
-        "normalized_direct_write_transaction_mode": "single_pg_transaction_bridge_sql_plus_direct_upserts",
+        "normalized_direct_write_transaction_mode": if normalized_final_cutover_active {
+            "single_pg_transaction_direct_sql_primary_plus_snapshot_export"
+        } else {
+            "single_pg_transaction_bridge_sql_plus_direct_upserts"
+        },
         "normalized_direct_write_supported_commands": normalized_repository_direct_write_supported_commands(),
         "normalized_direct_write_contract": normalized_repository_direct_write_contract_json(),
-        "normalized_unknown_command_mode": "audit_only_no_full_world_snapshot_fallback",
+        "normalized_unknown_command_mode": if normalized_final_cutover_active {
+            "unsupported_world_commands_rejected_no_generated_sql_fallback"
+        } else {
+            "audit_only_no_full_world_snapshot_fallback"
+        },
         "normalized_read_switch_gate": "latest_snapshot_requires_repository_audit_and_write_set_audit",
         "normalized_read_switch_source_of_truth_gate": "latest_snapshot_requires_repository_audit_write_set_audit_and_normalized_world_home_and_client_feed_read_models",
         "normalized_read_model_contract": normalized_repository_read_model_contract_json(),
         "dual_write_env": "CONSUMER_ENTRY_LEAGUE_NORMALIZED_DUAL_WRITE_ENABLED",
         "read_switch_env": "CONSUMER_ENTRY_LEAGUE_NORMALIZED_READ_SWITCH_ENABLED",
+        "final_cutover_env": "CONSUMER_ENTRY_LEAGUE_NORMALIZED_FINAL_CUTOVER_ENABLED",
         "database_url_env": "CONSUMER_ENTRY_LEAGUE_NORMALIZED_DATABASE_URL",
     })
 }

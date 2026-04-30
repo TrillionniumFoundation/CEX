@@ -1605,6 +1605,7 @@ pub struct ConsumerEntryConfig {
     pub league_normalized_database_url: Option<String>,
     pub league_normalized_dual_write_enabled: bool,
     pub league_normalized_read_switch_enabled: bool,
+    pub league_normalized_final_cutover_enabled: bool,
     pub league_hidden_tests_enabled: bool,
     pub league_llm_judge_url: Option<String>,
     pub league_llm_judge_token: Option<String>,
@@ -1834,6 +1835,10 @@ impl ConsumerEntryConfig {
                 "CONSUMER_ENTRY_LEAGUE_NORMALIZED_READ_SWITCH_ENABLED",
                 boolean_env("CEX_LEAGUE_NORMALIZED_READ_SWITCH_ENABLED", false),
             ),
+            league_normalized_final_cutover_enabled: boolean_env(
+                "CONSUMER_ENTRY_LEAGUE_NORMALIZED_FINAL_CUTOVER_ENABLED",
+                boolean_env("CEX_LEAGUE_NORMALIZED_FINAL_CUTOVER_ENABLED", false),
+            ),
             league_hidden_tests_enabled: boolean_env("CONSUMER_ENTRY_LEAGUE_HIDDEN_TESTS", true),
             league_llm_judge_url: first_present_env(&[
                 "CONSUMER_ENTRY_LEAGUE_LLM_JUDGE_URL",
@@ -2012,6 +2017,20 @@ impl ConsumerEntryConfig {
                 "CONSUMER_ENTRY_LEAGUE_NORMALIZED_READ_SWITCH_ENABLED=true requires CONSUMER_ENTRY_LEAGUE_NORMALIZED_DATABASE_URL"
                     .to_string(),
             );
+        }
+        if self.league_normalized_final_cutover_enabled {
+            if self.league_normalized_database_url.is_none() {
+                errors.push(
+                    "CONSUMER_ENTRY_LEAGUE_NORMALIZED_FINAL_CUTOVER_ENABLED=true requires CONSUMER_ENTRY_LEAGUE_NORMALIZED_DATABASE_URL"
+                        .to_string(),
+                );
+            }
+            if !self.league_normalized_dual_write_enabled {
+                errors.push(
+                    "CONSUMER_ENTRY_LEAGUE_NORMALIZED_FINAL_CUTOVER_ENABLED=true requires CONSUMER_ENTRY_LEAGUE_NORMALIZED_DUAL_WRITE_ENABLED=true"
+                        .to_string(),
+                );
+            }
         }
 
         if self.runtime_profile == RuntimeProfile::Production {

@@ -94,8 +94,8 @@ for axis_id in ["product_loop", "access_governance", "persistence_runtime", "wor
     axis = closed_beta_axes.get(axis_id) or {}
     require(f"closed_beta_axis_{axis_id}_100", axis.get("percent") == 100, axis)
 require("world_maturity_overall_100", maturity.get("overall_percent") == 100, maturity.get("overall_percent"))
-require("repository_effective_normalized", repo.get("effective_repository") == "normalized_sql_dual_write", repo)
-require("repository_cutover_read_switch_active", repo.get("repository_cutover_status") == "normalized_sql_dual_write_read_switch_active", repo)
+require("repository_effective_normalized", repo.get("effective_repository") == "normalized_sql_direct_write_final", repo)
+require("repository_cutover_read_switch_active", repo.get("repository_cutover_status") == "normalized_sql_direct_write_final_cutover_active", repo)
 require("consumer_ingress_protected", consumer.get("ingress_protected") is True, consumer.get("ingress_protected"))
 require("consumer_session_auth_required", consumer.get("require_session_auth") is True, consumer.get("require_session_auth"))
 require("consumer_identity_binding_required", consumer.get("require_identity_binding") is True, consumer.get("require_identity_binding"))

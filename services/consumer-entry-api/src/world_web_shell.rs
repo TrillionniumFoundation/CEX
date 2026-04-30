@@ -1275,9 +1275,9 @@ pub(super) async fn get_world_web_shell(
       const routeTaskGraphItems = ((((payload.route_task_graph || {{}}).tasks) || []));
       let lastViewport = null;
       let lastSelection = null;
-      const worldHandoffKey = routeHandoffStorageKey();
       let routeFilterMode = 'all';
       {shared_map_runtime_primitives_js}
+      const worldHandoffKey = () => routeHandoffStorageKey();
 
       {shared_map_route_target_resolution_js}
       {shared_map_route_status_js}
@@ -1319,9 +1319,9 @@ pub(super) async fn get_world_web_shell(
       const consumeWorldHandoff = () => {{
         try {{
           if (!window.sessionStorage) return null;
-          const raw = window.sessionStorage.getItem(worldHandoffKey);
+          const raw = window.sessionStorage.getItem(worldHandoffKey());
           if (!raw) return null;
-          window.sessionStorage.removeItem(worldHandoffKey);
+          window.sessionStorage.removeItem(worldHandoffKey());
           return JSON.parse(raw);
         }} catch (_error) {{
           return null;

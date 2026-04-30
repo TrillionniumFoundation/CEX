@@ -109,7 +109,7 @@ begin
       (table_entry->>'row_count')::bigint as expected_count
     from league_state_repository_snapshots snapshot
     cross join lateral jsonb_array_elements(snapshot.cutover_plan->'tables') as table_entry
-    where snapshot.cutover_phase = 'shadow_snapshot'
+    where snapshot.cutover_phase = 'final_cutover'
       and table_entry->>'table_name' like 'world_%'
   ), actual_counts as (
     select 'world_zones' as table_name, count(*)::bigint as actual_count from world_zones union all
@@ -163,7 +163,7 @@ echo "==> validating repository write-set audit in $TMP_DB"
 run_tmp_sql "
 do \$\$
 begin
-  if (select count(*) from league_state_repository_write_set_audits where cutover_phase = 'shadow_snapshot') < 12 then
+  if (select count(*) from league_state_repository_write_set_audits where cutover_phase = 'final_cutover') < 12 then
     raise exception 'repository write-set audit rows missing';
   end if;
   if (select count(*) from league_state_repository_write_set_audits where command = 'world_work_accept' and 'world_work_acceptances' = any(tables)) < 1 then

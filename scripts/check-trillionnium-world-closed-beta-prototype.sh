@@ -68,8 +68,8 @@ require("consumer_rate_limit_store_enabled", consumer.get("rate_limit_store_enab
 require("consumer_session_auth_secret_or_registry", profile_checks.get("session_auth_secret_present") is True or profile_checks.get("session_auth_issuer_registry_loaded") is True, profile_checks)
 require("consumer_session_auth_allowed_issuer", int(profile_checks.get("session_auth_allowed_issuer_count") or 0) >= 1, profile_checks)
 require("consumer_session_auth_expected_audience", profile_checks.get("session_auth_expected_audience_configured") is True, profile_checks)
-require("repository_normalized_sql_dual_write", repo.get("effective_repository") == "normalized_sql_dual_write", repo.get("effective_repository"))
-require("repository_read_switch_active", repo.get("repository_cutover_status") == "normalized_sql_dual_write_read_switch_active", repo.get("repository_cutover_status"))
+require("repository_normalized_sql_direct_write_final", repo.get("effective_repository") == "normalized_sql_direct_write_final", repo.get("effective_repository"))
+require("repository_read_switch_active", repo.get("repository_cutover_status") == "normalized_sql_direct_write_final_cutover_active", repo.get("repository_cutover_status"))
 
 matrix_governance = matrix.get("consumer_entry_session_auth_governance_overview") or {}
 selection = (matrix.get("consumer_entry_session_auth") or {}).get("selection") or {}

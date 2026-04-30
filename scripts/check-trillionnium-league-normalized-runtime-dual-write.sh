@@ -170,6 +170,7 @@ SMOKE_BODY="Runtime dual-write smoke: record normalized repository evidence, ris
   CONSUMER_ENTRY_LEAGUE_NORMALIZED_DATABASE_URL="$APP_DB_URL" \
   CONSUMER_ENTRY_LEAGUE_NORMALIZED_DUAL_WRITE_ENABLED="true" \
   CONSUMER_ENTRY_LEAGUE_NORMALIZED_READ_SWITCH_ENABLED="false" \
+  CONSUMER_ENTRY_LEAGUE_NORMALIZED_FINAL_CUTOVER_ENABLED="true" \
   cargo run -p consumer-entry-api >"$DUAL_WRITE_LOG" 2>&1
 ) &
 APP_PID=$!
@@ -537,10 +538,10 @@ begin
   if (select count(*) from league_state_snapshots where snapshot_kind = 'consumer_entry_json_v1') < 1 then
     raise exception 'runtime dual-write did not write league_state_snapshots';
   end if;
-  if (select count(*) from league_state_repository_snapshots where cutover_phase = 'shadow_snapshot') < 1 then
+  if (select count(*) from league_state_repository_snapshots where cutover_phase = 'final_cutover') < 1 then
     raise exception 'runtime dual-write did not write repository audit snapshots';
   end if;
-  if (select count(*) from league_state_repository_write_set_audits where cutover_phase = 'shadow_snapshot') < 12 then
+  if (select count(*) from league_state_repository_write_set_audits where cutover_phase = 'final_cutover') < 12 then
     raise exception 'runtime dual-write did not write repository write-set audits';
   end if;
   if (select count(*) from league_state_repository_write_set_audits where command = 'world_action' and 'world_events' = any(tables)) < 1 then
@@ -743,13 +744,18 @@ if ! grep -q '"normalized_dual_write_active":true' "$TMP_DIR/dual-write-health.j
   cat "$TMP_DIR/dual-write-health.json" >&2
   exit 1
 fi
-if ! grep -q '"normalized_runtime_write_mode":"command_scoped_normalized_world_upserts_with_full_snapshot_export"' "$TMP_DIR/dual-write-health.json"; then
-  echo "dual-write health did not expose command-scoped normalized runtime write mode" >&2
+if ! grep -q '"normalized_final_cutover_active":true' "$TMP_DIR/dual-write-health.json"; then
+  echo "dual-write health did not expose normalized_final_cutover_active=true" >&2
   cat "$TMP_DIR/dual-write-health.json" >&2
   exit 1
 fi
-if ! grep -q '"normalized_direct_write_mode":"typed_sqlx_command_helpers_for_supported_commands_with_generated_sql_fallback"' "$TMP_DIR/dual-write-health.json"; then
-  echo "dual-write health did not expose normalized direct-write runtime mode" >&2
+if ! grep -q '"normalized_runtime_write_mode":"normalized_sql_primary_world_command_writes_with_snapshot_export_rollback"' "$TMP_DIR/dual-write-health.json"; then
+  echo "dual-write health did not expose final-cutover normalized runtime write mode" >&2
+  cat "$TMP_DIR/dual-write-health.json" >&2
+  exit 1
+fi
+if ! grep -q '"normalized_direct_write_mode":"typed_sqlx_command_helpers_primary_for_supported_world_commands"' "$TMP_DIR/dual-write-health.json"; then
+  echo "dual-write health did not expose normalized final direct-write runtime mode" >&2
   cat "$TMP_DIR/dual-write-health.json" >&2
   exit 1
 fi
@@ -763,18 +769,18 @@ if ! grep -q 'trillionnium_normalized_repository_direct_write_v1' "$TMP_DIR/dual
   cat "$TMP_DIR/dual-write-health.json" >&2
   exit 1
 fi
-if ! grep -q '"normalized_direct_write_transaction_mode":"single_pg_transaction_bridge_sql_plus_direct_upserts"' "$TMP_DIR/dual-write-health.json"; then
+if ! grep -q '"normalized_direct_write_transaction_mode":"single_pg_transaction_direct_sql_primary_plus_snapshot_export"' "$TMP_DIR/dual-write-health.json"; then
   echo "dual-write health did not expose normalized direct-write transaction mode" >&2
   cat "$TMP_DIR/dual-write-health.json" >&2
   exit 1
 fi
-if ! grep -q 'single_pg_transaction_bridge_sql_plus_direct_upserts' "$TMP_DIR/dual-write-health.json"; then
+if ! grep -q 'single_pg_transaction_direct_sql_primary_plus_snapshot_export' "$TMP_DIR/dual-write-health.json"; then
   echo "dual-write health direct-write contract did not expose transaction boundary" >&2
   cat "$TMP_DIR/dual-write-health.json" >&2
   exit 1
 fi
-if ! grep -q '"normalized_unknown_command_mode":"audit_only_no_full_world_snapshot_fallback"' "$TMP_DIR/dual-write-health.json"; then
-  echo "dual-write health did not expose audit-only unknown command mode" >&2
+if ! grep -q '"normalized_unknown_command_mode":"unsupported_world_commands_rejected_no_generated_sql_fallback"' "$TMP_DIR/dual-write-health.json"; then
+  echo "dual-write health did not expose final-cutover unsupported command mode" >&2
   cat "$TMP_DIR/dual-write-health.json" >&2
   exit 1
 fi
@@ -807,8 +813,9 @@ READ_SWITCH_STATE="$TMP_DIR/read-switch-state.json"
   CONSUMER_ENTRY_RATE_LIMIT_STORE_PATH="" \
   CONSUMER_ENTRY_LEAGUE_STATE_PATH="$READ_SWITCH_STATE" \
   CONSUMER_ENTRY_LEAGUE_NORMALIZED_DATABASE_URL="$APP_DB_URL" \
-  CONSUMER_ENTRY_LEAGUE_NORMALIZED_DUAL_WRITE_ENABLED="false" \
+  CONSUMER_ENTRY_LEAGUE_NORMALIZED_DUAL_WRITE_ENABLED="true" \
   CONSUMER_ENTRY_LEAGUE_NORMALIZED_READ_SWITCH_ENABLED="true" \
+  CONSUMER_ENTRY_LEAGUE_NORMALIZED_FINAL_CUTOVER_ENABLED="true" \
   cargo run -p consumer-entry-api >"$READ_SWITCH_LOG" 2>&1
 ) &
 SECOND_APP_PID=$!

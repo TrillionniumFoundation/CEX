@@ -158,7 +158,7 @@ fn trillionnium_world_maturity_axes_json(
         maturity_bool(league_repository_runtime, "normalized_read_switch_active");
     let effective_repository_is_normalized =
         maturity_str(league_repository_runtime, "effective_repository")
-            == Some("normalized_sql_dual_write");
+            == Some("normalized_sql_direct_write_final");
     let source_of_truth_gate_green = maturity_str(
         league_repository_runtime,
         "normalized_read_switch_source_of_truth_gate",
@@ -429,10 +429,10 @@ fn trillionnium_world_closed_beta_prototype_json(
         maturity_bool(league_repository_runtime, "normalized_read_switch_active");
     let effective_repository_is_normalized =
         maturity_str(league_repository_runtime, "effective_repository")
-            == Some("normalized_sql_dual_write");
+            == Some("normalized_sql_direct_write_final");
     let repository_cutover_active =
         maturity_str(league_repository_runtime, "repository_cutover_status")
-            == Some("normalized_sql_dual_write_read_switch_active");
+            == Some("normalized_sql_direct_write_final_cutover_active");
     let normalized_read_models_active = maturity_str(
         league_repository_runtime,
         "normalized_source_of_truth_read_models",
@@ -446,7 +446,7 @@ fn trillionnium_world_closed_beta_prototype_json(
         .get("normalized_direct_write_contract")
         .and_then(|contract| contract.get("phase"))
         .and_then(Value::as_str)
-        == Some("direct_write_shadow");
+        == Some("direct_write_final_cutover");
 
     let session_auth_configured = config.require_session_auth
         && (!config
@@ -745,10 +745,10 @@ fn trillionnium_world_real_user_beta_json(
         maturity_bool(league_repository_runtime, "normalized_read_switch_active");
     let effective_repository_is_normalized =
         maturity_str(league_repository_runtime, "effective_repository")
-            == Some("normalized_sql_dual_write");
+            == Some("normalized_sql_direct_write_final");
     let repository_cutover_active =
         maturity_str(league_repository_runtime, "repository_cutover_status")
-            == Some("normalized_sql_dual_write_read_switch_active");
+            == Some("normalized_sql_direct_write_final_cutover_active");
     let normalized_read_models_active = maturity_str(
         league_repository_runtime,
         "normalized_source_of_truth_read_models",
@@ -762,7 +762,7 @@ fn trillionnium_world_real_user_beta_json(
         .get("normalized_direct_write_contract")
         .and_then(|contract| contract.get("phase"))
         .and_then(Value::as_str)
-        == Some("direct_write_shadow");
+        == Some("direct_write_final_cutover");
     let closed_beta_axes = [
         "product_loop",
         "access_governance",
@@ -1182,10 +1182,10 @@ fn trillionnium_world_public_commercial_product_json(
         maturity_bool(league_repository_runtime, "normalized_read_switch_active");
     let effective_repository_is_normalized =
         maturity_str(league_repository_runtime, "effective_repository")
-            == Some("normalized_sql_dual_write");
+            == Some("normalized_sql_direct_write_final");
     let repository_cutover_active =
         maturity_str(league_repository_runtime, "repository_cutover_status")
-            == Some("normalized_sql_dual_write_read_switch_active");
+            == Some("normalized_sql_direct_write_final_cutover_active");
     let direct_write_supported_commands = league_repository_runtime
         .get("normalized_direct_write_supported_commands")
         .and_then(Value::as_array)
@@ -1195,7 +1195,7 @@ fn trillionnium_world_public_commercial_product_json(
         .get("normalized_direct_write_contract")
         .and_then(|contract| contract.get("phase"))
         .and_then(Value::as_str)
-        == Some("direct_write_shadow");
+        == Some("direct_write_final_cutover");
     let normalized_read_models_active = maturity_str(
         league_repository_runtime,
         "normalized_source_of_truth_read_models",
@@ -1591,8 +1591,12 @@ pub(super) async fn health(State(state): State<AppState>) -> Json<Value> {
                 "league_normalized_database_configured": state.config().league_normalized_database_url.is_some(),
                 "league_normalized_dual_write_enabled": state.config().league_normalized_dual_write_enabled,
                 "league_normalized_read_switch_enabled": state.config().league_normalized_read_switch_enabled,
+                "league_normalized_final_cutover_enabled": state.config().league_normalized_final_cutover_enabled,
                 "league_normalized_dual_write_active": state.config().league_normalized_dual_write_enabled && state.config().league_normalized_database_url.is_some(),
                 "league_normalized_read_switch_active": state.config().league_normalized_read_switch_enabled && state.config().league_normalized_database_url.is_some(),
+                "league_normalized_final_cutover_active": state.config().league_normalized_final_cutover_enabled
+                    && state.config().league_normalized_dual_write_enabled
+                    && state.config().league_normalized_database_url.is_some(),
             }
         },
         "league_repository_runtime": league_repository_runtime,
