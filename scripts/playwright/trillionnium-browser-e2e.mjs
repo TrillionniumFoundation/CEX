@@ -44,7 +44,12 @@ const leafletStub = String.raw`
     map: makeMap,
     tileLayer: () => layerApi(),
     layerGroup: () => ({...layerApi(), __layers: new Set(), clearLayers(){ this.__layers.clear(); return this; }, addLayer(layer){ this.__layers.add(layer); return this; }}),
-    latLngBounds: () => ({ isValid: () => true }),
+    latLngBounds: () => ({
+      isValid: () => true,
+      pad(){ return this; },
+      extend(){ return this; },
+      getCenter(){ return { lat: 31.230416, lng: 121.473701 }; },
+    }),
     polyline: () => layerApi(),
     marker: () => layerApi(),
     circle: () => layerApi(),

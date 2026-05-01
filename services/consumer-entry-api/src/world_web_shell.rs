@@ -1256,10 +1256,6 @@ pub(super) async fn get_world_web_shell(
       const routeLinkStatus = document.getElementById('world-map-route-link-status');
       const routeFlowActions = document.getElementById('world-map-route-flow-actions');
       const actionConsoleStatus = document.getElementById('world-action-console-status');
-      const actionLocationSelect = document.getElementById(routeActionLocationId());
-      const actionBodyField = document.getElementById(routeActionTextareaId());
-      const defaultActionConsoleStatus = actionConsoleStatus ? actionConsoleStatus.textContent : '';
-      const defaultActionBodyText = actionBodyField ? actionBodyField.value : '';
       const focusSummary = document.getElementById('world-map-focus-summary');
       const focusDetail = document.getElementById('world-map-focus-detail');
       const actionRail = document.getElementById('world-map-action-rail');
@@ -1283,6 +1279,10 @@ pub(super) async fn get_world_web_shell(
       {shared_map_route_status_js}
       {shared_map_route_contract_js}
       {shared_map_route_action_js}
+      const actionLocationSelect = document.getElementById(routeActionLocationId());
+      const actionBodyField = document.getElementById(routeActionTextareaId());
+      const defaultActionConsoleStatus = actionConsoleStatus ? actionConsoleStatus.textContent : '';
+      const defaultActionBodyText = actionBodyField ? actionBodyField.value : '';
       const focusRouteTarget = (locationId, explicitNodeId, fallbackNodeId) => {{
         const nodeId = resolveRouteTargetNodeId(locationId, explicitNodeId, fallbackNodeId);
         if (!nodeId) return '';
