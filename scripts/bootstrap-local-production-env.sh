@@ -130,6 +130,7 @@ lines = [
     f"CAPABILITY_OPENCLAW_MODELS_JSON_PATH={out_dir / 'openclaw/agents/cex/agent/models.json'}",
     "OPENCLAW_CEX_EXTRA_MODELS=google/gemini-2.5-flash",
     "CEX_PROVIDER_PROBE_MODEL=google/gemini-2.5-flash",
+    "CEX_PROVIDER_PROBE_TIMEOUT_SECONDS=180",
     f"CEX_GATEWAY_API_KEY={gateway_key}",
     f"IDENTITY_STATIC_API_KEYS_JSON={json.dumps(identity_static_api_keys, separators=(',', ':'))}",
     f"IDENTITY_ADMIN_TOKENS_JSON={json.dumps(identity_admin_tokens, separators=(',', ':'))}",
