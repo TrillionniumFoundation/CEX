@@ -347,15 +347,21 @@ pub(super) fn map_camera_action_buttons_html() -> &'static str {
 
 pub(super) fn route_filter_buttons_html(
     button_class: &str,
-    selection_label: &str,
-    all_label: &str,
+    selection_label_en: &str,
+    selection_label_zh: &str,
+    all_label_en: &str,
+    all_label_zh: &str,
 ) -> String {
     format!(
-        "<button type=\"button\" class=\"focus-chip {}\" data-route-filter=\"selection\">{}</button>\n            <button type=\"button\" class=\"focus-chip {}\" data-route-filter=\"all\">{}</button>",
+        "<button type=\"button\" class=\"focus-chip {}\" data-route-filter=\"selection\" data-i18n-en=\"{}\" data-i18n-zh=\"{}\">{}</button>\n            <button type=\"button\" class=\"focus-chip {}\" data-route-filter=\"all\" data-i18n-en=\"{}\" data-i18n-zh=\"{}\">{}</button>",
         escape_html_text(button_class),
-        escape_html_text(selection_label),
+        escape_html_text(selection_label_en),
+        escape_html_text(selection_label_zh),
+        escape_html_text(selection_label_en),
         escape_html_text(button_class),
-        escape_html_text(all_label),
+        escape_html_text(all_label_en),
+        escape_html_text(all_label_zh),
+        escape_html_text(all_label_en),
     )
 }
 

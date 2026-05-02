@@ -32,9 +32,15 @@ fn client_app_visible_copy(value: &str) -> String {
         ("buyer", "quest taker / 接取方"),
         ("seller", "service party / 服务方"),
         ("commercial", "market quest / 市场任务"),
-        ("browser commerce E2E", "browser adventure E2E / 浏览器冒险验收"),
+        (
+            "browser commerce E2E",
+            "browser adventure E2E / 浏览器冒险验收",
+        ),
         ("AI 设计公司", "AI Design Studio / AI 设计工坊"),
-        ("服务真实客户", "serve real global clients / 完成海外真实委托"),
+        (
+            "服务真实客户",
+            "serve real global clients / 完成海外真实委托",
+        ),
         ("真实客户", "real global client / 海外真实委托"),
         ("委托方", "client / 委托目标"),
     ];
@@ -79,17 +85,20 @@ fn client_app_map_label(value: &str) -> String {
 }
 
 fn escape_client_app_visible_text(value: &str) -> String {
-    escape_html_text(&client_app_visible_copy(value))
+    let copy = client_app_visible_copy(value);
+    i18n_span_from_bilingual_slash_copy(&copy).unwrap_or_else(|| escape_html_text(&copy))
 }
 
 fn client_app_readiness_label(value: &str) -> String {
     match value {
-        "first_playable_loop_100" | "global_first_playable_loop_100" => "Global first playable 100% / 新手主线 100%".to_string(),
+        "first_playable_loop_100" | "global_first_playable_loop_100" => {
+            "Global first playable 100% · 新手主线 100%".to_string()
+        }
         "map_focus_visible" => "地图焦点可见".to_string(),
         "world_event_created" => "世界事件已创建".to_string(),
         "contract_open_or_completed" => "契约已开启或完成".to_string(),
         "quest_work_order_created" => "冒险委托已创建".to_string(),
-        "quest_rating_or_feedback_loop_visible" => "评级 / 返工路线可见".to_string(),
+        "quest_rating_or_feedback_loop_visible" => "评级与返工路线可见".to_string(),
         "wallet_progression_feed_updated" => "奖励成长动态已更新".to_string(),
         "route_task_graph_next_action_visible" => "路线下一步可见".to_string(),
         "visible" => "可见".to_string(),
@@ -158,7 +167,7 @@ pub(super) async fn get_client_app_web_shell(
                 .and_then(Value::as_str)
                 .unwrap_or("mirror-city");
             format!(
-                "<article class=\"module\"><strong>{}</strong><span>{} · {}</span><p>消息、协作、契约推进与世界行动的联系人入口。</p><code>{}</code></article>",
+                "<article class=\"module\"><strong>{}</strong><span>{} · {}</span><p data-i18n-en=\"Contact entry for messages, collaboration, contract progress, and world actions.\" data-i18n-zh=\"消息、协作、契约推进与世界行动的联系人入口。\">Contact entry for messages, collaboration, contract progress, and world actions.</p><code>{}</code></article>",
                 escape_client_app_visible_text(name),
                 escape_client_app_visible_text(kind),
                 escape_client_app_visible_text(role),
@@ -175,7 +184,7 @@ pub(super) async fn get_client_app_web_shell(
         .iter()
         .map(|task| {
             format!(
-                "<article class=\"module\"><strong>任务线程</strong><span>{} · {} / {}</span><p>{}</p><code>{}</code></article>",
+                "<article class=\"module\"><strong data-i18n-en=\"Task Thread\" data-i18n-zh=\"任务线程\">Task Thread</strong><span>{} · {} · {}</span><p>{}</p><code>{}</code></article>",
                 escape_client_app_visible_text(&task.task_id),
                 escape_client_app_visible_text(&task.latest_bucket),
                 escape_client_app_visible_text(&task.latest_status),
@@ -191,7 +200,7 @@ pub(super) async fn get_client_app_web_shell(
         .collect::<Vec<_>>()
         .join("\n");
     let message_cards = if message_cards.trim().is_empty() {
-        "<article class=\"module\"><strong>消息</strong><span>聊天房间循环</span><p>这里会显示联系人、Agent、通知、契约线程和任务协作入口。</p><code>/social</code></article>".to_string()
+        "<article class=\"module\"><strong data-i18n-en=\"Messages\" data-i18n-zh=\"消息\">Messages</strong><span data-i18n-en=\"Chat room loop\" data-i18n-zh=\"聊天房间循环\">Chat room loop</span><p data-i18n-en=\"Contacts, Agents, notifications, contract threads, and task collaboration entries appear here.\" data-i18n-zh=\"这里会显示联系人、Agent、通知、契约线程和任务协作入口。\">Contacts, Agents, notifications, contract threads, and task collaboration entries appear here.</p><code>/social</code></article>".to_string()
     } else {
         message_cards
     };
@@ -542,14 +551,14 @@ pub(super) async fn get_client_app_web_shell(
                 .and_then(Value::as_str)
                 .unwrap_or("visible");
             format!(
-                "<article class=\"module onboarding-step\" data-onboarding-step=\"{}\"><strong>{}</strong><span>{} · {}</span><p>{}</p><code>{}</code><p class=\"subtitle\">完成信号: <code>{}</code></p></article>",
+                "<article class=\"module onboarding-step\" data-onboarding-step=\"{}\"><strong>{}</strong><span>{} · {}</span><p>{}</p><code>{}</code><p class=\"subtitle\"><span data-i18n-en=\"Success signal:\" data-i18n-zh=\"完成信号：\">Success signal:</span> <code>{}</code></p></article>",
                 escape_html_text(step_id),
                 escape_client_app_visible_text(label),
                 escape_html_text(surface),
                 escape_html_text(&client_app_readiness_label(status)),
                 escape_client_app_visible_text(description),
                 escape_client_app_visible_text(command),
-                escape_html_text(&client_app_readiness_label(success_signal)),
+                escape_client_app_visible_text(&client_app_readiness_label(success_signal)),
             )
         })
         .collect::<Vec<_>>()
@@ -564,7 +573,7 @@ pub(super) async fn get_client_app_web_shell(
         .map(|check| {
             format!(
                 "<span class=\"hud-chip\"><strong>✓</strong>{}</span>",
-                escape_html_text(&client_app_readiness_label(&check))
+                escape_client_app_visible_text(&client_app_readiness_label(&check))
             )
         })
         .collect::<Vec<_>>()
@@ -590,8 +599,10 @@ pub(super) async fn get_client_app_web_shell(
     let shared_map_camera_actions_html = map_camera_action_buttons_html();
     let shared_route_filter_buttons_html = route_filter_buttons_html(
         "trillionnium-app-route-filter-action",
-        "Filter by Focus / 按焦点筛选路线",
-        "Show Full Route / 显示完整路线",
+        "Filter by Focus",
+        "按焦点筛选路线",
+        "Show Full Route",
+        "显示完整路线",
     );
     let shared_map_route_target_resolution_js = real_world_map_route_target_resolution_js();
     let shared_map_route_status_js = real_world_map_route_status_js();
@@ -680,22 +691,22 @@ pub(super) async fn get_client_app_web_shell(
     <h1>Trillionnium World</h1>
     <p class="subtitle"><span data-i18n-en="Mobile reality-mirror adventure for overseas-first launch: search cities and agents, then use four tabs — Messages, World, Feed, Me. Current focus:" data-i18n-zh="面向海外首发的移动现实镜像冒险：搜索城市和 Agent，并使用「消息、世界、动态、我」四个页签。当前位置：">Mobile reality-mirror adventure for overseas-first launch: search cities and agents, then use four tabs — Messages, World, Feed, Me. Current focus:</span> <strong>{}</strong></p>
     <div class="app-search-shell">
-      <input id="app-global-search" class="app-search-input" type="search" inputmode="search" placeholder="Search places, agents, quests / 搜索地点、联系人、任务、动态" aria-label="Global search / 全局搜索" />
-      <button id="app-search-clear" class="app-search-clear" type="button" aria-label="Clear global search / 清空全局搜索" hidden>Clear / 清空</button>
+      <input id="app-global-search" class="app-search-input" type="search" inputmode="search" placeholder="Search places, agents, quests" data-i18n-placeholder-en="Search places, agents, quests" data-i18n-placeholder-zh="搜索地点、联系人、任务、动态" aria-label="Global search" data-i18n-aria-label-en="Global search" data-i18n-aria-label-zh="全局搜索" />
+      <button id="app-search-clear" class="app-search-clear" type="button" aria-label="Clear global search" data-i18n-aria-label-en="Clear global search" data-i18n-aria-label-zh="清空全局搜索" data-i18n-en="Clear" data-i18n-zh="清空" hidden>Clear</button>
     </div>
     <div id="app-ux-status" class="app-ux-status" aria-live="polite">
-      <span id="app-ux-status-pill" class="app-ux-pill" data-state="ready">Adventure ready / 冒险准备完成 · World tab active / 世界页已激活</span>
-      <span id="app-ux-live-status" class="sr-only">Adventure ready / 冒险体验已准备完成</span>
+      <span id="app-ux-status-pill" class="app-ux-pill" data-state="ready" data-i18n-en="Adventure ready · World tab active" data-i18n-zh="冒险准备完成 · 世界页已激活">Adventure ready · World tab active</span>
+      <span id="app-ux-live-status" class="sr-only" data-i18n-en="Adventure ready" data-i18n-zh="冒险体验已准备完成">Adventure ready</span>
     </div>
     <div id="app-search-empty-state" class="app-search-empty" role="status" aria-live="polite" data-i18n-en="No results · Try another keyword or tab." data-i18n-zh="无匹配结果 · 换个关键词或切换底部 Tab。">No results · Try another keyword or tab.</div>
   </header>
   <main class="app-mobile-shell">
-    <section id="app-first-playable-onboarding" class="module quest-hero" aria-label="First playable main quest rail">
-      <span class="badge">Starter Quest / 新手主线</span>
+    <section id="app-first-playable-onboarding" class="module quest-hero" aria-label="First playable main quest rail" data-i18n-aria-label-en="First playable main quest rail" data-i18n-aria-label-zh="第一条可玩主线">
+      <span class="badge" data-i18n-en="Starter Quest" data-i18n-zh="新手主线">Starter Quest</span>
       <h2>{}</h2>
       <div class="quest-summary">
         <div>
-          <p class="subtitle">{} Goal / 目标：<code>{}</code></p>
+          <p class="subtitle">{} <span data-i18n-en="Goal:" data-i18n-zh="目标：">Goal:</span> <code>{}</code></p>
           <div id="app-first-playable-checks" class="map-stream-hud">{}</div>
         </div>
         <div class="quest-next-card">
@@ -718,11 +729,11 @@ pub(super) async fn get_client_app_web_shell(
         <h2 data-i18n-en="World" data-i18n-zh="世界">World</h2>
         <p class="subtitle" data-i18n-en="Main stage for exploration, routes, events, and actions." data-i18n-zh="探索、路线、事件和行动都从这里展开。">Main stage for exploration, routes, events, and actions.</p>
       </div>
-      <section class="map-shell" aria-label="现实镜像地图">
+      <section class="map-shell" aria-label="Reality mirror map" data-i18n-aria-label-en="Reality mirror map" data-i18n-aria-label-zh="现实镜像地图">
       <div class="map-panel">
-        <span class="badge">Reality Mirror Map / 现实镜像地图</span>
-        <h2>Global Launch Zone · 海外首发探索路线</h2>
-        <p>Start from a real-world map for global/overseas players：nearby places, live events, quest cards, and collaborative Agents become adventure routes. 普通玩家只需要选焦点、接委托、提交成果、拿评级；底层地图引擎和接口细节已经收进调试信息。</p>
+        <span class="badge" data-i18n-en="Reality Mirror Map" data-i18n-zh="现实镜像地图">Reality Mirror Map</span>
+        <h2 data-i18n-en="Global Launch Zone" data-i18n-zh="海外首发探索路线">Global Launch Zone</h2>
+        <p data-i18n-en="Start from a real-world map for global/overseas players: nearby places, live events, quest cards, and collaborative Agents become adventure routes. Players only need to choose a focus, accept commissions, submit results, and get rated; engine details stay in debug drawers." data-i18n-zh="从面向全球/海外玩家的真实地图开始：附近地点、实时事件、任务牌和协作 Agent 会变成冒险路线。普通玩家只需要选焦点、接委托、提交成果、拿评级；底层地图引擎和接口细节已经收进调试信息。">Start from a real-world map for global/overseas players: nearby places, live events, quest cards, and collaborative Agents become adventure routes. Players only need to choose a focus, accept commissions, submit results, and get rated; engine details stay in debug drawers.</p>
         <details class="dev-details"><summary>调试信息</summary>
           <p><strong>Real-world map engine</strong>: <code>{}</code> + <code>{}</code></p>
           <p><strong>Mirror</strong>: <code>{}</code> · <strong>Active Region</strong>: <code>{}</code> · <strong>Shards</strong>: {} · <strong>LOD Layers</strong>: {}</p>
@@ -730,14 +741,14 @@ pub(super) async fn get_client_app_web_shell(
           <p><strong>Web Viewport</strong>: <code>{}</code></p>
         </details>
         <p><code>{}</code></p>
-        <p><strong>Map Main Entry / 地图主入口</strong>: start with nearby places, events, and bounties / 先看附近地点、事件和悬赏，再进入其他模块。</p>
+        <p><strong data-i18n-en="Map Main Entry" data-i18n-zh="地图主入口">Map Main Entry</strong>: <span data-i18n-en="start with nearby places, events, and bounties before entering other modules." data-i18n-zh="先看附近地点、事件和悬赏，再进入其他模块。">start with nearby places, events, and bounties before entering other modules.</span></p>
         <p id="app-map-density-summary" class="subtitle">{}</p>
         <p id="app-map-camera-summary" class="subtitle">镜头加载中…</p>
         <div id="app-map-stream-hud" class="map-stream-hud">
-          <span class="hud-chip"><strong>{}</strong> 个区域分片</span>
-          <span class="hud-chip"><strong>{}</strong> 个可见地点</span>
-          <span class="hud-chip"><strong>{}</strong> 个预热地图块</span>
-          <span class="hud-chip"><strong>{}</strong> 个实时事件 · {}</span>
+          <span class="hud-chip"><strong>{}</strong> <span data-i18n-en="regional shards" data-i18n-zh="个区域分片">regional shards</span></span>
+          <span class="hud-chip"><strong>{}</strong> <span data-i18n-en="visible places" data-i18n-zh="个可见地点">visible places</span></span>
+          <span class="hud-chip"><strong>{}</strong> <span data-i18n-en="prefetch tiles" data-i18n-zh="个预热地图块">prefetch tiles</span></span>
+          <span class="hud-chip"><strong>{}</strong> <span data-i18n-en="live events" data-i18n-zh="个实时事件">live events</span> · {}</span>
         </div>
         <div id="app-map-overlay-controls" class="overlay-toggle-bar">
 {shared_map_overlay_controls_html}
@@ -747,44 +758,44 @@ pub(super) async fn get_client_app_web_shell(
         </div>
         <p id="app-map-overlay-status" class="subtitle">当前图层：密度、区域、地图块、预热圈、实时事件。</p>
         <div class="module" style="margin-top:14px; padding:16px 18px;">
-          <strong>Map Action Rail / 地图行动栏</strong>
-          <span id="app-map-focus-summary">Waiting for map focus / 等待选择地图焦点…</span>
-          <p id="app-map-focus-detail">Select a region, place, or event to create the next action / 选择区域、地点或事件，把地图变成下一步行动。</p>
+          <strong data-i18n-en="Map Action Rail" data-i18n-zh="地图行动栏">Map Action Rail</strong>
+          <span id="app-map-focus-summary" data-i18n-en="Waiting for map focus…" data-i18n-zh="等待选择地图焦点…">Waiting for map focus…</span>
+          <p id="app-map-focus-detail" data-i18n-en="Select a region, place, or event to create the next action." data-i18n-zh="选择区域、地点或事件，把地图变成下一步行动。">Select a region, place, or event to create the next action.</p>
           <div id="app-map-action-rail" class="focus-stack"></div>
         </div>
         <div class="module" style="margin-top:14px; padding:16px 18px;">
-          <strong>Adventure Route / 冒险路线</strong>
-          <span id="app-map-route-status">Adventure route / 冒险路线：waiting for map focus / 等待选择地图焦点…</span>
-          <p id="app-map-route-next-step-status">Recommended next step / 推荐下一步：choose a map focus first / 先选择地图焦点。</p>
-          <p id="app-map-route-event-brief-status">Event brief / 事件简报：waiting for event / 等待选择事件。</p>
-          <p id="app-map-route-link-status">Linked task route / 关联任务路线：none yet / 暂无。</p>
+          <strong data-i18n-en="Adventure Route" data-i18n-zh="冒险路线">Adventure Route</strong>
+          <span id="app-map-route-status" data-i18n-en="Adventure route: waiting for map focus…" data-i18n-zh="冒险路线：等待选择地图焦点…">Adventure route: waiting for map focus…</span>
+          <p id="app-map-route-next-step-status" data-i18n-en="Recommended next step: choose a map focus first." data-i18n-zh="推荐下一步：先选择地图焦点。">Recommended next step: choose a map focus first.</p>
+          <p id="app-map-route-event-brief-status" data-i18n-en="Event brief: waiting for event." data-i18n-zh="事件简报：等待选择事件。">Event brief: waiting for event.</p>
+          <p id="app-map-route-link-status" data-i18n-en="Linked task route: none yet." data-i18n-zh="关联任务路线：暂无。">Linked task route: none yet.</p>
           <div id="app-map-route-filter-actions" class="focus-stack">
             {shared_route_filter_buttons_html}
           </div>
           <div id="app-map-route-actions" class="focus-stack"></div>
         </div>
-        <p id="app-map-overlay-legend" class="subtitle">图层说明：区域锚点 · 活跃地图块 · 预热探索圈 · 实时事件脉冲。</p>
+        <p id="app-map-overlay-legend" class="subtitle" data-i18n-en="Layer legend: regional anchors · active tiles · prefetch rings · live-event pulses." data-i18n-zh="图层说明：区域锚点 · 活跃地图块 · 预热探索圈 · 实时事件脉冲。">Layer legend: regional anchors · active tiles · prefetch rings · live-event pulses.</p>
       </div>
-      <div id="real-world-map" data-engine="{}" data-provider="{}" aria-label="现实镜像地图"></div>
+      <div id="real-world-map" data-engine="{}" data-provider="{}" aria-label="Reality mirror map" data-i18n-aria-label-en="Reality mirror map" data-i18n-aria-label-zh="现实镜像地图"></div>
     </section>
     <section>
-      <h2>Map Tiles / 地图分片</h2>
+      <h2 data-i18n-en="Map Tiles" data-i18n-zh="地图分片">Map Tiles</h2>
       <section id="app-tile-shards-live" class="grid">{}</section>
     </section>
     <section>
-      <h2>Regional Hubs / 区域据点</h2>
+      <h2 data-i18n-en="Regional Hubs" data-i18n-zh="区域据点">Regional Hubs</h2>
       <section id="app-region-shards-live" class="grid">{}</section>
     </section>
     <section>
-      <h2>Nearby Hotspots / 附近热点</h2>
+      <h2 data-i18n-en="Nearby Hotspots" data-i18n-zh="附近热点">Nearby Hotspots</h2>
       <section id="app-poi-hotspots-live" class="grid">{}</section>
     </section>
     <section>
-      <h2>Prefetch Rings / 预热探索圈</h2>
+      <h2 data-i18n-en="Prefetch Rings" data-i18n-zh="预热探索圈">Prefetch Rings</h2>
       <section id="app-prefetch-queue-live" class="grid">{}</section>
     </section>
     <section>
-      <h2>Live Events / 实时事件</h2>
+      <h2 data-i18n-en="Live Events" data-i18n-zh="实时事件">Live Events</h2>
       <section id="app-live-events-live" class="grid">{}</section>
     </section>
     </section>
@@ -798,15 +809,15 @@ pub(super) async fn get_client_app_web_shell(
       <div id="app-feed-filter-actions" class="focus-stack">{}</div>
       <div id="app-feed-summary" class="map-stream-hud">{}</div>
       <section>
-        <h2>World Activity Timeline / 世界动态时间线</h2>
+        <h2 data-i18n-en="World Activity Timeline" data-i18n-zh="世界动态时间线">World Activity Timeline</h2>
         <section id="app-feed-items-live" class="grid">{}</section>
       </section>
     <section>
-      <h2>Adventure Route Preview / 冒险路线预览</h2>
+      <h2 data-i18n-en="Adventure Route Preview" data-i18n-zh="冒险路线预览">Adventure Route Preview</h2>
       <section id="app-route-preview-live" class="grid">{}</section>
     </section>
     <section>
-      <h2>Quest Route Graph / 任务路线图</h2>
+      <h2 data-i18n-en="Quest Route Graph" data-i18n-zh="任务路线图">Quest Route Graph</h2>
       <section id="app-route-task-graph-live" class="grid">{}</section>
     </section>
     </section>
@@ -818,12 +829,12 @@ pub(super) async fn get_client_app_web_shell(
       {}
       <section class="app-me-grid">{}</section>
       <section>
-        <h2>Character Modules / 角色模块</h2>
+        <h2 data-i18n-en="Character Modules" data-i18n-zh="角色模块">Character Modules</h2>
         <section class="grid">{}</section>
       </section>
     </section>
   </main>
-  <nav class="app-bottom-tabs" aria-label="移动端主导航" role="tablist">
+  <nav class="app-bottom-tabs" aria-label="Mobile main navigation" data-i18n-aria-label-en="Mobile main navigation" data-i18n-aria-label-zh="移动端主导航" role="tablist">
     <button id="app-tab-button-messages" type="button" class="app-bottom-tab" data-app-tab="messages" role="tab" data-i18n-en="Messages" data-i18n-zh="消息" aria-controls="app-tab-messages" aria-selected="false" tabindex="-1">Messages</button>
     <button id="app-tab-button-map" type="button" class="app-bottom-tab is-active" data-app-tab="map" role="tab" data-i18n-en="World" data-i18n-zh="世界" aria-controls="app-tab-map" aria-selected="true" tabindex="0">World</button>
     <button id="app-tab-button-feed" type="button" class="app-bottom-tab" data-app-tab="feed" role="tab" data-i18n-en="Feed" data-i18n-zh="动态" aria-controls="app-tab-feed" aria-selected="false" tabindex="-1">Feed</button>

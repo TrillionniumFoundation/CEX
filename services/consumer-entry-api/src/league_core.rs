@@ -18,6 +18,46 @@ pub(super) fn escape_html_text(input: &str) -> String {
         .replace('\'', "&#39;")
 }
 
+pub(super) fn contains_cjk_text(input: &str) -> bool {
+    input.chars().any(|ch| {
+        ('\u{3400}'..='\u{9fff}').contains(&ch) || ('\u{f900}'..='\u{faff}').contains(&ch)
+    })
+}
+
+pub(super) fn contains_latin_text(input: &str) -> bool {
+    input.chars().any(|ch| ch.is_ascii_alphabetic())
+}
+
+pub(super) fn i18n_span_from_bilingual_slash_copy(copy: &str) -> Option<String> {
+    if !copy.contains(" / ") {
+        return None;
+    }
+    let mut english_pieces = Vec::new();
+    let mut chinese_pieces = Vec::new();
+    for piece in copy.split(" / ") {
+        let trimmed = piece.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if contains_cjk_text(trimmed) {
+            chinese_pieces.push(trimmed);
+        } else if contains_latin_text(trimmed) {
+            english_pieces.push(trimmed);
+        }
+    }
+    if english_pieces.is_empty() || chinese_pieces.is_empty() {
+        return None;
+    }
+    let english = english_pieces.join(": ");
+    let chinese = chinese_pieces.join("：");
+    Some(format!(
+        "<span data-i18n-en=\"{}\" data-i18n-zh=\"{}\">{}</span>",
+        escape_html_text(&english),
+        escape_html_text(&chinese),
+        escape_html_text(&english)
+    ))
+}
+
 pub(super) fn league_web_session_secret(config: &ConsumerEntryConfig) -> Option<&str> {
     config
         .league_web_session_secret

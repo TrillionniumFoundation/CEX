@@ -155,6 +155,16 @@ async function activateTab(page, tab) {
   await page.waitForSelector(`#app-tab-${tab}.is-active`, { timeout: 10_000 });
 }
 
+async function assertNoVisibleBilingualSlashPair(page, label) {
+  const text = await page.locator('body').innerText({ timeout: 10_000 });
+  const slashPair = /(?:[A-Za-z][^\n]{0,120}\s\/\s[^\n]{0,120}[\u3400-\u9fff]|[\u3400-\u9fff][^\n]{0,120}\s\/\s[^\n]{0,120}[A-Za-z])/;
+  const offenders = text
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => slashPair.test(line));
+  assert(offenders.length === 0, `${label} still shows bilingual slash-pair copy`, offenders.slice(0, 8));
+}
+
 async function submitWorldForm(page, formSelector, marker, expectedUrlFragment) {
   const form = page.locator(formSelector).first();
   await form.evaluate((node) => {
@@ -250,12 +260,14 @@ async function main() {
   assert((await page.title()).includes('Trillionnium World Mobile'), 'app title missing');
   const englishTabs = await page.$$eval('nav.app-bottom-tabs [data-app-tab]', (tabs) => tabs.map((tab) => tab.textContent.trim()));
   assert(JSON.stringify(englishTabs) === JSON.stringify(['Messages', 'World', 'Feed', 'Me']), `English system language tabs mismatch: ${JSON.stringify(englishTabs)}`);
+  await assertNoVisibleBilingualSlashPair(page, '/app English system language');
   assert(await count(page, '[data-trillionnium-language-select]') === 1, 'system language selector missing');
   await activateTab(page, 'me');
   await page.locator('[data-trillionnium-language-select]').selectOption('zh');
   await page.waitForFunction(() => document.documentElement.getAttribute('data-ui-language') === 'zh', { timeout: 10_000 });
   const chineseTabs = await page.$$eval('nav.app-bottom-tabs [data-app-tab]', (tabs) => tabs.map((tab) => tab.textContent.trim()));
   assert(JSON.stringify(chineseTabs) === JSON.stringify(['消息', '世界', '动态', '我']), `Chinese system language tabs mismatch: ${JSON.stringify(chineseTabs)}`);
+  await assertNoVisibleBilingualSlashPair(page, '/app Chinese system language');
   assert((await page.locator('#trillionnium-system-language-settings').innerText()).includes('系统设置'), 'Chinese system settings copy missing');
   await page.locator('[data-trillionnium-language-select]').selectOption('en');
   await page.waitForFunction(() => document.documentElement.getAttribute('data-ui-language') === 'en', { timeout: 10_000 });
@@ -332,6 +344,7 @@ async function main() {
   for (const needle of ['Global-first open world', 'World Action Console', 'Bounties', 'Submit']) {
     assert(worldBodyText.includes(needle), `world English/global-first copy missing: ${needle}`);
   }
+  await assertNoVisibleBilingualSlashPair(page, '/world English system language');
   await page.goto('/world?lang=zh', { waitUntil: 'domcontentloaded', timeout: 30_000 });
   await page.waitForSelector('#world-real-map', { timeout: 15_000 });
   await page.waitForFunction(() => document.documentElement.getAttribute('data-ui-language') === 'zh', { timeout: 10_000 });
@@ -339,6 +352,7 @@ async function main() {
   for (const needle of ['世界行动台', '悬赏', '提交成果']) {
     assert(worldChineseText.includes(needle), `world Chinese language copy missing: ${needle}`);
   }
+  await assertNoVisibleBilingualSlashPair(page, '/world Chinese system language');
   await page.goto('/world?lang=en', { waitUntil: 'domcontentloaded', timeout: 30_000 });
   await page.waitForSelector('#world-real-map', { timeout: 15_000 });
   assert(await count(page, '#world-map-move-panel') === 1, 'world map move panel missing');

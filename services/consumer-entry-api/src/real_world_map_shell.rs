@@ -20,7 +20,6 @@ pub(super) fn trillionnium_language_runtime_script() -> &'static str {
 (function () {
   const STORAGE_KEY = 'trillionnium.ui.language';
   const COOKIE_KEY = 'trillionnium_lang';
-  const SUPPORTED = new Set(['en', 'zh']);
   const DEFAULT_LANGUAGE = 'en';
   const textOriginals = new WeakMap();
   const attrOriginals = new WeakMap();
@@ -31,7 +30,15 @@ pub(super) fn trillionnium_language_runtime_script() -> &'static str {
   function hasCjk(value) { return /[\u3400-\u9fff\uf900-\ufaff]/.test(String(value || '')); }
   function hasLatin(value) { return /[A-Za-z]/.test(String(value || '')); }
   function clean(value) { return String(value || '').replace(/\s+/g, ' ').trim(); }
-  function supported(value) { return SUPPORTED.has(String(value || '').toLowerCase()); }
+  function supportedLanguages() {
+    const languages = new Set(['en', 'zh']);
+    document.querySelectorAll('[data-trillionnium-language-select] option[value]').forEach((option) => {
+      const value = String(option.value || '').toLowerCase();
+      if (value && !value.startsWith('__')) languages.add(value);
+    });
+    return languages;
+  }
+  function supported(value) { return supportedLanguages().has(String(value || '').toLowerCase()); }
   function readCookieLanguage() {
     const match = document.cookie.match(new RegExp('(?:^|; )' + COOKIE_KEY + '=([^;]*)'));
     return match ? decodeURIComponent(match[1]) : '';
@@ -146,7 +153,9 @@ pub(super) fn trillionnium_language_runtime_script() -> &'static str {
     return !!parent.closest('script,style,code,pre,noscript');
   }
   function applyDatasetElement(element, language) {
-    const value = language === 'zh' ? element.getAttribute('data-i18n-zh') : element.getAttribute('data-i18n-en');
+    const value = element.getAttribute('data-i18n-' + language)
+      ?? element.getAttribute('data-i18n-en')
+      ?? element.getAttribute('data-i18n-zh');
     if (value !== null) element.textContent = value;
   }
   function applyTextNode(node, language) {
@@ -162,6 +171,13 @@ pub(super) fn trillionnium_language_runtime_script() -> &'static str {
     return store;
   }
   function applyAttribute(element, attr, language) {
+    const explicit = element.getAttribute('data-i18n-' + attr + '-' + language)
+      ?? element.getAttribute('data-i18n-' + attr + '-en')
+      ?? element.getAttribute('data-i18n-' + attr + '-zh');
+    if (explicit !== null) {
+      element.setAttribute(attr, explicit);
+      return;
+    }
     if (!element.hasAttribute(attr)) return;
     const store = attributeStore(element);
     if (!(attr in store)) store[attr] = element.getAttribute(attr) || '';
@@ -173,8 +189,11 @@ pub(super) fn trillionnium_language_runtime_script() -> &'static str {
     if (['hidden', 'password', 'file', 'checkbox', 'radio'].includes(type)) return;
     if (!controlOriginals.has(element)) controlOriginals.set(element, element.value || '');
     if (document.activeElement === element) return;
-    const original = controlOriginals.get(element) || '';
-    const next = localizeText(original, language);
+    const explicit = element.getAttribute('data-i18n-value-' + language)
+      ?? element.getAttribute('data-i18n-value-en')
+      ?? element.getAttribute('data-i18n-value-zh');
+    const original = explicit !== null ? explicit : (controlOriginals.get(element) || '');
+    const next = explicit !== null ? explicit : localizeText(original, language);
     if (next && element.value !== next) element.value = next;
   }
   function walk(root, language) {
@@ -218,7 +237,7 @@ pub(super) fn trillionnium_language_runtime_script() -> &'static str {
   function applyLanguage(language) {
     const next = supported(language) ? language : DEFAULT_LANGUAGE;
     activeLanguage = next;
-    document.documentElement.lang = next === 'zh' ? 'zh-CN' : 'en';
+    document.documentElement.lang = next === 'zh' ? 'zh-CN' : next;
     document.documentElement.setAttribute('data-ui-language', next);
     if (observer) observer.disconnect();
     walk(document.body, next);
@@ -339,7 +358,29 @@ pub(super) fn real_world_map_runtime_bootstrap_js() -> &'static str {
           ['customer-facing', 'player-facing / 玩家可用'], ['customer', 'client / 委托目标'], ['buyer', 'quest taker / 接取方'], ['seller', 'service party / 服务方'], ['commercial', 'market quest / 市场任务'], ['browser commerce E2E', 'browser adventure E2E / 浏览器冒险验收'], ['AI 设计公司', 'AI Design Studio / AI 设计工坊'], ['服务真实客户', 'serve real global clients / 完成海外真实委托'], ['真实客户', 'real global client / 海外真实委托'], ['委托方', 'client / 委托目标']
         ];
         replacements.forEach(([from, to]) => { text = text.replaceAll(from, to); });
-        return text;
+        const currentLanguage = () => {
+          const fromRuntime = window.TrillionniumLanguage && typeof window.TrillionniumLanguage.get === 'function'
+            ? String(window.TrillionniumLanguage.get() || '').toLowerCase()
+            : '';
+          if (fromRuntime) return fromRuntime;
+          const fromDocument = String(document.documentElement.getAttribute('data-ui-language') || '').toLowerCase();
+          if (fromDocument) return fromDocument;
+          const fromQuery = String(new URLSearchParams(window.location.search || '').get('lang') || '').toLowerCase();
+          if (fromQuery) return fromQuery;
+          return 'en';
+        };
+        const localizeSlashPair = (source) => {
+          if (!String(source || '').includes(' / ')) return source;
+          const language = currentLanguage();
+          const hasCjk = (piece) => /[\u3400-\u9fff\uf900-\ufaff]/.test(String(piece || ''));
+          const hasLatin = (piece) => /[A-Za-z]/.test(String(piece || ''));
+          const pieces = String(source || '').split(' / ').map((piece) => piece.trim()).filter(Boolean);
+          const selected = language === 'zh'
+            ? pieces.filter(hasCjk)
+            : pieces.filter((piece) => hasLatin(piece) && !hasCjk(piece));
+          return (selected.length ? selected : pieces).join(language === 'zh' ? '：' : ': ');
+        };
+        return localizeSlashPair(text);
       };
       const markerById = new Map((engine.markers || []).map((marker) => [String(marker.node_id || ''), marker]));
       const markerByLocationId = new Map();

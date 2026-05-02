@@ -1,5 +1,9 @@
 use super::*;
 
+fn escape_world_route_visible_text(value: &str) -> String {
+    i18n_span_from_bilingual_slash_copy(value).unwrap_or_else(|| escape_html_text(value))
+}
+
 struct WorldRouteProjectionContext<'a> {
     world: &'a WorldState,
     indexes: WorldIndexes,
@@ -1808,10 +1812,10 @@ impl WorldRoutePreviewItemView {
         };
         format!(
             "<article class=\"module\"><strong>{}</strong><span>{}</span><p>{}</p><div class=\"focus-stack\"><code>{}</code></div></article>",
-            escape_html_text(&self.title),
-            escape_html_text(detail),
-            escape_html_text(summary),
-            escape_html_text(focus_code),
+            escape_world_route_visible_text(&self.title),
+            escape_world_route_visible_text(detail),
+            escape_world_route_visible_text(summary),
+            escape_world_route_visible_text(focus_code),
         )
     }
 }
@@ -2153,16 +2157,16 @@ impl WorldRouteTaskGraphView {
             escape_html_text(&self.task_id),
             escape_html_text(&self.latest_location_id),
             escape_html_text(&self.task_id),
-            escape_html_text(&self.latest_bucket),
-            escape_html_text(&self.latest_status),
-            escape_html_text(&self.next_opportunity_kind),
+            escape_world_route_visible_text(&self.latest_bucket),
+            escape_world_route_visible_text(&self.latest_status),
+            escape_world_route_visible_text(&self.next_opportunity_kind),
             self.event_count,
             self.contract_count,
             self.completion_count,
-            escape_html_text(&self.outcome_summary),
-            escape_html_text(&self.next_opportunity_hint),
-            escape_html_text(&self.next_opportunity_playbook),
-            escape_html_text(&self.next_opportunity_command),
+            escape_world_route_visible_text(&self.outcome_summary),
+            escape_world_route_visible_text(&self.next_opportunity_hint),
+            escape_world_route_visible_text(&self.next_opportunity_playbook),
+            escape_world_route_visible_text(&self.next_opportunity_command),
             suggested_action,
             opportunity_action,
         )
@@ -2177,16 +2181,16 @@ impl WorldRouteTaskGraphView {
             escape_html_text(&self.task_id),
             escape_html_text(&self.latest_location_id),
             escape_html_text(&self.task_id),
-            escape_html_text(&self.latest_bucket),
-            escape_html_text(&self.latest_status),
-            escape_html_text(&self.next_opportunity_kind),
+            escape_world_route_visible_text(&self.latest_bucket),
+            escape_world_route_visible_text(&self.latest_status),
+            escape_world_route_visible_text(&self.next_opportunity_kind),
             escape_html_text(&self.task_id),
             self.event_count,
             self.contract_count,
             self.completion_count,
-            escape_html_text(&self.outcome_summary),
-            escape_html_text(&self.next_opportunity_hint),
-            escape_html_text(&self.next_opportunity_command),
+            escape_world_route_visible_text(&self.outcome_summary),
+            escape_world_route_visible_text(&self.next_opportunity_hint),
+            escape_world_route_visible_text(&self.next_opportunity_command),
             suggested_action,
             opportunity_action,
         )

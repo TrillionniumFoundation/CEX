@@ -82,42 +82,43 @@ fn world_user_visible_copy(value: &str) -> String {
 }
 
 fn escape_world_visible_text(value: &str) -> String {
-    escape_html_text(&world_user_visible_copy(value))
+    let copy = world_user_visible_copy(value);
+    i18n_span_from_bilingual_slash_copy(&copy).unwrap_or_else(|| escape_html_text(&copy))
 }
 
 fn world_node_kind_label(kind: &str) -> &str {
     match kind {
-        "hub_square" => "hub square / 主城广场",
-        "agent_home" => "Agent home / Agent 居所",
-        "ledger_office" => "reward office / 奖励窗口",
-        "workshop_room" => "workshop room / 工坊房间",
-        "craft_station" => "craft station / 锻造台",
-        "asset_yard" => "asset yard / 道具庭院",
-        "market_gate" => "bounty gate / 悬赏入口",
-        "client_board" => "quest board / 悬赏牌",
-        "delivery_dock" => "rating dock / 成果评定台",
-        "dispute_desk" => "dispute desk / 仲裁柜台",
-        "arena_gate" => "arena gate / 竞技入口",
-        "raid_hall" => "raid hall / 团本大厅",
+        "hub_square" => "hub square",
+        "agent_home" => "Agent home",
+        "ledger_office" => "reward office",
+        "workshop_room" => "workshop room",
+        "craft_station" => "craft station",
+        "asset_yard" => "asset yard",
+        "market_gate" => "bounty gate",
+        "client_board" => "quest board",
+        "delivery_dock" => "rating dock",
+        "dispute_desk" => "dispute desk",
+        "arena_gate" => "arena gate",
+        "raid_hall" => "raid hall",
         _ => kind,
     }
 }
 
 fn world_map_status_label(value: &str) -> String {
     world_user_visible_copy(match value {
-        "prefetch" => "prefetch / 预热分片",
-        "street_nodes" => "street nodes / 街区节点",
-        "neighbor_tile_warmup" => "neighbor warmup / 邻近地图预热",
-        "warm" => "warm / 预热",
-        "active" => "active / 活跃",
-        "planned" => "planned / 规划中",
-        "open" | "OPEN" => "open / 开放",
-        "contract" => "contract / 契约",
-        "venture" => "venture / 探索",
-        "no-task" => "no task / 未关联任务",
-        "world_event" => "world event / 世界事件",
-        "dense" => "dense / 高密度",
-        "regional" => "regional / 区域密度",
+        "prefetch" => "prefetch",
+        "street_nodes" => "street nodes",
+        "neighbor_tile_warmup" => "neighbor warmup",
+        "warm" => "warm",
+        "active" => "active",
+        "planned" => "planned",
+        "open" | "OPEN" => "open",
+        "contract" => "contract",
+        "venture" => "venture",
+        "no-task" => "no task",
+        "world_event" => "world event",
+        "dense" => "dense",
+        "regional" => "regional",
         _ => value,
     })
 }
@@ -283,13 +284,16 @@ pub(super) async fn get_world_web_shell(
     let current_map_summary = current_map_node
         .map(|node| {
             format!(
-                "{} · {} · exits {}",
-                world_user_visible_copy(&node.name),
-                world_user_visible_copy(&node.description),
+                "{} · {} · <span data-i18n-en=\"exits\" data-i18n-zh=\"出口\">exits</span> {}",
+                escape_world_visible_text(&node.name),
+                escape_world_visible_text(&node.description),
                 node.exits.len()
             )
         })
-        .unwrap_or_else(|| "地图启动中".to_string());
+        .unwrap_or_else(|| {
+            "<span data-i18n-en=\"Map booting…\" data-i18n-zh=\"地图启动中…\">Map booting…</span>"
+                .to_string()
+        });
     let world_map = world_map_json(&league, current_matrix_user_id);
     let world_viewport = world_map_viewport_json(
         &league.world,
@@ -1005,10 +1009,10 @@ pub(super) async fn get_world_web_shell(
                 escape_html_text(&event.location_id),
                 escape_html_text(&event.event_id),
                 escape_html_text(task_id),
-                escape_world_visible_text(event.cex_status.as_deref().unwrap_or(&event.result)),
-                escape_world_visible_text(&event.event_kind),
-                escape_world_visible_text(&event.body),
-                escape_world_visible_text(&event.result),
+                escape_html_text(event.cex_status.as_deref().unwrap_or(&event.result)),
+                escape_html_text(&event.event_kind),
+                escape_html_text(&event.body),
+                escape_html_text(&event.result),
                 event.created_at_epoch,
                 escape_world_visible_text(&event.event_kind),
                 escape_world_visible_text(&event.body),
@@ -1056,8 +1060,10 @@ pub(super) async fn get_world_web_shell(
     let shared_map_camera_actions_html = map_camera_action_buttons_html();
     let shared_route_filter_buttons_html = route_filter_buttons_html(
         "trillionnium-route-filter-action",
-        "Filter by Focus / 按焦点筛选路线",
-        "Show All Routes / 显示全部路线",
+        "Filter by Focus",
+        "按焦点筛选路线",
+        "Show All Routes",
+        "显示全部路线",
     );
     let shared_map_route_target_resolution_js = real_world_map_route_target_resolution_js();
     let shared_map_route_status_js = real_world_map_route_status_js();
@@ -1132,58 +1138,58 @@ pub(super) async fn get_world_web_shell(
 <body>
   <header>
     <section>
-      <div class="pill">Reality Mirror Adventure / 现实镜像冒险</div>
+      <div class="pill" data-i18n-en="Reality Mirror Adventure" data-i18n-zh="现实镜像冒险">Reality Mirror Adventure</div>
       <h1>Trillionnium World</h1>
-      <p class="subtitle">Global-first open world for overseas launch / 面向海外首发的开放世界：reality-mirror cities, studios, quest boards, League arenas, Agents, items, relationships, and free actions. 玩家看到的是探索、委托、评级和奖励。</p>
+      <p class="subtitle" data-i18n-en="Global-first open world for overseas launch: reality-mirror cities, studios, quest boards, League arenas, Agents, items, relationships, and free actions. Players see exploration, commissions, ratings, and rewards." data-i18n-zh="面向海外首发的开放世界：现实镜像城市、工坊、任务牌、League 赛场、Agent、道具、关系和自由行动。玩家看到的是探索、委托、评级和奖励。">Global-first open world for overseas launch: reality-mirror cities, studios, quest boards, League arenas, Agents, items, relationships, and free actions. Players see exploration, commissions, ratings, and rewards.</p>
     </section>
     <aside class="hero-card">
-      <strong>Next Adventure / 下一步冒险</strong>
-      <p class="subtitle">Pick a map focus, then turn it into a contract, commission, submitted result, rating, and reward / 先选一个地图焦点，再推进成契约、委托、成果提交和评级奖励。This is a player action table, not an internal admin panel / 这是玩家行动台，不是内部系统面板。</p>
-      <a id="world-league-link" class="cta" href="/league">Enter League Arena / 进入 League 竞技场</a>
+      <strong data-i18n-en="Next Adventure" data-i18n-zh="下一步冒险">Next Adventure</strong>
+      <p class="subtitle" data-i18n-en="Pick a map focus, then turn it into a contract, commission, submitted result, rating, and reward. This is a player action table, not an internal admin panel." data-i18n-zh="先选一个地图焦点，再推进成契约、委托、成果提交和评级奖励。这是玩家行动台，不是内部系统面板。">Pick a map focus, then turn it into a contract, commission, submitted result, rating, and reward. This is a player action table, not an internal admin panel.</p>
+      <a id="world-league-link" class="cta" href="/league" data-i18n-en="Enter League Arena" data-i18n-zh="进入 League 竞技场">Enter League Arena</a>
     </aside>
   </header>
   <main>
     <section class="stats">
-      <div class="stat"><span>Zones 区域</span><b>{zones}</b></div>
-      <div class="stat"><span>Places 地点</span><b>{locations}</b></div>
-      <div class="stat"><span>Agents 居民</span><b>{entities}</b></div>
-      <div class="stat"><span>Map Points 地图点</span><b>{map_nodes}</b></div>
-      <div class="stat"><span>Items 道具</span><b>{assets}</b></div>
-      <div class="stat"><span>Upgrades 升级</span><b>{asset_upgrades}</b></div>
-      <div class="stat"><span>Studios 工坊</span><b>{companies}</b></div>
-      <div class="stat"><span>Hubs 据点</span><b>{shops}</b></div>
-      <div class="stat"><span>Quest Cards 任务牌</span><b>{listings}</b></div>
-      <div class="stat"><span>Accepted 已接取</span><b>{purchases}</b></div>
-      <div class="stat"><span>Commissions 委托</span><b>{work_orders}</b></div>
-      <div class="stat"><span>Revisions 返工</span><b>{work_rejections}</b></div>
-      <div class="stat"><span>Reopens 重开</span><b>{work_reopens}</b></div>
-      <div class="stat"><span>Cancels 放弃</span><b>{work_cancellations}</b></div>
-      <div class="stat"><span>Factions 阵营</span><b>{factions}</b></div>
-      <div class="stat"><span>Contracts 契约</span><b>{contracts}</b></div>
-      <div class="stat"><span>Reports 战报</span><b>{completions}</b></div>
-      <div class="stat"><span>Events 事件</span><b>{events}</b></div>
-      <div class="stat"><span>Relations 关系</span><b>{relationships}</b></div>
+      <div class="stat"><span data-i18n-en="Zones" data-i18n-zh="区域">Zones</span><b>{zones}</b></div>
+      <div class="stat"><span data-i18n-en="Places" data-i18n-zh="地点">Places</span><b>{locations}</b></div>
+      <div class="stat"><span data-i18n-en="Agents" data-i18n-zh="居民">Agents</span><b>{entities}</b></div>
+      <div class="stat"><span data-i18n-en="Map Points" data-i18n-zh="地图点">Map Points</span><b>{map_nodes}</b></div>
+      <div class="stat"><span data-i18n-en="Items" data-i18n-zh="道具">Items</span><b>{assets}</b></div>
+      <div class="stat"><span data-i18n-en="Upgrades" data-i18n-zh="升级">Upgrades</span><b>{asset_upgrades}</b></div>
+      <div class="stat"><span data-i18n-en="Studios" data-i18n-zh="工坊">Studios</span><b>{companies}</b></div>
+      <div class="stat"><span data-i18n-en="Hubs" data-i18n-zh="据点">Hubs</span><b>{shops}</b></div>
+      <div class="stat"><span data-i18n-en="Quest Cards" data-i18n-zh="任务牌">Quest Cards</span><b>{listings}</b></div>
+      <div class="stat"><span data-i18n-en="Accepted" data-i18n-zh="已接取">Accepted</span><b>{purchases}</b></div>
+      <div class="stat"><span data-i18n-en="Commissions" data-i18n-zh="委托">Commissions</span><b>{work_orders}</b></div>
+      <div class="stat"><span data-i18n-en="Revisions" data-i18n-zh="返工">Revisions</span><b>{work_rejections}</b></div>
+      <div class="stat"><span data-i18n-en="Reopens" data-i18n-zh="重开">Reopens</span><b>{work_reopens}</b></div>
+      <div class="stat"><span data-i18n-en="Cancels" data-i18n-zh="放弃">Cancels</span><b>{work_cancellations}</b></div>
+      <div class="stat"><span data-i18n-en="Factions" data-i18n-zh="阵营">Factions</span><b>{factions}</b></div>
+      <div class="stat"><span data-i18n-en="Contracts" data-i18n-zh="契约">Contracts</span><b>{contracts}</b></div>
+      <div class="stat"><span data-i18n-en="Reports" data-i18n-zh="战报">Reports</span><b>{completions}</b></div>
+      <div class="stat"><span data-i18n-en="Events" data-i18n-zh="事件">Events</span><b>{events}</b></div>
+      <div class="stat"><span data-i18n-en="Relations" data-i18n-zh="关系">Relations</span><b>{relationships}</b></div>
     </section>
     <section class="panel">
       <div class="map-shell">
         <div>
-          <div class="pill">Reality Mirror Map / 现实镜像地图</div>
-          <h2>Global City Exploration / 海外首发城市探索</h2>
-          <p class="subtitle">Start from any map focus: regions, hotspots, live events, and route tasks become the next action / 从地图焦点进入冒险：区域、热点、实时事件和任务路线会自动串成下一步行动。Players see story, places, commissions, and rewards; engine details stay in debug drawers / 玩家看到故事、地点、委托和奖励；引擎细节收进调试抽屉。</p>
+          <div class="pill" data-i18n-en="Reality Mirror Map" data-i18n-zh="现实镜像地图">Reality Mirror Map</div>
+          <h2 data-i18n-en="Global City Exploration" data-i18n-zh="海外首发城市探索">Global City Exploration</h2>
+          <p class="subtitle" data-i18n-en="Start from any map focus: regions, hotspots, live events, and route tasks become the next action. Players see story, places, commissions, and rewards; engine details stay in debug drawers." data-i18n-zh="从地图焦点进入冒险：区域、热点、实时事件和任务路线会自动串成下一步行动。玩家看到故事、地点、委托和奖励；引擎细节收进调试抽屉。">Start from any map focus: regions, hotspots, live events, and route tasks become the next action. Players see story, places, commissions, and rewards; engine details stay in debug drawers.</p>
           <div id="world-tile-shards-live" class="mini-grid">{tile_shard_cards}</div>
           <div id="world-region-shards-live" class="mini-grid">{region_shard_cards}</div>
           <div class="mini-grid" style="margin-top:12px">{lod_layer_cards}</div>
           <div id="world-poi-hotspots-live" class="mini-grid" style="margin-top:12px">{hotspot_cards}</div>
           <div id="world-prefetch-queue-live" class="mini-grid" style="margin-top:12px">{prefetch_cards}</div>
           <div id="world-live-events-live" class="mini-grid" style="margin-top:12px">{live_event_cards}</div>
-          <details class="dev-details"><summary>Map debug / 地图调试信息</summary><p>Global Real-world Map Engine: <code>{map_engine_name}</code> + <code>{tile_provider}</code></p><p>Mirror: <code>{mirror_scope}</code> · Strategy: <code>{full_mirror_strategy}</code> · Style: <code>{simplification_style}</code> · Goal: <code>{scaling_goal}</code></p><p>Viewport API: <code>{viewport_path}</code></p><p>Web Viewport: <code>{web_session_viewport_path}</code></p></details>
+          <details class="dev-details"><summary data-i18n-en="Map debug" data-i18n-zh="地图调试信息">Map debug</summary><p>Global Real-world Map Engine: <code>{map_engine_name}</code> + <code>{tile_provider}</code></p><p>Mirror: <code>{mirror_scope}</code> · Strategy: <code>{full_mirror_strategy}</code> · Style: <code>{simplification_style}</code> · Goal: <code>{scaling_goal}</code></p><p>Viewport API: <code>{viewport_path}</code></p><p>Web Viewport: <code>{web_session_viewport_path}</code></p></details>
           <p id="world-map-density-summary" class="subtitle">{map_density_summary}</p>
           <p id="world-map-camera-summary" class="subtitle">镜头加载中…</p>
           <div id="world-map-stream-hud" class="map-stream-hud">
-            <span class="hud-chip"><strong>{map_stream_region_count}</strong> 个区域分片</span>
-            <span class="hud-chip"><strong>{map_visible_marker_count}</strong> 个可见地点</span>
-            <span class="hud-chip"><strong>{map_prefetch_count}</strong> 个预热地图块</span>
-            <span class="hud-chip"><strong>{map_live_event_count}</strong> 个实时事件 · {map_player_density_mode}</span>
+            <span class="hud-chip"><strong>{map_stream_region_count}</strong> <span data-i18n-en="regional shards" data-i18n-zh="个区域分片">regional shards</span></span>
+            <span class="hud-chip"><strong>{map_visible_marker_count}</strong> <span data-i18n-en="visible places" data-i18n-zh="个可见地点">visible places</span></span>
+            <span class="hud-chip"><strong>{map_prefetch_count}</strong> <span data-i18n-en="prefetch tiles" data-i18n-zh="个预热地图块">prefetch tiles</span></span>
+            <span class="hud-chip"><strong>{map_live_event_count}</strong> <span data-i18n-en="live events" data-i18n-zh="个实时事件">live events</span> · {map_player_density_mode}</span>
           </div>
           <div id="world-map-overlay-controls" class="overlay-toggle-bar">
 {shared_map_overlay_controls_html}
@@ -1191,184 +1197,184 @@ pub(super) async fn get_world_web_shell(
           <div id="world-map-camera-actions" class="overlay-toggle-bar">
 {shared_map_camera_actions_html}
           </div>
-          <p id="world-map-overlay-status" class="subtitle">Active layers / 当前图层：density, regions, tiles, prefetch rings, live events / 密度、区域、地图块、预热圈、实时事件。</p>
+          <p id="world-map-overlay-status" class="subtitle" data-i18n-en="Active layers: density, regions, tiles, prefetch rings, live events." data-i18n-zh="当前图层：密度、区域、地图块、预热圈、实时事件。">Active layers: density, regions, tiles, prefetch rings, live events.</p>
           <div class="mini" style="margin-top:14px;">
-            <strong>Map Action Rail / 地图行动栏</strong>
-            <span id="world-map-focus-summary">Waiting for map focus / 等待选择地图焦点…</span>
-            <small id="world-map-focus-detail">Choose a region, tile, hotspot, or live event to drive movement and world action / 选择区域、地图块、热点或实时事件，推动移动和世界行动。</small>
+            <strong data-i18n-en="Map Action Rail" data-i18n-zh="地图行动栏">Map Action Rail</strong>
+            <span id="world-map-focus-summary" data-i18n-en="Waiting for map focus…" data-i18n-zh="等待选择地图焦点…">Waiting for map focus…</span>
+            <small id="world-map-focus-detail" data-i18n-en="Choose a region, tile, hotspot, or live event to drive movement and world action." data-i18n-zh="选择区域、地图块、热点或实时事件，推动移动和世界行动。">Choose a region, tile, hotspot, or live event to drive movement and world action.</small>
             <div id="world-map-action-rail" class="focus-stack"></div>
           </div>
-          <p id="world-map-route-filter-status" class="subtitle">Route filter / 路线筛选：show all world activity / 显示全部世界活动。</p>
+          <p id="world-map-route-filter-status" class="subtitle" data-i18n-en="Route filter: show all world activity." data-i18n-zh="路线筛选：显示全部世界活动。">Route filter: show all world activity.</p>
           <div id="world-map-route-filter-actions" class="focus-stack">
             {shared_route_filter_buttons_html}
           </div>
-          <p id="world-map-route-flow-status" class="subtitle">Adventure route / 冒险路线：waiting for map focus / 等待地图焦点。</p>
-          <p id="world-map-route-next-step-status" class="subtitle">Recommended next step / 推荐下一步：choose a map focus first / 先选择地图焦点。</p>
-          <p id="world-map-route-event-brief-status" class="subtitle">Event brief / 事件简报：waiting for live-event focus / 等待实时事件焦点。</p>
-          <p id="world-map-route-link-status" class="subtitle">Linked task route / 关联任务路线：none yet / 暂无。</p>
+          <p id="world-map-route-flow-status" class="subtitle" data-i18n-en="Adventure route: waiting for map focus." data-i18n-zh="冒险路线：等待地图焦点。">Adventure route: waiting for map focus.</p>
+          <p id="world-map-route-next-step-status" class="subtitle" data-i18n-en="Recommended next step: choose a map focus first." data-i18n-zh="推荐下一步：先选择地图焦点。">Recommended next step: choose a map focus first.</p>
+          <p id="world-map-route-event-brief-status" class="subtitle" data-i18n-en="Event brief: waiting for live-event focus." data-i18n-zh="事件简报：等待实时事件焦点。">Event brief: waiting for live-event focus.</p>
+          <p id="world-map-route-link-status" class="subtitle" data-i18n-en="Linked task route: none yet." data-i18n-zh="关联任务路线：暂无。">Linked task route: none yet.</p>
           <div id="world-map-route-flow-actions" class="focus-stack"></div>
-          <p id="world-map-overlay-legend" class="subtitle">Layer legend / 图层说明：regional anchors, active tiles, prefetch rings, live-event pulses / 区域锚点、活跃地图块、预热探索圈、实时事件脉冲。</p>
+          <p id="world-map-overlay-legend" class="subtitle" data-i18n-en="Layer legend: regional anchors, active tiles, prefetch rings, live-event pulses." data-i18n-zh="图层说明：区域锚点、活跃地图块、预热探索圈、实时事件脉冲。">Layer legend: regional anchors, active tiles, prefetch rings, live-event pulses.</p>
         </div>
-        <div id="world-real-map" data-engine="{map_engine_id}" data-provider="{tile_provider}" aria-label="现实镜像地图"></div>
+        <div id="world-real-map" data-engine="{map_engine_id}" data-provider="{tile_provider}" aria-label="Reality mirror map" data-i18n-aria-label-en="Reality mirror map" data-i18n-aria-label-zh="现实镜像地图"></div>
       </div>
     </section>
     <section>
-      <h2>World Regions / 世界区域</h2>
+      <h2 data-i18n-en="World Regions" data-i18n-zh="世界区域">World Regions</h2>
       <div class="grid">{zone_cards}</div>
     </section>
     <section id="world-map-move-panel" class="panel">
-      <h2>Detailed World Map / 详细世界地图</h2>
+      <h2 data-i18n-en="Detailed World Map" data-i18n-zh="详细世界地图">Detailed World Map</h2>
       <p class="subtitle">{current_map_summary}</p>
       <div class="mini-grid">{map_cards}</div>
       <form method="post" action="/world/web/map-move" style="margin-top:16px">
         {csrf_input}
         <input type="hidden" name="matrix_user_id" value="{current_matrix_user_id}" />
         <select id="world-map-move-target" name="target">{map_exit_options}</select>
-        <button type="submit">Move Here / 移动到这里</button>
+        <button type="submit" data-i18n-en="Move Here" data-i18n-zh="移动到这里">Move Here</button>
       </form>
     </section>
     <section class="play">
       <div id="world-action-console" class="panel">
-        <h2>World Action Console / 世界行动台</h2>
+        <h2 data-i18n-en="World Action Console" data-i18n-zh="世界行动台">World Action Console</h2>
         <p id="world-action-console-status" class="subtitle">{console_note}</p>
         <form method="post" action="/world/web/action">
           {csrf_input}
           <input type="hidden" name="matrix_user_id" value="{current_matrix_user_id}" />
           <select id="world-action-location" name="location_id">{location_options}</select>
-          <textarea id="world-action-body" name="body">Launch an AI Design Studio for overseas/global players / 我要在全球镜像城市建立 AI 设计工坊，招募 Agent，完成海外真实委托，并把关键机会转成 League 任务。</textarea>
-          <button type="submit">Submit World Action / 提交世界行动</button>
+          <textarea id="world-action-body" name="body" data-i18n-value-en="Launch an AI Design Studio for overseas/global players: recruit Agents, complete real global commissions, and convert key opportunities into League quests." data-i18n-value-zh="我要在全球镜像城市建立 AI 设计工坊，招募 Agent，完成海外真实委托，并把关键机会转成 League 任务。">Launch an AI Design Studio for overseas/global players: recruit Agents, complete real global commissions, and convert key opportunities into League quests.</textarea>
+          <button type="submit" data-i18n-en="Submit World Action" data-i18n-zh="提交世界行动">Submit World Action</button>
         </form>
       </div>
       <div class="panel">
-        <h2>World Event Timeline / 世界事件时间线</h2>
+        <h2 data-i18n-en="World Event Timeline" data-i18n-zh="世界事件时间线">World Event Timeline</h2>
         <ul id="world-event-timeline" class="timeline">{event_items}</ul>
       </div>
     </section>
     <section class="panel">
-      <h2>Places / 地点</h2>
+      <h2 data-i18n-en="Places" data-i18n-zh="地点">Places</h2>
       <div class="mini-grid">{location_cards}</div>
     </section>
     <section class="panel">
-      <h2>Agent Residents / NPC · Agent 居民</h2>
+      <h2 data-i18n-en="Agent Residents · NPC" data-i18n-zh="Agent 居民 · NPC">Agent Residents · NPC</h2>
       <div class="mini-grid">{entity_cards}</div>
     </section>
     <section id="world-assets-panel" class="panel">
-      <h2>Character Items / 角色道具</h2>
+      <h2 data-i18n-en="Character Items" data-i18n-zh="角色道具">Character Items</h2>
       <div class="mini-grid">{asset_cards}</div>
       <form method="post" action="/world/web/asset" style="margin-top:16px">
         {csrf_input}
         <input type="hidden" name="matrix_user_id" value="{current_matrix_user_id}" />
         <input id="world-asset-id" name="asset_id" value="{latest_asset_id}" placeholder="自动填充或 latest" />
-        <textarea id="world-asset-body" name="body">Upgrade this world item / 升级这件世界道具：强化能力、证据、风险控制、行动循环和下一条支线。</textarea>
-        <button type="submit">Upgrade Item / 升级道具</button>
+        <textarea id="world-asset-body" name="body" data-i18n-value-en="Upgrade this world item: strengthen capability, evidence, risk control, action loop, and the next side quest." data-i18n-value-zh="升级这件世界道具：强化能力、证据、风险控制、行动循环和下一条支线。">Upgrade this world item: strengthen capability, evidence, risk control, action loop, and the next side quest.</textarea>
+        <button type="submit" data-i18n-en="Upgrade Item" data-i18n-zh="升级道具">Upgrade Item</button>
       </form>
     </section>
     <section id="world-companies-panel" class="panel">
-      <h2>Studios / Hubs · 工坊 / 据点</h2>
+      <h2 data-i18n-en="Studios and Hubs" data-i18n-zh="工坊与据点">Studios and Hubs</h2>
       <div class="mini-grid">{company_cards}</div>
       <form method="post" action="/world/web/company" style="margin-top:16px">
         {csrf_input}
         <input type="hidden" name="matrix_user_id" value="{current_matrix_user_id}" />
         <input id="world-company-asset-id" name="asset_id" value="{latest_asset_id}" placeholder="自动填充或 latest" />
-        <textarea id="world-company-body" name="body">Launch a global-facing studio hub / 用这件道具建立面向海外玩家的工坊据点：定义能力、服务对象、行动循环、证据和第一条悬赏路线。</textarea>
-        <button type="submit">Launch Studio / 建立工坊</button>
+        <textarea id="world-company-body" name="body" data-i18n-value-en="Launch a global-facing studio hub with this item: define capability, target clients, action loop, evidence, and the first bounty route." data-i18n-value-zh="用这件道具建立面向海外玩家的工坊据点：定义能力、服务对象、行动循环、证据和第一条悬赏路线。">Launch a global-facing studio hub with this item: define capability, target clients, action loop, evidence, and the first bounty route.</textarea>
+        <button type="submit" data-i18n-en="Launch Studio" data-i18n-zh="建立工坊">Launch Studio</button>
       </form>
     </section>
     <section id="world-listings-panel" class="panel">
-      <h2>Hubs / Quest Cards · 据点 / 任务牌</h2>
+      <h2 data-i18n-en="Hubs and Quest Cards" data-i18n-zh="据点与任务牌">Hubs and Quest Cards</h2>
       <div class="mini-grid">{shop_cards}</div>
       <div class="mini-grid" style="margin-top:12px">{listing_cards}</div>
       <form method="post" action="/world/web/listing" style="margin-top:16px">
         {csrf_input}
         <input type="hidden" name="matrix_user_id" value="{current_matrix_user_id}" />
         <input id="world-listing-company-id" name="company_id" value="{latest_company_id}" placeholder="自动填充或 latest" />
-        <textarea id="world-listing-body" name="body">Publish a global bounty card / 发布一个海外可接取的工坊委托：写清成果、赏金逻辑、证据包、承诺、风险控制、自检和下一步行动。</textarea>
-        <button type="submit">Publish Quest Card / 发布任务牌</button>
+        <textarea id="world-listing-body" name="body" data-i18n-value-en="Publish a global bounty card: specify deliverables, reward logic, evidence package, commitments, risk controls, self-review, and next action." data-i18n-value-zh="发布一个海外可接取的工坊委托：写清成果、赏金逻辑、证据包、承诺、风险控制、自检和下一步行动。">Publish a global bounty card: specify deliverables, reward logic, evidence package, commitments, risk controls, self-review, and next action.</textarea>
+        <button type="submit" data-i18n-en="Publish Quest Card" data-i18n-zh="发布任务牌">Publish Quest Card</button>
       </form>
     </section>
     <section id="world-commerce-panel" class="panel">
-      <h2>Bounties / Adventure Commissions · 悬赏 / 冒险委托</h2>
-      <p class="subtitle">Player loop for overseas beta / 海外 beta 玩家视角只需要三步：accept quest card → submit result → get rating and reward / 接取任务牌 → 提交成果 → 获得评级与奖励。完整路线操作仍可展开，方便 beta 验证和高级玩家调试。</p>
+      <h2 data-i18n-en="Bounties and Adventure Commissions" data-i18n-zh="悬赏与冒险委托">Bounties and Adventure Commissions</h2>
+      <p class="subtitle" data-i18n-en="Overseas beta player loop has three steps: accept quest card → submit result → get rating and reward. Advanced route operations remain expandable for beta validation and power users." data-i18n-zh="海外 beta 玩家视角只需要三步：接取任务牌 → 提交成果 → 获得评级与奖励。完整路线操作仍可展开，方便 beta 验证和高级玩家调试。">Overseas beta player loop has three steps: accept quest card → submit result → get rating and reward. Advanced route operations remain expandable for beta validation and power users.</p>
       <div class="world-adventure-steps">
-        <div class="world-adventure-step"><b>1 · Accept / 接取任务牌</b><span>Choose a bounty and turn it into an executable commission / 选择一个悬赏，把它变成可执行的冒险委托。</span></div>
-        <div class="world-adventure-step"><b>2 · Submit / 提交成果</b><span>Submit result package, evidence, risk review, and next action / 提交成果包、证据、风险复盘和下一步行动。</span></div>
-        <div class="world-adventure-step"><b>3 · Rate & Reward / 评级领奖励</b><span>Pass rating to earn reputation and rewards; otherwise enter revision / 通过评级后获得声望与奖励；不通过则进入返工路线。</span></div>
+        <div class="world-adventure-step"><b><span data-i18n-en="1 · Accept" data-i18n-zh="1 · 接取任务牌">1 · Accept</span></b><span data-i18n-en="Choose a bounty and turn it into an executable commission." data-i18n-zh="选择一个悬赏，把它变成可执行的冒险委托。">Choose a bounty and turn it into an executable commission.</span></div>
+        <div class="world-adventure-step"><b><span data-i18n-en="2 · Submit" data-i18n-zh="2 · 提交成果">2 · Submit</span></b><span data-i18n-en="Submit result package, evidence, risk review, and next action." data-i18n-zh="提交成果包、证据、风险复盘和下一步行动。">Submit result package, evidence, risk review, and next action.</span></div>
+        <div class="world-adventure-step"><b><span data-i18n-en="3 · Rate & Reward" data-i18n-zh="3 · 评级领奖励">3 · Rate & Reward</span></b><span data-i18n-en="Pass rating to earn reputation and rewards; otherwise enter revision." data-i18n-zh="通过评级后获得声望与奖励；不通过则进入返工路线。">Pass rating to earn reputation and rewards; otherwise enter revision.</span></div>
       </div>
       <div id="world-purchase-cards-live" class="mini-grid">{purchase_cards}</div>
       <div id="world-work-orders-live" class="mini-grid" style="margin-top:12px">{work_order_cards}</div>
-      <details class="dev-details world-route-drawer"><summary>展开完整路线操作台</summary>
+      <details class="dev-details world-route-drawer"><summary data-i18n-en="Expand full route console" data-i18n-zh="展开完整路线操作台">Expand full route console</summary>
         <form id="world-buy-form" method="post" action="/world/web/buy" style="margin-top:16px">
           {csrf_input}
           <input type="hidden" name="matrix_user_id" value="{current_matrix_user_id}" />
           <input id="world-buy-listing-id" name="listing_id" value="{latest_listing_id}" placeholder="自动填充或 latest" />
-          <textarea id="world-buy-body" name="body">Accept this quest card / 接取这个任务牌，开启冒险委托：确认成果、证据包、评级标准、风险控制和下一步行动。</textarea>
-          <button type="submit">Accept Quest Card / 接取任务牌</button>
+          <textarea id="world-buy-body" name="body" data-i18n-value-en="Accept this quest card and open an adventure commission: confirm deliverables, evidence package, rating standards, risk controls, and next action." data-i18n-value-zh="接取这个任务牌，开启冒险委托：确认成果、证据包、评级标准、风险控制和下一步行动。">Accept this quest card and open an adventure commission: confirm deliverables, evidence package, rating standards, risk controls, and next action.</textarea>
+          <button type="submit" data-i18n-en="Accept Quest Card" data-i18n-zh="接取任务牌">Accept Quest Card</button>
         </form>
       <div id="world-work-deliveries-live" class="mini-grid" style="margin-top:12px">{work_delivery_cards}</div>
       <form id="world-work-deliver-form" method="post" action="/world/web/work-deliver" style="margin-top:16px">
         {csrf_input}
         <input type="hidden" name="matrix_user_id" value="{current_matrix_user_id}" />
         <input id="world-work-deliver-id" name="work_order_id" value="{latest_work_order_id}" placeholder="自动填充或 latest" />
-        <textarea id="world-work-deliver-body" name="body">Result package / 成果提交包：成果、证据包、评级清单、风险复盘、下一步行动和自检记录。</textarea>
-        <button type="submit">Submit Result / 提交成果</button>
+        <textarea id="world-work-deliver-body" name="body" data-i18n-value-en="Result package: deliverable, evidence package, rating checklist, risk review, next action, and self-check notes." data-i18n-value-zh="成果提交包：成果、证据包、评级清单、风险复盘、下一步行动和自检记录。">Result package: deliverable, evidence package, rating checklist, risk review, next action, and self-check notes.</textarea>
+        <button type="submit" data-i18n-en="Submit Result" data-i18n-zh="提交成果">Submit Result</button>
       </form>
       <div id="world-work-acceptances-live" class="mini-grid" style="margin-top:12px">{work_acceptance_cards}</div>
       <form id="world-work-accept-form" method="post" action="/world/web/work-accept" style="margin-top:16px">
         {csrf_input}
         <input type="hidden" name="matrix_user_id" value="{current_matrix_user_id}" />
         <input id="world-work-accept-id" name="work_order_id" value="{latest_work_order_id}" placeholder="自动填充或 latest" />
-        <textarea id="world-work-accept-body" name="body">Rating passed / 评级通过：确认成果证据、质量备注、下一条支线和声望奖励。</textarea>
-        <button type="submit">Pass Rating / 评级通过</button>
+        <textarea id="world-work-accept-body" name="body" data-i18n-value-en="Rating passed: confirm result evidence, quality note, next side quest, and reputation reward." data-i18n-value-zh="评级通过：确认成果证据、质量备注、下一条支线和声望奖励。">Rating passed: confirm result evidence, quality note, next side quest, and reputation reward.</textarea>
+        <button type="submit" data-i18n-en="Pass Rating" data-i18n-zh="评级通过">Pass Rating</button>
       </form>
       <div id="world-work-rejections-live" class="mini-grid" style="margin-top:12px">{work_rejection_cards}</div>
       <form id="world-work-reject-form" method="post" action="/world/web/work-reject" style="margin-top:16px">
         {csrf_input}
         <input type="hidden" name="matrix_user_id" value="{current_matrix_user_id}" />
         <input id="world-work-reject-id" name="work_order_id" value="{latest_work_order_id}" placeholder="自动填充或 latest" />
-        <textarea id="world-work-reject-body" name="body">Revision required / 需要返工：记录未通过原因、证据缺口、奖励退回、返工要求和下一步行动。</textarea>
-        <button type="submit">Request Revision / 要求返工</button>
+        <textarea id="world-work-reject-body" name="body" data-i18n-value-en="Revision required: record failure reason, evidence gap, reward refund, revision requirement, and next action." data-i18n-value-zh="需要返工：记录未通过原因、证据缺口、奖励退回、返工要求和下一步行动。">Revision required: record failure reason, evidence gap, reward refund, revision requirement, and next action.</textarea>
+        <button type="submit" data-i18n-en="Request Revision" data-i18n-zh="要求返工">Request Revision</button>
       </form>
       <div id="world-work-reopens-live" class="mini-grid" style="margin-top:12px">{work_reopen_cards}</div>
       <form id="world-work-reopen-form" method="post" action="/world/web/work-reopen" style="margin-top:16px">
         {csrf_input}
         <input type="hidden" name="matrix_user_id" value="{current_matrix_user_id}" />
         <input id="world-work-reopen-id" name="work_order_id" value="{latest_work_order_id}" placeholder="自动填充或 latest" />
-        <textarea id="world-work-reopen-body" name="body">Reopen commission / 重开委托：重新托管奖励，列出返工要求、证据缺口、评级标准和再次提交行动。</textarea>
-        <button type="submit">Reopen Commission / 重开委托</button>
+        <textarea id="world-work-reopen-body" name="body" data-i18n-value-en="Reopen commission: escrow reward again, list revision requirements, evidence gaps, rating standards, and resubmission action." data-i18n-value-zh="重开委托：重新托管奖励，列出返工要求、证据缺口、评级标准和再次提交行动。">Reopen commission: escrow reward again, list revision requirements, evidence gaps, rating standards, and resubmission action.</textarea>
+        <button type="submit" data-i18n-en="Reopen Commission" data-i18n-zh="重开委托">Reopen Commission</button>
       </form>
       <div id="world-work-cancellations-live" class="mini-grid" style="margin-top:12px">{work_cancellation_cards}</div>
       <form id="world-work-cancel-form" method="post" action="/world/web/work-cancel" style="margin-top:16px">
         {csrf_input}
         <input type="hidden" name="matrix_user_id" value="{current_matrix_user_id}" />
         <input id="world-work-cancel-id" name="work_order_id" value="{latest_work_order_id}" placeholder="自动填充或 latest" />
-        <textarea id="world-work-cancel-body" name="body">Cancel commission / 放弃委托：在成果提交前结束路线、退回托管奖励、记录原因并关闭委托。</textarea>
-        <button type="submit">Cancel Commission / 放弃委托</button>
+        <textarea id="world-work-cancel-body" name="body" data-i18n-value-en="Cancel commission: end the route before result submission, refund escrowed reward, record reason, and close the commission." data-i18n-value-zh="放弃委托：在成果提交前结束路线、退回托管奖励、记录原因并关闭委托。">Cancel commission: end the route before result submission, refund escrowed reward, record reason, and close the commission.</textarea>
+        <button type="submit" data-i18n-en="Cancel Commission" data-i18n-zh="放弃委托">Cancel Commission</button>
       </form>
       </details>
     </section>
     <section class="panel">
-      <h2>Faction Reputation Map / 阵营声望图</h2>
+      <h2 data-i18n-en="Faction Reputation Map" data-i18n-zh="阵营声望图">Faction Reputation Map</h2>
       <div class="mini-grid">{faction_cards}</div>
       <div class="mini-grid" style="margin-top:12px">{standing_cards}</div>
     </section>
     <section id="world-contracts-panel" class="panel">
-      <h2>World Contracts / 世界契约</h2>
+      <h2 data-i18n-en="World Contracts" data-i18n-zh="世界契约">World Contracts</h2>
       <div id="world-contract-cards-live" class="mini-grid">{contract_cards}</div>
       <form id="world-contract-completion-form" method="post" action="/world/web/contract" style="margin-top:16px">
         {csrf_input}
         <input type="hidden" name="matrix_user_id" value="{current_matrix_user_id}" />
         <input id="world-contract-completion-id" name="contract_id" value="{latest_contract_id}" placeholder="自动填充或契约 ID" />
-        <textarea id="world-contract-completion-body" name="body">World contract report / 世界契约战报：成果、证据、风险复盘、下一步和评级标准。</textarea>
-        <button type="submit">Complete Contract / 完成契约</button>
+        <textarea id="world-contract-completion-body" name="body" data-i18n-value-en="World contract report: result, evidence, risk review, next step, and rating standards." data-i18n-value-zh="世界契约战报：成果、证据、风险复盘、下一步和评级标准。">World contract report: result, evidence, risk review, next step, and rating standards.</textarea>
+        <button type="submit" data-i18n-en="Complete Contract" data-i18n-zh="完成契约">Complete Contract</button>
       </form>
     </section>
     <section class="panel">
-      <h2>Quest Route Graph / 任务路线图</h2>
+      <h2 data-i18n-en="Quest Route Graph" data-i18n-zh="任务路线图">Quest Route Graph</h2>
       <div id="world-route-task-graph-live" class="mini-grid">{world_route_task_graph_cards}</div>
     </section>
     <section class="panel">
-      <h2>Playable Commands / 可玩指令</h2>
-      <p class="subtitle"><code>/world</code> <code>/world action Launch an AI Design Studio / 我要开一家 AI 设计工坊</code> <code>/league</code> <code>/arena</code> <code>/guild</code> <code>/raid</code></p>
+      <h2 data-i18n-en="Playable Commands" data-i18n-zh="可玩指令">Playable Commands</h2>
+      <p class="subtitle"><code>/world</code> <code data-i18n-en="/world action Launch an AI Design Studio" data-i18n-zh="/world action 我要开一家 AI 设计工坊">/world action Launch an AI Design Studio</code> <code>/league</code> <code>/arena</code> <code>/guild</code> <code>/raid</code></p>
     </section>
   </main>
   {language_runtime_script}
@@ -1926,7 +1932,7 @@ pub(super) async fn get_world_web_shell(
         map_engine_id = escape_html_text(map_engine_id),
         zone_cards = zone_cards,
         map_cards = map_cards,
-        current_map_summary = escape_html_text(&current_map_summary),
+        current_map_summary = current_map_summary,
         map_exit_options = map_exit_options,
         location_cards = location_cards,
         location_options = location_options,

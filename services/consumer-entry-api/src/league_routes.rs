@@ -20,7 +20,10 @@ fn league_visible_copy(value: &str) -> String {
         ("Bronze I", "青铜 I"),
         ("City Clerks", "城市书记门"),
         ("Prompt Forge", "Prompt Forge / Prompt 锻造会"),
-        ("Draft fast. Ship clean.", "Draft fast. Ship clean. / 快速组队，干净通关。"),
+        (
+            "Draft fast. Ship clean.",
+            "Draft fast. Ship clean. / 快速组队，干净通关。",
+        ),
         ("Audit Sanctum", "Audit Sanctum / 审稿圣所"),
         (
             "No hallucination survives the raid.",
@@ -65,7 +68,8 @@ fn league_visible_copy(value: &str) -> String {
 }
 
 fn escape_league_visible_text(value: &str) -> String {
-    escape_html_text(&league_visible_copy(value))
+    let copy = league_visible_copy(value);
+    i18n_span_from_bilingual_slash_copy(&copy).unwrap_or_else(|| escape_html_text(&copy))
 }
 
 pub(super) async fn get_league_season(
@@ -286,7 +290,7 @@ pub(super) async fn get_league_web_shell(
             heroes
                 .iter()
                 .filter_map(|hero| hero.get("name").and_then(Value::as_str))
-                .map(|hero| escape_league_visible_text(hero))
+                .map(escape_league_visible_text)
                 .collect::<Vec<_>>()
                 .join(" · ")
         })
@@ -345,11 +349,24 @@ pub(super) async fn get_league_web_shell(
         .get("unlocked_skin_count")
         .and_then(Value::as_u64)
         .unwrap_or(0);
-    let progression_line = format!(
-        "Level / 等级 {} {} · School / 门派 {} · Successful quests / 成功任务 {} · XP data / 经验数据点 {} · Skills/Tools/Skins 技能/工具/外观 {}/{}/{}",
+    let progression_rank_label = league_visible_copy(progression_rank);
+    let progression_school_label = league_visible_copy(progression_school);
+    let progression_line_en = format!(
+        "Level {} {} · School {} · Successful quests {} · XP data {} · Skills/Tools/Skins {}/{}/{}",
         progression_level,
-        league_visible_copy(progression_rank),
-        league_visible_copy(progression_school),
+        progression_rank_label,
+        progression_school_label,
+        progression_successes,
+        progression_data_points,
+        unlocked_skill_count,
+        unlocked_tool_count,
+        unlocked_skin_count,
+    );
+    let progression_line_zh = format!(
+        "等级 {} {} · 门派 {} · 成功任务 {} · 经验数据点 {} · 技能/工具/外观 {}/{}/{}",
+        progression_level,
+        progression_rank_label,
+        progression_school_label,
         progression_successes,
         progression_data_points,
         unlocked_skill_count,
@@ -407,71 +424,71 @@ pub(super) async fn get_league_web_shell(
 <body>
   <header>
     <section>
-      <div class="pill">Global-first Beta / 海外市场首发 · Preseason Zero</div>
+      <div class="pill"><span data-i18n-en="Global-first Beta" data-i18n-zh="海外市场首发">Global-first Beta</span> · Preseason Zero</div>
       <h1>Trillionnium League</h1>
-      <p class="subtitle">AI Agent arena for overseas-first launch：draft your squad, enter dungeons, clear bounties, submit results, get rated, rank up, and earn rewards / 面向海外首发的 AI Agent 竞技场：组建队伍、进入副本、完成悬赏、提交成果、获得评分、升级段位并领取奖励。</p>
+      <p class="subtitle" data-i18n-en="AI Agent arena for overseas-first launch: draft your squad, enter dungeons, clear bounties, submit results, get rated, rank up, and earn rewards." data-i18n-zh="面向海外首发的 AI Agent 竞技场：组建队伍、进入副本、完成悬赏、提交成果、获得评分、升级段位并领取奖励。">AI Agent arena for overseas-first launch: draft your squad, enter dungeons, clear bounties, submit results, get rated, rank up, and earn rewards.</p>
     </section>
     <aside class="hero-card">
-      <strong>Playable Now / 当前可玩版本</strong>
-      <p class="subtitle">Matrix/Element and web lobby are ready for bilingual global beta / 现在可以通过 Matrix/Element 和网页大厅进入；这里是第一版中英文兼容 League 游戏大厅。</p>
-      <a class="cta">Enter via /league / 通过 /league 入场</a>
+      <strong data-i18n-en="Playable Now" data-i18n-zh="当前可玩版本">Playable Now</strong>
+      <p class="subtitle" data-i18n-en="Matrix/Element and the web lobby are ready for the global beta; choose your UI language in system settings." data-i18n-zh="现在可以通过 Matrix/Element 和网页大厅进入；界面语言在系统设置中选择。">Matrix/Element and the web lobby are ready for the global beta; choose your UI language in system settings.</p>
+      <a class="cta" data-i18n-en="Enter via /league" data-i18n-zh="通过 /league 入场">Enter via /league</a>
     </aside>
   </header>
   <main>
     <section class="stats">
-      <div class="stat"><span>Players 玩家</span><b>{players}</b></div>
-      <div class="stat"><span>Arenas 赛场</span><b>{matches}</b></div>
-      <div class="stat"><span>Battles 战斗</span><b>{battles}</b></div>
-      <div class="stat"><span>Rewards 奖励</span><b>{rewards:.2}</b></div>
-      <div class="stat"><span>Items 道具</span><b>{items}</b></div>
+      <div class="stat"><span data-i18n-en="Players" data-i18n-zh="玩家">Players</span><b>{players}</b></div>
+      <div class="stat"><span data-i18n-en="Arenas" data-i18n-zh="赛场">Arenas</span><b>{matches}</b></div>
+      <div class="stat"><span data-i18n-en="Battles" data-i18n-zh="战斗">Battles</span><b>{battles}</b></div>
+      <div class="stat"><span data-i18n-en="Rewards" data-i18n-zh="奖励">Rewards</span><b>{rewards:.2}</b></div>
+      <div class="stat"><span data-i18n-en="Items" data-i18n-zh="道具">Items</span><b>{items}</b></div>
     </section>
     <section>
-      <h2>Playable Modes / 可进入玩法</h2>
+      <h2 data-i18n-en="Playable Modes" data-i18n-zh="可进入玩法">Playable Modes</h2>
       <div class="grid">{match_cards}</div>
     </section>
     <section class="panel">
-      <h2>Progression System / 角色成长系统</h2>
-      <p class="subtitle">Schools, skill trees, equipment/tools, skins, multi-Agent capability, experience data, and task-success-based levels / 门派系统、技能树、装备/工具、皮肤、多 Agent 能力、经验数据积累和以任务成功数量为核心的等级系统。</p>
-      <div class="commands"><code>{progression_line}</code><code>/progression</code><code>/skills</code><code>/tools</code><code>/skins</code></div>
+      <h2 data-i18n-en="Progression System" data-i18n-zh="角色成长系统">Progression System</h2>
+      <p class="subtitle" data-i18n-en="Schools, skill trees, equipment/tools, skins, multi-Agent capability, experience data, and task-success-based levels." data-i18n-zh="门派系统、技能树、装备/工具、皮肤、多 Agent 能力、经验数据积累和以任务成功数量为核心的等级系统。">Schools, skill trees, equipment/tools, skins, multi-Agent capability, experience data, and task-success-based levels.</p>
+      <div class="commands"><code data-i18n-en="{progression_line_en}" data-i18n-zh="{progression_line_zh}">{progression_line_en}</code><code>/progression</code><code>/skills</code><code>/tools</code><code>/skins</code></div>
     </section>
     <section class="panel">
       <h2>Trillionnium World</h2>
-      <p class="subtitle">Reality-mirror open world for global players: cities, studios, markets, Agent residents, items, and free actions / 面向全球玩家的现实镜像开放世界：城市、工坊、集市、Agent 居民、道具和自由行动。</p>
-      <div class="commands"><code>/world</code><code>/world action Launch an AI Design Studio / 我要开一家 AI 设计工坊</code><code>Items 道具 {world_assets}</code><code>Events 事件 {world_events}</code></div>
+      <p class="subtitle" data-i18n-en="Reality-mirror open world for global players: cities, studios, markets, Agent residents, items, and free actions." data-i18n-zh="面向全球玩家的现实镜像开放世界：城市、工坊、集市、Agent 居民、道具和自由行动。">Reality-mirror open world for global players: cities, studios, markets, Agent residents, items, and free actions.</p>
+      <div class="commands"><code>/world</code><code data-i18n-en="/world action Launch an AI Design Studio" data-i18n-zh="/world action 我要开一家 AI 设计工坊">/world action Launch an AI Design Studio</code><code><span data-i18n-en="Items" data-i18n-zh="道具">Items</span> {world_assets}</code><code><span data-i18n-en="Events" data-i18n-zh="事件">Events</span> {world_events}</code></div>
     </section>
     <section class="play">
       <div class="panel">
-        <h2>Web Battle Console / 网页战斗台</h2>
+        <h2 data-i18n-en="Web Battle Console" data-i18n-zh="网页战斗台">Web Battle Console</h2>
         <p class="subtitle">{console_note}</p>
         <form method="post" action="/league/web/action">
           {csrf_input}
           <input type="hidden" name="matrix_user_id" value="@alice:local.dev" />
-          <select name="action"><option value="join">Join Arena / 加入赛场</option><option value="guild">Join Guild / 加入公会</option><option value="team">Join Raid Team / 加入团本队伍</option><option value="draft">Draft Loadout / 配置阵容</option><option value="raid">Contribute Raid / 推进团本</option><option value="submit">Submit Result / 提交战果</option></select>
-          <input name="match_id" value="daily-dungeon-001" aria-label="match id / 赛场 id" />
-          <input name="guild_id" value="guild-prompt-forge" aria-label="guild id / 公会 id" />
-          <input name="role" value="scout" aria-label="raid role / 团本角色" />
+          <select name="action"><option value="join" data-i18n-en="Join Arena" data-i18n-zh="加入赛场">Join Arena</option><option value="guild" data-i18n-en="Join Guild" data-i18n-zh="加入公会">Join Guild</option><option value="team" data-i18n-en="Join Raid Team" data-i18n-zh="加入团本队伍">Join Raid Team</option><option value="draft" data-i18n-en="Draft Loadout" data-i18n-zh="配置阵容">Draft Loadout</option><option value="raid" data-i18n-en="Contribute Raid" data-i18n-zh="推进团本">Contribute Raid</option><option value="submit" data-i18n-en="Submit Result" data-i18n-zh="提交战果">Submit Result</option></select>
+          <input name="match_id" value="daily-dungeon-001" aria-label="match id" data-i18n-aria-label-en="match id" data-i18n-aria-label-zh="赛场 id" />
+          <input name="guild_id" value="guild-prompt-forge" aria-label="guild id" data-i18n-aria-label-en="guild id" data-i18n-aria-label-zh="公会 id" />
+          <input name="role" value="scout" aria-label="raid role" data-i18n-aria-label-en="raid role" data-i18n-aria-label-zh="团本角色" />
           <input name="heroes" value="oracle_scout forge_builder mirror_auditor courier_closer" aria-label="heroes" />
-          <textarea name="body">Web clear for global beta: deliverable/result, evidence, risk, self-review, next action. 网页通关：写清成果、证据、风险、自评和下一步。团本选项：侦察证据、分配建造者、定义 Boss 风险门槛。</textarea>
-          <button type="submit">Play Action / 执行行动</button>
+          <textarea name="body" data-i18n-value-en="Web clear for global beta: deliverable/result, evidence, risk, self-review, next action. Raid options: scout evidence, assign builders, define Boss risk gates." data-i18n-value-zh="网页通关：写清成果、证据、风险、自评和下一步。团本选项：侦察证据、分配建造者、定义 Boss 风险门槛。">Web clear for global beta: deliverable/result, evidence, risk, self-review, next action. Raid options: scout evidence, assign builders, define Boss risk gates.</textarea>
+          <button type="submit" data-i18n-en="Play Action" data-i18n-zh="执行行动">Play Action</button>
         </form>
       </div>
       <div class="panel">
-        <h2>Battle Timeline / 战斗时间线 · Replay / 回放</h2>
-        <p class="subtitle">Current loadout / 当前阵容：{loadout_line}</p>
-        <p class="subtitle">Top loot / 最强掉落：{top_loot}</p>
+        <h2><span data-i18n-en="Battle Timeline" data-i18n-zh="战斗时间线">Battle Timeline</span> · <span data-i18n-en="Replay" data-i18n-zh="回放">Replay</span></h2>
+        <p class="subtitle"><span data-i18n-en="Current loadout:" data-i18n-zh="当前阵容：">Current loadout:</span> {loadout_line}</p>
+        <p class="subtitle"><span data-i18n-en="Top loot:" data-i18n-zh="最强掉落：">Top loot:</span> {top_loot}</p>
         <ul class="timeline">{timeline}</ul>
       </div>
     </section>
     <section class="panel">
-      <h2>Guild Halls / 公会大厅</h2>
+      <h2 data-i18n-en="Guild Halls" data-i18n-zh="公会大厅">Guild Halls</h2>
       <div class="mini-grid">{guild_cards}</div>
     </section>
     <section class="panel">
-      <h2>Leaderboard / 排行榜</h2>
-      <table><thead><tr><th>#</th><th>Player 玩家</th><th>Rank 段位</th><th>RP 积分</th><th>Earned 已获奖励</th></tr></thead><tbody>{leaderboard}</tbody></table>
+      <h2 data-i18n-en="Leaderboard" data-i18n-zh="排行榜">Leaderboard</h2>
+      <table><thead><tr><th>#</th><th data-i18n-en="Player" data-i18n-zh="玩家">Player</th><th data-i18n-en="Rank" data-i18n-zh="段位">Rank</th><th data-i18n-en="RP" data-i18n-zh="积分">RP</th><th data-i18n-en="Earned" data-i18n-zh="已获奖励">Earned</th></tr></thead><tbody>{leaderboard}</tbody></table>
     </section>
     <section class="panel">
-      <h2>Playable Commands / 可用指令</h2>
+      <h2 data-i18n-en="Playable Commands" data-i18n-zh="可用指令">Playable Commands</h2>
       <div class="commands"><code>/arena</code><code>/join daily-dungeon-001</code><code>/battle daily-dungeon-001 &lt;action&gt;</code><code>/submit daily-dungeon-001 &lt;result&gt;</code><code>/rank</code><code>/profile</code><code>/rewards</code><code>/history</code></div>
     </section>
   </main>
@@ -485,7 +502,8 @@ pub(super) async fn get_league_web_shell(
         items = player_items.len(),
         match_cards = match_cards,
         guild_cards = guild_cards,
-        progression_line = escape_html_text(&progression_line),
+        progression_line_en = escape_html_text(&progression_line_en),
+        progression_line_zh = escape_html_text(&progression_line_zh),
         timeline = timeline,
         loadout_line = loadout_line,
         top_loot = escape_html_text(&top_loot),
