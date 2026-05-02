@@ -611,6 +611,8 @@ pub(super) async fn get_client_app_web_shell(
     let shared_map_viewport_hydration_js = real_world_map_viewport_hydration_js();
     let shared_map_render_cards_js =
         real_world_map_render_cards_js(RealWorldMapShellCardStyle::AppModule);
+    let app_header_language_switcher =
+        trillionnium_language_inline_switcher_html("trillionnium-app-language-select");
     Html(format!(
         r#"<!doctype html>
 <html lang="zh-CN">
@@ -648,6 +650,9 @@ pub(super) async fn get_client_app_web_shell(
     a {{ color:var(--gold); }}
     .app-mobile-shell {{ display:grid; gap:18px; }}
     .app-topbar-meta {{ display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px; }}
+    .app-topbar-actions {{ display:flex; align-items:center; justify-content:flex-end; gap:10px; flex-wrap:wrap; }}
+    .language-switcher {{ display:inline-flex; align-items:center; gap:8px; width:max-content; max-width:100%; border:1px solid rgba(100,227,255,.24); background:rgba(255,255,255,.065); color:var(--cyan); border-radius:999px; padding:6px 8px 6px 10px; font-size:12px; font-weight:900; }}
+    .language-switcher select {{ width:auto; min-width:92px; max-width:130px; margin:0; border:0; background:rgba(7,8,20,.72); color:var(--text); border-radius:999px; padding:7px 26px 7px 10px; font:inherit; font-size:12px; }}
     .app-search-shell {{ position:relative; display:flex; gap:12px; align-items:center; }}
     .app-search-input {{ width:100%; border-radius:18px; border:1px solid rgba(255,255,255,.12); background:rgba(255,255,255,.08); color:var(--text); padding:14px 16px; font-size:15px; box-shadow:0 10px 30px rgba(0,0,0,.18) inset; }}
     .app-search-input::placeholder {{ color:rgba(246,247,251,.56); }}
@@ -679,14 +684,41 @@ pub(super) async fn get_client_app_web_shell(
     .app-bottom-tab:focus-visible, .focus-chip:focus-visible, .overlay-toggle:focus-visible, .app-search-input:focus-visible, .app-search-clear:focus-visible {{ outline:2px solid var(--cyan); outline-offset:2px; }}
     .app-me-grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:16px; }}
     .app-search-hidden {{ display:none !important; }}
-    @media (max-width: 820px) {{ .map-shell {{ grid-template-columns:1fr; }} .quest-summary {{ grid-template-columns:1fr; }} #real-world-map {{ min-height:360px; }} main {{ padding:14px 16px 34px; }} header {{ padding:14px 16px 12px; }} }}
+    @media (max-width: 820px) {{
+      header {{ padding:12px 14px 10px; }}
+      main {{ padding:10px 14px 34px; gap:12px; }}
+      h1 {{ font-size:30px; }}
+      .subtitle {{ font-size:14px; line-height:1.4; }}
+      .app-topbar-meta {{ align-items:flex-start; gap:8px; margin-bottom:8px; }}
+      .app-topbar-actions {{ gap:7px; }}
+      .app-beta-chip {{ padding:6px 9px; font-size:11px; }}
+      .language-switcher {{ padding:5px 6px 5px 8px; font-size:11px; }}
+      .language-switcher select {{ min-width:82px; max-width:112px; padding:6px 22px 6px 8px; font-size:11px; }}
+      .app-search-shell {{ gap:8px; }}
+      .app-search-input {{ padding:11px 13px; border-radius:15px; }}
+      .app-search-clear {{ padding:9px 10px; border-radius:13px; }}
+      .app-ux-status {{ margin-top:7px; min-height:24px; }}
+      #app-tab-map {{ order:1; }}
+      #app-first-playable-onboarding {{ order:2; }}
+      #app-tab-messages {{ order:3; }}
+      #app-tab-feed {{ order:4; }}
+      #app-tab-me {{ order:5; }}
+      .map-shell {{ grid-template-columns:1fr; gap:12px; margin-bottom:12px; }}
+      #real-world-map {{ order:-1; min-height:min(54svh,390px); border-radius:20px; }}
+      .map-panel,.module {{ padding:15px; border-radius:19px; }}
+      .map-stream-hud,.overlay-toggle-bar,.focus-stack {{ gap:6px; }}
+      .hud-chip,.focus-chip,.overlay-toggle {{ padding:7px 9px; font-size:12px; }}
+      .quest-summary {{ grid-template-columns:1fr; }}
+      .quest-hero {{ gap:8px; }}
+      #app-first-playable-steps {{ display:none; }}
+    }}
   </style>
 </head>
 <body>
   <header>
     <div class="app-topbar-meta">
       <p><span class="app-beta-chip" data-i18n-en="Global-first Beta · Mobile World Shell v1" data-i18n-zh="海外市场首发 · 移动世界壳 v1">Global-first Beta · Mobile World Shell v1</span></p>
-      <p><a href="/world" data-i18n-en="World" data-i18n-zh="世界">World</a> · <a href="/league" data-i18n-en="Arena" data-i18n-zh="竞技场">Arena</a></p>
+      <div class="app-topbar-actions"><p><a href="/world" data-i18n-en="World" data-i18n-zh="世界">World</a> · <a href="/league" data-i18n-en="Arena" data-i18n-zh="竞技场">Arena</a></p>{app_header_language_switcher}</div>
     </div>
     <h1>Trillionnium World</h1>
     <p class="subtitle"><span data-i18n-en="Mobile reality-mirror adventure for overseas-first launch: search cities and agents, then use four tabs — Messages, World, Feed, Me. Current focus:" data-i18n-zh="面向海外首发的移动现实镜像冒险：搜索城市和 Agent，并使用「消息、世界、动态、我」四个页签。当前位置：">Mobile reality-mirror adventure for overseas-first launch: search cities and agents, then use four tabs — Messages, World, Feed, Me. Current focus:</span> <strong>{}</strong></p>

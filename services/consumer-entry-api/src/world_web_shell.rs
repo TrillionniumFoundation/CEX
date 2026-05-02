@@ -1072,6 +1072,8 @@ pub(super) async fn get_world_web_shell(
     let shared_map_viewport_hydration_js = real_world_map_viewport_hydration_js();
     let shared_map_render_cards_js =
         real_world_map_render_cards_js(RealWorldMapShellCardStyle::WorldMini);
+    let world_header_language_switcher =
+        trillionnium_language_inline_switcher_html("trillionnium-world-language-select");
 
     Html(format!(
         r#"<!doctype html>
@@ -1092,12 +1094,15 @@ pub(super) async fn get_world_web_shell(
     .hero-card,.card,.panel {{ border:1px solid rgba(255,255,255,.11); background:linear-gradient(145deg,rgba(255,255,255,.09),rgba(255,255,255,.035)); box-shadow:0 24px 80px rgba(0,0,0,.35); backdrop-filter: blur(14px); border-radius:24px; }}
     .hero-card,.panel,.card {{ padding:24px; }}
     .world-hero-main {{ min-height:350px; display:grid; align-content:center; gap:16px; }}
+    .world-hero-kicker {{ display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }}
     .world-hero-title {{ display:grid; gap:10px; }}
     .world-hero-actions {{ display:flex; flex-wrap:wrap; gap:10px; margin-top:2px; }}
     .world-mobile-promise {{ display:flex; flex-wrap:wrap; gap:8px; }}
     .world-mobile-promise span {{ border:1px solid rgba(100,227,255,.2); background:rgba(100,227,255,.075); color:var(--cyan); border-radius:999px; padding:8px 11px; font-size:12px; font-weight:850; }}
     .hero-card {{ display:grid; gap:14px; align-content:space-between; }}
     .hero-card strong {{ color:var(--gold); font-size:22px; }}
+    .language-switcher {{ display:inline-flex; align-items:center; gap:8px; width:max-content; max-width:100%; border:1px solid rgba(100,227,255,.24); background:rgba(255,255,255,.065); color:var(--cyan); border-radius:999px; padding:6px 8px 6px 10px; font-size:12px; font-weight:900; }}
+    .language-switcher select {{ width:auto; min-width:92px; max-width:130px; margin:0; border:0; background:rgba(7,8,20,.72); color:var(--text); border-radius:999px; padding:7px 26px 7px 10px; font:inherit; font-size:12px; }}
     .world-hero-steps {{ list-style:none; padding:0; margin:0; display:grid; gap:9px; }}
     .world-hero-steps li {{ display:grid; gap:3px; padding:10px 12px; border:1px solid rgba(255,255,255,.1); border-radius:16px; background:rgba(255,255,255,.055); }}
     .world-hero-steps b {{ color:var(--text); }}
@@ -1159,12 +1164,15 @@ pub(super) async fn get_world_web_shell(
     @media (max-width:720px) {{
       header.world-hero {{ padding:16px 14px 8px; gap:12px; }}
       .world-hero-main {{ min-height:auto; gap:10px; }}
+      .world-hero-kicker {{ gap:8px; }}
       h1 {{ font-size:clamp(40px,15vw,62px); letter-spacing:-.068em; }}
       h2 {{ margin-bottom:10px; }}
       .subtitle {{ font-size:14px; line-height:1.42; }}
       .pill {{ font-size:10px; padding:4px 8px; }}
       .world-mobile-promise {{ gap:6px; }}
       .world-mobile-promise span {{ padding:6px 8px; font-size:11px; }}
+      .language-switcher {{ padding:5px 6px 5px 8px; font-size:11px; }}
+      .language-switcher select {{ min-width:82px; max-width:112px; padding:6px 22px 6px 8px; font-size:11px; }}
       .world-hero-actions {{ display:grid; grid-template-columns:1fr 1fr; gap:8px; }}
       .world-hero-actions .cta,.hero-card .cta {{ min-height:42px; padding:10px 11px; border-radius:14px; font-size:13px; }}
       .hero-card,.panel,.card {{ padding:15px; border-radius:20px; }}
@@ -1196,7 +1204,7 @@ pub(super) async fn get_world_web_shell(
 <body>
   <header id="world-mobile-first-screen" class="world-hero">
     <section class="world-hero-main">
-      <div class="pill" data-i18n-en="Reality Mirror Adventure" data-i18n-zh="现实镜像冒险">Reality Mirror Adventure</div>
+      <div class="world-hero-kicker"><div class="pill" data-i18n-en="Reality Mirror Adventure" data-i18n-zh="现实镜像冒险">Reality Mirror Adventure</div><div id="world-language-switcher">{world_header_language_switcher}</div></div>
       <div class="world-hero-title">
         <h1>Trillionnium World</h1>
         <p class="subtitle" data-i18n-en="Global-first open world built for one-thumb exploration: pick a real city focus, accept a bounty, submit a result, get rated, and claim rewards." data-i18n-zh="面向海外首发、为单手探索重做的开放世界：选择现实城市焦点，接取悬赏，提交成果，获得评级并领取奖励。">Global-first open world built for one-thumb exploration: pick a real city focus, accept a bounty, submit a result, get rated, and claim rewards.</p>

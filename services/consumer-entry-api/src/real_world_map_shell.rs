@@ -6,13 +6,27 @@ pub(super) fn trillionnium_language_settings_html() -> &'static str {
   <span data-i18n-en="Interface language" data-i18n-zh="界面语言">Interface language</span>
   <p data-i18n-en="Choose one UI language. The product no longer shows English and Chinese at the same time; more languages can be added here later." data-i18n-zh="选择一种界面语言。产品不再同时显示中英文；以后新增语言也从这里扩展。">Choose one UI language. The product no longer shows English and Chinese at the same time; more languages can be added here later.</p>
   <label for="trillionnium-language-select" class="sr-only" data-i18n-en="Language" data-i18n-zh="语言">Language</label>
-  <select id="trillionnium-language-select" data-trillionnium-language-select aria-label="Language">
+  <select id="trillionnium-language-select" data-trillionnium-language-select aria-label="Language" data-i18n-aria-label-en="Language" data-i18n-aria-label-zh="语言">
     <option value="en">English</option>
     <option value="zh">中文</option>
-    <option value="__future" disabled>More languages coming</option>
+    <option value="__future" disabled data-i18n-en="More languages coming" data-i18n-zh="更多语言即将加入">More languages coming</option>
   </select>
   <p class="subtitle" data-i18n-en="Saved locally on this device." data-i18n-zh="语言设置会保存在当前设备。">Saved locally on this device.</p>
 </article>"#
+}
+
+pub(super) fn trillionnium_language_inline_switcher_html(id: &str) -> String {
+    format!(
+        r#"<label id="{id}-label" class="language-switcher" for="{id}">
+  <span data-i18n-en="Language" data-i18n-zh="语言">Language</span>
+  <select id="{id}" data-trillionnium-language-select aria-label="Language" data-i18n-aria-label-en="Language" data-i18n-aria-label-zh="语言">
+    <option value="en">English</option>
+    <option value="zh">中文</option>
+    <option value="__future" disabled data-i18n-en="More languages coming" data-i18n-zh="更多语言即将加入">More languages coming</option>
+  </select>
+</label>"#,
+        id = id
+    )
 }
 
 pub(super) fn trillionnium_language_runtime_script() -> &'static str {

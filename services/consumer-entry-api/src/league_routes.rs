@@ -67,6 +67,36 @@ fn league_visible_copy(value: &str) -> String {
     copy
 }
 
+fn league_visible_copy_for_language(value: &str, language: &str) -> String {
+    let copy = league_visible_copy(value);
+    if copy.contains(" / ") {
+        let pieces = copy
+            .split(" / ")
+            .map(str::trim)
+            .filter(|piece| !piece.is_empty())
+            .collect::<Vec<_>>();
+        let preferred = if language == "zh" {
+            pieces
+                .iter()
+                .copied()
+                .find(|piece| contains_cjk_text(piece))
+        } else {
+            pieces
+                .iter()
+                .copied()
+                .find(|piece| contains_latin_text(piece) && !contains_cjk_text(piece))
+        };
+        if let Some(piece) = preferred {
+            return piece.to_string();
+        }
+    }
+    if language != "zh" && contains_cjk_text(&copy) {
+        value.to_string()
+    } else {
+        copy
+    }
+}
+
 fn escape_league_visible_text(value: &str) -> String {
     let copy = league_visible_copy(value);
     i18n_span_from_bilingual_slash_copy(&copy).unwrap_or_else(|| escape_html_text(&copy))
@@ -349,13 +379,15 @@ pub(super) async fn get_league_web_shell(
         .get("unlocked_skin_count")
         .and_then(Value::as_u64)
         .unwrap_or(0);
-    let progression_rank_label = league_visible_copy(progression_rank);
-    let progression_school_label = league_visible_copy(progression_school);
+    let progression_rank_label_en = league_visible_copy_for_language(progression_rank, "en");
+    let progression_school_label_en = league_visible_copy_for_language(progression_school, "en");
+    let progression_rank_label_zh = league_visible_copy_for_language(progression_rank, "zh");
+    let progression_school_label_zh = league_visible_copy_for_language(progression_school, "zh");
     let progression_line_en = format!(
         "Level {} {} · School {} · Successful quests {} · XP data {} · Skills/Tools/Skins {}/{}/{}",
         progression_level,
-        progression_rank_label,
-        progression_school_label,
+        progression_rank_label_en,
+        progression_school_label_en,
         progression_successes,
         progression_data_points,
         unlocked_skill_count,
@@ -365,14 +397,16 @@ pub(super) async fn get_league_web_shell(
     let progression_line_zh = format!(
         "等级 {} {} · 门派 {} · 成功任务 {} · 经验数据点 {} · 技能/工具/外观 {}/{}/{}",
         progression_level,
-        progression_rank_label,
-        progression_school_label,
+        progression_rank_label_zh,
+        progression_school_label_zh,
         progression_successes,
         progression_data_points,
         unlocked_skill_count,
         unlocked_tool_count,
         unlocked_skin_count,
     );
+    let league_header_language_switcher =
+        trillionnium_language_inline_switcher_html("trillionnium-league-language-select");
 
     Html(format!(
         r#"<!doctype html>
@@ -401,6 +435,9 @@ pub(super) async fn get_league_web_shell(
     .card p {{ color:var(--muted); line-height:1.55; }}
     .card footer {{ display:flex; justify-content:space-between; gap:10px; align-items:center; margin-top:18px; color:var(--gold); }}
     .pill {{ display:inline-flex; border:1px solid rgba(100,227,255,.35); color:var(--cyan); padding:5px 10px; border-radius:999px; font-size:12px; letter-spacing:.12em; }}
+    .league-hero-kicker {{ display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }}
+    .language-switcher {{ display:inline-flex; align-items:center; gap:8px; width:max-content; max-width:100%; border:1px solid rgba(100,227,255,.24); background:rgba(255,255,255,.065); color:var(--cyan); border-radius:999px; padding:6px 8px 6px 10px; font-size:12px; font-weight:900; }}
+    .language-switcher select {{ width:auto; min-width:92px; max-width:130px; margin:0; border:0; background:rgba(7,8,20,.72); color:var(--text); border-radius:999px; padding:7px 26px 7px 10px; font:inherit; font-size:12px; }}
     .panel {{ padding:24px; }}
     table {{ width:100%; border-collapse:collapse; }}
     td,th {{ padding:12px 10px; border-bottom:1px solid rgba(255,255,255,.08); text-align:left; }}
@@ -418,13 +455,13 @@ pub(super) async fn get_league_web_shell(
     .timeline li {{ display:grid; grid-template-columns:1.3fr .6fr 1.1fr; gap:10px; padding:12px; border-radius:14px; background:rgba(255,255,255,.055); }}
     code {{ color:var(--cyan); background:rgba(100,227,255,.08); padding:3px 7px; border-radius:8px; }}
     .cta {{ color:var(--bg); background:linear-gradient(135deg,var(--gold),#ff8d4d); padding:14px 18px; border-radius:16px; display:inline-block; font-weight:800; }}
-    @media (max-width:900px) {{ header {{ grid-template-columns:1fr; }} .grid,.stats,.play,.mini-grid {{ grid-template-columns:1fr; }} }}
+    @media (max-width:900px) {{ header {{ grid-template-columns:1fr; padding:22px 16px 12px; }} h1 {{ font-size:clamp(42px,14vw,68px); }} .subtitle {{ font-size:14px; line-height:1.42; }} .grid,.stats,.play,.mini-grid {{ grid-template-columns:1fr; }} .language-switcher {{ padding:5px 6px 5px 8px; font-size:11px; }} .language-switcher select {{ min-width:82px; max-width:112px; padding:6px 22px 6px 8px; font-size:11px; }} }}
   </style>
 </head>
 <body>
   <header>
     <section>
-      <div class="pill"><span data-i18n-en="Global-first Beta" data-i18n-zh="海外市场首发">Global-first Beta</span> · Preseason Zero</div>
+      <div class="league-hero-kicker"><div class="pill"><span data-i18n-en="Global-first Beta" data-i18n-zh="海外市场首发">Global-first Beta</span> · Preseason Zero</div><div id="league-language-switcher">{league_header_language_switcher}</div></div>
       <h1>Trillionnium League</h1>
       <p class="subtitle" data-i18n-en="AI Agent arena for overseas-first launch: draft your squad, enter dungeons, clear bounties, submit results, get rated, rank up, and earn rewards." data-i18n-zh="面向海外首发的 AI Agent 竞技场：组建队伍、进入副本、完成悬赏、提交成果、获得评分、升级段位并领取奖励。">AI Agent arena for overseas-first launch: draft your squad, enter dungeons, clear bounties, submit results, get rated, rank up, and earn rewards.</p>
     </section>

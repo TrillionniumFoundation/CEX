@@ -261,15 +261,15 @@ async function main() {
   const englishTabs = await page.$$eval('nav.app-bottom-tabs [data-app-tab]', (tabs) => tabs.map((tab) => tab.textContent.trim()));
   assert(JSON.stringify(englishTabs) === JSON.stringify(['Messages', 'World', 'Feed', 'Me']), `English system language tabs mismatch: ${JSON.stringify(englishTabs)}`);
   await assertNoVisibleBilingualSlashPair(page, '/app English system language');
-  assert(await count(page, '[data-trillionnium-language-select]') === 1, 'system language selector missing');
+  assert(await count(page, '[data-trillionnium-language-select]') >= 2, 'system language selectors missing');
   await activateTab(page, 'me');
-  await page.locator('[data-trillionnium-language-select]').selectOption('zh');
+  await page.locator('#trillionnium-app-language-select').selectOption('zh');
   await page.waitForFunction(() => document.documentElement.getAttribute('data-ui-language') === 'zh', { timeout: 10_000 });
   const chineseTabs = await page.$$eval('nav.app-bottom-tabs [data-app-tab]', (tabs) => tabs.map((tab) => tab.textContent.trim()));
   assert(JSON.stringify(chineseTabs) === JSON.stringify(['消息', '世界', '动态', '我']), `Chinese system language tabs mismatch: ${JSON.stringify(chineseTabs)}`);
   await assertNoVisibleBilingualSlashPair(page, '/app Chinese system language');
   assert((await page.locator('#trillionnium-system-language-settings').innerText()).includes('系统设置'), 'Chinese system settings copy missing');
-  await page.locator('[data-trillionnium-language-select]').selectOption('en');
+  await page.locator('#trillionnium-app-language-select').selectOption('en');
   await page.waitForFunction(() => document.documentElement.getAttribute('data-ui-language') === 'en', { timeout: 10_000 });
   await activateTab(page, 'map');
   assert(await count(page, '[data-app-tab]') >= 4, 'mobile bottom tabs missing');
@@ -332,12 +332,34 @@ async function main() {
       return text && !/Waiting|Pick/i.test(text);
     }, { timeout: 10_000 }).catch(() => null);
   }
+  const appMapBox = await page.locator('#real-world-map').boundingBox({ timeout: 10_000 });
+  const appMapPanelBox = await page.locator('#app-tab-map .map-panel').boundingBox({ timeout: 10_000 });
+  const appOnboardingBox = await page.locator('#app-first-playable-onboarding').boundingBox({ timeout: 10_000 });
+  assert(appMapBox && appMapPanelBox && appMapBox.y <= appMapPanelBox.y, '/app mobile should show the real map before dense map copy', { appMapBox, appMapPanelBox });
+  assert(appMapBox && appOnboardingBox && appMapBox.y < appOnboardingBox.y, '/app mobile onboarding should not push the map below the first tab screen', { appMapBox, appOnboardingBox });
   steps.push({ name: 'app_real_map_focus_controls', ok: true, focus_buttons: focusButtons });
   await page.screenshot({ path: path.join(screenshotDir, 'app-mobile-feed-map.png'), fullPage: true }).catch((error) => {
     consoleMessages.push({ type: 'warning', text: `app screenshot skipped: ${error.message || error}` });
   });
 
-  await page.goto('/world', { waitUntil: 'domcontentloaded', timeout: 30_000 });
+  await page.goto('/league?lang=en', { waitUntil: 'domcontentloaded', timeout: 30_000 });
+  await page.waitForFunction(() => document.documentElement.getAttribute('data-ui-language') === 'en', { timeout: 10_000 });
+  assert(await count(page, '#league-language-switcher [data-trillionnium-language-select]') === 1, 'league visible language switcher missing');
+  const leagueEnglishText = await page.locator('body').innerText({ timeout: 10_000 });
+  for (const needle of ['Trillionnium League', 'Playable Now', 'Web Battle Console']) {
+    assert(leagueEnglishText.includes(needle), `league English copy missing: ${needle}`);
+  }
+  await assertNoVisibleBilingualSlashPair(page, '/league English system language');
+  await page.locator('#trillionnium-league-language-select').selectOption('zh');
+  await page.waitForFunction(() => document.documentElement.getAttribute('data-ui-language') === 'zh', { timeout: 10_000 });
+  const leagueChineseText = await page.locator('body').innerText({ timeout: 10_000 });
+  for (const needle of ['当前可玩版本', '网页战斗台', '公会大厅']) {
+    assert(leagueChineseText.includes(needle), `league Chinese copy missing: ${needle}`);
+  }
+  await assertNoVisibleBilingualSlashPair(page, '/league Chinese system language');
+  steps.push({ name: 'league_global_language_switcher_runtime', ok: true });
+
+  await page.goto('/world?lang=en', { waitUntil: 'domcontentloaded', timeout: 30_000 });
   await page.waitForSelector('#world-real-map', { timeout: 15_000 });
   assert((await page.title()).includes('Trillionnium World'), 'world title missing');
   const worldBodyText = await page.locator('body').innerText({ timeout: 10_000 });
@@ -345,6 +367,7 @@ async function main() {
     assert(worldBodyText.includes(needle), `world English/global-first copy missing: ${needle}`);
   }
   assert(await count(page, '#world-mobile-first-screen') === 1, 'world mobile-first hero missing');
+  assert(await count(page, '#world-language-switcher [data-trillionnium-language-select]') === 1, 'world visible language switcher missing');
   assert(await count(page, '#world-hero-mobile-actions .cta') >= 2, 'world mobile hero quick actions missing');
   assert(await count(page, '#world-pulse-strip .pulse-card') === 5, 'world pulse strip should keep only compact primary counters visible');
   assert(await count(page, '#world-stats-compact-more .stat') >= 12, 'world compact stats drawer missing secondary counters');
