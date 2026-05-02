@@ -157,6 +157,13 @@ async function activateTab(page, tab) {
 
 async function submitWorldForm(page, formSelector, marker, expectedUrlFragment) {
   const form = page.locator(formSelector).first();
+  await form.evaluate((node) => {
+    let current = node;
+    while (current) {
+      if (current.tagName === 'DETAILS') current.open = true;
+      current = current.parentElement;
+    }
+  });
   await form.scrollIntoViewIfNeeded({ timeout: 10_000 });
   const textarea = form.locator('textarea').first();
   if (await textarea.count()) {
@@ -224,7 +231,7 @@ async function main() {
 
   await page.goto('/app', { waitUntil: 'domcontentloaded', timeout: 30_000 });
   await page.waitForSelector('#real-world-map', { timeout: 15_000 });
-  assert((await page.title()).includes('Trillionnium Client App'), 'app title missing');
+  assert((await page.title()).includes('Trillionnium World Mobile'), 'app title missing');
   assert(await count(page, '[data-app-tab]') >= 4, 'mobile bottom tabs missing');
   assert(await count(page, '#app-tab-map.is-active') === 1, 'map tab not active by default');
   assert(await count(page, 'nav.app-bottom-tabs[role="tablist"]') === 1, 'accessible tablist missing');
@@ -265,7 +272,7 @@ async function main() {
   await activateTab(page, 'feed');
   await page.waitForFunction(() => {
     const status = document.querySelector('#app-feed-api-status')?.textContent || '';
-    return /Feed API (synced|fallback)|Embedded feed snapshot/.test(status);
+    return /动态已同步|动态备用快照|内置动态快照|Feed API (synced|fallback)|Embedded feed snapshot/.test(status);
   }, { timeout: 15_000 });
   assert(await count(page, '#app-feed-items-live .app-feed-item, #app-feed-items-live article') >= 1, 'feed cards missing after API hydration');
   assert((await text(page, '#app-feed-api-status')).includes('/app/web/feed'), 'feed hydration did not use web-session feed path');
@@ -294,7 +301,7 @@ async function main() {
   assert((await page.title()).includes('Trillionnium World'), 'world title missing');
   assert(await count(page, '#world-map-move-panel') === 1, 'world map move panel missing');
   assert(await count(page, '#world-buy-form') === 1, 'world buy form missing');
-  steps.push({ name: 'world_boot_real_map_and_commerce_forms', ok: true });
+  steps.push({ name: 'world_boot_real_map_and_quest_forms', ok: true });
 
   const worldFocusButtons = await count(page, '.trillionnium-map-focus');
   if (worldFocusButtons > 0) {
@@ -303,32 +310,32 @@ async function main() {
   await submitWorldForm(page, '#world-map-move-panel form', marker, 'map=moved');
   steps.push({ name: 'world_map_move_form_browser_submit', ok: true });
 
-  await page.locator('#world-action-body').fill('craft a real customer-facing studio asset with deliverable, evidence package, risk controls, operating loop, next action, and self review for browser commerce E2E.');
+  await page.locator('#world-action-body').fill('打造一个现实委托可用的 AI 设计工坊道具：写清成果、证据包、风险控制、行动循环、下一步和自检记录，用于 browser adventure E2E。');
   await submitWorldForm(page, 'form[action="/world/web/action"]', marker, 'played=1');
   steps.push({ name: 'world_action_browser_submit', ok: true });
 
-  await page.locator('#world-company-body').fill('Launch a craft studio company with customer segment, deliverable offer, evidence source pack, risk controls, operating loop, next revenue action, and self review.');
+  await page.locator('#world-company-body').fill('建立一个 AI 设计工坊：写清委托目标画像、可提交成果、证据来源包、风险控制、行动循环、下一条支线和自检记录。');
   await submitWorldForm(page, 'form[action="/world/web/company"]', marker, 'company=created');
   steps.push({ name: 'world_company_browser_submit', ok: true });
 
-  await page.locator('#world-listing-body').fill('Publish a service listing with clear deliverable, price logic, evidence package, customer promise, risk controls, next action, and self review.');
+  await page.locator('#world-listing-body').fill('发布一个工坊任务牌：写清成果、赏金逻辑、证据包、承诺、风险控制、下一步行动和自检记录。');
   await submitWorldForm(page, 'form[action="/world/web/listing"]', marker, 'listing=created');
   steps.push({ name: 'world_listing_browser_submit', ok: true });
 
   await submitWorldForm(page, '#world-buy-form', marker, 'purchase=created');
   const purchaseCards = await count(page, '#world-purchase-cards-live article, #world-purchase-cards-live .mini');
-  assert(purchaseCards >= 1, 'purchase card missing after buy');
-  steps.push({ name: 'world_buy_browser_submit', ok: true, purchase_cards: purchaseCards });
+  assert(purchaseCards >= 1, 'quest accept card missing after accepting quest board');
+  steps.push({ name: 'world_quest_accept_browser_submit', ok: true, purchase_cards: purchaseCards });
 
   await submitWorldForm(page, '#world-work-deliver-form', marker, 'work=delivered');
   const deliveryCards = await count(page, '#world-work-deliveries-live article, #world-work-deliveries-live .mini');
-  assert(deliveryCards >= 1, 'delivery card missing after deliver');
-  steps.push({ name: 'world_work_deliver_browser_submit', ok: true, delivery_cards: deliveryCards });
+  assert(deliveryCards >= 1, 'quest result card missing after submit');
+  steps.push({ name: 'world_quest_result_submit_browser_submit', ok: true, delivery_cards: deliveryCards });
 
   await submitWorldForm(page, '#world-work-accept-form', marker, 'work=accepted');
   const acceptanceCards = await count(page, '#world-work-acceptances-live article, #world-work-acceptances-live .mini');
-  assert(acceptanceCards >= 1, 'acceptance card missing after accept');
-  steps.push({ name: 'world_work_accept_browser_submit', ok: true, acceptance_cards: acceptanceCards });
+  assert(acceptanceCards >= 1, 'quest rating card missing after rating');
+  steps.push({ name: 'world_quest_rating_browser_submit', ok: true, acceptance_cards: acceptanceCards });
 
   const health = await page.request.get(`${baseUrl}/health`, { timeout: 20_000 });
   assert(health.ok(), `health failed after browser flow: ${health.status()}`);
@@ -347,7 +354,7 @@ async function main() {
     });
   }
 
-  await page.screenshot({ path: path.join(screenshotDir, 'world-commerce-accepted.png'), fullPage: false, timeout: 15_000, animations: 'disabled' }).catch((error) => {
+  await page.screenshot({ path: path.join(screenshotDir, 'world-quest-rated.png'), fullPage: false, timeout: 15_000, animations: 'disabled' }).catch((error) => {
     consoleMessages.push({ type: 'warning', text: `world screenshot skipped: ${error.message || error}` });
   });
 

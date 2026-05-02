@@ -109,8 +109,8 @@ const CLIENT_FEED_FILTER_SPECS: [(&str, &str); 7] = [
     ("live_event", "事件"),
     ("route_task", "任务"),
     ("contract", "委托"),
-    ("completion", "完成"),
-    ("commerce", "成交"),
+    ("completion", "战报"),
+    ("commerce", "冒险"),
     ("social", "社交"),
 ];
 
@@ -145,7 +145,7 @@ impl ClientFeedSurfaceView {
         let api_path = feed
             .and_then(|feed| feed.get("api_path"))
             .and_then(Value::as_str)
-            .unwrap_or("/v1/client/feed/@alice:local.dev")
+            .unwrap_or("/app/web/feed")
             .to_string();
         let web_session_path = feed
             .and_then(|feed| feed.get("web_session_path"))
@@ -243,23 +243,23 @@ impl ClientFeedSurfaceView {
     pub(super) fn summary_chips_html(&self) -> String {
         [
             format!(
-                "<span class=\"hud-chip\"><strong>{}</strong> feed items</span>",
+                "<span class=\"hud-chip\"><strong>{}</strong> 条动态</span>",
                 self.item_count
             ),
             format!(
-                "<span class=\"hud-chip\"><strong>{}</strong> contracts</span>",
+                "<span class=\"hud-chip\"><strong>{}</strong> 个委托</span>",
                 self.contract_count
             ),
             format!(
-                "<span class=\"hud-chip\"><strong>{}</strong> completions</span>",
+                "<span class=\"hud-chip\"><strong>{}</strong> 份战报</span>",
                 self.completion_count
             ),
             format!(
-                "<span class=\"hud-chip\"><strong>{}</strong> purchases · <strong>{}</strong> work orders</span>",
+                "<span class=\"hud-chip\"><strong>{}</strong> 次接取 · <strong>{}</strong> 个冒险委托</span>",
                 self.purchase_count, self.work_order_count
             ),
             format!(
-                "<span class=\"hud-chip\"><strong>{}</strong> nearby agents · {}</span>",
+                "<span class=\"hud-chip\"><strong>{}</strong> 位附近角色 · {}</span>",
                 self.nearby_agent_count,
                 escape_html_text(&self.active_region_id),
             ),
@@ -771,14 +771,14 @@ pub(super) fn build_client_feed_items(
             .unwrap_or("queued");
         json!({
             "feed_kind": "completion",
-            "source": "completion_snapshot",
+            "source": "quest_report_snapshot",
             "completion_id": completion_id,
             "contract_id": contract_id,
             "task_id": task_id,
             "location_id": location_id,
-            "title": format!("Completion {}", completion_id),
+            "title": format!("战报 {}", completion_id),
             "summary": completion.get("body").cloned().unwrap_or_else(|| json!("")),
-            "detail": format!("task {} · score {:.1} · reward {:.2} · {}", if task_id.is_empty() { "unlinked" } else { task_id }, score, reward_amount, payout_status),
+            "detail": format!("任务 {} · 评分 {:.1} · 奖励 {:.2} · {}", if task_id.is_empty() { "unlinked" } else { task_id }, score, reward_amount, payout_status),
             "created_at_epoch": completion.get("created_at_epoch").cloned().unwrap_or_else(|| json!(0)),
         })
     }));
@@ -797,13 +797,13 @@ pub(super) fn build_client_feed_items(
             .unwrap_or("pending");
         json!({
             "feed_kind": "commerce_purchase",
-            "source": "commerce_snapshot",
+            "source": "adventure_snapshot",
             "purchase_id": purchase_id,
             "listing_id": purchase.get("listing_id").cloned().unwrap_or(Value::Null),
             "company_id": purchase.get("company_id").cloned().unwrap_or(Value::Null),
-            "title": format!("Purchase {}", purchase_id),
-            "summary": purchase.get("listing_id").cloned().unwrap_or_else(|| json!("listing")),
-            "detail": format!("{} credits · {}", price_credits, status),
+            "title": format!("接取契约 {}", purchase_id),
+            "summary": purchase.get("listing_id").cloned().unwrap_or_else(|| json!("任务牌")),
+            "detail": format!("赏金 {} · {}", price_credits, status),
             "created_at_epoch": purchase.get("created_at_epoch").cloned().unwrap_or_else(|| json!(0)),
         })
     }));
@@ -822,14 +822,14 @@ pub(super) fn build_client_feed_items(
             .unwrap_or(0);
         json!({
             "feed_kind": "work_order",
-            "source": "commerce_snapshot",
+            "source": "adventure_snapshot",
             "work_order_id": work_order_id,
             "purchase_id": work_order.get("purchase_id").cloned().unwrap_or(Value::Null),
             "listing_id": work_order.get("listing_id").cloned().unwrap_or(Value::Null),
             "company_id": work_order.get("company_id").cloned().unwrap_or(Value::Null),
-            "title": format!("Work order {}", work_order_id),
+            "title": format!("冒险委托 {}", work_order_id),
             "summary": work_order.get("brief").cloned().unwrap_or_else(|| json!("")),
-            "detail": format!("{} · value {}", status, value_score),
+            "detail": format!("{} · 难度 {}", status, value_score),
             "created_at_epoch": work_order.get("created_at_epoch").cloned().unwrap_or_else(|| json!(0)),
         })
     }));
@@ -852,14 +852,14 @@ pub(super) fn build_client_feed_items(
         let score = delivery.get("score").and_then(Value::as_f64).unwrap_or(0.0);
         json!({
             "feed_kind": "delivery",
-            "source": "commerce_snapshot",
+            "source": "adventure_snapshot",
             "delivery_id": delivery_id,
             "work_order_id": work_order_id,
             "listing_id": linked_work_order.map(|work_order| work_order.listing_id.clone()).unwrap_or_default(),
             "company_id": linked_work_order.map(|work_order| work_order.company_id.clone()).unwrap_or_default(),
-            "title": format!("Delivery {}", delivery_id),
+            "title": format!("成果提交 {}", delivery_id),
             "summary": delivery.get("body").cloned().unwrap_or_else(|| json!("")),
-            "detail": format!("work order {} · {} · score {:.1}", if work_order_id.is_empty() { "pending" } else { work_order_id }, status, score),
+            "detail": format!("委托 {} · {} · 评分 {:.1}", if work_order_id.is_empty() { "pending" } else { work_order_id }, status, score),
             "created_at_epoch": delivery.get("created_at_epoch").cloned().unwrap_or_else(|| json!(0)),
         })
     }));
@@ -957,7 +957,7 @@ pub(super) fn decorate_route_task_feed_item(object: &mut serde_json::Map<String,
         object
             .get("next_opportunity_action_label")
             .cloned()
-            .unwrap_or_else(|| json!("Route next opportunity")),
+            .unwrap_or_else(|| json!("推进下一条支线")),
         object
             .get("next_opportunity_panel_id")
             .cloned()
@@ -998,10 +998,7 @@ pub(super) fn decorate_contract_feed_item(object: &mut serde_json::Map<String, V
     ClientFeedActionTarget::from_route_target(world_route_contract_lane_target(
         "打开委托",
         contract_id,
-        format!(
-            "{}: update contract evidence, acceptance standard, and next route step.",
-            title
-        ),
+        format!("{}: 更新契约证据、评级标准和下一步路线。", title),
     ))
     .with_location_id(client_feed_object_value(object, "location_id"))
     .with_task_id(client_feed_object_value(object, "task_id"))
@@ -1010,13 +1007,10 @@ pub(super) fn decorate_contract_feed_item(object: &mut serde_json::Map<String, V
 }
 
 pub(super) fn decorate_completion_feed_item(object: &mut serde_json::Map<String, Value>) {
-    let title = client_feed_object_string(object, "title", "Completion");
+    let title = client_feed_object_string(object, "title", "战报");
     ClientFeedActionTarget::from_route_target(world_route_action_console_target(
         "复盘收益",
-        format!(
-            "{}: review reward, proof quality, and the next repeat-order or upsell move.",
-            title
-        ),
+        format!("{}: 复盘奖励、证据质量、下一段支线和声望成长。", title),
     ))
     .with_location_id(client_feed_object_value(object, "location_id"))
     .with_task_id(client_feed_object_value(object, "task_id"))
@@ -1025,13 +1019,13 @@ pub(super) fn decorate_completion_feed_item(object: &mut serde_json::Map<String,
 }
 
 pub(super) fn decorate_purchase_feed_item(object: &mut serde_json::Map<String, Value>) {
-    let title = client_feed_object_string(object, "title", "Purchase");
+    let title = client_feed_object_string(object, "title", "契约接取");
     let listing_id = client_feed_object_string(object, "listing_id", "");
     ClientFeedActionTarget::from_route_target(world_route_purchase_lane_target(
-        "打开成交",
+        "打开契约",
         listing_id,
         format!(
-            "{}: review buyer intent, acceptance scope, and convert this purchase into a solid delivery path.",
+            "{}: 读取委托目标、评级范围，并把这次接取推进成清晰的冒险路线。",
             title
         ),
     ))
@@ -1058,28 +1052,22 @@ pub(super) fn decorate_work_lane_feed_item(
 }
 
 pub(super) fn decorate_work_order_feed_item(object: &mut serde_json::Map<String, Value>) {
-    let title = client_feed_object_string(object, "title", "Work order");
+    let title = client_feed_object_string(object, "title", "冒险委托");
     decorate_work_lane_feed_item(
         object,
-        "打开工单",
+        "打开委托",
         "delivery",
-        format!(
-            "{}: inspect this work order, tighten deliverable scope, and clear the next blocker.",
-            title
-        ),
+        format!("{}: 检查委托目标，收束成果范围，并清掉下一处阻碍。", title),
     );
 }
 
 pub(super) fn decorate_delivery_feed_item(object: &mut serde_json::Map<String, Value>) {
-    let title = client_feed_object_string(object, "title", "Delivery");
+    let title = client_feed_object_string(object, "title", "成果提交");
     decorate_work_lane_feed_item(
         object,
-        "去验收",
+        "去评级",
         "acceptance",
-        format!(
-            "{}: review delivery quality, acceptance proof, and revision risk.",
-            title
-        ),
+        format!("{}: 评定成果质量、证据完整度和是否需要返工。", title),
     );
 }
 
@@ -1087,10 +1075,7 @@ pub(super) fn decorate_social_agent_feed_item(object: &mut serde_json::Map<Strin
     let title = client_feed_object_string(object, "title", "Agent");
     ClientFeedActionTarget::from_route_target(world_route_action_console_target(
         "去世界",
-        format!(
-            "{}: connect this nearby agent with the current route, contract, or live event.",
-            title
-        ),
+        format!("{}: 把附近 Agent 接入当前路线、契约或实时事件。", title),
     ))
     .with_location_id(client_feed_object_value(object, "location_id"))
     .apply(object);
@@ -1183,7 +1168,7 @@ impl<'a> ClientFeedProjectionContext<'a> {
                 "route_preview",
                 "route_task_graph",
                 "contract_snapshot",
-                "commerce_snapshot",
+                "adventure_snapshot",
                 "social_snapshot"
             ],
             "items": items,
@@ -1373,15 +1358,15 @@ impl<'a> ClientAppProjectionContext<'a> {
         map_metrics: &ClientAppMapHubMetrics,
     ) -> Value {
         let starter_world_action = format!(
-            "/world action 在{}发起一个真实客户服务任务：明确客户、交付物、证据、风险和下一步。",
+            "/world action 在{}发现一个城市悬赏：明确委托目标、成果、证据、风险和下一步。",
             current_node_name
         );
         json!({
             "contract_version": "trillionnium_first_playable_onboarding_v1",
             "rail_id": "first_playable_main_quest_rail",
-            "rail_label": "新手主线：从地图到成交",
+            "rail_label": "新手主线：从地图到悬赏完成",
             "completion_target": "first_playable_loop_100",
-            "primary_goal": "把一个地图焦点推进成 world action、contract、commerce work order、delivery、acceptance 和 ledger reward。",
+            "primary_goal": "把一个地图焦点推进成探索、契约、委托、成果提交、评级和奖励领取。",
             "current_state": {
                 "matrix_user_id": self.matrix_user_id,
                 "active_region_id": active_region_id,
@@ -1401,61 +1386,61 @@ impl<'a> ClientAppProjectionContext<'a> {
                     "status": "ready",
                     "surface": "世界",
                     "label": "选择地图焦点",
-                    "description": "先在真实世界镜像地图里选择 region、POI、tile 或 live event，让后续 action 有明确位置。",
+                    "description": "先在现实镜像地图里选择区域、热点、地图块或实时事件，让后续行动有明确位置。",
                     "command": "/map",
                     "web_panel_id": "app-tab-map",
-                    "success_signal": "route_focus_selected",
+                    "success_signal": "地图焦点已选定",
                 },
                 {
                     "step_id": "start_world_action",
                     "status": "ready",
                     "surface": "世界",
-                    "label": "发起 World Action",
-                    "description": "把地图焦点转成一个真实客户服务任务，写清交付物、证据、风险和下一步。",
+                    "label": "发起世界行动",
+                    "description": "把地图焦点转成一个城市悬赏，写清委托目标、成果、证据、风险和下一步。",
                     "command": starter_world_action,
                     "web_panel_id": WORLD_ROUTE_ACTION_PANEL_ID,
                     "textarea_id": WORLD_ROUTE_ACTION_TEXTAREA_ID,
-                    "success_signal": "world_event_created",
+                    "success_signal": "世界事件已创建",
                 },
                 {
                     "step_id": "capture_contract",
                     "status": "ready",
                     "surface": "世界 / 消息",
-                    "label": "登记可验收委托",
-                    "description": "把 action 收成 contract，确保任务可以在 Web、Matrix 和 route graph 里追踪。",
-                    "command": "/contract <客户目标 + 交付物 + 验收标准>",
+                    "label": "登记待评级委托",
+                    "description": "把世界行动收成可追踪契约，确保主线、消息和路线图都能看到同一个任务。",
+                    "command": "/contract <委托目标 + 成果标准 + 评级规则>",
                     "web_panel_id": WORLD_ROUTE_CONTRACTS_PANEL_ID,
-                    "success_signal": "contract_open",
+                    "success_signal": "契约已开启",
                 },
                 {
-                    "step_id": "commerce_delivery",
+                    "step_id": "quest_delivery",
                     "status": "ready",
                     "surface": "动态 / 世界",
-                    "label": "完成一次商业交付",
-                    "description": "通过 listing、buy、work deliver、accept/reject/reopen/cancel 跑完真实 commerce lifecycle。",
-                    "command": "/work deliver latest <交付内容 + 证据包 + 验收清单>",
+                    "label": "完成一次悬赏委托",
+                    "description": "通过任务牌、接取、提交成果、评级/返工/重开/放弃跑完真实冒险循环。",
+                    "command": "/work deliver latest <成果内容 + 证据包 + 评级清单>",
                     "web_panel_id": WORLD_ROUTE_COMMERCE_PANEL_ID,
                     "input_id": WORLD_ROUTE_WORK_DELIVER_INPUT_ID,
                     "textarea_id": WORLD_ROUTE_WORK_DELIVER_TEXTAREA_ID,
-                    "success_signal": "work_accepted_or_feedback_loop_recorded",
+                    "success_signal": "评级或返工路线已记录",
                 },
                 {
                     "step_id": "read_reward_and_next_route",
                     "status": "ready",
                     "surface": "动态 / 我",
                     "label": "查看奖励与下一步路线",
-                    "description": "验收后检查 feed、wallet、progression 和 route task graph，把下一次复购/升级机会接起来。",
+                    "description": "评级后检查动态、奖励、成长和路线图，把下一条支线/升级机会接起来。",
                     "command": "/app",
                     "web_panel_id": "app-tab-feed",
-                    "success_signal": "ledger_or_route_next_opportunity_visible",
+                    "success_signal": "奖励或下一条路线可见"
                 }
             ],
             "acceptance_checks": [
                 "map_focus_visible",
                 "world_event_created",
                 "contract_open_or_completed",
-                "commerce_work_order_created",
-                "delivery_acceptance_or_feedback_loop_visible",
+                "quest_work_order_created",
+                "quest_rating_or_feedback_loop_visible",
                 "wallet_progression_feed_updated",
                 "route_task_graph_next_action_visible"
             ],
@@ -1476,7 +1461,7 @@ impl<'a> ClientAppProjectionContext<'a> {
             "full_vision_hooks": [
                 "real_world_map_engine",
                 "route_task_graph",
-                "commerce_lifecycle",
+                "quest_lifecycle",
                 "ledger_settlement",
                 "matrix_social_loop",
                 "normalized_repository_read_models"
@@ -1741,9 +1726,9 @@ impl<'a> ClientAppModulesProjection<'a> {
         vec![
             json!({
                 "module_id": "world_map",
-                "name": "World Map",
-                "style": "Leaflet + OpenStreetMap + 英雄坛说/Gather overlay",
-                "status": "playable",
+                "name": "现实地图",
+                "style": "Leaflet + OpenStreetMap + 英雄坛说/Gather 探索层",
+                "status": "可玩",
                 "entry_priority": 1,
                 "ui_role": "primary_super_entry",
                 "engine_id": "leaflet_openstreetmap_v1",
@@ -1757,7 +1742,7 @@ impl<'a> ClientAppModulesProjection<'a> {
                 "primary_command": "/map",
                 "secondary_command": "/go <direction|node-id>",
                 "summary": format!(
-                    "{} / {} · region {} · {} nearby POIs · {} live events · {} density",
+                    "{} / {} · 区域 {} · {} 个附近热点 · {} 个实时事件 · {} 密度",
                     self.current_node_name,
                     self.current_node_id,
                     self.active_region_id,
@@ -1768,36 +1753,36 @@ impl<'a> ClientAppModulesProjection<'a> {
             }),
             json!({
                 "module_id": "face_duel",
-                "name": "Face Duel",
-                "style": "Pokémon-like nearby battle",
-                "status": "playable",
+                "name": "面对面切磋",
+                "style": "宝可梦式附近对战",
+                "status": "可玩",
                 "primary_command": "/duel nearby <出招>",
                 "match_id": "face-duel-001",
-                "summary": "面对面选择 Agent 阵容、出招、评分和结算",
+                "summary": "面对面选择 Agent 阵容、出招、评分和奖励",
             }),
             json!({
                 "module_id": "social",
-                "name": "Social",
-                "style": "WeChat / Telegram room loop",
-                "status": "playable",
+                "name": "队友消息",
+                "style": "微信 / Telegram 房间循环",
+                "status": "可玩",
                 "primary_command": "/social",
                 "contact_count": self.nearby_agent_count,
-                "summary": "Matrix room + Agent/NPC contacts + guild presence",
+                "summary": "Matrix 房间 + Agent/NPC 联系人 + 公会在线状态",
             }),
             json!({
                 "module_id": "wallet",
-                "name": "Wallet",
-                "style": "Alipay-like credits wallet",
-                "status": "playable",
+                "name": "奖励钱包",
+                "style": "支付宝式积分钱包",
+                "status": "可玩",
                 "primary_command": "/wallet",
                 "secondary_command": "/pay",
-                "summary": "balance / reserved / reserve / consume / refund",
+                "summary": "余额 / 托管 / 领取 / 退回",
             }),
             json!({
                 "module_id": "progression",
-                "name": "Progression",
-                "style": "门派 / skills / tools / skins / XP / level",
-                "status": "playable",
+                "name": "角色成长",
+                "style": "门派 / 技能 / 道具 / 皮肤 / 经验 / 等级",
+                "status": "可玩",
                 "primary_command": "/progression",
                 "secondary_command": "/skills /tools /skins",
                 "level": self.progression_summary.level,

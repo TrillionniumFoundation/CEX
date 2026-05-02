@@ -300,7 +300,7 @@ pub(super) fn world_map_node_primary_actions_json(node: &WorldMapNode) -> Vec<Va
     let mut actions = vec![
         world_map_primary_action_json(
             "move_here",
-            "Move here",
+            "移动到这里",
             "movement",
             format!("/go {}", node.node_id),
             WORLD_ROUTE_MAP_MOVE_PANEL_ID,
@@ -312,7 +312,7 @@ pub(super) fn world_map_node_primary_actions_json(node: &WorldMapNode) -> Vec<Va
         ),
         world_map_primary_action_json(
             "inspect_node",
-            "Inspect",
+            "观察据点",
             "inspect",
             "/look".to_string(),
             WORLD_ROUTE_ACTION_PANEL_ID,
@@ -323,12 +323,12 @@ pub(super) fn world_map_node_primary_actions_json(node: &WorldMapNode) -> Vec<Va
     if has_tag("market") || has_tag("buy") || has_tag("sell") || has_tag("listing") {
         actions.push(world_map_primary_action_json(
             "open_market",
-            "Open market",
+            "打开任务牌",
             "commerce",
             "/shops".to_string(),
             WORLD_ROUTE_COMMERCE_PANEL_ID,
             format!(
-                "在「{}」浏览市场机会、客户需求、服务上架和可购买工作单。",
+                "在「{}」浏览悬赏机会、委托需求、工坊任务牌和可接取契约。",
                 node.name
             ),
             None,
@@ -337,12 +337,12 @@ pub(super) fn world_map_node_primary_actions_json(node: &WorldMapNode) -> Vec<Va
     if has_tag("craft") || has_tag("asset") || has_tag("upgrade") || has_tag("company") {
         actions.push(world_map_primary_action_json(
             "open_workshop",
-            "Open workshop",
+            "进入工坊",
             "craft",
             "/assets".to_string(),
             WORLD_ROUTE_ASSETS_PANEL_ID,
             format!(
-                "在「{}」整理资产、升级工坊、创建公司或准备交付物。",
+                "在「{}」整理道具、升级工坊、创建据点或准备可提交成果。",
                 node.name
             ),
             None,
@@ -351,12 +351,12 @@ pub(super) fn world_map_node_primary_actions_json(node: &WorldMapNode) -> Vec<Va
     if has_tag("deliver") || has_tag("accept") || has_tag("reject") || has_tag("cancel") {
         actions.push(world_map_primary_action_json(
             "open_work_orders",
-            "Work orders",
+            "查看委托",
             "work_order",
             "/work".to_string(),
             WORLD_ROUTE_COMMERCE_PANEL_ID,
             format!(
-                "在「{}」处理交付、验收、拒收、返工、取消和证据包。",
+                "在「{}」处理成果提交、评级、返工、重开、放弃和证据包。",
                 node.name
             ),
             None,
@@ -365,7 +365,7 @@ pub(super) fn world_map_node_primary_actions_json(node: &WorldMapNode) -> Vec<Va
     if has_tag("arena") || has_tag("raid") || has_tag("guild") || has_tag("team") {
         actions.push(world_map_primary_action_json(
             "open_league",
-            "Enter League",
+            "进入竞技场",
             "league",
             "/league".to_string(),
             WORLD_ROUTE_LEAGUE_LINK_ID,
@@ -379,11 +379,11 @@ pub(super) fn world_map_node_primary_actions_json(node: &WorldMapNode) -> Vec<Va
     if has_tag("wallet") || has_tag("refund") || has_tag("contract") {
         actions.push(world_map_primary_action_json(
             "open_wallet_contracts",
-            "Wallet / contracts",
+            "奖励 / 契约",
             "ledger_contract",
             "/wallet".to_string(),
             WORLD_ROUTE_CONTRACTS_PANEL_ID,
-            format!("在「{}」检查钱包、合约、退款、争议或验收状态。", node.name),
+            format!("在「{}」检查奖励、契约、退回、争议或评级状态。", node.name),
             None,
         ));
     }

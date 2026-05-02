@@ -1,11 +1,116 @@
 use super::*;
 
+fn client_app_visible_copy(value: &str) -> String {
+    let mut copy = value.to_string();
+    let replacements = [
+        ("Starter Studio", "新手工坊"),
+        ("Forge Workbench", "锻造工坊"),
+        ("Asset Yard", "道具庭院"),
+        ("ZBJ Market Gate", "悬赏集市门"),
+        ("League Coliseum", "League 竞技场"),
+        ("starter-studio", "新手工坊"),
+        ("forge-workbench", "锻造工坊"),
+        ("asset-yard", "道具庭院"),
+        ("zbj-market-gate", "悬赏集市门"),
+        ("league-coliseum", "League 竞技场"),
+        ("cn-shanghai-core", "上海主城"),
+        ("dense", "高密度"),
+        ("regional", "区域密度"),
+        ("route_task", "路线任务"),
+        ("contract_capture", "契约登记"),
+        ("work_order", "冒险委托"),
+        ("delivery", "成果提交"),
+        ("acceptance", "评级"),
+        ("rejection", "返工"),
+        ("reopen", "重开"),
+        ("cancellation", "放弃"),
+        ("pending", "待推进"),
+        ("completed", "已完成"),
+        ("accepted", "已评级"),
+        ("customer-facing", "委托可用"),
+        ("customer", "委托"),
+        ("buyer", "接取方"),
+        ("seller", "服务方"),
+        ("commercial", "任务"),
+        ("browser commerce E2E", "browser adventure E2E"),
+        ("AI 设计公司", "AI 设计工坊"),
+        ("服务真实客户", "完成真实委托"),
+        ("真实客户", "真实委托"),
+        ("委托方", "委托目标"),
+    ];
+    for (from, to) in replacements {
+        copy = copy.replace(from, to);
+    }
+    copy
+}
+
+fn client_app_map_label(value: &str) -> String {
+    let label = match value {
+        "prefetch" => "预热分片",
+        "street_nodes" => "街区节点",
+        "neighbor_tile_warmup" => "邻近地图预热",
+        "warm" => "预热",
+        "active" => "活跃",
+        "planned" => "规划中",
+        "open" | "OPEN" => "开放",
+        "contract" => "契约",
+        "venture" => "探索",
+        "no-task" => "未关联任务",
+        "poi" => "热点",
+        "world_event" => "世界事件",
+        "dense" => "高密度",
+        "regional" => "区域密度",
+        "Map density booting." => "地图密度加载中。",
+        "hub_square" => "主城广场",
+        "agent_home" => "Agent 居所",
+        "ledger_office" => "奖励窗口",
+        "workshop_room" => "工坊房间",
+        "craft_station" => "锻造台",
+        "asset_yard" => "道具庭院",
+        "market_gate" => "悬赏入口",
+        "client_board" => "悬赏牌",
+        "delivery_dock" => "成果评定台",
+        "dispute_desk" => "仲裁柜台",
+        "arena_gate" => "竞技入口",
+        "raid_hall" => "团本大厅",
+        _ => value,
+    };
+    client_app_visible_copy(label)
+}
+
+fn escape_client_app_visible_text(value: &str) -> String {
+    escape_html_text(&client_app_visible_copy(value))
+}
+
+fn client_app_readiness_label(value: &str) -> String {
+    match value {
+        "first_playable_loop_100" => "新手主线 100%".to_string(),
+        "map_focus_visible" => "地图焦点可见".to_string(),
+        "world_event_created" => "世界事件已创建".to_string(),
+        "contract_open_or_completed" => "契约已开启或完成".to_string(),
+        "quest_work_order_created" => "冒险委托已创建".to_string(),
+        "quest_rating_or_feedback_loop_visible" => "评级 / 返工路线可见".to_string(),
+        "wallet_progression_feed_updated" => "奖励成长动态已更新".to_string(),
+        "route_task_graph_next_action_visible" => "路线下一步可见".to_string(),
+        "visible" => "可见".to_string(),
+        "ready" => "已准备".to_string(),
+        _ => client_app_visible_copy(value),
+    }
+}
+
 pub(super) async fn get_client_app_web_shell(
     State(state): State<AppState>,
-    _headers: HeaderMap,
+    headers: HeaderMap,
 ) -> Html<String> {
+    let web_session = authorize_league_web_session_readonly(&state, &headers, true)
+        .ok()
+        .flatten();
+    let current_matrix_user_id = web_session
+        .as_ref()
+        .map(|session| session.matrix_user_id.as_str())
+        .unwrap_or("@alice:local.dev");
     let league = state.inner.league_state.lock().await;
-    let app = client_app_json(&league, "@alice:local.dev");
+    let app = client_app_json(&league, current_matrix_user_id);
     let modules = app
         .get("modules")
         .and_then(Value::as_array)
@@ -23,10 +128,10 @@ pub(super) async fn get_client_app_web_shell(
                 .unwrap_or("/app");
             format!(
                 "<article class=\"module\"><strong>{}</strong><span>{}</span><p>{}</p><code>{}</code></article>",
-                escape_html_text(name),
-                escape_html_text(style),
-                escape_html_text(summary),
-                escape_html_text(command),
+                escape_client_app_visible_text(name),
+                escape_client_app_visible_text(style),
+                escape_client_app_visible_text(summary),
+                escape_client_app_visible_text(command),
             )
         })
         .collect::<Vec<_>>()
@@ -53,11 +158,11 @@ pub(super) async fn get_client_app_web_shell(
                 .and_then(Value::as_str)
                 .unwrap_or("mirror-city");
             format!(
-                "<article class=\"module\"><strong>{}</strong><span>{} · {}</span><p>消息、协作、合同推进与 world action 的联系人入口。</p><code>{}</code></article>",
-                escape_html_text(name),
-                escape_html_text(kind),
-                escape_html_text(role),
-                escape_html_text(location),
+                "<article class=\"module\"><strong>{}</strong><span>{} · {}</span><p>消息、协作、契约推进与世界行动的联系人入口。</p><code>{}</code></article>",
+                escape_client_app_visible_text(name),
+                escape_client_app_visible_text(kind),
+                escape_client_app_visible_text(role),
+                escape_client_app_visible_text(location),
             )
         })
         .collect::<Vec<_>>()
@@ -70,12 +175,12 @@ pub(super) async fn get_client_app_web_shell(
         .iter()
         .map(|task| {
             format!(
-                "<article class=\"module\"><strong>Task Thread</strong><span>{} · {} / {}</span><p>{}</p><code>{}</code></article>",
-                escape_html_text(&task.task_id),
-                escape_html_text(&task.latest_bucket),
-                escape_html_text(&task.latest_status),
-                escape_html_text(&task.outcome_summary),
-                escape_html_text(&task.next_opportunity_hint),
+                "<article class=\"module\"><strong>任务线程</strong><span>{} · {} / {}</span><p>{}</p><code>{}</code></article>",
+                escape_client_app_visible_text(&task.task_id),
+                escape_client_app_visible_text(&task.latest_bucket),
+                escape_client_app_visible_text(&task.latest_status),
+                escape_client_app_visible_text(&task.outcome_summary),
+                escape_client_app_visible_text(&task.next_opportunity_hint),
             )
         })
         .collect::<Vec<_>>()
@@ -86,7 +191,7 @@ pub(super) async fn get_client_app_web_shell(
         .collect::<Vec<_>>()
         .join("\n");
     let message_cards = if message_cards.trim().is_empty() {
-        "<article class=\"module\"><strong>消息</strong><span>WeChat / Telegram loop</span><p>这里会显示联系人、Agent、系统通知、合同线程和任务协作入口。</p><code>/social</code></article>".to_string()
+        "<article class=\"module\"><strong>消息</strong><span>聊天房间循环</span><p>这里会显示联系人、Agent、通知、契约线程和任务协作入口。</p><code>/social</code></article>".to_string()
     } else {
         message_cards
     };
@@ -110,8 +215,8 @@ pub(super) async fn get_client_app_web_shell(
                 "<article class=\"module\"><strong>{}</strong><span>{}</span><p>{}</p><code>{}</code></article>",
                 escape_html_text(name),
                 escape_html_text(style),
-                escape_html_text(summary),
-                escape_html_text(command),
+                escape_client_app_visible_text(summary),
+                escape_client_app_visible_text(command),
             )
         })
         .collect::<Vec<_>>()
@@ -213,7 +318,7 @@ pub(super) async fn get_client_app_web_shell(
                 .cloned()
                 .unwrap_or_else(|| json!(0.0));
             let focus_button =
-                map_region_focus_button_html(center_lat, center_lng, zoom_focus, "Focus region");
+                map_region_focus_button_html(center_lat, center_lng, zoom_focus, "聚焦区域");
             format!(
                 "<article class=\"module\"><strong>{}</strong><span>{} · {} km</span><p><code>{}</code></p><div class=\"focus-stack\">{}</div></article>",
                 escape_html_text(name),
@@ -237,11 +342,11 @@ pub(super) async fn get_client_app_web_shell(
             let name = poi.get("name").and_then(Value::as_str).unwrap_or("POI");
             let node_kind = poi.get("node_kind").and_then(Value::as_str).unwrap_or("poi");
             let node_id = poi.get("node_id").and_then(Value::as_str).unwrap_or("node");
-            let focus_button = map_node_focus_button_html(node_id, "Focus POI");
+            let focus_button = map_node_focus_button_html(node_id, "聚焦热点");
             format!(
                 "<article class=\"module\"><strong>{}</strong><span>{}</span><p><code>{}</code></p><div class=\"focus-stack\">{}</div></article>",
-                escape_html_text(name),
-                escape_html_text(node_kind),
+                escape_client_app_visible_text(name),
+                escape_html_text(&client_app_map_label(node_kind)),
                 escape_html_text(node_id),
                 focus_button,
             )
@@ -271,11 +376,11 @@ pub(super) async fn get_client_app_web_shell(
                 .unwrap_or("street_nodes");
             let marker_count = tile.get("marker_count").and_then(Value::as_u64).unwrap_or(0);
             let focus_button =
-                map_tile_focus_button_html(tile_z, tile_x, tile_y, "Inspect tile");
+                map_tile_focus_button_html(tile_z, tile_x, tile_y, "查看分片");
             format!(
-                "<article class=\"module\"><strong>{}</strong><span>{} · {} · {} nodes</span><p><code>{}</code></p><div class=\"focus-stack\">{}</div></article>",
-                escape_html_text(tile_status),
-                escape_html_text(lod_mode),
+                "<article class=\"module\"><strong>{}</strong><span>{} · {} · {} 个地点</span><p><code>{}</code></p><div class=\"focus-stack\">{}</div></article>",
+                escape_html_text(&client_app_map_label(tile_status)),
+                escape_html_text(&client_app_map_label(lod_mode)),
                 escape_html_text(tile.get("quadkey").and_then(Value::as_str).unwrap_or("quadkey")),
                 marker_count,
                 escape_html_text(tile_id),
@@ -306,11 +411,11 @@ pub(super) async fn get_client_app_web_shell(
                 .and_then(Value::as_str)
                 .unwrap_or("neighbor_tile_warmup");
             let marker_count = tile.get("marker_count").and_then(Value::as_u64).unwrap_or(0);
-            let focus_button = map_tile_focus_button_html(tile_z, tile_x, tile_y, "Warm tile");
+            let focus_button = map_tile_focus_button_html(tile_z, tile_x, tile_y, "预热分片");
             format!(
-                "<article class=\"module\"><strong>{}</strong><span>{} · {} nodes</span><p><code>{}</code></p><div class=\"focus-stack\">{}</div></article>",
-                escape_html_text(priority),
-                escape_html_text(reason),
+                "<article class=\"module\"><strong>{}</strong><span>{} · {} 个地点</span><p><code>{}</code></p><div class=\"focus-stack\">{}</div></article>",
+                escape_html_text(&client_app_map_label(priority)),
+                escape_html_text(&client_app_map_label(reason)),
                 marker_count,
                 escape_html_text(tile_id),
                 focus_button,
@@ -356,16 +461,16 @@ pub(super) async fn get_client_app_web_shell(
                 event_id,
                 task_id,
                 location_id,
-                event_kind,
-                node_name,
-                event_body,
-                event_result,
-                "Track event",
+                &client_app_map_label(event_kind),
+                &client_app_visible_copy(node_name),
+                &client_app_visible_copy(event_body),
+                &client_app_visible_copy(event_result),
+                "追踪事件",
             );
             format!(
                 "<article class=\"module\"><strong>{}</strong><span>{} · {} km</span><p><code>{}</code></p><div class=\"focus-stack\">{}</div></article>",
-                escape_html_text(event_kind),
-                escape_html_text(node_name),
+                escape_html_text(&client_app_map_label(event_kind)),
+                escape_client_app_visible_text(node_name),
                 escape_html_text(&distance_km.to_string()),
                 escape_html_text(event_id),
                 focus_button,
@@ -407,11 +512,11 @@ pub(super) async fn get_client_app_web_shell(
     let onboarding_label = onboarding
         .and_then(|rail| rail.get("rail_label"))
         .and_then(Value::as_str)
-        .unwrap_or("新手主线：从地图到成交");
+        .unwrap_or("新手主线：从地图到悬赏完成");
     let onboarding_goal = onboarding
         .and_then(|rail| rail.get("primary_goal"))
         .and_then(Value::as_str)
-        .unwrap_or("把地图焦点推进成 world action、contract、commerce work order、delivery、acceptance 和 reward。");
+        .unwrap_or("把地图焦点推进成探索、契约、委托、成果提交、评级和奖励领取。");
     let onboarding_completion_target = onboarding
         .and_then(|rail| rail.get("completion_target"))
         .and_then(Value::as_str)
@@ -437,14 +542,14 @@ pub(super) async fn get_client_app_web_shell(
                 .and_then(Value::as_str)
                 .unwrap_or("visible");
             format!(
-                "<article class=\"module onboarding-step\" data-onboarding-step=\"{}\"><strong>{}</strong><span>{} · {}</span><p>{}</p><code>{}</code><p class=\"subtitle\">Success: <code>{}</code></p></article>",
+                "<article class=\"module onboarding-step\" data-onboarding-step=\"{}\"><strong>{}</strong><span>{} · {}</span><p>{}</p><code>{}</code><p class=\"subtitle\">完成信号: <code>{}</code></p></article>",
                 escape_html_text(step_id),
-                escape_html_text(label),
+                escape_client_app_visible_text(label),
                 escape_html_text(surface),
-                escape_html_text(status),
-                escape_html_text(description),
-                escape_html_text(command),
-                escape_html_text(success_signal),
+                escape_html_text(&client_app_readiness_label(status)),
+                escape_client_app_visible_text(description),
+                escape_client_app_visible_text(command),
+                escape_html_text(&client_app_readiness_label(success_signal)),
             )
         })
         .collect::<Vec<_>>()
@@ -459,7 +564,7 @@ pub(super) async fn get_client_app_web_shell(
         .map(|check| {
             format!(
                 "<span class=\"hud-chip\"><strong>✓</strong>{}</span>",
-                escape_html_text(&check)
+                escape_html_text(&client_app_readiness_label(&check))
             )
         })
         .collect::<Vec<_>>()
@@ -467,6 +572,8 @@ pub(super) async fn get_client_app_web_shell(
     let app_data_json = serde_json::to_string(&app)
         .unwrap_or_else(|_| "{}".to_string())
         .replace("</", "<\\/");
+    let current_matrix_user_id_json = serde_json::to_string(current_matrix_user_id)
+        .unwrap_or_else(|_| "\"current-player\"".to_string());
     let shared_map_runtime_bootstrap_js = real_world_map_runtime_bootstrap_js();
     let shared_map_runtime_primitives_js = real_world_map_runtime_primitives_js();
     let shared_map_focus_core_js = real_world_map_focus_core_js();
@@ -483,8 +590,8 @@ pub(super) async fn get_client_app_web_shell(
     let shared_map_camera_actions_html = map_camera_action_buttons_html();
     let shared_route_filter_buttons_html = route_filter_buttons_html(
         "trillionnium-app-route-filter-action",
-        "Filter route by focus",
-        "Show full route",
+        "按焦点筛选路线",
+        "显示完整路线",
     );
     let shared_map_route_target_resolution_js = real_world_map_route_target_resolution_js();
     let shared_map_route_status_js = real_world_map_route_status_js();
@@ -499,7 +606,7 @@ pub(super) async fn get_client_app_web_shell(
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Trillionnium Client App</title>
+  <title>Trillionnium World Mobile</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <style>
     :root {{ color-scheme: dark; --bg:#070814; --panel:#14182d; --gold:#f8c35b; --cyan:#64e3ff; --text:#f6f7fb; --muted:#a6adbb; }}
@@ -542,6 +649,15 @@ pub(super) async fn get_client_app_web_shell(
     .app-search-empty {{ display:none; margin-top:10px; border:1px dashed rgba(255,255,255,.16); border-radius:16px; padding:10px 12px; color:var(--muted); background:rgba(255,255,255,.04); }}
     .app-search-empty.is-visible {{ display:block; }}
     .sr-only {{ position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }}
+    .app-beta-chip {{ display:inline-flex; align-items:center; gap:8px; border:1px solid rgba(248,195,91,.24); background:rgba(248,195,91,.1); color:var(--gold); border-radius:999px; padding:7px 11px; font-weight:900; font-size:12px; }}
+    .quest-hero {{ position:relative; overflow:hidden; border-color:rgba(248,195,91,.26); background:linear-gradient(145deg,rgba(248,195,91,.16),rgba(100,227,255,.055) 44%,rgba(255,255,255,.045)); }}
+    .quest-hero::after {{ content:""; position:absolute; inset:auto -18% -48% 38%; height:220px; background:radial-gradient(circle,rgba(100,227,255,.22),transparent 62%); pointer-events:none; }}
+    .quest-summary {{ display:grid; gap:10px; grid-template-columns:minmax(0,1.25fr) minmax(220px,.75fr); align-items:stretch; }}
+    .quest-next-card {{ border:1px solid rgba(255,255,255,.14); background:rgba(7,8,20,.38); border-radius:18px; padding:14px; }}
+    .quest-next-card strong {{ display:block; color:var(--gold); font-size:15px; margin-bottom:6px; }}
+    .quest-cta {{ display:inline-flex; align-items:center; justify-content:center; min-height:42px; border-radius:14px; border:1px solid rgba(248,195,91,.42); background:linear-gradient(135deg,rgba(248,195,91,.92),rgba(255,150,89,.9)); color:#071019; text-decoration:none; font-weight:950; padding:0 14px; box-shadow:0 12px 28px rgba(248,195,91,.16); }}
+    .dev-details {{ margin-top:10px; color:var(--muted); }}
+    .dev-details summary {{ cursor:pointer; width:max-content; border:1px solid rgba(255,255,255,.1); border-radius:999px; padding:6px 10px; background:rgba(255,255,255,.05); color:rgba(246,247,251,.72); font-size:12px; font-weight:800; }}
     .app-tab-panel {{ display:none; gap:16px; }}
     .app-tab-panel.is-active {{ display:grid; }}
     .app-tab-header {{ display:grid; gap:6px; margin-bottom:4px; }}
@@ -551,64 +667,76 @@ pub(super) async fn get_client_app_web_shell(
     .app-bottom-tab:focus-visible, .focus-chip:focus-visible, .overlay-toggle:focus-visible, .app-search-input:focus-visible, .app-search-clear:focus-visible {{ outline:2px solid var(--cyan); outline-offset:2px; }}
     .app-me-grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:16px; }}
     .app-search-hidden {{ display:none !important; }}
-    @media (max-width: 820px) {{ .map-shell {{ grid-template-columns:1fr; }} #real-world-map {{ min-height:360px; }} main {{ padding:14px 16px 34px; }} header {{ padding:14px 16px 12px; }} }}
+    @media (max-width: 820px) {{ .map-shell {{ grid-template-columns:1fr; }} .quest-summary {{ grid-template-columns:1fr; }} #real-world-map {{ min-height:360px; }} main {{ padding:14px 16px 34px; }} header {{ padding:14px 16px 12px; }} }}
   </style>
 </head>
 <body>
   <header>
     <div class="app-topbar-meta">
-      <p><code>client app shell v1</code></p>
-      <p><a href="/world">World</a> · <a href="/league">League</a></p>
+      <p><span class="app-beta-chip">Beta 冒险入口 · 移动世界壳 v1</span></p>
+      <p><a href="/world">世界</a> · <a href="/league">竞技场</a></p>
     </div>
-    <h1>Trillionnium Client App</h1>
-    <p class="subtitle">一个手机端超级入口：顶部全局搜索，底部四栏——消息 / 世界 / 动态 / 我。当前位置：<strong>{}</strong></p>
+    <h1>Trillionnium World</h1>
+    <p class="subtitle">一个手机端现实镜像冒险入口：顶部搜索城市与角色，底部四栏——消息 / 世界 / 动态 / 我。当前位置：<strong>{}</strong></p>
     <div class="app-search-shell">
       <input id="app-global-search" class="app-search-input" type="search" inputmode="search" placeholder="搜索地点、联系人、任务、动态" aria-label="全局搜索" />
       <button id="app-search-clear" class="app-search-clear" type="button" aria-label="清空全局搜索" hidden>清空</button>
     </div>
     <div id="app-ux-status" class="app-ux-status" aria-live="polite">
-      <span id="app-ux-status-pill" class="app-ux-pill" data-state="ready">UX ready · 世界 tab active</span>
-      <span id="app-ux-live-status" class="sr-only">Client UX ready</span>
+      <span id="app-ux-status-pill" class="app-ux-pill" data-state="ready">冒险准备完成 · 世界页已激活</span>
+      <span id="app-ux-live-status" class="sr-only">冒险体验已准备完成</span>
     </div>
     <div id="app-search-empty-state" class="app-search-empty" role="status" aria-live="polite">无匹配结果 · 换个关键词或切换底部 Tab。</div>
   </header>
   <main class="app-mobile-shell">
-    <section id="app-first-playable-onboarding" class="module" aria-label="First playable onboarding rail">
-      <span class="badge">First playable onboarding</span>
+    <section id="app-first-playable-onboarding" class="module quest-hero" aria-label="First playable main quest rail">
+      <span class="badge">新手主线</span>
       <h2>{}</h2>
-      <p class="subtitle">{} 目标：<code>{}</code></p>
-      <div id="app-first-playable-checks" class="map-stream-hud">{}</div>
+      <div class="quest-summary">
+        <div>
+          <p class="subtitle">{} 目标：<code>{}</code></p>
+          <div id="app-first-playable-checks" class="map-stream-hud">{}</div>
+        </div>
+        <div class="quest-next-card">
+          <strong>下一步行动</strong>
+          <p class="subtitle">先在「世界」选择一个地图焦点，再接取任务牌、提交成果并完成评级。</p>
+          <a class="quest-cta" href="/world">进入世界行动台</a>
+        </div>
+      </div>
       <section id="app-first-playable-steps" class="grid">{}</section>
     </section>
     <section id="app-tab-messages" class="app-tab-panel" data-app-panel="messages" role="tabpanel" aria-labelledby="app-tab-button-messages" aria-hidden="true" hidden>
       <div class="app-tab-header">
         <h2>消息</h2>
-        <p class="subtitle">Telegram / 微信风格的消息首页，承接联系人、Agent 协作、系统通知与任务线程。</p>
+        <p class="subtitle">Telegram / 微信风格的消息首页，承接队友、Agent 协作、系统提示与主线/支线线程。</p>
       </div>
       <section id="app-message-cards" class="grid">{}</section>
     </section>
     <section id="app-tab-map" class="app-tab-panel is-active" data-app-panel="map" role="tabpanel" aria-labelledby="app-tab-button-map" aria-hidden="false">
       <div class="app-tab-header">
         <h2>世界</h2>
-        <p class="subtitle">World-first 主舞台：focus、route、live event、world action 都从这里展开。</p>
+        <p class="subtitle">世界主舞台：探索、路线、事件和行动都从这里展开。</p>
       </div>
-      <section class="map-shell" aria-label="Real-world map engine shell">
+      <section class="map-shell" aria-label="现实镜像地图">
       <div class="map-panel">
-        <span class="badge">Real-world map engine</span>
-        <h2>{} + {}</h2>
-        <p>这里不再只是文字地图：客户端以 OpenStreetMap 的全球真实世界瓦片做全量镜像底图，再把 Trillionnium World 的英雄坛说/Gather 节点、路线、LOD 分片和当前位置叠加成轻量 marker。Matrix 文字地图保留为低配和聊天 fallback，用于支撑更多玩家同时在线。</p>
-        <p><strong>Mirror</strong>: <code>{}</code> · <strong>Active Region</strong>: <code>{}</code> · <strong>Shards</strong>: {} · <strong>LOD Layers</strong>: {}</p>
-        <p><strong>Viewport API</strong>: <code>{}</code></p>
-        <p><strong>Web Viewport</strong>: <code>{}</code></p>
+        <span class="badge">现实镜像地图</span>
+        <h2>上海主城 · 探索路线</h2>
+        <p>从真实城市底图开始探索：附近地点、实时事件、任务牌和可协作 Agent 会叠加成冒险路线。普通玩家只需要选焦点、接委托、提交成果、拿评级；底层地图引擎和接口细节已经收进调试信息。</p>
+        <details class="dev-details"><summary>调试信息</summary>
+          <p><strong>Real-world map engine</strong>: <code>{}</code> + <code>{}</code></p>
+          <p><strong>Mirror</strong>: <code>{}</code> · <strong>Active Region</strong>: <code>{}</code> · <strong>Shards</strong>: {} · <strong>LOD Layers</strong>: {}</p>
+          <p><strong>Viewport API</strong>: <code>{}</code></p>
+          <p><strong>Web Viewport</strong>: <code>{}</code></p>
+        </details>
         <p><code>{}</code></p>
-        <p><strong>Map-first Hub</strong>: the World Map module is the primary super-app entry, with nearby POIs and region shards surfaced before other modules.</p>
+        <p><strong>地图主入口</strong>: 先看附近地点、事件和悬赏，再进入其他模块。</p>
         <p id="app-map-density-summary" class="subtitle">{}</p>
-        <p id="app-map-camera-summary" class="subtitle">Camera booting…</p>
+        <p id="app-map-camera-summary" class="subtitle">镜头加载中…</p>
         <div id="app-map-stream-hud" class="map-stream-hud">
-          <span class="hud-chip"><strong>{}</strong> region shards</span>
-          <span class="hud-chip"><strong>{}</strong> visible nodes</span>
-          <span class="hud-chip"><strong>{}</strong> prefetch tiles</span>
-          <span class="hud-chip"><strong>{}</strong> live events · {}</span>
+          <span class="hud-chip"><strong>{}</strong> 个区域分片</span>
+          <span class="hud-chip"><strong>{}</strong> 个可见地点</span>
+          <span class="hud-chip"><strong>{}</strong> 个预热地图块</span>
+          <span class="hud-chip"><strong>{}</strong> 个实时事件 · {}</span>
         </div>
         <div id="app-map-overlay-controls" class="overlay-toggle-bar">
 {shared_map_overlay_controls_html}
@@ -616,84 +744,84 @@ pub(super) async fn get_client_app_web_shell(
         <div id="app-map-camera-actions" class="overlay-toggle-bar">
 {shared_map_camera_actions_html}
         </div>
-        <p id="app-map-overlay-status" class="subtitle">Active overlays: density, regions, tiles, prefetch, live events.</p>
+        <p id="app-map-overlay-status" class="subtitle">当前图层：密度、区域、地图块、预热圈、实时事件。</p>
         <div class="module" style="margin-top:14px; padding:16px 18px;">
-          <strong>Map focus action rail</strong>
-          <span id="app-map-focus-summary">Waiting for viewport focus…</span>
-          <p id="app-map-focus-detail">Pick a region, tile, hotspot, or live event to turn the map into an action surface.</p>
+          <strong>地图行动栏</strong>
+          <span id="app-map-focus-summary">等待选择地图焦点…</span>
+          <p id="app-map-focus-detail">选择区域、地点或事件，把地图变成下一步行动。</p>
           <div id="app-map-action-rail" class="focus-stack"></div>
         </div>
         <div class="module" style="margin-top:14px; padding:16px 18px;">
-          <strong>World route cockpit</strong>
-          <span id="app-map-route-status">Focused route cockpit: waiting for a map focus…</span>
-          <p id="app-map-route-next-step-status">Recommended world handoff: pick a map focus first.</p>
-          <p id="app-map-route-event-brief-status">Focused event brief: waiting for a live event focus.</p>
-          <p id="app-map-route-link-status">Linked task route: none yet.</p>
+          <strong>冒险路线</strong>
+          <span id="app-map-route-status">冒险路线：等待选择地图焦点…</span>
+          <p id="app-map-route-next-step-status">推荐下一步：先选择地图焦点。</p>
+          <p id="app-map-route-event-brief-status">事件简报：等待选择事件。</p>
+          <p id="app-map-route-link-status">关联任务路线：暂无。</p>
           <div id="app-map-route-filter-actions" class="focus-stack">
             {shared_route_filter_buttons_html}
           </div>
           <div id="app-map-route-actions" class="focus-stack"></div>
         </div>
-        <p id="app-map-overlay-legend" class="subtitle">Overlay legend: region anchors · active tile frames · prefetch warm ring · live event pulses.</p>
+        <p id="app-map-overlay-legend" class="subtitle">图层说明：区域锚点 · 活跃地图块 · 预热探索圈 · 实时事件脉冲。</p>
       </div>
-      <div id="real-world-map" data-engine="{}" data-provider="{}" aria-label="Leaflet OpenStreetMap real-world map engine"></div>
+      <div id="real-world-map" data-engine="{}" data-provider="{}" aria-label="现实镜像地图"></div>
     </section>
     <section>
-      <h2>Tile Shards</h2>
+      <h2>地图分片</h2>
       <section id="app-tile-shards-live" class="grid">{}</section>
     </section>
     <section>
-      <h2>Region Shards</h2>
+      <h2>区域据点</h2>
       <section id="app-region-shards-live" class="grid">{}</section>
     </section>
     <section>
-      <h2>POI Hotspots</h2>
+      <h2>附近热点</h2>
       <section id="app-poi-hotspots-live" class="grid">{}</section>
     </section>
     <section>
-      <h2>Prefetch Queue</h2>
+      <h2>预热探索圈</h2>
       <section id="app-prefetch-queue-live" class="grid">{}</section>
     </section>
     <section>
-      <h2>Live Event Stream</h2>
+      <h2>实时事件</h2>
       <section id="app-live-events-live" class="grid">{}</section>
     </section>
     </section>
     <section id="app-tab-feed" class="app-tab-panel" data-app-panel="feed" role="tabpanel" aria-labelledby="app-tab-button-feed" aria-hidden="true" hidden>
       <div class="app-tab-header">
         <h2>动态</h2>
-        <p class="subtitle">小红书式流式浏览，但内容核心是 live events、contracts、completions、commerce 与 social updates。</p>
-        <p><strong>Feed API</strong>: <code>{}</code></p>
-        <p id="app-feed-api-status" class="subtitle">Feed boot from <code>{}</code> · active region <code>{}</code> · {} items ready.</p>
+        <p class="subtitle">小红书式流式浏览，但内容核心是城市事件、委托、战报、冒险动态与社交更新。</p>
+        <details class="dev-details"><summary>动态同步调试</summary><p><strong>Feed API</strong>: <code>{}</code></p><p><strong>Web Feed</strong>: <code>{}</code></p></details>
+        <p id="app-feed-api-status" class="subtitle">动态加载中 · 当前区域 <code>{}</code> · 已准备 {} 条动态。</p>
       </div>
       <div id="app-feed-filter-actions" class="focus-stack">{}</div>
       <div id="app-feed-summary" class="map-stream-hud">{}</div>
       <section>
-        <h2>Unified Feed Timeline</h2>
+        <h2>世界动态时间线</h2>
         <section id="app-feed-items-live" class="grid">{}</section>
       </section>
     <section>
-      <h2>World Route Preview</h2>
+      <h2>冒险路线预览</h2>
       <section id="app-route-preview-live" class="grid">{}</section>
     </section>
     <section>
-      <h2>Task-linked Route Graph</h2>
+      <h2>任务路线图</h2>
       <section id="app-route-task-graph-live" class="grid">{}</section>
     </section>
     </section>
     <section id="app-tab-me" class="app-tab-panel" data-app-panel="me" role="tabpanel" aria-labelledby="app-tab-button-me" aria-hidden="true" hidden>
       <div class="app-tab-header">
         <h2>我</h2>
-        <p class="subtitle">钱包支付、成长、资产、设置与系统能力统一归到个人中心。</p>
+        <p class="subtitle">奖励、成长、道具、设置与系统能力统一归到个人中心。</p>
       </div>
       <section class="app-me-grid">{}</section>
       <section>
-        <h2>System Modules</h2>
+        <h2>角色模块</h2>
         <section class="grid">{}</section>
       </section>
     </section>
   </main>
-  <nav class="app-bottom-tabs" aria-label="Client mobile tabs" role="tablist">
+  <nav class="app-bottom-tabs" aria-label="移动端主导航" role="tablist">
     <button id="app-tab-button-messages" type="button" class="app-bottom-tab" data-app-tab="messages" role="tab" aria-controls="app-tab-messages" aria-selected="false" tabindex="-1">消息</button>
     <button id="app-tab-button-map" type="button" class="app-bottom-tab is-active" data-app-tab="map" role="tab" aria-controls="app-tab-map" aria-selected="true" tabindex="0">世界</button>
     <button id="app-tab-button-feed" type="button" class="app-bottom-tab" data-app-tab="feed" role="tab" aria-controls="app-tab-feed" aria-selected="false" tabindex="-1">动态</button>
@@ -744,17 +872,18 @@ pub(super) async fn get_client_app_web_shell(
       const appPanels = Array.from(document.querySelectorAll('[data-app-panel]'));
       const appTabLabels = {{ messages: '消息', map: '世界', feed: '动态', me: '我' }};
       const appTabPlaceholders = {{
-        messages: '搜索联系人、群组、Agent、任务对话',
-        map: '搜索世界地点、公司、任务、事件',
-        feed: '搜索动态、话题、事件、成交案例',
-        me: '搜索订单、账单、资产、设置',
+        messages: '搜索队友、群组、Agent、任务对话',
+        map: '搜索世界地点、工坊、任务、事件',
+        feed: '搜索动态、话题、事件、冒险记录',
+        me: '搜索奖励、契约、道具、设置',
       }};
       let activeAppTab = 'map';
       {shared_map_runtime_bootstrap_js}
 
       const routePreviewItems = ((((app.map_hub || {{}}).route_preview) || {{}}).items) || [];
       const routeTaskGraphItems = ((((app.map_hub || {{}}).route_task_graph) || {{}}).tasks) || [];
-      const feedApiPath = ((((app.feed || {{}}).api_path) || '')) || '/v1/client/feed/@alice:local.dev';
+      const currentMatrixUserId = {};
+      const feedApiPath = ((((app.feed || {{}}).api_path) || '')) || ('/v1/client/feed/' + encodeURIComponent(currentMatrixUserId));
       const feedWebSessionPath = ((((app.feed || {{}}).web_session_path) || '')) || '/app/web/feed';
       const feedFilterLabels = {};
       let lastViewport = null;
@@ -766,7 +895,7 @@ pub(super) async fn get_client_app_web_shell(
       let feedLoadedViaApi = false;
       let feedRequestInFlight = null;
       const announceUxStatus = (message, state = 'ready') => {{
-        const text = String(message || '').trim() || 'Client UX ready';
+        const text = String(message || '').trim() || '冒险体验已准备完成';
         if (appUxLiveStatus) appUxLiveStatus.textContent = text;
         if (appUxStatusPill) {{
           appUxStatusPill.textContent = text;
@@ -817,7 +946,7 @@ pub(super) async fn get_client_app_web_shell(
           button.tabIndex = active ? 0 : -1;
         }});
         if (appSearchInput) appSearchInput.placeholder = appTabPlaceholders[activeAppTab] || '搜索地点、联系人、任务、动态';
-        announceUxStatus('UX ready · ' + (appTabLabels[activeAppTab] || activeAppTab) + ' tab active', 'ready');
+        announceUxStatus('冒险准备完成 · ' + (appTabLabels[activeAppTab] || activeAppTab) + '页已激活', 'ready');
         applyAppSearchFilter();
         if (activeAppTab === 'feed') {{
           renderFeedSurface(lastFeed, lastSelection);
@@ -882,21 +1011,21 @@ pub(super) async fn get_client_app_web_shell(
       {shared_map_route_action_js}
 
       const inferAppRouteNextStep = (selection, context) => inferConfiguredRouteNextStep(selection, context, {{
-        statusPrefix: 'Recommended world handoff',
-        rejectionBody: (selectionTitle, workOrderId) => selectionTitle + ': reopen work order ' + workOrderId + ' with revision requirements, renewed reserve, and redelivery plan.',
-        rejectionStatus: (workOrderId) => 'reopen work order ' + workOrderId + '.',
-        reopenBody: (selectionTitle, workOrderId) => selectionTitle + ': redeliver work order ' + workOrderId + ' with revised deliverable, proof, and acceptance checklist.',
-        reopenStatus: (workOrderId) => 'redeliver work order ' + workOrderId + '.',
-        deliveryBody: (selectionTitle, workOrderId) => selectionTitle + ': review delivery for work order ' + workOrderId + ' and decide accept vs reject with concrete proof gaps.',
-        deliveryStatus: (workOrderId) => 'review the latest delivery for work order ' + workOrderId + '.',
-        openWorkBody: (selectionTitle, workOrderId) => selectionTitle + ': prepare delivery for work order ' + workOrderId + ' with deliverable, evidence, and next action.',
-        openWorkStatus: (workOrderId) => 'deliver the active work order ' + workOrderId + '.',
-        contractBody: (selectionTitle, contractId) => selectionTitle + ': complete linked contract ' + contractId + ' with evidence, acceptance standard, and next step.',
-        contractStatus: (contractId) => 'complete contract ' + contractId + '.',
-        listingBody: (selectionTitle, listingId) => selectionTitle + ': hire listing ' + listingId + ' and define deliverable, acceptance, and risk controls.',
-        listingStatus: (listingId) => 'route listing ' + listingId + ' into world commerce.',
-        defaultBody: (selectionTitle) => selectionTitle + ': draft the next world action for this map focus with current evidence, risks, and next operational step.',
-        defaultStatus: () => 'draft a world action from this focused route.',
+        statusPrefix: '推荐下一步',
+        rejectionBody: (selectionTitle, workOrderId) => selectionTitle + ': 重开委托 ' + workOrderId + '，写清返工要求、再次投入和下一次提交计划。',
+        rejectionStatus: (workOrderId) => '重开委托 ' + workOrderId + '。',
+        reopenBody: (selectionTitle, workOrderId) => selectionTitle + ': 重新提交委托 ' + workOrderId + '，补齐成果、证据和评级清单。',
+        reopenStatus: (workOrderId) => '重新提交委托 ' + workOrderId + '。',
+        deliveryBody: (selectionTitle, workOrderId) => selectionTitle + ': 评定委托 ' + workOrderId + ' 的成果，明确通过或返工原因。',
+        deliveryStatus: (workOrderId) => '评定最新委托成果 ' + workOrderId + '。',
+        openWorkBody: (selectionTitle, workOrderId) => selectionTitle + ': 为委托 ' + workOrderId + ' 准备成果、证据和下一步行动。',
+        openWorkStatus: (workOrderId) => '提交当前委托 ' + workOrderId + '。',
+        contractBody: (selectionTitle, contractId) => selectionTitle + ': 完成关联契约 ' + contractId + '，带上证据、评级标准和下一步。',
+        contractStatus: (contractId) => '完成契约 ' + contractId + '。',
+        listingBody: (selectionTitle, listingId) => selectionTitle + ': 接取任务牌 ' + listingId + '，定义成果、评级和风险控制。',
+        listingStatus: (listingId) => '把任务牌 ' + listingId + ' 接入冒险路线。',
+        defaultBody: (selectionTitle) => selectionTitle + ': 为这个地图焦点起草下一步世界行动，带上证据、风险和推进路线。',
+        defaultStatus: () => '从当前焦点起草世界行动。',
       }});
       const openWorldRouteAction = (action) => {{
         const selection = buildSelectionFromFocus(lastSelection || buildDefaultFocus()) || {{}};
@@ -907,14 +1036,14 @@ pub(super) async fn get_client_app_web_shell(
       const renderAppRoutePreview = (items) => {{
         if (!routePreviewTarget) return;
         const visible = items.length ? items.slice(0, 8) : routePreviewItems.slice(0, 8);
-        routePreviewTarget.innerHTML = visible.map((item) => `<article class="module"><strong>${{escapeHtml(item.title || 'Route item')}}</strong><span>${{escapeHtml(item.detail || item.route_bucket || 'route')}}</span><p>${{escapeHtml(item.summary || item.route_status || 'waiting')}}</p><div class="focus-stack"><code>${{escapeHtml(item.task_id || item.location_id || item.route_bucket || 'route')}}</code></div></article>`).join('');
+        routePreviewTarget.innerHTML = visible.map((item) => `<article class="module"><strong>${{escapeHtml(mapText(item.title || '路线项目'))}}</strong><span>${{escapeHtml(mapText(item.detail || item.route_bucket || 'route'))}}</span><p>${{escapeHtml(mapText(item.summary || item.route_status || 'waiting'))}}</p><div class="focus-stack"><code>${{escapeHtml(mapText(item.task_id || item.location_id || item.route_bucket || 'route'))}}</code></div></article>`).join('');
       }};
       const renderAppTaskGraph = (tasks) => {{
         if (!routeTaskGraphTarget) return;
         const visible = tasks.length ? tasks.slice(0, 6) : routeTaskGraphItems.slice(0, 6);
         routeTaskGraphTarget.innerHTML = visible.map((task) => {{
           const actionButtons = routeTaskGraphActionButtonsHtml(task, 'trillionnium-app-route-flow-action');
-          return `<article class="module app-route-task-graph-item"><strong>${{escapeHtml(task.task_id || 'task')}}</strong><span>${{escapeHtml(task.latest_bucket || 'event')}} · ${{escapeHtml(task.latest_status || 'pending')}} · opportunity ${{escapeHtml(task.next_opportunity_kind || 'contract_capture')}}</span><p>${{escapeHtml(task.event_count ?? 0)}} events · ${{escapeHtml(task.contract_count ?? 0)}} contracts · ${{escapeHtml(task.completion_count ?? 0)}} completions</p><p>${{escapeHtml(task.outcome_summary || 'Outcome summary pending.')}}</p><p><strong>Opportunity lane</strong> · ${{escapeHtml(task.next_opportunity_hint || 'Opportunity hint pending.')}}</p><p>${{escapeHtml(task.next_opportunity_playbook || 'Opportunity playbook pending.')}}</p><div class="focus-stack"><code>${{escapeHtml(task.next_opportunity_command || '/world action 继续推进下一步机会。')}}</code></div><div class="focus-stack">${{actionButtons}}</div></article>`;
+          return `<article class="module app-route-task-graph-item"><strong>${{escapeHtml(mapText(task.task_id || '任务'))}}</strong><span>${{escapeHtml(mapText(task.latest_bucket || 'event'))}} · ${{escapeHtml(mapText(task.latest_status || 'pending'))}} · 支线 ${{escapeHtml(mapText(task.next_opportunity_kind || 'contract_capture'))}}</span><p>${{escapeHtml(task.event_count ?? 0)}} 事件 · ${{escapeHtml(task.contract_count ?? 0)}} 委托 · ${{escapeHtml(task.completion_count ?? 0)}} 战报</p><p>${{escapeHtml(mapText(task.outcome_summary || '战果总结待生成。'))}}</p><p><strong>下一条支线</strong> · ${{escapeHtml(mapText(task.next_opportunity_hint || '支线提示待生成。'))}}</p><p>${{escapeHtml(mapText(task.next_opportunity_playbook || '支线打法待生成。'))}}</p><div class="focus-stack"><code>${{escapeHtml(mapText(task.next_opportunity_command || '/world action 继续推进下一步机会。'))}}</code></div><div class="focus-stack">${{actionButtons}}</div></article>`;
         }}).join('');
       }};
 
@@ -980,28 +1109,28 @@ pub(super) async fn get_client_app_web_shell(
         const actions = [];
         pushUniqueRouteAction(actions, nextStep);
         pushUniqueRouteAction(actions, opportunityAction);
-        pushUniqueRouteAction(actions, buildDraftWorldAction(locationId, activeTaskId, buildRouteDraftBody(selection, {{}}, {{ selectionTitleFallback: 'Focused route', omitContextDetails: true, leadIn: ': continue ', emptyDetail: 'this map-driven route', suffix: ' with evidence, risk review, and next operational move.' }})));
-        if (activeTaskId) pushUniqueRouteAction(actions, buildTaskFollowUpAction(selection, activeTaskId, locationId, 'across linked event/contract state, evidence, blockers, and next action'));
+        pushUniqueRouteAction(actions, buildDraftWorldAction(locationId, activeTaskId, buildRouteDraftBody(selection, {{}}, {{ selectionTitleFallback: '当前路线', omitContextDetails: true, leadIn: ': 继续推进 ', emptyDetail: '这条地图冒险路线', suffix: '，补齐证据、风险判断和下一步行动。' }})));
+        if (activeTaskId) pushUniqueRouteAction(actions, buildTaskFollowUpAction(selection, activeTaskId, locationId, '结合关联事件/契约状态、证据、阻碍和下一步行动'));
         if (contractId) pushUniqueRouteAction(actions, buildLinkedContractRouteAction(selection, contractId, activeTaskId, locationId));
-        if (linkedEventItem) pushUniqueRouteAction(actions, buildRouteEventTimelineAction('Open linked event', {{
+        if (linkedEventItem) pushUniqueRouteAction(actions, buildRouteEventTimelineAction('打开关联事件', {{
           locationId,
           eventId: String(linkedEventItem.event_id || '').trim(),
           eventKind: String(linkedEventItem.title || 'world_event'),
           eventBody: String(linkedEventItem.summary || '').trim(),
           eventResult: String(linkedEventItem.route_status || '').trim(),
           eventTaskId: activeTaskId,
-          body: appendSelectionEventSignal(((routeSelection && routeSelection.title) || 'Focused route') + ': review linked event ' + String(linkedEventItem.title || 'event') + ' before the next world action.', selection),
+          body: appendSelectionEventSignal(((routeSelection && routeSelection.title) || '当前路线') + ': 在下一步世界行动前复盘关联事件 ' + String(linkedEventItem.title || 'event') + '。', selection),
         }}));
         lastRouteActions = actions;
         if (routeActionRail) {{
           routeActionRail.innerHTML = actions.map((action, index) => indexedRouteActionButtonHtml(action, index)).join(' ');
         }}
         if (routeStatus) routeStatus.textContent = routeFilterMode === 'all'
-          ? ('Focused route cockpit: showing full route overview' + (selection ? (' while focus stays on ' + (selection.title || 'focus')) : '') + ' · ' + filteredItems.length + ' route items' + (activeTaskId ? (' · task ' + activeTaskId) : '') + routeOpportunitySegment(opportunityTask) + '.')
-          : (routeSelection ? ('Focused route cockpit: ' + (routeSelection.title || 'focus') + ' · ' + (locationId || 'no location') + ' · ' + filteredItems.length + ' linked route items' + (activeTaskId ? (' · task ' + activeTaskId) : '') + routeOpportunitySegment(opportunityTask) + '.') : 'Focused route cockpit: no active map focus, showing latest route items.');
-        if (routeNextStepStatus) routeNextStepStatus.textContent = (nextStep && nextStep.status) || 'Recommended world handoff: draft a world action from this focused route.';
+          ? ('冒险路线：显示完整路线概览' + (selection ? (' · 焦点 ' + (selection.title || 'focus')) : '') + ' · ' + filteredItems.length + ' 条路线' + (activeTaskId ? (' · 任务 ' + activeTaskId) : '') + routeOpportunitySegment(opportunityTask) + '.')
+          : (routeSelection ? ('冒险路线：' + (routeSelection.title || 'focus') + ' · ' + (locationId || '未知地点') + ' · ' + filteredItems.length + ' 条关联路线' + (activeTaskId ? (' · 任务 ' + activeTaskId) : '') + routeOpportunitySegment(opportunityTask) + '.') : '冒险路线：暂无地图焦点，显示最新路线。');
+        if (routeNextStepStatus) routeNextStepStatus.textContent = (nextStep && nextStep.status) || '推荐下一步：从当前焦点起草世界行动。';
         if (routeEventBriefStatus) routeEventBriefStatus.textContent = routeEventBriefText(eventSignalText, routeFilterMode === 'all');
-        if (routeLinkStatus) routeLinkStatus.textContent = routeLinkStatusText({{ taskId: activeTaskId, linkedEventCount, linkedContractCount, opportunityTask, emptyText: 'Linked task route: no task-linked event/contract in the current focus.' }});
+        if (routeLinkStatus) routeLinkStatus.textContent = routeLinkStatusText({{ taskId: activeTaskId, linkedEventCount, linkedContractCount, opportunityTask, emptyText: '关联任务路线：当前焦点没有关联事件/契约。' }});
       }};
       const renderFocusPanel = () => {{
         renderMapFocusPanel({{
@@ -1009,7 +1138,7 @@ pub(super) async fn get_client_app_web_shell(
           focusDetail,
           actionRail,
           focus: lastSelection || buildDefaultFocus(),
-          emptyDetail: 'Pick a region, tile, hotspot, or live event to turn the map into an action surface.',
+          emptyDetail: '选择区域、地点或事件，把地图变成下一步行动。',
           nodeButtonExtraAttrs: ' data-open-world="true"',
           onEmpty: refreshRouteCockpit,
           onRendered: () => refreshRouteCockpit(),
@@ -1033,10 +1162,10 @@ pub(super) async fn get_client_app_web_shell(
         if (moveTarget) moveTarget.scrollIntoView({{ behavior: 'smooth', block: 'center' }});
         setFocusSelection({{ kind: 'node', nodeId }});
         if (focusDetail) {{
-          focusDetail.textContent = 'World handoff ready: ' + state.actionLabel + ' · open ' + state.panelId + ' in /world.';
+          focusDetail.textContent = '冒险行动已准备：' + state.actionLabel + ' · 在 /world 打开 ' + state.panelId + '。';
         }}
-        if (cameraSummary) {{ cameraSummary.textContent = 'Selected map action: ' + state.actionLabel + ' · ' + state.command; }}
-        announceUxStatus('Map handoff ready · ' + state.actionLabel, 'ready');
+        if (cameraSummary) {{ cameraSummary.textContent = '已选择地图行动：' + state.actionLabel + ' · ' + state.command; }}
+        announceUxStatus('地图行动已准备 · ' + state.actionLabel, 'ready');
         return handoff;
       }};
       window.trillionniumSetMoveTarget = (nodeId) => window.trillionniumApplyMarkerAction(nodeId, 'move_here');
@@ -1076,7 +1205,7 @@ pub(super) async fn get_client_app_web_shell(
         const routeActionButton = closestFromEvent(event, '.trillionnium-app-route-action');
         if (handleIndexedRouteActionButton(routeActionButton, lastRouteActions, openWorldRouteAction)) return;
         const appRouteFlowButton = closestFromEvent(event, '.trillionnium-app-route-flow-action');
-        if (handleRouteActionButton(appRouteFlowButton, openWorldRouteAction, 'Route action')) return;
+        if (handleRouteActionButton(appRouteFlowButton, openWorldRouteAction, '路线行动')) return;
         const cameraActionButton = closestFromEvent(event, mapClickSelectors.camera);
         if (handleMapCameraActionButton(cameraActionButton)) return;
         const focusButton = closestFromEvent(event, mapClickSelectors.focus);
@@ -1201,11 +1330,11 @@ pub(super) async fn get_client_app_web_shell(
         const workOrderCount = ((((payload.snapshots || {{}}).commerce || {{}}).work_order_count) ?? 0);
         const nearbyAgents = (((((payload.snapshots || {{}}).social || {{}}).nearby_agents) || [])).length;
         const chips = [
-          `<span class="hud-chip"><strong>${{escapeHtml((visibleItems || []).length)}}</strong> visible items</span>`,
-          `<span class="hud-chip"><strong>${{escapeHtml(payload.item_count ?? 0)}}</strong> total feed items</span>`,
-          `<span class="hud-chip"><strong>${{escapeHtml(contracts)}}</strong> contracts · <strong>${{escapeHtml(completions)}}</strong> completions</span>`,
-          `<span class="hud-chip"><strong>${{escapeHtml(purchaseCount)}}</strong> purchases · <strong>${{escapeHtml(workOrderCount)}}</strong> work orders</span>`,
-          `<span class="hud-chip"><strong>${{escapeHtml(nearbyAgents)}}</strong> nearby agents · ${{escapeHtml(payload.active_region_id || 'global')}}</span>`
+          `<span class="hud-chip"><strong>${{escapeHtml((visibleItems || []).length)}}</strong> 条可见动态</span>`,
+          `<span class="hud-chip"><strong>${{escapeHtml(payload.item_count ?? 0)}}</strong> 条总动态</span>`,
+          `<span class="hud-chip"><strong>${{escapeHtml(contracts)}}</strong> 个委托 · <strong>${{escapeHtml(completions)}}</strong> 份战报</span>`,
+          `<span class="hud-chip"><strong>${{escapeHtml(purchaseCount)}}</strong> 次接取 · <strong>${{escapeHtml(workOrderCount)}}</strong> 个冒险委托</span>`,
+          `<span class="hud-chip"><strong>${{escapeHtml(nearbyAgents)}}</strong> 位附近角色 · ${{escapeHtml(payload.active_region_id || 'global')}}</span>`
         ];
         if (selection) {{
           chips.push(`<span class="hud-chip"><strong>focus</strong> ${{escapeHtml(selection.taskId ? ('task ' + selection.taskId) : (selection.title || selection.locationId || selection.kind || 'selection'))}}</span>`);
@@ -1216,7 +1345,7 @@ pub(super) async fn get_client_app_web_shell(
         if (!feedItemTarget) return;
         const visible = Array.isArray(items) ? items : [];
         if (!visible.length) {{
-          feedItemTarget.innerHTML = '<article class="module app-feed-item"><strong>动态暂时安静</strong><span>feed waiting</span><p>切到世界选择一个 live event，或者稍后再拉一次 Feed API。</p><div class="focus-stack"><code>/v1/client/feed/@alice:local.dev</code></div></article>';
+          feedItemTarget.innerHTML = '<article class="module app-feed-item"><strong>动态暂时安静</strong><span>等待新事件</span><p>切到世界选择一个实时事件，或者稍后再拉一次动态。</p><div class="focus-stack"><code>' + escapeHtml(feedApiPath) + '</code></div></article>';
           return;
         }}
         feedItemTarget.innerHTML = visible.slice(0, 14).map((item) => {{
@@ -1231,7 +1360,7 @@ pub(super) async fn get_client_app_web_shell(
             buttons.push(routeFlowActionButtonHtml(action, 'trillionnium-app-feed-action'));
           }}
           const actionButtons = buttons.filter(Boolean).join(' ');
-          return `<article class="module app-feed-item" data-feed-kind="${{escapeHtml(kind)}}" data-feed-group="${{escapeHtml(group)}}"><strong>${{escapeHtml(item.title || 'Feed item')}}</strong><span>${{escapeHtml(detail)}}</span><p>${{escapeHtml(summary)}}</p><div class="focus-stack"><code>${{escapeHtml(source)}}</code>${{actionButtons ? ' ' + actionButtons : ''}}</div></article>`;
+          return `<article class="module app-feed-item" data-feed-kind="${{escapeHtml(kind)}}" data-feed-group="${{escapeHtml(group)}}"><strong>${{escapeHtml(item.title || '动态')}}</strong><span>${{escapeHtml(detail)}}</span><p>${{escapeHtml(summary)}}</p><div class="focus-stack"><code>${{escapeHtml(source)}}</code>${{actionButtons ? ' ' + actionButtons : ''}}</div></article>`;
         }}).join('');
       }};
       const renderFeedSurface = (feed = lastFeed, focus = lastSelection) => {{
@@ -1243,9 +1372,9 @@ pub(super) async fn get_client_app_web_shell(
         renderFeedSummary(payload, visibleItems, focus);
         renderFeedCards(visibleItems, focus);
         if (feedApiStatus) {{
-          const sourceLabel = feedLoadedViaApi ? 'Feed API synced' : 'Embedded feed snapshot';
+          const sourceLabel = feedLoadedViaApi ? '动态已同步' : '内置动态快照';
           const visibleFeedPath = payload.web_session_path || feedWebSessionPath || payload.api_path || feedApiPath;
-          feedApiStatus.textContent = sourceLabel + ' · ' + visibleFeedPath + ' · active region ' + (payload.active_region_id || 'global') + ' · ' + String(payload.item_count ?? sourceItems.length ?? 0) + ' items.';
+          feedApiStatus.textContent = sourceLabel + ' · ' + visibleFeedPath + ' · 活跃区域 ' + (payload.active_region_id || 'global') + ' · ' + String(payload.item_count ?? sourceItems.length ?? 0) + ' 条动态。';
         }}
       }};
       const loadFeedSurface = async (reason = 'manual') => {{
@@ -1253,7 +1382,7 @@ pub(super) async fn get_client_app_web_shell(
         if (!hydrationPath || feedRequestInFlight) return feedRequestInFlight;
         feedRequestInFlight = (async () => {{
           try {{
-            announceUxStatus('Feed loading · ' + reason, 'loading');
+            announceUxStatus('动态加载中 · ' + reason, 'loading');
             const response = await fetch(hydrationPath, {{ credentials: 'same-origin' }});
             if (!response.ok) throw new Error('feed_http_' + response.status);
             const payload = await response.json();
@@ -1262,14 +1391,14 @@ pub(super) async fn get_client_app_web_shell(
               feedLoadedViaApi = true;
               renderFeedSurface(lastFeed, lastSelection);
               applyAppSearchFilter();
-              if (feedApiStatus) feedApiStatus.textContent = 'Feed API synced · ' + hydrationPath + ' · reason ' + reason + ' · ' + String(payload.item_count ?? 0) + ' items.';
-              announceUxStatus('Feed API synced · ' + String(payload.item_count ?? 0) + ' items', 'ready');
+              if (feedApiStatus) feedApiStatus.textContent = '动态已同步 · ' + hydrationPath + ' · reason ' + reason + ' · ' + String(payload.item_count ?? 0) + ' 条动态。';
+              announceUxStatus('动态已同步 · ' + String(payload.item_count ?? 0) + ' 条', 'ready');
             }}
           }} catch (_error) {{
             feedLoadedViaApi = false;
             renderFeedSurface(lastFeed, lastSelection);
-            if (feedApiStatus) feedApiStatus.textContent = 'Feed API fallback · ' + hydrationPath + ' · using embedded snapshot.';
-            announceUxStatus('Feed API fallback · using embedded snapshot', navigator.onLine === false ? 'offline' : 'fallback');
+            if (feedApiStatus) feedApiStatus.textContent = '动态备用快照 · ' + hydrationPath + ' · 使用内置快照。';
+            announceUxStatus('动态备用快照 · 使用内置快照', navigator.onLine === false ? 'offline' : 'fallback');
           }} finally {{
             feedRequestInFlight = null;
           }}
@@ -1301,7 +1430,7 @@ pub(super) async fn get_client_app_web_shell(
           if (event.key === 'Escape' && appSearchInput.value) {{
             appSearchInput.value = '';
             applyAppSearchFilter();
-            announceUxStatus('Search cleared', 'ready');
+            announceUxStatus('搜索已清空', 'ready');
           }}
         }});
       }}
@@ -1310,12 +1439,12 @@ pub(super) async fn get_client_app_web_shell(
           appSearchInput.value = '';
           applyAppSearchFilter();
           appSearchInput.focus();
-          announceUxStatus('Search cleared', 'ready');
+          announceUxStatus('搜索已清空', 'ready');
         }});
       }}
-      window.addEventListener('offline', () => announceUxStatus('Offline mode · embedded snapshot ready', 'offline'));
+      window.addEventListener('offline', () => announceUxStatus('离线模式 · 内置快照可用', 'offline'));
       window.addEventListener('online', () => {{
-        announceUxStatus('Back online · refreshing feed', 'loading');
+        announceUxStatus('已联网 · 刷新动态', 'loading');
         if (activeAppTab === 'feed') loadFeedSurface('online');
       }});
       refreshOverlayControls();
@@ -1329,10 +1458,10 @@ pub(super) async fn get_client_app_web_shell(
   </script>
 </body>
 </html>"#,
-        escape_html_text(current_node),
+        escape_client_app_visible_text(current_node),
         escape_html_text(onboarding_label),
         escape_html_text(onboarding_goal),
-        escape_html_text(onboarding_completion_target),
+        escape_html_text(&client_app_readiness_label(onboarding_completion_target)),
         onboarding_acceptance_chips,
         onboarding_step_cards,
         message_cards,
@@ -1345,12 +1474,12 @@ pub(super) async fn get_client_app_web_shell(
         escape_html_text(viewport_path_template),
         escape_html_text(web_session_viewport_path_template),
         escape_html_text(map_engine_id),
-        escape_html_text(map_density_summary),
+        escape_html_text(&client_app_map_label(map_density_summary)),
         map_stream_region_count,
         map_visible_marker_count,
         map_prefetch_count,
         map_live_event_count,
-        escape_html_text(map_player_density_mode),
+        escape_html_text(&client_app_map_label(map_player_density_mode)),
         escape_html_text(map_engine_id),
         escape_html_text(tile_provider),
         map_tile_cards,
@@ -1370,6 +1499,7 @@ pub(super) async fn get_client_app_web_shell(
         me_primary_cards,
         module_cards,
         app_data_json,
+        current_matrix_user_id_json,
         feed_filter_labels_js,
     ))
 }

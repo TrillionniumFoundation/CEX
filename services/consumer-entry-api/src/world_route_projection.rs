@@ -117,9 +117,9 @@ impl<'a> WorldRouteProjectionContext<'a> {
             "created_at_epoch": completion.created_at_epoch,
             "completion_id": completion.completion_id,
             "contract_id": completion.contract_id,
-            "title": format!("Completion {}", completion.completion_id),
+            "title": format!("契约战报 {}", completion.completion_id),
             "summary": completion.body,
-            "detail": format!("score {:.1} · reward {:.2}", completion.score, completion.reward_amount),
+            "detail": format!("评分 {:.1} · 奖励 {:.2}", completion.score, completion.reward_amount),
         })
     }
 
@@ -131,9 +131,9 @@ impl<'a> WorldRouteProjectionContext<'a> {
             "created_at_epoch": purchase.created_at_epoch,
             "purchase_id": purchase.purchase_id,
             "listing_id": purchase.listing_id,
-            "title": format!("Purchase {}", purchase.purchase_id),
-            "summary": format!("{} credits · {}", purchase.price_credits, purchase.status),
-            "detail": format!("listing {}", purchase.listing_id),
+            "title": format!("接取契约 {}", purchase.purchase_id),
+            "summary": format!("{} 奖励 · {}", purchase.price_credits, purchase.status),
+            "detail": format!("任务牌 {}", purchase.listing_id),
         })
     }
 
@@ -146,9 +146,9 @@ impl<'a> WorldRouteProjectionContext<'a> {
             "work_order_id": work_order.work_order_id,
             "listing_id": work_order.listing_id,
             "purchase_id": work_order.purchase_id,
-            "title": format!("Work order {}", work_order.work_order_id),
+            "title": format!("冒险委托 {}", work_order.work_order_id),
             "summary": work_order.brief,
-            "detail": format!("value {} · {}", work_order.value_score, work_order.status),
+            "detail": format!("难度 {} · {}", work_order.value_score, work_order.status),
         })
     }
 
@@ -159,9 +159,9 @@ impl<'a> WorldRouteProjectionContext<'a> {
             "route_status": delivery.status,
             "created_at_epoch": delivery.created_at_epoch,
             "work_order_id": delivery.work_order_id,
-            "title": format!("Delivery {}", delivery.delivery_id),
+            "title": format!("成果提交 {}", delivery.delivery_id),
             "summary": delivery.body,
-            "detail": format!("score {:.1} · {}", delivery.score, delivery.status),
+            "detail": format!("评分 {:.1} · {}", delivery.score, delivery.status),
         })
     }
 
@@ -172,9 +172,9 @@ impl<'a> WorldRouteProjectionContext<'a> {
             "route_status": acceptance.status,
             "created_at_epoch": acceptance.created_at_epoch,
             "work_order_id": acceptance.work_order_id,
-            "title": format!("Acceptance {}", acceptance.acceptance_id),
+            "title": format!("评级通过 {}", acceptance.acceptance_id),
             "summary": acceptance.body,
-            "detail": format!("rep +{} · {}", acceptance.reputation_delta, acceptance.status),
+            "detail": format!("声望 +{} · {}", acceptance.reputation_delta, acceptance.status),
         })
     }
 
@@ -185,9 +185,9 @@ impl<'a> WorldRouteProjectionContext<'a> {
             "route_status": rejection.status,
             "created_at_epoch": rejection.created_at_epoch,
             "work_order_id": rejection.work_order_id,
-            "title": format!("Rejection {}", rejection.rejection_id),
+            "title": format!("返工要求 {}", rejection.rejection_id),
             "summary": rejection.body,
-            "detail": format!("refund {} · {}", rejection.refund_status, rejection.status),
+            "detail": format!("奖励退回 {} · {}", rejection.refund_status, rejection.status),
         })
     }
 
@@ -198,9 +198,9 @@ impl<'a> WorldRouteProjectionContext<'a> {
             "route_status": reopen.status,
             "created_at_epoch": reopen.created_at_epoch,
             "work_order_id": reopen.work_order_id,
-            "title": format!("Reopen {}", reopen.reopen_id),
+            "title": format!("委托重开 {}", reopen.reopen_id),
             "summary": reopen.body,
-            "detail": format!("reserve {} · {}", reopen.reserve_status, reopen.status),
+            "detail": format!("再次托管 {} · {}", reopen.reserve_status, reopen.status),
         })
     }
 
@@ -211,9 +211,9 @@ impl<'a> WorldRouteProjectionContext<'a> {
             "route_status": cancellation.status,
             "created_at_epoch": cancellation.created_at_epoch,
             "work_order_id": cancellation.work_order_id,
-            "title": format!("Cancel {}", cancellation.cancellation_id),
+            "title": format!("委托放弃 {}", cancellation.cancellation_id),
             "summary": cancellation.body,
-            "detail": format!("refund {} · {}", cancellation.refund_status, cancellation.status),
+            "detail": format!("奖励退回 {} · {}", cancellation.refund_status, cancellation.status),
         })
     }
 
@@ -262,13 +262,13 @@ impl<'a> WorldRouteProjectionContext<'a> {
             .unwrap_or("");
         let latest_contract_title = latest_contract
             .map(|item| item.title.as_str())
-            .unwrap_or("World contract");
+            .unwrap_or("世界契约");
         let latest_completion_id = latest_completion
             .map(|item| item.completion_id.as_str())
             .unwrap_or("");
         let latest_completion_title = latest_completion
             .map(|item| item.title.as_str())
-            .unwrap_or("World completion");
+            .unwrap_or("契约战报");
         let latest_title = latest
             .as_ref()
             .map(|item| item.title.as_str())
@@ -282,7 +282,7 @@ impl<'a> WorldRouteProjectionContext<'a> {
             .map(|item| item.detail.as_str())
             .unwrap_or("");
         let route_stage_summary = format!(
-            "{} events → {} contracts → {} completions · latest {}/{}",
+            "{} 个事件 → {} 份契约 → {} 条战报 · 最新 {}/{}",
             event_count, contract_count, completion_count, latest_bucket, latest_status
         );
         let derivation = WorldRouteTaskDerivationContext {
@@ -1052,39 +1052,39 @@ pub(super) fn world_route_contract_lane_target(
 type WorldRouteCommandTargetBuilder = fn(String) -> WorldRouteCommandTarget;
 
 fn world_route_upgrade_latest_command_target(body: String) -> WorldRouteCommandTarget {
-    world_route_asset_lane_target("Open asset upgrade lane", "latest".to_string(), body)
+    world_route_asset_lane_target("打开道具升级路线", "latest".to_string(), body)
 }
 
 fn world_route_company_latest_command_target(body: String) -> WorldRouteCommandTarget {
-    world_route_company_lane_target("Open company lane", "latest".to_string(), body)
+    world_route_company_lane_target("打开工坊路线", "latest".to_string(), body)
 }
 
 fn world_route_sell_latest_command_target(body: String) -> WorldRouteCommandTarget {
-    world_route_listing_lane_target("Open listing lane", "latest".to_string(), body)
+    world_route_listing_lane_target("打开任务牌路线", "latest".to_string(), body)
 }
 
 fn world_route_buy_latest_command_target(body: String) -> WorldRouteCommandTarget {
-    world_route_purchase_lane_target("Open purchase lane", "latest".to_string(), body)
+    world_route_purchase_lane_target("打开接取路线", "latest".to_string(), body)
 }
 
 fn world_route_work_deliver_latest_command_target(body: String) -> WorldRouteCommandTarget {
-    world_route_work_lane_target_by_kind("Open delivery lane", "delivery", body)
+    world_route_work_lane_target_by_kind("打开成果提交路线", "delivery", body)
 }
 
 fn world_route_work_accept_latest_command_target(body: String) -> WorldRouteCommandTarget {
-    world_route_work_lane_target_by_kind("Open acceptance lane", "acceptance", body)
+    world_route_work_lane_target_by_kind("打开评级路线", "acceptance", body)
 }
 
 fn world_route_work_reject_latest_command_target(body: String) -> WorldRouteCommandTarget {
-    world_route_work_lane_target_by_kind("Open rejection lane", "rejection", body)
+    world_route_work_lane_target_by_kind("打开返工路线", "rejection", body)
 }
 
 fn world_route_work_reopen_latest_command_target(body: String) -> WorldRouteCommandTarget {
-    world_route_work_lane_target_by_kind("Open reopen lane", "reopen", body)
+    world_route_work_lane_target_by_kind("打开重开路线", "reopen", body)
 }
 
 fn world_route_work_cancel_latest_command_target(body: String) -> WorldRouteCommandTarget {
-    world_route_work_lane_target_by_kind("Open cancellation lane", "cancellation", body)
+    world_route_work_lane_target_by_kind("打开放弃路线", "cancellation", body)
 }
 
 pub(super) const WORLD_ROUTE_PREFIX_COMMAND_BUILDERS: &[(&str, WorldRouteCommandTargetBuilder)] = &[
@@ -1140,14 +1140,14 @@ pub(super) fn world_route_command_target(command: &str) -> WorldRouteCommandTarg
 
     if let Some(body) = strip_body("/world action") {
         return finalize_world_route_command_target(
-            world_route_action_console_target("Open world action lane", body),
+            world_route_action_console_target("打开世界行动路线", body),
             trimmed,
         );
     }
 
     if let Some(body) = strip_body("/contract") {
         return finalize_world_route_command_target(
-            world_route_action_console_target("Open contract capture lane", body),
+            world_route_action_console_target("打开契约捕捉路线", body),
             trimmed,
         );
     }
@@ -1159,17 +1159,13 @@ pub(super) fn world_route_command_target(command: &str) -> WorldRouteCommandTarg
             .map(|(contract_id, body)| (contract_id.trim(), body.trim().to_string()))
             .unwrap_or((rest, String::new()));
         return finalize_world_route_command_target(
-            world_route_contract_lane_target(
-                "Open contract completion lane",
-                contract_id.to_string(),
-                body,
-            ),
+            world_route_contract_lane_target("打开契约完成路线", contract_id.to_string(), body),
             trimmed,
         );
     }
 
     finalize_world_route_command_target(
-        world_route_action_console_target("Open world action lane", trimmed.to_string()),
+        world_route_action_console_target("打开世界行动路线", trimmed.to_string()),
         trimmed,
     )
 }
@@ -1246,41 +1242,45 @@ impl<'a> WorldRouteTaskDerivationContext<'a> {
     fn feedback_focus(&self) -> String {
         match self.latest_bucket {
             "completion" => format!(
-                "Capture client feedback for {} and archive final delivery evidence, score, and lessons learned.",
+                "记录 {} 的委托方反馈，并归档最终成果证据、评分和复盘。",
                 self.latest_completion_title
             ),
             "acceptance" => format!(
-                "Capture what the buyer accepted in {} and which proof increased confidence.",
+                "记录委托方在 {} 中通过了什么，以及哪些证据提升了信任。",
                 self.latest_title
             ),
             "rejection" => format!(
-                "Capture evidence gaps, buyer objections, and revision scope from {}.",
+                "记录 {} 的证据缺口、委托方异议和返工范围。",
                 self.latest_title
             ),
             "reopen" => format!(
-                "Capture why {} reopened, what acceptance standard changed, and what must be fixed next.",
+                "记录 {} 为什么重开、评级标准如何变化，以及下一步要修什么。",
                 self.latest_title
             ),
             "cancellation" => format!(
-                "Capture cancellation reasons from {} and what qualification step would reduce churn next time.",
+                "记录 {} 的放弃原因，以及下次如何提前校准需求来减少流失。",
                 self.latest_title
             ),
             "contract" => format!(
-                "Capture delivery plan, acceptance standard, and outstanding risks for {}.",
+                "记录 {} 的成果计划、评级标准和未清风险。",
                 self.latest_contract_title
             ),
             "delivery" => format!(
-                "Capture delivered artifacts, missing proof, and buyer review cues from {}.",
+                "记录 {} 的已提交成果、缺失证据和委托方评级线索。",
                 self.latest_title
             ),
             "purchase" | "work_order" => format!(
-                "Capture buyer brief, promised scope, and execution risks from {}.",
+                "记录 {} 的委托简报、承诺范围和执行风险。",
                 self.latest_title
             ),
             _ => format!(
-                "Capture world-state evidence, blockers, and next action from {}{}{}.",
+                "记录 {}{}{} 的世界状态证据、阻碍和下一步行动。",
                 self.latest_title,
-                if self.latest_summary.is_empty() { "" } else { " · " },
+                if self.latest_summary.is_empty() {
+                    ""
+                } else {
+                    " · "
+                },
                 self.latest_summary
             ),
         }
@@ -1291,139 +1291,139 @@ impl<'a> WorldRouteTaskDerivationContext<'a> {
             "completion" => WorldRouteOpportunity {
                 kind: "repeat_order_upsell_referral".to_string(),
                 hint: format!(
-                    "Use {} as a springboard for a repeat order, upsell, or referral{}{}.",
+                    "把 {} 作为下一条回访委托、升级悬赏或转介绍支线的跳板{}{}。",
                     self.latest_completion_title,
-                    if self.latest_location_id.is_empty() { "" } else { " at " },
+                    if self.latest_location_id.is_empty() { "" } else { " @ " },
                     self.latest_location_id
                 ),
                 playbook: format!(
-                    "Archive proof from {}, ask for testimonial/referral, then package a premium repeat-order or upsell offer{}{}.",
+                    "归档 {} 的成果证据，索取评价/转介绍，再包装更高价值的回访委托或升级悬赏{}{}。",
                     self.latest_completion_title,
-                    if self.latest_location_id.is_empty() { "" } else { " for " },
+                    if self.latest_location_id.is_empty() { "" } else { " @ " },
                     self.latest_location_id
                 ),
                 command: format!(
-                    "/sell latest 复购/升级方案：基于 {} 提供下一阶段 deliverable、evidence、price、acceptance standard、timeline 和推荐理由。",
+                    "/sell latest 回访/升级悬赏：基于 {} 提供下一阶段成果、证据、赏金、评级标准、时间线和推荐理由。",
                     self.latest_completion_title
                 ),
             },
             "acceptance" => WorldRouteOpportunity {
                 kind: "acceptance_upsell".to_string(),
                 hint: format!(
-                    "Turn {} into the next collaboration, testimonial, or premium scope{}{}.",
+                    "把 {} 转化为下一次协作、评价或高阶悬赏{}{}。",
                     self.latest_title,
-                    if self.latest_location_id.is_empty() { "" } else { " at " },
+                    if self.latest_location_id.is_empty() { "" } else { " @ " },
                     self.latest_location_id
                 ),
                 playbook: format!(
-                    "Capture why {} was accepted, turn that proof into a testimonial, then pitch a higher-value follow-up package{}{}.",
+                    "记录 {} 为什么获得通过，把证据转成评价，再提出更高价值的后续支线{}{}。",
                     self.latest_title,
-                    if self.latest_location_id.is_empty() { "" } else { " for " },
+                    if self.latest_location_id.is_empty() { "" } else { " @ " },
                     self.latest_location_id
                 ),
                 command: format!(
-                    "/sell latest 验收后升级方案：围绕 {} 输出 premium scope、evidence、price ladder、timeline 和 next step。",
+                    "/sell latest 评级后升级悬赏：围绕 {} 输出高阶范围、证据、赏金阶梯、时间线和下一步。",
                     self.latest_title
                 ),
             },
             "rejection" => WorldRouteOpportunity {
                 kind: "revision_recovery".to_string(),
                 hint: format!(
-                    "Revise the offer, tighten acceptance criteria, and reopen the next sale path{}{}.",
-                    if self.latest_location_id.is_empty() { "" } else { " at " },
+                    "调整委托方案，收紧评级标准，并重新打开下一条支线{}{}。",
+                    if self.latest_location_id.is_empty() { "" } else { " @ " },
                     self.latest_location_id
                 ),
                 playbook: format!(
-                    "List objections from {}, patch the missing proof, restate acceptance criteria, then redeliver before reopening the next sale.",
+                    "列出 {} 的异议，补齐缺失证据，重述评级标准，再重新提交成果并打开下一条支线。",
                     self.latest_title
                 ),
-                command: "/work deliver latest 修订交付：补齐 evidence、修复 gap、重新对齐 acceptance standard、risk review 和 next action。".to_string(),
+                command: "/work deliver latest 修订成果：补齐证据、修复缺口、重新对齐评级标准、风险复盘和下一步。".to_string(),
             },
             "reopen" => WorldRouteOpportunity {
                 kind: "reopen_recovery".to_string(),
                 hint: format!(
-                    "Revise the offer, tighten acceptance criteria, and reopen the next sale path{}{}.",
-                    if self.latest_location_id.is_empty() { "" } else { " at " },
+                    "调整委托方案，收紧评级标准，并重新打开下一条支线{}{}。",
+                    if self.latest_location_id.is_empty() { "" } else { " @ " },
                     self.latest_location_id
                 ),
                 playbook: format!(
-                    "Use {} to drive a controlled redelivery loop: lock the new acceptance bar, patch proof gaps, then reopen expansion after acceptance.",
+                    "用 {} 推动可控的再次提交循环：锁定新评级线，补齐证据缺口，再在通过后打开扩展支线。",
                     self.latest_title
                 ),
-                command: "/work deliver latest 重开后修订交付：补齐 evidence、修复 reopen 要求、更新 acceptance checklist、next action。".to_string(),
+                command: "/work deliver latest 重开后修订成果：补齐证据、修复重开要求、更新评级清单和下一步。".to_string(),
             },
             "cancellation" => WorldRouteOpportunity {
                 kind: "smaller_scope_requalification".to_string(),
                 hint: format!(
-                    "Recover with a smaller-scoped or better-qualified opportunity{}{}.",
-                    if self.latest_location_id.is_empty() { "" } else { " at " },
+                    "用更小范围或更清晰的委托机会恢复这条路线{}{}。",
+                    if self.latest_location_id.is_empty() { "" } else { " @ " },
                     self.latest_location_id
                 ),
                 playbook: format!(
-                    "Turn {} into a requalification play: narrow scope, reduce risk, clarify evidence, and relaunch with a smaller starter offer.",
+                    "把 {} 转成重新校准：缩小范围、降低风险、明确证据，再用更小的起步悬赏重启。",
                     self.latest_title
                 ),
-                command: "/sell latest 小范围试单方案：更小 scope、明确 deliverable/evidence、低风险 acceptance standard、price 和 next action。".to_string(),
+                command: "/sell latest 小范围试炼委托：更小范围、明确成果/证据、低风险评级标准、赏金和下一步。".to_string(),
             },
             "contract" => WorldRouteOpportunity {
                 kind: "delivery_then_upsell".to_string(),
                 hint: format!(
-                    "Complete {} first, then open a post-delivery follow-up and next-sale pitch{}{}.",
+                    "先完成 {}，再打开成果后的跟进支线和下一条悬赏{}{}。",
                     self.latest_contract_title,
-                    if self.latest_location_id.is_empty() { "" } else { " at " },
+                    if self.latest_location_id.is_empty() { "" } else { " @ " },
                     self.latest_location_id
                 ),
                 playbook: format!(
-                    "Finish {}, lock delivery evidence and acceptance, then immediately draft the upsell or repeat-order angle while context is fresh.",
+                    "完成 {}，锁定成果证据和评级标准，再趁上下文新鲜起草下一条支线。",
                     self.latest_contract_title
                 ),
                 command: format!(
-                    "/complete {} 交付方案：包含 deliverable、evidence、risk review、acceptance standard、next step 和自检记录。",
+                    "/complete {} 成果方案：包含成果、证据、风险复盘、评级标准、下一步和自检记录。",
                     self.latest_contract_id
                 ),
             },
             "delivery" => WorldRouteOpportunity {
                 kind: "acceptance_closeout".to_string(),
                 hint: format!(
-                    "Use {} to secure acceptance, capture proof, and tee up the next collaboration{}{}.",
+                    "用 {} 完成评级闭环、沉淀证据，并铺好下一次协作{}{}。",
                     self.latest_title,
-                    if self.latest_location_id.is_empty() { "" } else { " at " },
+                    if self.latest_location_id.is_empty() { "" } else { " @ " },
                     self.latest_location_id
                 ),
                 playbook: format!(
-                    "Push {} through buyer review: highlight proof, close evidence gaps fast, and seed the next collaboration before the thread cools.",
+                    "推动 {} 完成委托方评级：突出证据，快速补齐缺口，在热度消退前埋好下一条支线。",
                     self.latest_title
                 ),
-                command: "/work accept latest 买家验收：确认 deliverable、evidence、quality、next collaboration 和 reputation grant。".to_string(),
+                command: "/work accept latest 评级通过：确认成果、证据、质量、下一次协作和声望奖励。".to_string(),
             },
             "purchase" | "work_order" => WorldRouteOpportunity {
                 kind: "fulfillment_launch".to_string(),
                 hint: format!(
-                    "Convert {} into the next contract, listing, or world-action opportunity{}{}.",
+                    "把 {} 推进成下一份契约、任务牌或世界行动机会{}{}。",
                     self.latest_title,
-                    if self.latest_location_id.is_empty() { "" } else { " at " },
+                    if self.latest_location_id.is_empty() { "" } else { " @ " },
                     self.latest_location_id
                 ),
                 playbook: format!(
-                    "Restate the brief from {}, lock milestones/evidence, and ship the first proof checkpoint fast so the route can move toward delivery and upsell.",
+                    "复述 {} 的委托目标，锁定里程碑和证据，尽快提交第一轮成果，让路线进入评级和下一条支线。",
                     self.latest_title
                 ),
-                command: "/work deliver latest 首轮交付：deliverable、evidence、acceptance checklist、risk review、next action。".to_string(),
+                command: "/work deliver latest 首轮成果：成果、证据、评级清单、风险复盘、下一步。".to_string(),
             },
             _ => WorldRouteOpportunity {
                 kind: "contract_capture".to_string(),
                 hint: format!(
-                    "Convert {} into the next contract, listing, or world-action opportunity{}{}.",
+                    "把 {} 转化为下一份契约、任务牌或世界行动机会{}{}。",
                     self.latest_title,
-                    if self.latest_location_id.is_empty() { "" } else { " at " },
+                    if self.latest_location_id.is_empty() { "" } else { " @ " },
                     self.latest_location_id
                 ),
                 playbook: format!(
-                    "Qualify {}, capture proof and risk, then decide whether to turn it into a contract, listing, or direct world action.",
+                    "判断 {} 的可行性，记录证据和风险，再决定转成契约、任务牌或直接世界行动。",
                     self.latest_title
                 ),
                 command: format!(
-                    "/contract 围绕 {} 整理目标、证据、风险、验收标准和下一步。",
+                    "/contract 围绕 {} 整理目标、证据、风险、评级标准和下一步。",
                     self.latest_title
                 ),
             },
@@ -1434,38 +1434,38 @@ impl<'a> WorldRouteTaskDerivationContext<'a> {
         if self.latest_bucket == "completion" && !self.latest_completion_id.is_empty() {
             WorldRouteSuggestedAction {
                 route_target: world_route_action_console_target(
-                    "Draft completion follow-up",
+                    "起草战报后续",
                     format!(
-                        "Task {}: follow up after completion {}, capture outcome evidence, client feedback, and next opportunity.",
+                        "任务 {}：跟进战报 {}，记录成果证据、委托方反馈和下一条支线。",
                         self.task_id, self.latest_completion_id
                     ),
                 ),
                 matrix_command: format!(
-                    "/world action 跟进已完成任务 {}：围绕 {} 记录交付证据、客户反馈、复盘和下一单机会。",
+                    "/world action 跟进已完成任务 {}：围绕 {} 记录成果证据、委托方反馈、复盘和下一条支线。",
                     self.task_id, self.latest_completion_title
                 ),
             }
         } else if !self.latest_contract_id.is_empty() {
             WorldRouteSuggestedAction {
                 route_target: world_route_contract_lane_target(
-                    "Route linked contract",
+                    "打开关联契约",
                     self.latest_contract_id.to_string(),
                     format!(
-                        "Task {}: complete linked contract {} with evidence, acceptance standard, and next step.",
+                        "任务 {}：完成关联契约 {}，带上证据、评级标准和下一步。",
                         self.task_id, self.latest_contract_id
                     ),
                 ),
                 matrix_command: format!(
-                    "/complete {} 交付方案：包含 deliverable、evidence、risk review、acceptance standard、next step 和自检记录。",
+                    "/complete {} 成果方案：包含成果、证据、风险复盘、评级标准、下一步和自检记录。",
                     self.latest_contract_id
                 ),
             }
         } else {
             WorldRouteSuggestedAction {
                 route_target: world_route_action_console_target(
-                    "Draft task follow-up",
+                    "起草任务后续",
                     format!(
-                        "Task {}: follow up on linked event {}, record world-state evidence, blockers, and next action.",
+                        "任务 {}：跟进关联事件 {}，记录世界状态证据、阻碍和下一步行动。",
                         self.task_id, self.latest_event_title
                     ),
                 ),
@@ -1552,7 +1552,7 @@ impl WorldRouteStoryView {
         let fallback_summary = preview_items
             .iter()
             .find_map(|item| item.get("summary").and_then(Value::as_str))
-            .unwrap_or("Route summary pending.")
+            .unwrap_or("路线摘要整理中。")
             .to_string();
         let fallback_target = world_route_command_target("/world action 继续推进下一步机会。");
         if let Some(task) = task_views.first() {
@@ -1599,7 +1599,7 @@ impl WorldRouteStoryView {
             next_stage_summary: fallback_summary,
             next_opportunity_kind: "contract_capture".to_string(),
             next_outcome_summary: "Outcome summary pending.".to_string(),
-            next_feedback_focus: "Evidence and next step pending.".to_string(),
+            next_feedback_focus: "证据和下一步待补齐。".to_string(),
             next_opportunity_hint: "Opportunity hint pending.".to_string(),
             next_opportunity_playbook: "Opportunity playbook pending.".to_string(),
             next_opportunity_command: "/world action 继续推进下一步机会。".to_string(),
@@ -1733,7 +1733,7 @@ impl WorldRoutePreviewItem {
             title: item
                 .get("title")
                 .and_then(Value::as_str)
-                .unwrap_or("Route item")
+                .unwrap_or("路线记录")
                 .to_string(),
             summary: item
                 .get("summary")
@@ -1949,17 +1949,17 @@ impl WorldRouteTaskGraphView {
             route_stage_summary: task
                 .get("route_stage_summary")
                 .and_then(Value::as_str)
-                .unwrap_or("Route summary pending.")
+                .unwrap_or("路线摘要整理中。")
                 .to_string(),
             outcome_summary: task
                 .get("outcome_summary")
                 .and_then(Value::as_str)
-                .unwrap_or("Outcome summary pending.")
+                .unwrap_or("结果摘要整理中。")
                 .to_string(),
             feedback_focus: task
                 .get("feedback_focus")
                 .and_then(Value::as_str)
-                .unwrap_or("Evidence and next step pending.")
+                .unwrap_or("证据和下一步整理中。")
                 .to_string(),
             next_opportunity_kind: task
                 .get("next_opportunity_kind")
@@ -1984,7 +1984,7 @@ impl WorldRouteTaskGraphView {
             next_opportunity_action_label: task
                 .get("next_opportunity_action_label")
                 .and_then(Value::as_str)
-                .unwrap_or("Route next opportunity")
+                .unwrap_or("推进下一条支线")
                 .to_string(),
             next_opportunity_panel_id: task
                 .get("next_opportunity_panel_id")
@@ -2019,7 +2019,7 @@ impl WorldRouteTaskGraphView {
             suggested_action_label: task
                 .get("suggested_action_label")
                 .and_then(Value::as_str)
-                .unwrap_or("Draft task follow-up")
+                .unwrap_or("起草任务后续")
                 .to_string(),
             suggested_panel_id: task
                 .get("suggested_panel_id")
@@ -2149,7 +2149,7 @@ impl WorldRouteTaskGraphView {
         let opportunity_action =
             self.opportunity_action_button_html("trillionnium-app-route-flow-action");
         format!(
-            "<article class=\"module app-route-task-graph-item\" data-task-id=\"{}\" data-location-id=\"{}\"><strong>{}</strong><span>{} · {} · opportunity {}</span><p>{} events · {} contracts · {} completions</p><p>{}</p><p><strong>Opportunity lane</strong> · {}</p><p>{}</p><div class=\"focus-stack\"><code>{}</code></div><div class=\"focus-stack\">{}{}</div></article>",
+            "<article class=\"module app-route-task-graph-item\" data-task-id=\"{}\" data-location-id=\"{}\"><strong>{}</strong><span>{} · {} · 支线 {}</span><p>{} 事件 · {} 委托 · {} 战报</p><p>{}</p><p><strong>下一条支线</strong> · {}</p><p>{}</p><div class=\"focus-stack\"><code>{}</code></div><div class=\"focus-stack\">{}{}</div></article>",
             escape_html_text(&self.task_id),
             escape_html_text(&self.latest_location_id),
             escape_html_text(&self.task_id),
@@ -2173,7 +2173,7 @@ impl WorldRouteTaskGraphView {
         let opportunity_action =
             self.opportunity_action_button_html("trillionnium-route-flow-action");
         format!(
-            "<article class=\"mini task-graph\" data-task-id=\"{}\" data-location-id=\"{}\"><strong>{}</strong><span>{} · {} · opportunity {}</span><code>{}</code><small>{} events · {} contracts · {} completions</small><small>{}</small><small><strong>Opportunity lane</strong> · {}</small><div class=\"focus-stack\"><code>{}</code></div><div class=\"focus-stack\">{}{}</div></article>",
+            "<article class=\"mini task-graph\" data-task-id=\"{}\" data-location-id=\"{}\"><strong>{}</strong><span>{} · {} · 支线 {}</span><code>{}</code><small>{} 事件 · {} 委托 · {} 战报</small><small>{}</small><small><strong>下一条支线</strong> · {}</small><div class=\"focus-stack\"><code>{}</code></div><div class=\"focus-stack\">{}{}</div></article>",
             escape_html_text(&self.task_id),
             escape_html_text(&self.latest_location_id),
             escape_html_text(&self.task_id),

@@ -80,6 +80,19 @@ pub(super) fn real_world_map_runtime_bootstrap_js() -> &'static str {
       const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (ch) => ({
         '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
       }[ch]));
+      const mapText = (value) => {
+        let text = String(value ?? '');
+        const replacements = [
+          ['Starter Studio', '新手工坊'], ['Forge Workbench', '锻造工坊'], ['Asset Yard', '道具庭院'], ['ZBJ Market Gate', '悬赏集市门'], ['League Coliseum', 'League 竞技场'],
+          ['starter-studio', '新手工坊'], ['forge-workbench', '锻造工坊'], ['asset-yard', '道具庭院'], ['zbj-market-gate', '悬赏集市门'], ['league-coliseum', 'League 竞技场'], ['cn-shanghai-core', '上海主城'],
+          ['prefetch', '预热分片'], ['street_nodes', '街区节点'], ['neighbor_tile_warmup', '邻近地图预热'], ['warm', '预热'], ['active', '活跃'], ['planned', '规划中'], ['pending', '待推进'], ['completed', '已完成'], ['accepted', '已评级'], ['world_event', '世界事件'], ['no-task', '未关联任务'], ['dense', '高密度'], ['regional', '区域密度'],
+          ['route_task', '路线任务'], ['contract_capture', '契约登记'], ['work_order', '冒险委托'], ['delivery', '成果提交'], ['acceptance', '评级'], ['rejection', '返工'], ['reopen', '重开'], ['cancellation', '放弃'], ['live_event', '实时事件'], ['event', '事件'], ['route', '路线'],
+          ['poi', '热点'], ['hub_square', '主城广场'], ['agent_home', 'Agent 居所'], ['ledger_office', '奖励窗口'], ['workshop_room', '工坊房间'], ['craft_station', '锻造台'], ['asset_yard', '道具庭院'], ['market_gate', '悬赏入口'], ['client_board', '悬赏牌'], ['delivery_dock', '成果评定台'], ['dispute_desk', '仲裁柜台'], ['arena_gate', '竞技入口'], ['raid_hall', '团本大厅'],
+          ['customer-facing', '委托可用'], ['customer', '委托'], ['buyer', '接取方'], ['seller', '服务方'], ['commercial', '任务'], ['browser commerce E2E', 'browser adventure E2E'], ['AI 设计公司', 'AI 设计工坊'], ['服务真实客户', '完成真实委托'], ['真实客户', '真实委托'], ['委托方', '委托目标']
+        ];
+        replacements.forEach(([from, to]) => { text = text.replaceAll(from, to); });
+        return text;
+      };
       const markerById = new Map((engine.markers || []).map((marker) => [String(marker.node_id || ''), marker]));
       const markerByLocationId = new Map();
       (engine.markers || []).forEach((marker) => {
@@ -95,7 +108,7 @@ pub(super) fn real_world_map_runtime_bootstrap_js() -> &'static str {
         events: mapAdapter.createOverlayLayer(mapRuntime),
       };
       const overlayState = { density: true, regions: true, tiles: true, prefetch: true, events: true };
-      const overlayLabels = { density: 'density', regions: 'regions', tiles: 'tiles', prefetch: 'prefetch', events: 'live events' };"#
+      const overlayLabels = { density: '密度', regions: '区域', tiles: '地图块', prefetch: '预热圈', events: '实时事件' };"#
 }
 
 pub(super) fn real_world_map_runtime_primitives_js() -> &'static str {
@@ -113,16 +126,16 @@ pub(super) fn real_world_map_runtime_primitives_js() -> &'static str {
       };
       const renderStreamHud = (viewport, focus = lastSelection) => {
         if (!streamHud) return;
-        const density = (viewport.player_density || {}).mode || 'dense';
+        const density = mapText((viewport.player_density || {}).mode || 'dense');
         const lens = buildStreamLens(viewport, focus);
         const chips = [
-          `<span class="hud-chip"><strong>${escapeHtml(viewport.stream_region_count ?? 0)}</strong> region shards</span>`,
-          `<span class="hud-chip"><strong>${escapeHtml(viewport.marker_count ?? 0)}</strong> visible nodes</span>`,
-          `<span class="hud-chip"><strong>${escapeHtml(viewport.prefetch_count ?? 0)}</strong> prefetch tiles</span>`,
-          `<span class="hud-chip"><strong>${escapeHtml(viewport.live_event_count ?? 0)}</strong> live events · ${escapeHtml(density)}</span>`
+          `<span class="hud-chip"><strong>${escapeHtml(viewport.stream_region_count ?? 0)}</strong> 个区域分片</span>`,
+          `<span class="hud-chip"><strong>${escapeHtml(viewport.marker_count ?? 0)}</strong> 个可见地点</span>`,
+          `<span class="hud-chip"><strong>${escapeHtml(viewport.prefetch_count ?? 0)}</strong> 个预热地图块</span>`,
+          `<span class="hud-chip"><strong>${escapeHtml(viewport.live_event_count ?? 0)}</strong> 个实时事件 · ${escapeHtml(density)}</span>`
         ];
         if (lens) {
-          chips.push(`<span class="hud-chip"><strong>${escapeHtml(lens.count ?? 0)}</strong> stream lens · ${escapeHtml(lens.label || 'focus')}</span>`);
+          chips.push(`<span class="hud-chip"><strong>${escapeHtml(lens.count ?? 0)}</strong> 条事件镜头 · ${escapeHtml(lens.label || '焦点')}</span>`);
         }
         streamHud.innerHTML = chips.join('');
       };
@@ -136,8 +149,8 @@ pub(super) fn real_world_map_runtime_primitives_js() -> &'static str {
         const active = Object.entries(overlayState)
           .filter(([, enabled]) => enabled)
           .map(([name]) => overlayLabels[name] || name);
-        const activeRegion = (((lastViewport || {}).active_region || {}).name) || 'current region';
-        overlayStatus.textContent = 'Active overlays: ' + (active.length ? active.join(', ') : 'none') + ' · quick focus: ' + activeRegion + ', nearest hotspot, hottest event.';
+        const activeRegion = mapText((((lastViewport || {}).active_region || {}).name) || '当前区域');
+        overlayStatus.textContent = '当前图层：' + (active.length ? active.join('、') : '无') + ' · 快捷焦点：' + activeRegion + '、最近热点、高热事件。';
       };
       const refreshOverlayControls = () => {
         if (!overlayControls) return;
@@ -222,8 +235,8 @@ pub(super) fn real_world_map_focus_core_js() -> &'static str {
         const filtered = filterLiveEventStream((viewport || {}).live_event_stream || [], selection);
         if (!filtered.length) return null;
         const label = selection.kind === 'event'
-          ? (selection.taskId ? ('task ' + selection.taskId) : (selection.title || 'selected event'))
-          : (selection.title || selection.locationId || selection.nodeId || selection.kind || 'focus');
+          ? (selection.taskId ? ('任务 ' + selection.taskId) : (selection.title || '已选事件'))
+          : (selection.title || selection.locationId || selection.nodeId || selection.kind || '焦点');
         return { count: filtered.length, label };
       };
       const findRegionByFocus = (focus) => {
@@ -282,9 +295,9 @@ pub(super) fn real_world_map_selection_builder_js() -> &'static str {
           if (!marker) return null;
           return {
             kind: 'node',
-            title: marker.name || marker.node_id || 'POI',
-            summary: (marker.node_kind || 'poi') + ' · ' + (((marker.interaction_tags || []).slice(0, 3)).join(' / ') || 'world interaction'),
-            detail: marker.description || 'Move, inspect, trade, craft, or open world actions from this hotspot.',
+            title: mapText(marker.name || marker.node_id || '热点'),
+            summary: mapText(marker.node_kind || '热点') + ' · ' + (mapText(((marker.interaction_tags || []).slice(0, 3)).join(' / ')) || '世界互动'),
+            detail: mapText(marker.description || '从这个热点移动、查看、协作、制作，或开启世界行动。'),
             nodeId: marker.node_id,
             locationId: marker.location_id || '',
             actions: marker.primary_actions || [],
@@ -297,13 +310,13 @@ pub(super) fn real_world_map_selection_builder_js() -> &'static str {
           const taskId = String(eventItem.cex_task_id || focus.taskId || '').trim();
           const locationId = String(eventItem.location_id || focus.locationId || marker.location_id || '').trim();
           const impact = Number(eventItem.impact_score ?? focus.impact ?? 0);
-          const eventKind = String(eventItem.event_kind || focus.eventKind || 'world_event');
-          const nodeName = String(eventItem.node_name || focus.nodeName || marker.name || locationId || 'POI');
+          const eventKind = mapText(String(eventItem.event_kind || focus.eventKind || 'world_event'));
+          const nodeName = mapText(String(eventItem.node_name || focus.nodeName || marker.name || locationId || '热点'));
           return {
             kind: 'event',
             title: eventKind + ' · ' + nodeName,
-            summary: (taskId ? ('task ' + taskId) : 'unlinked live event') + ' · impact ' + (Number.isFinite(impact) ? impact : 0),
-            detail: String(eventItem.result || focus.eventResult || eventItem.body || focus.eventBody || 'Track this live event into the route cockpit and next world action.'),
+            summary: (taskId ? ('任务 ' + taskId) : '未关联的实时事件') + ' · 影响 ' + (Number.isFinite(impact) ? impact : 0),
+            detail: mapText(String(eventItem.result || focus.eventResult || eventItem.body || focus.eventBody || '把这个实时事件推进到冒险路线和下一步世界行动。')),
             nodeId,
             locationId,
             taskId,
@@ -317,9 +330,9 @@ pub(super) fn real_world_map_selection_builder_js() -> &'static str {
           const region = findRegionByFocus(focus) || {};
           return {
             kind: 'region',
-            title: region.name || 'Region focus',
-            summary: (region.status || 'planned') + ' · ' + (region.coverage_kind || 'shard'),
-            detail: 'Zoom ' + (region.zoom_min || focus.zoom || 12) + '-' + (region.zoom_max || focus.zoom || 12) + ' · density ' + (region.player_density_mode || (((lastViewport || {}).player_density || {}).mode) || 'mixed'),
+            title: mapText(region.name || '区域焦点'),
+            summary: mapText(region.status || '规划中') + ' · ' + mapText(region.coverage_kind || '分片'),
+            detail: '缩放 ' + (region.zoom_min || focus.zoom || 12) + '-' + (region.zoom_max || focus.zoom || 12) + ' · 密度 ' + mapText(region.player_density_mode || (((lastViewport || {}).player_density || {}).mode) || '混合'),
             lat: focus.lat,
             lng: focus.lng,
             zoom: region.zoom_max || focus.zoom || 12,
@@ -333,9 +346,9 @@ pub(super) fn real_world_map_selection_builder_js() -> &'static str {
           const tile = tiles.find((item) => String(item.z || '') === String(focus.z || '') && String(item.x || '') === String(focus.x || '') && String(item.y || '') === String(focus.y || '')) || {};
           return {
             kind: 'tile',
-            title: tile.tile_id || 'Tile shard',
-            summary: (tile.tile_status || 'tile') + ' · ' + String(tile.marker_count ?? 0) + ' nodes',
-            detail: (tile.lod_mode || 'street_nodes') + ' · tile ' + [focus.z, focus.x, focus.y].filter((value) => value !== undefined && value !== null && value !== '').join('/'),
+            title: tile.tile_id || '地图分片',
+            summary: mapText(tile.tile_status || '地图块') + ' · ' + String(tile.marker_count ?? 0) + ' 个地点',
+            detail: mapText(tile.lod_mode || '街区节点') + ' · 地图块 ' + [focus.z, focus.x, focus.y].filter((value) => value !== undefined && value !== null && value !== '').join('/'),
             nodeIds: tile.node_ids || [],
             z: focus.z,
             x: focus.x,
@@ -352,9 +365,9 @@ pub(super) fn real_world_map_selection_signal_js() -> &'static str {
         if (!selection || selection.kind !== 'event') return '';
         const result = String(selection.eventResult || '').trim();
         const body = String(selection.eventBody || '').trim();
-        if (result && body) return 'Latest event signal: ' + result + ' · ' + body;
-        if (result) return 'Latest event signal: ' + result;
-        if (body) return 'Latest event signal: ' + body;
+        if (result && body) return '最新事件信号：' + mapText(result) + ' · ' + mapText(body);
+        if (result) return '最新事件信号：' + mapText(result);
+        if (body) return '最新事件信号：' + mapText(body);
         return '';
       };
       const appendSelectionEventSignal = (body, selection) => {
@@ -369,22 +382,22 @@ pub(super) fn real_world_map_focus_panel_js() -> &'static str {
           .filter(([, value]) => value !== undefined && value !== null)
           .map(([name, value]) => ` data-${name}="${escapeHtml(value)}"`)
           .join('');
-        return `<button type="button" class="focus-chip trillionnium-selection-action"${attrHtml}${extraAttrs}>${escapeHtml(label || 'Action')}</button>`;
+        return `<button type="button" class="focus-chip trillionnium-selection-action"${attrHtml}${extraAttrs}>${escapeHtml(label || '行动')}</button>`;
       };
       const selectionCameraActionButtonHtml = (actionId, label) => selectionActionButtonHtml({ 'selection-kind': 'camera', 'camera-action': actionId }, label);
       const buildMapFocusActionButtonsHtml = (selection, options) => {
         const nodeButtonExtraAttrs = String(((options || {}).nodeButtonExtraAttrs) || '');
         const buttons = [];
         if (selection.kind === 'node' || selection.kind === 'event') {
-          buttons.push(...(selection.actions || []).map((action) => selectionActionButtonHtml({ 'selection-kind': 'node', 'node-id': selection.nodeId || '', 'action-id': action.action_id || 'move_here' }, action.label || action.command || 'Action', nodeButtonExtraAttrs)));
+          buttons.push(...(selection.actions || []).map((action) => selectionActionButtonHtml({ 'selection-kind': 'node', 'node-id': selection.nodeId || '', 'action-id': action.action_id || 'move_here' }, action.label || action.command || '行动', nodeButtonExtraAttrs)));
         } else if (selection.kind === 'region') {
-          buttons.push(selectionActionButtonHtml({ 'selection-kind': 'region', lat: selection.lat ?? '', lng: selection.lng ?? '', zoom: selection.zoom ?? 12 }, 'Center region'));
-          buttons.push(selectionCameraActionButtonHtml('nearest_poi', 'Nearest hotspot'));
-          buttons.push(selectionCameraActionButtonHtml('hottest_event', 'Hottest event'));
+          buttons.push(selectionActionButtonHtml({ 'selection-kind': 'region', lat: selection.lat ?? '', lng: selection.lng ?? '', zoom: selection.zoom ?? 12 }, '聚焦区域'));
+          buttons.push(selectionCameraActionButtonHtml('nearest_poi', '最近热点'));
+          buttons.push(selectionCameraActionButtonHtml('hottest_event', '高热事件'));
         } else if (selection.kind === 'tile') {
-          buttons.push(selectionActionButtonHtml({ 'selection-kind': 'tile', 'tile-z': selection.z ?? '', 'tile-x': selection.x ?? '', 'tile-y': selection.y ?? '' }, 'Inspect tile'));
-          buttons.push(selectionCameraActionButtonHtml('nearest_poi', 'Nearest hotspot'));
-          buttons.push(selectionCameraActionButtonHtml('hottest_event', 'Hottest event'));
+          buttons.push(selectionActionButtonHtml({ 'selection-kind': 'tile', 'tile-z': selection.z ?? '', 'tile-x': selection.x ?? '', 'tile-y': selection.y ?? '' }, '查看分片'));
+          buttons.push(selectionCameraActionButtonHtml('nearest_poi', '最近热点'));
+          buttons.push(selectionCameraActionButtonHtml('hottest_event', '高热事件'));
         }
         return buttons.join(' ');
       };
@@ -396,14 +409,14 @@ pub(super) fn real_world_map_focus_panel_js() -> &'static str {
         const focus = ((options || {}).focus) || buildDefaultFocus();
         const selection = buildSelectionFromFocus(focus);
         if (!selection) {
-          focusSummaryNode.textContent = String(((options || {}).emptySummary) || 'Waiting for viewport focus…');
-          focusDetailNode.textContent = String(((options || {}).emptyDetail) || 'Pick a region, tile, hotspot, or live event to steer movement and world actions.');
+          focusSummaryNode.textContent = String(((options || {}).emptySummary) || '等待选择地图焦点…');
+          focusDetailNode.textContent = String(((options || {}).emptyDetail) || '选择区域、地图块、热点或实时事件，推动移动和世界行动。');
           actionRailNode.innerHTML = '';
           if (typeof (options || {}).onEmpty === 'function') options.onEmpty();
           return null;
         }
-        focusSummaryNode.textContent = selection.title || 'Map focus';
-        focusDetailNode.textContent = (selection.summary || 'world focus') + ' · ' + (selection.detail || '');
+        focusSummaryNode.textContent = selection.title || '地图焦点';
+        focusDetailNode.textContent = (selection.summary || '世界焦点') + ' · ' + (selection.detail || '');
         actionRailNode.innerHTML = buildMapFocusActionButtonsHtml(selection, options);
         if (typeof (options || {}).onRendered === 'function') options.onRendered(selection);
         return selection;
@@ -458,7 +471,7 @@ pub(super) fn real_world_map_focus_camera_js() -> &'static str {
           const focus = { kind: 'region', lat: centerPoint.lat, lng: centerPoint.lng, zoom: region.zoom_max || 12 };
           focusMapSurface(focus);
           setFocusSelection(focus);
-          if (cameraSummary) cameraSummary.textContent = 'Quick focus: active region · ' + (region.name || region.region_id || 'region');
+          if (cameraSummary) cameraSummary.textContent = '快捷焦点：当前区域 · ' + (region.name || region.region_id || 'region');
           return;
         }
         if (actionId === 'nearest_poi') {
@@ -467,7 +480,7 @@ pub(super) fn real_world_map_focus_camera_js() -> &'static str {
           const focus = { kind: 'node', nodeId: hotspot.node_id };
           focusMapSurface(focus);
           setFocusSelection(focus);
-          if (cameraSummary) cameraSummary.textContent = 'Quick focus: nearest hotspot · ' + (hotspot.name || hotspot.node_id || 'poi');
+          if (cameraSummary) cameraSummary.textContent = '快捷焦点：最近热点 · ' + (hotspot.name || hotspot.node_id || 'poi');
           return;
         }
         if (actionId === 'hottest_event') {
@@ -476,14 +489,14 @@ pub(super) fn real_world_map_focus_camera_js() -> &'static str {
           const focus = { kind: 'event', nodeId: hottestEvent.node_id, eventId: hottestEvent.event_id, taskId: hottestEvent.cex_task_id, locationId: hottestEvent.location_id, eventKind: hottestEvent.event_kind, nodeName: hottestEvent.node_name, eventBody: hottestEvent.body, eventResult: hottestEvent.result, impact: hottestEvent.impact_score, suppressAction: true };
           focusMapSurface(focus);
           setFocusSelection(focus);
-          if (cameraSummary) cameraSummary.textContent = 'Quick focus: hottest event · ' + (hottestEvent.event_kind || 'world_event') + ' · ' + (hottestEvent.node_name || hottestEvent.node_id || 'event');
+          if (cameraSummary) cameraSummary.textContent = '快捷焦点：高热事件 · ' + mapText(hottestEvent.event_kind || 'world_event') + ' · ' + mapText(hottestEvent.node_name || hottestEvent.node_id || 'event');
         }
       };
 "#
 }
 
 pub(super) fn real_world_map_static_marker_layers_js() -> &'static str {
-    r#"      const mapMarkerActionButtonHtml = (marker, action) => `<button type="button" class="trillionnium-map-action" data-node-id="${escapeHtml(marker.node_id)}" data-action-id="${escapeHtml(action.action_id || 'move_here')}">${escapeHtml(action.label || action.command || 'Action')}</button>`;
+    r#"      const mapMarkerActionButtonHtml = (marker, action) => `<button type="button" class="trillionnium-map-action" data-node-id="${escapeHtml(marker.node_id)}" data-action-id="${escapeHtml(action.action_id || 'move_here')}">${escapeHtml(action.label || action.command || '行动')}</button>`;
       (engine.route_edges || []).forEach((edge) => {
         if (!edge.from || !edge.to) return;
         mapAdapter.renderRouteLine(mapRuntime, edge.from, edge.to, { color: '#64e3ff', weight: 2, opacity: 0.62 });
@@ -560,20 +573,20 @@ pub(super) fn real_world_map_overlay_render_js() -> &'static str {
           if (!Number.isFinite(centerPoint.lat) || !Number.isFinite(centerPoint.lng)) return;
           const stroke = region.status === 'active' ? '#f8c35b' : (region.status === 'warm' ? '#64e3ff' : '#8d97a6');
           mapAdapter.renderRegionAnchor(overlayLayers.regions, centerPoint, { radius: region.status === 'active' ? 9 : 7, color: stroke, fillColor: stroke, fillOpacity: 0.28, weight: 1.6 })
-            .bindTooltip(`${region.name || 'Region'} · ${region.status || 'planned'}`);
+            .bindTooltip(`${mapText(region.name || '区域')} · ${mapText(region.status || '规划中')}`);
         });
         (viewport.visible_tile_shards || []).forEach((tile) => {
           const bounds = tileBoundsFromParts(Number(tile.z), Number(tile.x), Number(tile.y));
           if (!bounds) return;
           const active = tile.tile_status === 'active';
           mapAdapter.renderTileFrame(overlayLayers.tiles, bounds, { color: active ? '#64e3ff' : '#34506d', weight: active ? 2 : 1, fillColor: active ? '#64e3ff' : '#203244', fillOpacity: active ? 0.12 : 0.02 })
-            .bindTooltip(`${tile.tile_id || 'tile'} · ${tile.marker_count ?? 0} nodes`);
+            .bindTooltip(`${tile.tile_id || '地图块'} · ${tile.marker_count ?? 0} 个地点`);
         });
         (viewport.prefetch_queue || []).forEach((tile) => {
           const bounds = tileBoundsFromParts(Number(tile.z), Number(tile.x), Number(tile.y));
           if (!bounds) return;
           mapAdapter.renderTileFrame(overlayLayers.prefetch, bounds, { color: '#f8c35b', weight: 2, dashArray: '6 6', fillColor: '#f8c35b', fillOpacity: 0.04 })
-            .bindTooltip(`prefetch · ${tile.priority_label || 'warm'} · ${tile.tile_id || 'tile'}`);
+            .bindTooltip(`预热 · ${mapText(tile.priority_label || 'warm')} · ${tile.tile_id || '地图块'}`);
         });
         const visibleMarkerById = new Map((viewport.visible_markers || []).map((marker) => [String(marker.node_id || ''), marker]));
         (viewport.live_event_stream || []).forEach((eventItem) => {
@@ -582,15 +595,15 @@ pub(super) fn real_world_map_overlay_render_js() -> &'static str {
           const impact = Number(eventItem.impact_score || 0);
           const eventFocus = buildEventFocus(eventItem);
           mapAdapter.renderEventPulse(overlayLayers.events, marker, { radius: Math.max(6, Math.min(12, 5 + impact / 3)), color: '#ff8d4d', fillColor: '#ff8d4d', fillOpacity: 0.3, weight: 1.4 })
-            .bindTooltip(`${eventItem.event_kind || 'world_event'} · ${eventItem.node_name || marker.name || eventItem.location_id || 'POI'}`)
+            .bindTooltip(`${mapText(eventItem.event_kind || 'world_event')} · ${mapText(eventItem.node_name || marker.name || eventItem.location_id || '热点')}`)
             .on('click', () => {
               focusMapSurface(eventFocus);
               setFocusSelection(eventFocus);
             });
         });
         if (overlayLegend) {
-          const regionName = ((viewport.active_region || {}).name) || 'Region';
-          overlayLegend.textContent = 'Overlay legend: ' + regionName + ' anchors · ' + (viewport.tile_shard_count || 0) + ' tile frames · ' + (viewport.prefetch_count || 0) + ' prefetch warm ring · ' + (viewport.live_event_count || 0) + ' live event pulses.';
+          const regionName = mapText(((viewport.active_region || {}).name) || '区域');
+          overlayLegend.textContent = '图层说明：' + regionName + ' 锚点 · ' + (viewport.tile_shard_count || 0) + ' 个地图块 · ' + (viewport.prefetch_count || 0) + ' 个预热圈 · ' + (viewport.live_event_count || 0) + ' 个实时事件脉冲。';
         }
         Object.keys(overlayLayers).forEach((name) => setOverlayLayerVisibility(name, overlayState[name] !== false));
       };
@@ -611,13 +624,13 @@ pub(super) fn real_world_map_card_focus_helpers_js() -> &'static str {
         .filter(([, value]) => value !== undefined && value !== null)
         .map(([name, value]) => ` data-${name}="${escapeHtml(value)}"`)
         .join('');
-      const mapRegionFocusButton = (item, label = 'Focus region') => {
+      const mapRegionFocusButton = (item, label = '聚焦区域') => {
         const centerPoint = (item && item.center) || {};
         return `<button type="button" class="focus-chip trillionnium-map-focus"${mapFocusButtonAttrs({ 'focus-kind': 'region', lat: centerPoint.lat ?? '', lng: centerPoint.lng ?? '', zoom: (item || {}).zoom_max ?? 12 })}>${escapeHtml(label)}</button>`;
       };
-      const mapTileFocusButton = (item, label = 'Inspect tile') => `<button type="button" class="focus-chip trillionnium-map-focus"${mapFocusButtonAttrs({ 'focus-kind': 'tile', 'tile-z': (item || {}).z ?? '', 'tile-x': (item || {}).x ?? '', 'tile-y': (item || {}).y ?? '' })}>${escapeHtml(label)}</button>`;
-      const mapNodeFocusButton = (item, label = 'Focus POI') => `<button type="button" class="focus-chip trillionnium-map-focus"${mapFocusButtonAttrs({ 'focus-kind': 'node', 'node-id': (item || {}).node_id || '' })}>${escapeHtml(label)}</button>`;
-      const mapEventFocusButton = (item, label = 'Track event') => {
+      const mapTileFocusButton = (item, label = '查看地图分片') => `<button type="button" class="focus-chip trillionnium-map-focus"${mapFocusButtonAttrs({ 'focus-kind': 'tile', 'tile-z': (item || {}).z ?? '', 'tile-x': (item || {}).x ?? '', 'tile-y': (item || {}).y ?? '' })}>${escapeHtml(label)}</button>`;
+      const mapNodeFocusButton = (item, label = '聚焦热点') => `<button type="button" class="focus-chip trillionnium-map-focus"${mapFocusButtonAttrs({ 'focus-kind': 'node', 'node-id': (item || {}).node_id || '' })}>${escapeHtml(label)}</button>`;
+      const mapEventFocusButton = (item, label = '追踪事件') => {
         const eventItem = item || {};
         return `<button type="button" class="focus-chip trillionnium-map-focus"${mapFocusButtonAttrs({ 'focus-kind': 'event', 'node-id': eventItem.node_id || '', 'event-id': eventItem.event_id || '', 'task-id': eventItem.cex_task_id || '', 'location-id': eventItem.location_id || '', 'event-kind': eventItem.event_kind || 'world_event', 'node-name': eventItem.node_name || eventItem.location_id || 'POI', 'event-body': eventItem.body || '', 'event-result': eventItem.result || '', 'suppress-action': 'true' })}>${escapeHtml(label)}</button>`;
       };
@@ -627,10 +640,10 @@ pub(super) fn real_world_map_card_focus_helpers_js() -> &'static str {
         if (kind === 'region') {
           return {
             className: worldStyle ? 'mini shard' : 'module',
-            title: source.name || 'Region',
+            title: mapText(source.name || '区域'),
             meta: worldStyle
-              ? `${source.status || 'planned'} · ${source.coverage_kind || 'shard'} · ${source.distance_km ?? 0} km`
-              : `${source.status || 'planned'} · ${source.distance_km ?? 0} km`,
+              ? `${mapText(source.status || '规划中')} · ${mapText(source.coverage_kind || '分片')} · ${source.distance_km ?? 0} km`
+              : `${mapText(source.status || '规划中')} · ${source.distance_km ?? 0} km`,
             code: source.region_id || 'region',
             focusHtml: mapRegionFocusButton(source),
           };
@@ -638,36 +651,36 @@ pub(super) fn real_world_map_card_focus_helpers_js() -> &'static str {
         if (kind === 'tile') {
           return {
             className: worldStyle ? 'mini tile' : 'module',
-            title: source.tile_status || 'tile',
-            meta: `${source.lod_mode || 'lod'} · ${source.marker_count ?? 0} nodes`,
-            code: source.tile_id || 'tile',
-            focusHtml: mapTileFocusButton(source, 'Inspect tile'),
+            title: mapText(source.tile_status || '地图块'),
+            meta: `${mapText(source.lod_mode || 'LOD')} · ${source.marker_count ?? 0} 个地点`,
+            code: source.tile_id || '地图块',
+            focusHtml: mapTileFocusButton(source, '查看分片'),
           };
         }
         if (kind === 'prefetch') {
           return {
             className: worldStyle ? 'mini prefetch' : 'module',
-            title: source.priority_label || 'warm',
-            meta: `${source.prefetch_reason || 'neighbor_tile_warmup'} · ${source.marker_count ?? 0} nodes`,
-            code: source.tile_id || 'tile',
-            focusHtml: mapTileFocusButton(source, 'Warm tile'),
+            title: mapText(source.priority_label || '预热'),
+            meta: `${mapText(source.prefetch_reason || '邻近地图块预热')} · ${source.marker_count ?? 0} 个地点`,
+            code: source.tile_id || '地图块',
+            focusHtml: mapTileFocusButton(source, '预热分片'),
           };
         }
         if (kind === 'event') {
           return {
             className: worldStyle ? 'mini event' : 'module',
-            title: source.event_kind || 'world_event',
-            meta: `${source.node_name || source.location_id || 'POI'} · ${source.distance_km ?? 'global'} km`,
-            code: source.event_id || 'event',
-            focusHtml: mapEventFocusButton(source, 'Track event'),
+            title: mapText(source.event_kind || '世界事件'),
+            meta: `${mapText(source.node_name || source.location_id || '热点')} · ${source.distance_km ?? '全域'} km`,
+            code: source.event_id || '事件',
+            focusHtml: mapEventFocusButton(source, '追踪事件'),
           };
         }
         return {
           className: worldStyle ? 'mini poi' : 'module',
-          title: source.name || 'POI',
-          meta: `${source.node_kind || 'poi'} · ${source.distance_km ?? 0} km`,
-          code: source.node_id || 'node',
-          focusHtml: mapNodeFocusButton(source, 'Focus POI'),
+          title: mapText(source.name || '热点'),
+          meta: `${mapText(source.node_kind || '热点')} · ${source.distance_km ?? 0} km`,
+          code: source.node_id || '节点',
+          focusHtml: mapNodeFocusButton(source, '聚焦热点'),
         };
       };
       const mapViewportCardHtml = (item, kind, style = 'app') => {
@@ -741,20 +754,20 @@ pub(super) fn real_world_map_route_target_resolution_js() -> &'static str {
 pub(super) fn real_world_map_route_status_js() -> &'static str {
     r#"      const routeOpportunitySegment = (task) => {
         const kind = String(((task || {}).next_opportunity_kind) || '').trim();
-        return kind ? (' · opportunity ' + kind) : '';
+        return kind ? (' · 支线 ' + kind) : '';
       };
       const routeEventBriefText = (eventSignalText, fullRouteVisible) => {
-        const normalized = String(eventSignalText || '').replace(/^Latest event signal:\s*/, '').trim();
-        if (!normalized) return 'Focused event brief: no live event selected.';
-        return 'Focused event brief: ' + normalized + (fullRouteVisible ? ' · full route visible.' : '');
+        const normalized = String(eventSignalText || '').replace(/^(Latest event signal:|最新事件信号：)\s*/, '').trim();
+        if (!normalized) return '事件简报：尚未选择实时事件。';
+        return '事件简报：' + normalized + (fullRouteVisible ? ' · 已显示完整路线。' : '');
       };
       const routeLinkStatusText = (context) => {
         const taskId = String((context || {}).taskId || '').trim();
-        if (!taskId) return String((context || {}).emptyText || 'Linked task route: none yet.');
+        if (!taskId) return String((context || {}).emptyText || '关联任务路线：暂无。');
         const linkedEventCount = Number((context || {}).linkedEventCount || 0);
         const linkedContractCount = Number((context || {}).linkedContractCount || 0);
-        const contractText = (context || {}).inFocus ? ' contracts in focus' : ' contracts';
-        return 'Linked task route: ' + taskId + ' · ' + linkedEventCount + ' events · ' + linkedContractCount + contractText + routeOpportunitySegment((context || {}).opportunityTask) + '.';
+        const contractText = (context || {}).inFocus ? ' 个焦点契约' : ' 个契约';
+        return '关联任务路线：' + taskId + ' · ' + linkedEventCount + ' 个事件 · ' + linkedContractCount + contractText + routeOpportunitySegment((context || {}).opportunityTask) + '。';
       };
 "#
 }
@@ -797,7 +810,7 @@ pub(super) fn real_world_map_route_contract_js() -> String {
         return value == null ? fallback : value;
       }};
       const routeHandoffPanelId = (handoff, fallback = routeActionPanelId()) => routeHandoffValue(handoff, 'panel_id', fallback);
-      const routeHandoffActionLabel = (handoff, fallback = 'Action') => {{
+      const routeHandoffActionLabel = (handoff, fallback = '行动') => {{
         const label = String(routeHandoffValue(handoff, 'action_label', '') || '').trim();
         if (label) return label;
         const actionId = String(routeHandoffValue(handoff, 'action_id', '') || '').trim();
@@ -813,7 +826,7 @@ pub(super) fn real_world_map_route_contract_js() -> String {
           nodeId: routeHandoffValue(handoff, 'node_id', fallback.nodeId || ''),
           locationId: routeHandoffValue(handoff, 'location_id', fallback.locationId || ''),
           actionId: routeHandoffValue(handoff, 'action_id', fallback.actionId || ''),
-          actionLabel: routeHandoffActionLabel(handoff, fallback.actionLabel || 'Action'),
+          actionLabel: routeHandoffActionLabel(handoff, fallback.actionLabel || '行动'),
           command: routeHandoffCommand(handoff, fallback.command || 'prepared'),
           panelId: routeHandoffPanelId(handoff, fallback.panelId || routeActionPanelId()),
           actionBody: routeHandoffValue(handoff, 'action_body', fallback.actionBody || ''),
@@ -832,7 +845,7 @@ pub(super) fn real_world_map_route_contract_js() -> String {
         }};
       }};
       const buildMarkerRouteActionState = (action, handoff, nodeId) => buildRouteHandoffState(handoff, {{
-        actionLabel: ((action || {{}}).label) || ((action || {{}}).action_id) || 'Action',
+        actionLabel: ((action || {{}}).label) || ((action || {{}}).action_id) || '行动',
         command: ((action || {{}}).command) || ('/go ' + nodeId),
         moveTarget: nodeId,
       }});
@@ -874,7 +887,10 @@ pub(super) fn real_world_map_route_contract_js() -> String {
       }};
       const scrollRoutePanelIntoView = (panelId) => {{
         const panel = document.getElementById(panelId);
-        if (panel) panel.scrollIntoView({{ behavior: 'smooth', block: 'center' }});
+        if (panel) {{
+          panel.querySelectorAll('details').forEach((details) => {{ details.open = true; }});
+          panel.scrollIntoView({{ behavior: 'smooth', block: 'center' }});
+        }}
         return panel;
       }};
 "#
@@ -911,7 +927,7 @@ pub(super) fn real_world_map_route_flow_buttons_js() -> &'static str {
       const buildRouteOpportunityAction = (task, fallbackLocationId) => {
         if (!task || !(task.next_opportunity_command || task.next_opportunity_body)) return null;
         return buildSimpleRouteTargetAction({
-          label: task.next_opportunity_action_label || 'Route next opportunity',
+          label: task.next_opportunity_action_label || '推进下一条支线',
           panelId: task.next_opportunity_panel_id || routeActionPanelId(),
           inputId: task.next_opportunity_input_id || '',
           value: task.next_opportunity_input_value || '',
@@ -942,14 +958,14 @@ pub(super) fn real_world_map_route_flow_buttons_js() -> &'static str {
         const opportunityAction = buildRouteOpportunityAction(source, source.latest_location_id || '');
         return routeFlowActionButtonHtml(suggestedAction, className) + routeFlowActionButtonHtml(opportunityAction, className);
       };
-      const indexedRouteActionButtonHtml = (action, index, className = 'trillionnium-app-route-action') => `<button type="button" class="focus-chip ${escapeHtml(className)}" data-route-action-index="${escapeHtml(index)}">${escapeHtml((action || {}).label || 'Route action')}</button>`;
+      const indexedRouteActionButtonHtml = (action, index, className = 'trillionnium-app-route-action') => `<button type="button" class="focus-chip ${escapeHtml(className)}" data-route-action-index="${escapeHtml(index)}">${escapeHtml((action || {}).label || '路线行动')}</button>`;
 "#
 }
 
 pub(super) fn real_world_map_route_contract_accessors_js() -> &'static str {
     r#"      const inferConfiguredRouteNextStep = (selection, routeContext, config) => {
         const settings = config || {};
-        const selectionTitle = (selection && selection.title) ? selection.title : (settings.selectionTitleFallback || 'Focused route');
+        const selectionTitle = (selection && selection.title) ? selection.title : (settings.selectionTitleFallback || '当前路线');
         const withEventSignal = (body) => appendSelectionEventSignal(body, selection);
         const locationId = routeContext.locationId || '';
         const taskId = routeContext.taskId || '';
@@ -957,7 +973,7 @@ pub(super) fn real_world_map_route_contract_accessors_js() -> &'static str {
         const contractId = routeContext.contractId || '';
         const listingId = routeContext.listingId || '';
         const latestWorkBucket = routeContext.latestWorkBucket || '';
-        const statusPrefix = String(settings.statusPrefix || 'Recommended next step');
+        const statusPrefix = String(settings.statusPrefix || '推荐下一步');
         const formatStatus = (message) => statusPrefix + ': ' + message;
         const buildAction = (action) => buildSimpleRouteTargetAction({
           locationId,
@@ -969,14 +985,14 @@ pub(super) fn real_world_map_route_contract_accessors_js() -> &'static str {
         });
         if (latestWorkBucket === 'rejection' && workOrderId) {
           return buildAction(buildWorldWorkLaneAction('reopen', workOrderId, {
-            label: 'Route reopen',
+            label: '重开路线',
             body: withEventSignal(settings.rejectionBody(selectionTitle, workOrderId)),
             status: formatStatus(settings.rejectionStatus(workOrderId)),
           }));
         }
         if (latestWorkBucket === 'reopen' && workOrderId) {
           return buildAction(buildWorldWorkLaneAction('delivery', workOrderId, {
-            label: 'Route redelivery',
+            label: '再次提交成果',
             body: withEventSignal(settings.reopenBody(selectionTitle, workOrderId)),
             status: formatStatus(settings.reopenStatus(workOrderId)),
           }));
@@ -995,7 +1011,7 @@ pub(super) fn real_world_map_route_contract_accessors_js() -> &'static str {
         }
         if ((latestWorkBucket === 'acceptance' || latestWorkBucket === 'cancellation') && workOrderId && settings.closedWorkBody && settings.closedWorkStatus) {
           return buildAction({
-            label: settings.closedWorkLabel || 'Draft follow-up action',
+            label: settings.closedWorkLabel || '起草后续支线',
             panelId: routeActionPanelId(),
             textareaId: routeActionTextareaId(),
             body: withEventSignal(settings.closedWorkBody(selectionTitle, workOrderId, latestWorkBucket)),
@@ -1015,7 +1031,7 @@ pub(super) fn real_world_map_route_contract_accessors_js() -> &'static str {
           }));
         }
         return buildAction({
-          label: settings.defaultLabel || 'Draft world action',
+          label: settings.defaultLabel || '起草世界行动',
           panelId: routeActionPanelId(),
           textareaId: routeActionTextareaId(),
           body: withEventSignal(settings.defaultBody(selectionTitle)),
@@ -1024,28 +1040,28 @@ pub(super) fn real_world_map_route_contract_accessors_js() -> &'static str {
       };
       const buildRouteDraftBody = (selection, routeContext, options) => {
         const settings = options || {};
-        const selectionTitle = (selection && selection.title) ? selection.title : (settings.selectionTitleFallback || 'Focused world route');
+        const selectionTitle = (selection && selection.title) ? selection.title : (settings.selectionTitleFallback || '当前世界路线');
         const detail = [];
         if (!settings.omitContextDetails) {
-          if (routeContext.locationId) detail.push('location ' + routeContext.locationId);
-          if (routeContext.taskId) detail.push('task ' + routeContext.taskId);
-          if (routeContext.eventLabel && routeContext.eventLabel !== 'no event') detail.push('event ' + routeContext.eventLabel);
-          if (routeContext.workOrderId) detail.push('work order ' + routeContext.workOrderId);
-          if (routeContext.contractId) detail.push('contract ' + routeContext.contractId);
-          if (routeContext.listingId) detail.push('listing ' + routeContext.listingId);
-          if (routeContext.recommendedLabel) detail.push('next step ' + String(routeContext.recommendedLabel).toLowerCase());
+          if (routeContext.locationId) detail.push('地点 ' + routeContext.locationId);
+          if (routeContext.taskId) detail.push('任务 ' + routeContext.taskId);
+          if (routeContext.eventLabel && routeContext.eventLabel !== 'no event') detail.push('事件 ' + routeContext.eventLabel);
+          if (routeContext.workOrderId) detail.push('委托 ' + routeContext.workOrderId);
+          if (routeContext.contractId) detail.push('契约 ' + routeContext.contractId);
+          if (routeContext.listingId) detail.push('任务牌 ' + routeContext.listingId);
+          if (routeContext.recommendedLabel) detail.push('下一步 ' + String(routeContext.recommendedLabel).toLowerCase());
         }
-        const leadIn = String(settings.leadIn || ': continue the world flow for ');
-        const detailText = detail.join(' · ') || String(settings.emptyDetail || 'the active route');
-        const suffix = String(settings.suffix || '. Align deliverable, evidence, acceptance, risks, and next action for this map focus.');
+        const leadIn = String(settings.leadIn || '：继续推进');
+        const detailText = detail.join(' · ') || String(settings.emptyDetail || '当前路线');
+        const suffix = String(settings.suffix || '。明确成果、证据、评级标准、风险和下一步行动。');
         return appendSelectionEventSignal(selectionTitle + leadIn + detailText + suffix, selection);
       };
       const buildTaskFollowUpDraftBody = (selection, taskId, detailText) => {
         return buildRouteDraftBody(selection, {}, {
-          selectionTitleFallback: 'Focused route',
+          selectionTitleFallback: '当前路线',
           omitContextDetails: true,
-          leadIn: ': follow up on ',
-          emptyDetail: 'task ' + taskId + ' ' + detailText,
+          leadIn: '：跟进',
+          emptyDetail: '任务 ' + taskId + ' ' + detailText,
           suffix: '.',
         });
       };
@@ -1093,7 +1109,7 @@ pub(super) fn real_world_map_route_target_builders_js() -> &'static str {
         const inputValue = taskInfo.suggested_input_value || (inputId === routeContractInputId() ? contractId : '');
         const textareaId = taskInfo.suggested_textarea_id || routePanelTextareaId(panelId);
         return buildSimpleRouteTargetAction({
-          label: taskInfo.suggested_action_label || 'Draft task follow-up',
+          label: taskInfo.suggested_action_label || '起草任务后续',
           panelId,
           inputId,
           value: inputValue,
@@ -1109,18 +1125,18 @@ pub(super) fn real_world_map_route_target_builders_js() -> &'static str {
         const settings = options || {};
         const effectiveContractId = String(contractId || '').trim();
         const effectiveTaskId = String(taskId || effectiveContractId).trim();
-        const selectionTitle = (selection && selection.title) ? selection.title : (settings.selectionTitleFallback || 'Focused route');
+        const selectionTitle = (selection && selection.title) ? selection.title : (settings.selectionTitleFallback || '当前路线');
         return buildWorldContractLaneAction(effectiveContractId, {
-          label: settings.label || 'Route linked contract',
+          label: settings.label || '打开关联契约',
           locationId: locationId || '',
           taskId: effectiveTaskId,
-          body: appendSelectionEventSignal(selectionTitle + ': complete linked contract ' + effectiveContractId + ' for task ' + effectiveTaskId + (settings.bodySuffix || '.'), selection),
+          body: appendSelectionEventSignal(selectionTitle + ': 完成关联契约 ' + effectiveContractId + '，服务任务 ' + effectiveTaskId + (settings.bodySuffix || '。'), selection),
         });
       };
       const buildRouteEventTimelineAction = (label, eventContext) => {
         const event = eventContext || {};
         return {
-          label: label || 'Open event timeline',
+          label: label || '打开事件时间线',
           panelId: routeEventTimelinePanelId(),
           locationId: String(event.locationId || '').trim(),
           eventId: String(event.eventId || '').trim(),
@@ -1134,7 +1150,7 @@ pub(super) fn real_world_map_route_target_builders_js() -> &'static str {
       const buildRouteActionFromDataset = (dataset, fallbackLabel) => {
         const source = dataset || {};
         return buildSimpleRouteTargetAction({
-          label: String(fallbackLabel || '').trim() || 'Route action',
+          label: String(fallbackLabel || '').trim() || '路线行动',
           panelId: source.targetPanel || routeActionPanelId(),
           inputId: source.targetInputId || '',
           value: source.targetValue || '',
@@ -1154,7 +1170,7 @@ pub(super) fn real_world_map_route_target_builders_js() -> &'static str {
         });
       };
       const buildRouteActionFromButton = (button, fallbackLabel) => {
-        const label = String((button && button.textContent) || '').trim() || fallbackLabel || 'Route action';
+        const label = String((button && button.textContent) || '').trim() || fallbackLabel || '路线行动';
         return buildRouteActionFromDataset((button && button.dataset) || {}, label);
       };
       const handleRouteActionButton = (button, opener, fallbackLabel) => {
@@ -1186,7 +1202,7 @@ pub(super) fn real_world_map_route_target_builders_js() -> &'static str {
             node_id: targetNodeId || null,
             location_id: routeAction.locationId || focus.locationId || null,
             action_id: 'app_route_handoff',
-            action_label: routeAction.label || 'World route handoff',
+            action_label: routeAction.label || '世界路线交接',
             command: '/world',
             web_panel_id: routeAction.panelId || routeActionPanelId(),
             web_action_body: routeAction.body || '',
@@ -1208,7 +1224,7 @@ pub(super) fn real_world_map_route_target_builders_js() -> &'static str {
       const buildSimpleRouteTargetAction = (config) => {
         const target = config || {};
         return {
-          label: target.label || 'Route action',
+          label: target.label || '路线行动',
           panelId: target.panelId || routeActionPanelId(),
           inputId: target.inputId || '',
           value: target.value || '',
@@ -1232,14 +1248,14 @@ pub(super) fn real_world_map_route_target_builders_js() -> &'static str {
         const target = options || {};
         const normalizedLaneId = String(laneId || '').trim();
         const defaultLabel = normalizedLaneId === 'acceptance'
-          ? 'Route acceptance'
+          ? '打开评级路线'
           : normalizedLaneId === 'rejection'
-            ? 'Route rejection'
+            ? '打开返工路线'
             : normalizedLaneId === 'reopen'
-              ? 'Route reopen'
+              ? '打开重开路线'
               : normalizedLaneId === 'cancellation'
-                ? 'Route cancellation'
-                : 'Route delivery';
+                ? '打开放弃路线'
+                : '打开成果提交路线';
         const effectiveWorkOrderId = String(workOrderId || target.value || target.workOrderId || '').trim();
         return buildSimpleRouteTargetAction({
           ...target,
@@ -1256,7 +1272,7 @@ pub(super) fn real_world_map_route_target_builders_js() -> &'static str {
         const effectiveListingId = String(listingId || target.value || target.listingId || '').trim();
         return buildSimpleRouteTargetAction({
           ...target,
-          label: target.label || 'Route listing',
+          label: target.label || '打开任务牌路线',
           panelId: routeCommercePanelId(),
           inputId: routePurchaseInputId(),
           value: effectiveListingId,
@@ -1269,7 +1285,7 @@ pub(super) fn real_world_map_route_target_builders_js() -> &'static str {
         const effectiveContractId = String(contractId || target.value || target.contractId || '').trim();
         return buildSimpleRouteTargetAction({
           ...target,
-          label: target.label || 'Route contract',
+          label: target.label || '打开契约路线',
           panelId: routeContractsPanelId(),
           inputId: routeContractInputId(),
           value: effectiveContractId,
@@ -1278,7 +1294,7 @@ pub(super) fn real_world_map_route_target_builders_js() -> &'static str {
         });
       };
       const buildDraftWorldAction = (locationId, taskId, body) => buildSimpleRouteTargetAction({
-        label: 'Draft world action',
+        label: '起草世界行动',
         panelId: routeActionPanelId(),
         textareaId: routeActionTextareaId(),
         locationId: locationId || '',
@@ -1286,7 +1302,7 @@ pub(super) fn real_world_map_route_target_builders_js() -> &'static str {
         body: body || '',
       });
       const buildTaskFollowUpAction = (selection, taskId, locationId, detailText) => buildSimpleRouteTargetAction({
-        label: 'Draft task follow-up',
+        label: '起草任务后续',
         panelId: routeActionPanelId(),
         textareaId: routeActionTextareaId(),
         locationId: locationId || '',
@@ -1303,7 +1319,7 @@ pub(super) fn real_world_map_marker_action_handoff_js() -> &'static str {
         return (source.primary_actions || []).find((item) => item.action_id === actionId) || {
           action_id: actionId || 'move_here',
           command: '/go ' + resolvedNodeId,
-          label: 'Move here',
+          label: '移动到这里',
           web_panel_id: routeMapMovePanelId(),
           web_move_target: resolvedNodeId,
         };
@@ -1319,7 +1335,7 @@ pub(super) fn real_world_map_marker_action_handoff_js() -> &'static str {
             node_id: resolvedNodeId || nodeId || null,
             location_id: source.location_id || null,
             action_id: action.action_id || actionId || 'move_here',
-            action_label: action.label || action.action_id || 'Action',
+            action_label: action.label || action.action_id || '行动',
             command: action.command || ('/go ' + resolvedNodeId),
             web_panel_id: action.web_panel_id || routeActionPanelId(),
             web_action_body: action.web_action_body || '',
@@ -1352,10 +1368,10 @@ pub(super) fn real_world_map_viewport_hydration_js() -> &'static str {
       const applyViewportSnapshot = (viewport, mapCenter, zoom) => {
         lastViewport = viewport;
         if (densitySummary) {
-          densitySummary.textContent = ((viewport.player_density || {}).summary) || 'Map density booting…';
+          densitySummary.textContent = mapText(((viewport.player_density || {}).summary) || '地图密度加载中…');
         }
         if (cameraSummary) {
-          cameraSummary.textContent = 'Camera ' + mapCenter.lat.toFixed(4) + ', ' + mapCenter.lng.toFixed(4) + ' · zoom ' + zoom + ' · ' + (viewport.lod_mode || 'street_nodes') + ' · ' + (viewport.marker_count || 0) + ' visible nodes · ' + (((viewport.player_density || {}).mode) || 'dense') + ' density · ' + (viewport.live_event_count || 0) + ' live events';
+          cameraSummary.textContent = '镜头 ' + mapCenter.lat.toFixed(4) + ', ' + mapCenter.lng.toFixed(4) + ' · 缩放 ' + zoom + ' · ' + mapText(viewport.lod_mode || 'street_nodes') + ' · ' + (viewport.marker_count || 0) + ' 个可见地点 · ' + mapText(((viewport.player_density || {}).mode) || 'dense') + ' 密度 · ' + (viewport.live_event_count || 0) + ' 个实时事件';
         }
         renderStreamHud(viewport, lastSelection);
         renderCards(tileTarget, viewport.visible_tile_shards || [], 'tile');

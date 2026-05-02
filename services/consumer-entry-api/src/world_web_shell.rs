@@ -1,5 +1,127 @@
 use super::*;
 
+fn world_user_visible_copy(value: &str) -> String {
+    let mut copy = value.to_string();
+    let replacements = [
+        ("Starter Studio", "新手工坊"),
+        ("Forge Workbench", "锻造工坊"),
+        ("Asset Yard", "道具庭院"),
+        ("ZBJ Market Gate", "悬赏集市门"),
+        ("League Coliseum", "League 竞技场"),
+        ("starter-studio", "新手工坊"),
+        ("forge-workbench", "锻造工坊"),
+        ("asset-yard", "道具庭院"),
+        ("zbj-market-gate", "悬赏集市门"),
+        ("league-coliseum", "League 竞技场"),
+        ("cn-shanghai-core", "上海主城"),
+        ("客户需求牌", "悬赏任务牌"),
+        ("交付码头", "成果评定台"),
+        ("所有 World asset 的仓库和展示院，未来可拖拽摆放。", "收纳道具、素材和展示件的庭院，后续可自由布置。"),
+        ("把想法打磨成方案、商品、素材和交付包的工作台。", "把想法打磨成方案、素材、道具和成果包的工作台。"),
+        ("现实任务映射成世界委托的市场门口。", "现实机会映射成世界悬赏的入口。"),
+        ("像文字 MUD 的公告栏：任务、需求、报价和线索都贴在这里。", "像文字 MUD 的公告栏：任务、悬赏、提示和线索都贴在这里。"),
+        ("交付、验收、拒收、返工与取消都在这里形成流水线。", "成果提交、评级、返工和放弃都在这里形成冒险路线。"),
+        ("League 入口，任务可以从市场被带进竞技场评分。", "League 入口，任务可以从悬赏集市带进竞技场评级。"),
+        ("生成资产 / 审稿 / 做交付包", "生成道具 / 审稿 / 做成果包"),
+        ("摆放资产 / 升级工坊 / 创建公司", "摆放道具 / 升级工坊 / 创建据点"),
+        ("查看资产 / 升级资产 / 挂到店铺", "查看道具 / 升级道具 / 挂到摊位"),
+        ("接任务 / 上架服务 / 雇佣卖家", "接悬赏 / 发布服务 / 招募队友"),
+        ("浏览需求 / 投标 / 发布服务", "浏览悬赏 / 接取挑战 / 发布服务"),
+        ("提交交付 / 验收 / 发起返工/取消", "提交成果 / 评级 / 发起返工或放弃"),
+        ("craft a real customer-facing studio asset with deliverable, evidence package, risk controls, operating loop, next action, and self review for browser commerce E2E.", "打造一个真实委托可用的 AI 设计工坊道具：写清成果、证据包、风险控制、行动循环、下一步和自检记录，用于 browser adventure E2E。"),
+        ("browser commerce E2E", "browser adventure E2E"),
+        ("AI 设计公司", "AI 设计工坊"),
+        ("服务真实客户", "完成真实委托"),
+        ("route_task", "路线任务"),
+        ("contract_capture", "契约登记"),
+        ("work_order", "冒险委托"),
+        ("delivery", "成果提交"),
+        ("acceptance", "评级"),
+        ("rejection", "返工"),
+        ("reopen", "重开"),
+        ("cancellation", "放弃"),
+        ("pending", "待推进"),
+        ("completed", "已完成"),
+        ("accepted", "已评级"),
+        ("customer-facing", "委托可用"),
+        ("customer", "委托"),
+        ("buyer", "接取方"),
+        ("seller", "服务方"),
+        ("commercial", "任务"),
+        ("commerce", "集市"),
+        ("governance", "治理"),
+        ("builder", "建造"),
+        ("competition", "竞技"),
+        ("faction-city-clerks", "城市书记门"),
+        ("faction-craft-union", "工坊同盟"),
+        ("faction-market-guild", "集市公会"),
+        ("faction-league-order", "League 教团"),
+        ("public_hub", "公共枢纽"),
+        ("workshop", "工坊"),
+        ("real_task_gateway", "真实任务入口"),
+        ("arena", "竞技场"),
+        ("market", "集市"),
+        ("open", "开放"),
+        ("OPEN", "开放"),
+        ("active", "活跃"),
+        ("warm", "预热"),
+        ("planned", "规划中"),
+        ("prefetch", "预热分片"),
+        ("street_nodes", "街区节点"),
+        ("neighbor_tile_warmup", "邻近地图预热"),
+        ("contract", "契约"),
+        ("venture", "探索"),
+        ("no-task", "未关联任务"),
+        ("委托方", "委托目标"),
+        ("Map density booting.", "地图密度加载中。"),
+    ];
+    for (from, to) in replacements {
+        copy = copy.replace(from, to);
+    }
+    copy
+}
+
+fn escape_world_visible_text(value: &str) -> String {
+    escape_html_text(&world_user_visible_copy(value))
+}
+
+fn world_node_kind_label(kind: &str) -> &str {
+    match kind {
+        "hub_square" => "主城广场",
+        "agent_home" => "Agent 居所",
+        "ledger_office" => "奖励窗口",
+        "workshop_room" => "工坊房间",
+        "craft_station" => "锻造台",
+        "asset_yard" => "道具庭院",
+        "market_gate" => "悬赏入口",
+        "client_board" => "悬赏牌",
+        "delivery_dock" => "成果评定台",
+        "dispute_desk" => "仲裁柜台",
+        "arena_gate" => "竞技入口",
+        "raid_hall" => "团本大厅",
+        _ => kind,
+    }
+}
+
+fn world_map_status_label(value: &str) -> String {
+    world_user_visible_copy(match value {
+        "prefetch" => "预热分片",
+        "street_nodes" => "街区节点",
+        "neighbor_tile_warmup" => "邻近地图预热",
+        "warm" => "预热",
+        "active" => "活跃",
+        "planned" => "规划中",
+        "open" | "OPEN" => "开放",
+        "contract" => "契约",
+        "venture" => "探索",
+        "no-task" => "未关联任务",
+        "world_event" => "世界事件",
+        "dense" => "高密度",
+        "regional" => "区域密度",
+        _ => value,
+    })
+}
+
 pub(super) async fn get_world_web_shell(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -7,6 +129,10 @@ pub(super) async fn get_world_web_shell(
     let web_session = authorize_league_web_session_readonly(&state, &headers, true)
         .ok()
         .flatten();
+    let current_matrix_user_id = web_session
+        .as_ref()
+        .map(|session| session.matrix_user_id.as_str())
+        .unwrap_or("@alice:local.dev");
     let csrf_input = web_session
         .as_ref()
         .map(|session| {
@@ -17,11 +143,11 @@ pub(super) async fn get_world_web_shell(
         })
         .unwrap_or_default();
     let console_note = if web_session.is_some() {
-        "Authenticated web session: world actions are CSRF-protected and bound to the signed player."
+        "已登录的世界会话：行动会绑定当前玩家并通过 CSRF 保护。"
     } else if matches!(state.config().runtime_profile, RuntimeProfile::LocalDev) {
-        "Local-dev World shell: create ventures, craft assets, recruit Agents, and mirror real opportunities without exposing tokens to the browser."
+        "本地开发世界：探索城市、打造道具、招募 Agent，并把现实机会镜像成冒险事件。"
     } else {
-        "Read-only World shell: request a signed /league/web/session before submitting world actions."
+        "只读世界：提交行动前需要先获取签名 /league/web/session。"
     };
     let league = state.inner.league_state.lock().await;
     let world_indexes = build_world_indexes(&league.world);
@@ -46,11 +172,11 @@ pub(super) async fn get_world_web_shell(
         .map(|zone| {
             format!(
                 "<article class=\"card zone\"><div class=\"pill\">{}</div><h3>{}</h3><p>{}</p><footer><code>{}</code><span>{}</span></footer></article>",
-                escape_html_text(&zone.status),
-                escape_html_text(&zone.name),
-                escape_html_text(&zone.theme),
+                escape_html_text(&world_map_status_label(&zone.status)),
+                escape_world_visible_text(&zone.name),
+                escape_world_visible_text(&zone.theme),
                 escape_html_text(&zone.zone_id),
-                escape_html_text(&zone.mirror_kind),
+                escape_html_text(&world_map_status_label(&zone.mirror_kind)),
             )
         })
         .collect::<Vec<_>>()
@@ -60,10 +186,10 @@ pub(super) async fn get_world_web_shell(
         .map(|location| {
             format!(
                 "<article class=\"mini\"><strong>{}</strong><span>{}</span><code>{}</code><small>{}</small></article>",
-                escape_html_text(&location.name),
-                escape_html_text(&location.description),
+                escape_world_visible_text(&location.name),
+                escape_world_visible_text(&location.description),
                 escape_html_text(&location.location_id),
-                escape_html_text(&location.location_kind),
+                escape_html_text(&world_map_status_label(&location.location_kind)),
             )
         })
         .collect::<Vec<_>>()
@@ -74,8 +200,8 @@ pub(super) async fn get_world_web_shell(
             format!(
                 "<option value=\"{}\">{} · {}</option>",
                 escape_html_text(&location.location_id),
-                escape_html_text(&location.name),
-                escape_html_text(&location.location_kind),
+                escape_world_visible_text(&location.name),
+                escape_html_text(&world_map_status_label(&location.location_kind)),
             )
         })
         .collect::<Vec<_>>()
@@ -126,12 +252,12 @@ pub(super) async fn get_world_web_shell(
             format!(
                 "<article class=\"mini map-node\"><strong>{}{}</strong><span>{} · ({},{})</span><code>{}</code><small>{}</small></article>",
                 marker,
-                escape_html_text(&node.name),
-                escape_html_text(&node.node_kind),
+                escape_world_visible_text(&node.name),
+                escape_html_text(world_node_kind_label(&node.node_kind)),
                 node.x,
                 node.y,
                 escape_html_text(&node.node_id),
-                escape_html_text(&node.freedom_hooks.join(" / ")),
+                escape_world_visible_text(&node.freedom_hooks.join(" / ")),
             )
         })
         .collect::<Vec<_>>()
@@ -158,16 +284,16 @@ pub(super) async fn get_world_web_shell(
         .map(|node| {
             format!(
                 "{} · {} · exits {}",
-                node.name,
-                node.description,
+                world_user_visible_copy(&node.name),
+                world_user_visible_copy(&node.description),
                 node.exits.len()
             )
         })
-        .unwrap_or_else(|| "Map booting".to_string());
-    let world_map = world_map_json(&league, "@alice:local.dev");
+        .unwrap_or_else(|| "地图启动中".to_string());
+    let world_map = world_map_json(&league, current_matrix_user_id);
     let world_viewport = world_map_viewport_json(
         &league.world,
-        "@alice:local.dev",
+        current_matrix_user_id,
         None,
         None,
         None,
@@ -209,7 +335,7 @@ pub(super) async fn get_world_web_shell(
     let viewport_path = world_viewport
         .get("viewport_path")
         .and_then(Value::as_str)
-        .unwrap_or("/v1/world/map/@alice:local.dev/viewport");
+        .unwrap_or("/world/web/map-viewport");
     let web_session_viewport_path = world_viewport
         .get("web_session_viewport_path")
         .and_then(Value::as_str)
@@ -250,7 +376,7 @@ pub(super) async fn get_world_web_shell(
                 .cloned()
                 .unwrap_or_else(|| json!(0.0));
             let focus_button =
-                map_region_focus_button_html(center_lat, center_lng, zoom_focus, "Focus region");
+                map_region_focus_button_html(center_lat, center_lng, zoom_focus, "聚焦区域");
             format!(
                 "<article class=\"mini shard\"><strong>{}</strong><span>{} · {} · {} km</span><code>{}</code><div class=\"focus-stack\">{}</div></article>",
                 escape_html_text(name),
@@ -300,11 +426,11 @@ pub(super) async fn get_world_web_shell(
             let node_id = poi.get("node_id").and_then(Value::as_str).unwrap_or("node");
             let node_kind = poi.get("node_kind").and_then(Value::as_str).unwrap_or("poi");
             let distance = poi.get("distance_km").cloned().unwrap_or_else(|| json!(0.0));
-            let focus_button = map_node_focus_button_html(node_id, "Focus POI");
+            let focus_button = map_node_focus_button_html(node_id, "聚焦热点");
             format!(
                 "<article class=\"mini poi\"><strong>{}</strong><span>{} · {} km</span><code>{}</code><div class=\"focus-stack\">{}</div></article>",
-                escape_html_text(name),
-                escape_html_text(node_kind),
+                escape_world_visible_text(name),
+                escape_html_text(&world_map_status_label(node_kind)),
                 escape_html_text(&distance.to_string()),
                 escape_html_text(node_id),
                 focus_button,
@@ -334,11 +460,11 @@ pub(super) async fn get_world_web_shell(
                 .unwrap_or("street_nodes");
             let marker_count = tile.get("marker_count").and_then(Value::as_u64).unwrap_or(0);
             let focus_button =
-                map_tile_focus_button_html(tile_z, tile_x, tile_y, "Inspect tile");
+                map_tile_focus_button_html(tile_z, tile_x, tile_y, "查看分片");
             format!(
-                "<article class=\"mini tile\"><strong>{}</strong><span>{} · {} nodes</span><code>{}</code><div class=\"focus-stack\">{}</div></article>",
-                escape_html_text(tile_status),
-                escape_html_text(lod_mode),
+                "<article class=\"mini tile\"><strong>{}</strong><span>{} · {} 个地点</span><code>{}</code><div class=\"focus-stack\">{}</div></article>",
+                escape_html_text(&world_map_status_label(tile_status)),
+                escape_html_text(&world_map_status_label(lod_mode)),
                 marker_count,
                 escape_html_text(tile_id),
                 focus_button,
@@ -367,11 +493,11 @@ pub(super) async fn get_world_web_shell(
                 .and_then(Value::as_str)
                 .unwrap_or("neighbor_tile_warmup");
             let marker_count = tile.get("marker_count").and_then(Value::as_u64).unwrap_or(0);
-            let focus_button = map_tile_focus_button_html(tile_z, tile_x, tile_y, "Warm tile");
+            let focus_button = map_tile_focus_button_html(tile_z, tile_x, tile_y, "预热分片");
             format!(
-                "<article class=\"mini prefetch\"><strong>{}</strong><span>{} · {} nodes</span><code>{}</code><div class=\"focus-stack\">{}</div></article>",
-                escape_html_text(priority),
-                escape_html_text(reason),
+                "<article class=\"mini prefetch\"><strong>{}</strong><span>{} · {} 个地点</span><code>{}</code><div class=\"focus-stack\">{}</div></article>",
+                escape_html_text(&world_map_status_label(priority)),
+                escape_html_text(&world_map_status_label(reason)),
                 marker_count,
                 escape_html_text(tile_id),
                 focus_button,
@@ -416,16 +542,16 @@ pub(super) async fn get_world_web_shell(
                 event_id,
                 task_id,
                 location_id,
-                event_kind,
-                node_name,
-                event_body,
-                event_result,
-                "Track event",
+                &world_map_status_label(event_kind),
+                &world_user_visible_copy(node_name),
+                &world_user_visible_copy(event_body),
+                &world_user_visible_copy(event_result),
+                "追踪事件",
             );
             format!(
                 "<article class=\"mini event\"><strong>{}</strong><span>{} · {} km</span><code>{}</code><div class=\"focus-stack\">{}</div></article>",
-                escape_html_text(event_kind),
-                escape_html_text(node_name),
+                escape_html_text(&world_map_status_label(event_kind)),
+                escape_world_visible_text(node_name),
                 escape_html_text(&distance_km.to_string()),
                 escape_html_text(event_id),
                 focus_button,
@@ -433,11 +559,13 @@ pub(super) async fn get_world_web_shell(
         })
         .collect::<Vec<_>>()
         .join("\n");
-    let map_density_summary = world_viewport
-        .get("player_density")
-        .and_then(|density| density.get("summary"))
-        .and_then(Value::as_str)
-        .unwrap_or("Map density booting.");
+    let map_density_summary = world_map_status_label(
+        world_viewport
+            .get("player_density")
+            .and_then(|density| density.get("summary"))
+            .and_then(Value::as_str)
+            .unwrap_or("Map density booting."),
+    );
     let map_stream_region_count = world_viewport
         .get("stream_region_count")
         .and_then(Value::as_u64)
@@ -454,16 +582,18 @@ pub(super) async fn get_world_web_shell(
         .get("live_event_count")
         .and_then(Value::as_u64)
         .unwrap_or(0);
-    let map_player_density_mode = world_viewport
-        .get("player_density")
-        .and_then(|density| density.get("mode"))
-        .and_then(Value::as_str)
-        .unwrap_or("dense");
+    let map_player_density_mode = world_map_status_label(
+        world_viewport
+            .get("player_density")
+            .and_then(|density| density.get("mode"))
+            .and_then(Value::as_str)
+            .unwrap_or("dense"),
+    );
     let world_map_data_json = serde_json::to_string(&world_map)
         .unwrap_or_else(|_| "{}".to_string())
         .replace("</", "<\\/");
     let latest_asset_id = world_indexes
-        .latest_asset_index_for_owner("@alice:local.dev")
+        .latest_asset_index_for_owner(current_matrix_user_id)
         .and_then(|index| league.world.world_assets.get(index))
         .map(|asset| asset.asset_id.clone())
         .unwrap_or_else(|| "latest".to_string());
@@ -474,7 +604,7 @@ pub(super) async fn get_world_web_shell(
     )
     .map(|asset| {
             format!(
-                "<article class=\"mini asset\"><strong>{}</strong><span>{} · Lv {} · value {}</span><code>{}</code><small>{}</small></article>",
+                "<article class=\"mini asset\"><strong>{}</strong><span>{} · Lv {} · 战力 {}</span><code>{}</code><small>{}</small></article>",
                 escape_html_text(&asset.name),
                 escape_html_text(&asset.asset_kind),
                 asset.upgrade_level.max(1),
@@ -486,7 +616,7 @@ pub(super) async fn get_world_web_shell(
         .collect::<Vec<_>>()
         .join("\n");
     let asset_cards = if asset_cards.is_empty() {
-        "<article class=\"mini asset\"><strong>No player assets yet</strong><span>Create a venture or craft build to mint the first asset.</span><code>/world action</code></article>".to_string()
+        "<article class=\"mini asset\"><strong>还没有角色道具</strong><span>先发起一次世界行动，打造第一件可成长道具。</span><code>/world action</code></article>".to_string()
     } else {
         asset_cards
     };
@@ -497,7 +627,7 @@ pub(super) async fn get_world_web_shell(
     )
     .map(|company| {
             format!(
-                "<article class=\"mini company\"><strong>{}</strong><span>{} · Lv {} · revenue {}</span><code>{}</code><small>asset {} · rep {}</small></article>",
+                "<article class=\"mini company\"><strong>{}</strong><span>{} · Lv {} · 工坊值 {}</span><code>{}</code><small>道具 {} · 声望 {}</small></article>",
                 escape_html_text(&company.name),
                 escape_html_text(&company.company_kind),
                 company.level,
@@ -510,19 +640,19 @@ pub(super) async fn get_world_web_shell(
         .collect::<Vec<_>>()
         .join("\n");
     let company_cards = if company_cards.is_empty() {
-        "<article class=\"mini company\"><strong>No companies yet</strong><span>Use /company latest to turn an asset into an operating company.</span><code>/company latest</code></article>".to_string()
+        "<article class=\"mini company\"><strong>还没有工坊</strong><span>用 /company latest 把道具升级成可承接委托的据点。</span><code>/company latest</code></article>".to_string()
     } else {
         company_cards
     };
     let latest_company_id = world_indexes
-        .latest_company_index_for_owner("@alice:local.dev")
+        .latest_company_index_for_owner(current_matrix_user_id)
         .and_then(|index| league.world.world_companies.get(index))
         .map(|company| company.company_id.clone())
         .unwrap_or_else(|| "latest".to_string());
     let shop_cards = indexed_recent(&league.world.world_shops, &world_indexes.recent_shop_indices, 8)
         .map(|shop| {
             format!(
-                "<article class=\"mini shop\"><strong>{}</strong><span>{} · listings {} · GMV {}</span><code>{}</code><small>company {} · {}</small></article>",
+                "<article class=\"mini shop\"><strong>{}</strong><span>{} · 任务牌 {} · 热度 {}</span><code>{}</code><small>工坊 {} · {}</small></article>",
                 escape_html_text(&shop.name),
                 escape_html_text(&shop.shop_kind),
                 shop.listing_count,
@@ -535,7 +665,7 @@ pub(super) async fn get_world_web_shell(
         .collect::<Vec<_>>()
         .join("\n");
     let shop_cards = if shop_cards.is_empty() {
-        "<article class=\"mini shop\"><strong>No shops yet</strong><span>Launch a company to open the first storefront.</span><code>/company latest</code></article>".to_string()
+        "<article class=\"mini shop\"><strong>还没有据点</strong><span>先建立工坊，再开启第一个公会摊位。</span><code>/company latest</code></article>".to_string()
     } else {
         shop_cards
     };
@@ -546,7 +676,7 @@ pub(super) async fn get_world_web_shell(
     )
     .map(|listing| {
             format!(
-                "<article class=\"mini listing\"><strong>{}</strong><span>{} · {} credits · quality {}</span><code>{}</code><small>shop {} · {}</small></article>",
+                "<article class=\"mini listing\"><strong>{}</strong><span>{} · 赏金 {} · 品质 {}</span><code>{}</code><small>据点 {} · {}</small></article>",
                 escape_html_text(&listing.title),
                 escape_html_text(&listing.listing_kind),
                 listing.price_credits,
@@ -559,7 +689,7 @@ pub(super) async fn get_world_web_shell(
         .collect::<Vec<_>>()
         .join("\n");
     let listing_cards = if listing_cards.is_empty() {
-        "<article class=\"mini listing\"><strong>No listings yet</strong><span>Use /sell latest to publish an offer.</span><code>/sell latest</code></article>".to_string()
+        "<article class=\"mini listing\"><strong>还没有任务牌</strong><span>用 /sell latest 发布一个可接取的工坊委托。</span><code>/sell latest</code></article>".to_string()
     } else {
         listing_cards
     };
@@ -578,14 +708,13 @@ pub(super) async fn get_world_web_shell(
                 .company_location_id(&purchase.company_id)
                 .unwrap_or_default();
             format!(
-                "<article class=\"mini purchase world-route-filter-item\" data-route-bucket=\"purchase\" data-location-id=\"{}\" data-purchase-id=\"{}\" data-listing-id=\"{}\" data-company-id=\"{}\" data-route-status=\"{}\" data-created-at=\"{}\"><strong>{}</strong><span>{} credits · {}</span><code>{}</code><small>listing {} · seller {} · buyer {}</small></article>",
+                "<article class=\"mini purchase world-route-filter-item\" data-route-bucket=\"purchase\" data-location-id=\"{}\" data-purchase-id=\"{}\" data-listing-id=\"{}\" data-company-id=\"{}\" data-route-status=\"{}\" data-created-at=\"{}\"><strong>接取契约</strong><span>赏金 {} · {}</span><code>{}</code><small>任务牌 {} · 托管 {} · 领取 {}</small></article>",
                 escape_html_text(location_id),
                 escape_html_text(&purchase.purchase_id),
                 escape_html_text(&purchase.listing_id),
                 escape_html_text(&purchase.company_id),
                 escape_html_text(&purchase.status),
                 purchase.created_at_epoch,
-                escape_html_text(&purchase.buyer_matrix_user_id),
                 purchase.price_credits,
                 escape_html_text(&purchase.status),
                 escape_html_text(&purchase.purchase_id),
@@ -597,7 +726,7 @@ pub(super) async fn get_world_web_shell(
         .collect::<Vec<_>>()
         .join("\n");
     let purchase_cards = if purchase_cards.is_empty() {
-        "<article class=\"mini purchase\"><strong>No purchases yet</strong><span>Buy a listing to create seller revenue and a work order.</span><code>/buy latest</code></article>".to_string()
+        "<article class=\"mini purchase\"><strong>还没有接取记录</strong><span>接取任务牌后会开启冒险委托和奖励托管。</span><code>/buy latest</code></article>".to_string()
     } else {
         purchase_cards
     };
@@ -611,7 +740,7 @@ pub(super) async fn get_world_web_shell(
                 .work_order_location_id(&work_order.work_order_id)
                 .unwrap_or_default();
             format!(
-                "<article class=\"mini work world-route-filter-item\" data-route-bucket=\"work_order\" data-location-id=\"{}\" data-work-order-id=\"{}\" data-purchase-id=\"{}\" data-company-id=\"{}\" data-listing-id=\"{}\" data-route-status=\"{}\" data-created-at=\"{}\"><strong>{}</strong><span>{} · value {}</span><code>{}</code><small>buyer {} · seller {}</small></article>",
+                "<article class=\"mini work world-route-filter-item\" data-route-bucket=\"work_order\" data-location-id=\"{}\" data-work-order-id=\"{}\" data-purchase-id=\"{}\" data-company-id=\"{}\" data-listing-id=\"{}\" data-route-status=\"{}\" data-created-at=\"{}\"><strong>冒险委托</strong><span>{} · 难度 {}</span><code>{}</code><small>任务牌 {} · 接取 {}</small></article>",
                 escape_html_text(location_id),
                 escape_html_text(&work_order.work_order_id),
                 escape_html_text(&work_order.purchase_id),
@@ -619,23 +748,22 @@ pub(super) async fn get_world_web_shell(
                 escape_html_text(&work_order.listing_id),
                 escape_html_text(&work_order.status),
                 work_order.created_at_epoch,
-                escape_html_text(&work_order.status),
                 escape_html_text(&work_order.brief.chars().take(48).collect::<String>()),
                 work_order.value_score,
                 escape_html_text(&work_order.work_order_id),
-                escape_html_text(&work_order.buyer_matrix_user_id),
-                escape_html_text(&work_order.seller_matrix_user_id),
+                escape_html_text(&work_order.listing_id),
+                escape_html_text(&work_order.purchase_id),
             )
         })
         .collect::<Vec<_>>()
         .join("\n");
     let work_order_cards = if work_order_cards.is_empty() {
-        "<article class=\"mini work\"><strong>No work orders yet</strong><span>Purchases open jobs that sellers can fulfill next.</span><code>/work</code></article>".to_string()
+        "<article class=\"mini work\"><strong>还没有冒险委托</strong><span>接取任务牌后，委托会进入可提交成果的路线。</span><code>/work</code></article>".to_string()
     } else {
         work_order_cards
     };
     let latest_work_order_id = world_indexes
-        .latest_work_order_index_for_actor("@alice:local.dev")
+        .latest_work_order_index_for_actor(current_matrix_user_id)
         .and_then(|index| league.world.world_work_orders.get(index))
         .map(|work| work.work_order_id.clone())
         .unwrap_or_else(|| "latest".to_string());
@@ -649,12 +777,11 @@ pub(super) async fn get_world_web_shell(
                 .work_order_location_id(&delivery.work_order_id)
                 .unwrap_or_default();
             format!(
-                "<article class=\"mini delivery world-route-filter-item\" data-route-bucket=\"delivery\" data-location-id=\"{}\" data-work-order-id=\"{}\" data-route-status=\"{}\" data-created-at=\"{}\"><strong>{}</strong><span>{:.1} · {}</span><code>{}</code><small>work {}</small></article>",
+                "<article class=\"mini delivery world-route-filter-item\" data-route-bucket=\"delivery\" data-location-id=\"{}\" data-work-order-id=\"{}\" data-route-status=\"{}\" data-created-at=\"{}\"><strong>成果提交</strong><span>评分 {:.1} · {}</span><code>{}</code><small>委托 {}</small></article>",
                 escape_html_text(location_id),
                 escape_html_text(&delivery.work_order_id),
                 escape_html_text(&delivery.status),
                 delivery.created_at_epoch,
-                escape_html_text(&delivery.matrix_user_id),
                 delivery.score,
                 escape_html_text(&delivery.status),
                 escape_html_text(&delivery.delivery_id),
@@ -664,7 +791,7 @@ pub(super) async fn get_world_web_shell(
         .collect::<Vec<_>>()
         .join("\n");
     let work_delivery_cards = if work_delivery_cards.is_empty() {
-        "<article class=\"mini delivery\"><strong>No deliveries yet</strong><span>Sellers can deliver work after a listing is purchased.</span><code>/work deliver latest</code></article>".to_string()
+        "<article class=\"mini delivery\"><strong>还没有成果提交</strong><span>委托接取后，可以提交成果和证据包。</span><code>/work deliver latest</code></article>".to_string()
     } else {
         work_delivery_cards
     };
@@ -678,12 +805,11 @@ pub(super) async fn get_world_web_shell(
                 .work_order_location_id(&acceptance.work_order_id)
                 .unwrap_or_default();
             format!(
-                "<article class=\"mini acceptance world-route-filter-item\" data-route-bucket=\"acceptance\" data-location-id=\"{}\" data-work-order-id=\"{}\" data-route-status=\"{}\" data-created-at=\"{}\"><strong>{}</strong><span>{} · rep +{}</span><code>{}</code><small>work {}</small></article>",
+                "<article class=\"mini acceptance world-route-filter-item\" data-route-bucket=\"acceptance\" data-location-id=\"{}\" data-work-order-id=\"{}\" data-route-status=\"{}\" data-created-at=\"{}\"><strong>评级通过</strong><span>{} · 声望 +{}</span><code>{}</code><small>委托 {}</small></article>",
                 escape_html_text(location_id),
                 escape_html_text(&acceptance.work_order_id),
                 escape_html_text(&acceptance.status),
                 acceptance.created_at_epoch,
-                escape_html_text(&acceptance.matrix_user_id),
                 escape_html_text(&acceptance.status),
                 acceptance.reputation_delta,
                 escape_html_text(&acceptance.acceptance_id),
@@ -693,7 +819,7 @@ pub(super) async fn get_world_web_shell(
         .collect::<Vec<_>>()
         .join("\n");
     let work_acceptance_cards = if work_acceptance_cards.is_empty() {
-        "<article class=\"mini acceptance\"><strong>No acceptances yet</strong><span>Buyers can accept delivered work to finish the service loop.</span><code>/work accept latest</code></article>".to_string()
+        "<article class=\"mini acceptance\"><strong>还没有评级通过</strong><span>成果达标后可完成评级并领取声望奖励。</span><code>/work accept latest</code></article>".to_string()
     } else {
         work_acceptance_cards
     };
@@ -707,12 +833,11 @@ pub(super) async fn get_world_web_shell(
                 .work_order_location_id(&rejection.work_order_id)
                 .unwrap_or_default();
             format!(
-                "<article class=\"mini rejection world-route-filter-item\" data-route-bucket=\"rejection\" data-location-id=\"{}\" data-work-order-id=\"{}\" data-route-status=\"{}\" data-created-at=\"{}\"><strong>{}</strong><span>{} · refund {}</span><code>{}</code><small>work {}</small></article>",
+                "<article class=\"mini rejection world-route-filter-item\" data-route-bucket=\"rejection\" data-location-id=\"{}\" data-work-order-id=\"{}\" data-route-status=\"{}\" data-created-at=\"{}\"><strong>需要返工</strong><span>{} · 奖励退回 {}</span><code>{}</code><small>委托 {}</small></article>",
                 escape_html_text(location_id),
                 escape_html_text(&rejection.work_order_id),
                 escape_html_text(&rejection.status),
                 rejection.created_at_epoch,
-                escape_html_text(&rejection.matrix_user_id),
                 escape_html_text(&rejection.status),
                 escape_html_text(&rejection.refund_status),
                 escape_html_text(&rejection.rejection_id),
@@ -722,7 +847,7 @@ pub(super) async fn get_world_web_shell(
         .collect::<Vec<_>>()
         .join("\n");
     let work_rejection_cards = if work_rejection_cards.is_empty() {
-        "<article class=\"mini rejection\"><strong>No rejections yet</strong><span>Buyers can reject delivered work to refund reserved funds.</span><code>/work reject latest</code></article>".to_string()
+        "<article class=\"mini rejection\"><strong>还没有返工记录</strong><span>成果不达标时，可以标记证据缺口并退回托管奖励。</span><code>/work reject latest</code></article>".to_string()
     } else {
         work_rejection_cards
     };
@@ -736,12 +861,11 @@ pub(super) async fn get_world_web_shell(
                 .work_order_location_id(&reopen.work_order_id)
                 .unwrap_or_default();
             format!(
-                "<article class=\"mini reopen world-route-filter-item\" data-route-bucket=\"reopen\" data-location-id=\"{}\" data-work-order-id=\"{}\" data-route-status=\"{}\" data-created-at=\"{}\"><strong>{}</strong><span>{} · reserve {}</span><code>{}</code><small>work {}</small></article>",
+                "<article class=\"mini reopen world-route-filter-item\" data-route-bucket=\"reopen\" data-location-id=\"{}\" data-work-order-id=\"{}\" data-route-status=\"{}\" data-created-at=\"{}\"><strong>委托重开</strong><span>{} · 再次托管 {}</span><code>{}</code><small>委托 {}</small></article>",
                 escape_html_text(location_id),
                 escape_html_text(&reopen.work_order_id),
                 escape_html_text(&reopen.status),
                 reopen.created_at_epoch,
-                escape_html_text(&reopen.matrix_user_id),
                 escape_html_text(&reopen.status),
                 escape_html_text(&reopen.reserve_status),
                 escape_html_text(&reopen.reopen_id),
@@ -751,7 +875,7 @@ pub(super) async fn get_world_web_shell(
         .collect::<Vec<_>>()
         .join("\n");
     let work_reopen_cards = if work_reopen_cards.is_empty() {
-        "<article class=\"mini reopen\"><strong>No reopens yet</strong><span>Buyers can reopen a rejected work order, reserve funds again, and allow redelivery.</span><code>/work reopen latest</code></article>".to_string()
+        "<article class=\"mini reopen\"><strong>还没有重开记录</strong><span>返工后可以重新托管奖励，并允许再次提交。</span><code>/work reopen latest</code></article>".to_string()
     } else {
         work_reopen_cards
     };
@@ -765,12 +889,11 @@ pub(super) async fn get_world_web_shell(
                 .work_order_location_id(&cancellation.work_order_id)
                 .unwrap_or_default();
             format!(
-                "<article class=\"mini cancellation world-route-filter-item\" data-route-bucket=\"cancellation\" data-location-id=\"{}\" data-work-order-id=\"{}\" data-route-status=\"{}\" data-created-at=\"{}\"><strong>{}</strong><span>{} · refund {}</span><code>{}</code><small>work {}</small></article>",
+                "<article class=\"mini cancellation world-route-filter-item\" data-route-bucket=\"cancellation\" data-location-id=\"{}\" data-work-order-id=\"{}\" data-route-status=\"{}\" data-created-at=\"{}\"><strong>委托放弃</strong><span>{} · 奖励退回 {}</span><code>{}</code><small>委托 {}</small></article>",
                 escape_html_text(location_id),
                 escape_html_text(&cancellation.work_order_id),
                 escape_html_text(&cancellation.status),
                 cancellation.created_at_epoch,
-                escape_html_text(&cancellation.matrix_user_id),
                 escape_html_text(&cancellation.status),
                 escape_html_text(&cancellation.refund_status),
                 escape_html_text(&cancellation.cancellation_id),
@@ -780,7 +903,7 @@ pub(super) async fn get_world_web_shell(
         .collect::<Vec<_>>()
         .join("\n");
     let work_cancellation_cards = if work_cancellation_cards.is_empty() {
-        "<article class=\"mini cancellation\"><strong>No cancellations yet</strong><span>Buyers can cancel open work before delivery and refund reserved funds.</span><code>/work cancel latest</code></article>".to_string()
+        "<article class=\"mini cancellation\"><strong>还没有放弃记录</strong><span>成果提交前可以放弃委托并退回托管奖励。</span><code>/work cancel latest</code></article>".to_string()
     } else {
         work_cancellation_cards
     };
@@ -793,12 +916,12 @@ pub(super) async fn get_world_web_shell(
         .iter()
         .map(|faction| {
             format!(
-                "<article class=\"mini faction\"><strong>{}</strong><span>{} · rep {}</span><code>{}</code><small>{}</small></article>",
-                escape_html_text(&faction.name),
-                escape_html_text(&faction.faction_kind),
+                "<article class=\"mini faction\"><strong>{}</strong><span>{} · 声望 {}</span><code>{}</code><small>{}</small></article>",
+                escape_world_visible_text(&faction.name),
+                escape_html_text(&world_map_status_label(&faction.faction_kind)),
                 faction.reputation_score,
-                escape_html_text(&faction.faction_id),
-                escape_html_text(&faction.zone_id),
+                escape_world_visible_text(&faction.faction_id),
+                escape_world_visible_text(&faction.zone_id),
             )
         })
         .collect::<Vec<_>>()
@@ -810,7 +933,7 @@ pub(super) async fn get_world_web_shell(
     )
     .map(|standing| {
             format!(
-                "<article class=\"mini standing\"><strong>{}</strong><span>{} rep · {}</span><code>{}</code><small>{}</small></article>",
+                "<article class=\"mini standing\"><strong>{}</strong><span>{} 声望 · {}</span><code>{}</code><small>{}</small></article>",
                 escape_html_text(&standing.matrix_user_id),
                 standing.reputation_score,
                 escape_html_text(&standing.rank),
@@ -821,12 +944,12 @@ pub(super) async fn get_world_web_shell(
         .collect::<Vec<_>>()
         .join("\n");
     let standing_cards = if standing_cards.is_empty() {
-        "<article class=\"mini standing\"><strong>No faction standings yet</strong><span>Commerce and work will build reputation with city factions.</span><code>/factions</code></article>".to_string()
+        "<article class=\"mini standing\"><strong>还没有阵营声望</strong><span>完成委托和事件会逐步提升城市阵营声望。</span><code>/factions</code></article>".to_string()
     } else {
         standing_cards
     };
     let latest_contract_id = world_indexes
-        .latest_contract_index_for_actor("@alice:local.dev")
+        .latest_contract_index_for_actor(current_matrix_user_id)
         .and_then(|index| league.world.world_contracts.get(index))
         .map(|contract| contract.contract_id.clone())
         .unwrap_or_default();
@@ -837,24 +960,24 @@ pub(super) async fn get_world_web_shell(
     )
     .map(|contract| {
             format!(
-                "<article class=\"mini contract world-route-filter-item\" data-route-bucket=\"contract\" data-location-id=\"{}\" data-contract-id=\"{}\" data-task-id=\"{}\" data-route-status=\"{}\" data-created-at=\"{}\"><strong>{}</strong><span>{} · value {}</span><code>{}</code><small>task {} · {}</small></article>",
+                "<article class=\"mini contract world-route-filter-item\" data-route-bucket=\"contract\" data-location-id=\"{}\" data-contract-id=\"{}\" data-task-id=\"{}\" data-route-status=\"{}\" data-created-at=\"{}\"><strong>{}</strong><span>{} · 价值 {}</span><code>{}</code><small>任务 {} · {}</small></article>",
                 escape_html_text(&contract.location_id),
                 escape_html_text(&contract.contract_id),
                 escape_html_text(&contract.task_id),
                 escape_html_text(&contract.status),
                 contract.created_at_epoch,
-                escape_html_text(&contract.title),
-                escape_html_text(&contract.status),
+                escape_world_visible_text(&contract.title),
+                escape_world_visible_text(&contract.status),
                 contract.value_score,
                 escape_html_text(&contract.location_id),
                 escape_html_text(&contract.task_id),
-                escape_html_text(contract.cex_status.as_deref().unwrap_or("created")),
+                escape_world_visible_text(contract.cex_status.as_deref().unwrap_or("created")),
             )
         })
         .collect::<Vec<_>>()
         .join("\n");
     let contract_cards = if contract_cards.is_empty() {
-        "<article class=\"mini contract\"><strong>No World contracts yet</strong><span>Use /contract to mirror a real need into CEX execution.</span><code>/contract</code></article>".to_string()
+        "<article class=\"mini contract\"><strong>还没有世界契约</strong><span>用 /contract 把真实机会镜像成可追踪委托。</span><code>/contract</code></article>".to_string()
     } else {
         contract_cards
     };
@@ -870,11 +993,11 @@ pub(super) async fn get_world_web_shell(
                 &event.event_id,
                 task_id,
                 &event.location_id,
-                &event.event_kind,
+                &world_user_visible_copy(&event.event_kind),
                 &event.location_id,
-                &event.body,
-                &event.result,
-                "Track event",
+                &world_user_visible_copy(&event.body),
+                &world_user_visible_copy(&event.result),
+                "追踪事件",
             );
             format!(
                 "<li id=\"world-event-timeline-item-{}\" class=\"world-route-filter-item world-event-timeline-item\" data-route-bucket=\"event\" data-location-id=\"{}\" data-event-id=\"{}\" data-task-id=\"{}\" data-route-status=\"{}\" data-event-kind=\"{}\" data-event-body=\"{}\" data-event-result=\"{}\" data-created-at=\"{}\" tabindex=\"-1\"><b>🌍 {}</b><span>{}</span><small>{} · +{} · {}</small><em>{}</em><div class=\"focus-stack\">{}</div></li>",
@@ -882,24 +1005,24 @@ pub(super) async fn get_world_web_shell(
                 escape_html_text(&event.location_id),
                 escape_html_text(&event.event_id),
                 escape_html_text(task_id),
-                escape_html_text(event.cex_status.as_deref().unwrap_or(&event.result)),
-                escape_html_text(&event.event_kind),
-                escape_html_text(&event.body),
-                escape_html_text(&event.result),
+                escape_world_visible_text(event.cex_status.as_deref().unwrap_or(&event.result)),
+                escape_world_visible_text(&event.event_kind),
+                escape_world_visible_text(&event.body),
+                escape_world_visible_text(&event.result),
                 event.created_at_epoch,
-                escape_html_text(&event.event_kind),
-                escape_html_text(&event.body),
+                escape_world_visible_text(&event.event_kind),
+                escape_world_visible_text(&event.body),
                 escape_html_text(&event.location_id),
                 event.impact_score,
                 escape_html_text(event.cex_task_id.as_deref().unwrap_or("no-task")),
-                escape_html_text(&event.result),
+                escape_world_visible_text(&event.result),
                 focus_button,
             )
         })
         .collect::<Vec<_>>()
         .join("\n");
     let event_items = if event_items.is_empty() {
-        "<li><b>🌍 World is waiting</b><span>Use the action console to create the first world event.</span><small>/world action</small><em>Reality mirror booting.</em></li>".to_string()
+        "<li><b>🌍 世界正在等待</b><span>从地图焦点起草第一条世界行动。</span><small>/world action</small><em>现实镜像加载中。</em></li>".to_string()
     } else {
         event_items
     };
@@ -933,8 +1056,8 @@ pub(super) async fn get_world_web_shell(
     let shared_map_camera_actions_html = map_camera_action_buttons_html();
     let shared_route_filter_buttons_html = route_filter_buttons_html(
         "trillionnium-route-filter-action",
-        "Filter activity by focus",
-        "Show all activity",
+        "按焦点筛选路线",
+        "显示全部路线",
     );
     let shared_map_route_target_resolution_js = real_world_map_route_target_resolution_js();
     let shared_map_route_status_js = real_world_map_route_status_js();
@@ -972,6 +1095,14 @@ pub(super) async fn get_world_web_shell(
     .card p {{ color:var(--muted); line-height:1.55; }}
     .card footer {{ display:grid; gap:8px; margin-top:18px; color:var(--gold); }}
     .pill {{ display:inline-flex; border:1px solid rgba(100,227,255,.35); color:var(--cyan); padding:5px 10px; border-radius:999px; font-size:12px; text-transform:uppercase; letter-spacing:.12em; }}
+    .world-next-card {{ display:grid; gap:12px; border:1px solid rgba(248,195,91,.2); background:linear-gradient(145deg,rgba(248,195,91,.13),rgba(100,227,255,.055)); border-radius:20px; padding:18px; }}
+    .world-next-card strong {{ color:var(--gold); font-size:22px; }}
+    .world-adventure-steps {{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; margin:12px 0; }}
+    .world-adventure-step {{ border:1px solid rgba(248,195,91,.22); background:rgba(248,195,91,.075); border-radius:18px; padding:14px; display:grid; gap:6px; }}
+    .world-adventure-step b {{ color:var(--gold); }}
+    .world-route-drawer {{ border-color:rgba(100,227,255,.18); background:rgba(100,227,255,.045); border-radius:18px; padding:12px; }}
+    .dev-details {{ margin-top:12px; color:var(--muted); }}
+    .dev-details summary {{ cursor:pointer; width:max-content; border:1px solid rgba(255,255,255,.1); border-radius:999px; padding:6px 10px; background:rgba(255,255,255,.05); color:rgba(246,247,251,.72); font-size:12px; font-weight:800; }}
     .play {{ display:grid; grid-template-columns:.8fr 1.2fr; gap:18px; }}
     .map-shell {{ display:grid; grid-template-columns:minmax(320px,.9fr) minmax(360px,1.1fr); gap:18px; align-items:stretch; }}
     form {{ display:grid; gap:10px; margin:0; }}
@@ -995,65 +1126,64 @@ pub(super) async fn get_world_web_shell(
     .timeline em {{ grid-column:1 / -1; font-style:normal; }}
     code {{ color:var(--cyan); background:rgba(100,227,255,.08); padding:3px 7px; border-radius:8px; }}
     .cta {{ color:var(--bg); background:linear-gradient(135deg,var(--gold),#7dff9b); padding:14px 18px; border-radius:16px; display:inline-block; font-weight:800; text-decoration:none; }}
-    @media (max-width:1050px) {{ header,.play {{ grid-template-columns:1fr; }} .grid,.stats,.mini-grid {{ grid-template-columns:1fr; }} }}
+    @media (max-width:1050px) {{ header,.play {{ grid-template-columns:1fr; }} .grid,.stats,.mini-grid,.world-adventure-steps {{ grid-template-columns:1fr; }} }}
   </style>
 </head>
 <body>
   <header>
     <section>
-      <div class="pill">Reality Mirror Sandbox</div>
+      <div class="pill">现实镜像冒险</div>
       <h1>Trillionnium World</h1>
-      <p class="subtitle">开放世界总层：现实镜像城市、Craft 工坊、Market、League 竞技场、Agent 居民、资产、关系与自由行动。League 是竞技模块，Craft 是建造模块，Ledger 是结算层。</p>
+      <p class="subtitle">开放世界总层：现实镜像城市、工坊据点、任务牌、League 竞技场、Agent 居民、道具、关系与自由行动。玩家看到的是探索、委托、评级和奖励。</p>
     </section>
     <aside class="hero-card">
-      <strong>World Shell Online</strong>
-      <p class="subtitle">Build a company, craft an asset, recruit Agents, enter markets, or jump into League competition.</p>
-      <a id="world-league-link" class="cta" href="/league">Enter League Arena</a>
+      <strong>下一步冒险</strong>
+      <p class="subtitle">先选一个地图焦点，再把它推进成契约、委托、成果提交和评级奖励。这里是给真实玩家用的行动台，不再是内部系统面板。</p>
+      <a id="world-league-link" class="cta" href="/league">进入 League 竞技场</a>
     </aside>
   </header>
   <main>
     <section class="stats">
-      <div class="stat"><span>Zones</span><b>{zones}</b></div>
-      <div class="stat"><span>Locations</span><b>{locations}</b></div>
-      <div class="stat"><span>Agents</span><b>{entities}</b></div>
-      <div class="stat"><span>Map Nodes</span><b>{map_nodes}</b></div>
-      <div class="stat"><span>Assets</span><b>{assets}</b></div>
-      <div class="stat"><span>Upgrades</span><b>{asset_upgrades}</b></div>
-      <div class="stat"><span>Companies</span><b>{companies}</b></div>
-      <div class="stat"><span>Shops</span><b>{shops}</b></div>
-      <div class="stat"><span>Listings</span><b>{listings}</b></div>
-      <div class="stat"><span>Purchases</span><b>{purchases}</b></div>
-      <div class="stat"><span>Work</span><b>{work_orders}</b></div>
-      <div class="stat"><span>Rejected</span><b>{work_rejections}</b></div>
-      <div class="stat"><span>Reopened</span><b>{work_reopens}</b></div>
-      <div class="stat"><span>Cancelled</span><b>{work_cancellations}</b></div>
-      <div class="stat"><span>Factions</span><b>{factions}</b></div>
-      <div class="stat"><span>Contracts</span><b>{contracts}</b></div>
-      <div class="stat"><span>Done</span><b>{completions}</b></div>
-      <div class="stat"><span>Events</span><b>{events}</b></div>
-      <div class="stat"><span>Relations</span><b>{relationships}</b></div>
+      <div class="stat"><span>区域</span><b>{zones}</b></div>
+      <div class="stat"><span>地点</span><b>{locations}</b></div>
+      <div class="stat"><span>Agent 居民</span><b>{entities}</b></div>
+      <div class="stat"><span>地图点</span><b>{map_nodes}</b></div>
+      <div class="stat"><span>道具</span><b>{assets}</b></div>
+      <div class="stat"><span>升级</span><b>{asset_upgrades}</b></div>
+      <div class="stat"><span>工坊</span><b>{companies}</b></div>
+      <div class="stat"><span>据点</span><b>{shops}</b></div>
+      <div class="stat"><span>任务牌</span><b>{listings}</b></div>
+      <div class="stat"><span>已接取</span><b>{purchases}</b></div>
+      <div class="stat"><span>委托</span><b>{work_orders}</b></div>
+      <div class="stat"><span>返工</span><b>{work_rejections}</b></div>
+      <div class="stat"><span>重开</span><b>{work_reopens}</b></div>
+      <div class="stat"><span>放弃</span><b>{work_cancellations}</b></div>
+      <div class="stat"><span>阵营</span><b>{factions}</b></div>
+      <div class="stat"><span>契约</span><b>{contracts}</b></div>
+      <div class="stat"><span>战报</span><b>{completions}</b></div>
+      <div class="stat"><span>事件</span><b>{events}</b></div>
+      <div class="stat"><span>关系</span><b>{relationships}</b></div>
     </section>
     <section class="panel">
       <div class="map-shell">
         <div>
-          <div class="pill">Global Real-world Map Engine</div>
-          <h2>{map_engine_name} + {tile_provider}</h2>
-          <p class="subtitle">地图引擎现在就是 UI 主入口：底层以 <code>{mirror_scope}</code> 作为全量真实世界镜像，策略为 <code>{full_mirror_strategy}</code>，表现层采用 <code>{simplification_style}</code>，目标是 <code>{scaling_goal}</code>。</p>
+          <div class="pill">现实镜像地图</div>
+          <h2>城市探索面板</h2>
+          <p class="subtitle">从地图焦点进入冒险：区域、热点、实时事件和任务路线会自动串成下一步行动。默认给玩家看故事、地点、委托和奖励；引擎与接口信息收进调试抽屉。</p>
           <div id="world-tile-shards-live" class="mini-grid">{tile_shard_cards}</div>
           <div id="world-region-shards-live" class="mini-grid">{region_shard_cards}</div>
           <div class="mini-grid" style="margin-top:12px">{lod_layer_cards}</div>
           <div id="world-poi-hotspots-live" class="mini-grid" style="margin-top:12px">{hotspot_cards}</div>
           <div id="world-prefetch-queue-live" class="mini-grid" style="margin-top:12px">{prefetch_cards}</div>
           <div id="world-live-events-live" class="mini-grid" style="margin-top:12px">{live_event_cards}</div>
-          <p class="subtitle">Viewport API: <code>{viewport_path}</code></p>
-          <p class="subtitle">Web Viewport: <code>{web_session_viewport_path}</code></p>
+          <details class="dev-details"><summary>地图调试信息</summary><p>Global Real-world Map Engine: <code>{map_engine_name}</code> + <code>{tile_provider}</code></p><p>Mirror: <code>{mirror_scope}</code> · Strategy: <code>{full_mirror_strategy}</code> · Style: <code>{simplification_style}</code> · Goal: <code>{scaling_goal}</code></p><p>Viewport API: <code>{viewport_path}</code></p><p>Web Viewport: <code>{web_session_viewport_path}</code></p></details>
           <p id="world-map-density-summary" class="subtitle">{map_density_summary}</p>
-          <p id="world-map-camera-summary" class="subtitle">Camera booting…</p>
+          <p id="world-map-camera-summary" class="subtitle">镜头加载中…</p>
           <div id="world-map-stream-hud" class="map-stream-hud">
-            <span class="hud-chip"><strong>{map_stream_region_count}</strong> region shards</span>
-            <span class="hud-chip"><strong>{map_visible_marker_count}</strong> visible nodes</span>
-            <span class="hud-chip"><strong>{map_prefetch_count}</strong> prefetch tiles</span>
-            <span class="hud-chip"><strong>{map_live_event_count}</strong> live events · {map_player_density_mode}</span>
+            <span class="hud-chip"><strong>{map_stream_region_count}</strong> 个区域分片</span>
+            <span class="hud-chip"><strong>{map_visible_marker_count}</strong> 个可见地点</span>
+            <span class="hud-chip"><strong>{map_prefetch_count}</strong> 个预热地图块</span>
+            <span class="hud-chip"><strong>{map_live_event_count}</strong> 个实时事件 · {map_player_density_mode}</span>
           </div>
           <div id="world-map-overlay-controls" class="overlay-toggle-bar">
 {shared_map_overlay_controls_html}
@@ -1061,176 +1191,184 @@ pub(super) async fn get_world_web_shell(
           <div id="world-map-camera-actions" class="overlay-toggle-bar">
 {shared_map_camera_actions_html}
           </div>
-          <p id="world-map-overlay-status" class="subtitle">Active overlays: density, regions, tiles, prefetch, live events.</p>
+          <p id="world-map-overlay-status" class="subtitle">当前图层：密度、区域、地图块、预热圈、实时事件。</p>
           <div class="mini" style="margin-top:14px;">
-            <strong>Map focus action rail</strong>
-            <span id="world-map-focus-summary">Waiting for viewport focus…</span>
-            <small id="world-map-focus-detail">Pick a region, tile, hotspot, or live event to steer movement and world actions.</small>
+            <strong>地图行动栏</strong>
+            <span id="world-map-focus-summary">等待选择地图焦点…</span>
+            <small id="world-map-focus-detail">选择区域、地图块、热点或实时事件，推动移动和世界行动。</small>
             <div id="world-map-action-rail" class="focus-stack"></div>
           </div>
-          <p id="world-map-route-filter-status" class="subtitle">Focused route filter: showing all world activity.</p>
+          <p id="world-map-route-filter-status" class="subtitle">路线筛选：显示全部世界活动。</p>
           <div id="world-map-route-filter-actions" class="focus-stack">
             {shared_route_filter_buttons_html}
           </div>
-          <p id="world-map-route-flow-status" class="subtitle">Focused world flow: waiting for a map-driven route.</p>
-          <p id="world-map-route-next-step-status" class="subtitle">Recommended next step: pick a map focus first.</p>
-          <p id="world-map-route-event-brief-status" class="subtitle">Focused event brief: waiting for a live event focus.</p>
-          <p id="world-map-route-link-status" class="subtitle">Linked task route: none yet.</p>
+          <p id="world-map-route-flow-status" class="subtitle">冒险路线：等待地图焦点。</p>
+          <p id="world-map-route-next-step-status" class="subtitle">推荐下一步：先选择地图焦点。</p>
+          <p id="world-map-route-event-brief-status" class="subtitle">事件简报：等待实时事件焦点。</p>
+          <p id="world-map-route-link-status" class="subtitle">关联任务路线：暂无。</p>
           <div id="world-map-route-flow-actions" class="focus-stack"></div>
-          <p id="world-map-overlay-legend" class="subtitle">Overlay legend: region anchors · active tile frames · prefetch warm ring · live event pulses.</p>
+          <p id="world-map-overlay-legend" class="subtitle">图层说明：区域锚点 · 活跃地图块 · 预热探索圈 · 实时事件脉冲。</p>
         </div>
-        <div id="world-real-map" data-engine="{map_engine_id}" data-provider="{tile_provider}" aria-label="World real-world map engine"></div>
+        <div id="world-real-map" data-engine="{map_engine_id}" data-provider="{tile_provider}" aria-label="现实镜像地图"></div>
       </div>
     </section>
     <section>
-      <h2>World Zones</h2>
+      <h2>世界区域</h2>
       <div class="grid">{zone_cards}</div>
     </section>
     <section id="world-map-move-panel" class="panel">
-      <h2>Detailed World Map</h2>
+      <h2>详细世界地图</h2>
       <p class="subtitle">{current_map_summary}</p>
       <div class="mini-grid">{map_cards}</div>
       <form method="post" action="/world/web/map-move" style="margin-top:16px">
         {csrf_input}
-        <input type="hidden" name="matrix_user_id" value="@alice:local.dev" />
+        <input type="hidden" name="matrix_user_id" value="{current_matrix_user_id}" />
         <select id="world-map-move-target" name="target">{map_exit_options}</select>
-        <button type="submit">Move on Map</button>
+        <button type="submit">移动到这里</button>
       </form>
     </section>
     <section class="play">
       <div id="world-action-console" class="panel">
-        <h2>World Action Console</h2>
+        <h2>世界行动台</h2>
         <p id="world-action-console-status" class="subtitle">{console_note}</p>
         <form method="post" action="/world/web/action">
           {csrf_input}
-          <input type="hidden" name="matrix_user_id" value="@alice:local.dev" />
+          <input type="hidden" name="matrix_user_id" value="{current_matrix_user_id}" />
           <select id="world-action-location" name="location_id">{location_options}</select>
-          <textarea id="world-action-body" name="body">我要在镜像城市开一家 AI 设计公司，招募 Agent，服务真实客户，并把客户需求转成 League 任务。</textarea>
-          <button type="submit">Commit World Action</button>
+          <textarea id="world-action-body" name="body">我要在镜像城市建立 AI 设计工坊，招募 Agent，完成真实委托，并把关键机会转成 League 任务。</textarea>
+          <button type="submit">提交世界行动</button>
         </form>
       </div>
       <div class="panel">
-        <h2>World Event Timeline</h2>
+        <h2>世界事件时间线</h2>
         <ul id="world-event-timeline" class="timeline">{event_items}</ul>
       </div>
     </section>
     <section class="panel">
-      <h2>Locations</h2>
+      <h2>地点</h2>
       <div class="mini-grid">{location_cards}</div>
     </section>
     <section class="panel">
-      <h2>Agent Residents / NPCs</h2>
+      <h2>Agent 居民 / NPC</h2>
       <div class="mini-grid">{entity_cards}</div>
     </section>
     <section id="world-assets-panel" class="panel">
-      <h2>Player Assets</h2>
+      <h2>角色道具</h2>
       <div class="mini-grid">{asset_cards}</div>
       <form method="post" action="/world/web/asset" style="margin-top:16px">
         {csrf_input}
-        <input type="hidden" name="matrix_user_id" value="@alice:local.dev" />
-        <input id="world-asset-id" name="asset_id" value="{latest_asset_id}" placeholder="latest or world-asset-id" />
-        <textarea id="world-asset-body" name="body">Upgrade this World asset with a stronger offer, proof, risk control, operating loop, and next customer path.</textarea>
-        <button type="submit">Upgrade Asset</button>
+        <input type="hidden" name="matrix_user_id" value="{current_matrix_user_id}" />
+        <input id="world-asset-id" name="asset_id" value="{latest_asset_id}" placeholder="自动填充或 latest" />
+        <textarea id="world-asset-body" name="body">升级这件世界道具：强化能力、证据、风险控制、行动循环和下一条支线。</textarea>
+        <button type="submit">升级道具</button>
       </form>
     </section>
     <section id="world-companies-panel" class="panel">
-      <h2>Companies / Shops</h2>
+      <h2>工坊 / 据点</h2>
       <div class="mini-grid">{company_cards}</div>
       <form method="post" action="/world/web/company" style="margin-top:16px">
         {csrf_input}
-        <input type="hidden" name="matrix_user_id" value="@alice:local.dev" />
-        <input id="world-company-asset-id" name="asset_id" value="{latest_asset_id}" placeholder="latest or world-asset-id" />
-        <textarea id="world-company-body" name="body">Launch a shop/company from this asset with offer, customer segment, operating loop, proof, and first revenue path.</textarea>
-        <button type="submit">Launch Company</button>
+        <input type="hidden" name="matrix_user_id" value="{current_matrix_user_id}" />
+        <input id="world-company-asset-id" name="asset_id" value="{latest_asset_id}" placeholder="自动填充或 latest" />
+        <textarea id="world-company-body" name="body">用这件道具建立工坊据点：定义能力、服务对象、行动循环、证据和第一条悬赏路线。</textarea>
+        <button type="submit">建立工坊</button>
       </form>
     </section>
     <section id="world-listings-panel" class="panel">
-      <h2>Shops / Listings</h2>
+      <h2>据点 / 任务牌</h2>
       <div class="mini-grid">{shop_cards}</div>
       <div class="mini-grid" style="margin-top:12px">{listing_cards}</div>
       <form method="post" action="/world/web/listing" style="margin-top:16px">
         {csrf_input}
-        <input type="hidden" name="matrix_user_id" value="@alice:local.dev" />
-        <input id="world-listing-company-id" name="company_id" value="{latest_company_id}" placeholder="latest or world-company-id" />
-        <textarea id="world-listing-body" name="body">Publish a service listing with clear deliverable, price logic, evidence package, customer promise, risk controls, self-review, and next action.</textarea>
-        <button type="submit">Publish Listing</button>
+        <input type="hidden" name="matrix_user_id" value="{current_matrix_user_id}" />
+        <input id="world-listing-company-id" name="company_id" value="{latest_company_id}" placeholder="自动填充或 latest" />
+        <textarea id="world-listing-body" name="body">发布一个工坊委托：写清成果、赏金逻辑、证据包、承诺、风险控制、自检和下一步行动。</textarea>
+        <button type="submit">发布任务牌</button>
       </form>
     </section>
     <section id="world-commerce-panel" class="panel">
-      <h2>Commerce / Work Orders</h2>
+      <h2>悬赏 / 冒险委托</h2>
+      <p class="subtitle">玩家视角只需要三步：接取任务牌 → 提交成果 → 获得评级与奖励。完整路线操作仍可展开，方便 beta 验证和高级玩家调试。</p>
+      <div class="world-adventure-steps">
+        <div class="world-adventure-step"><b>1 · 接取任务牌</b><span>选择一个悬赏，把它变成可执行的冒险委托。</span></div>
+        <div class="world-adventure-step"><b>2 · 提交成果</b><span>提交成果包、证据、风险复盘和下一步行动。</span></div>
+        <div class="world-adventure-step"><b>3 · 评级领奖励</b><span>通过评级后获得声望与奖励；不通过则进入返工路线。</span></div>
+      </div>
       <div id="world-purchase-cards-live" class="mini-grid">{purchase_cards}</div>
       <div id="world-work-orders-live" class="mini-grid" style="margin-top:12px">{work_order_cards}</div>
-      <form id="world-buy-form" method="post" action="/world/web/buy" style="margin-top:16px">
-        {csrf_input}
-        <input type="hidden" name="matrix_user_id" value="@alice:local.dev" />
-        <input id="world-buy-listing-id" name="listing_id" value="{latest_listing_id}" placeholder="latest or world-listing-id" />
-        <textarea id="world-buy-body" name="body">Buy this service and open a work order with deliverable, evidence package, acceptance standard, risk controls, and next action.</textarea>
-        <button type="submit">Buy / Hire Listing</button>
-      </form>
+      <details class="dev-details world-route-drawer"><summary>展开完整路线操作台</summary>
+        <form id="world-buy-form" method="post" action="/world/web/buy" style="margin-top:16px">
+          {csrf_input}
+          <input type="hidden" name="matrix_user_id" value="{current_matrix_user_id}" />
+          <input id="world-buy-listing-id" name="listing_id" value="{latest_listing_id}" placeholder="自动填充或 latest" />
+          <textarea id="world-buy-body" name="body">接取这个任务牌，开启冒险委托：确认成果、证据包、评级标准、风险控制和下一步行动。</textarea>
+          <button type="submit">接取任务牌</button>
+        </form>
       <div id="world-work-deliveries-live" class="mini-grid" style="margin-top:12px">{work_delivery_cards}</div>
       <form id="world-work-deliver-form" method="post" action="/world/web/work-deliver" style="margin-top:16px">
         {csrf_input}
-        <input type="hidden" name="matrix_user_id" value="@alice:local.dev" />
-        <input id="world-work-deliver-id" name="work_order_id" value="{latest_work_order_id}" placeholder="latest or world-work-id" />
-        <textarea id="world-work-deliver-body" name="body">Work delivery package: deliverable, evidence package, acceptance checklist, risk review, next action, and self-review.</textarea>
-        <button type="submit">Deliver Work Order</button>
+        <input type="hidden" name="matrix_user_id" value="{current_matrix_user_id}" />
+        <input id="world-work-deliver-id" name="work_order_id" value="{latest_work_order_id}" placeholder="自动填充或 latest" />
+        <textarea id="world-work-deliver-body" name="body">成果提交包：成果、证据包、评级清单、风险复盘、下一步行动和自检记录。</textarea>
+        <button type="submit">提交成果</button>
       </form>
       <div id="world-work-acceptances-live" class="mini-grid" style="margin-top:12px">{work_acceptance_cards}</div>
       <form id="world-work-accept-form" method="post" action="/world/web/work-accept" style="margin-top:16px">
         {csrf_input}
-        <input type="hidden" name="matrix_user_id" value="@alice:local.dev" />
-        <input id="world-work-accept-id" name="work_order_id" value="{latest_work_order_id}" placeholder="latest or world-work-id" />
-        <textarea id="world-work-accept-body" name="body">Buyer acceptance: delivered work accepted with proof, quality note, next collaboration, and reputation confirmation.</textarea>
-        <button type="submit">Accept Work Order</button>
+        <input type="hidden" name="matrix_user_id" value="{current_matrix_user_id}" />
+        <input id="world-work-accept-id" name="work_order_id" value="{latest_work_order_id}" placeholder="自动填充或 latest" />
+        <textarea id="world-work-accept-body" name="body">评级通过：确认成果证据、质量备注、下一条支线和声望奖励。</textarea>
+        <button type="submit">评级通过</button>
       </form>
       <div id="world-work-rejections-live" class="mini-grid" style="margin-top:12px">{work_rejection_cards}</div>
       <form id="world-work-reject-form" method="post" action="/world/web/work-reject" style="margin-top:16px">
         {csrf_input}
-        <input type="hidden" name="matrix_user_id" value="@alice:local.dev" />
-        <input id="world-work-reject-id" name="work_order_id" value="{latest_work_order_id}" placeholder="latest or world-work-id" />
-        <textarea id="world-work-reject-body" name="body">Buyer rejection: delivery is not accepted, refund the reserved buyer funds, reopen with revision requirements, evidence gaps, and next action.</textarea>
-        <button type="submit">Reject / Refund Work Order</button>
+        <input type="hidden" name="matrix_user_id" value="{current_matrix_user_id}" />
+        <input id="world-work-reject-id" name="work_order_id" value="{latest_work_order_id}" placeholder="自动填充或 latest" />
+        <textarea id="world-work-reject-body" name="body">需要返工：记录未通过原因、证据缺口、奖励退回、返工要求和下一步行动。</textarea>
+        <button type="submit">要求返工</button>
       </form>
       <div id="world-work-reopens-live" class="mini-grid" style="margin-top:12px">{work_reopen_cards}</div>
       <form id="world-work-reopen-form" method="post" action="/world/web/work-reopen" style="margin-top:16px">
         {csrf_input}
-        <input type="hidden" name="matrix_user_id" value="@alice:local.dev" />
-        <input id="world-work-reopen-id" name="work_order_id" value="{latest_work_order_id}" placeholder="latest or world-work-id" />
-        <textarea id="world-work-reopen-body" name="body">Buyer reopen: reserve funds again, list revision requirements, evidence gaps, acceptance standard, and next redelivery action.</textarea>
-        <button type="submit">Reopen / Reserve Again</button>
+        <input type="hidden" name="matrix_user_id" value="{current_matrix_user_id}" />
+        <input id="world-work-reopen-id" name="work_order_id" value="{latest_work_order_id}" placeholder="自动填充或 latest" />
+        <textarea id="world-work-reopen-body" name="body">重开委托：重新托管奖励，列出返工要求、证据缺口、评级标准和再次提交行动。</textarea>
+        <button type="submit">重开委托</button>
       </form>
       <div id="world-work-cancellations-live" class="mini-grid" style="margin-top:12px">{work_cancellation_cards}</div>
       <form id="world-work-cancel-form" method="post" action="/world/web/work-cancel" style="margin-top:16px">
         {csrf_input}
-        <input type="hidden" name="matrix_user_id" value="@alice:local.dev" />
-        <input id="world-work-cancel-id" name="work_order_id" value="{latest_work_order_id}" placeholder="latest or world-work-id" />
-        <textarea id="world-work-cancel-body" name="body">Buyer cancel: cancel this open work before delivery, refund reserved buyer funds, record reason, and close the work order.</textarea>
-        <button type="submit">Cancel / Refund Work Order</button>
+        <input type="hidden" name="matrix_user_id" value="{current_matrix_user_id}" />
+        <input id="world-work-cancel-id" name="work_order_id" value="{latest_work_order_id}" placeholder="自动填充或 latest" />
+        <textarea id="world-work-cancel-body" name="body">放弃委托：在成果提交前结束路线、退回托管奖励、记录原因并关闭委托。</textarea>
+        <button type="submit">放弃委托</button>
       </form>
+      </details>
     </section>
     <section class="panel">
-      <h2>Faction Reputation Map</h2>
+      <h2>阵营声望图</h2>
       <div class="mini-grid">{faction_cards}</div>
       <div class="mini-grid" style="margin-top:12px">{standing_cards}</div>
     </section>
     <section id="world-contracts-panel" class="panel">
-      <h2>World Contracts</h2>
+      <h2>世界契约</h2>
       <div id="world-contract-cards-live" class="mini-grid">{contract_cards}</div>
       <form id="world-contract-completion-form" method="post" action="/world/web/contract" style="margin-top:16px">
         {csrf_input}
-        <input type="hidden" name="matrix_user_id" value="@alice:local.dev" />
-        <input id="world-contract-completion-id" name="contract_id" value="{latest_contract_id}" placeholder="world-contract-id" />
-        <textarea id="world-contract-completion-body" name="body">World contract delivery: deliverable, evidence, risk review, next step, acceptance standard.</textarea>
-        <button type="submit">Complete Contract</button>
+        <input type="hidden" name="matrix_user_id" value="{current_matrix_user_id}" />
+        <input id="world-contract-completion-id" name="contract_id" value="{latest_contract_id}" placeholder="自动填充或契约 ID" />
+        <textarea id="world-contract-completion-body" name="body">世界契约战报：成果、证据、风险复盘、下一步和评级标准。</textarea>
+        <button type="submit">完成契约</button>
       </form>
     </section>
     <section class="panel">
-      <h2>Task-linked Route Graph</h2>
+      <h2>任务路线图</h2>
       <div id="world-route-task-graph-live" class="mini-grid">{world_route_task_graph_cards}</div>
     </section>
     <section class="panel">
-      <h2>Playable Commands</h2>
-      <p class="subtitle"><code>/world</code> <code>/world action 我要开一家 AI 设计公司</code> <code>/league</code> <code>/arena</code> <code>/guild</code> <code>/raid</code></p>
+      <h2>可玩指令</h2>
+      <p class="subtitle"><code>/world</code> <code>/world action 我要开一家 AI 设计工坊</code> <code>/league</code> <code>/arena</code> <code>/guild</code> <code>/raid</code></p>
     </section>
   </main>
   <script id="trillionnium-world-map-data" type="application/json">{world_map_data_json}</script>
@@ -1345,10 +1483,10 @@ pub(super) async fn get_world_web_shell(
         const handoffNodeId = handoffEventId ? '' : focusRouteTarget(state.locationId || '', state.nodeId, state.moveTarget || '');
         scrollRoutePanelIntoView(state.panelId);
         if (cameraSummary) {{
-          cameraSummary.textContent = 'World handoff: ' + state.actionLabel + ' · ' + state.command + (handoffEventId ? (' · event ' + handoffEventId) : (handoffNodeId ? (' · focus ' + handoffNodeId) : '')) + (state.routeTaskId ? (' · task ' + state.routeTaskId) : '');
+          cameraSummary.textContent = '世界行动交接：' + state.actionLabel + ' · ' + state.command + (handoffEventId ? (' · 事件 ' + handoffEventId) : (handoffNodeId ? (' · 焦点 ' + handoffNodeId) : '')) + (state.routeTaskId ? (' · 任务 ' + state.routeTaskId) : '');
         }}
         if (focusDetail) {{
-          focusDetail.textContent = 'Prepared from /app: ' + state.actionLabel + ' · panel ' + state.panelId + ' · ' + state.actionBody + (handoffEventId ? (' · event ' + handoffEventId) : '') + (state.routeTaskId ? (' · task ' + state.routeTaskId) : '');
+          focusDetail.textContent = '来自 /app 的行动：' + state.actionLabel + ' · 面板 ' + state.panelId + ' · ' + state.actionBody + (handoffEventId ? (' · 事件 ' + handoffEventId) : '') + (state.routeTaskId ? (' · 任务 ' + state.routeTaskId) : '');
         }}
       }};
       const markRouteInputManual = (input) => {{
@@ -1427,7 +1565,7 @@ pub(super) async fn get_world_web_shell(
         const panel = document.getElementById(target.panelId);
         if (panel) panel.scrollIntoView({{ behavior: 'smooth', block: 'center' }});
         if (cameraSummary && (focusedEventId || focusedNodeId)) {{
-          cameraSummary.textContent = 'Route focus prepared: ' + (focusedEventId ? ('event ' + focusedEventId) : focusedNodeId) + ' · panel ' + (target.panelId || routeActionPanelId());
+          cameraSummary.textContent = '路线焦点已准备：' + (focusedEventId ? ('事件 ' + focusedEventId) : focusedNodeId) + ' · 面板 ' + (target.panelId || routeActionPanelId());
         }}
         const finalFocusTarget = input || textarea || (target.locationId ? document.getElementById(routeActionLocationId()) : null);
         if (finalFocusTarget) {{
@@ -1438,14 +1576,14 @@ pub(super) async fn get_world_web_shell(
           if (typeof input.select === 'function') input.select();
         }}
       }};
-      const buildRouteActionDraft = (selection, routeContext) => buildRouteDraftBody(selection, routeContext, {{ selectionTitleFallback: 'Focused world route' }});
+      const buildRouteActionDraft = (selection, routeContext) => buildRouteDraftBody(selection, routeContext, {{ selectionTitleFallback: '当前世界路线' }});
       const renderWorldTaskGraph = (tasks) => {{
         if (!routeTaskGraphTarget) return;
         const visible = (tasks && tasks.length ? tasks : routeTaskGraphItems).slice(0, 6);
         routeTaskGraphTarget.innerHTML = visible.length ? visible.map((task) => {{
           const actionButtons = routeTaskGraphActionButtonsHtml(task);
-          return `<article class="mini task-graph"><strong>${{escapeHtml(task.task_id || 'task')}}</strong><span>${{escapeHtml(task.latest_bucket || 'event')}} · ${{escapeHtml(task.latest_status || 'pending')}} · opportunity ${{escapeHtml(task.next_opportunity_kind || 'contract_capture')}}</span><code>${{escapeHtml(task.latest_location_id || task.task_id || 'route')}}</code><small>${{escapeHtml(task.event_count ?? 0)}} events · ${{escapeHtml(task.contract_count ?? 0)}} contracts · ${{escapeHtml(task.completion_count ?? 0)}} completions</small><small>${{escapeHtml(task.outcome_summary || 'Outcome summary pending.')}}</small><small><strong>Opportunity lane</strong> · ${{escapeHtml(task.next_opportunity_hint || 'Opportunity hint pending.')}}</small><div class="focus-stack"><code>${{escapeHtml(task.next_opportunity_command || '/world action 继续推进下一步机会。')}}</code></div><div class="focus-stack">${{actionButtons}}</div></article>`;
-        }}).join('') : '<article class="mini task-graph"><strong>No task-linked routes yet</strong><span>Create a world contract or task-linked event to grow the graph.</span><code>task graph</code></article>';
+          return `<article class="mini task-graph"><strong>${{escapeHtml(mapText(task.task_id || '任务'))}}</strong><span>${{escapeHtml(mapText(task.latest_bucket || 'event'))}} · ${{escapeHtml(mapText(task.latest_status || 'pending'))}} · 支线 ${{escapeHtml(mapText(task.next_opportunity_kind || 'contract_capture'))}}</span><code>${{escapeHtml(mapText(task.latest_location_id || task.task_id || 'route'))}}</code><small>${{escapeHtml(task.event_count ?? 0)}} 事件 · ${{escapeHtml(task.contract_count ?? 0)}} 契约 · ${{escapeHtml(task.completion_count ?? 0)}} 战报</small><small>${{escapeHtml(mapText(task.outcome_summary || '战果总结待生成。'))}}</small><small><strong>下一条支线</strong> · ${{escapeHtml(mapText(task.next_opportunity_hint || '支线提示待生成。'))}}</small><div class="focus-stack"><code>${{escapeHtml(mapText(task.next_opportunity_command || '/world action 继续推进下一步机会。'))}}</code></div><div class="focus-stack">${{actionButtons}}</div></article>`;
+        }}).join('') : '<article class="mini task-graph"><strong>还没有任务路线</strong><span>创建世界契约或任务事件后，路线图会生长出来。</span><code>task graph</code></article>';
       }};
       const findLatestVisibleByBuckets = (visibleItems, buckets) => {{
         const bucketSet = new Set(buckets);
@@ -1460,24 +1598,24 @@ pub(super) async fn get_world_web_shell(
           .sort((left, right) => Number(right.dataset.createdAt || 0) - Number(left.dataset.createdAt || 0))[0] || null;
       }};
       const inferRouteNextStep = (selection, routeContext) => inferConfiguredRouteNextStep(selection, routeContext, {{
-        statusPrefix: 'Recommended next step',
-        rejectionBody: (selectionTitle, workOrderId) => selectionTitle + ': reopen work order ' + workOrderId + ' with revision requirements, evidence gaps, renewed reserve, and next redelivery step.',
-        rejectionStatus: (workOrderId) => 'reopen work order ' + workOrderId + ' for this focused route.',
-        reopenBody: (selectionTitle, workOrderId) => selectionTitle + ': redeliver work order ' + workOrderId + ' with revised deliverable, evidence package, acceptance checklist, and risk review.',
-        reopenStatus: (workOrderId) => 'redeliver work order ' + workOrderId + ' after reopen.',
-        deliveryBody: (selectionTitle, workOrderId) => selectionTitle + ': review delivery for work order ' + workOrderId + ', confirm proof and quality, then accept or reject with concrete next action.',
-        deliveryStatus: (workOrderId) => 'review the latest delivery for work order ' + workOrderId + '.',
-        openWorkBody: (selectionTitle, workOrderId) => selectionTitle + ': prepare delivery for work order ' + workOrderId + ' with deliverable, evidence, acceptance checklist, and next action.',
-        openWorkStatus: (workOrderId) => 'deliver the active work order ' + workOrderId + '.',
-        closedWorkLabel: 'Draft follow-up action',
-        closedWorkBody: (selectionTitle, workOrderId, latestWorkBucket) => selectionTitle + ': follow up after ' + latestWorkBucket + ' on work order ' + workOrderId + '. Capture outcome, next collaboration, and world-state consequences for this route.',
-        closedWorkStatus: (workOrderId, latestWorkBucket) => 'draft a follow-up world action after ' + latestWorkBucket + ' on work order ' + workOrderId + '.',
-        contractBody: (selectionTitle, contractId) => selectionTitle + ': complete contract ' + contractId + ' with deliverable, evidence, risk review, acceptance standard, and next step.',
-        contractStatus: (contractId) => 'complete contract ' + contractId + ' for this route.',
-        listingBody: (selectionTitle, listingId) => selectionTitle + ': hire listing ' + listingId + ' and define deliverable, evidence, acceptance, risk control, and next action.',
-        listingStatus: (listingId) => 'route the active listing ' + listingId + ' into a hire/workflow.',
-        defaultBody: (selectionTitle) => selectionTitle + ': draft the next world action from this focused route, including evidence, risk, and next operational move.',
-        defaultStatus: () => 'draft a world action for this focused route.',
+        statusPrefix: '推荐下一步',
+        rejectionBody: (selectionTitle, workOrderId) => selectionTitle + ': 重开委托 ' + workOrderId + '，写清返工要求、证据缺口、再次托管和下一次提交。',
+        rejectionStatus: (workOrderId) => '为当前路线重开委托 ' + workOrderId + '。',
+        reopenBody: (selectionTitle, workOrderId) => selectionTitle + ': 重新提交委托 ' + workOrderId + '，带上修订成果、证据包、评级清单和风险复盘。',
+        reopenStatus: (workOrderId) => '重开后重新提交委托 ' + workOrderId + '。',
+        deliveryBody: (selectionTitle, workOrderId) => selectionTitle + ': 评定委托 ' + workOrderId + ' 的成果，确认证据和质量，再给出通过或返工的下一步。',
+        deliveryStatus: (workOrderId) => '评定最新委托成果 ' + workOrderId + '。',
+        openWorkBody: (selectionTitle, workOrderId) => selectionTitle + ': 为委托 ' + workOrderId + ' 准备成果、证据、评级清单和下一步行动。',
+        openWorkStatus: (workOrderId) => '提交当前委托 ' + workOrderId + '。',
+        closedWorkLabel: '起草后续行动',
+        closedWorkBody: (selectionTitle, workOrderId, latestWorkBucket) => selectionTitle + ': 在 ' + latestWorkBucket + ' 后跟进委托 ' + workOrderId + '，记录结果、下一条支线和世界状态变化。',
+        closedWorkStatus: (workOrderId, latestWorkBucket) => '在 ' + latestWorkBucket + ' 后起草委托 ' + workOrderId + ' 的后续世界行动。',
+        contractBody: (selectionTitle, contractId) => selectionTitle + ': 完成契约 ' + contractId + '，带上成果、证据、风险复盘、评级标准和下一步。',
+        contractStatus: (contractId) => '完成当前路线的契约 ' + contractId + '。',
+        listingBody: (selectionTitle, listingId) => selectionTitle + ': 接取任务牌 ' + listingId + '，定义成果、证据、评级、风险控制和下一步行动。',
+        listingStatus: (listingId) => '把任务牌 ' + listingId + ' 接入冒险路线。',
+        defaultBody: (selectionTitle) => selectionTitle + ': 从当前路线起草下一步世界行动，包含证据、风险和推进动作。',
+        defaultStatus: () => '为当前路线起草世界行动。',
       }});
       {shared_map_selection_location_ids_js}
       const applyRouteFilters = () => {{
@@ -1505,10 +1643,10 @@ pub(super) async fn get_world_web_shell(
         }});
         if (!routeFilterStatus) return;
         if (routeFilterMode === 'all' || !selection || (!selectedTaskId && !locationIds.size)) {{
-          routeFilterStatus.textContent = 'Focused route filter: showing all world activity.';
+          routeFilterStatus.textContent = '路线筛选：显示全部世界活动。';
         }} else {{
           const workflowCount = (counts.purchase || 0) + (counts.work_order || 0) + (counts.delivery || 0) + (counts.acceptance || 0) + (counts.rejection || 0) + (counts.reopen || 0) + (counts.cancellation || 0);
-          routeFilterStatus.textContent = 'Focused route filter: ' + (selection.title || 'focus') + (selectedTaskId ? (' · task ' + selectedTaskId) : '') + ' · ' + (counts.event || 0) + ' events · ' + (counts.contract || 0) + ' contracts · ' + workflowCount + ' commerce/work items.';
+          routeFilterStatus.textContent = '路线筛选：' + (selection.title || '焦点') + (selectedTaskId ? (' · 任务 ' + selectedTaskId) : '') + ' · ' + (counts.event || 0) + ' 事件 · ' + (counts.contract || 0) + ' 契约 · ' + workflowCount + ' 个冒险环节。';
         }}
         applyRouteFlow();
       }};
@@ -1575,10 +1713,10 @@ pub(super) async fn get_world_web_shell(
             pushRouteFlowActionButton(actions, actionKeys, buildDraftWorldAction(locationId, activeTaskId, draftBody));
           }}
           if (activeTaskId) {{
-            pushRouteFlowActionButton(actions, actionKeys, buildTaskFollowUpAction(selection, activeTaskId, locationId, 'with linked event/contract context, current world-state evidence, risks, and next action'));
+            pushRouteFlowActionButton(actions, actionKeys, buildTaskFollowUpAction(selection, activeTaskId, locationId, '结合关联事件/契约、当前世界状态证据、风险和下一步行动'));
           }}
           if (eventItem) {{
-            pushRouteFlowActionButton(actions, actionKeys, buildRouteEventTimelineAction('Open event timeline', {{
+            pushRouteFlowActionButton(actions, actionKeys, buildRouteEventTimelineAction('打开事件线', {{
               eventId: String(eventItem.dataset.eventId || ''),
               eventKind: String(eventItem.dataset.eventKind || 'world_event'),
               eventBody: String(eventItem.dataset.eventBody || ''),
@@ -1588,7 +1726,7 @@ pub(super) async fn get_world_web_shell(
             }}));
           }}
           if (activeTaskId && linkedEventItem) {{
-            pushRouteFlowActionButton(actions, actionKeys, buildRouteEventTimelineAction('Open linked event', {{
+            pushRouteFlowActionButton(actions, actionKeys, buildRouteEventTimelineAction('打开关联事件', {{
               eventId: String(linkedEventItem.dataset.eventId || ''),
               eventKind: String(linkedEventItem.dataset.eventKind || 'world_event'),
               eventBody: String(linkedEventItem.dataset.eventBody || ''),
@@ -1598,48 +1736,48 @@ pub(super) async fn get_world_web_shell(
             }}));
           }}
           if (workOrderId) {{
-            pushRouteFlowActionButton(actions, actionKeys, buildWorldWorkLaneAction('delivery', workOrderId, {{ label: 'Route work order', locationId }}));
+            pushRouteFlowActionButton(actions, actionKeys, buildWorldWorkLaneAction('delivery', workOrderId, {{ label: '推进委托', locationId }}));
           }}
           if (contractId) {{
             pushRouteFlowActionButton(actions, actionKeys, buildWorldContractLaneAction(contractId, {{ locationId }}));
           }}
           if (activeTaskId && linkedContractItem) {{
-            pushRouteFlowActionButton(actions, actionKeys, buildLinkedContractRouteAction(selection, String(linkedContractItem.dataset.contractId || ''), activeTaskId, locationId, {{ bodySuffix: ' with evidence, acceptance standard, and next step.' }}));
+            pushRouteFlowActionButton(actions, actionKeys, buildLinkedContractRouteAction(selection, String(linkedContractItem.dataset.contractId || ''), activeTaskId, locationId, {{ bodySuffix: '，带上证据、评级标准和下一步。' }}));
           }}
           if (listingId) {{
             pushRouteFlowActionButton(actions, actionKeys, buildWorldPurchaseLaneAction(listingId, {{ locationId }}));
           }}
-          if (((nextStep || {{}}).label) === 'Route acceptance' && workOrderId) {{
+          if (((nextStep || {{}}).label) === '打开评级路线' && workOrderId) {{
             pushRouteFlowActionButton(actions, actionKeys, buildWorldWorkLaneAction('rejection', workOrderId, {{
               locationId,
-              body: appendSelectionEventSignal((selection && selection.title ? selection.title : 'Focused route') + ': reject delivery for work order ' + workOrderId + ' with evidence gaps, refund logic, and revision path.', selection),
+              body: appendSelectionEventSignal((selection && selection.title ? selection.title : '当前路线') + ': 标记委托 ' + workOrderId + ' 需要返工，写清证据缺口、奖励退回和修订路线。', selection),
             }}));
           }}
           routeFlowActions.innerHTML = actions.join(' ');
         }}
         if (!routeFlowStatus) return;
         if (routeFilterMode === 'all' || !selection) {{
-          routeFlowStatus.textContent = 'Focused world flow: waiting for a map-driven route.';
-          if (routeNextStepStatus) routeNextStepStatus.textContent = 'Recommended next step: pick a map focus first.';
+          routeFlowStatus.textContent = '冒险路线：等待地图焦点。';
+          if (routeNextStepStatus) routeNextStepStatus.textContent = '推荐下一步：先选择地图焦点。';
           if (routeEventBriefStatus) routeEventBriefStatus.textContent = routeEventBriefText(eventSignalText, true);
-          if (routeLinkStatus) routeLinkStatus.textContent = routeLinkStatusText({{ emptyText: 'Linked task route: none yet.' }});
-          if (actionConsoleStatus) actionConsoleStatus.textContent = defaultActionConsoleStatus || 'Use the world action console to commit world actions.';
+          if (routeLinkStatus) routeLinkStatus.textContent = routeLinkStatusText({{ emptyText: '关联任务路线：暂无。' }});
+          if (actionConsoleStatus) actionConsoleStatus.textContent = defaultActionConsoleStatus || '使用世界行动台提交新的世界行动。';
           return;
         }}
-        const contractLabel = contractId || 'no contract';
-        const workLabel = workOrderId || 'no work order';
-        routeFlowStatus.textContent = 'Focused world flow: ' + (selection.title || 'focus') + ' → event ' + eventLabel + ' · work ' + workLabel + ' · contract ' + contractLabel + routeOpportunitySegment(opportunityTask) + '.';
+        const contractLabel = contractId || '暂无契约';
+        const workLabel = workOrderId || '暂无委托';
+        routeFlowStatus.textContent = '冒险路线：' + (selection.title || '焦点') + ' → 事件 ' + eventLabel + ' · 委托 ' + workLabel + ' · 契约 ' + contractLabel + routeOpportunitySegment(opportunityTask) + '。';
         if (routeNextStepStatus) {{
-          routeNextStepStatus.textContent = ((nextStep || {{}}).status) || 'Recommended next step: draft a world action for this focused route.';
+          routeNextStepStatus.textContent = ((nextStep || {{}}).status) || '推荐下一步：为当前路线起草世界行动。';
         }}
         if (routeEventBriefStatus) {{
           routeEventBriefStatus.textContent = routeEventBriefText(eventSignalText, false);
         }}
         if (routeLinkStatus) {{
-          routeLinkStatus.textContent = routeLinkStatusText({{ taskId: activeTaskId, linkedEventCount, linkedContractCount, opportunityTask, inFocus: true, emptyText: 'Linked task route: no event/contract task link in the current focus.' }});
+          routeLinkStatus.textContent = routeLinkStatusText({{ taskId: activeTaskId, linkedEventCount, linkedContractCount, opportunityTask, inFocus: true, emptyText: '关联任务路线：当前焦点没有事件/契约链接。' }});
         }}
         if (actionConsoleStatus) {{
-          actionConsoleStatus.textContent = 'Focused world action: ' + (selection.title || 'focus') + ' · ' + (locationId || 'no location') + ' · event ' + eventLabel + ' · work ' + workLabel + ' · contract ' + contractLabel + routeOpportunitySegment(opportunityTask) + ' · next ' + (((nextStep || {{}}).label) || 'draft world action') + '.';
+          actionConsoleStatus.textContent = '当前世界行动：' + (selection.title || '焦点') + ' · ' + (locationId || '未知地点') + ' · 事件 ' + eventLabel + ' · 委托 ' + workLabel + ' · 契约 ' + contractLabel + routeOpportunitySegment(opportunityTask) + ' · 下一步 ' + (((nextStep || {{}}).label) || '起草世界行动') + '。';
         }}
       }};
       {shared_map_focus_core_js}
@@ -1653,7 +1791,7 @@ pub(super) async fn get_world_web_shell(
           focusDetail,
           actionRail,
           focus: lastSelection || buildDefaultFocus(),
-          emptyDetail: 'Pick a region, tile, hotspot, or live event to steer movement and world actions.',
+          emptyDetail: '选择区域、地图块、热点或实时事件，推动移动和世界行动。',
         }});
       }};
       const setFocusSelection = (focus) => {{
@@ -1676,7 +1814,7 @@ pub(super) async fn get_world_web_shell(
         forceRouteFieldValueById(routeActionTextareaId(), state.actionBody);
         scrollRoutePanelIntoView(state.panelId);
         setFocusSelection({{ kind: 'node', nodeId }});
-        if (cameraSummary) {{ cameraSummary.textContent = 'Selected map action: ' + state.actionLabel + ' · ' + state.command; }}
+        if (cameraSummary) {{ cameraSummary.textContent = '已选择地图行动：' + state.actionLabel + ' · ' + state.command; }}
       }};
       window.trillionniumSetMoveTarget = (nodeId) => window.trillionniumApplyMarkerAction(nodeId, 'move_here');
       document.addEventListener('click', (event) => {{
@@ -1696,7 +1834,7 @@ pub(super) async fn get_world_web_shell(
           return;
         }}
         const routeFlowButton = closestFromEvent(event, '.trillionnium-route-flow-action');
-        if (handleRouteActionButton(routeFlowButton, openRouteFlowAction, 'Route action')) return;
+        if (handleRouteActionButton(routeFlowButton, openRouteFlowAction, '路线行动')) return;
         const cameraActionButton = closestFromEvent(event, mapClickSelectors.camera);
         if (handleMapCameraActionButton(cameraActionButton)) return;
         const focusButton = closestFromEvent(event, mapClickSelectors.focus);
@@ -1783,7 +1921,7 @@ pub(super) async fn get_world_web_shell(
         live_event_cards = live_event_cards,
         viewport_path = escape_html_text(viewport_path),
         web_session_viewport_path = escape_html_text(web_session_viewport_path),
-        map_density_summary = escape_html_text(map_density_summary),
+        map_density_summary = escape_html_text(&map_density_summary),
         map_engine_id = escape_html_text(map_engine_id),
         zone_cards = zone_cards,
         map_cards = map_cards,
@@ -1812,6 +1950,7 @@ pub(super) async fn get_world_web_shell(
         contract_cards = contract_cards,
         world_route_task_graph_cards = world_route_task_graph_cards,
         latest_contract_id = escape_html_text(&latest_contract_id),
+        current_matrix_user_id = escape_html_text(current_matrix_user_id),
         event_items = event_items,
         console_note = escape_html_text(console_note),
         csrf_input = csrf_input,

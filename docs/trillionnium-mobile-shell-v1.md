@@ -11,10 +11,10 @@
 
 - **消息** = Telegram / 微信风格的聊天与任务入口
 - **世界** = game-first 主入口，承接 Trillionnium World / route / live event / world action
-- **动态** = 类似小红书的信息流，但内容不是纯社交，而是 `world events + contracts + completions + commerce + social updates`
-- **我** = 钱包支付 + 系统设置 + 个人成长 / 资产 / 安全
+- **动态** = 类似小红书的信息流，但内容不是纯社交，而是 `world events + contracts + completions + adventure rewards + social updates`
+- **我** = 奖励钱包 + 系统设置 + 个人成长 / 道具 / 安全
 
-> 说明：第四栏我建议用 **「我」** 而不是直接写「设置」或「钱包」，因为钱包支付、成长、账户、设置本质都属于个人中心。这样更符合微信/Telegram 的熟悉感，也给后续 progression / inventory / skin / faction profile 留出空间。
+> 说明：第四栏我建议用 **「我」** 而不是直接写「设置」或「钱包」，因为奖励钱包、成长、账户、设置本质都属于个人中心。这样更符合微信/Telegram 的熟悉感，也给后续 progression / inventory / skin / faction profile 留出空间。
 
 ---
 
@@ -25,7 +25,7 @@
 虽然第一栏是消息，但**产品主引擎仍然是地图**。
 
 - 用户可以从消息进入任务
-- 但任务、事件、交易、合同、动态，最终都要能回流到地图
+- 但任务、事件、委托、契约、动态，最终都要能回流到地图
 - 地图是现实世界镜像、route cockpit、world action、event focus 的主舞台
 
 ### 2. Chat is the operating system
@@ -35,7 +35,7 @@
 - 人与人聊天
 - 人与 Agent 聊天
 - 系统通知
-- 合同 / 工作单 / 支付状态
+- 契约 / 冒险委托 / 奖励状态
 - 从 feed / map 一键转成对话或 task follow-up
 
 ### 3. Feed is event-driven, not influencer-first
@@ -45,13 +45,13 @@
 - live event
 - contract progress
 - completion / reward
-- nearby market activity
-- company/shop/listing updates
+- nearby quest-board activity
+- workshop/outpost/quest-board updates
 - guild/raid/social activity
 
 ### 4. Wallet lives inside identity
 
-支付、余额、订单、设置、安全、等级、技能、工具、皮肤，都放在「我」里统一管理。
+奖励、余额、契约、设置、安全、等级、技能、工具、皮肤，都放在「我」里统一管理。
 
 ---
 
@@ -77,16 +77,16 @@
 
 - 全局输入支持：
   - 人 / 联系人 / Agent
-  - 地点 / node / market / company / shop
-  - task / contract / work order / listing
+  - 地点 / node / quest board / workshop / outpost
+  - task / contract / commission / quest board
   - 动态关键词 / event / tag
 
 #### 各 tab 搜索占位文案
 
-- 消息：`搜索联系人、群组、Agent、任务对话`
-- 世界：`搜索世界地点、公司、任务、事件`
-- 动态：`搜索动态、话题、事件、成交案例`
-- 我：`搜索订单、账单、资产、设置`
+- 消息：`搜索队友、群组、Agent、任务对话`
+- 世界：`搜索世界地点、工坊、任务、事件`
+- 动态：`搜索动态、话题、事件、冒险记录`
+- 我：`搜索奖励、契约、道具、设置`
 
 #### 已落地的 UX readiness 合约
 
@@ -121,28 +121,28 @@ Telegram / 微信式消息首页，是最日常的操作入口。
 3. **快捷入口横条**
    - 新建任务
    - 发起 world action
-   - 联系商家 / 买家
-   - 支付确认
+   - 联系委托人 / 队友
+   - 奖励确认
 4. **未处理事项分组**
    - 待回复
    - 待确认
-   - 待交付
-   - 待付款 / 待退款
+   - 待提交成果
+   - 待领取奖励 / 待退回奖励
 
 ### 卡片类型
 
 - 普通聊天
 - Agent 协作线程
-- Contract / Work Order 对话线程
-- 支付通知
+- Contract / Commission 对话线程
+- 奖励通知
 - 系统提醒
 
 ### 关键动作
 
 - 左滑：标记已读 / 置顶 / 静音
-- 长按：转任务 / 转 world action / 转合同
+- 长按：转任务 / 转 world action / 转契约
 - 点开会话：进入聊天页
-- 消息内一键跳地图：查看事件发生地点 / work order 所在 location
+- 消息内一键跳地图：查看事件发生地点 / 委托所在 location
 
 ### 对应现有能力
 
@@ -175,7 +175,7 @@ Telegram / 微信式消息首页，是最日常的操作入口。
    - event brief
    - route next step
    - route actions
-   - open linked event / contract / work order
+   - open linked event / contract / commission
 
 ### 默认信息层
 
@@ -208,7 +208,7 @@ Telegram / 微信式消息首页，是最日常的操作入口。
 - `/world/web/map-viewport`
 - live event stream
 - route cockpit / stream lens / overlay focus
-- world action / commerce / contract / linked event
+- world action / quest lifecycle / contract / linked event
 
 ---
 
@@ -216,7 +216,7 @@ Telegram / 微信式消息首页，是最日常的操作入口。
 
 ### 定位
 
-用小红书式浏览体验承接“事件流”，但内容是 **World / League / Commerce / Social** 的融合动态。
+用小红书式浏览体验承接“事件流”，但内容是 **World / League / Adventure / Social** 的融合动态。
 
 ### 结构
 
@@ -225,9 +225,9 @@ Telegram / 微信式消息首页，是最日常的操作入口。
    - 推荐
    - 附近
    - 委托
-   - 成交
-   - 公司
-   - 市场
+   - 冒险
+   - 工坊
+   - 任务牌
    - Guild
    - 关注
 3. **信息流列表**
@@ -244,26 +244,26 @@ Telegram / 微信式消息首页，是最日常的操作入口。
 - task link
 - CTA: `去地图看` / `继续推进`
 
-#### B. Contract / Work Progress Card
+#### B. Contract / Commission Progress Card
 
-- contract/work 标题
+- contract/commission 标题
 - 当前阶段
-- 交付/验收状态
+- 成果/评级状态
 - CTA: `打开任务` / `去处理`
 
 #### C. Completion / Reward Card
 
 - 完成了什么
-- 奖励/声望/收入
+- 奖励/声望/成长
 - 下一机会
-- CTA: `复盘` / `继续接单`
+- CTA: `复盘` / `继续冒险`
 
-#### D. Company / Shop / Listing Card
+#### D. Workshop / Outpost / Quest-board Card
 
-- 公司/店铺名
-- 服务内容
-- 最新成交 / reputation
-- CTA: `去地图` / `联系` / `购买`
+- 工坊/店铺名
+- 委托内容
+- 最新冒险 / reputation
+- CTA: `去地图` / `联系` / `接取`
 
 #### E. Social / Guild Card
 
@@ -292,13 +292,13 @@ Telegram / 微信式消息首页，是最日常的操作入口。
 - `route_preview`
 - `route_task_graph`
 - economy events
-- contracts / completions / purchases / work lifecycle
+- contracts / completions / quest accepts / commission lifecycle
 
 > 建议新增一个聚合读模型接口：
 >
 > - `GET /v1/client/feed/:matrix_user_id`
 >
-> 把地图、合同、交付、成交、奖励、社交动态统一投影成 feed cards。
+> 把地图、契约、成果提交、冒险、奖励、社交动态统一投影成 feed cards。
 
 ---
 
@@ -308,7 +308,7 @@ Telegram / 微信式消息首页，是最日常的操作入口。
 
 第四栏统一承接：
 
-- 钱包支付
+- 奖励钱包
 - 个人资料
 - progression
 - inventory / assets
@@ -320,33 +320,33 @@ Telegram / 微信式消息首页，是最日常的操作入口。
    - 头像
    - 昵称
    - faction / level / title
-2. **钱包主卡**
+2. **奖励钱包主卡**
    - 可用余额
    - 冻结/预留
    - 最近交易
-   - 支付入口
+   - 奖励入口
 3. **功能宫格**
-   - 订单
+   - 契约
    - 合同
-   - 资产
-   - 公司
+   - 道具
+   - 工坊
    - 背包
    - 技能
    - 工具
    - 皮肤
 4. **设置区**
    - 通知
-   - 支付安全
+   - 奖励安全
    - 隐私
    - 账号与设备
    - 实验功能
 
 ### 钱包优先级
 
-既然用户明确提出“系统设置和钱包支付”，建议钱包卡在我页最上方，且有两个一级按钮：
+既然用户明确提出“系统设置和奖励钱包”，建议钱包卡在我页最上方，且有两个一级按钮：
 
-- `收付款`
-- `账单`
+- `领/退奖励`
+- `奖励记录`
 
 ### Progression 的归位
 
@@ -360,7 +360,7 @@ Telegram / 微信式消息首页，是最日常的操作入口。
 - `/tools`
 - `/skins`
 - `/inventory`
-- assets / companies / contracts / work history
+- assets / workshops / contracts / commission history
 
 ---
 
@@ -380,7 +380,7 @@ Telegram / 微信式消息首页，是最日常的操作入口。
 
 - **消息** ← Social + task conversations + system threads
 - **地图** ← World Map + Face Duel nearby + route cockpit + world action
-- **动态** ← live event stream + route preview + contract/work/reward feed
+- **动态** ← live event stream + route preview + contract/commission/reward feed
 - **我** ← Wallet + Progression + settings + inventory/profile
 
 ---
@@ -391,7 +391,7 @@ Telegram / 微信式消息首页，是最日常的操作入口。
 
 ```text
 [搜索]
-[快捷入口: 新任务 | World Action | 待支付 | 待交付]
+[快捷入口: 新任务 | World Action | 待支付 | 待提交成果]
 [置顶会话]
 [最近消息列表]
 ```
@@ -435,19 +435,19 @@ Telegram / 微信式消息首页，是最日常的操作入口。
 
 ### 地图 -> 消息
 
-- 点 contact / merchant / buyer / guild -> 消息 tab 打开对应线程
+- 点 contact / patron / teammate / guild -> 消息 tab 打开对应线程
 
 ### 动态 -> 地图
 
-- 点 event / company / listing / completion -> 地图 tab focus
+- 点 event / workshop / quest-board / completion -> 地图 tab focus
 
 ### 动态 -> 消息
 
-- 点人 / 团队 / 商家 -> 消息 tab
+- 点人 / 团队 / 委托人 -> 消息 tab
 
 ### 我 -> 地图 / 动态
 
-- 点订单 / 合同 / 资产 -> 跳对应地图 focus 或动态详情
+- 点契约 / 合同 / 道具 -> 跳对应地图 focus 或动态详情
 
 ---
 
@@ -458,12 +458,12 @@ Telegram / 微信式消息首页，是最日常的操作入口。
 - Telegram / 微信的熟悉感
 - 小红书的流式浏览感
 - 地图是主操作系统
-- 赛博现实、轻策略、强任务导向
+- 赛博现实、轻策略、强冒险/任务导向
 
 ### 配色建议
 
 - 主底色：深色 / 石墨蓝 / 夜间地图友好
-- 强调色：青蓝（地图/科技）、金色（钱包/奖励）、粉橙（动态热点）
+- 强调色：青蓝（地图/科技）、金色（奖励/成长）、粉橙（动态热点）
 - 状态色：
   - success: 绿
   - warning: 黄
@@ -475,7 +475,7 @@ Telegram / 微信式消息首页，是最日常的操作入口。
 - 消息：chat bubble
 - 地图：map pin / compass
 - 动态：spark / feed / pulse
-- 我：person / wallet
+- 我：person / reward pouch
 
 ---
 
@@ -505,7 +505,7 @@ v1 不必先造复杂社交系统，先用已有：
 - `live_event_stream`
 - `route_preview`
 - `route_task_graph`
-- world commerce / contract / completion snapshots
+- world adventure / contract / completion snapshots
 
 拼出动态流。
 
@@ -529,13 +529,13 @@ v1 不必先造复杂社交系统，先用已有：
 
 1. 新增 `client_feed_json(...)`
 2. 新增 `GET /v1/client/feed/:matrix_user_id`
-3. 把 world event / contract / completion / commerce 投影为 feed cards
+3. 把 world event / contract / completion / adventure 投影为 feed cards
 
 ### Cross-tab Handoff
 
 1. 消息线程 -> map focus
-2. feed card -> map focus / message thread / payment panel
-3. wallet/order -> work order / contract / map focus
+2. feed card -> map focus / message thread / reward panel
+3. reward/quest -> commission / contract / map focus
 
 ---
 

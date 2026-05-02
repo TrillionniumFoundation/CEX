@@ -1318,7 +1318,7 @@ fn client_app_map_hub_projects_stream_counts() {
     assert!(app["modules"][0]["summary"]
         .as_str()
         .unwrap_or_default()
-        .contains("live events"));
+        .contains("实时事件"));
 }
 
 #[tokio::test]
@@ -1383,11 +1383,11 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(app_html.contains("onViewportChange"));
     assert!(app_html.contains("getCenter"));
     assert!(app_html.contains("getZoom"));
-    assert!(app_html.contains("stream lens"));
-    assert!(app_html.contains("Filter route by focus"));
-    assert!(app_html.contains("Show full route"));
+    assert!(app_html.contains("条事件镜头"));
+    assert!(app_html.contains("按焦点筛选路线"));
+    assert!(app_html.contains("显示完整路线"));
     assert!(app_html.contains("selectionActionButtonHtml"));
-    assert!(app_html.contains("Focused event brief:"));
+    assert!(app_html.contains("事件简报："));
     assert!(app_html.contains("web_event_id"));
     assert!(app_html.contains("app-global-search"));
     assert!(app_html.contains("app-search-clear"));
@@ -1415,17 +1415,17 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(app_html.contains("动态"));
     assert!(app_html.contains("我"));
     assert!(app_html.contains("app-first-playable-onboarding"));
-    assert!(app_html.contains("First playable onboarding"));
+    assert!(app_html.contains("新手主线"));
     assert!(app_html.contains("first_playable_loop_100"));
     assert!(app_html.contains("trillionnium_first_playable_onboarding_v1"));
-    assert!(app_html.contains("data-onboarding-step=\"commerce_delivery\""));
+    assert!(app_html.contains("data-onboarding-step=\"quest_delivery\""));
     assert!(app_html.contains("route_task_graph_next_action_visible"));
     assert!(app_html.contains("/v1/client/feed/@alice:local.dev"));
     assert!(app_html.contains("app-feed-api-status"));
     assert!(app_html.contains("app-feed-filter-actions"));
     assert!(app_html.contains("app-feed-summary"));
     assert!(app_html.contains("app-feed-items-live"));
-    assert!(app_html.contains("Unified Feed Timeline"));
+    assert!(app_html.contains("世界动态时间线"));
     assert!(app_html.contains("trillionnium-app-feed-filter"));
     assert!(app_html.contains("feedFilterButtonHtml"));
     assert!(app_html.contains("trillionnium-app-feed-action"));
@@ -1477,9 +1477,9 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(world_html.contains("onViewportChange"));
     assert!(world_html.contains("getCenter"));
     assert!(world_html.contains("getZoom"));
-    assert!(world_html.contains("stream lens"));
+    assert!(world_html.contains("条事件镜头"));
     assert!(world_html.contains("selectionActionButtonHtml"));
-    assert!(world_html.contains("Focused event brief:"));
+    assert!(world_html.contains("事件简报："));
     assert!(world_html.contains("focusRouteEvent"));
     assert!(world_html.contains("world-event-timeline-item-"));
     assert!(world_html.contains("const routeUiContract ="));
@@ -1743,16 +1743,16 @@ fn client_app_map_hub_projects_route_preview() {
                     .unwrap_or(false)
                 && task["feedback_focus"]
                     .as_str()
-                    .map(|value| value.contains("client feedback"))
+                    .map(|value| value.contains("委托方反馈"))
                     .unwrap_or(false)
                 && task["next_opportunity_kind"] == "repeat_order_upsell_referral"
                 && task["next_opportunity_hint"]
                     .as_str()
-                    .map(|value| value.contains("repeat order") || value.contains("upsell"))
+                    .map(|value| value.contains("回访委托") || value.contains("升级悬赏"))
                     .unwrap_or(false)
                 && task["next_opportunity_playbook"]
                     .as_str()
-                    .map(|value| value.contains("testimonial") || value.contains("premium"))
+                    .map(|value| value.contains("评价") || value.contains("升级悬赏"))
                     .unwrap_or(false)
                 && task["next_opportunity_command"]
                     .as_str()
@@ -1765,24 +1765,24 @@ fn client_app_map_hub_projects_route_preview() {
                 && task["next_opportunity_textarea_id"] == "world-listing-body"
                 && task["next_opportunity_body"]
                     .as_str()
-                    .map(|value| value.contains("复购") || value.contains("upgrade"))
+                    .map(|value| value.contains("回访") || value.contains("升级悬赏"))
                     .unwrap_or(false)
                 && task["suggested_node_id"] == "starter-studio"
-                && task["suggested_action_label"] == "Draft completion follow-up"
+                && task["suggested_action_label"] == "起草战报后续"
                 && task["suggested_panel_id"] == "world-action-console"
                 && task["suggested_input_id"] == ""
                 && task["suggested_input_value"] == ""
                 && task["suggested_textarea_id"] == "world-action-body"
-                && task["next_opportunity_action_label"] == "Open listing lane"
+                && task["next_opportunity_action_label"] == "打开任务牌路线"
         }));
     assert_eq!(
         app["map_hub"]["route_story"]["next_task_id"],
         json!("task-route-preview-1")
     );
     assert_eq!(
-            app["map_hub"]["route_story"]["next_command_hint"],
-            json!("/world action 跟进已完成任务 task-route-preview-1：围绕 Completion world-completion-route-preview 记录交付证据、客户反馈、复盘和下一单机会。")
-        );
+        app["map_hub"]["route_story"]["next_command_hint"],
+        json!("/world action 跟进已完成任务 task-route-preview-1：围绕 契约战报 world-completion-route-preview 记录成果证据、委托方反馈、复盘和下一条支线。")
+    );
     assert_eq!(
         app["map_hub"]["route_story"]["next_opportunity_target"]["panel_id"],
         json!("world-listings-panel")
@@ -1796,34 +1796,34 @@ fn client_app_map_hub_projects_route_preview() {
 #[test]
 fn world_route_command_target_maps_structured_web_targets() {
     let listing = crate::world_route_command_target(
-        "/sell latest 为复购客户起草升级方案，包含推荐语、加价包和转介绍激励。",
+        "/sell latest 为回访委托方起草升级方案，包含推荐语、追加奖励包和转介绍激励。",
     );
     assert_eq!(listing.panel_id, "world-listings-panel");
     assert_eq!(listing.input_id, "world-listing-company-id");
     assert_eq!(listing.input_value, "latest");
     assert_eq!(listing.textarea_id, "world-listing-body");
-    assert_eq!(listing.action_label, "Open listing lane");
-    assert!(listing.body.contains("复购客户"));
+    assert_eq!(listing.action_label, "打开任务牌路线");
+    assert!(listing.body.contains("回访委托方"));
 
     let purchase = crate::world_route_command_target(
-        "/buy latest 购买当前上架服务，并附上验收标准、交付范围和时间要求。",
+        "/buy latest 接取当前任务牌，并附上评级标准、成果范围和时间要求。",
     );
     assert_eq!(purchase.panel_id, "world-commerce-panel");
     assert_eq!(purchase.input_id, "world-buy-listing-id");
     assert_eq!(purchase.input_value, "latest");
     assert_eq!(purchase.textarea_id, "world-buy-body");
-    assert_eq!(purchase.action_label, "Open purchase lane");
-    assert!(purchase.body.contains("验收标准"));
+    assert_eq!(purchase.action_label, "打开接取路线");
+    assert!(purchase.body.contains("评级标准"));
 
     let completion = crate::world_route_command_target(
-        "/complete world-contract-123 交付最终稿、证据包、风险复盘和下一步协作建议。",
+        "/complete world-contract-123 提交最终成果、证据包、风险复盘和下一步协作建议。",
     );
     assert_eq!(completion.panel_id, "world-contracts-panel");
     assert_eq!(completion.input_id, "world-contract-completion-id");
     assert_eq!(completion.input_value, "world-contract-123");
     assert_eq!(completion.textarea_id, "world-contract-completion-body");
-    assert_eq!(completion.action_label, "Open contract completion lane");
-    assert!(completion.body.contains("交付最终稿"));
+    assert_eq!(completion.action_label, "打开契约完成路线");
+    assert!(completion.body.contains("提交最终成果"));
 
     let rejection = crate::world_route_command_target(
         "/work reject latest 缺少原始文件、尺寸说明和修改承诺，请先补齐。",
@@ -1832,7 +1832,7 @@ fn world_route_command_target_maps_structured_web_targets() {
     assert_eq!(rejection.input_id, "world-work-reject-id");
     assert_eq!(rejection.input_value, "latest");
     assert_eq!(rejection.textarea_id, "world-work-reject-body");
-    assert_eq!(rejection.action_label, "Open rejection lane");
+    assert_eq!(rejection.action_label, "打开返工路线");
     assert!(rejection.body.contains("缺少原始文件"));
 }
 
@@ -3368,7 +3368,7 @@ async fn world_commerce_e2e_uses_real_configured_ledger_for_consume_refund_reope
         json!({
             "matrix_user_id": seller_matrix_user_id,
             "asset_id": "latest",
-            "body": "Launch a craft studio company with clear customer deliverables, evidence source pack, risk checklist, next action plan, and self review for real ledger commerce."
+            "body": "建立 AI 设计工坊：写清委托成果、证据来源包、风险清单、下一步行动和自检记录。"
         }),
     )
     .await;
@@ -3382,7 +3382,7 @@ async fn world_commerce_e2e_uses_real_configured_ledger_for_consume_refund_reope
         json!({
             "matrix_user_id": seller_matrix_user_id,
             "company_id": "latest",
-            "body": "Published service listing with customer deliverable, acceptance evidence, source notes, risk controls, next action, and self review for ledger-backed world commerce."
+            "body": "发布工坊任务牌：写清委托成果、评级证据、来源说明、风险控制、下一步行动和自检记录。"
         }),
     )
     .await;
@@ -3402,7 +3402,7 @@ async fn world_commerce_e2e_uses_real_configured_ledger_for_consume_refund_reope
             json!({
                 "matrix_user_id": buyer_matrix_user_id,
                 "room_id": room_id,
-                "body": "Buyer opens a ledger-backed work order with deliverable, evidence, acceptance standard, risk note, and next action."
+                "body": "委托方接取任务牌并开启冒险委托：写清成果、证据、评级标准、风险备注和下一步。"
             }),
         )
         .await
@@ -3519,7 +3519,7 @@ async fn world_commerce_e2e_uses_real_configured_ledger_for_consume_refund_reope
         json!({
             "matrix_user_id": buyer_matrix_user_id,
             "room_id": room_id,
-            "body": "Buyer reopens with revised acceptance evidence, risk checklist, next action, reserved funds again, and clear self review."
+            "body": "委托方重开委托：补充修订后的评级证据、风险清单、下一步、重新锁定奖励和清晰自检。"
         }),
     )
     .await;
@@ -3543,7 +3543,7 @@ async fn world_commerce_e2e_uses_real_configured_ledger_for_consume_refund_reope
         json!({
             "matrix_user_id": buyer_matrix_user_id,
             "room_id": room_id,
-            "body": "Buyer cancels before redelivery; refund reserve, record evidence gap, risk rationale, next action, and self review."
+            "body": "委托方在再次提交前放弃委托：退回预留奖励，记录证据缺口、风险理由、下一步和自检。"
         }),
     )
     .await;

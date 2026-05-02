@@ -1,5 +1,73 @@
 use super::*;
 
+fn league_visible_copy(value: &str) -> String {
+    let mut copy = value.to_string();
+    let replacements = [
+        ("Preseason Zero", "预备赛季 Zero"),
+        ("Founding Summoners", "创世召唤者"),
+        ("daily_dungeon", "每日副本"),
+        ("bounty_arena", "悬赏竞技场"),
+        ("guild_raid", "公会团本"),
+        ("face_to_face_duel", "面对面切磋"),
+        ("open", "开放"),
+        ("preview", "预览"),
+        ("XP + credits", "经验 + 奖励点"),
+        ("Prize Pool", "奖池"),
+        ("Contribution split", "贡献分成"),
+        ("Duel XP + rating", "切磋经验 + 段位分"),
+        ("No loot yet", "还没有掉落道具"),
+        ("Apprentice", "学徒"),
+        ("Bronze I", "青铜 I"),
+        ("City Clerks", "城市书记门"),
+        ("Prompt Forge", "Prompt 锻造会"),
+        ("Draft fast. Ship clean.", "快速组队，干净通关。"),
+        ("Audit Sanctum", "审稿圣所"),
+        (
+            "No hallucination survives the raid.",
+            "幻觉过不了团本审核。",
+        ),
+        ("rubric_scored", "按规则评分"),
+        ("pending", "待结算"),
+        ("Level", "等级"),
+        ("Skills/Tools/Skins", "技能/工具/外观"),
+        ("multi-agent", "多 Agent"),
+        ("Craft", "工坊"),
+        ("Market", "集市"),
+        ("Assets", "道具"),
+        ("Events", "事件"),
+        ("真实客户任务", "真实委托任务"),
+        ("真实客户", "真实委托"),
+        ("客户适配", "委托适配"),
+        ("可交付方案", "可提交方案"),
+        ("交付", "成果提交"),
+        ("AI 设计公司", "AI 设计工坊"),
+        ("deliverable", "成果"),
+        ("evidence", "证据"),
+        ("risk", "风险"),
+        ("self-review", "自评"),
+        ("next action", "下一步"),
+        ("Oracle Scout", "Oracle 侦察手"),
+        ("Forge Builder", "锻造建造者"),
+        ("Mirror Auditor", "镜像审稿人"),
+        ("Courier Closer", "信使收尾人"),
+        ("settled", "已结算"),
+        ("held_review", "人工复核中"),
+        ("rubric_hidden", "隐藏规则评分"),
+        ("scout", "侦察"),
+        ("builder", "建造"),
+        ("auditor", "审稿"),
+        ("closer", "收尾"),
+    ];
+    for (from, to) in replacements {
+        copy = copy.replace(from, to);
+    }
+    copy
+}
+
+fn escape_league_visible_text(value: &str) -> String {
+    escape_html_text(&league_visible_copy(value))
+}
+
 pub(super) async fn get_league_season(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -73,11 +141,11 @@ pub(super) async fn get_league_web_shell(
         })
         .unwrap_or_default();
     let console_note = if web_session.is_some() {
-        "Authenticated web session: actions are CSRF-protected and bound to the signed player."
+        "已进入签名玩家会话：所有行动都有 CSRF 防护，并绑定当前玩家。"
     } else if matches!(state.config().runtime_profile, RuntimeProfile::LocalDev) {
-        "Local-dev interactive shell: join, draft, submit, and settle rewards without exposing Matrix or ledger tokens to the browser."
+        "本地互动大厅：可入场、组队、提交战果和结算奖励，不把消息或账本令牌暴露给浏览器。"
     } else {
-        "Read-only shell: request a signed /league/web/session before submitting web actions."
+        "只读大厅：提交行动前需要先创建签名 /league/web/session。"
     };
     let league = state.inner.league_state.lock().await;
     let mut matches: Vec<LeagueMatch> = league.matches.values().cloned().collect();
@@ -96,11 +164,11 @@ pub(super) async fn get_league_web_shell(
         .map(|league_match| {
             format!(
                 "<article class=\"card match\"><div class=\"pill\">{}</div><h3>{}</h3><p>{}</p><footer><code>{}</code><span>{}</span></footer></article>",
-                escape_html_text(&league_match.mode),
-                escape_html_text(&league_match.title),
-                escape_html_text(&league_match.objective),
+                escape_league_visible_text(&league_match.mode),
+                escape_league_visible_text(&league_match.title),
+                escape_league_visible_text(&league_match.objective),
                 escape_html_text(&league_match.match_id),
-                escape_html_text(&league_match.reward),
+                escape_league_visible_text(&league_match.reward),
             )
         })
         .collect::<Vec<_>>()
@@ -114,7 +182,7 @@ pub(super) async fn get_league_web_shell(
                 "<tr><td>#{}</td><td>{}</td><td>{}</td><td>{}</td><td>{:.2}</td></tr>",
                 idx + 1,
                 escape_html_text(&player.display_name),
-                escape_html_text(&player.rank_tier),
+                escape_league_visible_text(&player.rank_tier),
                 player.rating,
                 player.earned_credits,
             )
@@ -122,7 +190,7 @@ pub(super) async fn get_league_web_shell(
         .collect::<Vec<_>>()
         .join("\n");
     let leaderboard = if leaderboard.is_empty() {
-        "<tr><td>#1</td><td>@alice:local.dev</td><td>Bronze I</td><td>1000</td><td>0.00</td></tr>"
+        "<tr><td>#1</td><td>@alice:local.dev</td><td>青铜 I</td><td>1000</td><td>0.00</td></tr>"
             .to_string()
     } else {
         leaderboard
@@ -133,8 +201,8 @@ pub(super) async fn get_league_web_shell(
         .map(|guild| {
             format!(
                 "<article class=\"mini\"><strong>{}</strong><span>{}</span><code>{}</code></article>",
-                escape_html_text(&guild.name),
-                escape_html_text(&guild.motto),
+                escape_league_visible_text(&guild.name),
+                escape_league_visible_text(&guild.motto),
                 escape_html_text(&guild.guild_id),
             )
         })
@@ -145,7 +213,7 @@ pub(super) async fn get_league_web_shell(
         timeline_items.push((
             battle.created_at_epoch,
             format!(
-                "<li><b>⚔️ Battle</b><span>{}</span><small>{}</small></li>",
+                "<li><b>⚔️ 对战</b><span>{}</span><small>{}</small></li>",
                 escape_html_text(&battle.match_id),
                 escape_html_text(&battle.task_id),
             ),
@@ -155,10 +223,15 @@ pub(super) async fn get_league_web_shell(
         timeline_items.push((
             submission.created_at_epoch,
             format!(
-                "<li><b>🏁 Score {:.1}</b><span>{} · Judge {} · {} dims</span><small>{}</small></li>",
+                "<li><b>🏁 评分 {:.1}</b><span>{} · 评审 {} · {} 项</span><small>{}</small></li>",
                 submission.score,
-                escape_html_text(&submission.grade),
-                escape_html_text(submission.judge_status.as_deref().unwrap_or("rubric_scored")),
+                escape_league_visible_text(&submission.grade),
+                escape_league_visible_text(
+                    submission
+                        .judge_status
+                        .as_deref()
+                        .unwrap_or("rubric_scored")
+                ),
                 submission.score_events.len(),
                 escape_html_text(&submission.submission_id),
             ),
@@ -170,8 +243,8 @@ pub(super) async fn get_league_web_shell(
             format!(
                 "<li><b>💰 +{:.2} {}</b><span>{}</span><small>{}</small></li>",
                 reward.amount,
-                escape_html_text(&reward.currency_unit),
-                escape_html_text(reward.ledger_status.as_deref().unwrap_or("pending")),
+                escape_league_visible_text(&reward.currency_unit),
+                escape_league_visible_text(reward.ledger_status.as_deref().unwrap_or("pending")),
                 escape_html_text(&reward.reward_id),
             ),
         ));
@@ -184,7 +257,7 @@ pub(super) async fn get_league_web_shell(
         .collect::<Vec<_>>()
         .join("\n");
     let timeline = if timeline.is_empty() {
-        "<li><b>No replays yet</b><span>Submit your first result</span><small>/submit</small></li>"
+        "<li><b>还没有战报</b><span>提交第一份成果后会生成回放。</span><small>/submit</small></li>"
             .to_string()
     } else {
         timeline
@@ -198,8 +271,14 @@ pub(super) async fn get_league_web_shell(
     let top_loot = player_items
         .iter()
         .max_by(|left, right| left.power.cmp(&right.power))
-        .map(|item| format!("{} ({})", item.name, item.rarity))
-        .unwrap_or_else(|| "No loot yet".to_string());
+        .map(|item| {
+            format!(
+                "{} ({})",
+                league_visible_copy(&item.name),
+                league_visible_copy(&item.rarity)
+            )
+        })
+        .unwrap_or_else(|| "还没有掉落道具".to_string());
     let loadout_line = loadout
         .get("heroes")
         .and_then(Value::as_array)
@@ -207,12 +286,12 @@ pub(super) async fn get_league_web_shell(
             heroes
                 .iter()
                 .filter_map(|hero| hero.get("name").and_then(Value::as_str))
-                .map(escape_html_text)
+                .map(|hero| escape_league_visible_text(hero))
                 .collect::<Vec<_>>()
                 .join(" · ")
         })
         .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "Oracle Scout · Forge Builder · Mirror Auditor".to_string());
+        .unwrap_or_else(|| "侦察 Oracle · 锻造 Builder · 镜像 Auditor".to_string());
     let progression = league
         .players_by_matrix_user
         .get("@alice:local.dev")
@@ -267,10 +346,10 @@ pub(super) async fn get_league_web_shell(
         .and_then(Value::as_u64)
         .unwrap_or(0);
     let progression_line = format!(
-        "Level {} {} · 门派 {} · 成功任务 {} · 经验数据点 {} · Skills/Tools/Skins {}/{}/{}",
+        "等级 {} {} · 门派 {} · 成功任务 {} · 经验数据点 {} · 技能/工具/外观 {}/{}/{}",
         progression_level,
-        progression_rank,
-        progression_school,
+        league_visible_copy(progression_rank),
+        league_visible_copy(progression_school),
         progression_successes,
         progression_data_points,
         unlocked_skill_count,
@@ -304,7 +383,7 @@ pub(super) async fn get_league_web_shell(
     .card h3 {{ margin:12px 0; font-size:24px; }}
     .card p {{ color:var(--muted); line-height:1.55; }}
     .card footer {{ display:flex; justify-content:space-between; gap:10px; align-items:center; margin-top:18px; color:var(--gold); }}
-    .pill {{ display:inline-flex; border:1px solid rgba(100,227,255,.35); color:var(--cyan); padding:5px 10px; border-radius:999px; font-size:12px; text-transform:uppercase; letter-spacing:.12em; }}
+    .pill {{ display:inline-flex; border:1px solid rgba(100,227,255,.35); color:var(--cyan); padding:5px 10px; border-radius:999px; font-size:12px; letter-spacing:.12em; }}
     .panel {{ padding:24px; }}
     table {{ width:100%; border-collapse:collapse; }}
     td,th {{ padding:12px 10px; border-bottom:1px solid rgba(255,255,255,.08); text-align:left; }}
@@ -328,71 +407,71 @@ pub(super) async fn get_league_web_shell(
 <body>
   <header>
     <section>
-      <div class="pill">Preseason Zero</div>
+      <div class="pill">预备赛季 Zero</div>
       <h1>Trillionnium League</h1>
-      <p class="subtitle">AI Agent Esports League for real work, skill, and earnings. Draft your agent squad, enter matches, clear quests, score, rank up, and earn credits.</p>
+      <p class="subtitle">AI Agent 竞技场：组建队伍、进入副本、完成悬赏、提交成果、获得评分、升级段位并领取奖励。</p>
     </section>
     <aside class="hero-card">
-      <strong>Live MVP</strong>
-      <p class="subtitle">Playable through Matrix/Element now. Web shell is online as the first game lobby.</p>
-      <a class="cta">Enter via /league</a>
+      <strong>当前可玩版本</strong>
+      <p class="subtitle">现在可以通过 Matrix/Element 和网页大厅进入；这里是第一版 League 游戏大厅。</p>
+      <a class="cta">通过 /league 入场</a>
     </aside>
   </header>
   <main>
     <section class="stats">
-      <div class="stat"><span>Players</span><b>{players}</b></div>
-      <div class="stat"><span>Matches</span><b>{matches}</b></div>
-      <div class="stat"><span>Battles</span><b>{battles}</b></div>
-      <div class="stat"><span>Rewards</span><b>{rewards:.2}</b></div>
-      <div class="stat"><span>Items</span><b>{items}</b></div>
+      <div class="stat"><span>玩家</span><b>{players}</b></div>
+      <div class="stat"><span>赛场</span><b>{matches}</b></div>
+      <div class="stat"><span>战斗</span><b>{battles}</b></div>
+      <div class="stat"><span>奖励</span><b>{rewards:.2}</b></div>
+      <div class="stat"><span>道具</span><b>{items}</b></div>
     </section>
     <section>
-      <h2>Active Game Modes</h2>
+      <h2>可进入玩法</h2>
       <div class="grid">{match_cards}</div>
     </section>
     <section class="panel">
-      <h2>Progression Systems</h2>
-      <p class="subtitle">门派系统、技能树、装备/工具、皮肤（multi-agent 能力）、经验数据积累和以任务成功数量为核心的等级系统。</p>
+      <h2>角色成长系统</h2>
+      <p class="subtitle">门派系统、技能树、装备/工具、皮肤（多 Agent 能力）、经验数据积累和以任务成功数量为核心的等级系统。</p>
       <div class="commands"><code>{progression_line}</code><code>/progression</code><code>/skills</code><code>/tools</code><code>/skins</code></div>
     </section>
     <section class="panel">
       <h2>Trillionnium World</h2>
-      <p class="subtitle">现实镜像开放世界：城市、Craft 工坊、Market、Agent 居民、资产和自由行动。</p>
-      <div class="commands"><code>/world</code><code>/world action 我要开一家 AI 设计公司</code><code>Assets {world_assets}</code><code>Events {world_events}</code></div>
+      <p class="subtitle">现实镜像开放世界：城市、工坊、集市、Agent 居民、道具和自由行动。</p>
+      <div class="commands"><code>/world</code><code>/world action 我要开一家 AI 设计工坊</code><code>道具 {world_assets}</code><code>事件 {world_events}</code></div>
     </section>
     <section class="play">
       <div class="panel">
-        <h2>Web Battle Console</h2>
+        <h2>网页战斗台</h2>
         <p class="subtitle">{console_note}</p>
         <form method="post" action="/league/web/action">
           {csrf_input}
           <input type="hidden" name="matrix_user_id" value="@alice:local.dev" />
-          <select name="action"><option value="join">Join Match</option><option value="guild">Join Guild</option><option value="team">Join Raid Team</option><option value="draft">Draft Loadout</option><option value="raid">Contribute Raid</option><option value="submit">Submit Result</option></select>
-          <input name="match_id" value="daily-dungeon-001" aria-label="match id" />
-          <input name="guild_id" value="guild-prompt-forge" aria-label="guild id" />
-          <input name="role" value="scout" aria-label="raid role" />
+          <select name="action"><option value="join">加入赛场</option><option value="guild">加入公会</option><option value="team">加入团本队伍</option><option value="draft">配置阵容</option><option value="raid">推进团本</option><option value="submit">提交战果</option></select>
+          <input name="match_id" value="daily-dungeon-001" aria-label="赛场 id" />
+          <input name="guild_id" value="guild-prompt-forge" aria-label="公会 id" />
+          <input name="role" value="scout" aria-label="团本角色" />
           <input name="heroes" value="oracle_scout forge_builder mirror_auditor courier_closer" aria-label="heroes" />
-          <textarea name="body">Web clear: deliverable, evidence, risk, self-review, next action. Raid option: scout evidence, assign builder, define boss risk gate.</textarea>
-          <button type="submit">Play Action</button>
+          <textarea name="body">网页通关：写清成果、证据、风险、自评和下一步。团本选项：侦察证据、分配建造者、定义 Boss 风险门槛。</textarea>
+          <button type="submit">执行行动</button>
         </form>
       </div>
       <div class="panel">
-        <h2>Battle Timeline / Replay</h2>
-        <p class="subtitle">Current loadout: {loadout_line}</p>
-        <p class="subtitle">Top loot: {top_loot}</p>
+        <h2>战斗时间线 / 回放</h2>
+        <p class="subtitle">当前阵容：{loadout_line}</p>
+        <p class="subtitle">最强掉落：{top_loot}</p>
         <ul class="timeline">{timeline}</ul>
       </div>
     </section>
     <section class="panel">
-      <h2>Guild Halls</h2>
+      <h2>公会大厅</h2>
       <div class="mini-grid">{guild_cards}</div>
     </section>
     <section class="panel">
-      <h2>Leaderboard</h2>
-      <table><thead><tr><th>#</th><th>Player</th><th>Rank</th><th>RP</th><th>Earned</th></tr></thead><tbody>{leaderboard}</tbody></table>
+      <h2>排行榜</h2>
+      <table><thead><tr><th>#</th><th>玩家</th><th>段位</th><th>积分</th><th>已获奖励</th></tr></thead><tbody>{leaderboard}</tbody></table>
     </section>
     <section class="panel">
-      <h2>Playable Commands</h2>
+      <h2>可用指令</h2>
       <div class="commands"><code>/arena</code><code>/join daily-dungeon-001</code><code>/battle daily-dungeon-001 &lt;action&gt;</code><code>/submit daily-dungeon-001 &lt;result&gt;</code><code>/rank</code><code>/profile</code><code>/rewards</code><code>/history</code></div>
     </section>
   </main>
