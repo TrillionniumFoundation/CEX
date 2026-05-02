@@ -168,7 +168,15 @@ async function submitWorldForm(page, formSelector, marker, expectedUrlFragment) 
   const textarea = form.locator('textarea').first();
   if (await textarea.count()) {
     const existing = await textarea.inputValue().catch(() => '');
-    await textarea.fill(`${existing}\nBrowser E2E marker ${marker}: normalized SQL final-cutover path proof.`);
+    const nextValue = `${existing}\nBrowser E2E marker ${marker}: normalized SQL final-cutover path proof.`;
+    if (await textarea.isVisible().catch(() => false)) {
+      await textarea.fill(nextValue);
+    } else {
+      await textarea.evaluate((node, value) => {
+        node.value = value;
+        node.dispatchEvent(new Event('input', { bubbles: true }));
+      }, nextValue);
+    }
   }
   const [response] = await Promise.all([
     page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 20_000 }).catch(() => null),
@@ -182,7 +190,14 @@ async function submitWorldForm(page, formSelector, marker, expectedUrlFragment) 
     }),
   ]);
   await page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => null);
-  assert(page.url().includes(expectedUrlFragment), `expected ${formSelector} navigation to include ${expectedUrlFragment}`, page.url());
+  if (!page.url().includes(expectedUrlFragment)) {
+    const bodySnippet = await page.locator('body').innerText({ timeout: 2_000 }).catch(() => '');
+    assert(false, `expected ${formSelector} navigation to include ${expectedUrlFragment}`, {
+      url: page.url(),
+      status: response ? response.status() : null,
+      body: bodySnippet.slice(0, 800),
+    });
+  }
   return response ? response.status() : 200;
 }
 
@@ -229,13 +244,22 @@ async function main() {
 
   const marker = `browser-e2e-${Math.floor(Date.now() / 1000)}`;
 
-  await page.goto('/app', { waitUntil: 'domcontentloaded', timeout: 30_000 });
+  await page.goto('/app?lang=en', { waitUntil: 'domcontentloaded', timeout: 30_000 });
   await page.waitForSelector('#real-world-map', { timeout: 15_000 });
+  await page.waitForFunction(() => document.documentElement.getAttribute('data-ui-language') === 'en', { timeout: 10_000 });
   assert((await page.title()).includes('Trillionnium World Mobile'), 'app title missing');
-  const appBodyText = await page.locator('body').innerText({ timeout: 10_000 });
-  for (const needle of ['Messages', '消息', 'World', '世界', 'Feed', '动态', 'Me', '我', 'Global', '海外']) {
-    assert(appBodyText.includes(needle), `app bilingual/global-first copy missing: ${needle}`);
-  }
+  const englishTabs = await page.$$eval('nav.app-bottom-tabs [data-app-tab]', (tabs) => tabs.map((tab) => tab.textContent.trim()));
+  assert(JSON.stringify(englishTabs) === JSON.stringify(['Messages', 'World', 'Feed', 'Me']), `English system language tabs mismatch: ${JSON.stringify(englishTabs)}`);
+  assert(await count(page, '[data-trillionnium-language-select]') === 1, 'system language selector missing');
+  await activateTab(page, 'me');
+  await page.locator('[data-trillionnium-language-select]').selectOption('zh');
+  await page.waitForFunction(() => document.documentElement.getAttribute('data-ui-language') === 'zh', { timeout: 10_000 });
+  const chineseTabs = await page.$$eval('nav.app-bottom-tabs [data-app-tab]', (tabs) => tabs.map((tab) => tab.textContent.trim()));
+  assert(JSON.stringify(chineseTabs) === JSON.stringify(['消息', '世界', '动态', '我']), `Chinese system language tabs mismatch: ${JSON.stringify(chineseTabs)}`);
+  assert((await page.locator('#trillionnium-system-language-settings').innerText()).includes('系统设置'), 'Chinese system settings copy missing');
+  await page.locator('[data-trillionnium-language-select]').selectOption('en');
+  await page.waitForFunction(() => document.documentElement.getAttribute('data-ui-language') === 'en', { timeout: 10_000 });
+  await activateTab(page, 'map');
   assert(await count(page, '[data-app-tab]') >= 4, 'mobile bottom tabs missing');
   assert(await count(page, '#app-tab-map.is-active') === 1, 'map tab not active by default');
   assert(await count(page, 'nav.app-bottom-tabs[role="tablist"]') === 1, 'accessible tablist missing');
@@ -276,10 +300,11 @@ async function main() {
   await activateTab(page, 'feed');
   await page.waitForFunction(() => {
     const status = document.querySelector('#app-feed-api-status')?.textContent || '';
-    return /动态已同步|动态备用快照|内置动态快照|Feed API (synced|fallback)|Embedded feed snapshot/.test(status);
+    const ux = document.querySelector('#app-ux-status-pill')?.textContent || '';
+    return /动态已同步|动态备用快照|内置动态快照|Feed synced|Fallback feed snapshot|Feed API (synced|fallback)|Embedded feed snapshot/.test(status + ' ' + ux);
   }, { timeout: 15_000 });
   assert(await count(page, '#app-feed-items-live .app-feed-item, #app-feed-items-live article') >= 1, 'feed cards missing after API hydration');
-  assert((await text(page, '#app-feed-api-status')).includes('/app/web/feed'), 'feed hydration did not use web-session feed path');
+  assert(appJson?.feed?.web_session_path === '/app/web/feed', 'feed hydration did not expose web-session feed path');
   const filterCount = await count(page, '.trillionnium-app-feed-filter');
   if (filterCount > 0) {
     await clickOrDomActivate(page.locator('.trillionnium-app-feed-filter').first());
@@ -304,9 +329,18 @@ async function main() {
   await page.waitForSelector('#world-real-map', { timeout: 15_000 });
   assert((await page.title()).includes('Trillionnium World'), 'world title missing');
   const worldBodyText = await page.locator('body').innerText({ timeout: 10_000 });
-  for (const needle of ['Global-first open world', '面向海外首发', 'World Action Console', '世界行动台', 'Bounties', '悬赏', 'Submit', '提交成果']) {
-    assert(worldBodyText.includes(needle), `world bilingual/global-first copy missing: ${needle}`);
+  for (const needle of ['Global-first open world', 'World Action Console', 'Bounties', 'Submit']) {
+    assert(worldBodyText.includes(needle), `world English/global-first copy missing: ${needle}`);
   }
+  await page.goto('/world?lang=zh', { waitUntil: 'domcontentloaded', timeout: 30_000 });
+  await page.waitForSelector('#world-real-map', { timeout: 15_000 });
+  await page.waitForFunction(() => document.documentElement.getAttribute('data-ui-language') === 'zh', { timeout: 10_000 });
+  const worldChineseText = await page.locator('body').innerText({ timeout: 10_000 });
+  for (const needle of ['世界行动台', '悬赏', '提交成果']) {
+    assert(worldChineseText.includes(needle), `world Chinese language copy missing: ${needle}`);
+  }
+  await page.goto('/world?lang=en', { waitUntil: 'domcontentloaded', timeout: 30_000 });
+  await page.waitForSelector('#world-real-map', { timeout: 15_000 });
   assert(await count(page, '#world-map-move-panel') === 1, 'world map move panel missing');
   assert(await count(page, '#world-buy-form') === 1, 'world buy form missing');
   steps.push({ name: 'world_boot_real_map_and_quest_forms', ok: true });
@@ -335,6 +369,10 @@ async function main() {
   assert(purchaseCards >= 1, 'quest accept card missing after accepting quest board');
   steps.push({ name: 'world_quest_accept_browser_submit', ok: true, purchase_cards: purchaseCards });
 
+  await page.locator('#world-work-deliver-body').evaluate((node) => {
+    node.value = 'Browser quest delivery: deliver a customer-ready方案 with evidence/source data, risk controls, self-review, next action plan, acceptance checklist, and concrete result notes. 提交可交付方案：成果、证据包、风险控制、自评复盘、下一步计划、验收清单和真实结果记录。';
+    node.dispatchEvent(new Event('input', { bubbles: true }));
+  });
   await submitWorldForm(page, '#world-work-deliver-form', marker, 'work=delivered');
   const deliveryCards = await count(page, '#world-work-deliveries-live article, #world-work-deliveries-live .mini');
   assert(deliveryCards >= 1, 'quest result card missing after submit');

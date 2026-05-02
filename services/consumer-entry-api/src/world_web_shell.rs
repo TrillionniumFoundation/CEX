@@ -1371,6 +1371,7 @@ pub(super) async fn get_world_web_shell(
       <p class="subtitle"><code>/world</code> <code>/world action Launch an AI Design Studio / 我要开一家 AI 设计工坊</code> <code>/league</code> <code>/arena</code> <code>/guild</code> <code>/raid</code></p>
     </section>
   </main>
+  {language_runtime_script}
   <script id="trillionnium-world-map-data" type="application/json">{world_map_data_json}</script>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
@@ -1954,6 +1955,7 @@ pub(super) async fn get_world_web_shell(
         event_items = event_items,
         console_note = escape_html_text(console_note),
         csrf_input = csrf_input,
+        language_runtime_script = trillionnium_language_runtime_script(),
         world_map_data_json = world_map_data_json,
     ))
 }

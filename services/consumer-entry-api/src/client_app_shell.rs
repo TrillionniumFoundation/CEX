@@ -640,6 +640,7 @@ pub(super) async fn get_client_app_web_shell(
     .app-search-shell {{ position:relative; display:flex; gap:12px; align-items:center; }}
     .app-search-input {{ width:100%; border-radius:18px; border:1px solid rgba(255,255,255,.12); background:rgba(255,255,255,.08); color:var(--text); padding:14px 16px; font-size:15px; box-shadow:0 10px 30px rgba(0,0,0,.18) inset; }}
     .app-search-input::placeholder {{ color:rgba(246,247,251,.56); }}
+    .system-settings select {{ width:100%; margin-top:10px; border:1px solid rgba(100,227,255,.28); background:rgba(7,8,20,.72); color:var(--text); border-radius:14px; padding:11px 12px; font-weight:850; }}
     .app-search-clear {{ flex:0 0 auto; border:1px solid rgba(248,195,91,.3); background:rgba(248,195,91,.1); color:var(--gold); border-radius:14px; padding:11px 12px; font-weight:900; cursor:pointer; }}
     .app-search-clear[hidden] {{ display:none; }}
     .app-ux-status {{ display:flex; align-items:center; gap:8px; margin-top:10px; min-height:28px; }}
@@ -673,11 +674,11 @@ pub(super) async fn get_client_app_web_shell(
 <body>
   <header>
     <div class="app-topbar-meta">
-      <p><span class="app-beta-chip">Global-first Beta · 海外市场首发 · Mobile World Shell / 移动世界壳 v1</span></p>
-      <p><a href="/world">World / 世界</a> · <a href="/league">Arena / 竞技场</a></p>
+      <p><span class="app-beta-chip" data-i18n-en="Global-first Beta · Mobile World Shell v1" data-i18n-zh="海外市场首发 · 移动世界壳 v1">Global-first Beta · Mobile World Shell v1</span></p>
+      <p><a href="/world" data-i18n-en="World" data-i18n-zh="世界">World</a> · <a href="/league" data-i18n-en="Arena" data-i18n-zh="竞技场">Arena</a></p>
     </div>
     <h1>Trillionnium World</h1>
-    <p class="subtitle">A bilingual mobile reality-mirror adventure for overseas-first launch：search cities and agents, then use four tabs — Messages / 消息, World / 世界, Feed / 动态, Me / 我. 当前位置 / Current focus：<strong>{}</strong></p>
+    <p class="subtitle"><span data-i18n-en="Mobile reality-mirror adventure for overseas-first launch: search cities and agents, then use four tabs — Messages, World, Feed, Me. Current focus:" data-i18n-zh="面向海外首发的移动现实镜像冒险：搜索城市和 Agent，并使用「消息、世界、动态、我」四个页签。当前位置：">Mobile reality-mirror adventure for overseas-first launch: search cities and agents, then use four tabs — Messages, World, Feed, Me. Current focus:</span> <strong>{}</strong></p>
     <div class="app-search-shell">
       <input id="app-global-search" class="app-search-input" type="search" inputmode="search" placeholder="Search places, agents, quests / 搜索地点、联系人、任务、动态" aria-label="Global search / 全局搜索" />
       <button id="app-search-clear" class="app-search-clear" type="button" aria-label="Clear global search / 清空全局搜索" hidden>Clear / 清空</button>
@@ -686,7 +687,7 @@ pub(super) async fn get_client_app_web_shell(
       <span id="app-ux-status-pill" class="app-ux-pill" data-state="ready">Adventure ready / 冒险准备完成 · World tab active / 世界页已激活</span>
       <span id="app-ux-live-status" class="sr-only">Adventure ready / 冒险体验已准备完成</span>
     </div>
-    <div id="app-search-empty-state" class="app-search-empty" role="status" aria-live="polite">No results / 无匹配结果 · Try another keyword or tab / 换个关键词或切换底部 Tab。</div>
+    <div id="app-search-empty-state" class="app-search-empty" role="status" aria-live="polite" data-i18n-en="No results · Try another keyword or tab." data-i18n-zh="无匹配结果 · 换个关键词或切换底部 Tab。">No results · Try another keyword or tab.</div>
   </header>
   <main class="app-mobile-shell">
     <section id="app-first-playable-onboarding" class="module quest-hero" aria-label="First playable main quest rail">
@@ -698,24 +699,24 @@ pub(super) async fn get_client_app_web_shell(
           <div id="app-first-playable-checks" class="map-stream-hud">{}</div>
         </div>
         <div class="quest-next-card">
-          <strong>Next Action / 下一步行动</strong>
-          <p class="subtitle">Choose a map focus in World / 世界, accept a quest card / 任务牌, submit results / 提交成果, then finish rating / 评级。</p>
-          <a class="quest-cta" href="/world">Open World Console / 进入世界行动台</a>
+          <strong data-i18n-en="Next Action" data-i18n-zh="下一步行动">Next Action</strong>
+          <p class="subtitle" data-i18n-en="Choose a map focus in World, accept a quest card, submit results, then finish rating." data-i18n-zh="先在世界页选择地图焦点，再接取任务牌、提交成果并完成评级。">Choose a map focus in World, accept a quest card, submit results, then finish rating.</p>
+          <a class="quest-cta" href="/world" data-i18n-en="Open World Console" data-i18n-zh="进入世界行动台">Open World Console</a>
         </div>
       </div>
       <section id="app-first-playable-steps" class="grid">{}</section>
     </section>
     <section id="app-tab-messages" class="app-tab-panel" data-app-panel="messages" role="tabpanel" aria-labelledby="app-tab-button-messages" aria-hidden="true" hidden>
       <div class="app-tab-header">
-        <h2>Messages / 消息</h2>
-        <p class="subtitle">Telegram/WeChat-style hub for teammates, Agents, notifications, and quest threads / 队友、Agent 协作、提示与主线/支线线程。</p>
+        <h2 data-i18n-en="Messages" data-i18n-zh="消息">Messages</h2>
+        <p class="subtitle" data-i18n-en="Hub for teammates, Agents, notifications, and quest threads." data-i18n-zh="队友、Agent 协作、提示与主线/支线线程。">Hub for teammates, Agents, notifications, and quest threads.</p>
       </div>
       <section id="app-message-cards" class="grid">{}</section>
     </section>
     <section id="app-tab-map" class="app-tab-panel is-active" data-app-panel="map" role="tabpanel" aria-labelledby="app-tab-button-map" aria-hidden="false">
       <div class="app-tab-header">
-        <h2>World / 世界</h2>
-        <p class="subtitle">Main stage for exploration, routes, events, and actions / 探索、路线、事件和行动都从这里展开。</p>
+        <h2 data-i18n-en="World" data-i18n-zh="世界">World</h2>
+        <p class="subtitle" data-i18n-en="Main stage for exploration, routes, events, and actions." data-i18n-zh="探索、路线、事件和行动都从这里展开。">Main stage for exploration, routes, events, and actions.</p>
       </div>
       <section class="map-shell" aria-label="现实镜像地图">
       <div class="map-panel">
@@ -789,8 +790,8 @@ pub(super) async fn get_client_app_web_shell(
     </section>
     <section id="app-tab-feed" class="app-tab-panel" data-app-panel="feed" role="tabpanel" aria-labelledby="app-tab-button-feed" aria-hidden="true" hidden>
       <div class="app-tab-header">
-        <h2>Feed / 动态</h2>
-        <p class="subtitle">A global-friendly discovery feed for city events, commissions, battle reports, adventure updates, and social posts / 城市事件、委托、战报、冒险动态与社交更新。</p>
+        <h2 data-i18n-en="Feed" data-i18n-zh="动态">Feed</h2>
+        <p class="subtitle" data-i18n-en="Discovery feed for city events, commissions, battle reports, adventure updates, and social posts." data-i18n-zh="城市事件、委托、战报、冒险动态与社交更新。">Discovery feed for city events, commissions, battle reports, adventure updates, and social posts.</p>
         <details class="dev-details"><summary>动态同步调试</summary><p><strong>Feed API</strong>: <code>{}</code></p><p><strong>Web Feed</strong>: <code>{}</code></p></details>
         <p id="app-feed-api-status" class="subtitle">动态加载中 · 当前区域 <code>{}</code> · 已准备 {} 条动态。</p>
       </div>
@@ -811,9 +812,10 @@ pub(super) async fn get_client_app_web_shell(
     </section>
     <section id="app-tab-me" class="app-tab-panel" data-app-panel="me" role="tabpanel" aria-labelledby="app-tab-button-me" aria-hidden="true" hidden>
       <div class="app-tab-header">
-        <h2>Me / 我</h2>
-        <p class="subtitle">Rewards, progression, items, settings, and system abilities / 奖励、成长、道具、设置与系统能力统一归到个人中心。</p>
+        <h2 data-i18n-en="Me" data-i18n-zh="我">Me</h2>
+        <p class="subtitle" data-i18n-en="Rewards, progression, items, settings, and system abilities." data-i18n-zh="奖励、成长、道具、设置与系统能力统一归到个人中心。">Rewards, progression, items, settings, and system abilities.</p>
       </div>
+      {}
       <section class="app-me-grid">{}</section>
       <section>
         <h2>Character Modules / 角色模块</h2>
@@ -822,11 +824,12 @@ pub(super) async fn get_client_app_web_shell(
     </section>
   </main>
   <nav class="app-bottom-tabs" aria-label="移动端主导航" role="tablist">
-    <button id="app-tab-button-messages" type="button" class="app-bottom-tab" data-app-tab="messages" role="tab" aria-controls="app-tab-messages" aria-selected="false" tabindex="-1">Messages<br/>消息</button>
-    <button id="app-tab-button-map" type="button" class="app-bottom-tab is-active" data-app-tab="map" role="tab" aria-controls="app-tab-map" aria-selected="true" tabindex="0">World<br/>世界</button>
-    <button id="app-tab-button-feed" type="button" class="app-bottom-tab" data-app-tab="feed" role="tab" aria-controls="app-tab-feed" aria-selected="false" tabindex="-1">Feed<br/>动态</button>
-    <button id="app-tab-button-me" type="button" class="app-bottom-tab" data-app-tab="me" role="tab" aria-controls="app-tab-me" aria-selected="false" tabindex="-1">Me<br/>我</button>
+    <button id="app-tab-button-messages" type="button" class="app-bottom-tab" data-app-tab="messages" role="tab" data-i18n-en="Messages" data-i18n-zh="消息" aria-controls="app-tab-messages" aria-selected="false" tabindex="-1">Messages</button>
+    <button id="app-tab-button-map" type="button" class="app-bottom-tab is-active" data-app-tab="map" role="tab" data-i18n-en="World" data-i18n-zh="世界" aria-controls="app-tab-map" aria-selected="true" tabindex="0">World</button>
+    <button id="app-tab-button-feed" type="button" class="app-bottom-tab" data-app-tab="feed" role="tab" data-i18n-en="Feed" data-i18n-zh="动态" aria-controls="app-tab-feed" aria-selected="false" tabindex="-1">Feed</button>
+    <button id="app-tab-button-me" type="button" class="app-bottom-tab" data-app-tab="me" role="tab" data-i18n-en="Me" data-i18n-zh="我" aria-controls="app-tab-me" aria-selected="false" tabindex="-1">Me</button>
   </nav>
+  {}
   <script id="trillionnium-app-data" type="application/json">{}</script>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
@@ -870,13 +873,17 @@ pub(super) async fn get_client_app_web_shell(
       const appUxStatusPill = document.getElementById('app-ux-status-pill');
       const appBottomTabs = Array.from(document.querySelectorAll('[data-app-tab]'));
       const appPanels = Array.from(document.querySelectorAll('[data-app-panel]'));
-      const appTabLabels = {{ messages: 'Messages / 消息', map: 'World / 世界', feed: 'Feed / 动态', me: 'Me / 我' }};
+      const uiLanguage = () => ((window.TrillionniumLanguage && window.TrillionniumLanguage.get && window.TrillionniumLanguage.get()) === 'zh' ? 'zh' : 'en');
+      const uiText = (english, chinese) => uiLanguage() === 'zh' ? chinese : english;
+      const appTabLabels = {{ messages: {{ en: 'Messages', zh: '消息' }}, map: {{ en: 'World', zh: '世界' }}, feed: {{ en: 'Feed', zh: '动态' }}, me: {{ en: 'Me', zh: '我' }} }};
       const appTabPlaceholders = {{
-        messages: 'Search teammates, Agents, quest chats / 搜索队友、群组、Agent、任务对话',
-        map: 'Search world places, studios, quests, events / 搜索世界地点、工坊、任务、事件',
-        feed: 'Search posts, topics, events, adventure logs / 搜索动态、话题、事件、冒险记录',
-        me: 'Search rewards, contracts, items, settings / 搜索奖励、契约、道具、设置',
+        messages: {{ en: 'Search teammates, Agents, quest chats', zh: '搜索队友、群组、Agent、任务对话' }},
+        map: {{ en: 'Search world places, studios, quests, events', zh: '搜索世界地点、工坊、任务、事件' }},
+        feed: {{ en: 'Search posts, topics, events, adventure logs', zh: '搜索动态、话题、事件、冒险记录' }},
+        me: {{ en: 'Search rewards, contracts, items, settings', zh: '搜索奖励、契约、道具、设置' }},
       }};
+      const appTabLabel = (tabId) => ((appTabLabels[tabId] || {{ en: tabId, zh: tabId }})[uiLanguage()] || tabId);
+      const appTabPlaceholder = (tabId) => ((appTabPlaceholders[tabId] || appTabPlaceholders.map)[uiLanguage()] || appTabPlaceholders.map.en);
       let activeAppTab = 'map';
       {shared_map_runtime_bootstrap_js}
 
@@ -895,7 +902,7 @@ pub(super) async fn get_client_app_web_shell(
       let feedLoadedViaApi = false;
       let feedRequestInFlight = null;
       const announceUxStatus = (message, state = 'ready') => {{
-        const text = String(message || '').trim() || '冒险体验已准备完成';
+        const text = String(message || '').trim() || uiText('Adventure ready', '冒险体验已准备完成');
         if (appUxLiveStatus) appUxLiveStatus.textContent = text;
         if (appUxStatusPill) {{
           appUxStatusPill.textContent = text;
@@ -909,8 +916,10 @@ pub(super) async fn get_client_app_web_shell(
         if (appSearchEmptyState) {{
           appSearchEmptyState.classList.toggle('is-visible', isEmpty);
           appSearchEmptyState.textContent = isEmpty
-            ? ('No results / 无匹配结果 · “' + String(query || '').trim() + '” missed current ' + (appTabLabels[activeAppTab] || activeAppTab) + ' tab，try another keyword or tab / 换个关键词或切换底部 Tab。')
-            : 'No results / 无匹配结果 · Try another keyword or tab / 换个关键词或切换底部 Tab。';
+            ? (uiLanguage() === 'zh'
+                ? ('无匹配结果 · “' + String(query || '').trim() + '” 未命中当前' + appTabLabel(activeAppTab) + '页，请换个关键词或切换底部 Tab。')
+                : ('No results · “' + String(query || '').trim() + '” missed the current ' + appTabLabel(activeAppTab) + ' tab. Try another keyword or tab.'))
+            : uiText('No results · Try another keyword or tab.', '无匹配结果 · 换个关键词或切换底部 Tab。');
         }}
       }};
       const applyAppSearchFilter = () => {{
@@ -945,8 +954,8 @@ pub(super) async fn get_client_app_web_shell(
           button.setAttribute('aria-selected', String(active));
           button.tabIndex = active ? 0 : -1;
         }});
-        if (appSearchInput) appSearchInput.placeholder = appTabPlaceholders[activeAppTab] || '搜索地点、联系人、任务、动态';
-        announceUxStatus('Adventure ready / 冒险准备完成 · ' + (appTabLabels[activeAppTab] || activeAppTab) + ' tab active / 页已激活', 'ready');
+        if (appSearchInput) appSearchInput.placeholder = appTabPlaceholder(activeAppTab);
+        announceUxStatus(uiText('Adventure ready · ' + appTabLabel(activeAppTab) + ' tab active', '冒险准备完成 · ' + appTabLabel(activeAppTab) + '页已激活'), 'ready');
         applyAppSearchFilter();
         if (activeAppTab === 'feed') {{
           renderFeedSurface(lastFeed, lastSelection);
@@ -1165,7 +1174,7 @@ pub(super) async fn get_client_app_web_shell(
           focusDetail.textContent = '冒险行动已准备：' + state.actionLabel + ' · 在 /world 打开 ' + state.panelId + '。';
         }}
         if (cameraSummary) {{ cameraSummary.textContent = '已选择地图行动：' + state.actionLabel + ' · ' + state.command; }}
-        announceUxStatus('地图行动已准备 · ' + state.actionLabel, 'ready');
+        announceUxStatus(uiText('Map action ready · ' + state.actionLabel, '地图行动已准备 · ' + state.actionLabel), 'ready');
         return handoff;
       }};
       window.trillionniumSetMoveTarget = (nodeId) => window.trillionniumApplyMarkerAction(nodeId, 'move_here');
@@ -1382,7 +1391,7 @@ pub(super) async fn get_client_app_web_shell(
         if (!hydrationPath || feedRequestInFlight) return feedRequestInFlight;
         feedRequestInFlight = (async () => {{
           try {{
-            announceUxStatus('动态加载中 · ' + reason, 'loading');
+            announceUxStatus(uiText('Loading feed · ' + reason, '动态加载中 · ' + reason), 'loading');
             const response = await fetch(hydrationPath, {{ credentials: 'same-origin' }});
             if (!response.ok) throw new Error('feed_http_' + response.status);
             const payload = await response.json();
@@ -1392,13 +1401,13 @@ pub(super) async fn get_client_app_web_shell(
               renderFeedSurface(lastFeed, lastSelection);
               applyAppSearchFilter();
               if (feedApiStatus) feedApiStatus.textContent = '动态已同步 · ' + hydrationPath + ' · reason ' + reason + ' · ' + String(payload.item_count ?? 0) + ' 条动态。';
-              announceUxStatus('动态已同步 · ' + String(payload.item_count ?? 0) + ' 条', 'ready');
+              announceUxStatus(uiText('Feed synced · ' + String(payload.item_count ?? 0) + ' items', '动态已同步 · ' + String(payload.item_count ?? 0) + ' 条'), 'ready');
             }}
           }} catch (_error) {{
             feedLoadedViaApi = false;
             renderFeedSurface(lastFeed, lastSelection);
             if (feedApiStatus) feedApiStatus.textContent = '动态备用快照 · ' + hydrationPath + ' · 使用内置快照。';
-            announceUxStatus('动态备用快照 · 使用内置快照', navigator.onLine === false ? 'offline' : 'fallback');
+            announceUxStatus(uiText('Fallback feed snapshot · using bundled data', '动态备用快照 · 使用内置快照'), navigator.onLine === false ? 'offline' : 'fallback');
           }} finally {{
             feedRequestInFlight = null;
           }}
@@ -1430,7 +1439,7 @@ pub(super) async fn get_client_app_web_shell(
           if (event.key === 'Escape' && appSearchInput.value) {{
             appSearchInput.value = '';
             applyAppSearchFilter();
-            announceUxStatus('搜索已清空', 'ready');
+            announceUxStatus(uiText('Search cleared', '搜索已清空'), 'ready');
           }}
         }});
       }}
@@ -1439,14 +1448,15 @@ pub(super) async fn get_client_app_web_shell(
           appSearchInput.value = '';
           applyAppSearchFilter();
           appSearchInput.focus();
-          announceUxStatus('搜索已清空', 'ready');
+          announceUxStatus(uiText('Search cleared', '搜索已清空'), 'ready');
         }});
       }}
-      window.addEventListener('offline', () => announceUxStatus('离线模式 · 内置快照可用', 'offline'));
+      window.addEventListener('offline', () => announceUxStatus(uiText('Offline · bundled snapshot available', '离线模式 · 内置快照可用'), 'offline'));
       window.addEventListener('online', () => {{
-        announceUxStatus('已联网 · 刷新动态', 'loading');
+        announceUxStatus(uiText('Online · refreshing feed', '已联网 · 刷新动态'), 'loading');
         if (activeAppTab === 'feed') loadFeedSurface('online');
       }});
+      window.addEventListener('trillionnium:languagechange', () => setActiveAppTab(activeAppTab));
       refreshOverlayControls();
       renderOverlayStatus();
       renderFeedSurface(lastFeed, lastSelection);
@@ -1496,8 +1506,10 @@ pub(super) async fn get_client_app_web_shell(
         feed_item_cards,
         map_route_preview_cards,
         map_route_task_graph_cards,
+        trillionnium_language_settings_html(),
         me_primary_cards,
         module_cards,
+        trillionnium_language_runtime_script(),
         app_data_json,
         current_matrix_user_id_json,
         feed_filter_labels_js,

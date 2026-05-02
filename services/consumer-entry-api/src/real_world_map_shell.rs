@@ -1,5 +1,253 @@
 use super::*;
 
+pub(super) fn trillionnium_language_settings_html() -> &'static str {
+    r#"<article id="trillionnium-system-language-settings" class="module system-settings" data-i18n-preserve="1">
+  <strong data-i18n-en="System Settings" data-i18n-zh="系统设置">System Settings</strong>
+  <span data-i18n-en="Interface language" data-i18n-zh="界面语言">Interface language</span>
+  <p data-i18n-en="Choose one UI language. The product no longer shows English and Chinese at the same time; more languages can be added here later." data-i18n-zh="选择一种界面语言。产品不再同时显示中英文；以后新增语言也从这里扩展。">Choose one UI language. The product no longer shows English and Chinese at the same time; more languages can be added here later.</p>
+  <label for="trillionnium-language-select" class="sr-only" data-i18n-en="Language" data-i18n-zh="语言">Language</label>
+  <select id="trillionnium-language-select" data-trillionnium-language-select aria-label="Language">
+    <option value="en">English</option>
+    <option value="zh">中文</option>
+    <option value="__future" disabled>More languages coming</option>
+  </select>
+  <p class="subtitle" data-i18n-en="Saved locally on this device." data-i18n-zh="语言设置会保存在当前设备。">Saved locally on this device.</p>
+</article>"#
+}
+
+pub(super) fn trillionnium_language_runtime_script() -> &'static str {
+    r#"<script>
+(function () {
+  const STORAGE_KEY = 'trillionnium.ui.language';
+  const COOKIE_KEY = 'trillionnium_lang';
+  const SUPPORTED = new Set(['en', 'zh']);
+  const DEFAULT_LANGUAGE = 'en';
+  const textOriginals = new WeakMap();
+  const attrOriginals = new WeakMap();
+  const controlOriginals = new WeakMap();
+  let activeLanguage = DEFAULT_LANGUAGE;
+  let observer = null;
+
+  function hasCjk(value) { return /[\u3400-\u9fff\uf900-\ufaff]/.test(String(value || '')); }
+  function hasLatin(value) { return /[A-Za-z]/.test(String(value || '')); }
+  function clean(value) { return String(value || '').replace(/\s+/g, ' ').trim(); }
+  function supported(value) { return SUPPORTED.has(String(value || '').toLowerCase()); }
+  function readCookieLanguage() {
+    const match = document.cookie.match(new RegExp('(?:^|; )' + COOKIE_KEY + '=([^;]*)'));
+    return match ? decodeURIComponent(match[1]) : '';
+  }
+  function requestedLanguage() {
+    const params = new URLSearchParams(window.location.search || '');
+    const fromQuery = (params.get('lang') || '').toLowerCase();
+    if (supported(fromQuery)) {
+      try { window.localStorage.setItem(STORAGE_KEY, fromQuery); } catch (_) {}
+      return fromQuery;
+    }
+    try {
+      const stored = (window.localStorage.getItem(STORAGE_KEY) || '').toLowerCase();
+      if (supported(stored)) return stored;
+    } catch (_) {}
+    const cookieLang = readCookieLanguage().toLowerCase();
+    if (supported(cookieLang)) return cookieLang;
+    const browserLang = String(navigator.language || '').toLowerCase();
+    if (browserLang.startsWith('zh')) return 'zh';
+    return DEFAULT_LANGUAGE;
+  }
+  function persistLanguage(language) {
+    const next = supported(language) ? language : DEFAULT_LANGUAGE;
+    try { window.localStorage.setItem(STORAGE_KEY, next); } catch (_) {}
+    document.cookie = COOKIE_KEY + '=' + encodeURIComponent(next) + '; Max-Age=31536000; Path=/; SameSite=Lax';
+  }
+  function choosePair(left, right, language) {
+    const leftClean = clean(left);
+    const rightClean = clean(right);
+    if (!leftClean || !rightClean) return leftClean || rightClean;
+    const leftCjk = hasCjk(leftClean);
+    const rightCjk = hasCjk(rightClean);
+    const leftLatin = hasLatin(leftClean);
+    const rightLatin = hasLatin(rightClean);
+    if (language === 'zh') {
+      if (rightCjk) return rightClean;
+      if (leftCjk) return leftClean;
+      return rightClean || leftClean;
+    }
+    if (leftLatin && !leftCjk) return leftClean;
+    if (rightLatin && !rightCjk) return rightClean;
+    return leftClean || rightClean;
+  }
+  function stripForLanguage(piece, language) {
+    const source = clean(piece);
+    if (!source) return '';
+    if (language === 'zh') {
+      if (!hasCjk(source)) return '';
+      const chars = Array.from(source);
+      let first = -1;
+      let last = -1;
+      chars.forEach((char, index) => {
+        if (hasCjk(char)) {
+          if (first < 0) first = index;
+          last = index;
+        }
+      });
+      return first >= 0 ? chars.slice(first, last + 1).join('').trim() : '';
+    }
+    if (!hasLatin(source)) return '';
+    return source
+      .replace(/[\u3400-\u9fff\uf900-\ufaff]+[：:，,、;；。.!?？\s-]*/g, ' ')
+      .replace(/^[：:，,、;；。.!?？\s-]+/, '')
+      .replace(/[：:，,、;；。.!?？\s-]+$/, '')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+  }
+  function joinLocalizedPieces(pieces, language) {
+    const seen = new Set();
+    const chosen = [];
+    pieces.forEach((piece) => {
+      const next = stripForLanguage(piece, language);
+      if (next && !seen.has(next)) {
+        seen.add(next);
+        chosen.push(next);
+      }
+    });
+    if (!chosen.length) return '';
+    if (chosen.length === 1) return chosen[0];
+    return chosen.join(language === 'zh' ? '：' : ': ');
+  }
+  function localizeChunk(chunk, language) {
+    if (!chunk) return chunk;
+    if (chunk.indexOf(' / ') !== -1) {
+      const pieces = chunk.split(' / ');
+      if (pieces.length === 2) return choosePair(pieces[0], pieces[1], language);
+      return joinLocalizedPieces(pieces, language) || chunk;
+    }
+    if (chunk.indexOf(' · ') !== -1) {
+      const pieces = chunk.split(' · ');
+      const joined = joinLocalizedPieces(pieces, language);
+      if (joined) return joined;
+    }
+    return chunk;
+  }
+  function localizeText(value, language) {
+    const input = String(value || '');
+    if (input.indexOf(' / ') === -1 && input.indexOf(' · ') === -1) {
+      if (hasCjk(input) && hasLatin(input)) return stripForLanguage(input, language) || input;
+      return input;
+    }
+    const parts = input.split(/(\s+—\s+|[,，;；。.!?？]\s*)/g);
+    const localized = parts.map((part) => localizeChunk(part, language)).join('');
+    const normalized = localized.replace(/\s+([,，;；。.!?？])/g, '$1').replace(/\s{2,}/g, ' ').trim();
+    if (hasCjk(normalized) && hasLatin(normalized)) return stripForLanguage(normalized, language) || normalized || input;
+    return normalized || input;
+  }
+  function shouldSkipNode(node) {
+    const parent = node && node.parentElement;
+    if (!parent) return true;
+    if (parent.closest('[data-i18n-preserve="1"]')) return true;
+    return !!parent.closest('script,style,code,pre,noscript');
+  }
+  function applyDatasetElement(element, language) {
+    const value = language === 'zh' ? element.getAttribute('data-i18n-zh') : element.getAttribute('data-i18n-en');
+    if (value !== null) element.textContent = value;
+  }
+  function applyTextNode(node, language) {
+    if (shouldSkipNode(node)) return;
+    if (!textOriginals.has(node)) textOriginals.set(node, node.nodeValue || '');
+    const original = textOriginals.get(node) || '';
+    const next = localizeText(original, language);
+    if (node.nodeValue !== next) node.nodeValue = next;
+  }
+  function attributeStore(element) {
+    let store = attrOriginals.get(element);
+    if (!store) { store = {}; attrOriginals.set(element, store); }
+    return store;
+  }
+  function applyAttribute(element, attr, language) {
+    if (!element.hasAttribute(attr)) return;
+    const store = attributeStore(element);
+    if (!(attr in store)) store[attr] = element.getAttribute(attr) || '';
+    element.setAttribute(attr, localizeText(store[attr], language));
+  }
+  function applyControlValue(element, language) {
+    if (!/^(TEXTAREA|INPUT)$/.test(element.tagName || '')) return;
+    const type = String(element.getAttribute('type') || '').toLowerCase();
+    if (['hidden', 'password', 'file', 'checkbox', 'radio'].includes(type)) return;
+    if (!controlOriginals.has(element)) controlOriginals.set(element, element.value || '');
+    if (document.activeElement === element) return;
+    const original = controlOriginals.get(element) || '';
+    const next = localizeText(original, language);
+    if (next && element.value !== next) element.value = next;
+  }
+  function walk(root, language) {
+    if (!root) return;
+    if (root.nodeType === Node.TEXT_NODE) { applyTextNode(root, language); return; }
+    if (root.nodeType !== Node.ELEMENT_NODE && root.nodeType !== Node.DOCUMENT_NODE) return;
+    const element = root.nodeType === Node.ELEMENT_NODE ? root : null;
+    if (element) {
+      applyDatasetElement(element, language);
+      applyAttribute(element, 'placeholder', language);
+      applyAttribute(element, 'aria-label', language);
+      applyAttribute(element, 'title', language);
+      applyControlValue(element, language);
+    }
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
+    let node = walker.currentNode;
+    while (node) {
+      if (node.nodeType === Node.ELEMENT_NODE) {
+        applyDatasetElement(node, language);
+        applyAttribute(node, 'placeholder', language);
+        applyAttribute(node, 'aria-label', language);
+        applyAttribute(node, 'title', language);
+        applyControlValue(node, language);
+      } else if (node.nodeType === Node.TEXT_NODE) {
+        applyTextNode(node, language);
+      }
+      node = walker.nextNode();
+    }
+  }
+  function syncSelectors(language) {
+    document.querySelectorAll('[data-trillionnium-language-select]').forEach((select) => {
+      if (select.value !== language) select.value = language;
+      if (!select.dataset.languageBound) {
+        select.dataset.languageBound = '1';
+        select.addEventListener('change', () => {
+          if (supported(select.value)) window.TrillionniumLanguage.set(select.value);
+        });
+      }
+    });
+  }
+  function applyLanguage(language) {
+    const next = supported(language) ? language : DEFAULT_LANGUAGE;
+    activeLanguage = next;
+    document.documentElement.lang = next === 'zh' ? 'zh-CN' : 'en';
+    document.documentElement.setAttribute('data-ui-language', next);
+    if (observer) observer.disconnect();
+    walk(document.body, next);
+    syncSelectors(next);
+    if (observer) observer.observe(document.body, { childList: true, subtree: true });
+    window.dispatchEvent(new CustomEvent('trillionnium:languagechange', { detail: { language: next } }));
+  }
+  window.TrillionniumLanguage = {
+    get: () => activeLanguage,
+    set: (language) => { persistLanguage(language); applyLanguage(language); },
+    apply: () => applyLanguage(activeLanguage),
+  };
+  document.addEventListener('DOMContentLoaded', () => {
+    activeLanguage = requestedLanguage();
+    persistLanguage(activeLanguage);
+    observer = new MutationObserver((mutations) => {
+      if (observer) observer.disconnect();
+      for (const mutation of mutations) {
+        mutation.addedNodes.forEach((node) => walk(node, activeLanguage));
+      }
+      syncSelectors(activeLanguage);
+      if (observer) observer.observe(document.body, { childList: true, subtree: true });
+    });
+    applyLanguage(activeLanguage);
+  });
+})();
+</script>"#
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(super) enum RealWorldMapShellCardStyle {
     AppModule,

@@ -2,19 +2,21 @@
 
 ## Goal
 
-把当前 `GET /app` 的客户端超级入口，收敛成一个**手机端优先、海外首发、英中双语兼容**的四栏底部导航界面：
+把当前 `GET /app` 的客户端超级入口，收敛成一个**手机端优先、海外首发、可切换系统语言**的四栏底部导航界面。
 
-- 顶部：Global Search / 全局搜索
-- 底部从左到右：**Messages / 消息 · World / 世界 · Feed / 动态 · Me / 我**
+语言策略不是“中英文同时展示”，而是用户在 **Me / 我 → System Settings / 系统设置** 中选择一种界面语言：`English`、`中文`，以后新增语言继续挂到同一个系统选项。
+
+- 顶部：Global Search（中文模式为“全局搜索”）
+- 底部从左到右：English = **Messages · World · Feed · Me**；中文 = **消息 · 世界 · 动态 · 我**
 
 其中：
 
-- **Messages / 消息** = Telegram / 微信风格的聊天与任务入口
+- **Messages / 消息** = Telegram / 微信风格的聊天与任务入口（按当前系统语言只显示一种）
 - **World / 世界** = game-first 主入口，承接 Trillionnium World / route / live event / world action
 - **Feed / 动态** = 面向海外用户也能理解的信息流：`world events + contracts + completions + adventure rewards + social updates`
 - **Me / 我** = 奖励钱包 + 系统设置 + 个人成长 / 道具 / 安全
 
-首期市场定位：**Global-first / 海外市场首发**。界面文案可以英语优先，但关键行动、导航、状态和验收点必须保留中文对照，避免把中文用户挡在外面；同时不要再退回只有中文的国内产品语感。
+首期市场定位：**Global-first / 海外市场首发**。默认可以是 English-first，但可见 UI 必须服从系统语言选择；不能再依赖“English / 中文”并排展示的双语策略。
 
 > 说明：第四栏我建议用 **「我」** 而不是直接写「设置」或「钱包」，因为奖励钱包、成长、账户、设置本质都属于个人中心。这样更符合微信/Telegram 的熟悉感，也给后续 progression / inventory / skin / faction profile 留出空间。
 

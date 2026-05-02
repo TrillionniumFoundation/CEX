@@ -475,6 +475,7 @@ pub(super) async fn get_league_web_shell(
       <div class="commands"><code>/arena</code><code>/join daily-dungeon-001</code><code>/battle daily-dungeon-001 &lt;action&gt;</code><code>/submit daily-dungeon-001 &lt;result&gt;</code><code>/rank</code><code>/profile</code><code>/rewards</code><code>/history</code></div>
     </section>
   </main>
+  {language_runtime_script}
 </body>
 </html>"#,
         players = league.players_by_matrix_user.len(),
@@ -493,6 +494,7 @@ pub(super) async fn get_league_web_shell(
         world_events = league.world.world_events.len(),
         console_note = escape_html_text(console_note),
         csrf_input = csrf_input,
+        language_runtime_script = trillionnium_language_runtime_script(),
     ))
 }
 
