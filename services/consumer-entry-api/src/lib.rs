@@ -3407,8 +3407,13 @@ fn session_auth_issuer_registry_runtime_state(
         .clone()
 }
 
+async fn get_favicon() -> StatusCode {
+    StatusCode::NO_CONTENT
+}
+
 pub fn build_router(state: AppState) -> Router {
     Router::new()
+        .route("/favicon.ico", get(get_favicon))
         .route("/health", get(health))
         .route("/metrics", get(metrics))
         .route("/app", get(get_client_app_web_shell))
@@ -3433,6 +3438,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/world/web/work-reject", post(post_world_web_work_reject))
         .route("/world/web/work-reopen", post(post_world_web_work_reopen))
         .route("/world/web/work-cancel", post(post_world_web_work_cancel))
+        .route("/app/web/feed", get(get_client_web_feed_home))
         .route("/v1/chat/tasks", post(create_chat_task))
         .route("/v1/chat/tasks/:id", get(get_chat_task))
         .route("/v1/matrix/messages", post(create_matrix_message_task))

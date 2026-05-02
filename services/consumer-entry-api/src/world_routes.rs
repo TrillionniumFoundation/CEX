@@ -209,18 +209,13 @@ pub(super) async fn get_world_web_map_viewport(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Response {
-    let web_session = match authorize_league_web_session(&state, &headers, None) {
-        Ok(value) => value,
-        Err(response) => {
-            if matches!(state.config().runtime_profile, RuntimeProfile::LocalDev)
-                && cookie_value(&headers, &state.config().league_web_session_cookie_name).is_none()
-            {
-                None
-            } else {
-                return response;
-            }
-        }
-    };
+    let allow_missing_cookie = matches!(state.config().runtime_profile, RuntimeProfile::LocalDev)
+        || !state.config().league_web_session_required;
+    let web_session =
+        match authorize_league_web_session_readonly(&state, &headers, allow_missing_cookie) {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
     let matrix_user_id = web_session
         .as_ref()
         .map(|session| session.matrix_user_id.clone())
@@ -435,6 +430,38 @@ pub(super) async fn get_client_feed_home(
         )
             .into_response();
     };
+    let league = state.inner.league_state.lock().await;
+    (
+        StatusCode::OK,
+        Json(client_feed_json(&league, &matrix_user_id)),
+    )
+        .into_response()
+}
+
+pub(super) async fn get_client_web_feed_home(
+    Query(query): Query<HashMap<String, String>>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let allow_missing_cookie = matches!(state.config().runtime_profile, RuntimeProfile::LocalDev)
+        || !state.config().league_web_session_required;
+    let web_session =
+        match authorize_league_web_session_readonly(&state, &headers, allow_missing_cookie) {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    let matrix_user_id = web_session
+        .as_ref()
+        .map(|session| session.matrix_user_id.clone())
+        .or_else(|| {
+            normalize_league_matrix_user(
+                query
+                    .get("matrix_user_id")
+                    .map(String::as_str)
+                    .unwrap_or("@alice:local.dev"),
+            )
+        })
+        .unwrap_or_else(|| "@alice:local.dev".to_string());
     let league = state.inner.league_state.lock().await;
     (
         StatusCode::OK,

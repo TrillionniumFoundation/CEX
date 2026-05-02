@@ -530,15 +530,25 @@ pub(super) async fn get_client_app_web_shell(
     a {{ color:var(--gold); }}
     .app-mobile-shell {{ display:grid; gap:18px; }}
     .app-topbar-meta {{ display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px; }}
-    .app-search-shell {{ display:flex; gap:12px; align-items:center; }}
+    .app-search-shell {{ position:relative; display:flex; gap:12px; align-items:center; }}
     .app-search-input {{ width:100%; border-radius:18px; border:1px solid rgba(255,255,255,.12); background:rgba(255,255,255,.08); color:var(--text); padding:14px 16px; font-size:15px; box-shadow:0 10px 30px rgba(0,0,0,.18) inset; }}
     .app-search-input::placeholder {{ color:rgba(246,247,251,.56); }}
+    .app-search-clear {{ flex:0 0 auto; border:1px solid rgba(248,195,91,.3); background:rgba(248,195,91,.1); color:var(--gold); border-radius:14px; padding:11px 12px; font-weight:900; cursor:pointer; }}
+    .app-search-clear[hidden] {{ display:none; }}
+    .app-ux-status {{ display:flex; align-items:center; gap:8px; margin-top:10px; min-height:28px; }}
+    .app-ux-pill {{ display:inline-flex; align-items:center; max-width:100%; border:1px solid rgba(100,227,255,.22); background:rgba(100,227,255,.08); color:var(--cyan); border-radius:999px; padding:6px 10px; font-size:12px; font-weight:900; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
+    .app-ux-pill[data-state="loading"] {{ color:var(--gold); border-color:rgba(248,195,91,.32); background:rgba(248,195,91,.1); }}
+    .app-ux-pill[data-state="offline"], .app-ux-pill[data-state="fallback"] {{ color:#ffb48a; border-color:rgba(255,180,138,.32); background:rgba(255,120,70,.1); }}
+    .app-search-empty {{ display:none; margin-top:10px; border:1px dashed rgba(255,255,255,.16); border-radius:16px; padding:10px 12px; color:var(--muted); background:rgba(255,255,255,.04); }}
+    .app-search-empty.is-visible {{ display:block; }}
+    .sr-only {{ position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }}
     .app-tab-panel {{ display:none; gap:16px; }}
     .app-tab-panel.is-active {{ display:grid; }}
     .app-tab-header {{ display:grid; gap:6px; margin-bottom:4px; }}
     .app-bottom-tabs {{ position:fixed; left:0; right:0; bottom:0; z-index:30; display:grid; grid-template-columns:repeat(4,1fr); gap:8px; padding:10px min(4vw,24px) calc(10px + env(safe-area-inset-bottom, 0px)); border-top:1px solid rgba(255,255,255,.08); background:rgba(8,10,24,.92); backdrop-filter:blur(18px); }}
     .app-bottom-tab {{ border:1px solid rgba(255,255,255,.1); background:rgba(255,255,255,.05); color:var(--muted); border-radius:16px; padding:10px 8px; font-weight:800; cursor:pointer; }}
     .app-bottom-tab.is-active {{ color:var(--text); background:rgba(100,227,255,.12); border-color:rgba(100,227,255,.32); }}
+    .app-bottom-tab:focus-visible, .focus-chip:focus-visible, .overlay-toggle:focus-visible, .app-search-input:focus-visible, .app-search-clear:focus-visible {{ outline:2px solid var(--cyan); outline-offset:2px; }}
     .app-me-grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:16px; }}
     .app-search-hidden {{ display:none !important; }}
     @media (max-width: 820px) {{ .map-shell {{ grid-template-columns:1fr; }} #real-world-map {{ min-height:360px; }} main {{ padding:14px 16px 34px; }} header {{ padding:14px 16px 12px; }} }}
@@ -554,7 +564,13 @@ pub(super) async fn get_client_app_web_shell(
     <p class="subtitle">一个手机端超级入口：顶部全局搜索，底部四栏——消息 / 世界 / 动态 / 我。当前位置：<strong>{}</strong></p>
     <div class="app-search-shell">
       <input id="app-global-search" class="app-search-input" type="search" inputmode="search" placeholder="搜索地点、联系人、任务、动态" aria-label="全局搜索" />
+      <button id="app-search-clear" class="app-search-clear" type="button" aria-label="清空全局搜索" hidden>清空</button>
     </div>
+    <div id="app-ux-status" class="app-ux-status" aria-live="polite">
+      <span id="app-ux-status-pill" class="app-ux-pill" data-state="ready">UX ready · 世界 tab active</span>
+      <span id="app-ux-live-status" class="sr-only">Client UX ready</span>
+    </div>
+    <div id="app-search-empty-state" class="app-search-empty" role="status" aria-live="polite">无匹配结果 · 换个关键词或切换底部 Tab。</div>
   </header>
   <main class="app-mobile-shell">
     <section id="app-first-playable-onboarding" class="module" aria-label="First playable onboarding rail">
@@ -564,14 +580,14 @@ pub(super) async fn get_client_app_web_shell(
       <div id="app-first-playable-checks" class="map-stream-hud">{}</div>
       <section id="app-first-playable-steps" class="grid">{}</section>
     </section>
-    <section id="app-tab-messages" class="app-tab-panel" data-app-panel="messages">
+    <section id="app-tab-messages" class="app-tab-panel" data-app-panel="messages" role="tabpanel" aria-labelledby="app-tab-button-messages" aria-hidden="true" hidden>
       <div class="app-tab-header">
         <h2>消息</h2>
         <p class="subtitle">Telegram / 微信风格的消息首页，承接联系人、Agent 协作、系统通知与任务线程。</p>
       </div>
       <section id="app-message-cards" class="grid">{}</section>
     </section>
-    <section id="app-tab-map" class="app-tab-panel is-active" data-app-panel="map">
+    <section id="app-tab-map" class="app-tab-panel is-active" data-app-panel="map" role="tabpanel" aria-labelledby="app-tab-button-map" aria-hidden="false">
       <div class="app-tab-header">
         <h2>世界</h2>
         <p class="subtitle">World-first 主舞台：focus、route、live event、world action 都从这里展开。</p>
@@ -643,7 +659,7 @@ pub(super) async fn get_client_app_web_shell(
       <section id="app-live-events-live" class="grid">{}</section>
     </section>
     </section>
-    <section id="app-tab-feed" class="app-tab-panel" data-app-panel="feed">
+    <section id="app-tab-feed" class="app-tab-panel" data-app-panel="feed" role="tabpanel" aria-labelledby="app-tab-button-feed" aria-hidden="true" hidden>
       <div class="app-tab-header">
         <h2>动态</h2>
         <p class="subtitle">小红书式流式浏览，但内容核心是 live events、contracts、completions、commerce 与 social updates。</p>
@@ -665,7 +681,7 @@ pub(super) async fn get_client_app_web_shell(
       <section id="app-route-task-graph-live" class="grid">{}</section>
     </section>
     </section>
-    <section id="app-tab-me" class="app-tab-panel" data-app-panel="me">
+    <section id="app-tab-me" class="app-tab-panel" data-app-panel="me" role="tabpanel" aria-labelledby="app-tab-button-me" aria-hidden="true" hidden>
       <div class="app-tab-header">
         <h2>我</h2>
         <p class="subtitle">钱包支付、成长、资产、设置与系统能力统一归到个人中心。</p>
@@ -677,11 +693,11 @@ pub(super) async fn get_client_app_web_shell(
       </section>
     </section>
   </main>
-  <nav class="app-bottom-tabs" aria-label="Client mobile tabs">
-    <button type="button" class="app-bottom-tab" data-app-tab="messages">消息</button>
-    <button type="button" class="app-bottom-tab is-active" data-app-tab="map">世界</button>
-    <button type="button" class="app-bottom-tab" data-app-tab="feed">动态</button>
-    <button type="button" class="app-bottom-tab" data-app-tab="me">我</button>
+  <nav class="app-bottom-tabs" aria-label="Client mobile tabs" role="tablist">
+    <button id="app-tab-button-messages" type="button" class="app-bottom-tab" data-app-tab="messages" role="tab" aria-controls="app-tab-messages" aria-selected="false" tabindex="-1">消息</button>
+    <button id="app-tab-button-map" type="button" class="app-bottom-tab is-active" data-app-tab="map" role="tab" aria-controls="app-tab-map" aria-selected="true" tabindex="0">世界</button>
+    <button id="app-tab-button-feed" type="button" class="app-bottom-tab" data-app-tab="feed" role="tab" aria-controls="app-tab-feed" aria-selected="false" tabindex="-1">动态</button>
+    <button id="app-tab-button-me" type="button" class="app-bottom-tab" data-app-tab="me" role="tab" aria-controls="app-tab-me" aria-selected="false" tabindex="-1">我</button>
   </nav>
   <script id="trillionnium-app-data" type="application/json">{}</script>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -720,8 +736,13 @@ pub(super) async fn get_client_app_web_shell(
       const routePreviewTarget = document.getElementById('app-route-preview-live');
       const routeTaskGraphTarget = document.getElementById('app-route-task-graph-live');
       const appSearchInput = document.getElementById('app-global-search');
+      const appSearchClearButton = document.getElementById('app-search-clear');
+      const appSearchEmptyState = document.getElementById('app-search-empty-state');
+      const appUxLiveStatus = document.getElementById('app-ux-live-status');
+      const appUxStatusPill = document.getElementById('app-ux-status-pill');
       const appBottomTabs = Array.from(document.querySelectorAll('[data-app-tab]'));
       const appPanels = Array.from(document.querySelectorAll('[data-app-panel]'));
+      const appTabLabels = {{ messages: '消息', map: '世界', feed: '动态', me: '我' }};
       const appTabPlaceholders = {{
         messages: '搜索联系人、群组、Agent、任务对话',
         map: '搜索世界地点、公司、任务、事件',
@@ -734,6 +755,7 @@ pub(super) async fn get_client_app_web_shell(
       const routePreviewItems = ((((app.map_hub || {{}}).route_preview) || {{}}).items) || [];
       const routeTaskGraphItems = ((((app.map_hub || {{}}).route_task_graph) || {{}}).tasks) || [];
       const feedApiPath = ((((app.feed || {{}}).api_path) || '')) || '/v1/client/feed/@alice:local.dev';
+      const feedWebSessionPath = ((((app.feed || {{}}).web_session_path) || '')) || '/app/web/feed';
       const feedFilterLabels = {};
       let lastViewport = null;
       let lastFeed = app.feed || {{}};
@@ -743,27 +765,91 @@ pub(super) async fn get_client_app_web_shell(
       let feedFilterMode = 'all';
       let feedLoadedViaApi = false;
       let feedRequestInFlight = null;
+      const announceUxStatus = (message, state = 'ready') => {{
+        const text = String(message || '').trim() || 'Client UX ready';
+        if (appUxLiveStatus) appUxLiveStatus.textContent = text;
+        if (appUxStatusPill) {{
+          appUxStatusPill.textContent = text;
+          appUxStatusPill.dataset.state = state || 'ready';
+        }}
+      }};
+      const updateSearchEmptyState = (query, visibleCount, totalCount) => {{
+        const hasQuery = !!String(query || '').trim();
+        const isEmpty = hasQuery && totalCount > 0 && visibleCount === 0;
+        if (appSearchClearButton) appSearchClearButton.hidden = !hasQuery;
+        if (appSearchEmptyState) {{
+          appSearchEmptyState.classList.toggle('is-visible', isEmpty);
+          appSearchEmptyState.textContent = isEmpty
+            ? ('无匹配结果 · “' + String(query || '').trim() + '” 没有命中当前 ' + (appTabLabels[activeAppTab] || activeAppTab) + ' 页，换个关键词或切换底部 Tab。')
+            : '无匹配结果 · 换个关键词或切换底部 Tab。';
+        }}
+      }};
       const applyAppSearchFilter = () => {{
         const query = String((appSearchInput && appSearchInput.value) || '').trim().toLowerCase();
         const activePanel = appPanels.find((panel) => panel.dataset.appPanel === activeAppTab) || null;
-        if (!activePanel) return;
+        if (!activePanel) {{
+          updateSearchEmptyState(query, 0, 0);
+          return;
+        }}
+        let totalCount = 0;
+        let visibleCount = 0;
         activePanel.querySelectorAll('article.module, article.mini, li.world-route-filter-item').forEach((card) => {{
+          totalCount += 1;
           const text = String(card.textContent || '').toLowerCase();
           const visible = !query || text.includes(query);
+          if (visible) visibleCount += 1;
           card.classList.toggle('app-search-hidden', !visible);
         }});
+        updateSearchEmptyState(query, visibleCount, totalCount);
       }};
       const setActiveAppTab = (tabId) => {{
         activeAppTab = Object.prototype.hasOwnProperty.call(appTabPlaceholders, tabId) ? tabId : 'map';
-        appPanels.forEach((panel) => panel.classList.toggle('is-active', panel.dataset.appPanel === activeAppTab));
-        appBottomTabs.forEach((button) => button.classList.toggle('is-active', button.dataset.appTab === activeAppTab));
+        appPanels.forEach((panel) => {{
+          const active = panel.dataset.appPanel === activeAppTab;
+          panel.classList.toggle('is-active', active);
+          panel.hidden = !active;
+          panel.setAttribute('aria-hidden', String(!active));
+        }});
+        appBottomTabs.forEach((button) => {{
+          const active = button.dataset.appTab === activeAppTab;
+          button.classList.toggle('is-active', active);
+          button.setAttribute('aria-selected', String(active));
+          button.tabIndex = active ? 0 : -1;
+        }});
         if (appSearchInput) appSearchInput.placeholder = appTabPlaceholders[activeAppTab] || '搜索地点、联系人、任务、动态';
+        announceUxStatus('UX ready · ' + (appTabLabels[activeAppTab] || activeAppTab) + ' tab active', 'ready');
         applyAppSearchFilter();
         if (activeAppTab === 'feed') {{
           renderFeedSurface(lastFeed, lastSelection);
           loadFeedSurface('tab-open');
         }}
         if (activeAppTab === 'map') requestAnimationFrame(() => mapAdapter.invalidateSize(mapRuntime));
+      }};
+      const focusAppTabByOffset = (currentButton, offset) => {{
+        const index = Math.max(0, appBottomTabs.indexOf(currentButton));
+        const next = (index + offset + appBottomTabs.length) % appBottomTabs.length;
+        const nextButton = appBottomTabs[next];
+        if (!nextButton) return;
+        setActiveAppTab(nextButton.dataset.appTab || 'map');
+        nextButton.focus();
+      }};
+      const handleAppTabKeydown = (event) => {{
+        if (!event || !event.currentTarget) return;
+        if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {{
+          event.preventDefault();
+          focusAppTabByOffset(event.currentTarget, 1);
+        }} else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {{
+          event.preventDefault();
+          focusAppTabByOffset(event.currentTarget, -1);
+        }} else if (event.key === 'Home') {{
+          event.preventDefault();
+          const first = appBottomTabs[0];
+          if (first) {{ setActiveAppTab(first.dataset.appTab || 'messages'); first.focus(); }}
+        }} else if (event.key === 'End') {{
+          event.preventDefault();
+          const last = appBottomTabs[appBottomTabs.length - 1];
+          if (last) {{ setActiveAppTab(last.dataset.appTab || 'me'); last.focus(); }}
+        }}
       }};
       {shared_map_runtime_primitives_js}
       const worldHandoffKey = () => routeHandoffStorageKey();
@@ -950,6 +1036,7 @@ pub(super) async fn get_client_app_web_shell(
           focusDetail.textContent = 'World handoff ready: ' + state.actionLabel + ' · open ' + state.panelId + ' in /world.';
         }}
         if (cameraSummary) {{ cameraSummary.textContent = 'Selected map action: ' + state.actionLabel + ' · ' + state.command; }}
+        announceUxStatus('Map handoff ready · ' + state.actionLabel, 'ready');
         return handoff;
       }};
       window.trillionniumSetMoveTarget = (nodeId) => window.trillionniumApplyMarkerAction(nodeId, 'move_here');
@@ -1157,14 +1244,17 @@ pub(super) async fn get_client_app_web_shell(
         renderFeedCards(visibleItems, focus);
         if (feedApiStatus) {{
           const sourceLabel = feedLoadedViaApi ? 'Feed API synced' : 'Embedded feed snapshot';
-          feedApiStatus.textContent = sourceLabel + ' · ' + (payload.api_path || feedApiPath) + ' · active region ' + (payload.active_region_id || 'global') + ' · ' + String(payload.item_count ?? sourceItems.length ?? 0) + ' items.';
+          const visibleFeedPath = payload.web_session_path || feedWebSessionPath || payload.api_path || feedApiPath;
+          feedApiStatus.textContent = sourceLabel + ' · ' + visibleFeedPath + ' · active region ' + (payload.active_region_id || 'global') + ' · ' + String(payload.item_count ?? sourceItems.length ?? 0) + ' items.';
         }}
       }};
       const loadFeedSurface = async (reason = 'manual') => {{
-        if (!feedApiPath || feedRequestInFlight) return feedRequestInFlight;
+        const hydrationPath = feedWebSessionPath || feedApiPath;
+        if (!hydrationPath || feedRequestInFlight) return feedRequestInFlight;
         feedRequestInFlight = (async () => {{
           try {{
-            const response = await fetch(feedApiPath, {{ credentials: 'same-origin' }});
+            announceUxStatus('Feed loading · ' + reason, 'loading');
+            const response = await fetch(hydrationPath, {{ credentials: 'same-origin' }});
             if (!response.ok) throw new Error('feed_http_' + response.status);
             const payload = await response.json();
             if (payload && typeof payload === 'object') {{
@@ -1172,12 +1262,14 @@ pub(super) async fn get_client_app_web_shell(
               feedLoadedViaApi = true;
               renderFeedSurface(lastFeed, lastSelection);
               applyAppSearchFilter();
-              if (feedApiStatus) feedApiStatus.textContent = 'Feed API synced · ' + feedApiPath + ' · reason ' + reason + ' · ' + String(payload.item_count ?? 0) + ' items.';
+              if (feedApiStatus) feedApiStatus.textContent = 'Feed API synced · ' + hydrationPath + ' · reason ' + reason + ' · ' + String(payload.item_count ?? 0) + ' items.';
+              announceUxStatus('Feed API synced · ' + String(payload.item_count ?? 0) + ' items', 'ready');
             }}
           }} catch (_error) {{
             feedLoadedViaApi = false;
             renderFeedSurface(lastFeed, lastSelection);
-            if (feedApiStatus) feedApiStatus.textContent = 'Feed API fallback · ' + feedApiPath + ' · using embedded snapshot.';
+            if (feedApiStatus) feedApiStatus.textContent = 'Feed API fallback · ' + hydrationPath + ' · using embedded snapshot.';
+            announceUxStatus('Feed API fallback · using embedded snapshot', navigator.onLine === false ? 'offline' : 'fallback');
           }} finally {{
             feedRequestInFlight = null;
           }}
@@ -1199,8 +1291,33 @@ pub(super) async fn get_client_app_web_shell(
         }}, 180);
       }};
       mapAdapter.onViewportChange(mapRuntime, refreshViewport);
-      appBottomTabs.forEach((button) => button.addEventListener('click', () => setActiveAppTab(button.dataset.appTab || 'map')));
-      if (appSearchInput) appSearchInput.addEventListener('input', applyAppSearchFilter);
+      appBottomTabs.forEach((button) => {{
+        button.addEventListener('click', () => setActiveAppTab(button.dataset.appTab || 'map'));
+        button.addEventListener('keydown', handleAppTabKeydown);
+      }});
+      if (appSearchInput) {{
+        appSearchInput.addEventListener('input', applyAppSearchFilter);
+        appSearchInput.addEventListener('keydown', (event) => {{
+          if (event.key === 'Escape' && appSearchInput.value) {{
+            appSearchInput.value = '';
+            applyAppSearchFilter();
+            announceUxStatus('Search cleared', 'ready');
+          }}
+        }});
+      }}
+      if (appSearchClearButton && appSearchInput) {{
+        appSearchClearButton.addEventListener('click', () => {{
+          appSearchInput.value = '';
+          applyAppSearchFilter();
+          appSearchInput.focus();
+          announceUxStatus('Search cleared', 'ready');
+        }});
+      }}
+      window.addEventListener('offline', () => announceUxStatus('Offline mode · embedded snapshot ready', 'offline'));
+      window.addEventListener('online', () => {{
+        announceUxStatus('Back online · refreshing feed', 'loading');
+        if (activeAppTab === 'feed') loadFeedSurface('online');
+      }});
       refreshOverlayControls();
       renderOverlayStatus();
       renderFeedSurface(lastFeed, lastSelection);
@@ -1242,7 +1359,7 @@ pub(super) async fn get_client_app_web_shell(
         map_prefetch_cards,
         map_live_event_cards,
         escape_html_text(&feed_surface.api_path),
-        escape_html_text(&feed_surface.api_path),
+        escape_html_text(&feed_surface.web_session_path),
         escape_html_text(&feed_surface.active_region_id),
         feed_surface.item_count,
         feed_filter_chips,

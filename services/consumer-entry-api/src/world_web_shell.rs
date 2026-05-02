@@ -4,7 +4,7 @@ pub(super) async fn get_world_web_shell(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Html<String> {
-    let web_session = authorize_league_web_session(&state, &headers, None)
+    let web_session = authorize_league_web_session_readonly(&state, &headers, true)
         .ok()
         .flatten();
     let csrf_input = web_session

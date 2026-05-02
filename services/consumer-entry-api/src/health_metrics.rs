@@ -66,6 +66,29 @@ fn all_maturity_axes_converged(maturity: &Value, axis_ids: &[&str]) -> bool {
             .all(|axis_id| maturity_axis_percent(maturity, axis_id) == 100)
 }
 
+fn mobile_shell_ux_contract_green(app: &Value) -> bool {
+    let readiness_checks = app
+        .get("mobile_shell_contract")
+        .and_then(|contract| contract.get("readiness_checks"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    [
+        "four_tab_mobile_shell_visible",
+        "mobile_tablist_a11y_visible",
+        "keyboard_tab_navigation_visible",
+        "global_search_filters_active_tab",
+        "search_empty_state_visible",
+        "search_clear_and_escape_visible",
+        "aria_live_ux_status_visible",
+        "offline_feed_fallback_status_visible",
+        "web_session_feed_hydration_visible",
+        "feed_api_hydration_visible",
+    ]
+    .iter()
+    .all(|expected| readiness_checks.iter().any(|check| check == expected))
+}
+
 fn first_maturity_matrix_user_id(league: &LeagueState) -> String {
     league
         .players_by_matrix_user
@@ -109,6 +132,7 @@ fn trillionnium_world_maturity_axes_json(
         .cloned()
         .unwrap_or_default();
     let app_module_count = app.get("module_count").and_then(Value::as_u64).unwrap_or(0);
+    let mobile_shell_ux_green = mobile_shell_ux_contract_green(&app);
     let feed_item_count = app
         .get("feed")
         .and_then(|feed| feed.get("items"))
@@ -232,6 +256,7 @@ fn trillionnium_world_maturity_axes_json(
                     .iter()
                     .any(|check| check == "matrix_app_card_exposes_onboarding"),
             ),
+            ("mobile_shell_ux_contract_green", mobile_shell_ux_green),
             ("feed_has_live_items", feed_item_count >= 5),
             (
                 "commerce_accept_path_green",
@@ -267,7 +292,7 @@ fn trillionnium_world_maturity_axes_json(
             ),
             (
                 "open_world_events_and_contracts",
-                world.world_events.len() >= 3 && world.world_contracts.len() >= 1,
+                world.world_events.len() >= 3 && !world.world_contracts.is_empty(),
             ),
             (
                 "economy_companies_shops_listings",
@@ -351,6 +376,7 @@ fn trillionnium_world_closed_beta_prototype_json(
         .map(Vec::len)
         .unwrap_or(0);
     let app_module_count = app.get("module_count").and_then(Value::as_u64).unwrap_or(0);
+    let mobile_shell_ux_green = mobile_shell_ux_contract_green(&app);
     let feed_item_count = app
         .get("feed")
         .and_then(|feed| feed.get("items"))
@@ -479,6 +505,7 @@ fn trillionnium_world_closed_beta_prototype_json(
         vec![
             ("maturity_all_4_axes_converged", maturity_all_axes_converged),
             ("client_app_has_5_modules", app_module_count >= 5),
+            ("mobile_shell_ux_contract_green", mobile_shell_ux_green),
             (
                 "first_playable_onboarding_complete",
                 onboarding_step_count >= 5,
@@ -674,6 +701,7 @@ fn trillionnium_world_real_user_beta_json(
         .map(Vec::len)
         .unwrap_or(0);
     let app_module_count = app.get("module_count").and_then(Value::as_u64).unwrap_or(0);
+    let mobile_shell_ux_green = mobile_shell_ux_contract_green(&app);
     let feed_item_count = app
         .get("feed")
         .and_then(|feed| feed.get("items"))
@@ -809,6 +837,7 @@ fn trillionnium_world_real_user_beta_json(
                 closed_beta_all_axes_converged,
             ),
             ("client_app_has_5_modules", app_module_count >= 5),
+            ("mobile_shell_ux_contract_green", mobile_shell_ux_green),
             ("onboarding_has_5_steps", onboarding_step_count >= 5),
             ("route_preview_dense", route_preview_count >= 20),
             ("route_task_graph_dense", route_task_graph_count >= 10),
@@ -1066,6 +1095,7 @@ fn trillionnium_world_public_commercial_product_json(
     let real_user_beta_converged =
         all_maturity_axes_converged(trillionnium_world_real_user_beta, &real_user_axes);
     let app_module_count = app.get("module_count").and_then(Value::as_u64).unwrap_or(0);
+    let mobile_shell_ux_green = mobile_shell_ux_contract_green(&app);
     let onboarding_step_count = app
         .get("onboarding")
         .and_then(|onboarding| onboarding.get("steps"))
@@ -1234,6 +1264,7 @@ fn trillionnium_world_public_commercial_product_json(
         vec![
             ("real_user_beta_converged", real_user_beta_converged),
             ("client_app_has_5_modules", app_module_count >= 5),
+            ("mobile_shell_ux_contract_green", mobile_shell_ux_green),
             ("onboarding_has_5_steps", onboarding_step_count >= 5),
             ("feed_surface_has_live_items", feed_item_count >= 5),
             ("social_contacts_ready", social_contact_count >= 3),

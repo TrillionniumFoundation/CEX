@@ -1,4 +1,5 @@
 import { createRequire } from 'node:module';
+import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -10,6 +11,10 @@ const rootDir = process.env.CEX_PROJECT_ROOT || process.cwd();
 const outDir = process.env.TRILLIONNIUM_BROWSER_E2E_OUT_DIR || path.join(rootDir, 'run', 'league-browser');
 const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE || process.env.CHROME_BIN || '/usr/bin/google-chrome-stable';
 const expectFinalCutover = process.env.TRILLIONNIUM_BROWSER_E2E_EXPECT_FINAL_CUTOVER !== '0';
+const ingressToken = (process.env.CONSUMER_ENTRY_INGRESS_TOKEN || '').trim();
+const matrixUserId = process.env.TRILLIONNIUM_BROWSER_E2E_MATRIX_USER_ID || '@alice:local.dev';
+const roomId = process.env.TRILLIONNIUM_BROWSER_E2E_ROOM_ID || '!browser-local:local.dev';
+const sessionId = process.env.TRILLIONNIUM_BROWSER_E2E_SESSION_ID || 'browser-e2e-session';
 const runId = `${Math.floor(Date.now() / 1000)}-${process.pid}`;
 const summaryPath = path.join(outDir, `browser-e2e-summary-${runId}.json`);
 const screenshotDir = path.join(outDir, `screenshots-${runId}`);
@@ -97,6 +102,53 @@ async function clickOrDomActivate(locator) {
   }
 }
 
+function ingressHeaders() {
+  return ingressToken ? { 'x-entry-token': ingressToken } : {};
+}
+
+function signedSessionHeaders() {
+  const secret = process.env.CONSUMER_ENTRY_SESSION_AUTH_SECRET || process.env.MATRIX_ENTRY_CONSUMER_SESSION_AUTH_SECRET || '';
+  if (!secret.trim()) return {};
+  const issuer = process.env.MATRIX_ENTRY_CONSUMER_SESSION_AUTH_ISSUER || 'matrix-entry-adapter';
+  const audience = process.env.CONSUMER_ENTRY_SESSION_AUTH_EXPECTED_AUDIENCE || process.env.MATRIX_ENTRY_CONSUMER_SESSION_AUTH_AUDIENCE || 'consumer-entry-api';
+  const now = Math.floor(Date.now() / 1000);
+  const requestFingerprint = `league-web-session:${matrixUserId}:${roomId}:${sessionId}`;
+  const claims = {
+    version: 1,
+    issuer,
+    key_id: null,
+    subject: matrixUserId,
+    source_kind: 'league_web_session',
+    audience,
+    request_fingerprint: requestFingerprint,
+    room_id: roomId,
+    session_id: sessionId,
+    org_id: null,
+    account_id: null,
+    issued_at_epoch: now,
+    expires_at_epoch: now + 300,
+  };
+  const assertion = Buffer.from(JSON.stringify(claims)).toString('base64url');
+  const signature = crypto.createHmac('sha256', secret).update(assertion).digest('base64url');
+  return {
+    'x-cex-user-session': assertion,
+    'x-cex-user-session-signature': signature,
+  };
+}
+
+async function seedWebSession(context) {
+  const response = await context.request.post('/league/web/session', {
+    headers: { ...ingressHeaders(), ...signedSessionHeaders() },
+    data: { matrix_user_id: matrixUserId, room_id: roomId, session_id: sessionId },
+    timeout: 20_000,
+  });
+  const bodyText = await response.text();
+  assert(response.ok(), `failed to seed browser web session: ${response.status()}`, bodyText);
+  const body = JSON.parse(bodyText || '{}');
+  assert(body.csrf, 'browser web session did not return csrf', body);
+  return body;
+}
+
 async function activateTab(page, tab) {
   const tabButton = page.locator(`nav.app-bottom-tabs [data-app-tab="${tab}"]`).first();
   await clickOrDomActivate(tabButton);
@@ -145,7 +197,10 @@ async function main() {
     locale: 'zh-CN',
     timezoneId: 'Asia/Shanghai',
     baseURL: baseUrl,
+    extraHTTPHeaders: ingressHeaders(),
   });
+
+  const webSession = await seedWebSession(context);
 
   await context.route('https://unpkg.com/leaflet@1.9.4/dist/leaflet.css', (route) => route.fulfill({ status: 200, contentType: 'text/css', body: '' }));
   await context.route('https://unpkg.com/leaflet@1.9.4/dist/leaflet.js', (route) => route.fulfill({ status: 200, contentType: 'application/javascript', body: leafletStub }));
@@ -172,8 +227,35 @@ async function main() {
   assert((await page.title()).includes('Trillionnium Client App'), 'app title missing');
   assert(await count(page, '[data-app-tab]') >= 4, 'mobile bottom tabs missing');
   assert(await count(page, '#app-tab-map.is-active') === 1, 'map tab not active by default');
+  assert(await count(page, 'nav.app-bottom-tabs[role="tablist"]') === 1, 'accessible tablist missing');
+  assert(await page.locator('nav.app-bottom-tabs [data-app-tab="map"]').first().getAttribute('aria-selected') === 'true', 'active map tab aria-selected missing');
+  assert(await count(page, '#app-tab-map[role="tabpanel"]:not([hidden])') === 1, 'active map tabpanel not exposed');
+  assert(await count(page, '#app-ux-live-status') === 1, 'UX live status missing');
+  assert(await count(page, '#app-search-empty-state') === 1, 'search empty state missing');
   assert(await count(page, '#app-feed-items-live .app-feed-item, #app-feed-items-live article') >= 1, 'embedded feed cards missing');
   steps.push({ name: 'app_boot_mobile_map_feed_shell', ok: true });
+
+  await page.locator('nav.app-bottom-tabs [data-app-tab="map"]').first().focus();
+  await page.keyboard.press('ArrowRight');
+  await page.waitForSelector('#app-tab-feed.is-active', { timeout: 10_000 });
+  assert(await page.locator('nav.app-bottom-tabs [data-app-tab="feed"]').first().getAttribute('aria-selected') === 'true', 'keyboard tab navigation did not update aria-selected');
+  await page.locator('#app-global-search').fill(`no-match-${marker}`);
+  await page.waitForSelector('#app-search-empty-state.is-visible', { timeout: 10_000 });
+  const clearVisible = await page.locator('#app-search-clear').first().isVisible({ timeout: 5_000 }).catch(() => false);
+  assert(clearVisible, 'search clear button not visible for active query');
+  await clickOrDomActivate(page.locator('#app-search-clear').first());
+  await page.waitForFunction(() => !(document.querySelector('#app-search-empty-state')?.classList.contains('is-visible')), { timeout: 10_000 });
+  steps.push({ name: 'app_mobile_ux_a11y_keyboard_search', ok: true });
+
+  const appJsonText = await page.locator('#trillionnium-app-data').first().textContent({ timeout: 10_000 });
+  const appJson = JSON.parse(appJsonText || '{}');
+  const mobileShellChecks = appJson?.mobile_shell_contract?.readiness_checks || [];
+  assert(appJson?.mobile_shell_contract?.contract_version === 'trillionnium_mobile_shell_ux_v1', 'mobile shell UX contract missing from client app json', appJson?.mobile_shell_contract);
+  for (const expectedCheck of ['mobile_tablist_a11y_visible', 'keyboard_tab_navigation_visible', 'search_empty_state_visible', 'search_clear_and_escape_visible', 'aria_live_ux_status_visible', 'offline_feed_fallback_status_visible', 'web_session_feed_hydration_visible']) {
+    assert(mobileShellChecks.includes(expectedCheck), `mobile shell UX readiness check missing: ${expectedCheck}`, mobileShellChecks);
+  }
+  assert(appJson?.feed?.web_session_path === '/app/web/feed', 'web session feed hydration path missing', appJson?.feed);
+  steps.push({ name: 'app_mobile_shell_ux_contract_json', ok: true });
 
   for (const tab of ['messages', 'feed', 'me', 'map']) {
     await activateTab(page, tab);
@@ -186,6 +268,7 @@ async function main() {
     return /Feed API (synced|fallback)|Embedded feed snapshot/.test(status);
   }, { timeout: 15_000 });
   assert(await count(page, '#app-feed-items-live .app-feed-item, #app-feed-items-live article') >= 1, 'feed cards missing after API hydration');
+  assert((await text(page, '#app-feed-api-status')).includes('/app/web/feed'), 'feed hydration did not use web-session feed path');
   const filterCount = await count(page, '.trillionnium-app-feed-filter');
   if (filterCount > 0) {
     await clickOrDomActivate(page.locator('.trillionnium-app-feed-filter').first());
@@ -264,7 +347,7 @@ async function main() {
     });
   }
 
-  await page.screenshot({ path: path.join(screenshotDir, 'world-commerce-accepted.png'), fullPage: true }).catch((error) => {
+  await page.screenshot({ path: path.join(screenshotDir, 'world-commerce-accepted.png'), fullPage: false, timeout: 15_000, animations: 'disabled' }).catch((error) => {
     consoleMessages.push({ type: 'warning', text: `world screenshot skipped: ${error.message || error}` });
   });
 
@@ -280,6 +363,11 @@ async function main() {
       app: true,
       world: true,
       mobile_tabs: true,
+      mobile_tab_a11y: true,
+      mobile_shell_contract: true,
+      mobile_keyboard_tab_navigation: true,
+      mobile_search_empty_and_clear_state: true,
+      mobile_ux_live_status: true,
       real_world_map: true,
       feed_api_hydration: true,
       world_map_move: true,
@@ -287,6 +375,13 @@ async function main() {
       world_work_deliver: true,
       world_work_accept: true,
       normalized_sql_final_cutover: true,
+    },
+    web_session: {
+      seeded: true,
+      matrix_user_id: matrixUserId,
+      room_id: roomId,
+      session_id: sessionId,
+      expires_at_epoch: webSession.expires_at_epoch,
     },
     steps,
     console_messages: consoleMessages.slice(0, 20),

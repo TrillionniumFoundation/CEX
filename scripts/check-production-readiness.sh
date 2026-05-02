@@ -148,6 +148,9 @@ else
   if [[ "$consumer_health_ok" -ne 0 ]]; then
     fail "production posture cannot read consumer-entry health ($CONSUMER_ENTRY_BASE_URL/health)"
   else
+    if [[ "$(jq -r '.runtime_profile // "unknown"' "$consumer_health_file")" != "production" ]]; then
+      fail 'production runtime requires consumer-entry runtime_profile=production'
+    fi
     if [[ "$(jq -r '.ingress_protected // false' "$consumer_health_file")" != "true" ]]; then
       fail 'production runtime requires consumer-entry ingress_protected=true'
     fi
@@ -171,6 +174,9 @@ else
   if [[ "$matrix_health_ok" -ne 0 ]]; then
     fail "production posture cannot read matrix-entry health ($MATRIX_ENTRY_BASE_URL/health)"
   else
+    if [[ "$(jq -r '.runtime_profile // "unknown"' "$matrix_health_file")" != "production" ]]; then
+      fail 'production runtime requires matrix-entry runtime_profile=production'
+    fi
     if [[ "$(jq -r '.ingress_protected // false' "$matrix_health_file")" != "true" ]]; then
       fail 'production runtime requires matrix-entry ingress_protected=true'
     fi

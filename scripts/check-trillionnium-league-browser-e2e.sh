@@ -2,6 +2,9 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=scripts/_dev-helpers.sh
+source "$ROOT_DIR/scripts/_dev-helpers.sh"
+cex_load_env
 SCRIPT_PATH="$ROOT_DIR/scripts/playwright/trillionnium-browser-e2e.mjs"
 BASE_URL="${CONSUMER_ENTRY_BASE_URL:-http://127.0.0.1:8090}"
 CHROME_BIN="${PLAYWRIGHT_CHROMIUM_EXECUTABLE:-${CHROME_BIN:-/usr/bin/google-chrome-stable}}"

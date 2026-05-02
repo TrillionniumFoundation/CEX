@@ -76,9 +76,27 @@ pub(super) fn authorize_league_web_session(
     headers: &HeaderMap,
     csrf: Option<&str>,
 ) -> Result<Option<LeagueWebSessionClaims>, Response> {
+    authorize_league_web_session_inner(state, headers, csrf, false, true)
+}
+
+pub(super) fn authorize_league_web_session_readonly(
+    state: &AppState,
+    headers: &HeaderMap,
+    allow_missing_cookie: bool,
+) -> Result<Option<LeagueWebSessionClaims>, Response> {
+    authorize_league_web_session_inner(state, headers, None, allow_missing_cookie, false)
+}
+
+fn authorize_league_web_session_inner(
+    state: &AppState,
+    headers: &HeaderMap,
+    csrf: Option<&str>,
+    allow_missing_cookie: bool,
+    csrf_required_for_configured_session: bool,
+) -> Result<Option<LeagueWebSessionClaims>, Response> {
     let Some(raw_cookie) = cookie_value(headers, &state.config().league_web_session_cookie_name)
     else {
-        if state.config().league_web_session_required {
+        if state.config().league_web_session_required && !allow_missing_cookie {
             return Err((
                 StatusCode::UNAUTHORIZED,
                 Json(json!({
@@ -142,7 +160,7 @@ pub(super) fn authorize_league_web_session(
             )
                 .into_response());
         }
-    } else if state.config().league_web_session_required {
+    } else if state.config().league_web_session_required && csrf_required_for_configured_session {
         return Err((
             StatusCode::FORBIDDEN,
             Json(json!({ "error": "league web csrf token is required" })),

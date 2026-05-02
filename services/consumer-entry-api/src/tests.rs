@@ -1,16 +1,16 @@
 use super::{
-    authorize_user_session, build_chat_identity_scope, build_chat_org_rate_limit_key,
-    build_chat_rate_limit_key, build_chat_replay_key, build_chat_request_fingerprint,
-    build_chat_room_rate_limit_key, build_chat_session_rate_limit_key,
-    build_chat_user_rate_limit_key, build_matrix_identity_scope, build_matrix_org_rate_limit_key,
-    build_matrix_rate_limit_key, build_matrix_replay_key, build_matrix_room_rate_limit_key,
-    build_matrix_session_rate_limit_key, build_matrix_user_rate_limit_key, build_router,
-    client_app_json, client_feed_json, default_league_state,
-    evaluate_identity_binding_reload_governance, get_client_app_web_shell, get_world_web_shell,
-    league_state_hash, league_state_repository_write_set_for_command,
-    league_state_sql_cutover_plan_json, league_state_sql_shadow_validation_json,
-    load_identity_binding_revision_approval_state, load_identity_binding_store,
-    load_rate_limit_cache, load_session_auth_issuer_registry,
+    authorize_league_web_session, authorize_league_web_session_readonly, authorize_user_session,
+    build_chat_identity_scope, build_chat_org_rate_limit_key, build_chat_rate_limit_key,
+    build_chat_replay_key, build_chat_request_fingerprint, build_chat_room_rate_limit_key,
+    build_chat_session_rate_limit_key, build_chat_user_rate_limit_key, build_matrix_identity_scope,
+    build_matrix_org_rate_limit_key, build_matrix_rate_limit_key, build_matrix_replay_key,
+    build_matrix_room_rate_limit_key, build_matrix_session_rate_limit_key,
+    build_matrix_user_rate_limit_key, build_router, client_app_json, client_feed_json,
+    default_league_state, encode_league_web_session, evaluate_identity_binding_reload_governance,
+    get_client_app_web_shell, get_world_web_shell, league_state_hash,
+    league_state_repository_write_set_for_command, league_state_sql_cutover_plan_json,
+    league_state_sql_shadow_validation_json, load_identity_binding_revision_approval_state,
+    load_identity_binding_store, load_rate_limit_cache, load_session_auth_issuer_registry,
     load_session_auth_issuer_registry_revision_approval_state,
     normalized_repository_client_feed_read_model_sql, normalized_repository_command_shadow_sql,
     normalized_repository_direct_write_contract_json,
@@ -22,8 +22,8 @@ use super::{
     world_map_viewport_json, world_route_ui_contract_json, AppState, AppStateInner,
     ConsumerEntryConfig, ConsumerEntryMetrics, CreateChatTaskRequest, IdentityBindingAuditState,
     IdentityBindingEntry, IdentityBindingMetadata, IdentityBindingRevisionApprovalState,
-    IdentityBindingStore, IdentityBindings, LeagueStateRepositorySnapshot, MatrixMessageRequest,
-    ProductUserIdentity, RateLimitCache, ReplayCache, RuntimeProfile,
+    IdentityBindingStore, IdentityBindings, LeagueStateRepositorySnapshot, LeagueWebSessionClaims,
+    MatrixMessageRequest, ProductUserIdentity, RateLimitCache, ReplayCache, RuntimeProfile,
     SessionAuthIssuerRegistryIssuer, SessionAuthIssuerRegistryMetadata,
     SessionAuthIssuerRegistryRuntimeState, UserSessionAuthClaims, WorldContract,
     WorldContractCompletion, WorldEconomyEvent, WorldEvent, WorldMapNode, WorldPlayerPosition,
@@ -969,6 +969,49 @@ fn test_state(
 }
 
 #[test]
+fn league_web_session_readonly_validates_cookie_without_requiring_csrf() {
+    let mut config = test_config();
+    config.runtime_profile = RuntimeProfile::Production;
+    config.league_web_session_required = true;
+    config.league_web_session_secret = Some("readonly-session-secret".to_string());
+    let cookie_name = config.league_web_session_cookie_name.clone();
+    let secret = config.league_web_session_secret.clone().unwrap();
+    let state = test_state(config, IdentityBindings::default(), HashMap::new());
+
+    let claims = LeagueWebSessionClaims {
+        version: 1,
+        matrix_user_id: "@alice:local.dev".to_string(),
+        room_id: Some("!room:local.dev".to_string()),
+        session_id: Some("readonly-test".to_string()),
+        csrf: "csrf-readonly-test".to_string(),
+        issued_at_epoch: Utc::now().timestamp(),
+        expires_at_epoch: Utc::now().timestamp() + 300,
+    };
+    let token = encode_league_web_session(&claims, &secret).unwrap();
+    let mut headers = HeaderMap::new();
+    headers.insert("cookie", format!("{cookie_name}={token}").parse().unwrap());
+
+    let readonly = authorize_league_web_session_readonly(&state, &headers, false)
+        .unwrap()
+        .unwrap();
+    assert_eq!(readonly.matrix_user_id, "@alice:local.dev");
+    assert!(authorize_league_web_session(&state, &headers, None).is_err());
+    assert!(
+        authorize_league_web_session(&state, &headers, Some(&claims.csrf))
+            .unwrap()
+            .is_some()
+    );
+
+    let empty_headers = HeaderMap::new();
+    assert!(
+        authorize_league_web_session_readonly(&state, &empty_headers, true)
+            .unwrap()
+            .is_none()
+    );
+    assert!(authorize_league_web_session_readonly(&state, &empty_headers, false).is_err());
+}
+
+#[test]
 fn world_map_viewport_includes_prefetch_density_and_live_events() {
     let mut league = default_league_state();
     let starter_location_id = league
@@ -1245,6 +1288,33 @@ fn client_app_map_hub_projects_stream_counts() {
         app["feed"]["route_task_graph"]["task_count"],
         app["map_hub"]["route_task_graph"]["task_count"]
     );
+    assert_eq!(
+        app["mobile_shell_contract"]["contract_version"],
+        "trillionnium_mobile_shell_ux_v1"
+    );
+    let mobile_shell_checks = app["mobile_shell_contract"]["readiness_checks"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    for check in [
+        "mobile_tablist_a11y_visible",
+        "keyboard_tab_navigation_visible",
+        "search_empty_state_visible",
+        "search_clear_and_escape_visible",
+        "aria_live_ux_status_visible",
+        "offline_feed_fallback_status_visible",
+        "web_session_feed_hydration_visible",
+    ] {
+        assert!(mobile_shell_checks.iter().any(|value| value == check));
+    }
+    assert_eq!(app["feed"]["web_session_path"], "/app/web/feed");
+    let beta_checks = app["onboarding"]["beta_readiness_checks"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    assert!(beta_checks
+        .iter()
+        .any(|value| value == "mobile_tablist_a11y_visible"));
     assert!(app["modules"][0]["summary"]
         .as_str()
         .unwrap_or_default()
@@ -1320,13 +1390,28 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(app_html.contains("Focused event brief:"));
     assert!(app_html.contains("web_event_id"));
     assert!(app_html.contains("app-global-search"));
+    assert!(app_html.contains("app-search-clear"));
+    assert!(app_html.contains("app-search-empty-state"));
+    assert!(app_html.contains("app-ux-live-status"));
+    assert!(app_html.contains("trillionnium_mobile_shell_ux_v1"));
+    assert!(app_html.contains("keyboard_tab_navigation_visible"));
+    assert!(app_html.contains("offline_feed_fallback_status_visible"));
+    assert!(app_html.contains("web_session_feed_hydration_visible"));
+    assert!(app_html.contains("/app/web/feed"));
     assert!(app_html.contains("app-bottom-tabs"));
+    assert!(app_html.contains("role=\"tablist\""));
+    assert!(app_html.contains("role=\"tab\""));
+    assert!(app_html.contains("role=\"tabpanel\""));
+    assert!(app_html.contains("aria-selected=\"true\""));
+    assert!(app_html.contains("handleAppTabKeydown"));
+    assert!(app_html.contains("announceUxStatus"));
     assert!(app_html.contains("app-tab-messages"));
     assert!(app_html.contains("app-tab-map"));
     assert!(app_html.contains("app-tab-feed"));
     assert!(app_html.contains("app-tab-me"));
     assert!(app_html.contains("消息"));
-    assert!(app_html.contains("data-app-tab=\"map\">世界</button>"));
+    assert!(app_html.contains("data-app-tab=\"map\" role=\"tab\""));
+    assert!(app_html.contains("aria-controls=\"app-tab-map\""));
     assert!(app_html.contains("动态"));
     assert!(app_html.contains("我"));
     assert!(app_html.contains("app-first-playable-onboarding"));

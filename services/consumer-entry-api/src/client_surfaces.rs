@@ -129,6 +129,7 @@ pub(super) fn client_feed_filter_labels_js_object() -> String {
 #[derive(Debug, Clone)]
 pub(super) struct ClientFeedSurfaceView {
     pub(super) api_path: String,
+    pub(super) web_session_path: String,
     pub(super) active_region_id: String,
     pub(super) item_count: u64,
     contract_count: u64,
@@ -145,6 +146,11 @@ impl ClientFeedSurfaceView {
             .and_then(|feed| feed.get("api_path"))
             .and_then(Value::as_str)
             .unwrap_or("/v1/client/feed/@alice:local.dev")
+            .to_string();
+        let web_session_path = feed
+            .and_then(|feed| feed.get("web_session_path"))
+            .and_then(Value::as_str)
+            .unwrap_or("/app/web/feed")
             .to_string();
         let active_region_id = feed
             .and_then(|feed| feed.get("active_region_id"))
@@ -194,6 +200,7 @@ impl ClientFeedSurfaceView {
 
         Self {
             api_path,
+            web_session_path,
             active_region_id,
             item_count,
             contract_count,
@@ -1167,6 +1174,7 @@ impl<'a> ClientFeedProjectionContext<'a> {
             "index_layer": "WorldIndexes::client_feed_recent_indices_v1",
             "matrix_user_id": self.matrix_user_id,
             "api_path": format!("/v1/client/feed/{}", self.matrix_user_id),
+            "web_session_path": "/app/web/feed",
             "active_region_id": active_region_id,
             "item_count": items.len(),
             "source_count": 6,
@@ -1453,7 +1461,14 @@ impl<'a> ClientAppProjectionContext<'a> {
             ],
             "beta_readiness_checks": [
                 "four_tab_mobile_shell_visible",
+                "mobile_tablist_a11y_visible",
+                "keyboard_tab_navigation_visible",
                 "global_search_filters_active_tab",
+                "search_empty_state_visible",
+                "search_clear_and_escape_visible",
+                "aria_live_ux_status_visible",
+                "offline_feed_fallback_status_visible",
+                "web_session_feed_hydration_visible",
                 "next_action_rail_visible",
                 "feed_api_hydration_visible",
                 "matrix_app_card_exposes_onboarding"
@@ -1465,6 +1480,56 @@ impl<'a> ClientAppProjectionContext<'a> {
                 "ledger_settlement",
                 "matrix_social_loop",
                 "normalized_repository_read_models"
+            ]
+        })
+    }
+
+    fn mobile_shell_contract_json(&self) -> Value {
+        json!({
+            "contract_version": "trillionnium_mobile_shell_ux_v1",
+            "shell_id": "trillionnium_mobile_shell",
+            "default_tab": "map",
+            "tabs": [
+                {"tab_id": "messages", "label": "消息", "panel_id": "app-tab-messages", "role": "tab"},
+                {"tab_id": "map", "label": "世界", "panel_id": "app-tab-map", "role": "tab", "default_active": true},
+                {"tab_id": "feed", "label": "动态", "panel_id": "app-tab-feed", "role": "tab"},
+                {"tab_id": "me", "label": "我", "panel_id": "app-tab-me", "role": "tab"}
+            ],
+            "navigation": {
+                "role": "tablist",
+                "keyboard": ["ArrowRight", "ArrowLeft", "ArrowDown", "ArrowUp", "Home", "End"],
+                "state_attributes": ["aria-selected", "aria-controls", "aria-hidden", "tabindex", "hidden"],
+            },
+            "search": {
+                "input_id": "app-global-search",
+                "active_tab_filter": true,
+                "clear_button_id": "app-search-clear",
+                "empty_state_id": "app-search-empty-state",
+                "escape_to_clear": true,
+            },
+            "live_status": {
+                "visible_status_id": "app-ux-status-pill",
+                "screen_reader_status_id": "app-ux-live-status",
+                "aria_live": "polite",
+                "states": ["ready", "loading", "fallback", "offline"],
+            },
+            "resilience": {
+                "feed_api_hydration": "loadFeedSurface",
+                "web_session_feed_path": "/app/web/feed",
+                "offline_fallback": "embedded feed snapshot",
+                "online_refresh": true,
+            },
+            "readiness_checks": [
+                "four_tab_mobile_shell_visible",
+                "mobile_tablist_a11y_visible",
+                "keyboard_tab_navigation_visible",
+                "global_search_filters_active_tab",
+                "search_empty_state_visible",
+                "search_clear_and_escape_visible",
+                "aria_live_ux_status_visible",
+                "offline_feed_fallback_status_visible",
+                "web_session_feed_hydration_visible",
+                "feed_api_hydration_visible"
             ]
         })
     }
@@ -1498,6 +1563,7 @@ impl<'a> ClientAppProjectionContext<'a> {
             &progression_summary,
             &map_metrics,
         );
+        let mobile_shell_contract = self.mobile_shell_contract_json();
         let map_hub = app_context.into_client_app_map_hub_json(&map_metrics);
         json!({
             "kind": "trillionnium_client_app",
@@ -1510,6 +1576,7 @@ impl<'a> ClientAppProjectionContext<'a> {
             "modules": modules,
             "module_count": module_count,
             "route_contract": world_route_ui_contract_json(),
+            "mobile_shell_contract": mobile_shell_contract,
             "onboarding": onboarding,
             "map": map,
             "feed": feed,

@@ -2,27 +2,39 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=scripts/_dev-helpers.sh
+source "$ROOT_DIR/scripts/_dev-helpers.sh"
+cex_load_env
 cd "$ROOT_DIR"
 BASE_URL="${CONSUMER_ENTRY_BASE_URL:-http://127.0.0.1:8090}"
 SUMMARY_DIR="$ROOT_DIR/run/league-web"
 mkdir -p "$SUMMARY_DIR"
 
 python3 - <<'PY'
-import json, os, pathlib, re, time, urllib.parse, urllib.request
+import base64, hashlib, hmac, json, os, pathlib, re, time, urllib.parse, urllib.request
 
 base = os.environ.get('CONSUMER_ENTRY_BASE_URL', 'http://127.0.0.1:8090').rstrip('/')
 root = pathlib.Path.cwd()
 summary_dir = root / 'run/league-web'
 summary_dir.mkdir(parents=True, exist_ok=True)
 
-def get(path):
-    with urllib.request.urlopen(base + path, timeout=20) as resp:
+def entry_headers():
+    token = os.environ.get('CONSUMER_ENTRY_INGRESS_TOKEN', '').strip()
+    return {'x-entry-token': token} if token else {}
+
+def get(path, headers=None):
+    request_headers = entry_headers()
+    if headers:
+        request_headers.update(headers)
+    req = urllib.request.Request(base + path, headers=request_headers)
+    with urllib.request.urlopen(req, timeout=20) as resp:
         body = resp.read().decode('utf-8', errors='replace')
         return resp.status, body
 
 def post_form(path, headers=None, **fields):
     data = urllib.parse.urlencode(fields).encode()
     request_headers = {'content-type': 'application/x-www-form-urlencoded'}
+    request_headers.update(entry_headers())
     if headers:
         request_headers.update(headers)
     req = urllib.request.Request(
@@ -40,6 +52,7 @@ def post_action(headers=None, **fields):
 
 def post_json(path, payload, headers=None):
     request_headers = {'content-type': 'application/json'}
+    request_headers.update(entry_headers())
     if headers:
         request_headers.update(headers)
     req = urllib.request.Request(
@@ -51,6 +64,39 @@ def post_json(path, payload, headers=None):
     with urllib.request.urlopen(req, timeout=20) as resp:
         body = resp.read().decode('utf-8', errors='replace')
         return resp.status, dict(resp.headers), json.loads(body)
+
+def b64url(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).decode().rstrip('=')
+
+def signed_session_headers(matrix_user_id, room_id, session_id):
+    secret = os.environ.get('CONSUMER_ENTRY_SESSION_AUTH_SECRET') or os.environ.get('MATRIX_ENTRY_CONSUMER_SESSION_AUTH_SECRET')
+    if not secret:
+        return {}
+    issuer = os.environ.get('MATRIX_ENTRY_CONSUMER_SESSION_AUTH_ISSUER') or 'matrix-entry-adapter'
+    audience = os.environ.get('CONSUMER_ENTRY_SESSION_AUTH_EXPECTED_AUDIENCE') or os.environ.get('MATRIX_ENTRY_CONSUMER_SESSION_AUTH_AUDIENCE') or 'consumer-entry-api'
+    now = int(time.time())
+    fingerprint = f'league-web-session:{matrix_user_id}:{room_id or ""}:{session_id or ""}'
+    claims = {
+        'version': 1,
+        'issuer': issuer,
+        'key_id': None,
+        'subject': matrix_user_id,
+        'source_kind': 'league_web_session',
+        'audience': audience,
+        'request_fingerprint': fingerprint,
+        'room_id': room_id,
+        'session_id': session_id,
+        'org_id': None,
+        'account_id': None,
+        'issued_at_epoch': now,
+        'expires_at_epoch': now + 300,
+    }
+    assertion = b64url(json.dumps(claims, separators=(',', ':')).encode())
+    signature = b64url(hmac.new(secret.encode(), assertion.encode(), hashlib.sha256).digest())
+    return {
+        'x-cex-user-session': assertion,
+        'x-cex-user-session-signature': signature,
+    }
 
 status, html = get('/league')
 assert status == 200, status
@@ -65,22 +111,24 @@ for needle in ['Trillionnium World', 'World Action Console', 'Reality Mirror San
 matrix_user_id = '@alice:local.dev'
 marker = f'web-e2e-{int(time.time())}'
 actions = []
+room_id = '!web-local:local.dev'
+session_id = 'web-e2e-session'
 session_status, session_headers, session_body = post_json('/league/web/session', {
     'matrix_user_id': matrix_user_id,
-    'room_id': '!web-local:local.dev',
-    'session_id': 'web-e2e-session',
-})
+    'room_id': room_id,
+    'session_id': session_id,
+}, headers=signed_session_headers(matrix_user_id, room_id, session_id))
 assert session_status == 200, session_status
 session_cookie = session_headers.get('Set-Cookie') or session_headers.get('set-cookie')
 assert session_cookie and 'cex_league_session=' in session_cookie, session_headers
 csrf = session_body.get('csrf')
 assert csrf, session_body
 cookie_header = {'Cookie': session_cookie.split(';', 1)[0]}
-status, html_with_session = get('/league')
+status, html_with_session = get('/league', headers=cookie_header)
 assert status == 200, status
 app_status, app_html = get('/app')
 assert app_status == 200 and 'Trillionnium Client App' in app_html, app_status
-for needle in ['real-world-map', 'leaflet_openstreetmap_v1', 'createRealWorldMapAdapter', 'leaflet_renderer_adapter_v1', 'maplibre_gl_v1', 'const mapRuntime', 'supports_future_engine_swap', 'gating_contract', 'renderRouteLine', 'renderTileFrame', 'renderEventPulse', 'onViewportChange', 'getCenter', 'getZoom', 'OpenStreetMap', 'Leaflet', 'tile.openstreetmap.org', 'global_real_world_tiles', 'gather_hero_tale_lod', 'cn-shanghai-core', 'primary_actions', 'trillionnium-map-action', 'Move here', '/v1/world/map/{matrix_user_id}/viewport', '/world/web/map-viewport', '/v1/client/feed/@alice:local.dev', 'app-global-search', 'app-bottom-tabs', 'app-tab-messages', 'app-tab-map', 'app-tab-feed', 'app-tab-me', '消息', '世界', '动态', '我', 'app-first-playable-onboarding', 'app-first-playable-checks', 'app-first-playable-steps', 'First playable onboarding', 'trillionnium_first_playable_onboarding_v1', 'first_playable_loop_100', 'data-onboarding-step="commerce_delivery"', 'route_task_graph_next_action_visible', 'app-map-camera-summary', 'app-map-route-status', 'Recommended world handoff:', 'Focused event brief:', 'Linked task route:', 'Draft task follow-up', 'Route next opportunity', 'Opportunity lane', 'Filter route by focus', 'Show full route', 'app-route-preview-live', 'World Route Preview', 'app-route-task-graph-live', 'Task-linked Route Graph', 'Route linked contract', 'app-feed-api-status', 'app-feed-filter-actions', 'app-feed-summary', 'app-feed-items-live', 'Unified Feed Timeline', 'trillionnium-app-feed-filter', 'trillionnium-app-feed-action', 'loadFeedSurface', 'app-tile-shards-live', 'Tile Shards', 'Region Shards', 'POI Hotspots', 'Progression', '/progression', '/skills /tools /skins', 'findLiveEventByFocus', 'buildEventFocus', 'filterLiveEventStream', 'stream lens', 'web_event_id', 'data-focus-kind="event"', 'data-event-id=', 'data-task-id=']:
+for needle in ['real-world-map', 'leaflet_openstreetmap_v1', 'createRealWorldMapAdapter', 'leaflet_renderer_adapter_v1', 'maplibre_gl_v1', 'const mapRuntime', 'supports_future_engine_swap', 'gating_contract', 'renderRouteLine', 'renderTileFrame', 'renderEventPulse', 'onViewportChange', 'getCenter', 'getZoom', 'OpenStreetMap', 'Leaflet', 'tile.openstreetmap.org', 'global_real_world_tiles', 'gather_hero_tale_lod', 'cn-shanghai-core', 'primary_actions', 'trillionnium-map-action', 'Move here', '/v1/world/map/{matrix_user_id}/viewport', '/world/web/map-viewport', '/v1/client/feed/@alice:local.dev', 'app-global-search', 'app-search-clear', 'app-search-empty-state', 'app-ux-live-status', 'role="tablist"', 'role="tab"', 'role="tabpanel"', 'aria-selected="true"', 'handleAppTabKeydown', 'announceUxStatus', 'trillionnium_mobile_shell_ux_v1', 'keyboard_tab_navigation_visible', 'offline_feed_fallback_status_visible', 'web_session_feed_hydration_visible', '/app/web/feed', 'app-bottom-tabs', 'app-tab-messages', 'app-tab-map', 'app-tab-feed', 'app-tab-me', '消息', '世界', '动态', '我', 'app-first-playable-onboarding', 'app-first-playable-checks', 'app-first-playable-steps', 'First playable onboarding', 'trillionnium_first_playable_onboarding_v1', 'first_playable_loop_100', 'data-onboarding-step="commerce_delivery"', 'route_task_graph_next_action_visible', 'app-map-camera-summary', 'app-map-route-status', 'Recommended world handoff:', 'Focused event brief:', 'Linked task route:', 'Draft task follow-up', 'Route next opportunity', 'Opportunity lane', 'Filter route by focus', 'Show full route', 'app-route-preview-live', 'World Route Preview', 'app-route-task-graph-live', 'Task-linked Route Graph', 'Route linked contract', 'app-feed-api-status', 'app-feed-filter-actions', 'app-feed-summary', 'app-feed-items-live', 'Unified Feed Timeline', 'trillionnium-app-feed-filter', 'trillionnium-app-feed-action', 'loadFeedSurface', 'app-tile-shards-live', 'Tile Shards', 'Region Shards', 'POI Hotspots', 'Progression', '/progression', '/skills /tools /skins', 'findLiveEventByFocus', 'buildEventFocus', 'filterLiveEventStream', 'stream lens', 'web_event_id', 'data-focus-kind="event"', 'data-event-id=', 'data-task-id=']:
     assert needle in app_html, ('client_app_real_world_map_engine', needle)
 # The normal unauthenticated local-dev shell remains available; the signed session path is checked below.
 code, url, body = post_action(**{
@@ -210,39 +258,42 @@ assert code == 200 and 'Trillionnium World' in body, ('world_work_cancel', code,
 actions.append({'action': 'world_work_cancel', 'status': code, 'url': url})
 
 for fields in [
-    {'action': 'join', 'matrix_user_id': matrix_user_id, 'match_id': 'daily-dungeon-001'},
-    {'action': 'guild', 'matrix_user_id': matrix_user_id, 'guild_id': 'guild-prompt-forge'},
-    {'action': 'team', 'matrix_user_id': matrix_user_id, 'match_id': 'guild-raid-001', 'role': 'scout', 'heroes': 'oracle_scout'},
-    {'action': 'draft', 'matrix_user_id': matrix_user_id, 'heroes': 'oracle_scout forge_builder mirror_auditor courier_closer'},
+    {'action': 'join', 'matrix_user_id': matrix_user_id, 'csrf': csrf, 'match_id': 'daily-dungeon-001'},
+    {'action': 'guild', 'matrix_user_id': matrix_user_id, 'csrf': csrf, 'guild_id': 'guild-prompt-forge'},
+    {'action': 'team', 'matrix_user_id': matrix_user_id, 'csrf': csrf, 'match_id': 'guild-raid-001', 'role': 'scout', 'heroes': 'oracle_scout'},
+    {'action': 'draft', 'matrix_user_id': matrix_user_id, 'csrf': csrf, 'heroes': 'oracle_scout forge_builder mirror_auditor courier_closer'},
     {
         'action': 'raid',
         'matrix_user_id': matrix_user_id,
+        'csrf': csrf,
         'match_id': 'guild-raid-001',
         'body': f'Raid contribution {marker}: scout evidence, assign builder, define risk gate, next step.',
     },
     {
         'action': 'submit',
         'matrix_user_id': matrix_user_id,
+        'csrf': csrf,
         'match_id': 'daily-dungeon-001',
         'body': f'Web E2E result {marker}: deliverable, evidence, risk, self-review, next action.',
     },
     {
         'action': 'submit',
         'matrix_user_id': matrix_user_id,
+        'csrf': csrf,
         'match_id': 'daily-dungeon-001',
         'body': 'copy copy copy',
     },
 ]:
-    code, url, body = post_action(**fields)
+    code, url, body = post_action(headers=cookie_header, **fields)
     assert code == 200, (fields['action'], code, url)
     assert 'Trillionnium League' in body, fields['action']
     actions.append({'action': fields['action'], 'status': code, 'url': url})
 
-status, html_after = get('/league')
+status, html_after = get('/league', headers=cookie_header)
 assert status == 200, status
 for needle in ['Oracle Scout', 'Forge Builder', 'Mirror Auditor', 'Top loot', 'settled', 'held_review', 'rubric_hidden', 'Progression Systems', '成功任务']:
     assert needle in html_after, needle
-world_status, world_html_after = get('/world')
+world_status, world_html_after = get('/world', headers=cookie_header)
 assert world_status == 200, world_status
 assert world_marker in world_html_after, world_marker
 health_status, health_body = get('/health')
@@ -296,8 +347,9 @@ summary = {
     'has_web_console': 'Web Battle Console' in html_after,
     'has_web_session': bool(session_cookie and csrf),
     'has_client_app_shell': 'Trillionnium Client App' in app_html,
-    'has_client_app_mobile_shell': 'app-global-search' in app_html and 'app-bottom-tabs' in app_html and 'app-tab-map' in app_html,
+    'has_client_app_mobile_shell': 'app-global-search' in app_html and 'app-search-clear' in app_html and 'app-bottom-tabs' in app_html and 'app-tab-map' in app_html,
     'has_client_app_mobile_tabs': all(label in app_html for label in ['消息', '世界', '动态', '我']),
+    'has_client_app_mobile_a11y_ux': all(token in app_html for token in ['app-ux-live-status', 'app-search-empty-state', 'role="tablist"', 'role="tab"', 'role="tabpanel"', 'aria-selected="true"', 'handleAppTabKeydown', 'announceUxStatus', 'trillionnium_mobile_shell_ux_v1', 'keyboard_tab_navigation_visible', 'offline_feed_fallback_status_visible', 'web_session_feed_hydration_visible', '/app/web/feed']),
     'has_client_app_first_playable_onboarding': 'app-first-playable-onboarding' in app_html and 'First playable onboarding' in app_html and 'first_playable_loop_100' in app_html and 'trillionnium_first_playable_onboarding_v1' in app_html and 'data-onboarding-step="commerce_delivery"' in app_html and 'route_task_graph_next_action_visible' in app_html,
     'has_client_app_world_map': 'World Map' in app_html,
     'has_client_app_feed_api': '/v1/client/feed/@alice:local.dev' in app_html and 'Feed API' in app_html,

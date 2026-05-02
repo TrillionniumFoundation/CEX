@@ -88,6 +88,18 @@
 - 动态：`搜索动态、话题、事件、成交案例`
 - 我：`搜索订单、账单、资产、设置`
 
+#### 已落地的 UX readiness 合约
+
+`GET /v1/client/app/:matrix_user_id` 暴露 `mobile_shell_contract.contract_version=trillionnium_mobile_shell_ux_v1`，用于把前端/用户体验从“有 UI”推进到可验证的 100% gate：
+
+- 底部四栏是 ARIA tablist/tab/tabpanel 结构，默认选中 `世界`，并同步 `aria-selected`、`aria-controls`、`aria-hidden`、`tabindex` 和 `hidden`。
+- 键盘支持 `ArrowRight` / `ArrowLeft` / `ArrowDown` / `ArrowUp` / `Home` / `End` 在四栏间切换。
+- 顶部全局搜索会过滤当前 tab，可显示空结果状态，并提供 `清空` 按钮与 `Escape` 清空。
+- `app-ux-live-status` / `app-ux-status-pill` 通过 `aria-live=polite` 播报 tab、feed loading、fallback、offline/online 恢复等状态。
+- feed hydration 优先走同源 Web session 路由 `/app/web/feed`，避免公开 `/app` 页面在生产模式下直接撞受 ingress-token 保护的 `/v1/client/feed/:matrix_user_id` 并制造 401；feed API 失败时明确回退 embedded snapshot，恢复 online 时刷新 feed。
+
+这些检查已进入 `trillionnium_world_maturity.beta_readiness`、closed beta / real-user beta / public product launch surface 的 maturity gate，并被 `scripts/check-trillionnium-league-web-e2e.sh` 与 browser E2E 覆盖。
+
 ---
 
 ## Bottom Navigation
