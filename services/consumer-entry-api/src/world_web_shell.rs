@@ -3,17 +3,17 @@ use super::*;
 fn world_user_visible_copy(value: &str) -> String {
     let mut copy = value.to_string();
     let replacements = [
-        ("Starter Studio", "新手工坊"),
-        ("Forge Workbench", "锻造工坊"),
-        ("Asset Yard", "道具庭院"),
-        ("ZBJ Market Gate", "悬赏集市门"),
-        ("League Coliseum", "League 竞技场"),
-        ("starter-studio", "新手工坊"),
-        ("forge-workbench", "锻造工坊"),
-        ("asset-yard", "道具庭院"),
-        ("zbj-market-gate", "悬赏集市门"),
-        ("league-coliseum", "League 竞技场"),
-        ("cn-shanghai-core", "上海主城"),
+        ("Starter Studio", "Starter Studio / 新手工坊"),
+        ("Forge Workbench", "Forge Workbench / 锻造工坊"),
+        ("Asset Yard", "Asset Yard / 道具庭院"),
+        ("ZBJ Market Gate", "Bounty Market Gate / 悬赏集市门"),
+        ("League Coliseum", "League Coliseum / League 竞技场"),
+        ("starter-studio", "starter-studio / 新手工坊"),
+        ("forge-workbench", "forge-workbench / 锻造工坊"),
+        ("asset-yard", "asset-yard / 道具庭院"),
+        ("zbj-market-gate", "bounty-market-gate / 悬赏集市门"),
+        ("league-coliseum", "league-coliseum / League 竞技场"),
+        ("cn-shanghai-core", "global-start-zone / 全球首发区"),
         ("客户需求牌", "悬赏任务牌"),
         ("交付码头", "成果评定台"),
         ("所有 World asset 的仓库和展示院，未来可拖拽摆放。", "收纳道具、素材和展示件的庭院，后续可自由布置。"),
@@ -29,9 +29,9 @@ fn world_user_visible_copy(value: &str) -> String {
         ("浏览需求 / 投标 / 发布服务", "浏览悬赏 / 接取挑战 / 发布服务"),
         ("提交交付 / 验收 / 发起返工/取消", "提交成果 / 评级 / 发起返工或放弃"),
         ("craft a real customer-facing studio asset with deliverable, evidence package, risk controls, operating loop, next action, and self review for browser commerce E2E.", "打造一个真实委托可用的 AI 设计工坊道具：写清成果、证据包、风险控制、行动循环、下一步和自检记录，用于 browser adventure E2E。"),
-        ("browser commerce E2E", "browser adventure E2E"),
-        ("AI 设计公司", "AI 设计工坊"),
-        ("服务真实客户", "完成真实委托"),
+        ("browser commerce E2E", "browser adventure E2E / 浏览器冒险验收"),
+        ("AI 设计公司", "AI Design Studio / AI 设计工坊"),
+        ("服务真实客户", "serve real global clients / 完成海外真实委托"),
         ("route_task", "路线任务"),
         ("contract_capture", "契约登记"),
         ("work_order", "冒险委托"),
@@ -61,19 +61,19 @@ fn world_user_visible_copy(value: &str) -> String {
         ("real_task_gateway", "真实任务入口"),
         ("arena", "竞技场"),
         ("market", "集市"),
-        ("open", "开放"),
-        ("OPEN", "开放"),
-        ("active", "活跃"),
-        ("warm", "预热"),
-        ("planned", "规划中"),
-        ("prefetch", "预热分片"),
-        ("street_nodes", "街区节点"),
-        ("neighbor_tile_warmup", "邻近地图预热"),
-        ("contract", "契约"),
-        ("venture", "探索"),
-        ("no-task", "未关联任务"),
-        ("委托方", "委托目标"),
-        ("Map density booting.", "地图密度加载中。"),
+        ("open", "open / 开放"),
+        ("OPEN", "open / 开放"),
+        ("active", "active / 活跃"),
+        ("warm", "warm / 预热"),
+        ("planned", "planned / 规划中"),
+        ("prefetch", "prefetch / 预热分片"),
+        ("street_nodes", "street nodes / 街区节点"),
+        ("neighbor_tile_warmup", "neighbor warmup / 邻近地图预热"),
+        ("contract", "contract / 契约"),
+        ("venture", "venture / 探索"),
+        ("no-task", "no task / 未关联任务"),
+        ("委托方", "client / 委托目标"),
+        ("Map density booting.", "Map density loading / 地图密度加载中。"),
     ];
     for (from, to) in replacements {
         copy = copy.replace(from, to);
@@ -87,37 +87,37 @@ fn escape_world_visible_text(value: &str) -> String {
 
 fn world_node_kind_label(kind: &str) -> &str {
     match kind {
-        "hub_square" => "主城广场",
-        "agent_home" => "Agent 居所",
-        "ledger_office" => "奖励窗口",
-        "workshop_room" => "工坊房间",
-        "craft_station" => "锻造台",
-        "asset_yard" => "道具庭院",
-        "market_gate" => "悬赏入口",
-        "client_board" => "悬赏牌",
-        "delivery_dock" => "成果评定台",
-        "dispute_desk" => "仲裁柜台",
-        "arena_gate" => "竞技入口",
-        "raid_hall" => "团本大厅",
+        "hub_square" => "hub square / 主城广场",
+        "agent_home" => "Agent home / Agent 居所",
+        "ledger_office" => "reward office / 奖励窗口",
+        "workshop_room" => "workshop room / 工坊房间",
+        "craft_station" => "craft station / 锻造台",
+        "asset_yard" => "asset yard / 道具庭院",
+        "market_gate" => "bounty gate / 悬赏入口",
+        "client_board" => "quest board / 悬赏牌",
+        "delivery_dock" => "rating dock / 成果评定台",
+        "dispute_desk" => "dispute desk / 仲裁柜台",
+        "arena_gate" => "arena gate / 竞技入口",
+        "raid_hall" => "raid hall / 团本大厅",
         _ => kind,
     }
 }
 
 fn world_map_status_label(value: &str) -> String {
     world_user_visible_copy(match value {
-        "prefetch" => "预热分片",
-        "street_nodes" => "街区节点",
-        "neighbor_tile_warmup" => "邻近地图预热",
-        "warm" => "预热",
-        "active" => "活跃",
-        "planned" => "规划中",
-        "open" | "OPEN" => "开放",
-        "contract" => "契约",
-        "venture" => "探索",
-        "no-task" => "未关联任务",
-        "world_event" => "世界事件",
-        "dense" => "高密度",
-        "regional" => "区域密度",
+        "prefetch" => "prefetch / 预热分片",
+        "street_nodes" => "street nodes / 街区节点",
+        "neighbor_tile_warmup" => "neighbor warmup / 邻近地图预热",
+        "warm" => "warm / 预热",
+        "active" => "active / 活跃",
+        "planned" => "planned / 规划中",
+        "open" | "OPEN" => "open / 开放",
+        "contract" => "contract / 契约",
+        "venture" => "venture / 探索",
+        "no-task" => "no task / 未关联任务",
+        "world_event" => "world event / 世界事件",
+        "dense" => "dense / 高密度",
+        "regional" => "regional / 区域密度",
         _ => value,
     })
 }
@@ -1056,8 +1056,8 @@ pub(super) async fn get_world_web_shell(
     let shared_map_camera_actions_html = map_camera_action_buttons_html();
     let shared_route_filter_buttons_html = route_filter_buttons_html(
         "trillionnium-route-filter-action",
-        "按焦点筛选路线",
-        "显示全部路线",
+        "Filter by Focus / 按焦点筛选路线",
+        "Show All Routes / 显示全部路线",
     );
     let shared_map_route_target_resolution_js = real_world_map_route_target_resolution_js();
     let shared_map_route_status_js = real_world_map_route_status_js();
@@ -1132,51 +1132,51 @@ pub(super) async fn get_world_web_shell(
 <body>
   <header>
     <section>
-      <div class="pill">现实镜像冒险</div>
+      <div class="pill">Reality Mirror Adventure / 现实镜像冒险</div>
       <h1>Trillionnium World</h1>
-      <p class="subtitle">开放世界总层：现实镜像城市、工坊据点、任务牌、League 竞技场、Agent 居民、道具、关系与自由行动。玩家看到的是探索、委托、评级和奖励。</p>
+      <p class="subtitle">Global-first open world for overseas launch / 面向海外首发的开放世界：reality-mirror cities, studios, quest boards, League arenas, Agents, items, relationships, and free actions. 玩家看到的是探索、委托、评级和奖励。</p>
     </section>
     <aside class="hero-card">
-      <strong>下一步冒险</strong>
-      <p class="subtitle">先选一个地图焦点，再把它推进成契约、委托、成果提交和评级奖励。这里是给真实玩家用的行动台，不再是内部系统面板。</p>
-      <a id="world-league-link" class="cta" href="/league">进入 League 竞技场</a>
+      <strong>Next Adventure / 下一步冒险</strong>
+      <p class="subtitle">Pick a map focus, then turn it into a contract, commission, submitted result, rating, and reward / 先选一个地图焦点，再推进成契约、委托、成果提交和评级奖励。This is a player action table, not an internal admin panel / 这是玩家行动台，不是内部系统面板。</p>
+      <a id="world-league-link" class="cta" href="/league">Enter League Arena / 进入 League 竞技场</a>
     </aside>
   </header>
   <main>
     <section class="stats">
-      <div class="stat"><span>区域</span><b>{zones}</b></div>
-      <div class="stat"><span>地点</span><b>{locations}</b></div>
-      <div class="stat"><span>Agent 居民</span><b>{entities}</b></div>
-      <div class="stat"><span>地图点</span><b>{map_nodes}</b></div>
-      <div class="stat"><span>道具</span><b>{assets}</b></div>
-      <div class="stat"><span>升级</span><b>{asset_upgrades}</b></div>
-      <div class="stat"><span>工坊</span><b>{companies}</b></div>
-      <div class="stat"><span>据点</span><b>{shops}</b></div>
-      <div class="stat"><span>任务牌</span><b>{listings}</b></div>
-      <div class="stat"><span>已接取</span><b>{purchases}</b></div>
-      <div class="stat"><span>委托</span><b>{work_orders}</b></div>
-      <div class="stat"><span>返工</span><b>{work_rejections}</b></div>
-      <div class="stat"><span>重开</span><b>{work_reopens}</b></div>
-      <div class="stat"><span>放弃</span><b>{work_cancellations}</b></div>
-      <div class="stat"><span>阵营</span><b>{factions}</b></div>
-      <div class="stat"><span>契约</span><b>{contracts}</b></div>
-      <div class="stat"><span>战报</span><b>{completions}</b></div>
-      <div class="stat"><span>事件</span><b>{events}</b></div>
-      <div class="stat"><span>关系</span><b>{relationships}</b></div>
+      <div class="stat"><span>Zones 区域</span><b>{zones}</b></div>
+      <div class="stat"><span>Places 地点</span><b>{locations}</b></div>
+      <div class="stat"><span>Agents 居民</span><b>{entities}</b></div>
+      <div class="stat"><span>Map Points 地图点</span><b>{map_nodes}</b></div>
+      <div class="stat"><span>Items 道具</span><b>{assets}</b></div>
+      <div class="stat"><span>Upgrades 升级</span><b>{asset_upgrades}</b></div>
+      <div class="stat"><span>Studios 工坊</span><b>{companies}</b></div>
+      <div class="stat"><span>Hubs 据点</span><b>{shops}</b></div>
+      <div class="stat"><span>Quest Cards 任务牌</span><b>{listings}</b></div>
+      <div class="stat"><span>Accepted 已接取</span><b>{purchases}</b></div>
+      <div class="stat"><span>Commissions 委托</span><b>{work_orders}</b></div>
+      <div class="stat"><span>Revisions 返工</span><b>{work_rejections}</b></div>
+      <div class="stat"><span>Reopens 重开</span><b>{work_reopens}</b></div>
+      <div class="stat"><span>Cancels 放弃</span><b>{work_cancellations}</b></div>
+      <div class="stat"><span>Factions 阵营</span><b>{factions}</b></div>
+      <div class="stat"><span>Contracts 契约</span><b>{contracts}</b></div>
+      <div class="stat"><span>Reports 战报</span><b>{completions}</b></div>
+      <div class="stat"><span>Events 事件</span><b>{events}</b></div>
+      <div class="stat"><span>Relations 关系</span><b>{relationships}</b></div>
     </section>
     <section class="panel">
       <div class="map-shell">
         <div>
-          <div class="pill">现实镜像地图</div>
-          <h2>城市探索面板</h2>
-          <p class="subtitle">从地图焦点进入冒险：区域、热点、实时事件和任务路线会自动串成下一步行动。默认给玩家看故事、地点、委托和奖励；引擎与接口信息收进调试抽屉。</p>
+          <div class="pill">Reality Mirror Map / 现实镜像地图</div>
+          <h2>Global City Exploration / 海外首发城市探索</h2>
+          <p class="subtitle">Start from any map focus: regions, hotspots, live events, and route tasks become the next action / 从地图焦点进入冒险：区域、热点、实时事件和任务路线会自动串成下一步行动。Players see story, places, commissions, and rewards; engine details stay in debug drawers / 玩家看到故事、地点、委托和奖励；引擎细节收进调试抽屉。</p>
           <div id="world-tile-shards-live" class="mini-grid">{tile_shard_cards}</div>
           <div id="world-region-shards-live" class="mini-grid">{region_shard_cards}</div>
           <div class="mini-grid" style="margin-top:12px">{lod_layer_cards}</div>
           <div id="world-poi-hotspots-live" class="mini-grid" style="margin-top:12px">{hotspot_cards}</div>
           <div id="world-prefetch-queue-live" class="mini-grid" style="margin-top:12px">{prefetch_cards}</div>
           <div id="world-live-events-live" class="mini-grid" style="margin-top:12px">{live_event_cards}</div>
-          <details class="dev-details"><summary>地图调试信息</summary><p>Global Real-world Map Engine: <code>{map_engine_name}</code> + <code>{tile_provider}</code></p><p>Mirror: <code>{mirror_scope}</code> · Strategy: <code>{full_mirror_strategy}</code> · Style: <code>{simplification_style}</code> · Goal: <code>{scaling_goal}</code></p><p>Viewport API: <code>{viewport_path}</code></p><p>Web Viewport: <code>{web_session_viewport_path}</code></p></details>
+          <details class="dev-details"><summary>Map debug / 地图调试信息</summary><p>Global Real-world Map Engine: <code>{map_engine_name}</code> + <code>{tile_provider}</code></p><p>Mirror: <code>{mirror_scope}</code> · Strategy: <code>{full_mirror_strategy}</code> · Style: <code>{simplification_style}</code> · Goal: <code>{scaling_goal}</code></p><p>Viewport API: <code>{viewport_path}</code></p><p>Web Viewport: <code>{web_session_viewport_path}</code></p></details>
           <p id="world-map-density-summary" class="subtitle">{map_density_summary}</p>
           <p id="world-map-camera-summary" class="subtitle">镜头加载中…</p>
           <div id="world-map-stream-hud" class="map-stream-hud">
@@ -1191,108 +1191,108 @@ pub(super) async fn get_world_web_shell(
           <div id="world-map-camera-actions" class="overlay-toggle-bar">
 {shared_map_camera_actions_html}
           </div>
-          <p id="world-map-overlay-status" class="subtitle">当前图层：密度、区域、地图块、预热圈、实时事件。</p>
+          <p id="world-map-overlay-status" class="subtitle">Active layers / 当前图层：density, regions, tiles, prefetch rings, live events / 密度、区域、地图块、预热圈、实时事件。</p>
           <div class="mini" style="margin-top:14px;">
-            <strong>地图行动栏</strong>
-            <span id="world-map-focus-summary">等待选择地图焦点…</span>
-            <small id="world-map-focus-detail">选择区域、地图块、热点或实时事件，推动移动和世界行动。</small>
+            <strong>Map Action Rail / 地图行动栏</strong>
+            <span id="world-map-focus-summary">Waiting for map focus / 等待选择地图焦点…</span>
+            <small id="world-map-focus-detail">Choose a region, tile, hotspot, or live event to drive movement and world action / 选择区域、地图块、热点或实时事件，推动移动和世界行动。</small>
             <div id="world-map-action-rail" class="focus-stack"></div>
           </div>
-          <p id="world-map-route-filter-status" class="subtitle">路线筛选：显示全部世界活动。</p>
+          <p id="world-map-route-filter-status" class="subtitle">Route filter / 路线筛选：show all world activity / 显示全部世界活动。</p>
           <div id="world-map-route-filter-actions" class="focus-stack">
             {shared_route_filter_buttons_html}
           </div>
-          <p id="world-map-route-flow-status" class="subtitle">冒险路线：等待地图焦点。</p>
-          <p id="world-map-route-next-step-status" class="subtitle">推荐下一步：先选择地图焦点。</p>
-          <p id="world-map-route-event-brief-status" class="subtitle">事件简报：等待实时事件焦点。</p>
-          <p id="world-map-route-link-status" class="subtitle">关联任务路线：暂无。</p>
+          <p id="world-map-route-flow-status" class="subtitle">Adventure route / 冒险路线：waiting for map focus / 等待地图焦点。</p>
+          <p id="world-map-route-next-step-status" class="subtitle">Recommended next step / 推荐下一步：choose a map focus first / 先选择地图焦点。</p>
+          <p id="world-map-route-event-brief-status" class="subtitle">Event brief / 事件简报：waiting for live-event focus / 等待实时事件焦点。</p>
+          <p id="world-map-route-link-status" class="subtitle">Linked task route / 关联任务路线：none yet / 暂无。</p>
           <div id="world-map-route-flow-actions" class="focus-stack"></div>
-          <p id="world-map-overlay-legend" class="subtitle">图层说明：区域锚点 · 活跃地图块 · 预热探索圈 · 实时事件脉冲。</p>
+          <p id="world-map-overlay-legend" class="subtitle">Layer legend / 图层说明：regional anchors, active tiles, prefetch rings, live-event pulses / 区域锚点、活跃地图块、预热探索圈、实时事件脉冲。</p>
         </div>
         <div id="world-real-map" data-engine="{map_engine_id}" data-provider="{tile_provider}" aria-label="现实镜像地图"></div>
       </div>
     </section>
     <section>
-      <h2>世界区域</h2>
+      <h2>World Regions / 世界区域</h2>
       <div class="grid">{zone_cards}</div>
     </section>
     <section id="world-map-move-panel" class="panel">
-      <h2>详细世界地图</h2>
+      <h2>Detailed World Map / 详细世界地图</h2>
       <p class="subtitle">{current_map_summary}</p>
       <div class="mini-grid">{map_cards}</div>
       <form method="post" action="/world/web/map-move" style="margin-top:16px">
         {csrf_input}
         <input type="hidden" name="matrix_user_id" value="{current_matrix_user_id}" />
         <select id="world-map-move-target" name="target">{map_exit_options}</select>
-        <button type="submit">移动到这里</button>
+        <button type="submit">Move Here / 移动到这里</button>
       </form>
     </section>
     <section class="play">
       <div id="world-action-console" class="panel">
-        <h2>世界行动台</h2>
+        <h2>World Action Console / 世界行动台</h2>
         <p id="world-action-console-status" class="subtitle">{console_note}</p>
         <form method="post" action="/world/web/action">
           {csrf_input}
           <input type="hidden" name="matrix_user_id" value="{current_matrix_user_id}" />
           <select id="world-action-location" name="location_id">{location_options}</select>
-          <textarea id="world-action-body" name="body">我要在镜像城市建立 AI 设计工坊，招募 Agent，完成真实委托，并把关键机会转成 League 任务。</textarea>
-          <button type="submit">提交世界行动</button>
+          <textarea id="world-action-body" name="body">Launch an AI Design Studio for overseas/global players / 我要在全球镜像城市建立 AI 设计工坊，招募 Agent，完成海外真实委托，并把关键机会转成 League 任务。</textarea>
+          <button type="submit">Submit World Action / 提交世界行动</button>
         </form>
       </div>
       <div class="panel">
-        <h2>世界事件时间线</h2>
+        <h2>World Event Timeline / 世界事件时间线</h2>
         <ul id="world-event-timeline" class="timeline">{event_items}</ul>
       </div>
     </section>
     <section class="panel">
-      <h2>地点</h2>
+      <h2>Places / 地点</h2>
       <div class="mini-grid">{location_cards}</div>
     </section>
     <section class="panel">
-      <h2>Agent 居民 / NPC</h2>
+      <h2>Agent Residents / NPC · Agent 居民</h2>
       <div class="mini-grid">{entity_cards}</div>
     </section>
     <section id="world-assets-panel" class="panel">
-      <h2>角色道具</h2>
+      <h2>Character Items / 角色道具</h2>
       <div class="mini-grid">{asset_cards}</div>
       <form method="post" action="/world/web/asset" style="margin-top:16px">
         {csrf_input}
         <input type="hidden" name="matrix_user_id" value="{current_matrix_user_id}" />
         <input id="world-asset-id" name="asset_id" value="{latest_asset_id}" placeholder="自动填充或 latest" />
-        <textarea id="world-asset-body" name="body">升级这件世界道具：强化能力、证据、风险控制、行动循环和下一条支线。</textarea>
-        <button type="submit">升级道具</button>
+        <textarea id="world-asset-body" name="body">Upgrade this world item / 升级这件世界道具：强化能力、证据、风险控制、行动循环和下一条支线。</textarea>
+        <button type="submit">Upgrade Item / 升级道具</button>
       </form>
     </section>
     <section id="world-companies-panel" class="panel">
-      <h2>工坊 / 据点</h2>
+      <h2>Studios / Hubs · 工坊 / 据点</h2>
       <div class="mini-grid">{company_cards}</div>
       <form method="post" action="/world/web/company" style="margin-top:16px">
         {csrf_input}
         <input type="hidden" name="matrix_user_id" value="{current_matrix_user_id}" />
         <input id="world-company-asset-id" name="asset_id" value="{latest_asset_id}" placeholder="自动填充或 latest" />
-        <textarea id="world-company-body" name="body">用这件道具建立工坊据点：定义能力、服务对象、行动循环、证据和第一条悬赏路线。</textarea>
-        <button type="submit">建立工坊</button>
+        <textarea id="world-company-body" name="body">Launch a global-facing studio hub / 用这件道具建立面向海外玩家的工坊据点：定义能力、服务对象、行动循环、证据和第一条悬赏路线。</textarea>
+        <button type="submit">Launch Studio / 建立工坊</button>
       </form>
     </section>
     <section id="world-listings-panel" class="panel">
-      <h2>据点 / 任务牌</h2>
+      <h2>Hubs / Quest Cards · 据点 / 任务牌</h2>
       <div class="mini-grid">{shop_cards}</div>
       <div class="mini-grid" style="margin-top:12px">{listing_cards}</div>
       <form method="post" action="/world/web/listing" style="margin-top:16px">
         {csrf_input}
         <input type="hidden" name="matrix_user_id" value="{current_matrix_user_id}" />
         <input id="world-listing-company-id" name="company_id" value="{latest_company_id}" placeholder="自动填充或 latest" />
-        <textarea id="world-listing-body" name="body">发布一个工坊委托：写清成果、赏金逻辑、证据包、承诺、风险控制、自检和下一步行动。</textarea>
-        <button type="submit">发布任务牌</button>
+        <textarea id="world-listing-body" name="body">Publish a global bounty card / 发布一个海外可接取的工坊委托：写清成果、赏金逻辑、证据包、承诺、风险控制、自检和下一步行动。</textarea>
+        <button type="submit">Publish Quest Card / 发布任务牌</button>
       </form>
     </section>
     <section id="world-commerce-panel" class="panel">
-      <h2>悬赏 / 冒险委托</h2>
-      <p class="subtitle">玩家视角只需要三步：接取任务牌 → 提交成果 → 获得评级与奖励。完整路线操作仍可展开，方便 beta 验证和高级玩家调试。</p>
+      <h2>Bounties / Adventure Commissions · 悬赏 / 冒险委托</h2>
+      <p class="subtitle">Player loop for overseas beta / 海外 beta 玩家视角只需要三步：accept quest card → submit result → get rating and reward / 接取任务牌 → 提交成果 → 获得评级与奖励。完整路线操作仍可展开，方便 beta 验证和高级玩家调试。</p>
       <div class="world-adventure-steps">
-        <div class="world-adventure-step"><b>1 · 接取任务牌</b><span>选择一个悬赏，把它变成可执行的冒险委托。</span></div>
-        <div class="world-adventure-step"><b>2 · 提交成果</b><span>提交成果包、证据、风险复盘和下一步行动。</span></div>
-        <div class="world-adventure-step"><b>3 · 评级领奖励</b><span>通过评级后获得声望与奖励；不通过则进入返工路线。</span></div>
+        <div class="world-adventure-step"><b>1 · Accept / 接取任务牌</b><span>Choose a bounty and turn it into an executable commission / 选择一个悬赏，把它变成可执行的冒险委托。</span></div>
+        <div class="world-adventure-step"><b>2 · Submit / 提交成果</b><span>Submit result package, evidence, risk review, and next action / 提交成果包、证据、风险复盘和下一步行动。</span></div>
+        <div class="world-adventure-step"><b>3 · Rate & Reward / 评级领奖励</b><span>Pass rating to earn reputation and rewards; otherwise enter revision / 通过评级后获得声望与奖励；不通过则进入返工路线。</span></div>
       </div>
       <div id="world-purchase-cards-live" class="mini-grid">{purchase_cards}</div>
       <div id="world-work-orders-live" class="mini-grid" style="margin-top:12px">{work_order_cards}</div>
@@ -1301,74 +1301,74 @@ pub(super) async fn get_world_web_shell(
           {csrf_input}
           <input type="hidden" name="matrix_user_id" value="{current_matrix_user_id}" />
           <input id="world-buy-listing-id" name="listing_id" value="{latest_listing_id}" placeholder="自动填充或 latest" />
-          <textarea id="world-buy-body" name="body">接取这个任务牌，开启冒险委托：确认成果、证据包、评级标准、风险控制和下一步行动。</textarea>
-          <button type="submit">接取任务牌</button>
+          <textarea id="world-buy-body" name="body">Accept this quest card / 接取这个任务牌，开启冒险委托：确认成果、证据包、评级标准、风险控制和下一步行动。</textarea>
+          <button type="submit">Accept Quest Card / 接取任务牌</button>
         </form>
       <div id="world-work-deliveries-live" class="mini-grid" style="margin-top:12px">{work_delivery_cards}</div>
       <form id="world-work-deliver-form" method="post" action="/world/web/work-deliver" style="margin-top:16px">
         {csrf_input}
         <input type="hidden" name="matrix_user_id" value="{current_matrix_user_id}" />
         <input id="world-work-deliver-id" name="work_order_id" value="{latest_work_order_id}" placeholder="自动填充或 latest" />
-        <textarea id="world-work-deliver-body" name="body">成果提交包：成果、证据包、评级清单、风险复盘、下一步行动和自检记录。</textarea>
-        <button type="submit">提交成果</button>
+        <textarea id="world-work-deliver-body" name="body">Result package / 成果提交包：成果、证据包、评级清单、风险复盘、下一步行动和自检记录。</textarea>
+        <button type="submit">Submit Result / 提交成果</button>
       </form>
       <div id="world-work-acceptances-live" class="mini-grid" style="margin-top:12px">{work_acceptance_cards}</div>
       <form id="world-work-accept-form" method="post" action="/world/web/work-accept" style="margin-top:16px">
         {csrf_input}
         <input type="hidden" name="matrix_user_id" value="{current_matrix_user_id}" />
         <input id="world-work-accept-id" name="work_order_id" value="{latest_work_order_id}" placeholder="自动填充或 latest" />
-        <textarea id="world-work-accept-body" name="body">评级通过：确认成果证据、质量备注、下一条支线和声望奖励。</textarea>
-        <button type="submit">评级通过</button>
+        <textarea id="world-work-accept-body" name="body">Rating passed / 评级通过：确认成果证据、质量备注、下一条支线和声望奖励。</textarea>
+        <button type="submit">Pass Rating / 评级通过</button>
       </form>
       <div id="world-work-rejections-live" class="mini-grid" style="margin-top:12px">{work_rejection_cards}</div>
       <form id="world-work-reject-form" method="post" action="/world/web/work-reject" style="margin-top:16px">
         {csrf_input}
         <input type="hidden" name="matrix_user_id" value="{current_matrix_user_id}" />
         <input id="world-work-reject-id" name="work_order_id" value="{latest_work_order_id}" placeholder="自动填充或 latest" />
-        <textarea id="world-work-reject-body" name="body">需要返工：记录未通过原因、证据缺口、奖励退回、返工要求和下一步行动。</textarea>
-        <button type="submit">要求返工</button>
+        <textarea id="world-work-reject-body" name="body">Revision required / 需要返工：记录未通过原因、证据缺口、奖励退回、返工要求和下一步行动。</textarea>
+        <button type="submit">Request Revision / 要求返工</button>
       </form>
       <div id="world-work-reopens-live" class="mini-grid" style="margin-top:12px">{work_reopen_cards}</div>
       <form id="world-work-reopen-form" method="post" action="/world/web/work-reopen" style="margin-top:16px">
         {csrf_input}
         <input type="hidden" name="matrix_user_id" value="{current_matrix_user_id}" />
         <input id="world-work-reopen-id" name="work_order_id" value="{latest_work_order_id}" placeholder="自动填充或 latest" />
-        <textarea id="world-work-reopen-body" name="body">重开委托：重新托管奖励，列出返工要求、证据缺口、评级标准和再次提交行动。</textarea>
-        <button type="submit">重开委托</button>
+        <textarea id="world-work-reopen-body" name="body">Reopen commission / 重开委托：重新托管奖励，列出返工要求、证据缺口、评级标准和再次提交行动。</textarea>
+        <button type="submit">Reopen Commission / 重开委托</button>
       </form>
       <div id="world-work-cancellations-live" class="mini-grid" style="margin-top:12px">{work_cancellation_cards}</div>
       <form id="world-work-cancel-form" method="post" action="/world/web/work-cancel" style="margin-top:16px">
         {csrf_input}
         <input type="hidden" name="matrix_user_id" value="{current_matrix_user_id}" />
         <input id="world-work-cancel-id" name="work_order_id" value="{latest_work_order_id}" placeholder="自动填充或 latest" />
-        <textarea id="world-work-cancel-body" name="body">放弃委托：在成果提交前结束路线、退回托管奖励、记录原因并关闭委托。</textarea>
-        <button type="submit">放弃委托</button>
+        <textarea id="world-work-cancel-body" name="body">Cancel commission / 放弃委托：在成果提交前结束路线、退回托管奖励、记录原因并关闭委托。</textarea>
+        <button type="submit">Cancel Commission / 放弃委托</button>
       </form>
       </details>
     </section>
     <section class="panel">
-      <h2>阵营声望图</h2>
+      <h2>Faction Reputation Map / 阵营声望图</h2>
       <div class="mini-grid">{faction_cards}</div>
       <div class="mini-grid" style="margin-top:12px">{standing_cards}</div>
     </section>
     <section id="world-contracts-panel" class="panel">
-      <h2>世界契约</h2>
+      <h2>World Contracts / 世界契约</h2>
       <div id="world-contract-cards-live" class="mini-grid">{contract_cards}</div>
       <form id="world-contract-completion-form" method="post" action="/world/web/contract" style="margin-top:16px">
         {csrf_input}
         <input type="hidden" name="matrix_user_id" value="{current_matrix_user_id}" />
         <input id="world-contract-completion-id" name="contract_id" value="{latest_contract_id}" placeholder="自动填充或契约 ID" />
-        <textarea id="world-contract-completion-body" name="body">世界契约战报：成果、证据、风险复盘、下一步和评级标准。</textarea>
-        <button type="submit">完成契约</button>
+        <textarea id="world-contract-completion-body" name="body">World contract report / 世界契约战报：成果、证据、风险复盘、下一步和评级标准。</textarea>
+        <button type="submit">Complete Contract / 完成契约</button>
       </form>
     </section>
     <section class="panel">
-      <h2>任务路线图</h2>
+      <h2>Quest Route Graph / 任务路线图</h2>
       <div id="world-route-task-graph-live" class="mini-grid">{world_route_task_graph_cards}</div>
     </section>
     <section class="panel">
-      <h2>可玩指令</h2>
-      <p class="subtitle"><code>/world</code> <code>/world action 我要开一家 AI 设计工坊</code> <code>/league</code> <code>/arena</code> <code>/guild</code> <code>/raid</code></p>
+      <h2>Playable Commands / 可玩指令</h2>
+      <p class="subtitle"><code>/world</code> <code>/world action Launch an AI Design Studio / 我要开一家 AI 设计工坊</code> <code>/league</code> <code>/arena</code> <code>/guild</code> <code>/raid</code></p>
     </section>
   </main>
   <script id="trillionnium-world-map-data" type="application/json">{world_map_data_json}</script>

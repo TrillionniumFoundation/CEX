@@ -300,35 +300,38 @@ pub(super) fn world_map_node_primary_actions_json(node: &WorldMapNode) -> Vec<Va
     let mut actions = vec![
         world_map_primary_action_json(
             "move_here",
-            "移动到这里",
+            "Move Here / 移动到这里",
             "movement",
             format!("/go {}", node.node_id),
             WORLD_ROUTE_MAP_MOVE_PANEL_ID,
             format!(
-                "移动到「{}」并观察这里的现实镜像任务、Agent 和可交互对象。",
+                "Move to「{0}」and inspect reality-mirror quests, Agents, and interactables / 移动到「{0}」并观察这里的现实镜像任务、Agent 和可交互对象。",
                 node.name
             ),
             Some(node.node_id.as_str()),
         ),
         world_map_primary_action_json(
             "inspect_node",
-            "观察据点",
+            "Inspect Hub / 观察据点",
             "inspect",
             "/look".to_string(),
             WORLD_ROUTE_ACTION_PANEL_ID,
-            format!("在「{}」详细观察：{}", node.name, node.description),
+            format!(
+                "Inspect「{}」in detail / 在这里详细观察：{}",
+                node.name, node.description
+            ),
             None,
         ),
     ];
     if has_tag("market") || has_tag("buy") || has_tag("sell") || has_tag("listing") {
         actions.push(world_map_primary_action_json(
             "open_market",
-            "打开任务牌",
+            "Open Quest Cards / 打开任务牌",
             "commerce",
             "/shops".to_string(),
             WORLD_ROUTE_COMMERCE_PANEL_ID,
             format!(
-                "在「{}」浏览悬赏机会、委托需求、工坊任务牌和可接取契约。",
+                "Browse bounties, commission needs, studio quest cards, and contracts at「{}」/ 在这里浏览悬赏机会、委托需求、工坊任务牌和可接取契约。",
                 node.name
             ),
             None,
@@ -337,12 +340,12 @@ pub(super) fn world_map_node_primary_actions_json(node: &WorldMapNode) -> Vec<Va
     if has_tag("craft") || has_tag("asset") || has_tag("upgrade") || has_tag("company") {
         actions.push(world_map_primary_action_json(
             "open_workshop",
-            "进入工坊",
+            "Enter Studio / 进入工坊",
             "craft",
             "/assets".to_string(),
             WORLD_ROUTE_ASSETS_PANEL_ID,
             format!(
-                "在「{}」整理道具、升级工坊、创建据点或准备可提交成果。",
+                "Manage items, upgrade studios, create hubs, or prepare submittable results at「{}」/ 在这里整理道具、升级工坊、创建据点或准备可提交成果。",
                 node.name
             ),
             None,
@@ -351,12 +354,12 @@ pub(super) fn world_map_node_primary_actions_json(node: &WorldMapNode) -> Vec<Va
     if has_tag("deliver") || has_tag("accept") || has_tag("reject") || has_tag("cancel") {
         actions.push(world_map_primary_action_json(
             "open_work_orders",
-            "查看委托",
+            "View Commissions / 查看委托",
             "work_order",
             "/work".to_string(),
             WORLD_ROUTE_COMMERCE_PANEL_ID,
             format!(
-                "在「{}」处理成果提交、评级、返工、重开、放弃和证据包。",
+                "Handle result submission, rating, revision, reopen, cancel, and evidence packs at「{}」/ 在这里处理成果提交、评级、返工、重开、放弃和证据包。",
                 node.name
             ),
             None,
@@ -365,12 +368,12 @@ pub(super) fn world_map_node_primary_actions_json(node: &WorldMapNode) -> Vec<Va
     if has_tag("arena") || has_tag("raid") || has_tag("guild") || has_tag("team") {
         actions.push(world_map_primary_action_json(
             "open_league",
-            "进入竞技场",
+            "Enter Arena / 进入竞技场",
             "league",
             "/league".to_string(),
             WORLD_ROUTE_LEAGUE_LINK_ID,
             format!(
-                "从「{}」进入 League，把现实任务带进竞技评分和队伍协作。",
+                "Enter League from「{}」and turn real-world quests into ratings and team play / 从这里进入 League，把现实任务带进竞技评分和队伍协作。",
                 node.name
             ),
             None,
@@ -379,11 +382,14 @@ pub(super) fn world_map_node_primary_actions_json(node: &WorldMapNode) -> Vec<Va
     if has_tag("wallet") || has_tag("refund") || has_tag("contract") {
         actions.push(world_map_primary_action_json(
             "open_wallet_contracts",
-            "奖励 / 契约",
+            "Rewards / Contracts · 奖励 / 契约",
             "ledger_contract",
             "/wallet".to_string(),
             WORLD_ROUTE_CONTRACTS_PANEL_ID,
-            format!("在「{}」检查奖励、契约、退回、争议或评级状态。", node.name),
+            format!(
+                "Check rewards, contracts, refunds, disputes, or rating status at「{}」/ 在这里检查奖励、契约、退回、争议或评级状态。",
+                node.name
+            ),
             None,
         ));
     }

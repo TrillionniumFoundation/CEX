@@ -3,40 +3,40 @@ use super::*;
 fn client_app_visible_copy(value: &str) -> String {
     let mut copy = value.to_string();
     let replacements = [
-        ("Starter Studio", "新手工坊"),
-        ("Forge Workbench", "锻造工坊"),
-        ("Asset Yard", "道具庭院"),
-        ("ZBJ Market Gate", "悬赏集市门"),
-        ("League Coliseum", "League 竞技场"),
-        ("starter-studio", "新手工坊"),
-        ("forge-workbench", "锻造工坊"),
-        ("asset-yard", "道具庭院"),
-        ("zbj-market-gate", "悬赏集市门"),
-        ("league-coliseum", "League 竞技场"),
-        ("cn-shanghai-core", "上海主城"),
-        ("dense", "高密度"),
-        ("regional", "区域密度"),
-        ("route_task", "路线任务"),
-        ("contract_capture", "契约登记"),
-        ("work_order", "冒险委托"),
-        ("delivery", "成果提交"),
-        ("acceptance", "评级"),
-        ("rejection", "返工"),
-        ("reopen", "重开"),
-        ("cancellation", "放弃"),
-        ("pending", "待推进"),
-        ("completed", "已完成"),
-        ("accepted", "已评级"),
-        ("customer-facing", "委托可用"),
-        ("customer", "委托"),
-        ("buyer", "接取方"),
-        ("seller", "服务方"),
-        ("commercial", "任务"),
-        ("browser commerce E2E", "browser adventure E2E"),
-        ("AI 设计公司", "AI 设计工坊"),
-        ("服务真实客户", "完成真实委托"),
-        ("真实客户", "真实委托"),
-        ("委托方", "委托目标"),
+        ("Starter Studio", "Starter Studio / 新手工坊"),
+        ("Forge Workbench", "Forge Workbench / 锻造工坊"),
+        ("Asset Yard", "Asset Yard / 道具庭院"),
+        ("ZBJ Market Gate", "Bounty Market Gate / 悬赏集市门"),
+        ("League Coliseum", "League Coliseum / League 竞技场"),
+        ("starter-studio", "starter-studio / 新手工坊"),
+        ("forge-workbench", "forge-workbench / 锻造工坊"),
+        ("asset-yard", "asset-yard / 道具庭院"),
+        ("zbj-market-gate", "bounty-market-gate / 悬赏集市门"),
+        ("league-coliseum", "league-coliseum / League 竞技场"),
+        ("cn-shanghai-core", "global-start-zone / 全球首发区"),
+        ("dense", "dense / 高密度"),
+        ("regional", "regional / 区域密度"),
+        ("route_task", "route task / 路线任务"),
+        ("contract_capture", "contract capture / 契约登记"),
+        ("work_order", "quest commission / 冒险委托"),
+        ("delivery", "result submit / 成果提交"),
+        ("acceptance", "rating pass / 评级"),
+        ("rejection", "revision / 返工"),
+        ("reopen", "reopen / 重开"),
+        ("cancellation", "cancel / 放弃"),
+        ("pending", "pending / 待推进"),
+        ("completed", "completed / 已完成"),
+        ("accepted", "accepted / 已评级"),
+        ("customer-facing", "player-facing / 玩家可用"),
+        ("customer", "client / 委托目标"),
+        ("buyer", "quest taker / 接取方"),
+        ("seller", "service party / 服务方"),
+        ("commercial", "market quest / 市场任务"),
+        ("browser commerce E2E", "browser adventure E2E / 浏览器冒险验收"),
+        ("AI 设计公司", "AI Design Studio / AI 设计工坊"),
+        ("服务真实客户", "serve real global clients / 完成海外真实委托"),
+        ("真实客户", "real global client / 海外真实委托"),
+        ("委托方", "client / 委托目标"),
     ];
     for (from, to) in replacements {
         copy = copy.replace(from, to);
@@ -46,33 +46,33 @@ fn client_app_visible_copy(value: &str) -> String {
 
 fn client_app_map_label(value: &str) -> String {
     let label = match value {
-        "prefetch" => "预热分片",
-        "street_nodes" => "街区节点",
-        "neighbor_tile_warmup" => "邻近地图预热",
-        "warm" => "预热",
-        "active" => "活跃",
-        "planned" => "规划中",
-        "open" | "OPEN" => "开放",
-        "contract" => "契约",
-        "venture" => "探索",
-        "no-task" => "未关联任务",
-        "poi" => "热点",
-        "world_event" => "世界事件",
-        "dense" => "高密度",
-        "regional" => "区域密度",
-        "Map density booting." => "地图密度加载中。",
-        "hub_square" => "主城广场",
-        "agent_home" => "Agent 居所",
-        "ledger_office" => "奖励窗口",
-        "workshop_room" => "工坊房间",
-        "craft_station" => "锻造台",
-        "asset_yard" => "道具庭院",
-        "market_gate" => "悬赏入口",
-        "client_board" => "悬赏牌",
-        "delivery_dock" => "成果评定台",
-        "dispute_desk" => "仲裁柜台",
-        "arena_gate" => "竞技入口",
-        "raid_hall" => "团本大厅",
+        "prefetch" => "prefetch / 预热分片",
+        "street_nodes" => "street nodes / 街区节点",
+        "neighbor_tile_warmup" => "neighbor warmup / 邻近地图预热",
+        "warm" => "warm / 预热",
+        "active" => "active / 活跃",
+        "planned" => "planned / 规划中",
+        "open" | "OPEN" => "open / 开放",
+        "contract" => "contract / 契约",
+        "venture" => "venture / 探索",
+        "no-task" => "no task / 未关联任务",
+        "poi" => "POI / 热点",
+        "world_event" => "world event / 世界事件",
+        "dense" => "dense / 高密度",
+        "regional" => "regional / 区域密度",
+        "Map density booting." => "Map density loading / 地图密度加载中。",
+        "hub_square" => "hub square / 主城广场",
+        "agent_home" => "Agent home / Agent 居所",
+        "ledger_office" => "reward office / 奖励窗口",
+        "workshop_room" => "workshop room / 工坊房间",
+        "craft_station" => "craft station / 锻造台",
+        "asset_yard" => "asset yard / 道具庭院",
+        "market_gate" => "bounty gate / 悬赏入口",
+        "client_board" => "quest board / 悬赏牌",
+        "delivery_dock" => "rating dock / 成果评定台",
+        "dispute_desk" => "dispute desk / 仲裁柜台",
+        "arena_gate" => "arena gate / 竞技入口",
+        "raid_hall" => "raid hall / 团本大厅",
         _ => value,
     };
     client_app_visible_copy(label)
@@ -84,7 +84,7 @@ fn escape_client_app_visible_text(value: &str) -> String {
 
 fn client_app_readiness_label(value: &str) -> String {
     match value {
-        "first_playable_loop_100" => "新手主线 100%".to_string(),
+        "first_playable_loop_100" | "global_first_playable_loop_100" => "Global first playable 100% / 新手主线 100%".to_string(),
         "map_focus_visible" => "地图焦点可见".to_string(),
         "world_event_created" => "世界事件已创建".to_string(),
         "contract_open_or_completed" => "契约已开启或完成".to_string(),
@@ -590,8 +590,8 @@ pub(super) async fn get_client_app_web_shell(
     let shared_map_camera_actions_html = map_camera_action_buttons_html();
     let shared_route_filter_buttons_html = route_filter_buttons_html(
         "trillionnium-app-route-filter-action",
-        "按焦点筛选路线",
-        "显示完整路线",
+        "Filter by Focus / 按焦点筛选路线",
+        "Show Full Route / 显示完整路线",
     );
     let shared_map_route_target_resolution_js = real_world_map_route_target_resolution_js();
     let shared_map_route_status_js = real_world_map_route_status_js();
@@ -673,55 +673,55 @@ pub(super) async fn get_client_app_web_shell(
 <body>
   <header>
     <div class="app-topbar-meta">
-      <p><span class="app-beta-chip">Beta 冒险入口 · 移动世界壳 v1</span></p>
-      <p><a href="/world">世界</a> · <a href="/league">竞技场</a></p>
+      <p><span class="app-beta-chip">Global-first Beta · 海外市场首发 · Mobile World Shell / 移动世界壳 v1</span></p>
+      <p><a href="/world">World / 世界</a> · <a href="/league">Arena / 竞技场</a></p>
     </div>
     <h1>Trillionnium World</h1>
-    <p class="subtitle">一个手机端现实镜像冒险入口：顶部搜索城市与角色，底部四栏——消息 / 世界 / 动态 / 我。当前位置：<strong>{}</strong></p>
+    <p class="subtitle">A bilingual mobile reality-mirror adventure for overseas-first launch：search cities and agents, then use four tabs — Messages / 消息, World / 世界, Feed / 动态, Me / 我. 当前位置 / Current focus：<strong>{}</strong></p>
     <div class="app-search-shell">
-      <input id="app-global-search" class="app-search-input" type="search" inputmode="search" placeholder="搜索地点、联系人、任务、动态" aria-label="全局搜索" />
-      <button id="app-search-clear" class="app-search-clear" type="button" aria-label="清空全局搜索" hidden>清空</button>
+      <input id="app-global-search" class="app-search-input" type="search" inputmode="search" placeholder="Search places, agents, quests / 搜索地点、联系人、任务、动态" aria-label="Global search / 全局搜索" />
+      <button id="app-search-clear" class="app-search-clear" type="button" aria-label="Clear global search / 清空全局搜索" hidden>Clear / 清空</button>
     </div>
     <div id="app-ux-status" class="app-ux-status" aria-live="polite">
-      <span id="app-ux-status-pill" class="app-ux-pill" data-state="ready">冒险准备完成 · 世界页已激活</span>
-      <span id="app-ux-live-status" class="sr-only">冒险体验已准备完成</span>
+      <span id="app-ux-status-pill" class="app-ux-pill" data-state="ready">Adventure ready / 冒险准备完成 · World tab active / 世界页已激活</span>
+      <span id="app-ux-live-status" class="sr-only">Adventure ready / 冒险体验已准备完成</span>
     </div>
-    <div id="app-search-empty-state" class="app-search-empty" role="status" aria-live="polite">无匹配结果 · 换个关键词或切换底部 Tab。</div>
+    <div id="app-search-empty-state" class="app-search-empty" role="status" aria-live="polite">No results / 无匹配结果 · Try another keyword or tab / 换个关键词或切换底部 Tab。</div>
   </header>
   <main class="app-mobile-shell">
     <section id="app-first-playable-onboarding" class="module quest-hero" aria-label="First playable main quest rail">
-      <span class="badge">新手主线</span>
+      <span class="badge">Starter Quest / 新手主线</span>
       <h2>{}</h2>
       <div class="quest-summary">
         <div>
-          <p class="subtitle">{} 目标：<code>{}</code></p>
+          <p class="subtitle">{} Goal / 目标：<code>{}</code></p>
           <div id="app-first-playable-checks" class="map-stream-hud">{}</div>
         </div>
         <div class="quest-next-card">
-          <strong>下一步行动</strong>
-          <p class="subtitle">先在「世界」选择一个地图焦点，再接取任务牌、提交成果并完成评级。</p>
-          <a class="quest-cta" href="/world">进入世界行动台</a>
+          <strong>Next Action / 下一步行动</strong>
+          <p class="subtitle">Choose a map focus in World / 世界, accept a quest card / 任务牌, submit results / 提交成果, then finish rating / 评级。</p>
+          <a class="quest-cta" href="/world">Open World Console / 进入世界行动台</a>
         </div>
       </div>
       <section id="app-first-playable-steps" class="grid">{}</section>
     </section>
     <section id="app-tab-messages" class="app-tab-panel" data-app-panel="messages" role="tabpanel" aria-labelledby="app-tab-button-messages" aria-hidden="true" hidden>
       <div class="app-tab-header">
-        <h2>消息</h2>
-        <p class="subtitle">Telegram / 微信风格的消息首页，承接队友、Agent 协作、系统提示与主线/支线线程。</p>
+        <h2>Messages / 消息</h2>
+        <p class="subtitle">Telegram/WeChat-style hub for teammates, Agents, notifications, and quest threads / 队友、Agent 协作、提示与主线/支线线程。</p>
       </div>
       <section id="app-message-cards" class="grid">{}</section>
     </section>
     <section id="app-tab-map" class="app-tab-panel is-active" data-app-panel="map" role="tabpanel" aria-labelledby="app-tab-button-map" aria-hidden="false">
       <div class="app-tab-header">
-        <h2>世界</h2>
-        <p class="subtitle">世界主舞台：探索、路线、事件和行动都从这里展开。</p>
+        <h2>World / 世界</h2>
+        <p class="subtitle">Main stage for exploration, routes, events, and actions / 探索、路线、事件和行动都从这里展开。</p>
       </div>
       <section class="map-shell" aria-label="现实镜像地图">
       <div class="map-panel">
-        <span class="badge">现实镜像地图</span>
-        <h2>上海主城 · 探索路线</h2>
-        <p>从真实城市底图开始探索：附近地点、实时事件、任务牌和可协作 Agent 会叠加成冒险路线。普通玩家只需要选焦点、接委托、提交成果、拿评级；底层地图引擎和接口细节已经收进调试信息。</p>
+        <span class="badge">Reality Mirror Map / 现实镜像地图</span>
+        <h2>Global Launch Zone · 海外首发探索路线</h2>
+        <p>Start from a real-world map for global/overseas players：nearby places, live events, quest cards, and collaborative Agents become adventure routes. 普通玩家只需要选焦点、接委托、提交成果、拿评级；底层地图引擎和接口细节已经收进调试信息。</p>
         <details class="dev-details"><summary>调试信息</summary>
           <p><strong>Real-world map engine</strong>: <code>{}</code> + <code>{}</code></p>
           <p><strong>Mirror</strong>: <code>{}</code> · <strong>Active Region</strong>: <code>{}</code> · <strong>Shards</strong>: {} · <strong>LOD Layers</strong>: {}</p>
@@ -729,7 +729,7 @@ pub(super) async fn get_client_app_web_shell(
           <p><strong>Web Viewport</strong>: <code>{}</code></p>
         </details>
         <p><code>{}</code></p>
-        <p><strong>地图主入口</strong>: 先看附近地点、事件和悬赏，再进入其他模块。</p>
+        <p><strong>Map Main Entry / 地图主入口</strong>: start with nearby places, events, and bounties / 先看附近地点、事件和悬赏，再进入其他模块。</p>
         <p id="app-map-density-summary" class="subtitle">{}</p>
         <p id="app-map-camera-summary" class="subtitle">镜头加载中…</p>
         <div id="app-map-stream-hud" class="map-stream-hud">
@@ -746,17 +746,17 @@ pub(super) async fn get_client_app_web_shell(
         </div>
         <p id="app-map-overlay-status" class="subtitle">当前图层：密度、区域、地图块、预热圈、实时事件。</p>
         <div class="module" style="margin-top:14px; padding:16px 18px;">
-          <strong>地图行动栏</strong>
-          <span id="app-map-focus-summary">等待选择地图焦点…</span>
-          <p id="app-map-focus-detail">选择区域、地点或事件，把地图变成下一步行动。</p>
+          <strong>Map Action Rail / 地图行动栏</strong>
+          <span id="app-map-focus-summary">Waiting for map focus / 等待选择地图焦点…</span>
+          <p id="app-map-focus-detail">Select a region, place, or event to create the next action / 选择区域、地点或事件，把地图变成下一步行动。</p>
           <div id="app-map-action-rail" class="focus-stack"></div>
         </div>
         <div class="module" style="margin-top:14px; padding:16px 18px;">
-          <strong>冒险路线</strong>
-          <span id="app-map-route-status">冒险路线：等待选择地图焦点…</span>
-          <p id="app-map-route-next-step-status">推荐下一步：先选择地图焦点。</p>
-          <p id="app-map-route-event-brief-status">事件简报：等待选择事件。</p>
-          <p id="app-map-route-link-status">关联任务路线：暂无。</p>
+          <strong>Adventure Route / 冒险路线</strong>
+          <span id="app-map-route-status">Adventure route / 冒险路线：waiting for map focus / 等待选择地图焦点…</span>
+          <p id="app-map-route-next-step-status">Recommended next step / 推荐下一步：choose a map focus first / 先选择地图焦点。</p>
+          <p id="app-map-route-event-brief-status">Event brief / 事件简报：waiting for event / 等待选择事件。</p>
+          <p id="app-map-route-link-status">Linked task route / 关联任务路线：none yet / 暂无。</p>
           <div id="app-map-route-filter-actions" class="focus-stack">
             {shared_route_filter_buttons_html}
           </div>
@@ -767,65 +767,65 @@ pub(super) async fn get_client_app_web_shell(
       <div id="real-world-map" data-engine="{}" data-provider="{}" aria-label="现实镜像地图"></div>
     </section>
     <section>
-      <h2>地图分片</h2>
+      <h2>Map Tiles / 地图分片</h2>
       <section id="app-tile-shards-live" class="grid">{}</section>
     </section>
     <section>
-      <h2>区域据点</h2>
+      <h2>Regional Hubs / 区域据点</h2>
       <section id="app-region-shards-live" class="grid">{}</section>
     </section>
     <section>
-      <h2>附近热点</h2>
+      <h2>Nearby Hotspots / 附近热点</h2>
       <section id="app-poi-hotspots-live" class="grid">{}</section>
     </section>
     <section>
-      <h2>预热探索圈</h2>
+      <h2>Prefetch Rings / 预热探索圈</h2>
       <section id="app-prefetch-queue-live" class="grid">{}</section>
     </section>
     <section>
-      <h2>实时事件</h2>
+      <h2>Live Events / 实时事件</h2>
       <section id="app-live-events-live" class="grid">{}</section>
     </section>
     </section>
     <section id="app-tab-feed" class="app-tab-panel" data-app-panel="feed" role="tabpanel" aria-labelledby="app-tab-button-feed" aria-hidden="true" hidden>
       <div class="app-tab-header">
-        <h2>动态</h2>
-        <p class="subtitle">小红书式流式浏览，但内容核心是城市事件、委托、战报、冒险动态与社交更新。</p>
+        <h2>Feed / 动态</h2>
+        <p class="subtitle">A global-friendly discovery feed for city events, commissions, battle reports, adventure updates, and social posts / 城市事件、委托、战报、冒险动态与社交更新。</p>
         <details class="dev-details"><summary>动态同步调试</summary><p><strong>Feed API</strong>: <code>{}</code></p><p><strong>Web Feed</strong>: <code>{}</code></p></details>
         <p id="app-feed-api-status" class="subtitle">动态加载中 · 当前区域 <code>{}</code> · 已准备 {} 条动态。</p>
       </div>
       <div id="app-feed-filter-actions" class="focus-stack">{}</div>
       <div id="app-feed-summary" class="map-stream-hud">{}</div>
       <section>
-        <h2>世界动态时间线</h2>
+        <h2>World Activity Timeline / 世界动态时间线</h2>
         <section id="app-feed-items-live" class="grid">{}</section>
       </section>
     <section>
-      <h2>冒险路线预览</h2>
+      <h2>Adventure Route Preview / 冒险路线预览</h2>
       <section id="app-route-preview-live" class="grid">{}</section>
     </section>
     <section>
-      <h2>任务路线图</h2>
+      <h2>Quest Route Graph / 任务路线图</h2>
       <section id="app-route-task-graph-live" class="grid">{}</section>
     </section>
     </section>
     <section id="app-tab-me" class="app-tab-panel" data-app-panel="me" role="tabpanel" aria-labelledby="app-tab-button-me" aria-hidden="true" hidden>
       <div class="app-tab-header">
-        <h2>我</h2>
-        <p class="subtitle">奖励、成长、道具、设置与系统能力统一归到个人中心。</p>
+        <h2>Me / 我</h2>
+        <p class="subtitle">Rewards, progression, items, settings, and system abilities / 奖励、成长、道具、设置与系统能力统一归到个人中心。</p>
       </div>
       <section class="app-me-grid">{}</section>
       <section>
-        <h2>角色模块</h2>
+        <h2>Character Modules / 角色模块</h2>
         <section class="grid">{}</section>
       </section>
     </section>
   </main>
   <nav class="app-bottom-tabs" aria-label="移动端主导航" role="tablist">
-    <button id="app-tab-button-messages" type="button" class="app-bottom-tab" data-app-tab="messages" role="tab" aria-controls="app-tab-messages" aria-selected="false" tabindex="-1">消息</button>
-    <button id="app-tab-button-map" type="button" class="app-bottom-tab is-active" data-app-tab="map" role="tab" aria-controls="app-tab-map" aria-selected="true" tabindex="0">世界</button>
-    <button id="app-tab-button-feed" type="button" class="app-bottom-tab" data-app-tab="feed" role="tab" aria-controls="app-tab-feed" aria-selected="false" tabindex="-1">动态</button>
-    <button id="app-tab-button-me" type="button" class="app-bottom-tab" data-app-tab="me" role="tab" aria-controls="app-tab-me" aria-selected="false" tabindex="-1">我</button>
+    <button id="app-tab-button-messages" type="button" class="app-bottom-tab" data-app-tab="messages" role="tab" aria-controls="app-tab-messages" aria-selected="false" tabindex="-1">Messages<br/>消息</button>
+    <button id="app-tab-button-map" type="button" class="app-bottom-tab is-active" data-app-tab="map" role="tab" aria-controls="app-tab-map" aria-selected="true" tabindex="0">World<br/>世界</button>
+    <button id="app-tab-button-feed" type="button" class="app-bottom-tab" data-app-tab="feed" role="tab" aria-controls="app-tab-feed" aria-selected="false" tabindex="-1">Feed<br/>动态</button>
+    <button id="app-tab-button-me" type="button" class="app-bottom-tab" data-app-tab="me" role="tab" aria-controls="app-tab-me" aria-selected="false" tabindex="-1">Me<br/>我</button>
   </nav>
   <script id="trillionnium-app-data" type="application/json">{}</script>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -870,12 +870,12 @@ pub(super) async fn get_client_app_web_shell(
       const appUxStatusPill = document.getElementById('app-ux-status-pill');
       const appBottomTabs = Array.from(document.querySelectorAll('[data-app-tab]'));
       const appPanels = Array.from(document.querySelectorAll('[data-app-panel]'));
-      const appTabLabels = {{ messages: '消息', map: '世界', feed: '动态', me: '我' }};
+      const appTabLabels = {{ messages: 'Messages / 消息', map: 'World / 世界', feed: 'Feed / 动态', me: 'Me / 我' }};
       const appTabPlaceholders = {{
-        messages: '搜索队友、群组、Agent、任务对话',
-        map: '搜索世界地点、工坊、任务、事件',
-        feed: '搜索动态、话题、事件、冒险记录',
-        me: '搜索奖励、契约、道具、设置',
+        messages: 'Search teammates, Agents, quest chats / 搜索队友、群组、Agent、任务对话',
+        map: 'Search world places, studios, quests, events / 搜索世界地点、工坊、任务、事件',
+        feed: 'Search posts, topics, events, adventure logs / 搜索动态、话题、事件、冒险记录',
+        me: 'Search rewards, contracts, items, settings / 搜索奖励、契约、道具、设置',
       }};
       let activeAppTab = 'map';
       {shared_map_runtime_bootstrap_js}
@@ -909,8 +909,8 @@ pub(super) async fn get_client_app_web_shell(
         if (appSearchEmptyState) {{
           appSearchEmptyState.classList.toggle('is-visible', isEmpty);
           appSearchEmptyState.textContent = isEmpty
-            ? ('无匹配结果 · “' + String(query || '').trim() + '” 没有命中当前 ' + (appTabLabels[activeAppTab] || activeAppTab) + ' 页，换个关键词或切换底部 Tab。')
-            : '无匹配结果 · 换个关键词或切换底部 Tab。';
+            ? ('No results / 无匹配结果 · “' + String(query || '').trim() + '” missed current ' + (appTabLabels[activeAppTab] || activeAppTab) + ' tab，try another keyword or tab / 换个关键词或切换底部 Tab。')
+            : 'No results / 无匹配结果 · Try another keyword or tab / 换个关键词或切换底部 Tab。';
         }}
       }};
       const applyAppSearchFilter = () => {{
@@ -946,7 +946,7 @@ pub(super) async fn get_client_app_web_shell(
           button.tabIndex = active ? 0 : -1;
         }});
         if (appSearchInput) appSearchInput.placeholder = appTabPlaceholders[activeAppTab] || '搜索地点、联系人、任务、动态';
-        announceUxStatus('冒险准备完成 · ' + (appTabLabels[activeAppTab] || activeAppTab) + '页已激活', 'ready');
+        announceUxStatus('Adventure ready / 冒险准备完成 · ' + (appTabLabels[activeAppTab] || activeAppTab) + ' tab active / 页已激活', 'ready');
         applyAppSearchFilter();
         if (activeAppTab === 'feed') {{
           renderFeedSurface(lastFeed, lastSelection);

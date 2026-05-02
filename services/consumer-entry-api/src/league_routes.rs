@@ -3,60 +3,60 @@ use super::*;
 fn league_visible_copy(value: &str) -> String {
     let mut copy = value.to_string();
     let replacements = [
-        ("Preseason Zero", "预备赛季 Zero"),
-        ("Founding Summoners", "创世召唤者"),
-        ("daily_dungeon", "每日副本"),
-        ("bounty_arena", "悬赏竞技场"),
-        ("guild_raid", "公会团本"),
-        ("face_to_face_duel", "面对面切磋"),
-        ("open", "开放"),
-        ("preview", "预览"),
-        ("XP + credits", "经验 + 奖励点"),
-        ("Prize Pool", "奖池"),
-        ("Contribution split", "贡献分成"),
-        ("Duel XP + rating", "切磋经验 + 段位分"),
+        ("Preseason Zero", "Preseason Zero / 预备赛季 Zero"),
+        ("Founding Summoners", "Founding Summoners / 创世召唤者"),
+        ("daily_dungeon", "Daily Dungeon / 每日副本"),
+        ("bounty_arena", "Bounty Arena / 悬赏竞技场"),
+        ("guild_raid", "Guild Raid / 公会团本"),
+        ("face_to_face_duel", "Face Duel / 面对面切磋"),
+        ("open", "open / 开放"),
+        ("preview", "preview / 预览"),
+        ("XP + credits", "XP + credits / 经验 + 奖励点"),
+        ("Prize Pool", "Prize Pool / 奖池"),
+        ("Contribution split", "Contribution Split / 贡献分成"),
+        ("Duel XP + rating", "Duel XP + rating / 切磋经验 + 段位分"),
         ("No loot yet", "还没有掉落道具"),
         ("Apprentice", "学徒"),
         ("Bronze I", "青铜 I"),
         ("City Clerks", "城市书记门"),
-        ("Prompt Forge", "Prompt 锻造会"),
-        ("Draft fast. Ship clean.", "快速组队，干净通关。"),
-        ("Audit Sanctum", "审稿圣所"),
+        ("Prompt Forge", "Prompt Forge / Prompt 锻造会"),
+        ("Draft fast. Ship clean.", "Draft fast. Ship clean. / 快速组队，干净通关。"),
+        ("Audit Sanctum", "Audit Sanctum / 审稿圣所"),
         (
             "No hallucination survives the raid.",
-            "幻觉过不了团本审核。",
+            "No hallucination survives the raid. / 幻觉过不了团本审核。",
         ),
-        ("rubric_scored", "按规则评分"),
-        ("pending", "待结算"),
-        ("Level", "等级"),
-        ("Skills/Tools/Skins", "技能/工具/外观"),
+        ("rubric_scored", "rubric scored / 按规则评分"),
+        ("pending", "pending / 待结算"),
+        ("Level", "Level / 等级"),
+        ("Skills/Tools/Skins", "Skills/Tools/Skins / 技能/工具/外观"),
         ("multi-agent", "多 Agent"),
         ("Craft", "工坊"),
         ("Market", "集市"),
         ("Assets", "道具"),
         ("Events", "事件"),
-        ("真实客户任务", "真实委托任务"),
-        ("真实客户", "真实委托"),
-        ("客户适配", "委托适配"),
-        ("可交付方案", "可提交方案"),
-        ("交付", "成果提交"),
-        ("AI 设计公司", "AI 设计工坊"),
+        ("真实客户任务", "real global-client quest / 真实委托任务"),
+        ("真实客户", "real global client / 海外真实委托"),
+        ("客户适配", "client fit / 委托适配"),
+        ("可交付方案", "submittable proposal / 可提交方案"),
+        ("交付", "result submit / 成果提交"),
+        ("AI 设计公司", "AI Design Studio / AI 设计工坊"),
         ("deliverable", "成果"),
         ("evidence", "证据"),
         ("risk", "风险"),
         ("self-review", "自评"),
         ("next action", "下一步"),
-        ("Oracle Scout", "Oracle 侦察手"),
-        ("Forge Builder", "锻造建造者"),
-        ("Mirror Auditor", "镜像审稿人"),
-        ("Courier Closer", "信使收尾人"),
-        ("settled", "已结算"),
-        ("held_review", "人工复核中"),
-        ("rubric_hidden", "隐藏规则评分"),
-        ("scout", "侦察"),
-        ("builder", "建造"),
-        ("auditor", "审稿"),
-        ("closer", "收尾"),
+        ("Oracle Scout", "Oracle Scout / Oracle 侦察手"),
+        ("Forge Builder", "Forge Builder / 锻造建造者"),
+        ("Mirror Auditor", "Mirror Auditor / 镜像审稿人"),
+        ("Courier Closer", "Courier Closer / 信使收尾人"),
+        ("settled", "settled / 已结算"),
+        ("held_review", "held review / 人工复核中"),
+        ("rubric_hidden", "hidden rubric / 隐藏规则评分"),
+        ("scout", "scout / 侦察"),
+        ("builder", "builder / 建造"),
+        ("auditor", "auditor / 审稿"),
+        ("closer", "closer / 收尾"),
     ];
     for (from, to) in replacements {
         copy = copy.replace(from, to);
@@ -346,7 +346,7 @@ pub(super) async fn get_league_web_shell(
         .and_then(Value::as_u64)
         .unwrap_or(0);
     let progression_line = format!(
-        "等级 {} {} · 门派 {} · 成功任务 {} · 经验数据点 {} · 技能/工具/外观 {}/{}/{}",
+        "Level / 等级 {} {} · School / 门派 {} · Successful quests / 成功任务 {} · XP data / 经验数据点 {} · Skills/Tools/Skins 技能/工具/外观 {}/{}/{}",
         progression_level,
         league_visible_copy(progression_rank),
         league_visible_copy(progression_school),
@@ -407,71 +407,71 @@ pub(super) async fn get_league_web_shell(
 <body>
   <header>
     <section>
-      <div class="pill">预备赛季 Zero</div>
+      <div class="pill">Global-first Beta / 海外市场首发 · Preseason Zero</div>
       <h1>Trillionnium League</h1>
-      <p class="subtitle">AI Agent 竞技场：组建队伍、进入副本、完成悬赏、提交成果、获得评分、升级段位并领取奖励。</p>
+      <p class="subtitle">AI Agent arena for overseas-first launch：draft your squad, enter dungeons, clear bounties, submit results, get rated, rank up, and earn rewards / 面向海外首发的 AI Agent 竞技场：组建队伍、进入副本、完成悬赏、提交成果、获得评分、升级段位并领取奖励。</p>
     </section>
     <aside class="hero-card">
-      <strong>当前可玩版本</strong>
-      <p class="subtitle">现在可以通过 Matrix/Element 和网页大厅进入；这里是第一版 League 游戏大厅。</p>
-      <a class="cta">通过 /league 入场</a>
+      <strong>Playable Now / 当前可玩版本</strong>
+      <p class="subtitle">Matrix/Element and web lobby are ready for bilingual global beta / 现在可以通过 Matrix/Element 和网页大厅进入；这里是第一版中英文兼容 League 游戏大厅。</p>
+      <a class="cta">Enter via /league / 通过 /league 入场</a>
     </aside>
   </header>
   <main>
     <section class="stats">
-      <div class="stat"><span>玩家</span><b>{players}</b></div>
-      <div class="stat"><span>赛场</span><b>{matches}</b></div>
-      <div class="stat"><span>战斗</span><b>{battles}</b></div>
-      <div class="stat"><span>奖励</span><b>{rewards:.2}</b></div>
-      <div class="stat"><span>道具</span><b>{items}</b></div>
+      <div class="stat"><span>Players 玩家</span><b>{players}</b></div>
+      <div class="stat"><span>Arenas 赛场</span><b>{matches}</b></div>
+      <div class="stat"><span>Battles 战斗</span><b>{battles}</b></div>
+      <div class="stat"><span>Rewards 奖励</span><b>{rewards:.2}</b></div>
+      <div class="stat"><span>Items 道具</span><b>{items}</b></div>
     </section>
     <section>
-      <h2>可进入玩法</h2>
+      <h2>Playable Modes / 可进入玩法</h2>
       <div class="grid">{match_cards}</div>
     </section>
     <section class="panel">
-      <h2>角色成长系统</h2>
-      <p class="subtitle">门派系统、技能树、装备/工具、皮肤（多 Agent 能力）、经验数据积累和以任务成功数量为核心的等级系统。</p>
+      <h2>Progression System / 角色成长系统</h2>
+      <p class="subtitle">Schools, skill trees, equipment/tools, skins, multi-Agent capability, experience data, and task-success-based levels / 门派系统、技能树、装备/工具、皮肤、多 Agent 能力、经验数据积累和以任务成功数量为核心的等级系统。</p>
       <div class="commands"><code>{progression_line}</code><code>/progression</code><code>/skills</code><code>/tools</code><code>/skins</code></div>
     </section>
     <section class="panel">
       <h2>Trillionnium World</h2>
-      <p class="subtitle">现实镜像开放世界：城市、工坊、集市、Agent 居民、道具和自由行动。</p>
-      <div class="commands"><code>/world</code><code>/world action 我要开一家 AI 设计工坊</code><code>道具 {world_assets}</code><code>事件 {world_events}</code></div>
+      <p class="subtitle">Reality-mirror open world for global players: cities, studios, markets, Agent residents, items, and free actions / 面向全球玩家的现实镜像开放世界：城市、工坊、集市、Agent 居民、道具和自由行动。</p>
+      <div class="commands"><code>/world</code><code>/world action Launch an AI Design Studio / 我要开一家 AI 设计工坊</code><code>Items 道具 {world_assets}</code><code>Events 事件 {world_events}</code></div>
     </section>
     <section class="play">
       <div class="panel">
-        <h2>网页战斗台</h2>
+        <h2>Web Battle Console / 网页战斗台</h2>
         <p class="subtitle">{console_note}</p>
         <form method="post" action="/league/web/action">
           {csrf_input}
           <input type="hidden" name="matrix_user_id" value="@alice:local.dev" />
-          <select name="action"><option value="join">加入赛场</option><option value="guild">加入公会</option><option value="team">加入团本队伍</option><option value="draft">配置阵容</option><option value="raid">推进团本</option><option value="submit">提交战果</option></select>
-          <input name="match_id" value="daily-dungeon-001" aria-label="赛场 id" />
-          <input name="guild_id" value="guild-prompt-forge" aria-label="公会 id" />
-          <input name="role" value="scout" aria-label="团本角色" />
+          <select name="action"><option value="join">Join Arena / 加入赛场</option><option value="guild">Join Guild / 加入公会</option><option value="team">Join Raid Team / 加入团本队伍</option><option value="draft">Draft Loadout / 配置阵容</option><option value="raid">Contribute Raid / 推进团本</option><option value="submit">Submit Result / 提交战果</option></select>
+          <input name="match_id" value="daily-dungeon-001" aria-label="match id / 赛场 id" />
+          <input name="guild_id" value="guild-prompt-forge" aria-label="guild id / 公会 id" />
+          <input name="role" value="scout" aria-label="raid role / 团本角色" />
           <input name="heroes" value="oracle_scout forge_builder mirror_auditor courier_closer" aria-label="heroes" />
-          <textarea name="body">网页通关：写清成果、证据、风险、自评和下一步。团本选项：侦察证据、分配建造者、定义 Boss 风险门槛。</textarea>
-          <button type="submit">执行行动</button>
+          <textarea name="body">Web clear for global beta: deliverable/result, evidence, risk, self-review, next action. 网页通关：写清成果、证据、风险、自评和下一步。团本选项：侦察证据、分配建造者、定义 Boss 风险门槛。</textarea>
+          <button type="submit">Play Action / 执行行动</button>
         </form>
       </div>
       <div class="panel">
-        <h2>战斗时间线 / 回放</h2>
-        <p class="subtitle">当前阵容：{loadout_line}</p>
-        <p class="subtitle">最强掉落：{top_loot}</p>
+        <h2>Battle Timeline / 战斗时间线 · Replay / 回放</h2>
+        <p class="subtitle">Current loadout / 当前阵容：{loadout_line}</p>
+        <p class="subtitle">Top loot / 最强掉落：{top_loot}</p>
         <ul class="timeline">{timeline}</ul>
       </div>
     </section>
     <section class="panel">
-      <h2>公会大厅</h2>
+      <h2>Guild Halls / 公会大厅</h2>
       <div class="mini-grid">{guild_cards}</div>
     </section>
     <section class="panel">
-      <h2>排行榜</h2>
-      <table><thead><tr><th>#</th><th>玩家</th><th>段位</th><th>积分</th><th>已获奖励</th></tr></thead><tbody>{leaderboard}</tbody></table>
+      <h2>Leaderboard / 排行榜</h2>
+      <table><thead><tr><th>#</th><th>Player 玩家</th><th>Rank 段位</th><th>RP 积分</th><th>Earned 已获奖励</th></tr></thead><tbody>{leaderboard}</tbody></table>
     </section>
     <section class="panel">
-      <h2>可用指令</h2>
+      <h2>Playable Commands / 可用指令</h2>
       <div class="commands"><code>/arena</code><code>/join daily-dungeon-001</code><code>/battle daily-dungeon-001 &lt;action&gt;</code><code>/submit daily-dungeon-001 &lt;result&gt;</code><code>/rank</code><code>/profile</code><code>/rewards</code><code>/history</code></div>
     </section>
   </main>

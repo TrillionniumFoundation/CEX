@@ -232,6 +232,10 @@ async function main() {
   await page.goto('/app', { waitUntil: 'domcontentloaded', timeout: 30_000 });
   await page.waitForSelector('#real-world-map', { timeout: 15_000 });
   assert((await page.title()).includes('Trillionnium World Mobile'), 'app title missing');
+  const appBodyText = await page.locator('body').innerText({ timeout: 10_000 });
+  for (const needle of ['Messages', '消息', 'World', '世界', 'Feed', '动态', 'Me', '我', 'Global', '海外']) {
+    assert(appBodyText.includes(needle), `app bilingual/global-first copy missing: ${needle}`);
+  }
   assert(await count(page, '[data-app-tab]') >= 4, 'mobile bottom tabs missing');
   assert(await count(page, '#app-tab-map.is-active') === 1, 'map tab not active by default');
   assert(await count(page, 'nav.app-bottom-tabs[role="tablist"]') === 1, 'accessible tablist missing');
@@ -299,6 +303,10 @@ async function main() {
   await page.goto('/world', { waitUntil: 'domcontentloaded', timeout: 30_000 });
   await page.waitForSelector('#world-real-map', { timeout: 15_000 });
   assert((await page.title()).includes('Trillionnium World'), 'world title missing');
+  const worldBodyText = await page.locator('body').innerText({ timeout: 10_000 });
+  for (const needle of ['Global-first open world', '面向海外首发', 'World Action Console', '世界行动台', 'Bounties', '悬赏', 'Submit', '提交成果']) {
+    assert(worldBodyText.includes(needle), `world bilingual/global-first copy missing: ${needle}`);
+  }
   assert(await count(page, '#world-map-move-panel') === 1, 'world map move panel missing');
   assert(await count(page, '#world-buy-form') === 1, 'world buy form missing');
   steps.push({ name: 'world_boot_real_map_and_quest_forms', ok: true });
