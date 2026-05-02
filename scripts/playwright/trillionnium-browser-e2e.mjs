@@ -344,6 +344,12 @@ async function main() {
   for (const needle of ['Global-first open world', 'World Action Console', 'Bounties', 'Submit']) {
     assert(worldBodyText.includes(needle), `world English/global-first copy missing: ${needle}`);
   }
+  assert(await count(page, '#world-mobile-first-screen') === 1, 'world mobile-first hero missing');
+  assert(await count(page, '#world-hero-mobile-actions .cta') >= 2, 'world mobile hero quick actions missing');
+  assert(await count(page, '#world-pulse-strip .pulse-card') === 5, 'world pulse strip should keep only compact primary counters visible');
+  assert(await count(page, '#world-stats-compact-more .stat') >= 12, 'world compact stats drawer missing secondary counters');
+  const pulseBox = await page.locator('#world-pulse-strip').boundingBox({ timeout: 10_000 });
+  assert(pulseBox && pulseBox.height < 360, 'world mobile stats area is too tall', pulseBox);
   await assertNoVisibleBilingualSlashPair(page, '/world English system language');
   await page.goto('/world?lang=zh', { waitUntil: 'domcontentloaded', timeout: 30_000 });
   await page.waitForSelector('#world-real-map', { timeout: 15_000 });

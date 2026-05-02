@@ -1084,16 +1084,38 @@ pub(super) async fn get_world_web_shell(
   <style>
     :root {{ color-scheme: dark; --bg:#060711; --panel:#111426; --panel2:#171b31; --gold:#f8c35b; --cyan:#64e3ff; --green:#7dff9b; --text:#f6f7fb; --muted:#9aa3b2; }}
     * {{ box-sizing:border-box; }}
-    body {{ margin:0; min-height:100vh; font-family:Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background:radial-gradient(circle at 22% 0%, #133f38 0, transparent 32rem), radial-gradient(circle at 90% 18%, #3b245c 0, transparent 30rem), var(--bg); color:var(--text); }}
-    header {{ padding:42px min(6vw,72px) 18px; display:grid; gap:22px; grid-template-columns:1.3fr .7fr; align-items:end; }}
+    body {{ margin:0; min-height:100vh; overflow-x:hidden; font-family:Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background:radial-gradient(circle at 22% 0%, #133f38 0, transparent 32rem), radial-gradient(circle at 90% 18%, #3b245c 0, transparent 30rem), var(--bg); color:var(--text); }}
+    header.world-hero {{ padding:32px min(6vw,72px) 16px; display:grid; gap:18px; grid-template-columns:minmax(0,1fr) minmax(280px,.46fr); align-items:stretch; }}
     h1 {{ margin:0; font-size:clamp(44px,7vw,96px); line-height:.88; letter-spacing:-.075em; }}
     h2 {{ margin:0 0 16px; letter-spacing:-.03em; }}
     .subtitle {{ color:var(--muted); font-size:18px; max-width:840px; line-height:1.55; }}
     .hero-card,.card,.panel {{ border:1px solid rgba(255,255,255,.11); background:linear-gradient(145deg,rgba(255,255,255,.09),rgba(255,255,255,.035)); box-shadow:0 24px 80px rgba(0,0,0,.35); backdrop-filter: blur(14px); border-radius:24px; }}
     .hero-card,.panel,.card {{ padding:24px; }}
-    .stats {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:14px; margin-top:22px; }}
-    .stat {{ padding:18px; background:rgba(255,255,255,.06); border-radius:18px; }}
-    .stat b {{ display:block; font-size:26px; color:var(--gold); }}
+    .world-hero-main {{ min-height:350px; display:grid; align-content:center; gap:16px; }}
+    .world-hero-title {{ display:grid; gap:10px; }}
+    .world-hero-actions {{ display:flex; flex-wrap:wrap; gap:10px; margin-top:2px; }}
+    .world-mobile-promise {{ display:flex; flex-wrap:wrap; gap:8px; }}
+    .world-mobile-promise span {{ border:1px solid rgba(100,227,255,.2); background:rgba(100,227,255,.075); color:var(--cyan); border-radius:999px; padding:8px 11px; font-size:12px; font-weight:850; }}
+    .hero-card {{ display:grid; gap:14px; align-content:space-between; }}
+    .hero-card strong {{ color:var(--gold); font-size:22px; }}
+    .world-hero-steps {{ list-style:none; padding:0; margin:0; display:grid; gap:9px; }}
+    .world-hero-steps li {{ display:grid; gap:3px; padding:10px 12px; border:1px solid rgba(255,255,255,.1); border-radius:16px; background:rgba(255,255,255,.055); }}
+    .world-hero-steps b {{ color:var(--text); }}
+    .world-hero-steps span {{ color:var(--muted); font-size:13px; line-height:1.35; }}
+    .stats.world-pulse-strip {{ display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:10px; margin:0; align-items:stretch; }}
+    .pulse-card {{ min-width:0; min-height:96px; padding:13px; display:grid; align-content:space-between; gap:6px; border:1px solid rgba(255,255,255,.1); background:rgba(255,255,255,.06); border-radius:18px; }}
+    .pulse-card.is-primary {{ grid-column:span 2; border-color:rgba(248,195,91,.28); background:linear-gradient(145deg,rgba(248,195,91,.16),rgba(100,227,255,.055)); }}
+    .pulse-card span,.stat span {{ color:var(--muted); font-size:12px; font-weight:850; text-transform:uppercase; letter-spacing:.08em; }}
+    .pulse-card b {{ display:block; font-size:clamp(28px,4vw,42px); color:var(--gold); letter-spacing:-.05em; line-height:.92; }}
+    .pulse-card small {{ color:var(--muted); line-height:1.35; }}
+    .world-stats-more {{ grid-column:1 / -1; border:1px solid rgba(255,255,255,.1); border-radius:18px; background:rgba(255,255,255,.045); overflow:hidden; }}
+    .world-stats-more summary {{ cursor:pointer; list-style:none; display:flex; align-items:center; justify-content:space-between; gap:10px; padding:11px 14px; color:var(--cyan); font-weight:900; }}
+    .world-stats-more summary::-webkit-details-marker {{ display:none; }}
+    .world-stats-more summary::after {{ content:"+"; color:var(--gold); font-size:18px; }}
+    .world-stats-more[open] summary::after {{ content:"–"; }}
+    .stats-more-grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:8px; padding:0 12px 12px; }}
+    .stat {{ padding:10px; background:rgba(255,255,255,.055); border-radius:14px; }}
+    .stat b {{ display:block; font-size:19px; color:var(--gold); }}
     main {{ padding:20px min(6vw,72px) 60px; display:grid; gap:24px; }}
     .grid {{ display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:18px; }}
     .mini-grid {{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }}
@@ -1131,48 +1153,104 @@ pub(super) async fn get_world_web_shell(
     .timeline li {{ display:grid; grid-template-columns:.55fr 1.35fr .55fr; gap:10px; padding:12px; border-radius:14px; background:rgba(255,255,255,.055); }}
     .timeline em {{ grid-column:1 / -1; font-style:normal; }}
     code {{ color:var(--cyan); background:rgba(100,227,255,.08); padding:3px 7px; border-radius:8px; }}
-    .cta {{ color:var(--bg); background:linear-gradient(135deg,var(--gold),#7dff9b); padding:14px 18px; border-radius:16px; display:inline-block; font-weight:800; text-decoration:none; }}
-    @media (max-width:1050px) {{ header,.play {{ grid-template-columns:1fr; }} .grid,.stats,.mini-grid,.world-adventure-steps {{ grid-template-columns:1fr; }} }}
+    .cta {{ color:var(--bg); background:linear-gradient(135deg,var(--gold),#7dff9b); padding:14px 18px; border-radius:16px; display:inline-flex; justify-content:center; align-items:center; font-weight:800; text-decoration:none; }}
+    .cta.secondary {{ color:var(--text); background:rgba(255,255,255,.07); border:1px solid rgba(100,227,255,.24); }}
+    @media (max-width:1050px) {{ header.world-hero,.play,.map-shell {{ grid-template-columns:1fr; }} .grid,.mini-grid,.world-adventure-steps {{ grid-template-columns:1fr; }} .stats.world-pulse-strip {{ grid-template-columns:repeat(3,minmax(0,1fr)); }} #world-real-map {{ order:-1; }} }}
+    @media (max-width:720px) {{
+      header.world-hero {{ padding:16px 14px 8px; gap:12px; }}
+      .world-hero-main {{ min-height:auto; gap:10px; }}
+      h1 {{ font-size:clamp(40px,15vw,62px); letter-spacing:-.068em; }}
+      h2 {{ margin-bottom:10px; }}
+      .subtitle {{ font-size:14px; line-height:1.42; }}
+      .pill {{ font-size:10px; padding:4px 8px; }}
+      .world-mobile-promise {{ gap:6px; }}
+      .world-mobile-promise span {{ padding:6px 8px; font-size:11px; }}
+      .world-hero-actions {{ display:grid; grid-template-columns:1fr 1fr; gap:8px; }}
+      .world-hero-actions .cta,.hero-card .cta {{ min-height:42px; padding:10px 11px; border-radius:14px; font-size:13px; }}
+      .hero-card,.panel,.card {{ padding:15px; border-radius:20px; }}
+      .hero-card {{ gap:10px; }}
+      .hero-card strong {{ font-size:18px; }}
+      .world-hero-steps {{ grid-template-columns:repeat(3,minmax(0,1fr)); gap:7px; }}
+      .world-hero-steps li {{ padding:8px; border-radius:13px; }}
+      .world-hero-steps b {{ font-size:12px; }}
+      .world-hero-steps span {{ display:none; }}
+      main {{ padding:8px 12px 42px; gap:14px; }}
+      .stats.world-pulse-strip {{ grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }}
+      .pulse-card {{ min-height:72px; padding:10px; border-radius:15px; }}
+      .pulse-card.is-primary {{ grid-column:1 / -1; min-height:78px; }}
+      .pulse-card span,.stat span {{ font-size:10px; letter-spacing:.06em; }}
+      .pulse-card b {{ font-size:26px; }}
+      .pulse-card small {{ font-size:11px; }}
+      .world-stats-more summary {{ padding:10px 12px; font-size:13px; }}
+      .stats-more-grid {{ grid-template-columns:repeat(2,minmax(0,1fr)); padding:0 9px 9px; }}
+      .stat {{ padding:8px; border-radius:12px; }}
+      .stat b {{ font-size:16px; }}
+      .map-shell {{ gap:12px; }}
+      #world-real-map {{ min-height:min(58svh,430px); border-radius:18px; }}
+      .map-stream-hud,.overlay-toggle-bar,.focus-stack {{ gap:6px; }}
+      .hud-chip,.focus-chip,.overlay-toggle {{ padding:7px 9px; font-size:12px; }}
+      .timeline li {{ grid-template-columns:1fr; }}
+    }}
   </style>
 </head>
 <body>
-  <header>
-    <section>
+  <header id="world-mobile-first-screen" class="world-hero">
+    <section class="world-hero-main">
       <div class="pill" data-i18n-en="Reality Mirror Adventure" data-i18n-zh="现实镜像冒险">Reality Mirror Adventure</div>
-      <h1>Trillionnium World</h1>
-      <p class="subtitle" data-i18n-en="Global-first open world for overseas launch: reality-mirror cities, studios, quest boards, League arenas, Agents, items, relationships, and free actions. Players see exploration, commissions, ratings, and rewards." data-i18n-zh="面向海外首发的开放世界：现实镜像城市、工坊、任务牌、League 赛场、Agent、道具、关系和自由行动。玩家看到的是探索、委托、评级和奖励。">Global-first open world for overseas launch: reality-mirror cities, studios, quest boards, League arenas, Agents, items, relationships, and free actions. Players see exploration, commissions, ratings, and rewards.</p>
+      <div class="world-hero-title">
+        <h1>Trillionnium World</h1>
+        <p class="subtitle" data-i18n-en="Global-first open world built for one-thumb exploration: pick a real city focus, accept a bounty, submit a result, get rated, and claim rewards." data-i18n-zh="面向海外首发、为单手探索重做的开放世界：选择现实城市焦点，接取悬赏，提交成果，获得评级并领取奖励。">Global-first open world built for one-thumb exploration: pick a real city focus, accept a bounty, submit a result, get rated, and claim rewards.</p>
+      </div>
+      <div class="world-mobile-promise" aria-label="World mobile promises" data-i18n-aria-label-en="World mobile promises" data-i18n-aria-label-zh="世界移动端承诺">
+        <span data-i18n-en="Map first" data-i18n-zh="地图优先">Map first</span>
+        <span data-i18n-en="Player actions only" data-i18n-zh="只露出玩家行动">Player actions only</span>
+        <span data-i18n-en="Stats stay compact" data-i18n-zh="统计保持紧凑">Stats stay compact</span>
+      </div>
+      <div id="world-hero-mobile-actions" class="world-hero-actions">
+        <a class="cta" href='#world-real-map' data-i18n-en="Open Map" data-i18n-zh="打开地图">Open Map</a>
+        <a class="cta secondary" href='#world-action-console' data-i18n-en="Start Action" data-i18n-zh="发起行动">Start Action</a>
+      </div>
     </section>
     <aside class="hero-card">
       <strong data-i18n-en="Next Adventure" data-i18n-zh="下一步冒险">Next Adventure</strong>
-      <p class="subtitle" data-i18n-en="Pick a map focus, then turn it into a contract, commission, submitted result, rating, and reward. This is a player action table, not an internal admin panel." data-i18n-zh="先选一个地图焦点，再推进成契约、委托、成果提交和评级奖励。这是玩家行动台，不是内部系统面板。">Pick a map focus, then turn it into a contract, commission, submitted result, rating, and reward. This is a player action table, not an internal admin panel.</p>
+      <ol class="world-hero-steps">
+        <li><b data-i18n-en="1 · Focus" data-i18n-zh="1 · 选焦点">1 · Focus</b><span data-i18n-en="Tap a map place, event, or route." data-i18n-zh="点选地图地点、事件或路线。">Tap a map place, event, or route.</span></li>
+        <li><b data-i18n-en="2 · Quest" data-i18n-zh="2 · 接任务">2 · Quest</b><span data-i18n-en="Accept a bounty and submit results." data-i18n-zh="接取悬赏并提交成果。">Accept a bounty and submit results.</span></li>
+        <li><b data-i18n-en="3 · Reward" data-i18n-zh="3 · 拿奖励">3 · Reward</b><span data-i18n-en="Get rated, paid, and routed onward." data-i18n-zh="获得评级、奖励和下一步路线。">Get rated, paid, and routed onward.</span></li>
+      </ol>
       <a id="world-league-link" class="cta" href="/league" data-i18n-en="Enter League Arena" data-i18n-zh="进入 League 竞技场">Enter League Arena</a>
     </aside>
   </header>
   <main>
-    <section class="stats">
-      <div class="stat"><span data-i18n-en="Zones" data-i18n-zh="区域">Zones</span><b>{zones}</b></div>
-      <div class="stat"><span data-i18n-en="Places" data-i18n-zh="地点">Places</span><b>{locations}</b></div>
-      <div class="stat"><span data-i18n-en="Agents" data-i18n-zh="居民">Agents</span><b>{entities}</b></div>
-      <div class="stat"><span data-i18n-en="Map Points" data-i18n-zh="地图点">Map Points</span><b>{map_nodes}</b></div>
-      <div class="stat"><span data-i18n-en="Items" data-i18n-zh="道具">Items</span><b>{assets}</b></div>
-      <div class="stat"><span data-i18n-en="Upgrades" data-i18n-zh="升级">Upgrades</span><b>{asset_upgrades}</b></div>
-      <div class="stat"><span data-i18n-en="Studios" data-i18n-zh="工坊">Studios</span><b>{companies}</b></div>
-      <div class="stat"><span data-i18n-en="Hubs" data-i18n-zh="据点">Hubs</span><b>{shops}</b></div>
-      <div class="stat"><span data-i18n-en="Quest Cards" data-i18n-zh="任务牌">Quest Cards</span><b>{listings}</b></div>
-      <div class="stat"><span data-i18n-en="Accepted" data-i18n-zh="已接取">Accepted</span><b>{purchases}</b></div>
-      <div class="stat"><span data-i18n-en="Commissions" data-i18n-zh="委托">Commissions</span><b>{work_orders}</b></div>
-      <div class="stat"><span data-i18n-en="Revisions" data-i18n-zh="返工">Revisions</span><b>{work_rejections}</b></div>
-      <div class="stat"><span data-i18n-en="Reopens" data-i18n-zh="重开">Reopens</span><b>{work_reopens}</b></div>
-      <div class="stat"><span data-i18n-en="Cancels" data-i18n-zh="放弃">Cancels</span><b>{work_cancellations}</b></div>
-      <div class="stat"><span data-i18n-en="Factions" data-i18n-zh="阵营">Factions</span><b>{factions}</b></div>
-      <div class="stat"><span data-i18n-en="Contracts" data-i18n-zh="契约">Contracts</span><b>{contracts}</b></div>
-      <div class="stat"><span data-i18n-en="Reports" data-i18n-zh="战报">Reports</span><b>{completions}</b></div>
-      <div class="stat"><span data-i18n-en="Events" data-i18n-zh="事件">Events</span><b>{events}</b></div>
-      <div class="stat"><span data-i18n-en="Relations" data-i18n-zh="关系">Relations</span><b>{relationships}</b></div>
+    <section id="world-pulse-strip" class="stats world-pulse-strip" aria-label="World pulse counters" data-i18n-aria-label-en="World pulse counters" data-i18n-aria-label-zh="世界脉冲统计">
+      <article class="pulse-card is-primary"><span data-i18n-en="Live Events" data-i18n-zh="实时事件">Live Events</span><b>{events}</b><small data-i18n-en="Tap one to turn the map into a route." data-i18n-zh="点一个事件，把地图变成路线。">Tap one to turn the map into a route.</small></article>
+      <article class="pulse-card"><span data-i18n-en="Map Points" data-i18n-zh="地图点">Map Points</span><b>{map_nodes}</b><small data-i18n-en="Real city anchors" data-i18n-zh="现实城市锚点">Real city anchors</small></article>
+      <article class="pulse-card"><span data-i18n-en="Quest Cards" data-i18n-zh="任务牌">Quest Cards</span><b>{listings}</b><small data-i18n-en="Available bounties" data-i18n-zh="可接取悬赏">Available bounties</small></article>
+      <article class="pulse-card"><span data-i18n-en="Commissions" data-i18n-zh="委托">Commissions</span><b>{work_orders}</b><small data-i18n-en="Accepted loops" data-i18n-zh="已进入执行循环">Accepted loops</small></article>
+      <article class="pulse-card"><span data-i18n-en="Agents" data-i18n-zh="居民">Agents</span><b>{entities}</b><small data-i18n-en="World residents" data-i18n-zh="世界居民">World residents</small></article>
+      <details id="world-stats-compact-more" class="world-stats-more">
+        <summary data-i18n-en="More world counters" data-i18n-zh="更多世界统计">More world counters</summary>
+        <div class="stats-more-grid">
+          <div class="stat"><span data-i18n-en="Zones" data-i18n-zh="区域">Zones</span><b>{zones}</b></div>
+          <div class="stat"><span data-i18n-en="Places" data-i18n-zh="地点">Places</span><b>{locations}</b></div>
+          <div class="stat"><span data-i18n-en="Items" data-i18n-zh="道具">Items</span><b>{assets}</b></div>
+          <div class="stat"><span data-i18n-en="Upgrades" data-i18n-zh="升级">Upgrades</span><b>{asset_upgrades}</b></div>
+          <div class="stat"><span data-i18n-en="Studios" data-i18n-zh="工坊">Studios</span><b>{companies}</b></div>
+          <div class="stat"><span data-i18n-en="Hubs" data-i18n-zh="据点">Hubs</span><b>{shops}</b></div>
+          <div class="stat"><span data-i18n-en="Accepted" data-i18n-zh="已接取">Accepted</span><b>{purchases}</b></div>
+          <div class="stat"><span data-i18n-en="Revisions" data-i18n-zh="返工">Revisions</span><b>{work_rejections}</b></div>
+          <div class="stat"><span data-i18n-en="Reopens" data-i18n-zh="重开">Reopens</span><b>{work_reopens}</b></div>
+          <div class="stat"><span data-i18n-en="Cancels" data-i18n-zh="放弃">Cancels</span><b>{work_cancellations}</b></div>
+          <div class="stat"><span data-i18n-en="Factions" data-i18n-zh="阵营">Factions</span><b>{factions}</b></div>
+          <div class="stat"><span data-i18n-en="Contracts" data-i18n-zh="契约">Contracts</span><b>{contracts}</b></div>
+          <div class="stat"><span data-i18n-en="Reports" data-i18n-zh="战报">Reports</span><b>{completions}</b></div>
+          <div class="stat"><span data-i18n-en="Relations" data-i18n-zh="关系">Relations</span><b>{relationships}</b></div>
+        </div>
+      </details>
     </section>
     <section class="panel">
       <div class="map-shell">
-        <div>
+        <div class="map-copy">
           <div class="pill" data-i18n-en="Reality Mirror Map" data-i18n-zh="现实镜像地图">Reality Mirror Map</div>
           <h2 data-i18n-en="Global City Exploration" data-i18n-zh="海外首发城市探索">Global City Exploration</h2>
           <p class="subtitle" data-i18n-en="Start from any map focus: regions, hotspots, live events, and route tasks become the next action. Players see story, places, commissions, and rewards; engine details stay in debug drawers." data-i18n-zh="从地图焦点进入冒险：区域、热点、实时事件和任务路线会自动串成下一步行动。玩家看到故事、地点、委托和奖励；引擎细节收进调试抽屉。">Start from any map focus: regions, hotspots, live events, and route tasks become the next action. Players see story, places, commissions, and rewards; engine details stay in debug drawers.</p>
