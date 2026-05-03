@@ -441,6 +441,12 @@ pub(super) async fn get_league_web_shell(
     .stat b {{ display:block; font-size:26px; color:var(--gold); }}
     main {{ padding:20px min(6vw,72px) 60px; display:grid; gap:24px; min-width:0; }}
     main > * {{ min-width:0; max-width:100%; }}
+    main > section {{ order:8; }}
+    .stats {{ order:1; }}
+    #league-playable-modes {{ order:2; }}
+    #league-battle-console {{ order:3; }}
+    #league-progression {{ order:4; }}
+    #league-world-bridge {{ order:5; }}
     .grid {{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:18px; }}
     .card {{ padding:20px; min-height:210px; overflow-wrap:anywhere; }}
     .card h3 {{ margin:12px 0; font-size:24px; }}
@@ -455,7 +461,8 @@ pub(super) async fn get_league_web_shell(
     td,th {{ padding:12px 10px; border-bottom:1px solid rgba(255,255,255,.08); text-align:left; overflow-wrap:anywhere; }}
     th {{ color:var(--muted); font-weight:600; }}
     .commands {{ display:flex; flex-wrap:wrap; gap:10px; }}
-    .play {{ display:grid; grid-template-columns:1fr 1fr; gap:18px; }}
+    .play {{ display:grid; grid-template-columns:1fr 1fr; gap:18px; align-items:start; }}
+    #league-battle-console .timeline {{ max-height:520px; overflow:auto; padding-right:4px; }}
     form {{ display:grid; gap:10px; margin:0; }}
     input,textarea,select {{ width:100%; color:var(--text); background:rgba(255,255,255,.07); border:1px solid rgba(255,255,255,.14); border-radius:14px; padding:12px 14px; font:inherit; }}
     textarea {{ min-height:92px; resize:vertical; }}
