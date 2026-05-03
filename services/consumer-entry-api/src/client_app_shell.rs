@@ -651,11 +651,23 @@ pub(super) async fn get_client_app_web_shell(
     body {{ margin:0; min-height:100vh; font-family:Inter, ui-sans-serif, system-ui, sans-serif; background:radial-gradient(circle at 20% 0%, #153f58, transparent 32rem), var(--bg); color:var(--text); padding-bottom:88px; }}
     header {{ position:sticky; top:0; z-index:20; padding:18px min(5vw,32px) 16px; backdrop-filter:blur(18px); background:linear-gradient(180deg, rgba(7,8,20,.96), rgba(7,8,20,.78)); border-bottom:1px solid rgba(255,255,255,.08); }}
     main {{ padding:18px min(5vw,32px) 34px; }}
+    main.app-mobile-shell > section {{ order:8; }}
+    #app-tab-map.is-active {{ display:contents; }}
+    #app-tab-map > .app-tab-header {{ order:1; }}
+    #app-tab-map > .map-shell {{ order:2; }}
+    #app-first-playable-onboarding {{ order:3; }}
+    #app-tab-map > section:not(.map-shell) {{ order:7; }}
+    #app-tab-messages {{ order:4; }}
+    #app-tab-feed {{ order:5; }}
+    #app-tab-me {{ order:6; }}
     h1 {{ margin:0; font-size:clamp(28px,5.6vw,52px); letter-spacing:-.06em; }}
     .subtitle {{ color:var(--muted); max-width:850px; line-height:1.55; }}
     .grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:16px; }}
-    .map-shell {{ display:grid; grid-template-columns:minmax(260px,.8fr) minmax(320px,1.2fr); gap:18px; align-items:stretch; margin-bottom:22px; }}
-    .map-panel {{ border:1px solid rgba(255,255,255,.12); border-radius:26px; background:rgba(255,255,255,.07); padding:22px; box-shadow:0 20px 70px rgba(0,0,0,.35); }}
+    .map-shell {{ display:grid; grid-template-columns:minmax(320px,1.1fr) minmax(300px,.9fr); gap:18px; align-items:start; margin-bottom:22px; }}
+    #real-world-map {{ order:1; }}
+    #app-map-route-panel {{ order:2; }}
+    #app-map-action-panel {{ order:3; }}
+    .map-panel {{ order:4; border:1px solid rgba(255,255,255,.12); border-radius:26px; background:rgba(255,255,255,.07); padding:22px; box-shadow:0 20px 70px rgba(0,0,0,.35); }}
     #real-world-map {{ min-height:430px; border-radius:26px; overflow:hidden; border:1px solid rgba(100,227,255,.28); box-shadow:0 24px 90px rgba(0,0,0,.45); background:#0b1220; }}
     #real-world-map .leaflet-control-zoom a {{ width:40px; height:40px; line-height:40px; font-size:20px; }}
     .badge {{ display:inline-flex; width:max-content; color:#071019; background:var(--gold); border-radius:999px; padding:5px 10px; font-weight:800; }}
