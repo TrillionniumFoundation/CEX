@@ -8,6 +8,16 @@ fn client_app_visible_copy(value: &str) -> String {
         ("Asset Yard", "Asset Yard / 道具庭院"),
         ("ZBJ Market Gate", "Bounty Market Gate / 悬赏集市门"),
         ("League Coliseum", "League Coliseum / League 竞技场"),
+        ("Mirror City Square", "Mirror City Square / 镜像城市广场"),
+        ("Guild Raid Hall", "Guild Raid Hall / 公会团本厅"),
+        ("Bounty Board", "Bounty Board / 悬赏任务牌"),
+        ("Result Rating Dock", "Result Rating Dock / 成果评定台"),
+        ("Dispute Desk", "Dispute Desk / 争议柜台"),
+        ("镜像城市广场", "Mirror City Square / 镜像城市广场"),
+        ("公会团本厅", "Guild Raid Hall / 公会团本厅"),
+        ("悬赏任务牌", "Bounty Board / 悬赏任务牌"),
+        ("成果评定台", "Result Rating Dock / 成果评定台"),
+        ("争议柜台", "Dispute Desk / 争议柜台"),
         ("starter-studio", "starter-studio / 新手工坊"),
         ("forge-workbench", "forge-workbench / 锻造工坊"),
         ("asset-yard", "asset-yard / 道具庭院"),
@@ -44,6 +54,9 @@ fn client_app_visible_copy(value: &str) -> String {
         ("真实客户", "real global client / 海外真实委托"),
         ("委托方", "client / 委托目标"),
     ];
+    if let Some((_, to)) = replacements.iter().find(|(from, _)| value == *from) {
+        return (*to).to_string();
+    }
     for (from, to) in replacements {
         copy = copy.replace(from, to);
     }
@@ -1142,7 +1155,7 @@ pub(super) async fn get_client_app_web_shell(
         const visible = tasks.length ? tasks.slice(0, 6) : routeTaskGraphItems.slice(0, 6);
         routeTaskGraphTarget.innerHTML = visible.map((task) => {{
           const actionButtons = routeTaskGraphActionButtonsHtml(task, 'trillionnium-app-route-flow-action');
-          return `<article class="module app-route-task-graph-item"><strong>${{escapeHtml(mapText(task.task_id || '任务'))}}</strong><span>${{escapeHtml(mapText(task.latest_bucket || 'event'))}} · ${{escapeHtml(mapText(task.latest_status || 'pending'))}} · 支线 ${{escapeHtml(mapText(task.next_opportunity_kind || 'contract_capture'))}}</span><p>${{escapeHtml(task.event_count ?? 0)}} 事件 · ${{escapeHtml(task.contract_count ?? 0)}} 委托 · ${{escapeHtml(task.completion_count ?? 0)}} 战报</p><p>${{escapeHtml(mapText(task.outcome_summary || '战果总结待生成。'))}}</p><p><strong>下一条支线</strong> · ${{escapeHtml(mapText(task.next_opportunity_hint || '支线提示待生成。'))}}</p><p>${{escapeHtml(mapText(task.next_opportunity_playbook || '支线打法待生成。'))}}</p><div class="focus-stack"><code>${{escapeHtml(mapText(task.next_opportunity_command || '/world action 继续推进下一步机会。'))}}</code></div><div class="focus-stack">${{actionButtons}}</div></article>`;
+          return `<article class="module app-route-task-graph-item"><strong>${{escapeHtml(mapText(task.task_id || 'route task / 路线任务'))}}</strong><span>${{escapeHtml(mapText(task.latest_bucket || 'event'))}} · ${{escapeHtml(mapText(task.latest_status || 'pending'))}} · ${{escapeHtml(mapText('branch / 支线'))}} ${{escapeHtml(mapText(task.next_opportunity_kind || 'contract_capture'))}}</span><p>${{escapeHtml(task.event_count ?? 0)}} ${{escapeHtml(mapText('events / 事件'))}} · ${{escapeHtml(task.contract_count ?? 0)}} ${{escapeHtml(mapText('commissions / 委托'))}} · ${{escapeHtml(task.completion_count ?? 0)}} ${{escapeHtml(mapText('battle reports / 战报'))}}</p><p>${{escapeHtml(mapText(task.outcome_summary || '战果总结待生成。'))}}</p><p><strong>${{escapeHtml(mapText('next branch / 下一条支线'))}}</strong> · ${{escapeHtml(mapText(task.next_opportunity_hint || '支线提示待生成。'))}}</p><p>${{escapeHtml(mapText(task.next_opportunity_playbook || '支线打法待生成。'))}}</p><div class="focus-stack"><code>${{escapeHtml(mapText(task.next_opportunity_command || '/world action 继续推进下一步机会。'))}}</code></div><div class="focus-stack">${{actionButtons}}</div></article>`;
         }}).join('');
       }};
 

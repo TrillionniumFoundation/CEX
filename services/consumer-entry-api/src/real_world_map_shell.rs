@@ -364,12 +364,15 @@ pub(super) fn real_world_map_runtime_bootstrap_js() -> &'static str {
       const mapText = (value) => {
         let text = String(value ?? '');
         const replacements = [
-          ['Starter Studio', 'Starter Studio / 新手工坊'], ['Forge Workbench', 'Forge Workbench / 锻造工坊'], ['Asset Yard', 'Asset Yard / 道具庭院'], ['ZBJ Market Gate', 'Bounty Market Gate / 悬赏集市门'], ['League Coliseum', 'League Coliseum / League 竞技场'],
+          ['Starter Studio', 'Starter Studio / 新手工坊'], ['Forge Workbench', 'Forge Workbench / 锻造工坊'], ['Asset Yard', 'Asset Yard / 道具庭院'], ['ZBJ Market Gate', 'Bounty Market Gate / 悬赏集市门'], ['League Coliseum', 'League Coliseum / League 竞技场'], ['Mirror City Square', 'Mirror City Square / 镜像城市广场'], ['Guild Raid Hall', 'Guild Raid Hall / 公会团本厅'], ['Bounty Board', 'Bounty Board / 悬赏任务牌'], ['Result Rating Dock', 'Result Rating Dock / 成果评定台'], ['Dispute Desk', 'Dispute Desk / 争议柜台'],
+          ['镜像城市广场', 'Mirror City Square / 镜像城市广场'], ['公会团本厅', 'Guild Raid Hall / 公会团本厅'], ['悬赏任务牌', 'Bounty Board / 悬赏任务牌'], ['成果评定台', 'Result Rating Dock / 成果评定台'], ['争议柜台', 'Dispute Desk / 争议柜台'], ['League 竞技场', 'League Arena / League 竞技场'],
           ['starter-studio', 'starter-studio / 新手工坊'], ['forge-workbench', 'forge-workbench / 锻造工坊'], ['asset-yard', 'asset-yard / 道具庭院'], ['zbj-market-gate', 'bounty-market-gate / 悬赏集市门'], ['league-coliseum', 'league-coliseum / League 竞技场'], ['cn-shanghai-core', 'global-start-zone / 全球首发区'],
           ['prefetch', 'prefetch / 预热分片'], ['street_nodes', 'street nodes / 街区节点'], ['neighbor_tile_warmup', 'neighbor warmup / 邻近地图预热'], ['warm', 'warm / 预热'], ['active', 'active / 活跃'], ['planned', 'planned / 规划中'], ['pending', 'pending / 待推进'], ['completed', 'completed / 已完成'], ['accepted', 'accepted / 已评级'], ['world_event', 'world event / 世界事件'], ['no-task', 'no task / 未关联任务'], ['dense', 'dense / 高密度'], ['regional', 'regional / 区域密度'],
           ['route_task', 'route task / 路线任务'], ['contract_capture', 'contract capture / 契约登记'], ['work_order', 'quest commission / 冒险委托'], ['delivery', 'result submit / 成果提交'], ['acceptance', 'rating pass / 评级'], ['rejection', 'revision / 返工'], ['reopen', 'reopen / 重开'], ['cancellation', 'cancel / 放弃'], ['live_event', 'live event / 实时事件'],
           ['poi', 'POI / 热点'], ['hub_square', 'hub square / 主城广场'], ['agent_home', 'Agent home / Agent 居所'], ['ledger_office', 'reward office / 奖励窗口'], ['workshop_room', 'workshop room / 工坊房间'], ['craft_station', 'craft station / 锻造台'], ['asset_yard', 'asset yard / 道具庭院'], ['market_gate', 'bounty gate / 悬赏入口'], ['client_board', 'quest board / 悬赏牌'], ['delivery_dock', 'rating dock / 成果评定台'], ['dispute_desk', 'dispute desk / 仲裁柜台'], ['arena_gate', 'arena gate / 竞技入口'], ['raid_hall', 'raid hall / 团本大厅'],
-          ['customer-facing', 'player-facing / 玩家可用'], ['customer', 'client / 委托目标'], ['buyer', 'quest taker / 接取方'], ['seller', 'service party / 服务方'], ['commercial', 'market quest / 市场任务'], ['browser commerce E2E', 'browser adventure E2E / 浏览器冒险验收'], ['AI 设计公司', 'AI Design Studio / AI 设计工坊'], ['服务真实客户', 'serve real global clients / 完成海外真实委托'], ['真实客户', 'real global client / 海外真实委托'], ['委托方', 'client / 委托目标']
+          ['customer-facing', 'player-facing / 玩家可用'], ['customer', 'client / 委托目标'], ['buyer', 'quest taker / 接取方'], ['seller', 'service party / 服务方'], ['commercial', 'market quest / 市场任务'], ['browser commerce E2E', 'browser adventure E2E / 浏览器冒险验收'], ['AI 设计公司', 'AI Design Studio / AI 设计工坊'], ['服务真实客户', 'serve real global clients / 完成海外真实委托'], ['真实客户', 'real global client / 海外真实委托'], ['委托方', 'client / 委托目标'],
+          ['打开任务牌路线', 'Open bounty route / 打开任务牌路线'], ['打开契约路线', 'Open contract route / 打开契约路线'], ['打开契约捕捉路线', 'Open contract capture route / 打开契约捕捉路线'], ['打开契约完成路线', 'Open contract completion route / 打开契约完成路线'], ['打开成果提交路线', 'Open result submission route / 打开成果提交路线'], ['打开评级路线', 'Open rating route / 打开评级路线'], ['打开返工路线', 'Open revision route / 打开返工路线'], ['打开重开路线', 'Open reopen route / 打开重开路线'], ['打开放弃路线', 'Open cancellation route / 打开放弃路线'], ['打开关联契约', 'Open linked contract / 打开关联契约'], ['打开关联事件', 'Open linked event / 打开关联事件'], ['打开事件时间线', 'Open event timeline / 打开事件时间线'], ['打开事件线', 'Open event lane / 打开事件线'], ['起草世界行动', 'Draft world action / 起草世界行动'], ['起草任务后续', 'Draft task follow-up / 起草任务后续'], ['起草后续行动', 'Draft next action / 起草后续行动'], ['起草后续支线', 'Draft next branch / 起草后续支线'], ['推进委托', 'Advance commission / 推进委托'], ['推进下一条支线', 'Advance next branch / 推进下一条支线'], ['路线行动', 'Route action / 路线行动'], ['世界路线交接', 'World route handoff / 世界路线交接'], ['移动到这里', 'Move here / 移动到这里'],
+          ['冒险路线', 'Adventure route / 冒险路线'], ['暂无地图焦点', 'no map focus / 暂无地图焦点'], ['未知地点', 'unknown place / 未知地点'], ['当前路线', 'current route / 当前路线'], ['当前世界路线', 'current world route / 当前世界路线'], ['下一条支线', 'next branch / 下一条支线'], ['支线', 'branch / 支线'], ['战果总结待生成。', 'Outcome summary pending. / 战果总结待生成。'], ['支线提示待生成。', 'Branch hint pending. / 支线提示待生成。'], ['支线打法待生成。', 'Branch playbook pending. / 支线打法待生成。'], ['继续推进下一步机会。', 'continue the next opportunity. / 继续推进下一步机会。'], ['围绕 contract 整理目标、证据、风险、评级标准和下一步。', 'prepare goals, evidence, risks, rating criteria, and next step around contract. / 围绕 contract 整理目标、证据、风险、评级标准和下一步。']
         ];
         replacements.forEach(([from, to]) => { text = text.replaceAll(from, to); });
         const currentLanguage = () => {
@@ -394,7 +397,12 @@ pub(super) fn real_world_map_runtime_bootstrap_js() -> &'static str {
             : pieces.filter((piece) => hasLatin(piece) && !hasCjk(piece));
           return (selected.length ? selected : pieces).join(language === 'zh' ? '：' : ': ');
         };
-        return localizeSlashPair(text);
+        const normalizeLocalizedCopy = (source) => currentLanguage() === 'zh' ? source : String(source || '')
+          .replaceAll('，', ',')
+          .replaceAll('：', ':')
+          .replaceAll('。', '.')
+          .replaceAll('、', ', ');
+        return normalizeLocalizedCopy(localizeSlashPair(text));
       };
       const markerById = new Map((engine.markers || []).map((marker) => [String(marker.node_id || ''), marker]));
       const markerByLocationId = new Map();
@@ -1245,7 +1253,7 @@ pub(super) fn real_world_map_route_flow_buttons_js() -> &'static str {
       const routeFlowActionButtonHtml = (action, className) => {
         if (!action || !action.label || !action.panelId) return '';
         const buttonClass = String(className || 'trillionnium-route-flow-action').trim() || 'trillionnium-route-flow-action';
-        return `<button type="button" class="focus-chip ${escapeHtml(buttonClass)}"${routeFlowActionAttrs(action)}>${escapeHtml(action.label)}</button>`;
+        return `<button type="button" class="focus-chip ${escapeHtml(buttonClass)}"${routeFlowActionAttrs(action)}>${escapeHtml(mapText(action.label))}</button>`;
       };
       const pushRouteFlowActionButton = (buttons, keySet, action) => {
         if (!action || !action.label || !action.panelId) return;
@@ -1261,7 +1269,7 @@ pub(super) fn real_world_map_route_flow_buttons_js() -> &'static str {
         const opportunityAction = buildRouteOpportunityAction(source, source.latest_location_id || '');
         return routeFlowActionButtonHtml(suggestedAction, className) + routeFlowActionButtonHtml(opportunityAction, className);
       };
-      const indexedRouteActionButtonHtml = (action, index, className = 'trillionnium-app-route-action') => `<button type="button" class="focus-chip ${escapeHtml(className)}" data-route-action-index="${escapeHtml(index)}">${escapeHtml((action || {}).label || '路线行动')}</button>`;
+      const indexedRouteActionButtonHtml = (action, index, className = 'trillionnium-app-route-action') => `<button type="button" class="focus-chip ${escapeHtml(className)}" data-route-action-index="${escapeHtml(index)}">${escapeHtml(mapText((action || {}).label || '路线行动'))}</button>`;
 "#
 }
 

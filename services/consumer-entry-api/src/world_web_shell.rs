@@ -8,59 +8,70 @@ fn world_user_visible_copy(value: &str) -> String {
         ("Asset Yard", "Asset Yard / 道具庭院"),
         ("ZBJ Market Gate", "Bounty Market Gate / 悬赏集市门"),
         ("League Coliseum", "League Coliseum / League 竞技场"),
+        ("Mirror City Square", "Mirror City Square / 镜像城市广场"),
+        ("Guild Raid Hall", "Guild Raid Hall / 公会团本厅"),
+        ("Bounty Board", "Bounty Board / 悬赏任务牌"),
+        ("Result Rating Dock", "Result Rating Dock / 成果评定台"),
+        ("Dispute Desk", "Dispute Desk / 争议柜台"),
+        ("镜像城市广场", "Mirror City Square / 镜像城市广场"),
+        ("公会团本厅", "Guild Raid Hall / 公会团本厅"),
+        ("悬赏任务牌", "Bounty Board / 悬赏任务牌"),
+        ("成果评定台", "Result Rating Dock / 成果评定台"),
+        ("争议柜台", "Dispute Desk / 争议柜台"),
+        ("League 竞技场", "League Arena / League 竞技场"),
         ("starter-studio", "starter-studio / 新手工坊"),
         ("forge-workbench", "forge-workbench / 锻造工坊"),
         ("asset-yard", "asset-yard / 道具庭院"),
         ("zbj-market-gate", "bounty-market-gate / 悬赏集市门"),
         ("league-coliseum", "league-coliseum / League 竞技场"),
         ("cn-shanghai-core", "global-start-zone / 全球首发区"),
-        ("客户需求牌", "悬赏任务牌"),
-        ("交付码头", "成果评定台"),
-        ("所有 World asset 的仓库和展示院，未来可拖拽摆放。", "收纳道具、素材和展示件的庭院，后续可自由布置。"),
-        ("把想法打磨成方案、商品、素材和交付包的工作台。", "把想法打磨成方案、素材、道具和成果包的工作台。"),
-        ("现实任务映射成世界委托的市场门口。", "现实机会映射成世界悬赏的入口。"),
-        ("像文字 MUD 的公告栏：任务、需求、报价和线索都贴在这里。", "像文字 MUD 的公告栏：任务、悬赏、提示和线索都贴在这里。"),
-        ("交付、验收、拒收、返工与取消都在这里形成流水线。", "成果提交、评级、返工和放弃都在这里形成冒险路线。"),
-        ("League 入口，任务可以从市场被带进竞技场评分。", "League 入口，任务可以从悬赏集市带进竞技场评级。"),
-        ("生成资产 / 审稿 / 做交付包", "生成道具 / 审稿 / 做成果包"),
-        ("摆放资产 / 升级工坊 / 创建公司", "摆放道具 / 升级工坊 / 创建据点"),
-        ("查看资产 / 升级资产 / 挂到店铺", "查看道具 / 升级道具 / 挂到摊位"),
-        ("接任务 / 上架服务 / 雇佣卖家", "接悬赏 / 发布服务 / 招募队友"),
-        ("浏览需求 / 投标 / 发布服务", "浏览悬赏 / 接取挑战 / 发布服务"),
-        ("提交交付 / 验收 / 发起返工/取消", "提交成果 / 评级 / 发起返工或放弃"),
-        ("craft a real customer-facing studio asset with deliverable, evidence package, risk controls, operating loop, next action, and self review for browser commerce E2E.", "打造一个真实委托可用的 AI 设计工坊道具：写清成果、证据包、风险控制、行动循环、下一步和自检记录，用于 browser adventure E2E。"),
+        ("客户需求牌", "Bounty Board / 悬赏任务牌"),
+        ("交付码头", "Result Rating Dock / 成果评定台"),
+        ("所有 World asset 的仓库和展示院，未来可拖拽摆放。", "Asset yard for inventory, materials, and display pieces; free placement arrives later. / 收纳道具、素材和展示件的庭院，后续可自由布置。"),
+        ("把想法打磨成方案、商品、素材和交付包的工作台。", "Workbench for turning ideas into proposals, materials, items, and result packages. / 把想法打磨成方案、素材、道具和成果包的工作台。"),
+        ("现实任务映射成世界委托的市场门口。", "Gateway where real opportunities become world bounties. / 现实机会映射成世界悬赏的入口。"),
+        ("像文字 MUD 的公告栏：任务、需求、报价和线索都贴在这里。", "Text-MUD style bounty board for quests, prompts, offers, and clues. / 像文字 MUD 的公告栏：任务、悬赏、提示和线索都贴在这里。"),
+        ("交付、验收、拒收、返工与取消都在这里形成流水线。", "Result submission, rating, revision, and cancellation become adventure routes here. / 成果提交、评级、返工和放弃都在这里形成冒险路线。"),
+        ("League 入口，任务可以从市场被带进竞技场评分。", "League entry where bounty-market quests can enter arena rating. / League 入口，任务可以从悬赏集市带进竞技场评级。"),
+        ("生成资产 / 审稿 / 做交付包", "Generate items / Review drafts / Build result packs / 生成道具 / 审稿 / 做成果包"),
+        ("摆放资产 / 升级工坊 / 创建公司", "Place items / Upgrade studio / Create base / 摆放道具 / 升级工坊 / 创建据点"),
+        ("查看资产 / 升级资产 / 挂到店铺", "View items / Upgrade items / List at stall / 查看道具 / 升级道具 / 挂到摊位"),
+        ("接任务 / 上架服务 / 雇佣卖家", "Accept bounty / Publish service / Recruit teammates / 接悬赏 / 发布服务 / 招募队友"),
+        ("浏览需求 / 投标 / 发布服务", "Browse bounties / Accept challenge / Publish service / 浏览悬赏 / 接取挑战 / 发布服务"),
+        ("提交交付 / 验收 / 发起返工/取消", "Submit result / Rate result / Request revision or cancel / 提交成果 / 评级 / 发起返工或放弃"),
+        ("craft a real customer-facing studio asset with deliverable, evidence package, risk controls, operating loop, next action, and self review for browser commerce E2E.", "Craft a global-client-ready AI design studio item with result, evidence pack, risk controls, operating loop, next action, and self-review for browser adventure E2E. / 打造一个真实委托可用的 AI 设计工坊道具：写清成果、证据包、风险控制、行动循环、下一步和自检记录，用于 browser adventure E2E。"),
         ("browser commerce E2E", "browser adventure E2E / 浏览器冒险验收"),
         ("AI 设计公司", "AI Design Studio / AI 设计工坊"),
         ("服务真实客户", "serve real global clients / 完成海外真实委托"),
-        ("route_task", "路线任务"),
-        ("contract_capture", "契约登记"),
-        ("work_order", "冒险委托"),
-        ("delivery", "成果提交"),
-        ("acceptance", "评级"),
-        ("rejection", "返工"),
-        ("reopen", "重开"),
-        ("cancellation", "放弃"),
-        ("pending", "待推进"),
-        ("completed", "已完成"),
-        ("accepted", "已评级"),
-        ("customer-facing", "委托可用"),
-        ("customer", "委托"),
-        ("buyer", "接取方"),
-        ("seller", "服务方"),
-        ("commercial", "任务"),
-        ("commerce", "集市"),
-        ("governance", "治理"),
-        ("builder", "建造"),
-        ("competition", "竞技"),
-        ("faction-city-clerks", "城市书记门"),
-        ("faction-craft-union", "工坊同盟"),
-        ("faction-market-guild", "集市公会"),
-        ("faction-league-order", "League 教团"),
-        ("public_hub", "公共枢纽"),
-        ("workshop", "工坊"),
-        ("real_task_gateway", "真实任务入口"),
-        ("arena", "竞技场"),
-        ("market", "集市"),
+        ("route_task", "route task / 路线任务"),
+        ("contract_capture", "contract capture / 契约登记"),
+        ("work_order", "adventure commission / 冒险委托"),
+        ("delivery", "result submit / 成果提交"),
+        ("acceptance", "rating pass / 评级"),
+        ("rejection", "revision / 返工"),
+        ("reopen", "reopen / 重开"),
+        ("cancellation", "cancel / 放弃"),
+        ("pending", "pending / 待推进"),
+        ("completed", "completed / 已完成"),
+        ("accepted", "accepted / 已评级"),
+        ("customer-facing", "player-facing / 玩家可用"),
+        ("customer", "client / 委托目标"),
+        ("buyer", "quest taker / 接取方"),
+        ("seller", "service party / 服务方"),
+        ("commercial", "market quest / 市场任务"),
+        ("commerce", "commerce / 集市"),
+        ("governance", "governance / 治理"),
+        ("builder", "builder / 建造"),
+        ("competition", "competition / 竞技"),
+        ("faction-city-clerks", "City Clerks / 城市书记门"),
+        ("faction-craft-union", "Craft Union / 工坊同盟"),
+        ("faction-market-guild", "Market Guild / 集市公会"),
+        ("faction-league-order", "League Order / League 教团"),
+        ("public_hub", "public hub / 公共枢纽"),
+        ("workshop", "workshop / 工坊"),
+        ("real_task_gateway", "real quest gate / 真实任务入口"),
+        ("arena", "arena / 竞技场"),
+        ("market", "market / 集市"),
         ("open", "open / 开放"),
         ("OPEN", "open / 开放"),
         ("active", "active / 活跃"),
@@ -73,8 +84,38 @@ fn world_user_visible_copy(value: &str) -> String {
         ("venture", "venture / 探索"),
         ("no-task", "no task / 未关联任务"),
         ("委托方", "client / 委托目标"),
+        ("加入赛场 / 提交比赛 / 查看排行", "Join arena / Submit match / View ranking / 加入赛场 / 提交比赛 / 查看排行"),
+        ("认领职责 / 组队打本 / 分配 Agent", "Claim role / Form raid team / Assign Agent / 认领职责 / 组队打本 / 分配 Agent"),
+        ("摆放道具 / 升级工坊 / 创建据点", "Place items / Upgrade studio / Create base / 摆放道具 / 升级工坊 / 创建据点"),
+        ("生成道具 / 审稿 / 做成果包", "Generate items / Review drafts / Build result pack / 生成道具 / 审稿 / 做成果包"),
+        ("查账 / 发起争议 / 登记合约", "Check ledger / Open dispute / Register contract / 查账 / 发起争议 / 登记合约"),
+        ("查看道具 / 升级道具 / 挂到摊位", "View items / Upgrade items / List at stall / 查看道具 / 升级道具 / 挂到摊位"),
+        ("接悬赏 / 发布服务 / 招募队友", "Accept bounty / Publish service / Recruit teammates / 接悬赏 / 发布服务 / 招募队友"),
+        ("浏览悬赏 / 接取挑战 / 发布服务", "Browse bounties / Accept challenge / Publish service / 浏览悬赏 / 接取挑战 / 发布服务"),
+        ("提交成果 / 评级 / 发起返工或放弃", "Submit result / Rate result / Request revision or cancel / 提交成果 / 评级 / 发起返工或放弃"),
+        ("申请仲裁 / 查看退款 / 提交证据", "Request arbitration / Check refund / Submit evidence / 申请仲裁 / 查看退款 / 提交证据"),
+        ("多人协作任务和 Agent 阵容站位的大厅。", "Guild raid lobby for co-op missions and Agent loadouts. / 多人协作任务和 Agent 阵容站位的大厅。"),
+        ("现实任务和客户需求映射为世界委托的入口。", "Real-world tasks and client briefs become world commissions here. / 现实任务和客户需求映射为世界委托的入口。"),
+        ("现实世界映射、身份、关系和城市自由行动", "Reality mapping, identity, relationships, and city free-roam / 现实世界映射、身份、关系和城市自由行动"),
+        ("建造、工坊、道具、摊位和创造系统", "Building, studios, items, stalls, and creation systems / 建造、工坊、道具、摊位和创造系统"),
+        ("建造、工坊、资产、店铺和创造系统", "Building, studios, assets, shops, and creation systems / 建造、工坊、资产、店铺和创造系统"),
+        ("真实任务、委托、悬赏、招募和声望", "Real tasks, commissions, bounties, recruiting, and reputation / 真实任务、委托、悬赏、招募和声望"),
+        ("真实任务、客户、交易、雇佣和声望", "Real tasks, clients, trades, hiring, and reputation / 真实任务、客户、交易、雇佣和声望"),
+        ("竞技、团本、赛季和裁判结算", "Arenas, raids, seasons, judging, and settlement / 竞技、团本、赛季和裁判结算"),
+        ("玩家、Agent 居民、公会和现实事件进入世界的公共入口。", "Public entrance where players, Agent residents, guilds, and real-world events enter the world. / 玩家、Agent 居民、公会和现实事件进入世界的公共入口。"),
+        ("自由建造第一间工坊、Agent 据点或公会基地。", "Freely build the first studio, Agent base, or guild home. / 自由建造第一间工坊、Agent 据点或公会基地。"),
+        ("现实机会和线索映射为世界悬赏的入口。", "Entrance where real opportunities and clues become world bounties. / 现实机会和线索映射为世界悬赏的入口。"),
+        ("League 赛事、团本、评级、奖励与排行榜发生地。", "Home of League matches, raids, ratings, rewards, and leaderboards. / League 赛事、团本、评级、奖励与排行榜发生地。"),
+        ("新手工坊", "Starter Studio / 新手工坊"),
+        ("悬赏集市门", "Bounty Market Gate / 悬赏集市门"),
+        ("侦察、现实情报、任务发现", "scouting, real-world intel, quest discovery / 侦察、现实情报、任务发现"),
+        ("建造、生成、工坊资产", "building, generation, studio assets / 建造、生成、工坊资产"),
+        ("资产登记、声望、合约和结算提示", "asset registry, reputation, contracts, and settlement prompts / 资产登记、声望、合约和结算提示"),
         ("Map density booting.", "Map density loading / 地图密度加载中。"),
     ];
+    if let Some((_, to)) = replacements.iter().find(|(from, _)| value == *from) {
+        return (*to).to_string();
+    }
     for (from, to) in replacements {
         copy = copy.replace(from, to);
     }
@@ -213,9 +254,9 @@ pub(super) async fn get_world_web_shell(
             format!(
                 "<article class=\"mini\"><strong>{}</strong><span>{}</span><code>{}</code><small>{}</small></article>",
                 escape_html_text(&entity.name),
-                escape_html_text(&entity.role),
+                escape_world_visible_text(&entity.role),
                 escape_html_text(&entity.entity_id),
-                escape_html_text(&entity.status),
+                escape_world_visible_text(&entity.status),
             )
         })
         .collect::<Vec<_>>()
@@ -631,7 +672,7 @@ pub(super) async fn get_world_web_shell(
     )
     .map(|company| {
             format!(
-                "<article class=\"mini company\"><strong>{}</strong><span>{} · Lv {} · 工坊值 {}</span><code>{}</code><small>道具 {} · 声望 {}</small></article>",
+                "<article class=\"mini company\"><strong>{}</strong><span>{} · Lv {} · Studio value {}</span><code>{}</code><small>Items {} · Reputation {}</small></article>",
                 escape_html_text(&company.name),
                 escape_html_text(&company.company_kind),
                 company.level,
@@ -656,7 +697,7 @@ pub(super) async fn get_world_web_shell(
     let shop_cards = indexed_recent(&league.world.world_shops, &world_indexes.recent_shop_indices, 8)
         .map(|shop| {
             format!(
-                "<article class=\"mini shop\"><strong>{}</strong><span>{} · 任务牌 {} · 热度 {}</span><code>{}</code><small>工坊 {} · {}</small></article>",
+                "<article class=\"mini shop\"><strong>{}</strong><span>{} · Quest cards {} · Heat {}</span><code>{}</code><small>Studio {} · {}</small></article>",
                 escape_html_text(&shop.name),
                 escape_html_text(&shop.shop_kind),
                 shop.listing_count,
@@ -680,7 +721,7 @@ pub(super) async fn get_world_web_shell(
     )
     .map(|listing| {
             format!(
-                "<article class=\"mini listing\"><strong>{}</strong><span>{} · 赏金 {} · 品质 {}</span><code>{}</code><small>据点 {} · {}</small></article>",
+                "<article class=\"mini listing\"><strong>{}</strong><span>{} · Bounty {} · Quality {}</span><code>{}</code><small>Base {} · {}</small></article>",
                 escape_html_text(&listing.title),
                 escape_html_text(&listing.listing_kind),
                 listing.price_credits,
@@ -693,7 +734,7 @@ pub(super) async fn get_world_web_shell(
         .collect::<Vec<_>>()
         .join("\n");
     let listing_cards = if listing_cards.is_empty() {
-        "<article class=\"mini listing\"><strong>还没有任务牌</strong><span>用 /sell latest 发布一个可接取的工坊委托。</span><code>/sell latest</code></article>".to_string()
+        "<article class=\"mini listing\"><strong>No bounty cards yet</strong><span>Use /sell latest to publish an acceptable studio commission.</span><code>/sell latest</code></article>".to_string()
     } else {
         listing_cards
     };
@@ -712,7 +753,7 @@ pub(super) async fn get_world_web_shell(
                 .company_location_id(&purchase.company_id)
                 .unwrap_or_default();
             format!(
-                "<article class=\"mini purchase world-route-filter-item\" data-route-bucket=\"purchase\" data-location-id=\"{}\" data-purchase-id=\"{}\" data-listing-id=\"{}\" data-company-id=\"{}\" data-route-status=\"{}\" data-created-at=\"{}\"><strong>接取契约</strong><span>赏金 {} · {}</span><code>{}</code><small>任务牌 {} · 托管 {} · 领取 {}</small></article>",
+                "<article class=\"mini purchase world-route-filter-item\" data-route-bucket=\"purchase\" data-location-id=\"{}\" data-purchase-id=\"{}\" data-listing-id=\"{}\" data-company-id=\"{}\" data-route-status=\"{}\" data-created-at=\"{}\"><strong>Contract Accepted</strong><span>Bounty {} · {}</span><code>{}</code><small>Quest card {} · Escrow {} · Claim {}</small></article>",
                 escape_html_text(location_id),
                 escape_html_text(&purchase.purchase_id),
                 escape_html_text(&purchase.listing_id),
@@ -730,7 +771,7 @@ pub(super) async fn get_world_web_shell(
         .collect::<Vec<_>>()
         .join("\n");
     let purchase_cards = if purchase_cards.is_empty() {
-        "<article class=\"mini purchase\"><strong>还没有接取记录</strong><span>接取任务牌后会开启冒险委托和奖励托管。</span><code>/buy latest</code></article>".to_string()
+        "<article class=\"mini purchase\"><strong>No accept records yet</strong><span>Accept a quest card to open an adventure commission and escrowed reward.</span><code>/buy latest</code></article>".to_string()
     } else {
         purchase_cards
     };
@@ -744,7 +785,7 @@ pub(super) async fn get_world_web_shell(
                 .work_order_location_id(&work_order.work_order_id)
                 .unwrap_or_default();
             format!(
-                "<article class=\"mini work world-route-filter-item\" data-route-bucket=\"work_order\" data-location-id=\"{}\" data-work-order-id=\"{}\" data-purchase-id=\"{}\" data-company-id=\"{}\" data-listing-id=\"{}\" data-route-status=\"{}\" data-created-at=\"{}\"><strong>冒险委托</strong><span>{} · 难度 {}</span><code>{}</code><small>任务牌 {} · 接取 {}</small></article>",
+                "<article class=\"mini work world-route-filter-item\" data-route-bucket=\"work_order\" data-location-id=\"{}\" data-work-order-id=\"{}\" data-purchase-id=\"{}\" data-company-id=\"{}\" data-listing-id=\"{}\" data-route-status=\"{}\" data-created-at=\"{}\"><strong>Adventure Commission</strong><span>{} · Difficulty {}</span><code>{}</code><small>Quest card {} · Purchase {}</small></article>",
                 escape_html_text(location_id),
                 escape_html_text(&work_order.work_order_id),
                 escape_html_text(&work_order.purchase_id),
@@ -762,7 +803,7 @@ pub(super) async fn get_world_web_shell(
         .collect::<Vec<_>>()
         .join("\n");
     let work_order_cards = if work_order_cards.is_empty() {
-        "<article class=\"mini work\"><strong>还没有冒险委托</strong><span>接取任务牌后，委托会进入可提交成果的路线。</span><code>/work</code></article>".to_string()
+        "<article class=\"mini work\"><strong>No adventure commissions yet</strong><span>After accepting a quest card, the commission enters a result-submission route.</span><code>/work</code></article>".to_string()
     } else {
         work_order_cards
     };
@@ -781,7 +822,7 @@ pub(super) async fn get_world_web_shell(
                 .work_order_location_id(&delivery.work_order_id)
                 .unwrap_or_default();
             format!(
-                "<article class=\"mini delivery world-route-filter-item\" data-route-bucket=\"delivery\" data-location-id=\"{}\" data-work-order-id=\"{}\" data-route-status=\"{}\" data-created-at=\"{}\"><strong>成果提交</strong><span>评分 {:.1} · {}</span><code>{}</code><small>委托 {}</small></article>",
+                "<article class=\"mini delivery world-route-filter-item\" data-route-bucket=\"delivery\" data-location-id=\"{}\" data-work-order-id=\"{}\" data-route-status=\"{}\" data-created-at=\"{}\"><strong>Result Submission</strong><span>Score {:.1} · {}</span><code>{}</code><small>Commission {}</small></article>",
                 escape_html_text(location_id),
                 escape_html_text(&delivery.work_order_id),
                 escape_html_text(&delivery.status),
@@ -795,7 +836,7 @@ pub(super) async fn get_world_web_shell(
         .collect::<Vec<_>>()
         .join("\n");
     let work_delivery_cards = if work_delivery_cards.is_empty() {
-        "<article class=\"mini delivery\"><strong>还没有成果提交</strong><span>委托接取后，可以提交成果和证据包。</span><code>/work deliver latest</code></article>".to_string()
+        "<article class=\"mini delivery\"><strong>No result submissions yet</strong><span>After accepting a commission, submit the result and evidence pack here.</span><code>/work deliver latest</code></article>".to_string()
     } else {
         work_delivery_cards
     };
@@ -809,7 +850,7 @@ pub(super) async fn get_world_web_shell(
                 .work_order_location_id(&acceptance.work_order_id)
                 .unwrap_or_default();
             format!(
-                "<article class=\"mini acceptance world-route-filter-item\" data-route-bucket=\"acceptance\" data-location-id=\"{}\" data-work-order-id=\"{}\" data-route-status=\"{}\" data-created-at=\"{}\"><strong>评级通过</strong><span>{} · 声望 +{}</span><code>{}</code><small>委托 {}</small></article>",
+                "<article class=\"mini acceptance world-route-filter-item\" data-route-bucket=\"acceptance\" data-location-id=\"{}\" data-work-order-id=\"{}\" data-route-status=\"{}\" data-created-at=\"{}\"><strong>Rating Passed</strong><span>{} · Reputation +{}</span><code>{}</code><small>Commission {}</small></article>",
                 escape_html_text(location_id),
                 escape_html_text(&acceptance.work_order_id),
                 escape_html_text(&acceptance.status),
@@ -823,7 +864,7 @@ pub(super) async fn get_world_web_shell(
         .collect::<Vec<_>>()
         .join("\n");
     let work_acceptance_cards = if work_acceptance_cards.is_empty() {
-        "<article class=\"mini acceptance\"><strong>还没有评级通过</strong><span>成果达标后可完成评级并领取声望奖励。</span><code>/work accept latest</code></article>".to_string()
+        "<article class=\"mini acceptance\"><strong>No rating passes yet</strong><span>Once results meet the bar, pass rating and claim reputation rewards.</span><code>/work accept latest</code></article>".to_string()
     } else {
         work_acceptance_cards
     };
@@ -837,7 +878,7 @@ pub(super) async fn get_world_web_shell(
                 .work_order_location_id(&rejection.work_order_id)
                 .unwrap_or_default();
             format!(
-                "<article class=\"mini rejection world-route-filter-item\" data-route-bucket=\"rejection\" data-location-id=\"{}\" data-work-order-id=\"{}\" data-route-status=\"{}\" data-created-at=\"{}\"><strong>需要返工</strong><span>{} · 奖励退回 {}</span><code>{}</code><small>委托 {}</small></article>",
+                "<article class=\"mini rejection world-route-filter-item\" data-route-bucket=\"rejection\" data-location-id=\"{}\" data-work-order-id=\"{}\" data-route-status=\"{}\" data-created-at=\"{}\"><strong>Revision Needed</strong><span>{} · Reward refund {}</span><code>{}</code><small>Commission {}</small></article>",
                 escape_html_text(location_id),
                 escape_html_text(&rejection.work_order_id),
                 escape_html_text(&rejection.status),
@@ -851,7 +892,7 @@ pub(super) async fn get_world_web_shell(
         .collect::<Vec<_>>()
         .join("\n");
     let work_rejection_cards = if work_rejection_cards.is_empty() {
-        "<article class=\"mini rejection\"><strong>还没有返工记录</strong><span>成果不达标时，可以标记证据缺口并退回托管奖励。</span><code>/work reject latest</code></article>".to_string()
+        "<article class=\"mini rejection\"><strong>No revision records yet</strong><span>When results miss the bar, mark evidence gaps and refund escrowed reward.</span><code>/work reject latest</code></article>".to_string()
     } else {
         work_rejection_cards
     };
@@ -865,7 +906,7 @@ pub(super) async fn get_world_web_shell(
                 .work_order_location_id(&reopen.work_order_id)
                 .unwrap_or_default();
             format!(
-                "<article class=\"mini reopen world-route-filter-item\" data-route-bucket=\"reopen\" data-location-id=\"{}\" data-work-order-id=\"{}\" data-route-status=\"{}\" data-created-at=\"{}\"><strong>委托重开</strong><span>{} · 再次托管 {}</span><code>{}</code><small>委托 {}</small></article>",
+                "<article class=\"mini reopen world-route-filter-item\" data-route-bucket=\"reopen\" data-location-id=\"{}\" data-work-order-id=\"{}\" data-route-status=\"{}\" data-created-at=\"{}\"><strong>Commission Reopened</strong><span>{} · Re-escrow {}</span><code>{}</code><small>Commission {}</small></article>",
                 escape_html_text(location_id),
                 escape_html_text(&reopen.work_order_id),
                 escape_html_text(&reopen.status),
@@ -879,7 +920,7 @@ pub(super) async fn get_world_web_shell(
         .collect::<Vec<_>>()
         .join("\n");
     let work_reopen_cards = if work_reopen_cards.is_empty() {
-        "<article class=\"mini reopen\"><strong>还没有重开记录</strong><span>返工后可以重新托管奖励，并允许再次提交。</span><code>/work reopen latest</code></article>".to_string()
+        "<article class=\"mini reopen\"><strong>No reopen records yet</strong><span>After revision, re-escrow the reward and allow another submission.</span><code>/work reopen latest</code></article>".to_string()
     } else {
         work_reopen_cards
     };
@@ -893,7 +934,7 @@ pub(super) async fn get_world_web_shell(
                 .work_order_location_id(&cancellation.work_order_id)
                 .unwrap_or_default();
             format!(
-                "<article class=\"mini cancellation world-route-filter-item\" data-route-bucket=\"cancellation\" data-location-id=\"{}\" data-work-order-id=\"{}\" data-route-status=\"{}\" data-created-at=\"{}\"><strong>委托放弃</strong><span>{} · 奖励退回 {}</span><code>{}</code><small>委托 {}</small></article>",
+                "<article class=\"mini cancellation world-route-filter-item\" data-route-bucket=\"cancellation\" data-location-id=\"{}\" data-work-order-id=\"{}\" data-route-status=\"{}\" data-created-at=\"{}\"><strong>Commission Canceled</strong><span>{} · Reward refund {}</span><code>{}</code><small>Commission {}</small></article>",
                 escape_html_text(location_id),
                 escape_html_text(&cancellation.work_order_id),
                 escape_html_text(&cancellation.status),
@@ -907,7 +948,7 @@ pub(super) async fn get_world_web_shell(
         .collect::<Vec<_>>()
         .join("\n");
     let work_cancellation_cards = if work_cancellation_cards.is_empty() {
-        "<article class=\"mini cancellation\"><strong>还没有放弃记录</strong><span>成果提交前可以放弃委托并退回托管奖励。</span><code>/work cancel latest</code></article>".to_string()
+        "<article class=\"mini cancellation\"><strong>No cancellation records yet</strong><span>Before result submission, cancel the commission and refund escrowed reward.</span><code>/work cancel latest</code></article>".to_string()
     } else {
         work_cancellation_cards
     };
@@ -920,7 +961,7 @@ pub(super) async fn get_world_web_shell(
         .iter()
         .map(|faction| {
             format!(
-                "<article class=\"mini faction\"><strong>{}</strong><span>{} · 声望 {}</span><code>{}</code><small>{}</small></article>",
+                "<article class=\"mini faction\"><strong>{}</strong><span>{} · Reputation {}</span><code>{}</code><small>{}</small></article>",
                 escape_world_visible_text(&faction.name),
                 escape_html_text(&world_map_status_label(&faction.faction_kind)),
                 faction.reputation_score,
@@ -937,7 +978,7 @@ pub(super) async fn get_world_web_shell(
     )
     .map(|standing| {
             format!(
-                "<article class=\"mini standing\"><strong>{}</strong><span>{} 声望 · {}</span><code>{}</code><small>{}</small></article>",
+                "<article class=\"mini standing\"><strong>{}</strong><span>{} Reputation · {}</span><code>{}</code><small>{}</small></article>",
                 escape_html_text(&standing.matrix_user_id),
                 standing.reputation_score,
                 escape_html_text(&standing.rank),
@@ -964,7 +1005,7 @@ pub(super) async fn get_world_web_shell(
     )
     .map(|contract| {
             format!(
-                "<article class=\"mini contract world-route-filter-item\" data-route-bucket=\"contract\" data-location-id=\"{}\" data-contract-id=\"{}\" data-task-id=\"{}\" data-route-status=\"{}\" data-created-at=\"{}\"><strong>{}</strong><span>{} · 价值 {}</span><code>{}</code><small>任务 {} · {}</small></article>",
+                "<article class=\"mini contract world-route-filter-item\" data-route-bucket=\"contract\" data-location-id=\"{}\" data-contract-id=\"{}\" data-task-id=\"{}\" data-route-status=\"{}\" data-created-at=\"{}\"><strong>{}</strong><span>{} · Value {}</span><code>{}</code><small>Task {} · {}</small></article>",
                 escape_html_text(&contract.location_id),
                 escape_html_text(&contract.contract_id),
                 escape_html_text(&contract.task_id),
@@ -981,7 +1022,7 @@ pub(super) async fn get_world_web_shell(
         .collect::<Vec<_>>()
         .join("\n");
     let contract_cards = if contract_cards.is_empty() {
-        "<article class=\"mini contract\"><strong>还没有世界契约</strong><span>用 /contract 把真实机会镜像成可追踪委托。</span><code>/contract</code></article>".to_string()
+        "<article class=\"mini contract\"><strong>No world contracts yet</strong><span>Use /contract to mirror real opportunities into trackable commissions.</span><code>/contract</code></article>".to_string()
     } else {
         contract_cards
     };
@@ -1137,12 +1178,13 @@ pub(super) async fn get_world_web_shell(
     .world-map-loop-steps li {{ display:grid; gap:4px; min-height:82px; border:1px solid rgba(248,195,91,.2); background:rgba(248,195,91,.07); border-radius:16px; padding:12px; }}
     .world-map-loop-steps b {{ color:var(--gold); }}
     .world-map-loop-steps span {{ color:var(--muted); font-size:13px; line-height:1.35; }}
-    .world-advanced-map-drawer {{ border:1px solid rgba(255,255,255,.1); background:rgba(255,255,255,.035); border-radius:18px; padding:10px; }}
+    .world-advanced-map-drawer {{ min-width:0; border:1px solid rgba(255,255,255,.1); background:rgba(255,255,255,.035); border-radius:18px; padding:10px; overflow:hidden; }}
     .world-adventure-steps {{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; margin:12px 0; }}
     .world-adventure-step {{ border:1px solid rgba(248,195,91,.22); background:rgba(248,195,91,.075); border-radius:18px; padding:14px; display:grid; gap:6px; }}
     .world-adventure-step b {{ color:var(--gold); }}
     .world-route-drawer {{ border-color:rgba(100,227,255,.18); background:rgba(100,227,255,.045); border-radius:18px; padding:12px; }}
-    .dev-details {{ margin-top:12px; color:var(--muted); }}
+    .dev-details {{ margin-top:12px; color:var(--muted); min-width:0; overflow-wrap:anywhere; }}
+    .dev-details p {{ min-width:0; overflow-wrap:anywhere; }}
     .dev-details summary {{ cursor:pointer; width:max-content; border:1px solid rgba(255,255,255,.1); border-radius:999px; padding:8px 12px; min-height:36px; display:inline-flex; align-items:center; background:rgba(255,255,255,.05); color:rgba(246,247,251,.72); font-size:12px; font-weight:800; }}
     .play {{ display:grid; grid-template-columns:.8fr 1.2fr; gap:18px; }}
     .map-shell {{ display:grid; grid-template-columns:minmax(320px,.9fr) minmax(360px,1.1fr); gap:18px; align-items:stretch; }}
@@ -1166,7 +1208,7 @@ pub(super) async fn get_world_web_shell(
     .timeline {{ list-style:none; padding:0; margin:0; display:grid; gap:10px; }}
     .timeline li {{ display:grid; grid-template-columns:.55fr 1.35fr .55fr; gap:10px; padding:12px; border-radius:14px; background:rgba(255,255,255,.055); }}
     .timeline em {{ grid-column:1 / -1; font-style:normal; }}
-    code {{ color:var(--cyan); background:rgba(100,227,255,.08); padding:3px 7px; border-radius:8px; }}
+    code {{ color:var(--cyan); background:rgba(100,227,255,.08); padding:3px 7px; border-radius:8px; max-width:100%; overflow-wrap:anywhere; word-break:break-word; white-space:normal; }}
     .cta {{ color:var(--bg); background:linear-gradient(135deg,var(--gold),#7dff9b); padding:14px 18px; border-radius:16px; display:inline-flex; justify-content:center; align-items:center; font-weight:800; text-decoration:none; }}
     .cta.secondary {{ color:var(--text); background:rgba(255,255,255,.07); border:1px solid rgba(100,227,255,.24); }}
     @media (max-width:1050px) {{ header.world-hero,.play,.map-shell {{ grid-template-columns:1fr; }} .grid,.mini-grid,.world-adventure-steps {{ grid-template-columns:1fr; }} .stats.world-pulse-strip {{ grid-template-columns:repeat(3,minmax(0,1fr)); }} #world-real-map {{ order:-1; }} }}
@@ -1711,8 +1753,8 @@ pub(super) async fn get_world_web_shell(
         const visible = (tasks && tasks.length ? tasks : routeTaskGraphItems).slice(0, 6);
         routeTaskGraphTarget.innerHTML = visible.length ? visible.map((task) => {{
           const actionButtons = routeTaskGraphActionButtonsHtml(task);
-          return `<article class="mini task-graph"><strong>${{escapeHtml(mapText(task.task_id || '任务'))}}</strong><span>${{escapeHtml(mapText(task.latest_bucket || 'event'))}} · ${{escapeHtml(mapText(task.latest_status || 'pending'))}} · 支线 ${{escapeHtml(mapText(task.next_opportunity_kind || 'contract_capture'))}}</span><code>${{escapeHtml(mapText(task.latest_location_id || task.task_id || 'route'))}}</code><small>${{escapeHtml(task.event_count ?? 0)}} 事件 · ${{escapeHtml(task.contract_count ?? 0)}} 契约 · ${{escapeHtml(task.completion_count ?? 0)}} 战报</small><small>${{escapeHtml(mapText(task.outcome_summary || '战果总结待生成。'))}}</small><small><strong>下一条支线</strong> · ${{escapeHtml(mapText(task.next_opportunity_hint || '支线提示待生成。'))}}</small><div class="focus-stack"><code>${{escapeHtml(mapText(task.next_opportunity_command || '/world action 继续推进下一步机会。'))}}</code></div><div class="focus-stack">${{actionButtons}}</div></article>`;
-        }}).join('') : '<article class="mini task-graph"><strong>还没有任务路线</strong><span>创建世界契约或任务事件后，路线图会生长出来。</span><code>task graph</code></article>';
+          return `<article class="mini task-graph"><strong>${{escapeHtml(mapText(task.task_id || 'route task / 路线任务'))}}</strong><span>${{escapeHtml(mapText(task.latest_bucket || 'event'))}} · ${{escapeHtml(mapText(task.latest_status || 'pending'))}} · ${{escapeHtml(mapText('branch / 支线'))}} ${{escapeHtml(mapText(task.next_opportunity_kind || 'contract_capture'))}}</span><code>${{escapeHtml(mapText(task.latest_location_id || task.task_id || 'route'))}}</code><small>${{escapeHtml(task.event_count ?? 0)}} ${{escapeHtml(mapText('events / 事件'))}} · ${{escapeHtml(task.contract_count ?? 0)}} ${{escapeHtml(mapText('contracts / 契约'))}} · ${{escapeHtml(task.completion_count ?? 0)}} ${{escapeHtml(mapText('battle reports / 战报'))}}</small><small>${{escapeHtml(mapText(task.outcome_summary || '战果总结待生成。'))}}</small><small><strong>${{escapeHtml(mapText('next branch / 下一条支线'))}}</strong> · ${{escapeHtml(mapText(task.next_opportunity_hint || '支线提示待生成。'))}}</small><div class="focus-stack"><code>${{escapeHtml(mapText(task.next_opportunity_command || '/world action 继续推进下一步机会。'))}}</code></div><div class="focus-stack">${{actionButtons}}</div></article>`;
+        }}).join('') : '<article class="mini task-graph"><strong>' + escapeHtml(mapText('No task-linked routes yet / 还没有任务路线')) + '</strong><span>' + escapeHtml(mapText('Create a world contract or task event to grow the route graph. / 创建世界契约或任务事件后，路线图会生长出来。')) + '</span><code>task graph</code></article>';
       }};
       const findLatestVisibleByBuckets = (visibleItems, buckets) => {{
         const bucketSet = new Set(buckets);

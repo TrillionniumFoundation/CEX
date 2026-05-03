@@ -50,6 +50,7 @@ pub(super) fn i18n_span_from_bilingual_slash_copy(copy: &str) -> Option<String> 
                                 | '！'
                                 | '?'
                                 | '？'
+                                | '、'
                                 | '-'
                                 | '·'
                         )
@@ -63,7 +64,8 @@ pub(super) fn i18n_span_from_bilingual_slash_copy(copy: &str) -> Option<String> 
                 .chars()
                 .filter(|ch| {
                     !(('\u{3400}'..='\u{9fff}').contains(ch)
-                        || ('\u{f900}'..='\u{faff}').contains(ch))
+                        || ('\u{f900}'..='\u{faff}').contains(ch)
+                        || matches!(ch, '、' | '，' | '。' | '：' | '；' | '！' | '？'))
                 })
                 .collect::<String>()
         }

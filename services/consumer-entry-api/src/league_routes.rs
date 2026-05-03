@@ -9,16 +9,24 @@ fn league_visible_copy(value: &str) -> String {
         ("bounty_arena", "Bounty Arena / 悬赏竞技场"),
         ("guild_raid", "Guild Raid / 公会团本"),
         ("face_to_face_duel", "Face Duel / 面对面切磋"),
+        ("Prompt Forge 入门战", "Prompt Forge Starter Battle / Prompt Forge 入门战"),
+        ("赏金赛：真实委托预备场", "Bounty Arena: Real Quest Tryout / 赏金赛：真实委托预备场"),
+        ("公会团本：多阶段成果战", "Guild Raid: Multi-stage Result Battle / 公会团本：多阶段成果战"),
+        ("附近对战：Agent Face Duel", "Nearby Duel: Agent Face Duel / 附近对战：Agent Face Duel"),
+        ("用最少成本生成一个可提交成果，并给出自评/风险。", "Generate a submittable result at minimum cost, then add self-review and risk notes. / 用最少成本生成一个可提交成果，并给出自评/风险。"),
+        ("多人提交方案，按质量、速度、成本和委托适配评分。", "Multiple players submit proposals scored by quality, speed, cost, and client fit. / 多人提交方案，按质量、速度、成本和委托适配评分。"),
+        ("团队分工完成调研、构建、审核和成果提交。", "Split roles across research, build, audit, and result submission. / 团队分工完成调研、构建、审核和成果提交。"),
+        ("像 Pokémon 近距离对战一样，面对面选择 Agent 阵容、出招、提交证据并结算奖励。", "Like a nearby Pokémon duel: choose Agent loadouts face to face, make moves, submit evidence, and settle rewards. / 像 Pokémon 近距离对战一样，面对面选择 Agent 阵容、出招、提交证据并结算奖励。"),
         ("open", "open / 开放"),
         ("preview", "preview / 预览"),
         ("XP + credits", "XP + credits / 经验 + 奖励点"),
         ("Prize Pool", "Prize Pool / 奖池"),
         ("Contribution split", "Contribution Split / 贡献分成"),
         ("Duel XP + rating", "Duel XP + rating / 切磋经验 + 段位分"),
-        ("No loot yet", "还没有掉落道具"),
-        ("Apprentice", "学徒"),
-        ("Bronze I", "青铜 I"),
-        ("City Clerks", "城市书记门"),
+        ("No loot yet", "No loot yet / 还没有掉落道具"),
+        ("Apprentice", "Apprentice / 学徒"),
+        ("Bronze I", "Bronze I / 青铜 I"),
+        ("City Clerks", "City Clerks / 城市书记门"),
         ("Prompt Forge", "Prompt Forge / Prompt 锻造会"),
         (
             "Draft fast. Ship clean.",
@@ -33,22 +41,22 @@ fn league_visible_copy(value: &str) -> String {
         ("pending", "pending / 待结算"),
         ("Level", "Level / 等级"),
         ("Skills/Tools/Skins", "Skills/Tools/Skins / 技能/工具/外观"),
-        ("multi-agent", "多 Agent"),
-        ("Craft", "工坊"),
-        ("Market", "集市"),
-        ("Assets", "道具"),
-        ("Events", "事件"),
+        ("multi-agent", "multi-agent / 多 Agent"),
+        ("Craft", "Craft / 工坊"),
+        ("Market", "Market / 集市"),
+        ("Assets", "Assets / 道具"),
+        ("Events", "Events / 事件"),
         ("真实客户任务", "real global-client quest / 真实委托任务"),
         ("真实客户", "real global client / 海外真实委托"),
         ("客户适配", "client fit / 委托适配"),
         ("可交付方案", "submittable proposal / 可提交方案"),
         ("交付", "result submit / 成果提交"),
         ("AI 设计公司", "AI Design Studio / AI 设计工坊"),
-        ("deliverable", "成果"),
-        ("evidence", "证据"),
-        ("risk", "风险"),
-        ("self-review", "自评"),
-        ("next action", "下一步"),
+        ("deliverable", "deliverable / 成果"),
+        ("evidence", "evidence / 证据"),
+        ("risk", "risk / 风险"),
+        ("self-review", "self-review / 自评"),
+        ("next action", "next action / 下一步"),
         ("Oracle Scout", "Oracle Scout / Oracle 侦察手"),
         ("Forge Builder", "Forge Builder / 锻造建造者"),
         ("Mirror Auditor", "Mirror Auditor / 镜像审稿人"),
@@ -61,6 +69,9 @@ fn league_visible_copy(value: &str) -> String {
         ("auditor", "auditor / 审稿"),
         ("closer", "closer / 收尾"),
     ];
+    if let Some((_, to)) = replacements.iter().find(|(from, _)| value == *from) {
+        return (*to).to_string();
+    }
     for (from, to) in replacements {
         copy = copy.replace(from, to);
     }
@@ -224,7 +235,7 @@ pub(super) async fn get_league_web_shell(
         .collect::<Vec<_>>()
         .join("\n");
     let leaderboard = if leaderboard.is_empty() {
-        "<tr><td>#1</td><td>@alice:local.dev</td><td>青铜 I</td><td>1000</td><td>0.00</td></tr>"
+        "<tr><td>#1</td><td>@alice:local.dev</td><td><span data-i18n-en=\"Bronze I\" data-i18n-zh=\"青铜 I\">Bronze I</span></td><td>1000</td><td>0.00</td></tr>"
             .to_string()
     } else {
         leaderboard
@@ -247,7 +258,7 @@ pub(super) async fn get_league_web_shell(
         timeline_items.push((
             battle.created_at_epoch,
             format!(
-                "<li><b>⚔️ 对战</b><span>{}</span><small>{}</small></li>",
+                "<li><b>⚔️ <span data-i18n-en=\"Battle\" data-i18n-zh=\"对战\">Battle</span></b><span>{}</span><small>{}</small></li>",
                 escape_html_text(&battle.match_id),
                 escape_html_text(&battle.task_id),
             ),
@@ -257,7 +268,7 @@ pub(super) async fn get_league_web_shell(
         timeline_items.push((
             submission.created_at_epoch,
             format!(
-                "<li><b>🏁 评分 {:.1}</b><span>{} · 评审 {} · {} 项</span><small>{}</small></li>",
+                "<li><b>🏁 <span data-i18n-en=\"Score\" data-i18n-zh=\"评分\">Score</span> {:.1}</b><span>{} · {} · {} <span data-i18n-en=\"events\" data-i18n-zh=\"项\">events</span></span><small>{}</small></li>",
                 submission.score,
                 escape_league_visible_text(&submission.grade),
                 escape_league_visible_text(
@@ -291,7 +302,7 @@ pub(super) async fn get_league_web_shell(
         .collect::<Vec<_>>()
         .join("\n");
     let timeline = if timeline.is_empty() {
-        "<li><b>还没有战报</b><span>提交第一份成果后会生成回放。</span><small>/submit</small></li>"
+        "<li><b><span data-i18n-en=\"No battle reports yet\" data-i18n-zh=\"还没有战报\">No battle reports yet</span></b><span data-i18n-en=\"Submit the first result to generate a replay.\" data-i18n-zh=\"提交第一份成果后会生成回放。\">Submit the first result to generate a replay.</span><small>/submit</small></li>"
             .to_string()
     } else {
         timeline
@@ -418,29 +429,30 @@ pub(super) async fn get_league_web_shell(
   <style>
     :root {{ color-scheme: dark; --bg:#060711; --panel:#111426; --panel2:#171b31; --gold:#f8c35b; --cyan:#64e3ff; --pink:#ff5ca8; --text:#f6f7fb; --muted:#9aa3b2; }}
     * {{ box-sizing:border-box; }}
-    body {{ margin:0; min-height:100vh; font-family:Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background:radial-gradient(circle at 20% 0%, #213064 0, transparent 32rem), radial-gradient(circle at 88% 14%, #532044 0, transparent 30rem), var(--bg); color:var(--text); }}
+    body {{ margin:0; min-height:100vh; overflow-x:hidden; font-family:Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background:radial-gradient(circle at 20% 0%, #213064 0, transparent 32rem), radial-gradient(circle at 88% 14%, #532044 0, transparent 30rem), var(--bg); color:var(--text); }}
     header {{ padding:42px min(6vw,72px) 18px; display:grid; gap:22px; grid-template-columns:1.25fr .75fr; align-items:end; }}
     h1 {{ margin:0; font-size:clamp(42px,7vw,92px); line-height:.9; letter-spacing:-.07em; }}
     h2 {{ margin:0 0 16px; letter-spacing:-.03em; }}
     .subtitle {{ color:var(--muted); font-size:18px; max-width:760px; }}
-    .hero-card,.card,.panel {{ border:1px solid rgba(255,255,255,.11); background:linear-gradient(145deg,rgba(255,255,255,.09),rgba(255,255,255,.035)); box-shadow:0 24px 80px rgba(0,0,0,.35); backdrop-filter: blur(14px); border-radius:24px; }}
+    .hero-card,.card,.panel {{ min-width:0; border:1px solid rgba(255,255,255,.11); background:linear-gradient(145deg,rgba(255,255,255,.09),rgba(255,255,255,.035)); box-shadow:0 24px 80px rgba(0,0,0,.35); backdrop-filter: blur(14px); border-radius:24px; }}
     .hero-card {{ padding:24px; display:grid; gap:14px; }}
     .stats {{ display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin-top:22px; }}
     .stat {{ padding:18px; background:rgba(255,255,255,.06); border-radius:18px; }}
     .stat b {{ display:block; font-size:26px; color:var(--gold); }}
-    main {{ padding:20px min(6vw,72px) 60px; display:grid; gap:24px; }}
+    main {{ padding:20px min(6vw,72px) 60px; display:grid; gap:24px; min-width:0; }}
+    main > * {{ min-width:0; max-width:100%; }}
     .grid {{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:18px; }}
-    .card {{ padding:20px; min-height:210px; }}
+    .card {{ padding:20px; min-height:210px; overflow-wrap:anywhere; }}
     .card h3 {{ margin:12px 0; font-size:24px; }}
     .card p {{ color:var(--muted); line-height:1.55; }}
-    .card footer {{ display:flex; justify-content:space-between; gap:10px; align-items:center; margin-top:18px; color:var(--gold); }}
+    .card footer {{ display:flex; justify-content:space-between; gap:10px; align-items:center; flex-wrap:wrap; margin-top:18px; color:var(--gold); }}
     .pill {{ display:inline-flex; border:1px solid rgba(100,227,255,.35); color:var(--cyan); padding:5px 10px; border-radius:999px; font-size:12px; letter-spacing:.12em; }}
     .league-hero-kicker {{ display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }}
     .language-switcher {{ display:inline-flex; align-items:center; gap:8px; width:max-content; max-width:100%; border:1px solid rgba(100,227,255,.24); background:rgba(255,255,255,.065); color:var(--cyan); border-radius:999px; padding:6px 8px 6px 10px; font-size:12px; font-weight:900; }}
     .language-switcher select {{ width:auto; min-width:92px; max-width:130px; margin:0; border:0; background:rgba(7,8,20,.72); color:var(--text); border-radius:999px; padding:7px 26px 7px 10px; font:inherit; font-size:12px; }}
     .panel {{ padding:24px; }}
-    table {{ width:100%; border-collapse:collapse; }}
-    td,th {{ padding:12px 10px; border-bottom:1px solid rgba(255,255,255,.08); text-align:left; }}
+    table {{ width:100%; border-collapse:collapse; table-layout:fixed; }}
+    td,th {{ padding:12px 10px; border-bottom:1px solid rgba(255,255,255,.08); text-align:left; overflow-wrap:anywhere; }}
     th {{ color:var(--muted); font-weight:600; }}
     .commands {{ display:flex; flex-wrap:wrap; gap:10px; }}
     .play {{ display:grid; grid-template-columns:1fr 1fr; gap:18px; }}
@@ -453,11 +465,11 @@ pub(super) async fn get_league_web_shell(
     .mini span, .timeline small {{ color:var(--muted); }}
     .timeline {{ list-style:none; padding:0; margin:0; display:grid; gap:10px; }}
     .timeline li {{ display:grid; grid-template-columns:1.3fr .6fr 1.1fr; gap:10px; padding:12px; border-radius:14px; background:rgba(255,255,255,.055); }}
-    code {{ color:var(--cyan); background:rgba(100,227,255,.08); padding:3px 7px; border-radius:8px; }}
+    code {{ color:var(--cyan); background:rgba(100,227,255,.08); padding:3px 7px; border-radius:8px; overflow-wrap:anywhere; word-break:break-word; }}
     .cta {{ color:var(--bg); background:linear-gradient(135deg,var(--gold),#ff8d4d); padding:14px 18px; border-radius:16px; display:inline-flex; justify-content:center; align-items:center; min-height:48px; font-weight:800; text-decoration:none; }}
     .cta.secondary {{ color:var(--text); background:rgba(255,255,255,.07); border:1px solid rgba(100,227,255,.22); }}
     .league-hero-actions {{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }}
-    @media (max-width:900px) {{ header {{ grid-template-columns:1fr; padding:18px 16px 8px; gap:12px; }} h1 {{ font-size:clamp(38px,13vw,58px); }} .subtitle {{ font-size:14px; line-height:1.42; }} header > section .subtitle {{ margin:8px 0 0; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }} .grid,.play,.mini-grid {{ grid-template-columns:1fr; }} .stats {{ display:flex; overflow-x:auto; gap:8px; margin-top:8px; padding-bottom:4px; scroll-snap-type:x proximity; }} .stat {{ flex:0 0 112px; min-height:74px; padding:11px; scroll-snap-align:start; }} .stat b {{ font-size:22px; }} .hero-card {{ padding:16px; border-radius:20px; gap:10px; }} .hero-card .subtitle {{ margin:0; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }} .league-hero-actions {{ grid-template-columns:repeat(3,minmax(0,1fr)); gap:7px; }} .league-hero-actions .cta {{ font-size:12px; }} .cta {{ min-height:44px; padding:10px 12px; border-radius:14px; }} .language-switcher {{ padding:5px 6px 5px 8px; font-size:11px; }} .language-switcher select {{ min-width:82px; max-width:112px; padding:6px 22px 6px 8px; font-size:11px; }} }}
+    @media (max-width:900px) {{ header {{ grid-template-columns:1fr; padding:18px 16px 8px; gap:12px; }} h1 {{ font-size:clamp(38px,13vw,58px); }} .subtitle {{ font-size:14px; line-height:1.42; }} header > section .subtitle {{ margin:8px 0 0; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }} .grid,.play,.mini-grid {{ grid-template-columns:minmax(0,1fr); }} .stats {{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); overflow:visible; gap:8px; margin-top:8px; padding-bottom:0; }} .stat {{ min-height:68px; min-width:0; padding:10px 8px; }} .stat b {{ font-size:clamp(17px,5.4vw,22px); letter-spacing:-.03em; }} .stat span {{ font-size:11px; }} .card {{ min-height:auto; padding:16px; }} .card h3 {{ font-size:20px; line-height:1.15; }} .card p {{ margin:8px 0; line-height:1.45; }} .card footer {{ font-size:12px; }} .hero-card {{ padding:16px; border-radius:20px; gap:10px; }} .hero-card .subtitle {{ margin:0; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }} .league-hero-actions {{ grid-template-columns:repeat(3,minmax(0,1fr)); gap:7px; }} .league-hero-actions .cta {{ font-size:12px; }} .cta {{ min-height:44px; padding:10px 12px; border-radius:14px; }} .language-switcher {{ padding:5px 6px 5px 8px; font-size:11px; }} .language-switcher select {{ min-width:82px; max-width:112px; padding:6px 22px 6px 8px; font-size:11px; }} }}
   </style>
 </head>
 <body>
