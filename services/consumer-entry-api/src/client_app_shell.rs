@@ -53,6 +53,12 @@ fn client_app_visible_copy(value: &str) -> String {
         ),
         ("真实客户", "real global client / 海外真实委托"),
         ("委托方", "client / 委托目标"),
+        ("委托目标", "client goal"),
+        ("成果标准", "deliverable standard"),
+        ("评级规则", "rating rules"),
+        ("成果内容", "deliverable"),
+        ("证据包", "evidence pack"),
+        ("评级清单", "rating checklist"),
     ];
     if let Some((_, to)) = replacements.iter().find(|(from, _)| value == *from) {
         return (*to).to_string();
@@ -576,7 +582,7 @@ pub(super) async fn get_client_app_web_shell(
                 escape_html_text(surface),
                 escape_client_app_visible_text(&client_app_readiness_label(status)),
                 escape_client_app_visible_text(description),
-                escape_client_app_visible_text(command),
+                escape_client_app_visible_text(&client_app_readiness_label(command)),
                 escape_client_app_visible_text(&client_app_readiness_label(success_signal)),
             )
         })
