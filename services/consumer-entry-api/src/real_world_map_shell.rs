@@ -411,7 +411,7 @@ pub(super) fn real_world_map_runtime_bootstrap_js() -> &'static str {
         events: mapAdapter.createOverlayLayer(mapRuntime),
       };
       const overlayState = { density: true, regions: true, tiles: true, prefetch: true, events: true };
-      const overlayLabels = { density: '密度', regions: '区域', tiles: '地图块', prefetch: '预热圈', events: '实时事件' };"#
+      const overlayLabels = { density: 'Density / 密度', regions: 'Regions / 区域', tiles: 'Map tiles / 地图块', prefetch: 'Prefetch rings / 预热圈', events: 'Live events / 实时事件' };"#
 }
 
 pub(super) fn real_world_map_runtime_primitives_js() -> &'static str {
@@ -451,9 +451,9 @@ pub(super) fn real_world_map_runtime_primitives_js() -> &'static str {
         if (!overlayStatus) return;
         const active = Object.entries(overlayState)
           .filter(([, enabled]) => enabled)
-          .map(([name]) => overlayLabels[name] || name);
-        const activeRegion = mapText((((lastViewport || {}).active_region || {}).name) || '当前区域');
-        overlayStatus.textContent = '当前图层：' + (active.length ? active.join('、') : '无') + ' · 快捷焦点：' + activeRegion + '、最近热点、高热事件。';
+          .map(([name]) => mapText(overlayLabels[name] || name));
+        const activeRegion = mapText((((lastViewport || {}).active_region || {}).name) || 'Active region / 当前区域');
+        overlayStatus.textContent = mapText('Active overlays / 当前图层') + ': ' + (active.length ? active.join(', ') : mapText('None / 无')) + ' · ' + mapText('Quick focus / 快捷焦点') + ': ' + activeRegion + ', ' + mapText('Nearest hotspot / 最近热点') + ', ' + mapText('Hottest event / 高热事件') + '.';
       };
       const refreshOverlayControls = () => {
         if (!overlayControls) return;
@@ -685,7 +685,7 @@ pub(super) fn real_world_map_focus_panel_js() -> &'static str {
           .filter(([, value]) => value !== undefined && value !== null)
           .map(([name, value]) => ` data-${name}="${escapeHtml(value)}"`)
           .join('');
-        return `<button type="button" class="focus-chip trillionnium-selection-action"${attrHtml}${extraAttrs}>${escapeHtml(label || '行动')}</button>`;
+        return `<button type="button" class="focus-chip trillionnium-selection-action"${attrHtml}${extraAttrs}>${escapeHtml(mapText(label || 'Action / 行动'))}</button>`;
       };
       const selectionCameraActionButtonHtml = (actionId, label) => selectionActionButtonHtml({ 'selection-kind': 'camera', 'camera-action': actionId }, label);
       const buildMapFocusActionButtonsHtml = (selection, options) => {
@@ -694,13 +694,13 @@ pub(super) fn real_world_map_focus_panel_js() -> &'static str {
         if (selection.kind === 'node' || selection.kind === 'event') {
           buttons.push(...(selection.actions || []).map((action) => selectionActionButtonHtml({ 'selection-kind': 'node', 'node-id': selection.nodeId || '', 'action-id': action.action_id || 'move_here' }, action.label || action.command || '行动', nodeButtonExtraAttrs)));
         } else if (selection.kind === 'region') {
-          buttons.push(selectionActionButtonHtml({ 'selection-kind': 'region', lat: selection.lat ?? '', lng: selection.lng ?? '', zoom: selection.zoom ?? 12 }, '聚焦区域'));
-          buttons.push(selectionCameraActionButtonHtml('nearest_poi', '最近热点'));
-          buttons.push(selectionCameraActionButtonHtml('hottest_event', '高热事件'));
+          buttons.push(selectionActionButtonHtml({ 'selection-kind': 'region', lat: selection.lat ?? '', lng: selection.lng ?? '', zoom: selection.zoom ?? 12 }, 'Focus region / 聚焦区域'));
+          buttons.push(selectionCameraActionButtonHtml('nearest_poi', 'Nearest hotspot / 最近热点'));
+          buttons.push(selectionCameraActionButtonHtml('hottest_event', 'Hottest event / 高热事件'));
         } else if (selection.kind === 'tile') {
-          buttons.push(selectionActionButtonHtml({ 'selection-kind': 'tile', 'tile-z': selection.z ?? '', 'tile-x': selection.x ?? '', 'tile-y': selection.y ?? '' }, '查看分片'));
-          buttons.push(selectionCameraActionButtonHtml('nearest_poi', '最近热点'));
-          buttons.push(selectionCameraActionButtonHtml('hottest_event', '高热事件'));
+          buttons.push(selectionActionButtonHtml({ 'selection-kind': 'tile', 'tile-z': selection.z ?? '', 'tile-x': selection.x ?? '', 'tile-y': selection.y ?? '' }, 'View tile / 查看分片'));
+          buttons.push(selectionCameraActionButtonHtml('nearest_poi', 'Nearest hotspot / 最近热点'));
+          buttons.push(selectionCameraActionButtonHtml('hottest_event', 'Hottest event / 高热事件'));
         }
         return buttons.join(' ');
       };
@@ -712,14 +712,14 @@ pub(super) fn real_world_map_focus_panel_js() -> &'static str {
         const focus = ((options || {}).focus) || buildDefaultFocus();
         const selection = buildSelectionFromFocus(focus);
         if (!selection) {
-          focusSummaryNode.textContent = String(((options || {}).emptySummary) || '等待选择地图焦点…');
-          focusDetailNode.textContent = String(((options || {}).emptyDetail) || '选择区域、地图块、热点或实时事件，推动移动和世界行动。');
+          focusSummaryNode.textContent = mapText(String(((options || {}).emptySummary) || 'Waiting for map focus / 等待选择地图焦点…'));
+          focusDetailNode.textContent = mapText(String(((options || {}).emptyDetail) || 'Choose a region, tile, hotspot, or live event to drive movement and world action / 选择区域、地图块、热点或实时事件，推动移动和世界行动。'));
           actionRailNode.innerHTML = '';
           if (typeof (options || {}).onEmpty === 'function') options.onEmpty();
           return null;
         }
-        focusSummaryNode.textContent = selection.title || '地图焦点';
-        focusDetailNode.textContent = (selection.summary || '世界焦点') + ' · ' + (selection.detail || '');
+        focusSummaryNode.textContent = mapText(selection.title || 'Map focus / 地图焦点');
+        focusDetailNode.textContent = mapText(selection.summary || 'World focus / 世界焦点') + ' · ' + mapText(selection.detail || '');
         actionRailNode.innerHTML = buildMapFocusActionButtonsHtml(selection, options);
         if (typeof (options || {}).onRendered === 'function') options.onRendered(selection);
         return selection;
@@ -774,7 +774,7 @@ pub(super) fn real_world_map_focus_camera_js() -> &'static str {
           const focus = { kind: 'region', lat: centerPoint.lat, lng: centerPoint.lng, zoom: region.zoom_max || 12 };
           focusMapSurface(focus);
           setFocusSelection(focus);
-          if (cameraSummary) cameraSummary.textContent = '快捷焦点：当前区域 · ' + (region.name || region.region_id || 'region');
+          if (cameraSummary) cameraSummary.textContent = mapText('Quick focus / 快捷焦点') + ': ' + mapText('Active region / 当前区域') + ' · ' + mapText(region.name || region.region_id || 'region');
           return;
         }
         if (actionId === 'nearest_poi') {
@@ -783,7 +783,7 @@ pub(super) fn real_world_map_focus_camera_js() -> &'static str {
           const focus = { kind: 'node', nodeId: hotspot.node_id };
           focusMapSurface(focus);
           setFocusSelection(focus);
-          if (cameraSummary) cameraSummary.textContent = '快捷焦点：最近热点 · ' + (hotspot.name || hotspot.node_id || 'poi');
+          if (cameraSummary) cameraSummary.textContent = mapText('Quick focus / 快捷焦点') + ': ' + mapText('Nearest hotspot / 最近热点') + ' · ' + mapText(hotspot.name || hotspot.node_id || 'poi');
           return;
         }
         if (actionId === 'hottest_event') {
@@ -792,14 +792,14 @@ pub(super) fn real_world_map_focus_camera_js() -> &'static str {
           const focus = { kind: 'event', nodeId: hottestEvent.node_id, eventId: hottestEvent.event_id, taskId: hottestEvent.cex_task_id, locationId: hottestEvent.location_id, eventKind: hottestEvent.event_kind, nodeName: hottestEvent.node_name, eventBody: hottestEvent.body, eventResult: hottestEvent.result, impact: hottestEvent.impact_score, suppressAction: true };
           focusMapSurface(focus);
           setFocusSelection(focus);
-          if (cameraSummary) cameraSummary.textContent = '快捷焦点：高热事件 · ' + mapText(hottestEvent.event_kind || 'world_event') + ' · ' + mapText(hottestEvent.node_name || hottestEvent.node_id || 'event');
+          if (cameraSummary) cameraSummary.textContent = mapText('Quick focus / 快捷焦点') + ': ' + mapText('Hottest event / 高热事件') + ' · ' + mapText(hottestEvent.event_kind || 'world_event') + ' · ' + mapText(hottestEvent.node_name || hottestEvent.node_id || 'event');
         }
       };
 "#
 }
 
 pub(super) fn real_world_map_static_marker_layers_js() -> &'static str {
-    r#"      const mapMarkerActionButtonHtml = (marker, action) => `<button type="button" class="trillionnium-map-action" data-node-id="${escapeHtml(marker.node_id)}" data-action-id="${escapeHtml(action.action_id || 'move_here')}">${escapeHtml(action.label || action.command || '行动')}</button>`;
+    r#"      const mapMarkerActionButtonHtml = (marker, action) => `<button type="button" class="trillionnium-map-action" data-node-id="${escapeHtml(marker.node_id)}" data-action-id="${escapeHtml(action.action_id || 'move_here')}">${escapeHtml(mapText(action.label || action.command || 'Action / 行动'))}</button>`;
       (engine.route_edges || []).forEach((edge) => {
         if (!edge.from || !edge.to) return;
         mapAdapter.renderRouteLine(mapRuntime, edge.from, edge.to, { color: '#64e3ff', weight: 2, opacity: 0.62 });
@@ -927,15 +927,15 @@ pub(super) fn real_world_map_card_focus_helpers_js() -> &'static str {
         .filter(([, value]) => value !== undefined && value !== null)
         .map(([name, value]) => ` data-${name}="${escapeHtml(value)}"`)
         .join('');
-      const mapRegionFocusButton = (item, label = '聚焦区域') => {
+      const mapRegionFocusButton = (item, label = 'Focus region / 聚焦区域') => {
         const centerPoint = (item && item.center) || {};
-        return `<button type="button" class="focus-chip trillionnium-map-focus"${mapFocusButtonAttrs({ 'focus-kind': 'region', lat: centerPoint.lat ?? '', lng: centerPoint.lng ?? '', zoom: (item || {}).zoom_max ?? 12 })}>${escapeHtml(label)}</button>`;
+        return `<button type="button" class="focus-chip trillionnium-map-focus"${mapFocusButtonAttrs({ 'focus-kind': 'region', lat: centerPoint.lat ?? '', lng: centerPoint.lng ?? '', zoom: (item || {}).zoom_max ?? 12 })}>${escapeHtml(mapText(label))}</button>`;
       };
-      const mapTileFocusButton = (item, label = '查看地图分片') => `<button type="button" class="focus-chip trillionnium-map-focus"${mapFocusButtonAttrs({ 'focus-kind': 'tile', 'tile-z': (item || {}).z ?? '', 'tile-x': (item || {}).x ?? '', 'tile-y': (item || {}).y ?? '' })}>${escapeHtml(label)}</button>`;
-      const mapNodeFocusButton = (item, label = '聚焦热点') => `<button type="button" class="focus-chip trillionnium-map-focus"${mapFocusButtonAttrs({ 'focus-kind': 'node', 'node-id': (item || {}).node_id || '' })}>${escapeHtml(label)}</button>`;
-      const mapEventFocusButton = (item, label = '追踪事件') => {
+      const mapTileFocusButton = (item, label = 'View map tile / 查看地图分片') => `<button type="button" class="focus-chip trillionnium-map-focus"${mapFocusButtonAttrs({ 'focus-kind': 'tile', 'tile-z': (item || {}).z ?? '', 'tile-x': (item || {}).x ?? '', 'tile-y': (item || {}).y ?? '' })}>${escapeHtml(mapText(label))}</button>`;
+      const mapNodeFocusButton = (item, label = 'Focus hotspot / 聚焦热点') => `<button type="button" class="focus-chip trillionnium-map-focus"${mapFocusButtonAttrs({ 'focus-kind': 'node', 'node-id': (item || {}).node_id || '' })}>${escapeHtml(mapText(label))}</button>`;
+      const mapEventFocusButton = (item, label = 'Track event / 追踪事件') => {
         const eventItem = item || {};
-        return `<button type="button" class="focus-chip trillionnium-map-focus"${mapFocusButtonAttrs({ 'focus-kind': 'event', 'node-id': eventItem.node_id || '', 'event-id': eventItem.event_id || '', 'task-id': eventItem.cex_task_id || '', 'location-id': eventItem.location_id || '', 'event-kind': eventItem.event_kind || 'world_event', 'node-name': eventItem.node_name || eventItem.location_id || 'POI', 'event-body': eventItem.body || '', 'event-result': eventItem.result || '', 'suppress-action': 'true' })}>${escapeHtml(label)}</button>`;
+        return `<button type="button" class="focus-chip trillionnium-map-focus"${mapFocusButtonAttrs({ 'focus-kind': 'event', 'node-id': eventItem.node_id || '', 'event-id': eventItem.event_id || '', 'task-id': eventItem.cex_task_id || '', 'location-id': eventItem.location_id || '', 'event-kind': eventItem.event_kind || 'world_event', 'node-name': eventItem.node_name || eventItem.location_id || 'POI', 'event-body': eventItem.body || '', 'event-result': eventItem.result || '', 'suppress-action': 'true' })}>${escapeHtml(mapText(label))}</button>`;
       };
       const mapViewportCardModel = (item, kind, style = 'app') => {
         const source = item || {};
@@ -943,10 +943,10 @@ pub(super) fn real_world_map_card_focus_helpers_js() -> &'static str {
         if (kind === 'region') {
           return {
             className: worldStyle ? 'mini shard' : 'module',
-            title: mapText(source.name || '区域'),
+            title: mapText(source.name || 'Region / 区域'),
             meta: worldStyle
-              ? `${mapText(source.status || '规划中')} · ${mapText(source.coverage_kind || '分片')} · ${source.distance_km ?? 0} km`
-              : `${mapText(source.status || '规划中')} · ${source.distance_km ?? 0} km`,
+              ? `${mapText(source.status || 'planned / 规划中')} · ${mapText(source.coverage_kind || 'shard / 分片')} · ${source.distance_km ?? 0} km`
+              : `${mapText(source.status || 'planned / 规划中')} · ${source.distance_km ?? 0} km`,
             code: source.region_id || 'region',
             focusHtml: mapRegionFocusButton(source),
           };
@@ -954,36 +954,36 @@ pub(super) fn real_world_map_card_focus_helpers_js() -> &'static str {
         if (kind === 'tile') {
           return {
             className: worldStyle ? 'mini tile' : 'module',
-            title: mapText(source.tile_status || '地图块'),
-            meta: `${mapText(source.lod_mode || 'LOD')} · ${source.marker_count ?? 0} 个地点`,
+            title: mapText(source.tile_status || 'map tile / 地图块'),
+            meta: `${mapText(source.lod_mode || 'LOD')} · ${source.marker_count ?? 0} ${mapText('locations / 个地点')}`,
             code: source.tile_id || '地图块',
-            focusHtml: mapTileFocusButton(source, '查看分片'),
+            focusHtml: mapTileFocusButton(source, 'View tile / 查看分片'),
           };
         }
         if (kind === 'prefetch') {
           return {
             className: worldStyle ? 'mini prefetch' : 'module',
-            title: mapText(source.priority_label || '预热'),
-            meta: `${mapText(source.prefetch_reason || '邻近地图块预热')} · ${source.marker_count ?? 0} 个地点`,
-            code: source.tile_id || '地图块',
-            focusHtml: mapTileFocusButton(source, '预热分片'),
+            title: mapText(source.priority_label || 'warm / 预热'),
+            meta: `${mapText(source.prefetch_reason || 'neighbor tile warmup / 邻近地图块预热')} · ${source.marker_count ?? 0} ${mapText('locations / 个地点')}`,
+            code: source.tile_id || 'map tile / 地图块',
+            focusHtml: mapTileFocusButton(source, 'Warm tile / 预热分片'),
           };
         }
         if (kind === 'event') {
           return {
             className: worldStyle ? 'mini event' : 'module',
-            title: mapText(source.event_kind || '世界事件'),
-            meta: `${mapText(source.node_name || source.location_id || '热点')} · ${source.distance_km ?? '全域'} km`,
-            code: source.event_id || '事件',
-            focusHtml: mapEventFocusButton(source, '追踪事件'),
+            title: mapText(source.event_kind || 'world event / 世界事件'),
+            meta: `${mapText(source.node_name || source.location_id || 'hotspot / 热点')} · ${source.distance_km ?? mapText('global / 全域')} km`,
+            code: source.event_id || 'event / 事件',
+            focusHtml: mapEventFocusButton(source, 'Track event / 追踪事件'),
           };
         }
         return {
           className: worldStyle ? 'mini poi' : 'module',
-          title: mapText(source.name || '热点'),
-          meta: `${mapText(source.node_kind || '热点')} · ${source.distance_km ?? 0} km`,
-          code: source.node_id || '节点',
-          focusHtml: mapNodeFocusButton(source, '聚焦热点'),
+          title: mapText(source.name || 'hotspot / 热点'),
+          meta: `${mapText(source.node_kind || 'hotspot / 热点')} · ${source.distance_km ?? 0} km`,
+          code: source.node_id || 'node / 节点',
+          focusHtml: mapNodeFocusButton(source, 'Focus hotspot / 聚焦热点'),
         };
       };
       const mapViewportCardHtml = (item, kind, style = 'app') => {

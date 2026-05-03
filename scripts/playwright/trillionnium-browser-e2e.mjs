@@ -165,6 +165,29 @@ async function assertNoVisibleBilingualSlashPair(page, label) {
   assert(offenders.length === 0, `${label} still shows bilingual slash-pair copy`, offenders.slice(0, 8));
 }
 
+async function assertEnglishSurfaceHasNoCoreChineseLeaks(page, label) {
+  const pageText = await page.locator('body').innerText({ timeout: 10_000 });
+  const forbidden = [
+    '地图焦点可见',
+    '世界事件已创建',
+    '契约已开启或完成',
+    '冒险委托已创建',
+    '评级与返工路线可见',
+    '奖励成长动态已更新',
+    '路线下一步可见',
+    '聚焦区域',
+    '聚焦热点',
+    '查看分片',
+    '查看地图分片',
+    '预热分片',
+    '追踪事件',
+    '最近热点',
+    '高热事件',
+  ];
+  const offenders = forbidden.filter((needle) => pageText.includes(needle));
+  assert(offenders.length === 0, `${label} leaked core Chinese map/onboarding labels in English mode`, offenders);
+}
+
 async function submitWorldForm(page, formSelector, marker, expectedUrlFragment) {
   const form = page.locator(formSelector).first();
   await form.evaluate((node) => {
@@ -261,6 +284,7 @@ async function main() {
   const englishTabs = await page.$$eval('nav.app-bottom-tabs [data-app-tab]', (tabs) => tabs.map((tab) => tab.textContent.trim()));
   assert(JSON.stringify(englishTabs) === JSON.stringify(['Messages', 'World', 'Feed', 'Me']), `English system language tabs mismatch: ${JSON.stringify(englishTabs)}`);
   await assertNoVisibleBilingualSlashPair(page, '/app English system language');
+  await assertEnglishSurfaceHasNoCoreChineseLeaks(page, '/app English system language');
   assert(await count(page, '[data-trillionnium-language-select]') >= 2, 'system language selectors missing');
   await activateTab(page, 'me');
   await page.locator('#trillionnium-app-language-select').selectOption('zh');
@@ -374,6 +398,7 @@ async function main() {
   const pulseBox = await page.locator('#world-pulse-strip').boundingBox({ timeout: 10_000 });
   assert(pulseBox && pulseBox.height < 360, 'world mobile stats area is too tall', pulseBox);
   await assertNoVisibleBilingualSlashPair(page, '/world English system language');
+  await assertEnglishSurfaceHasNoCoreChineseLeaks(page, '/world English system language');
   await page.goto('/world?lang=zh', { waitUntil: 'domcontentloaded', timeout: 30_000 });
   await page.waitForSelector('#world-real-map', { timeout: 15_000 });
   await page.waitForFunction(() => document.documentElement.getAttribute('data-ui-language') === 'zh', { timeout: 10_000 });

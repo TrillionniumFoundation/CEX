@@ -283,7 +283,7 @@ pub(super) fn map_region_focus_button_html(lat: f64, lng: f64, zoom: i64, label:
         lat,
         lng,
         zoom,
-        escape_html_text(label),
+        map_focus_button_label_html(label),
     )
 }
 
@@ -291,7 +291,7 @@ pub(super) fn map_node_focus_button_html(node_id: &str, label: &str) -> String {
     format!(
         "<button type=\"button\" class=\"focus-chip trillionnium-map-focus\" data-focus-kind=\"node\" data-node-id=\"{}\">{}</button>",
         escape_html_text(node_id),
-        escape_html_text(label),
+        map_focus_button_label_html(label),
     )
 }
 
@@ -301,8 +301,22 @@ pub(super) fn map_tile_focus_button_html(z: i64, x: i64, y: i64, label: &str) ->
         z,
         x,
         y,
-        escape_html_text(label),
+        map_focus_button_label_html(label),
     )
+}
+
+fn map_focus_button_label_html(label: &str) -> String {
+    let copy = match label {
+        "聚焦区域" => "Focus region / 聚焦区域",
+        "聚焦热点" => "Focus hotspot / 聚焦热点",
+        "查看分片" => "View tile / 查看分片",
+        "查看地图分片" => "View map tile / 查看地图分片",
+        "预热分片" => "Warm tile / 预热分片",
+        "追踪事件" => "Track event / 追踪事件",
+        "行动" => "Action / 行动",
+        _ => label,
+    };
+    i18n_span_from_bilingual_slash_copy(copy).unwrap_or_else(|| escape_html_text(copy))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -327,7 +341,7 @@ pub(super) fn map_event_focus_button_html(
         escape_html_text(node_name),
         escape_html_text(event_body),
         escape_html_text(event_result),
-        escape_html_text(label),
+        map_focus_button_label_html(label),
     )
 }
 

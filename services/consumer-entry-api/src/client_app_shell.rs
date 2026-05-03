@@ -92,17 +92,23 @@ fn escape_client_app_visible_text(value: &str) -> String {
 fn client_app_readiness_label(value: &str) -> String {
     match value {
         "first_playable_loop_100" | "global_first_playable_loop_100" => {
-            "Global first playable 100% · 新手主线 100%".to_string()
+            "Global first playable 100% / 新手主线 100%".to_string()
         }
-        "map_focus_visible" => "地图焦点可见".to_string(),
-        "world_event_created" => "世界事件已创建".to_string(),
-        "contract_open_or_completed" => "契约已开启或完成".to_string(),
-        "quest_work_order_created" => "冒险委托已创建".to_string(),
-        "quest_rating_or_feedback_loop_visible" => "评级与返工路线可见".to_string(),
-        "wallet_progression_feed_updated" => "奖励成长动态已更新".to_string(),
-        "route_task_graph_next_action_visible" => "路线下一步可见".to_string(),
-        "visible" => "可见".to_string(),
-        "ready" => "已准备".to_string(),
+        "map_focus_visible" => "Map focus visible / 地图焦点可见".to_string(),
+        "world_event_created" => "World event created / 世界事件已创建".to_string(),
+        "contract_open_or_completed" => "Contract open or completed / 契约已开启或完成".to_string(),
+        "quest_work_order_created" => "Quest commission created / 冒险委托已创建".to_string(),
+        "quest_rating_or_feedback_loop_visible" => {
+            "Rating and revision route visible / 评级与返工路线可见".to_string()
+        }
+        "wallet_progression_feed_updated" => {
+            "Reward progression feed updated / 奖励成长动态已更新".to_string()
+        }
+        "route_task_graph_next_action_visible" => {
+            "Route next action visible / 路线下一步可见".to_string()
+        }
+        "visible" => "Visible / 可见".to_string(),
+        "ready" => "Ready / 已准备".to_string(),
         _ => client_app_visible_copy(value),
     }
 }
@@ -555,7 +561,7 @@ pub(super) async fn get_client_app_web_shell(
                 escape_html_text(step_id),
                 escape_client_app_visible_text(label),
                 escape_html_text(surface),
-                escape_html_text(&client_app_readiness_label(status)),
+                escape_client_app_visible_text(&client_app_readiness_label(status)),
                 escape_client_app_visible_text(description),
                 escape_client_app_visible_text(command),
                 escape_client_app_visible_text(&client_app_readiness_label(success_signal)),
@@ -1512,9 +1518,9 @@ pub(super) async fn get_client_app_web_shell(
 </body>
 </html>"#,
         escape_client_app_visible_text(current_node),
-        escape_html_text(onboarding_label),
-        escape_html_text(onboarding_goal),
-        escape_html_text(&client_app_readiness_label(onboarding_completion_target)),
+        escape_client_app_visible_text(onboarding_label),
+        escape_client_app_visible_text(onboarding_goal),
+        escape_client_app_visible_text(&client_app_readiness_label(onboarding_completion_target)),
         onboarding_acceptance_chips,
         onboarding_step_cards,
         message_cards,

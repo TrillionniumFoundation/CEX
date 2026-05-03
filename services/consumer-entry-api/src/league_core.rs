@@ -32,6 +32,66 @@ pub(super) fn i18n_span_from_bilingual_slash_copy(copy: &str) -> Option<String> 
     if !copy.contains(" / ") {
         return None;
     }
+    fn normalize_language_piece(value: &str, keep_cjk: bool) -> String {
+        fn cleanup(value: &str) -> String {
+            value
+                .trim_matches(|ch: char| {
+                    ch.is_whitespace()
+                        || matches!(
+                            ch,
+                            ':' | '：'
+                                | ','
+                                | '，'
+                                | ';'
+                                | '；'
+                                | '。'
+                                | '.'
+                                | '!'
+                                | '！'
+                                | '?'
+                                | '？'
+                                | '-'
+                                | '·'
+                        )
+                })
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+        }
+        fn strip_cjk(value: &str) -> String {
+            value
+                .chars()
+                .filter(|ch| {
+                    !(('\u{3400}'..='\u{9fff}').contains(ch)
+                        || ('\u{f900}'..='\u{faff}').contains(ch))
+                })
+                .collect::<String>()
+        }
+        if keep_cjk {
+            let mut pieces = Vec::new();
+            for raw_part in value.split('·') {
+                let part = raw_part.trim();
+                if !contains_cjk_text(part) {
+                    continue;
+                }
+                if part.contains('：') || part.contains(':') {
+                    let segments = part
+                        .split(['：', ':'])
+                        .map(str::trim)
+                        .filter(|segment| contains_cjk_text(segment))
+                        .collect::<Vec<_>>();
+                    if !segments.is_empty() {
+                        pieces.push(segments.join("："));
+                        continue;
+                    }
+                }
+                pieces.push(part.to_string());
+            }
+            return cleanup(&pieces.join(" · "));
+        }
+        cleanup(&strip_cjk(value))
+    }
+
     let mut english_pieces = Vec::new();
     let mut chinese_pieces = Vec::new();
     for piece in copy.split(" / ") {
@@ -39,10 +99,21 @@ pub(super) fn i18n_span_from_bilingual_slash_copy(copy: &str) -> Option<String> 
         if trimmed.is_empty() {
             continue;
         }
-        if contains_cjk_text(trimmed) {
-            chinese_pieces.push(trimmed);
-        } else if contains_latin_text(trimmed) {
-            english_pieces.push(trimmed);
+        let has_cjk = contains_cjk_text(trimmed);
+        let has_latin = contains_latin_text(trimmed);
+        if has_cjk && has_latin {
+            let english = normalize_language_piece(trimmed, false);
+            let chinese = normalize_language_piece(trimmed, true);
+            if !english.is_empty() {
+                english_pieces.push(english);
+            }
+            if !chinese.is_empty() {
+                chinese_pieces.push(chinese);
+            }
+        } else if has_cjk {
+            chinese_pieces.push(trimmed.to_string());
+        } else if has_latin {
+            english_pieces.push(trimmed.to_string());
         }
     }
     if english_pieces.is_empty() || chinese_pieces.is_empty() {
