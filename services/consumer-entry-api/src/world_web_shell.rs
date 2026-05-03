@@ -1130,12 +1130,20 @@ pub(super) async fn get_world_web_shell(
     .pill {{ display:inline-flex; border:1px solid rgba(100,227,255,.35); color:var(--cyan); padding:5px 10px; border-radius:999px; font-size:12px; text-transform:uppercase; letter-spacing:.12em; }}
     .world-next-card {{ display:grid; gap:12px; border:1px solid rgba(248,195,91,.2); background:linear-gradient(145deg,rgba(248,195,91,.13),rgba(100,227,255,.055)); border-radius:20px; padding:18px; }}
     .world-next-card strong {{ color:var(--gold); font-size:22px; }}
+    .world-map-player-summary {{ display:grid; grid-template-columns:minmax(0,1fr) auto; gap:12px; align-items:center; border:1px solid rgba(100,227,255,.18); background:rgba(100,227,255,.055); border-radius:20px; padding:14px; margin:14px 0; }}
+    .world-map-player-summary strong {{ display:block; color:var(--gold); margin-bottom:4px; }}
+    .world-map-player-summary .subtitle {{ margin:0; }}
+    .world-map-loop-steps {{ list-style:none; padding:0; margin:12px 0; display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }}
+    .world-map-loop-steps li {{ display:grid; gap:4px; min-height:82px; border:1px solid rgba(248,195,91,.2); background:rgba(248,195,91,.07); border-radius:16px; padding:12px; }}
+    .world-map-loop-steps b {{ color:var(--gold); }}
+    .world-map-loop-steps span {{ color:var(--muted); font-size:13px; line-height:1.35; }}
+    .world-advanced-map-drawer {{ border:1px solid rgba(255,255,255,.1); background:rgba(255,255,255,.035); border-radius:18px; padding:10px; }}
     .world-adventure-steps {{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; margin:12px 0; }}
     .world-adventure-step {{ border:1px solid rgba(248,195,91,.22); background:rgba(248,195,91,.075); border-radius:18px; padding:14px; display:grid; gap:6px; }}
     .world-adventure-step b {{ color:var(--gold); }}
     .world-route-drawer {{ border-color:rgba(100,227,255,.18); background:rgba(100,227,255,.045); border-radius:18px; padding:12px; }}
     .dev-details {{ margin-top:12px; color:var(--muted); }}
-    .dev-details summary {{ cursor:pointer; width:max-content; border:1px solid rgba(255,255,255,.1); border-radius:999px; padding:6px 10px; background:rgba(255,255,255,.05); color:rgba(246,247,251,.72); font-size:12px; font-weight:800; }}
+    .dev-details summary {{ cursor:pointer; width:max-content; border:1px solid rgba(255,255,255,.1); border-radius:999px; padding:8px 12px; min-height:36px; display:inline-flex; align-items:center; background:rgba(255,255,255,.05); color:rgba(246,247,251,.72); font-size:12px; font-weight:800; }}
     .play {{ display:grid; grid-template-columns:.8fr 1.2fr; gap:18px; }}
     .map-shell {{ display:grid; grid-template-columns:minmax(320px,.9fr) minmax(360px,1.1fr); gap:18px; align-items:stretch; }}
     form {{ display:grid; gap:10px; margin:0; }}
@@ -1174,7 +1182,8 @@ pub(super) async fn get_world_web_shell(
       .language-switcher {{ padding:5px 6px 5px 8px; font-size:11px; }}
       .language-switcher select {{ min-width:82px; max-width:112px; padding:6px 22px 6px 8px; font-size:11px; }}
       .world-hero-actions {{ display:grid; grid-template-columns:1fr 1fr; gap:8px; }}
-      .world-hero-actions .cta,.hero-card .cta {{ min-height:42px; padding:10px 11px; border-radius:14px; font-size:13px; }}
+      .world-hero-actions .cta,.hero-card .cta,.world-map-player-summary .cta {{ min-height:44px; padding:10px 11px; border-radius:14px; font-size:13px; }}
+      button,input,textarea,select,.focus-chip,.overlay-toggle {{ min-height:44px; }}
       .hero-card,.panel,.card {{ padding:15px; border-radius:20px; }}
       .hero-card {{ gap:10px; }}
       .hero-card strong {{ font-size:18px; }}
@@ -1193,6 +1202,8 @@ pub(super) async fn get_world_web_shell(
       .stats-more-grid {{ grid-template-columns:repeat(2,minmax(0,1fr)); padding:0 9px 9px; }}
       .stat {{ padding:8px; border-radius:12px; }}
       .stat b {{ font-size:16px; }}
+      .world-map-player-summary,.world-map-loop-steps {{ grid-template-columns:1fr; }}
+      .world-map-loop-steps li {{ min-height:auto; padding:10px 12px; }}
       .map-shell {{ gap:12px; }}
       #world-real-map {{ min-height:min(58svh,430px); border-radius:18px; }}
       .map-stream-hud,.overlay-toggle-bar,.focus-stack {{ gap:6px; }}
@@ -1262,28 +1273,22 @@ pub(super) async fn get_world_web_shell(
           <div class="pill" data-i18n-en="Reality Mirror Map" data-i18n-zh="现实镜像地图">Reality Mirror Map</div>
           <h2 data-i18n-en="Global City Exploration" data-i18n-zh="海外首发城市探索">Global City Exploration</h2>
           <p class="subtitle" data-i18n-en="Start from any map focus: regions, hotspots, live events, and route tasks become the next action. Players see story, places, commissions, and rewards; engine details stay in debug drawers." data-i18n-zh="从地图焦点进入冒险：区域、热点、实时事件和任务路线会自动串成下一步行动。玩家看到故事、地点、委托和奖励；引擎细节收进调试抽屉。">Start from any map focus: regions, hotspots, live events, and route tasks become the next action. Players see story, places, commissions, and rewards; engine details stay in debug drawers.</p>
-          <div id="world-tile-shards-live" class="mini-grid">{tile_shard_cards}</div>
-          <div id="world-region-shards-live" class="mini-grid">{region_shard_cards}</div>
-          <div class="mini-grid" style="margin-top:12px">{lod_layer_cards}</div>
-          <div id="world-poi-hotspots-live" class="mini-grid" style="margin-top:12px">{hotspot_cards}</div>
-          <div id="world-prefetch-queue-live" class="mini-grid" style="margin-top:12px">{prefetch_cards}</div>
-          <div id="world-live-events-live" class="mini-grid" style="margin-top:12px">{live_event_cards}</div>
-          <details class="dev-details"><summary data-i18n-en="Map debug" data-i18n-zh="地图调试信息">Map debug</summary><p>Global Real-world Map Engine: <code>{map_engine_name}</code> + <code>{tile_provider}</code></p><p>Mirror: <code>{mirror_scope}</code> · Strategy: <code>{full_mirror_strategy}</code> · Style: <code>{simplification_style}</code> · Goal: <code>{scaling_goal}</code></p><p>Viewport API: <code>{viewport_path}</code></p><p>Web Viewport: <code>{web_session_viewport_path}</code></p></details>
-          <p id="world-map-density-summary" class="subtitle">{map_density_summary}</p>
-          <p id="world-map-camera-summary" class="subtitle">镜头加载中…</p>
-          <div id="world-map-stream-hud" class="map-stream-hud">
-            <span class="hud-chip"><strong>{map_stream_region_count}</strong> <span data-i18n-en="regional shards" data-i18n-zh="个区域分片">regional shards</span></span>
-            <span class="hud-chip"><strong>{map_visible_marker_count}</strong> <span data-i18n-en="visible places" data-i18n-zh="个可见地点">visible places</span></span>
-            <span class="hud-chip"><strong>{map_prefetch_count}</strong> <span data-i18n-en="prefetch tiles" data-i18n-zh="个预热地图块">prefetch tiles</span></span>
-            <span class="hud-chip"><strong>{map_live_event_count}</strong> <span data-i18n-en="live events" data-i18n-zh="个实时事件">live events</span> · {map_player_density_mode}</span>
+          <div class="world-map-player-summary">
+            <div>
+              <strong data-i18n-en="Current Status" data-i18n-zh="当前状态">Current Status</strong>
+              <p id="world-map-density-summary" class="subtitle">{map_density_summary}</p>
+              <p id="world-map-camera-summary" class="subtitle" data-i18n-en="Camera loading…" data-i18n-zh="镜头加载中…">Camera loading…</p>
+            </div>
+            <a class="cta" href='#world-action-console' data-i18n-en="Start Next Action" data-i18n-zh="发起下一步行动">Start Next Action</a>
           </div>
-          <div id="world-map-overlay-controls" class="overlay-toggle-bar">
-{shared_map_overlay_controls_html}
-          </div>
+          <ol class="world-map-loop-steps" aria-label="World player loop" data-i18n-aria-label-en="World player loop" data-i18n-aria-label-zh="世界玩家三步循环">
+            <li><b data-i18n-en="1 · Choose focus" data-i18n-zh="1 · 选择焦点">1 · Choose focus</b><span data-i18n-en="Tap a place, event, or route." data-i18n-zh="点选地点、事件或路线。">Tap a place, event, or route.</span></li>
+            <li><b data-i18n-en="2 · Accept bounty" data-i18n-zh="2 · 接悬赏">2 · Accept bounty</b><span data-i18n-en="Convert the focus into a quest card." data-i18n-zh="把焦点转成任务牌。">Convert the focus into a quest card.</span></li>
+            <li><b data-i18n-en="3 · Submit result" data-i18n-zh="3 · 提交成果">3 · Submit result</b><span data-i18n-en="Get rated, rewarded, and routed onward." data-i18n-zh="获得评级、奖励和下一步路线。">Get rated, rewarded, and routed onward.</span></li>
+          </ol>
           <div id="world-map-camera-actions" class="overlay-toggle-bar">
 {shared_map_camera_actions_html}
           </div>
-          <p id="world-map-overlay-status" class="subtitle" data-i18n-en="Active layers: density, regions, tiles, prefetch rings, live events." data-i18n-zh="当前图层：密度、区域、地图块、预热圈、实时事件。">Active layers: density, regions, tiles, prefetch rings, live events.</p>
           <div class="mini" style="margin-top:14px;">
             <strong data-i18n-en="Map Action Rail" data-i18n-zh="地图行动栏">Map Action Rail</strong>
             <span id="world-map-focus-summary" data-i18n-en="Waiting for map focus…" data-i18n-zh="等待选择地图焦点…">Waiting for map focus…</span>
@@ -1299,7 +1304,30 @@ pub(super) async fn get_world_web_shell(
           <p id="world-map-route-event-brief-status" class="subtitle" data-i18n-en="Event brief: waiting for live-event focus." data-i18n-zh="事件简报：等待实时事件焦点。">Event brief: waiting for live-event focus.</p>
           <p id="world-map-route-link-status" class="subtitle" data-i18n-en="Linked task route: none yet." data-i18n-zh="关联任务路线：暂无。">Linked task route: none yet.</p>
           <div id="world-map-route-flow-actions" class="focus-stack"></div>
-          <p id="world-map-overlay-legend" class="subtitle" data-i18n-en="Layer legend: regional anchors, active tiles, prefetch rings, live-event pulses." data-i18n-zh="图层说明：区域锚点、活跃地图块、预热探索圈、实时事件脉冲。">Layer legend: regional anchors, active tiles, prefetch rings, live-event pulses.</p>
+          <details class="dev-details world-advanced-map-drawer">
+            <summary data-i18n-en="Advanced map layers" data-i18n-zh="高级地图图层">Advanced map layers</summary>
+            <div id="world-tile-shards-live" class="mini-grid">{tile_shard_cards}</div>
+            <div id="world-region-shards-live" class="mini-grid" style="margin-top:12px">{region_shard_cards}</div>
+            <div class="mini-grid" style="margin-top:12px">{lod_layer_cards}</div>
+            <div id="world-poi-hotspots-live" class="mini-grid" style="margin-top:12px">{hotspot_cards}</div>
+            <div id="world-prefetch-queue-live" class="mini-grid" style="margin-top:12px">{prefetch_cards}</div>
+            <div id="world-live-events-live" class="mini-grid" style="margin-top:12px">{live_event_cards}</div>
+            <p style="margin-top:12px"><strong>Global Real-world Map Engine</strong>: <code>{map_engine_name}</code> + <code>{tile_provider}</code></p>
+            <p><strong>Mirror</strong>: <code>{mirror_scope}</code> · <strong>Strategy</strong>: <code>{full_mirror_strategy}</code> · <strong>Style</strong>: <code>{simplification_style}</code> · <strong>Goal</strong>: <code>{scaling_goal}</code></p>
+            <p><strong>Viewport API</strong>: <code>{viewport_path}</code></p>
+            <p><strong>Web Viewport</strong>: <code>{web_session_viewport_path}</code></p>
+            <div id="world-map-stream-hud" class="map-stream-hud">
+              <span class="hud-chip"><strong>{map_stream_region_count}</strong> <span data-i18n-en="regional shards" data-i18n-zh="个区域分片">regional shards</span></span>
+              <span class="hud-chip"><strong>{map_visible_marker_count}</strong> <span data-i18n-en="visible places" data-i18n-zh="个可见地点">visible places</span></span>
+              <span class="hud-chip"><strong>{map_prefetch_count}</strong> <span data-i18n-en="prefetch tiles" data-i18n-zh="个预热地图块">prefetch tiles</span></span>
+              <span class="hud-chip"><strong>{map_live_event_count}</strong> <span data-i18n-en="live events" data-i18n-zh="个实时事件">live events</span> · {map_player_density_mode}</span>
+            </div>
+            <div id="world-map-overlay-controls" class="overlay-toggle-bar">
+{shared_map_overlay_controls_html}
+            </div>
+            <p id="world-map-overlay-status" class="subtitle" data-i18n-en="Active layers: density, regions, tiles, prefetch rings, live events." data-i18n-zh="当前图层：密度、区域、地图块、预热圈、实时事件。">Active layers: density, regions, tiles, prefetch rings, live events.</p>
+            <p id="world-map-overlay-legend" class="subtitle" data-i18n-en="Layer legend: regional anchors, active tiles, prefetch rings, live-event pulses." data-i18n-zh="图层说明：区域锚点、活跃地图块、预热探索圈、实时事件脉冲。">Layer legend: regional anchors, active tiles, prefetch rings, live-event pulses.</p>
+          </details>
         </div>
         <div id="world-real-map" data-engine="{map_engine_id}" data-provider="{tile_provider}" aria-label="Reality mirror map" data-i18n-aria-label-en="Reality mirror map" data-i18n-aria-label-zh="现实镜像地图"></div>
       </div>

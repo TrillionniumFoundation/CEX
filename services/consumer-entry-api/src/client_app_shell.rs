@@ -677,10 +677,20 @@ pub(super) async fn get_client_app_web_shell(
     .quest-hero::after {{ content:""; position:absolute; inset:auto -18% -48% 38%; height:220px; background:radial-gradient(circle,rgba(100,227,255,.22),transparent 62%); pointer-events:none; }}
     .quest-summary {{ display:grid; gap:10px; grid-template-columns:minmax(0,1.25fr) minmax(220px,.75fr); align-items:stretch; }}
     .quest-next-card {{ border:1px solid rgba(255,255,255,.14); background:rgba(7,8,20,.38); border-radius:18px; padding:14px; }}
-    .quest-next-card strong {{ display:block; color:var(--gold); font-size:15px; margin-bottom:6px; }}
-    .quest-cta {{ display:inline-flex; align-items:center; justify-content:center; min-height:42px; border-radius:14px; border:1px solid rgba(248,195,91,.42); background:linear-gradient(135deg,rgba(248,195,91,.92),rgba(255,150,89,.9)); color:#071019; text-decoration:none; font-weight:950; padding:0 14px; box-shadow:0 12px 28px rgba(248,195,91,.16); }}
+    .quest-next-card strong,.quest-status-card strong {{ display:block; color:var(--gold); font-size:15px; margin-bottom:6px; }}
+    .quest-status-card {{ border:1px solid rgba(100,227,255,.16); background:rgba(100,227,255,.05); border-radius:18px; padding:14px; }}
+    .quest-status-card .subtitle {{ margin:0 0 8px; }}
+    .quest-cta {{ display:inline-flex; align-items:center; justify-content:center; min-height:44px; border-radius:14px; border:1px solid rgba(248,195,91,.42); background:linear-gradient(135deg,rgba(248,195,91,.92),rgba(255,150,89,.9)); color:#071019; text-decoration:none; font-weight:950; padding:0 16px; box-shadow:0 12px 28px rgba(248,195,91,.16); }}
+    .app-player-loop-steps {{ list-style:none; padding:0; margin:12px 0 0; display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }}
+    .app-player-loop-steps li {{ display:grid; gap:4px; min-height:86px; border:1px solid rgba(248,195,91,.2); background:rgba(248,195,91,.07); border-radius:16px; padding:12px; }}
+    .app-player-loop-steps b {{ color:var(--gold); }}
+    .app-player-loop-steps span {{ color:var(--muted); font-size:13px; line-height:1.35; }}
+    .app-map-product-strip {{ display:grid; gap:10px; grid-template-columns:minmax(0,1fr) auto; align-items:center; border:1px solid rgba(100,227,255,.18); background:rgba(100,227,255,.055); border-radius:18px; padding:12px; margin:12px 0; }}
+    .app-map-product-strip strong {{ display:block; color:var(--gold); margin-bottom:4px; }}
+    .app-map-product-strip .quest-cta {{ min-width:154px; }}
+    .map-technical-drawer,.app-progress-drawer {{ border:1px solid rgba(255,255,255,.1); background:rgba(255,255,255,.035); border-radius:18px; padding:10px; }}
     .dev-details {{ margin-top:10px; color:var(--muted); }}
-    .dev-details summary {{ cursor:pointer; width:max-content; border:1px solid rgba(255,255,255,.1); border-radius:999px; padding:6px 10px; background:rgba(255,255,255,.05); color:rgba(246,247,251,.72); font-size:12px; font-weight:800; }}
+    .dev-details summary {{ cursor:pointer; width:max-content; border:1px solid rgba(255,255,255,.1); border-radius:999px; padding:8px 12px; min-height:36px; display:inline-flex; align-items:center; background:rgba(255,255,255,.05); color:rgba(246,247,251,.72); font-size:12px; font-weight:800; }}
     .app-tab-panel {{ display:none; gap:16px; }}
     .app-tab-panel.is-active {{ display:grid; }}
     .app-tab-header {{ display:grid; gap:6px; margin-bottom:4px; }}
@@ -713,9 +723,16 @@ pub(super) async fn get_client_app_web_shell(
       #real-world-map {{ order:-1; min-height:min(54svh,390px); border-radius:20px; }}
       .map-panel,.module {{ padding:15px; border-radius:19px; }}
       .map-stream-hud,.overlay-toggle-bar,.focus-stack {{ gap:6px; }}
-      .hud-chip,.focus-chip,.overlay-toggle {{ padding:7px 9px; font-size:12px; }}
-      .quest-summary {{ grid-template-columns:1fr; }}
+      .hud-chip,.focus-chip,.overlay-toggle {{ padding:7px 9px; font-size:12px; min-height:44px; }}
+      .app-bottom-tab,.quest-cta,.app-search-clear,.language-switcher,.language-switcher select {{ min-height:44px; }}
+      .quest-summary,.app-map-product-strip {{ grid-template-columns:1fr; }}
       .quest-hero {{ gap:8px; }}
+      .quest-next-card .subtitle {{ display:none; }}
+      .quest-status-card .subtitle {{ display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }}
+      .app-player-loop-steps {{ grid-template-columns:repeat(3,minmax(0,1fr)); gap:7px; margin-top:10px; }}
+      .app-player-loop-steps li {{ min-height:auto; padding:8px; border-radius:13px; }}
+      .app-player-loop-steps b {{ font-size:12px; }}
+      .app-player-loop-steps span {{ display:none; }}
       #app-first-playable-steps {{ display:none; }}
     }}
   </style>
@@ -743,16 +760,22 @@ pub(super) async fn get_client_app_web_shell(
       <span class="badge" data-i18n-en="Starter Quest" data-i18n-zh="新手主线">Starter Quest</span>
       <h2>{}</h2>
       <div class="quest-summary">
-        <div>
+        <div class="quest-status-card">
+          <strong data-i18n-en="Current Status" data-i18n-zh="当前状态">Current Status</strong>
           <p class="subtitle">{} <span data-i18n-en="Goal:" data-i18n-zh="目标：">Goal:</span> <code>{}</code></p>
-          <div id="app-first-playable-checks" class="map-stream-hud">{}</div>
         </div>
         <div class="quest-next-card">
           <strong data-i18n-en="Next Action" data-i18n-zh="下一步行动">Next Action</strong>
           <p class="subtitle" data-i18n-en="Choose a map focus in World, accept a quest card, submit results, then finish rating." data-i18n-zh="先在世界页选择地图焦点，再接取任务牌、提交成果并完成评级。">Choose a map focus in World, accept a quest card, submit results, then finish rating.</p>
-          <a class="quest-cta" href="/world" data-i18n-en="Open World Console" data-i18n-zh="进入世界行动台">Open World Console</a>
+          <a class="quest-cta" href="/world" data-i18n-en="Start World Quest" data-i18n-zh="开始世界任务">Start World Quest</a>
         </div>
       </div>
+      <ol class="app-player-loop-steps" aria-label="Starter quest steps" data-i18n-aria-label-en="Starter quest steps" data-i18n-aria-label-zh="新手任务三步">
+        <li><b data-i18n-en="1 · Choose map focus" data-i18n-zh="1 · 选择地图焦点">1 · Choose map focus</b><span data-i18n-en="Tap a city place, region, or live event." data-i18n-zh="点选城市地点、区域或实时事件。">Tap a city place, region, or live event.</span></li>
+        <li><b data-i18n-en="2 · Accept bounty" data-i18n-zh="2 · 接取悬赏">2 · Accept bounty</b><span data-i18n-en="Turn the focus into a playable quest card." data-i18n-zh="把焦点变成可玩的任务牌。">Turn the focus into a playable quest card.</span></li>
+        <li><b data-i18n-en="3 · Submit & claim" data-i18n-zh="3 · 提交并领奖">3 · Submit & claim</b><span data-i18n-en="Submit results, pass rating, and claim reward." data-i18n-zh="提交成果，通过评级并领取奖励。">Submit results, pass rating, and claim reward.</span></li>
+      </ol>
+      <details class="dev-details app-progress-drawer"><summary data-i18n-en="Progress checks" data-i18n-zh="进度检查">Progress checks</summary><div id="app-first-playable-checks" class="map-stream-hud">{}</div></details>
       <section id="app-first-playable-steps" class="grid">{}</section>
     </section>
     <section id="app-tab-messages" class="app-tab-panel" data-app-panel="messages" role="tabpanel" aria-labelledby="app-tab-button-messages" aria-hidden="true" hidden>
@@ -772,29 +795,36 @@ pub(super) async fn get_client_app_web_shell(
         <span class="badge" data-i18n-en="Reality Mirror Map" data-i18n-zh="现实镜像地图">Reality Mirror Map</span>
         <h2 data-i18n-en="Global Launch Zone" data-i18n-zh="海外首发探索路线">Global Launch Zone</h2>
         <p data-i18n-en="Start from a real-world map for global/overseas players: nearby places, live events, quest cards, and collaborative Agents become adventure routes. Players only need to choose a focus, accept commissions, submit results, and get rated; engine details stay in debug drawers." data-i18n-zh="从面向全球/海外玩家的真实地图开始：附近地点、实时事件、任务牌和协作 Agent 会变成冒险路线。普通玩家只需要选焦点、接委托、提交成果、拿评级；底层地图引擎和接口细节已经收进调试信息。">Start from a real-world map for global/overseas players: nearby places, live events, quest cards, and collaborative Agents become adventure routes. Players only need to choose a focus, accept commissions, submit results, and get rated; engine details stay in debug drawers.</p>
-        <details class="dev-details"><summary>调试信息</summary>
+        <div class="app-map-product-strip">
+          <div>
+            <strong data-i18n-en="Current Status" data-i18n-zh="当前状态">Current Status</strong>
+            <p id="app-map-density-summary" class="subtitle">{}</p>
+            <p id="app-map-camera-summary" class="subtitle" data-i18n-en="Camera loading…" data-i18n-zh="镜头加载中…">Camera loading…</p>
+          </div>
+          <a class="quest-cta" href='#app-map-action-rail' data-i18n-en="Choose Focus" data-i18n-zh="选择焦点">Choose Focus</a>
+        </div>
+        <p><strong data-i18n-en="Map Main Entry" data-i18n-zh="地图主入口">Map Main Entry</strong>: <span data-i18n-en="start with nearby places, events, and bounties before entering other modules." data-i18n-zh="先看附近地点、事件和悬赏，再进入其他模块。">start with nearby places, events, and bounties before entering other modules.</span></p>
+        <div id="app-map-camera-actions" class="overlay-toggle-bar">
+{shared_map_camera_actions_html}
+        </div>
+        <details class="dev-details map-technical-drawer"><summary data-i18n-en="Advanced map layers" data-i18n-zh="高级地图图层">Advanced map layers</summary>
           <p><strong>Real-world map engine</strong>: <code>{}</code> + <code>{}</code></p>
           <p><strong>Mirror</strong>: <code>{}</code> · <strong>Active Region</strong>: <code>{}</code> · <strong>Shards</strong>: {} · <strong>LOD Layers</strong>: {}</p>
           <p><strong>Viewport API</strong>: <code>{}</code></p>
           <p><strong>Web Viewport</strong>: <code>{}</code></p>
-        </details>
-        <p><code>{}</code></p>
-        <p><strong data-i18n-en="Map Main Entry" data-i18n-zh="地图主入口">Map Main Entry</strong>: <span data-i18n-en="start with nearby places, events, and bounties before entering other modules." data-i18n-zh="先看附近地点、事件和悬赏，再进入其他模块。">start with nearby places, events, and bounties before entering other modules.</span></p>
-        <p id="app-map-density-summary" class="subtitle">{}</p>
-        <p id="app-map-camera-summary" class="subtitle">镜头加载中…</p>
-        <div id="app-map-stream-hud" class="map-stream-hud">
-          <span class="hud-chip"><strong>{}</strong> <span data-i18n-en="regional shards" data-i18n-zh="个区域分片">regional shards</span></span>
-          <span class="hud-chip"><strong>{}</strong> <span data-i18n-en="visible places" data-i18n-zh="个可见地点">visible places</span></span>
-          <span class="hud-chip"><strong>{}</strong> <span data-i18n-en="prefetch tiles" data-i18n-zh="个预热地图块">prefetch tiles</span></span>
-          <span class="hud-chip"><strong>{}</strong> <span data-i18n-en="live events" data-i18n-zh="个实时事件">live events</span> · {}</span>
-        </div>
-        <div id="app-map-overlay-controls" class="overlay-toggle-bar">
+          <p><code>{}</code></p>
+          <div id="app-map-stream-hud" class="map-stream-hud">
+            <span class="hud-chip"><strong>{}</strong> <span data-i18n-en="regional shards" data-i18n-zh="个区域分片">regional shards</span></span>
+            <span class="hud-chip"><strong>{}</strong> <span data-i18n-en="visible places" data-i18n-zh="个可见地点">visible places</span></span>
+            <span class="hud-chip"><strong>{}</strong> <span data-i18n-en="prefetch tiles" data-i18n-zh="个预热地图块">prefetch tiles</span></span>
+            <span class="hud-chip"><strong>{}</strong> <span data-i18n-en="live events" data-i18n-zh="个实时事件">live events</span> · {}</span>
+          </div>
+          <div id="app-map-overlay-controls" class="overlay-toggle-bar">
 {shared_map_overlay_controls_html}
-        </div>
-        <div id="app-map-camera-actions" class="overlay-toggle-bar">
-{shared_map_camera_actions_html}
-        </div>
-        <p id="app-map-overlay-status" class="subtitle">当前图层：密度、区域、地图块、预热圈、实时事件。</p>
+          </div>
+          <p id="app-map-overlay-status" class="subtitle" data-i18n-en="Active layers: density, regions, tiles, prefetch rings, live events." data-i18n-zh="当前图层：密度、区域、地图块、预热圈、实时事件。">Active layers: density, regions, tiles, prefetch rings, live events.</p>
+          <p id="app-map-overlay-legend" class="subtitle" data-i18n-en="Layer legend: regional anchors · active tiles · prefetch rings · live-event pulses." data-i18n-zh="图层说明：区域锚点 · 活跃地图块 · 预热探索圈 · 实时事件脉冲。">Layer legend: regional anchors · active tiles · prefetch rings · live-event pulses.</p>
+        </details>
         <div class="module" style="margin-top:14px; padding:16px 18px;">
           <strong data-i18n-en="Map Action Rail" data-i18n-zh="地图行动栏">Map Action Rail</strong>
           <span id="app-map-focus-summary" data-i18n-en="Waiting for map focus…" data-i18n-zh="等待选择地图焦点…">Waiting for map focus…</span>
@@ -812,7 +842,6 @@ pub(super) async fn get_client_app_web_shell(
           </div>
           <div id="app-map-route-actions" class="focus-stack"></div>
         </div>
-        <p id="app-map-overlay-legend" class="subtitle" data-i18n-en="Layer legend: regional anchors · active tiles · prefetch rings · live-event pulses." data-i18n-zh="图层说明：区域锚点 · 活跃地图块 · 预热探索圈 · 实时事件脉冲。">Layer legend: regional anchors · active tiles · prefetch rings · live-event pulses.</p>
       </div>
       <div id="real-world-map" data-engine="{}" data-provider="{}" aria-label="Reality mirror map" data-i18n-aria-label-en="Reality mirror map" data-i18n-aria-label-zh="现实镜像地图"></div>
     </section>
@@ -841,8 +870,8 @@ pub(super) async fn get_client_app_web_shell(
       <div class="app-tab-header">
         <h2 data-i18n-en="Feed" data-i18n-zh="动态">Feed</h2>
         <p class="subtitle" data-i18n-en="Discovery feed for city events, commissions, battle reports, adventure updates, and social posts." data-i18n-zh="城市事件、委托、战报、冒险动态与社交更新。">Discovery feed for city events, commissions, battle reports, adventure updates, and social posts.</p>
-        <details class="dev-details"><summary>动态同步调试</summary><p><strong>Feed API</strong>: <code>{}</code></p><p><strong>Web Feed</strong>: <code>{}</code></p></details>
-        <p id="app-feed-api-status" class="subtitle">动态加载中 · 当前区域 <code>{}</code> · 已准备 {} 条动态。</p>
+        <details class="dev-details"><summary data-i18n-en="Feed sync debug" data-i18n-zh="动态同步调试">Feed sync debug</summary><p><strong>Feed API</strong>: <code>{}</code></p><p><strong>Web Feed</strong>: <code>{}</code></p></details>
+        <p id="app-feed-api-status" class="subtitle"><span data-i18n-en="Feed loading" data-i18n-zh="动态加载中">Feed loading</span> · <span data-i18n-en="Active region" data-i18n-zh="当前区域">Active region</span> <code>{}</code> · <span data-i18n-en="Ready items" data-i18n-zh="已准备动态">Ready items</span> {}.</p>
       </div>
       <div id="app-feed-filter-actions" class="focus-stack">{}</div>
       <div id="app-feed-summary" class="map-stream-hud">{}</div>
@@ -1524,6 +1553,7 @@ pub(super) async fn get_client_app_web_shell(
         onboarding_acceptance_chips,
         onboarding_step_cards,
         message_cards,
+        escape_html_text(&client_app_map_label(map_density_summary)),
         escape_html_text(map_engine_name),
         escape_html_text(tile_provider),
         escape_html_text(mirror_scope),
@@ -1533,7 +1563,6 @@ pub(super) async fn get_client_app_web_shell(
         escape_html_text(viewport_path_template),
         escape_html_text(web_session_viewport_path_template),
         escape_html_text(map_engine_id),
-        escape_html_text(&client_app_map_label(map_density_summary)),
         map_stream_region_count,
         map_visible_marker_count,
         map_prefetch_count,
