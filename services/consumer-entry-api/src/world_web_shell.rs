@@ -1759,7 +1759,7 @@ pub(super) async fn get_world_web_shell(
         const panel = document.getElementById(target.panelId);
         if (panel) panel.scrollIntoView({{ behavior: 'smooth', block: 'center' }});
         if (cameraSummary && (focusedEventId || focusedNodeId)) {{
-          cameraSummary.textContent = '路线焦点已准备：' + (focusedEventId ? ('事件 ' + focusedEventId) : focusedNodeId) + ' · 面板 ' + (target.panelId || routeActionPanelId());
+          cameraSummary.textContent = routePhrase('Route focus ready: ' + (focusedEventId ? ('event ' + focusedEventId) : focusedNodeId) + ' · panel ' + (target.panelId || routeActionPanelId()), '路线焦点已准备：' + (focusedEventId ? ('事件 ' + focusedEventId) : focusedNodeId) + ' · 面板 ' + (target.panelId || routeActionPanelId()));
         }}
         const finalFocusTarget = input || textarea || (target.locationId ? document.getElementById(routeActionLocationId()) : null);
         if (finalFocusTarget) {{
@@ -1770,7 +1770,7 @@ pub(super) async fn get_world_web_shell(
           if (typeof input.select === 'function') input.select();
         }}
       }};
-      const buildRouteActionDraft = (selection, routeContext) => buildRouteDraftBody(selection, routeContext, {{ selectionTitleFallback: '当前世界路线' }});
+      const buildRouteActionDraft = (selection, routeContext) => buildRouteDraftBody(selection, routeContext, {{ selectionTitleFallback: routePhrase('current world route', '当前世界路线') }});
       const renderWorldTaskGraph = (tasks) => {{
         if (!routeTaskGraphTarget) return;
         const visible = (tasks && tasks.length ? tasks : routeTaskGraphItems).slice(0, 6);
@@ -1792,24 +1792,24 @@ pub(super) async fn get_world_web_shell(
           .sort((left, right) => Number(right.dataset.createdAt || 0) - Number(left.dataset.createdAt || 0))[0] || null;
       }};
       const inferRouteNextStep = (selection, routeContext) => inferConfiguredRouteNextStep(selection, routeContext, {{
-        statusPrefix: '推荐下一步',
-        rejectionBody: (selectionTitle, workOrderId) => selectionTitle + ': 重开委托 ' + workOrderId + '，写清返工要求、证据缺口、再次托管和下一次提交。',
-        rejectionStatus: (workOrderId) => '为当前路线重开委托 ' + workOrderId + '。',
-        reopenBody: (selectionTitle, workOrderId) => selectionTitle + ': 重新提交委托 ' + workOrderId + '，带上修订成果、证据包、评级清单和风险复盘。',
-        reopenStatus: (workOrderId) => '重开后重新提交委托 ' + workOrderId + '。',
-        deliveryBody: (selectionTitle, workOrderId) => selectionTitle + ': 评定委托 ' + workOrderId + ' 的成果，确认证据和质量，再给出通过或返工的下一步。',
-        deliveryStatus: (workOrderId) => '评定最新委托成果 ' + workOrderId + '。',
-        openWorkBody: (selectionTitle, workOrderId) => selectionTitle + ': 为委托 ' + workOrderId + ' 准备成果、证据、评级清单和下一步行动。',
-        openWorkStatus: (workOrderId) => '提交当前委托 ' + workOrderId + '。',
-        closedWorkLabel: '起草后续行动',
-        closedWorkBody: (selectionTitle, workOrderId, latestWorkBucket) => selectionTitle + ': 在 ' + latestWorkBucket + ' 后跟进委托 ' + workOrderId + '，记录结果、下一条支线和世界状态变化。',
-        closedWorkStatus: (workOrderId, latestWorkBucket) => '在 ' + latestWorkBucket + ' 后起草委托 ' + workOrderId + ' 的后续世界行动。',
-        contractBody: (selectionTitle, contractId) => selectionTitle + ': 完成契约 ' + contractId + '，带上成果、证据、风险复盘、评级标准和下一步。',
-        contractStatus: (contractId) => '完成当前路线的契约 ' + contractId + '。',
-        listingBody: (selectionTitle, listingId) => selectionTitle + ': 接取任务牌 ' + listingId + '，定义成果、证据、评级、风险控制和下一步行动。',
-        listingStatus: (listingId) => '把任务牌 ' + listingId + ' 接入冒险路线。',
-        defaultBody: (selectionTitle) => selectionTitle + ': 从当前路线起草下一步世界行动，包含证据、风险和推进动作。',
-        defaultStatus: () => '为当前路线起草世界行动。',
+        statusPrefix: routePhrase('Recommended next step', '推荐下一步'),
+        rejectionBody: (selectionTitle, workOrderId) => routePhrase(selectionTitle + ': reopen commission ' + workOrderId + ' with revision needs, evidence gaps, renewed escrow, and next submission.', selectionTitle + ': 重开委托 ' + workOrderId + '，写清返工要求、证据缺口、再次托管和下一次提交。'),
+        rejectionStatus: (workOrderId) => routePhrase('Reopen commission ' + workOrderId + ' for the current route.', '为当前路线重开委托 ' + workOrderId + '。'),
+        reopenBody: (selectionTitle, workOrderId) => routePhrase(selectionTitle + ': resubmit commission ' + workOrderId + ' with revised result, evidence pack, rating checklist, and risk review.', selectionTitle + ': 重新提交委托 ' + workOrderId + '，带上修订成果、证据包、评级清单和风险复盘。'),
+        reopenStatus: (workOrderId) => routePhrase('Resubmit commission ' + workOrderId + ' after reopening.', '重开后重新提交委托 ' + workOrderId + '。'),
+        deliveryBody: (selectionTitle, workOrderId) => routePhrase(selectionTitle + ': rate commission ' + workOrderId + ', confirm evidence and quality, then choose pass or revision next step.', selectionTitle + ': 评定委托 ' + workOrderId + ' 的成果，确认证据和质量，再给出通过或返工的下一步。'),
+        deliveryStatus: (workOrderId) => routePhrase('Rate latest commission result ' + workOrderId + '.', '评定最新委托成果 ' + workOrderId + '。'),
+        openWorkBody: (selectionTitle, workOrderId) => routePhrase(selectionTitle + ': prepare result, evidence, rating checklist, and next action for commission ' + workOrderId + '.', selectionTitle + ': 为委托 ' + workOrderId + ' 准备成果、证据、评级清单和下一步行动。'),
+        openWorkStatus: (workOrderId) => routePhrase('Submit current commission ' + workOrderId + '.', '提交当前委托 ' + workOrderId + '。'),
+        closedWorkLabel: routePhrase('Draft follow-up action', '起草后续行动'),
+        closedWorkBody: (selectionTitle, workOrderId, latestWorkBucket) => routePhrase(selectionTitle + ': follow up commission ' + workOrderId + ' after ' + mapText(latestWorkBucket) + ', recording result, next branch, and world-state changes.', selectionTitle + ': 在 ' + latestWorkBucket + ' 后跟进委托 ' + workOrderId + '，记录结果、下一条支线和世界状态变化。'),
+        closedWorkStatus: (workOrderId, latestWorkBucket) => routePhrase('Draft follow-up world action for commission ' + workOrderId + ' after ' + mapText(latestWorkBucket) + '.', '在 ' + latestWorkBucket + ' 后起草委托 ' + workOrderId + ' 的后续世界行动。'),
+        contractBody: (selectionTitle, contractId) => routePhrase(selectionTitle + ': complete contract ' + contractId + ' with result, evidence, risk review, rating criteria, and next step.', selectionTitle + ': 完成契约 ' + contractId + '，带上成果、证据、风险复盘、评级标准和下一步。'),
+        contractStatus: (contractId) => routePhrase('Complete contract ' + contractId + ' for the current route.', '完成当前路线的契约 ' + contractId + '。'),
+        listingBody: (selectionTitle, listingId) => routePhrase(selectionTitle + ': accept bounty card ' + listingId + ' with deliverable, evidence, rating, risk controls, and next action.', selectionTitle + ': 接取任务牌 ' + listingId + '，定义成果、证据、评级、风险控制和下一步行动。'),
+        listingStatus: (listingId) => routePhrase('Connect bounty card ' + listingId + ' into the adventure route.', '把任务牌 ' + listingId + ' 接入冒险路线。'),
+        defaultBody: (selectionTitle) => routePhrase(selectionTitle + ': draft the next world action from the current route with evidence, risk, and execution move.', selectionTitle + ': 从当前路线起草下一步世界行动，包含证据、风险和推进动作。'),
+        defaultStatus: () => routePhrase('Draft a world action for the current route.', '为当前路线起草世界行动。'),
       }});
       {shared_map_selection_location_ids_js}
       const applyRouteFilters = () => {{
@@ -1837,10 +1837,10 @@ pub(super) async fn get_world_web_shell(
         }});
         if (!routeFilterStatus) return;
         if (routeFilterMode === 'all' || !selection || (!selectedTaskId && !locationIds.size)) {{
-          routeFilterStatus.textContent = '路线筛选：显示全部世界活动。';
+          routeFilterStatus.textContent = routePhrase('Route filter: showing all world activity.', '路线筛选：显示全部世界活动。');
         }} else {{
           const workflowCount = (counts.purchase || 0) + (counts.work_order || 0) + (counts.delivery || 0) + (counts.acceptance || 0) + (counts.rejection || 0) + (counts.reopen || 0) + (counts.cancellation || 0);
-          routeFilterStatus.textContent = '路线筛选：' + (selection.title || '焦点') + (selectedTaskId ? (' · 任务 ' + selectedTaskId) : '') + ' · ' + (counts.event || 0) + ' 事件 · ' + (counts.contract || 0) + ' 契约 · ' + workflowCount + ' 个冒险环节。';
+          routeFilterStatus.textContent = routePhrase('Route filter: ' + mapText(selection.title || 'focus') + (selectedTaskId ? (' · task ' + selectedTaskId) : '') + ' · ' + (counts.event || 0) + ' events · ' + (counts.contract || 0) + ' contracts · ' + workflowCount + ' workflow steps.', '路线筛选：' + (selection.title || '焦点') + (selectedTaskId ? (' · 任务 ' + selectedTaskId) : '') + ' · ' + (counts.event || 0) + ' 事件 · ' + (counts.contract || 0) + ' 契约 · ' + workflowCount + ' 个冒险环节。');
         }}
         applyRouteFlow();
       }};
@@ -1907,10 +1907,10 @@ pub(super) async fn get_world_web_shell(
             pushRouteFlowActionButton(actions, actionKeys, buildDraftWorldAction(locationId, activeTaskId, draftBody));
           }}
           if (activeTaskId) {{
-            pushRouteFlowActionButton(actions, actionKeys, buildTaskFollowUpAction(selection, activeTaskId, locationId, '结合关联事件/契约、当前世界状态证据、风险和下一步行动'));
+            pushRouteFlowActionButton(actions, actionKeys, buildTaskFollowUpAction(selection, activeTaskId, locationId, routePhrase('Combine linked event/contract, current world-state evidence, risk, and next action', '结合关联事件/契约、当前世界状态证据、风险和下一步行动')));
           }}
           if (eventItem) {{
-            pushRouteFlowActionButton(actions, actionKeys, buildRouteEventTimelineAction('打开事件线', {{
+            pushRouteFlowActionButton(actions, actionKeys, buildRouteEventTimelineAction(routePhrase('Open event lane', '打开事件线'), {{
               eventId: String(eventItem.dataset.eventId || ''),
               eventKind: String(eventItem.dataset.eventKind || 'world_event'),
               eventBody: String(eventItem.dataset.eventBody || ''),
@@ -1920,7 +1920,7 @@ pub(super) async fn get_world_web_shell(
             }}));
           }}
           if (activeTaskId && linkedEventItem) {{
-            pushRouteFlowActionButton(actions, actionKeys, buildRouteEventTimelineAction('打开关联事件', {{
+            pushRouteFlowActionButton(actions, actionKeys, buildRouteEventTimelineAction(routePhrase('Open linked event', '打开关联事件'), {{
               eventId: String(linkedEventItem.dataset.eventId || ''),
               eventKind: String(linkedEventItem.dataset.eventKind || 'world_event'),
               eventBody: String(linkedEventItem.dataset.eventBody || ''),
@@ -1930,39 +1930,39 @@ pub(super) async fn get_world_web_shell(
             }}));
           }}
           if (workOrderId) {{
-            pushRouteFlowActionButton(actions, actionKeys, buildWorldWorkLaneAction('delivery', workOrderId, {{ label: '推进委托', locationId }}));
+            pushRouteFlowActionButton(actions, actionKeys, buildWorldWorkLaneAction('delivery', workOrderId, {{ label: routePhrase('Advance commission', '推进委托'), locationId }}));
           }}
           if (contractId) {{
             pushRouteFlowActionButton(actions, actionKeys, buildWorldContractLaneAction(contractId, {{ locationId }}));
           }}
           if (activeTaskId && linkedContractItem) {{
-            pushRouteFlowActionButton(actions, actionKeys, buildLinkedContractRouteAction(selection, String(linkedContractItem.dataset.contractId || ''), activeTaskId, locationId, {{ bodySuffix: '，带上证据、评级标准和下一步。' }}));
+            pushRouteFlowActionButton(actions, actionKeys, buildLinkedContractRouteAction(selection, String(linkedContractItem.dataset.contractId || ''), activeTaskId, locationId, {{ bodySuffix: routePhrase(', with evidence, rating criteria, and next step.', '，带上证据、评级标准和下一步。') }}));
           }}
           if (listingId) {{
             pushRouteFlowActionButton(actions, actionKeys, buildWorldPurchaseLaneAction(listingId, {{ locationId }}));
           }}
-          if (((nextStep || {{}}).label) === '打开评级路线' && workOrderId) {{
+          if (((nextStep || {{}}).label) === routePhrase('Open rating route', '打开评级路线') && workOrderId) {{
             pushRouteFlowActionButton(actions, actionKeys, buildWorldWorkLaneAction('rejection', workOrderId, {{
               locationId,
-              body: appendSelectionEventSignal((selection && selection.title ? selection.title : '当前路线') + ': 标记委托 ' + workOrderId + ' 需要返工，写清证据缺口、奖励退回和修订路线。', selection),
+              body: appendSelectionEventSignal(routePhrase((selection && selection.title ? selection.title : 'current route') + ': mark commission ' + workOrderId + ' as needing revision, with evidence gap, reward return, and revision route.', (selection && selection.title ? selection.title : '当前路线') + ': 标记委托 ' + workOrderId + ' 需要返工，写清证据缺口、奖励退回和修订路线。'), selection),
             }}));
           }}
           routeFlowActions.innerHTML = actions.join(' ');
         }}
         if (!routeFlowStatus) return;
         if (routeFilterMode === 'all' || !selection) {{
-          routeFlowStatus.textContent = '冒险路线：等待地图焦点。';
-          if (routeNextStepStatus) routeNextStepStatus.textContent = '推荐下一步：先选择地图焦点。';
+          routeFlowStatus.textContent = routePhrase('Adventure route: waiting for map focus.', '冒险路线：等待地图焦点。');
+          if (routeNextStepStatus) routeNextStepStatus.textContent = routePhrase('Recommended next step: choose a map focus first.', '推荐下一步：先选择地图焦点。');
           if (routeEventBriefStatus) routeEventBriefStatus.textContent = routeEventBriefText(eventSignalText, true);
           if (routeLinkStatus) routeLinkStatus.textContent = routeLinkStatusText({{ emptyText: '关联任务路线：暂无。' }});
-          if (actionConsoleStatus) actionConsoleStatus.textContent = defaultActionConsoleStatus || '使用世界行动台提交新的世界行动。';
+          if (actionConsoleStatus) actionConsoleStatus.textContent = defaultActionConsoleStatus || routePhrase('Use the World Action Console to submit a new world action.', '使用世界行动台提交新的世界行动。');
           return;
         }}
-        const contractLabel = contractId || '暂无契约';
-        const workLabel = workOrderId || '暂无委托';
-        routeFlowStatus.textContent = '冒险路线：' + (selection.title || '焦点') + ' → 事件 ' + eventLabel + ' · 委托 ' + workLabel + ' · 契约 ' + contractLabel + routeOpportunitySegment(opportunityTask) + '。';
+        const contractLabel = routePhrase(contractId || 'no contract yet', contractId || '暂无契约');
+        const workLabel = routePhrase(workOrderId || 'no commission yet', workOrderId || '暂无委托');
+        routeFlowStatus.textContent = routePhrase('Adventure route: ' + mapText(selection.title || 'focus') + ' → event ' + mapText(eventLabel) + ' · commission ' + workLabel + ' · contract ' + contractLabel + routeOpportunitySegment(opportunityTask) + '.', '冒险路线：' + (selection.title || '焦点') + ' → 事件 ' + eventLabel + ' · 委托 ' + workLabel + ' · 契约 ' + contractLabel + routeOpportunitySegment(opportunityTask) + '。');
         if (routeNextStepStatus) {{
-          routeNextStepStatus.textContent = ((nextStep || {{}}).status) || '推荐下一步：为当前路线起草世界行动。';
+          routeNextStepStatus.textContent = ((nextStep || {{}}).status) || routePhrase('Recommended next step: draft a world action for the current route.', '推荐下一步：为当前路线起草世界行动。');
         }}
         if (routeEventBriefStatus) {{
           routeEventBriefStatus.textContent = routeEventBriefText(eventSignalText, false);
@@ -1971,7 +1971,7 @@ pub(super) async fn get_world_web_shell(
           routeLinkStatus.textContent = routeLinkStatusText({{ taskId: activeTaskId, linkedEventCount, linkedContractCount, opportunityTask, inFocus: true, emptyText: '关联任务路线：当前焦点没有事件/契约链接。' }});
         }}
         if (actionConsoleStatus) {{
-          actionConsoleStatus.textContent = '当前世界行动：' + (selection.title || '焦点') + ' · ' + (locationId || '未知地点') + ' · 事件 ' + eventLabel + ' · 委托 ' + workLabel + ' · 契约 ' + contractLabel + routeOpportunitySegment(opportunityTask) + ' · 下一步 ' + (((nextStep || {{}}).label) || '起草世界行动') + '。';
+          actionConsoleStatus.textContent = routePhrase('Current world action: ' + mapText(selection.title || 'focus') + ' · ' + (locationId || 'unknown place') + ' · event ' + mapText(eventLabel) + ' · commission ' + workLabel + ' · contract ' + contractLabel + routeOpportunitySegment(opportunityTask) + ' · next step ' + mapText(((nextStep || {{}}).label) || 'Draft world action') + '.', '当前世界行动：' + (selection.title || '焦点') + ' · ' + (locationId || '未知地点') + ' · 事件 ' + eventLabel + ' · 委托 ' + workLabel + ' · 契约 ' + contractLabel + routeOpportunitySegment(opportunityTask) + ' · 下一步 ' + (((nextStep || {{}}).label) || '起草世界行动') + '。');
         }}
       }};
       {shared_map_focus_core_js}

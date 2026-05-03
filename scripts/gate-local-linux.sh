@@ -9,18 +9,23 @@ cex_load_env
 SERVICE_LOCAL_ONLY=0
 SKIP_DB_BOOTSTRAP=0
 SKIP_WORKSPACE=0
+RUN_TRILLIONNIUM_UI_AUDIT="${CEX_LINUX_GATE_TRILLIONNIUM_UI_AUDIT:-0}"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/gate-local-linux.sh [--service-local-only] [--skip-db-bootstrap] [--skip-workspace]
+Usage: scripts/gate-local-linux.sh [--service-local-only] [--skip-db-bootstrap] [--skip-workspace] [--with-trillionnium-ui-audit]
 
 Linux equivalent of the Windows full gate.
 
 Options:
-  --service-local-only  run cargo test --workspace only
-  --skip-db-bootstrap   skip migrations + local-dev seed (use when DB is already provisioned)
-  --skip-workspace      skip cargo test --workspace and run runtime suites only
-  -h, --help            show this help
+  --service-local-only              run cargo test --workspace only
+  --skip-db-bootstrap               skip migrations + local-dev seed (use when DB is already provisioned)
+  --skip-workspace                  skip cargo test --workspace and run runtime suites only
+  --with-trillionnium-ui-audit      run the Playwright /app,/world,/league UI audit after runtime restart
+  -h, --help                        show this help
+
+Env:
+  CEX_LINUX_GATE_TRILLIONNIUM_UI_AUDIT=1 also enables the UI audit.
 EOF
 }
 
@@ -34,6 +39,9 @@ while (($#)); do
       ;;
     --skip-workspace)
       SKIP_WORKSPACE=1
+      ;;
+    --with-trillionnium-ui-audit)
+      RUN_TRILLIONNIUM_UI_AUDIT=1
       ;;
     -h|--help)
       usage
@@ -99,6 +107,9 @@ cleanup() {
 trap cleanup EXIT
 
 cex_require_cmd cargo curl
+if [[ "$RUN_TRILLIONNIUM_UI_AUDIT" == "1" ]]; then
+  cex_require_cmd npm
+fi
 
 if [[ "$SKIP_DB_BOOTSTRAP" -eq 0 ]]; then
   cex_wait_postgres
@@ -136,5 +147,10 @@ bash "$SCRIPT_DIR/runtime-manager-linux.sh" status
 
 echo '==> runtime metrics smoke after linux gate'
 bash "$SCRIPT_DIR/smoke-runtime-metrics.sh"
+
+if [[ "$RUN_TRILLIONNIUM_UI_AUDIT" == "1" ]]; then
+  echo '==> Trillionnium UI audit after linux gate'
+  bash "$SCRIPT_DIR/check-trillionnium-ui-audit.sh"
+fi
 
 echo '==> linux gate complete'

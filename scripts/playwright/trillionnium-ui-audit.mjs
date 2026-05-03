@@ -236,8 +236,9 @@ try {
     const context = await browser.newContext(profile.context);
     for (const target of targets) {
       const page = await context.newPage();
+      let result = null;
       try {
-        const result = await auditPage(page, profile, target);
+        result = await auditPage(page, profile, target);
         checkCommon(result);
         if (profile.name === 'mobile') checkMobile(result, profile.limits[target.name]);
         else checkDesktop(result, profile.limits[target.name]);
@@ -245,7 +246,14 @@ try {
         results.push(result);
       } catch (error) {
         failures.push({ profile: profile.name, surface: target.name, message: error.message, details: error.details });
-        results.push({ profile: profile.name, name: target.name, route: target.route, ok: false, error: error.message, details: error.details });
+        if (result) {
+          result.ok = false;
+          result.error = error.message;
+          result.details = error.details;
+          results.push(result);
+        } else {
+          results.push({ profile: profile.name, name: target.name, route: target.route, ok: false, error: error.message, details: error.details });
+        }
       } finally {
         await page.close().catch(() => null);
       }

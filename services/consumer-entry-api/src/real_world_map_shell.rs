@@ -361,6 +361,17 @@ pub(super) fn real_world_map_runtime_bootstrap_js() -> &'static str {
       const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (ch) => ({
         '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
       }[ch]));
+      const mapLanguage = () => {
+        const fromRuntime = window.TrillionniumLanguage && typeof window.TrillionniumLanguage.get === 'function'
+          ? String(window.TrillionniumLanguage.get() || '').toLowerCase()
+          : '';
+        if (fromRuntime) return fromRuntime;
+        const fromDocument = String(document.documentElement.getAttribute('data-ui-language') || '').toLowerCase();
+        if (fromDocument) return fromDocument;
+        const fromQuery = String(new URLSearchParams(window.location.search || '').get('lang') || '').toLowerCase();
+        if (fromQuery) return fromQuery;
+        return 'en';
+      };
       const mapText = (value) => {
         let text = String(value ?? '');
         const replacements = [
@@ -375,20 +386,9 @@ pub(super) fn real_world_map_runtime_bootstrap_js() -> &'static str {
           ['冒险路线', 'Adventure route / 冒险路线'], ['暂无地图焦点', 'no map focus / 暂无地图焦点'], ['未知地点', 'unknown place / 未知地点'], ['当前路线', 'current route / 当前路线'], ['当前世界路线', 'current world route / 当前世界路线'], ['下一条支线', 'next branch / 下一条支线'], ['支线', 'branch / 支线'], ['战果总结待生成。', 'Outcome summary pending. / 战果总结待生成。'], ['支线提示待生成。', 'Branch hint pending. / 支线提示待生成。'], ['支线打法待生成。', 'Branch playbook pending. / 支线打法待生成。'], ['继续推进下一步机会。', 'continue the next opportunity. / 继续推进下一步机会。'], ['围绕 contract 整理目标、证据、风险、评级标准和下一步。', 'prepare goals, evidence, risks, rating criteria, and next step around contract. / 围绕 contract 整理目标、证据、风险、评级标准和下一步。']
         ];
         replacements.forEach(([from, to]) => { text = text.replaceAll(from, to); });
-        const currentLanguage = () => {
-          const fromRuntime = window.TrillionniumLanguage && typeof window.TrillionniumLanguage.get === 'function'
-            ? String(window.TrillionniumLanguage.get() || '').toLowerCase()
-            : '';
-          if (fromRuntime) return fromRuntime;
-          const fromDocument = String(document.documentElement.getAttribute('data-ui-language') || '').toLowerCase();
-          if (fromDocument) return fromDocument;
-          const fromQuery = String(new URLSearchParams(window.location.search || '').get('lang') || '').toLowerCase();
-          if (fromQuery) return fromQuery;
-          return 'en';
-        };
         const localizeSlashPair = (source) => {
           if (!String(source || '').includes(' / ')) return source;
-          const language = currentLanguage();
+          const language = mapLanguage();
           const hasCjk = (piece) => /[\u3400-\u9fff\uf900-\ufaff]/.test(String(piece || ''));
           const hasLatin = (piece) => /[A-Za-z]/.test(String(piece || ''));
           const pieces = String(source || '').split(' / ').map((piece) => piece.trim()).filter(Boolean);
@@ -397,7 +397,7 @@ pub(super) fn real_world_map_runtime_bootstrap_js() -> &'static str {
             : pieces.filter((piece) => hasLatin(piece) && !hasCjk(piece));
           return (selected.length ? selected : pieces).join(language === 'zh' ? '：' : ': ');
         };
-        const normalizeLocalizedCopy = (source) => currentLanguage() === 'zh' ? source : String(source || '')
+        const normalizeLocalizedCopy = (source) => mapLanguage() === 'zh' ? source : String(source || '')
           .replaceAll('，', ',')
           .replaceAll('：', ':')
           .replaceAll('。', '.')
@@ -440,13 +440,13 @@ pub(super) fn real_world_map_runtime_primitives_js() -> &'static str {
         const density = mapText((viewport.player_density || {}).mode || 'dense');
         const lens = buildStreamLens(viewport, focus);
         const chips = [
-          `<span class="hud-chip"><strong>${escapeHtml(viewport.stream_region_count ?? 0)}</strong> 个区域分片</span>`,
-          `<span class="hud-chip"><strong>${escapeHtml(viewport.marker_count ?? 0)}</strong> 个可见地点</span>`,
-          `<span class="hud-chip"><strong>${escapeHtml(viewport.prefetch_count ?? 0)}</strong> 个预热地图块</span>`,
-          `<span class="hud-chip"><strong>${escapeHtml(viewport.live_event_count ?? 0)}</strong> 个实时事件 · ${escapeHtml(density)}</span>`
+          `<span class="hud-chip"><strong>${escapeHtml(viewport.stream_region_count ?? 0)}</strong> ${escapeHtml(mapText('regional shards / 个区域分片'))}</span>`,
+          `<span class="hud-chip"><strong>${escapeHtml(viewport.marker_count ?? 0)}</strong> ${escapeHtml(mapText('visible places / 个可见地点'))}</span>`,
+          `<span class="hud-chip"><strong>${escapeHtml(viewport.prefetch_count ?? 0)}</strong> ${escapeHtml(mapText('prefetch tiles / 个预热地图块'))}</span>`,
+          `<span class="hud-chip"><strong>${escapeHtml(viewport.live_event_count ?? 0)}</strong> ${escapeHtml(mapText('live events / 个实时事件'))} · ${escapeHtml(density)}</span>`
         ];
         if (lens) {
-          chips.push(`<span class="hud-chip"><strong>${escapeHtml(lens.count ?? 0)}</strong> 条事件镜头 · ${escapeHtml(lens.label || '焦点')}</span>`);
+          chips.push(`<span class="hud-chip"><strong>${escapeHtml(lens.count ?? 0)}</strong> ${escapeHtml(mapText('event lenses / 条事件镜头'))} · ${escapeHtml(mapText(lens.label || 'focus / 焦点'))}</span>`);
         }
         streamHud.innerHTML = chips.join('');
       };
@@ -1063,22 +1063,25 @@ pub(super) fn real_world_map_route_target_resolution_js() -> &'static str {
 }
 
 pub(super) fn real_world_map_route_status_js() -> &'static str {
-    r#"      const routeOpportunitySegment = (task) => {
+    r#"      const routeUiLanguage = () => mapLanguage() === 'zh' ? 'zh' : 'en';
+      const routePhrase = (en, zh) => routeUiLanguage() === 'zh' ? zh : en;
+      const routeOpportunitySegment = (task) => {
         const kind = String(((task || {}).next_opportunity_kind) || '').trim();
-        return kind ? (' · 支线 ' + kind) : '';
+        return kind ? routePhrase(' · branch ' + mapText(kind), ' · 支线 ' + kind) : '';
       };
       const routeEventBriefText = (eventSignalText, fullRouteVisible) => {
         const normalized = String(eventSignalText || '').replace(/^(Latest event signal:|最新事件信号：)\s*/, '').trim();
-        if (!normalized) return '事件简报：尚未选择实时事件。';
-        return '事件简报：' + normalized + (fullRouteVisible ? ' · 已显示完整路线。' : '');
+        if (!normalized) return routePhrase('Event brief: no live event selected.', '事件简报：尚未选择实时事件。');
+        return routePhrase('Event brief: ' + mapText(normalized) + (fullRouteVisible ? ' · full route visible.' : ''), '事件简报：' + normalized + (fullRouteVisible ? ' · 已显示完整路线。' : ''));
       };
       const routeLinkStatusText = (context) => {
         const taskId = String((context || {}).taskId || '').trim();
-        if (!taskId) return String((context || {}).emptyText || '关联任务路线：暂无。');
+        if (!taskId) return routePhrase('Linked task route: none yet.', String((context || {}).emptyText || '关联任务路线：暂无。'));
         const linkedEventCount = Number((context || {}).linkedEventCount || 0);
         const linkedContractCount = Number((context || {}).linkedContractCount || 0);
         const contractText = (context || {}).inFocus ? ' 个焦点契约' : ' 个契约';
-        return '关联任务路线：' + taskId + ' · ' + linkedEventCount + ' 个事件 · ' + linkedContractCount + contractText + routeOpportunitySegment((context || {}).opportunityTask) + '。';
+        const englishContractText = (context || {}).inFocus ? ' focus contracts' : ' contracts';
+        return routePhrase('Linked task route: ' + taskId + ' · ' + linkedEventCount + ' events · ' + linkedContractCount + englishContractText + routeOpportunitySegment((context || {}).opportunityTask) + '.', '关联任务路线：' + taskId + ' · ' + linkedEventCount + ' 个事件 · ' + linkedContractCount + contractText + routeOpportunitySegment((context || {}).opportunityTask) + '。');
       };
 "#
 }
@@ -1682,7 +1685,7 @@ pub(super) fn real_world_map_viewport_hydration_js() -> &'static str {
           densitySummary.textContent = mapText(((viewport.player_density || {}).summary) || '地图密度加载中…');
         }
         if (cameraSummary) {
-          cameraSummary.textContent = '镜头 ' + mapCenter.lat.toFixed(4) + ', ' + mapCenter.lng.toFixed(4) + ' · 缩放 ' + zoom + ' · ' + mapText(viewport.lod_mode || 'street_nodes') + ' · ' + (viewport.marker_count || 0) + ' 个可见地点 · ' + mapText(((viewport.player_density || {}).mode) || 'dense') + ' 密度 · ' + (viewport.live_event_count || 0) + ' 个实时事件';
+          cameraSummary.textContent = routePhrase('Camera ' + mapCenter.lat.toFixed(4) + ', ' + mapCenter.lng.toFixed(4) + ' · zoom ' + zoom + ' · ' + mapText(viewport.lod_mode || 'street_nodes') + ' · ' + (viewport.marker_count || 0) + ' visible places · ' + mapText(((viewport.player_density || {}).mode) || 'dense') + ' density · ' + (viewport.live_event_count || 0) + ' live events', '镜头 ' + mapCenter.lat.toFixed(4) + ', ' + mapCenter.lng.toFixed(4) + ' · 缩放 ' + zoom + ' · ' + mapText(viewport.lod_mode || 'street_nodes') + ' · ' + (viewport.marker_count || 0) + ' 个可见地点 · ' + mapText(((viewport.player_density || {}).mode) || 'dense') + ' 密度 · ' + (viewport.live_event_count || 0) + ' 个实时事件');
         }
         renderStreamHud(viewport, lastSelection);
         renderCards(tileTarget, viewport.visible_tile_shards || [], 'tile');

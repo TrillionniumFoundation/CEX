@@ -27,7 +27,10 @@ Useful Linux variants:
 ```bash
 ./scripts/gate-local-linux.sh --service-local-only
 ./scripts/gate-local-linux.sh --skip-db-bootstrap
+./scripts/gate-local-linux.sh --with-trillionnium-ui-audit
 ```
+
+Set `CEX_LINUX_GATE_TRILLIONNIUM_UI_AUDIT=1` to enable the same Trillionnium UI audit from env-driven gate runs.
 
 For DB bootstrap, the Linux helpers prefer local `psql`, then Docker Postgres. If the Docker socket is not directly accessible but passwordless `sudo docker` works, they automatically use `sudo -n docker`; set `CEX_DOCKER_USE_SUDO=1` to force that path.
 

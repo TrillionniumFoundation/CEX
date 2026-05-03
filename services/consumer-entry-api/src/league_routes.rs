@@ -186,12 +186,14 @@ pub(super) async fn get_league_web_shell(
         })
         .unwrap_or_default();
     let console_note = if web_session.is_some() {
-        "已进入签名玩家会话：所有行动都有 CSRF 防护，并绑定当前玩家。"
+        "Signed player session active: every action has CSRF protection and is bound to the current player. / 已进入签名玩家会话：所有行动都有 CSRF 防护，并绑定当前玩家。"
     } else if matches!(state.config().runtime_profile, RuntimeProfile::LocalDev) {
-        "本地互动大厅：可入场、组队、提交战果和结算奖励，不把消息或账本令牌暴露给浏览器。"
+        "Local play lobby: join arenas, form teams, submit results, and settle rewards without exposing message or ledger tokens to the browser. / 本地互动大厅：可入场、组队、提交战果和结算奖励，不把消息或账本令牌暴露给浏览器。"
     } else {
-        "只读大厅：提交行动前需要先创建签名 /league/web/session。"
+        "Read-only lobby: create a signed /league/web/session before submitting actions. / 只读大厅：提交行动前需要先创建签名 /league/web/session。"
     };
+    let console_note_html = i18n_span_from_bilingual_slash_copy(console_note)
+        .unwrap_or_else(|| escape_html_text(console_note));
     let league = state.inner.league_state.lock().await;
     let mut matches: Vec<LeagueMatch> = league.matches.values().cloned().collect();
     matches.sort_by(|left, right| left.match_id.cmp(&right.match_id));
@@ -573,7 +575,7 @@ pub(super) async fn get_league_web_shell(
         leaderboard = leaderboard,
         world_assets = league.world.world_assets.len(),
         world_events = league.world.world_events.len(),
-        console_note = escape_html_text(console_note),
+        console_note = console_note_html,
         csrf_input = csrf_input,
         language_runtime_script = trillionnium_language_runtime_script(),
     ))
