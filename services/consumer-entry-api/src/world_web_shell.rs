@@ -1261,6 +1261,18 @@ pub(super) async fn get_world_web_shell(
       #world-real-map {{ order:1; min-height:min(54svh,410px); border-radius:18px; }}
       .map-stream-hud,.overlay-toggle-bar,.focus-stack {{ gap:6px; }}
       .hud-chip,.focus-chip,.overlay-toggle {{ padding:7px 9px; font-size:12px; }}
+      #world-map-shell-panel .map-copy {{ max-height:680px; overflow:auto; }}
+      #world-map-move-panel .mini-grid,
+      #world-commerce-panel #world-purchase-cards-live,
+      #world-commerce-panel #world-work-orders-live,
+      #world-assets-panel .mini-grid,
+      #world-companies-panel .mini-grid,
+      #world-listings-panel .mini-grid,
+      #world-contract-cards-live,
+      #world-route-task-graph-live,
+      main > section.panel > .mini-grid,
+      main > section > .grid {{ max-height:420px; overflow:auto; padding-right:4px; }}
+      .timeline {{ max-height:420px; overflow:auto; padding-right:4px; }}
       .timeline li {{ grid-template-columns:1fr; }}
     }}
   </style>
