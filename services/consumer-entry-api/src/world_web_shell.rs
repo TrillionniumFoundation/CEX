@@ -1163,6 +1163,12 @@ pub(super) async fn get_world_web_shell(
     .stat {{ padding:10px; background:rgba(255,255,255,.055); border-radius:14px; }}
     .stat b {{ display:block; font-size:19px; color:var(--gold); }}
     main {{ padding:20px min(6vw,72px) 60px; display:grid; gap:24px; }}
+    main > section {{ order:8; }}
+    #world-pulse-strip {{ order:1; }}
+    #world-map-shell-panel {{ order:2; }}
+    main > .play {{ order:3; }}
+    #world-map-move-panel {{ order:4; }}
+    #world-commerce-panel {{ order:5; }}
     .grid {{ display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:18px; }}
     .mini-grid {{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }}
     .card h3 {{ margin:12px 0; font-size:24px; }}
@@ -1186,8 +1192,10 @@ pub(super) async fn get_world_web_shell(
     .dev-details {{ margin-top:12px; color:var(--muted); min-width:0; overflow-wrap:anywhere; }}
     .dev-details p {{ min-width:0; overflow-wrap:anywhere; }}
     .dev-details summary {{ cursor:pointer; width:max-content; border:1px solid rgba(255,255,255,.1); border-radius:999px; padding:8px 12px; min-height:36px; display:inline-flex; align-items:center; background:rgba(255,255,255,.05); color:rgba(246,247,251,.72); font-size:12px; font-weight:800; }}
-    .play {{ display:grid; grid-template-columns:.8fr 1.2fr; gap:18px; }}
-    .map-shell {{ display:grid; grid-template-columns:minmax(320px,.9fr) minmax(360px,1.1fr); gap:18px; align-items:stretch; }}
+    .play {{ display:grid; grid-template-columns:.8fr 1.2fr; gap:18px; align-items:start; }}
+    .play .timeline {{ max-height:680px; overflow:auto; padding-right:4px; }}
+    .map-shell {{ display:grid; grid-template-columns:minmax(320px,.9fr) minmax(360px,1.1fr); gap:18px; align-items:start; }}
+    #world-map-shell-panel .map-copy {{ max-height:680px; overflow:auto; }}
     form {{ display:grid; gap:10px; margin:0; }}
     input,textarea,select {{ width:100%; color:var(--text); background:rgba(255,255,255,.07); border:1px solid rgba(255,255,255,.14); border-radius:14px; padding:12px 14px; font:inherit; }}
     textarea {{ min-height:140px; resize:vertical; }}
@@ -1201,7 +1209,7 @@ pub(super) async fn get_world_web_shell(
     .overlay-toggle {{ border:1px solid rgba(248,195,91,.25); background:rgba(248,195,91,.08); color:var(--text); border-radius:999px; padding:8px 10px; font-weight:700; cursor:pointer; }}
     .overlay-toggle.is-off {{ opacity:.58; background:rgba(255,255,255,.04); border-color:rgba(255,255,255,.12); color:var(--muted); }}
     .mini {{ display:grid; gap:7px; padding:14px; border-radius:16px; background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.08); }}
-    #world-real-map {{ min-height:520px; border-radius:22px; overflow:hidden; border:1px solid rgba(100,227,255,.24); box-shadow:0 24px 90px rgba(0,0,0,.42); background:#0b1220; }}
+    #world-real-map {{ min-height:min(58vh,620px); border-radius:22px; overflow:hidden; border:1px solid rgba(100,227,255,.24); box-shadow:0 24px 90px rgba(0,0,0,.42); background:#0b1220; }}
     #world-real-map .leaflet-control-zoom a {{ width:40px; height:40px; line-height:40px; font-size:20px; }}
     .asset strong {{ color:var(--green); }}
     .mini span,.mini small,.timeline small,.timeline em {{ color:var(--muted); }}
