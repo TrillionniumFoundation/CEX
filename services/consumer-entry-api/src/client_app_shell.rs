@@ -638,6 +638,7 @@ pub(super) async fn get_client_app_web_shell(
     .map-shell {{ display:grid; grid-template-columns:minmax(260px,.8fr) minmax(320px,1.2fr); gap:18px; align-items:stretch; margin-bottom:22px; }}
     .map-panel {{ border:1px solid rgba(255,255,255,.12); border-radius:26px; background:rgba(255,255,255,.07); padding:22px; box-shadow:0 20px 70px rgba(0,0,0,.35); }}
     #real-world-map {{ min-height:430px; border-radius:26px; overflow:hidden; border:1px solid rgba(100,227,255,.28); box-shadow:0 24px 90px rgba(0,0,0,.45); background:#0b1220; }}
+    #real-world-map .leaflet-control-zoom a {{ width:40px; height:40px; line-height:40px; font-size:20px; }}
     .badge {{ display:inline-flex; width:max-content; color:#071019; background:var(--gold); border-radius:999px; padding:5px 10px; font-weight:800; }}
     .module {{ display:grid; gap:10px; border:1px solid rgba(255,255,255,.12); background:linear-gradient(145deg,rgba(255,255,255,.09),rgba(255,255,255,.035)); border-radius:22px; padding:22px; box-shadow:0 20px 70px rgba(0,0,0,.35); }}
     .module strong {{ color:var(--gold); font-size:24px; }}
@@ -657,6 +658,8 @@ pub(super) async fn get_client_app_web_shell(
     .app-mobile-shell {{ display:grid; gap:18px; }}
     .app-topbar-meta {{ display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:12px; }}
     .app-topbar-actions {{ display:flex; align-items:center; justify-content:flex-end; gap:10px; flex-wrap:wrap; }}
+    .app-topbar-actions p {{ margin:0; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }}
+    .app-topbar-actions a {{ min-height:40px; display:inline-flex; align-items:center; justify-content:center; padding:0 12px; border:1px solid rgba(248,195,91,.24); border-radius:999px; background:rgba(248,195,91,.08); text-decoration:none; font-weight:900; }}
     .language-switcher {{ display:inline-flex; align-items:center; gap:8px; width:max-content; max-width:100%; border:1px solid rgba(100,227,255,.24); background:rgba(255,255,255,.065); color:var(--cyan); border-radius:999px; padding:6px 8px 6px 10px; font-size:12px; font-weight:900; }}
     .language-switcher select {{ width:auto; min-width:92px; max-width:130px; margin:0; border:0; background:rgba(7,8,20,.72); color:var(--text); border-radius:999px; padding:7px 26px 7px 10px; font:inherit; font-size:12px; }}
     .app-search-shell {{ position:relative; display:flex; gap:12px; align-items:center; }}
@@ -707,6 +710,7 @@ pub(super) async fn get_client_app_web_shell(
       .subtitle {{ font-size:14px; line-height:1.4; }}
       .app-topbar-meta {{ align-items:flex-start; gap:8px; margin-bottom:8px; }}
       .app-topbar-actions {{ gap:7px; }}
+      .app-topbar-actions a {{ min-height:44px; padding:0 11px; }}
       .app-beta-chip {{ padding:6px 9px; font-size:11px; }}
       .language-switcher {{ padding:5px 6px 5px 8px; font-size:11px; }}
       .language-switcher select {{ min-width:82px; max-width:112px; padding:6px 22px 6px 8px; font-size:11px; }}
@@ -725,7 +729,11 @@ pub(super) async fn get_client_app_web_shell(
       .map-stream-hud,.overlay-toggle-bar,.focus-stack {{ gap:6px; }}
       .hud-chip,.focus-chip,.overlay-toggle {{ padding:7px 9px; font-size:12px; min-height:44px; }}
       .app-bottom-tab,.quest-cta,.app-search-clear,.language-switcher,.language-switcher select {{ min-height:44px; }}
-      .quest-summary,.app-map-product-strip {{ grid-template-columns:1fr; }}
+      .quest-summary {{ grid-template-columns:1fr; }}
+      .app-map-product-strip {{ position:fixed; left:12px; right:12px; bottom:calc(76px + env(safe-area-inset-bottom, 0px)); z-index:28; grid-template-columns:minmax(0,1fr) auto; margin:0; padding:10px; border-radius:17px; background:rgba(9,13,27,.92); box-shadow:0 18px 50px rgba(0,0,0,.36); backdrop-filter:blur(16px); }}
+      .app-map-product-strip .subtitle {{ margin:0; font-size:12px; line-height:1.28; }}
+      #app-map-camera-summary {{ display:none; }}
+      .app-map-product-strip .quest-cta {{ min-width:118px; min-height:42px; padding:0 12px; }}
       .quest-hero {{ gap:8px; }}
       .quest-next-card .subtitle {{ display:none; }}
       .quest-status-card .subtitle {{ display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }}
@@ -741,7 +749,7 @@ pub(super) async fn get_client_app_web_shell(
   <header>
     <div class="app-topbar-meta">
       <p><span class="app-beta-chip" data-i18n-en="Global-first Beta · Mobile World Shell v1" data-i18n-zh="海外市场首发 · 移动世界壳 v1">Global-first Beta · Mobile World Shell v1</span></p>
-      <div class="app-topbar-actions"><p><a href="/world" data-i18n-en="World" data-i18n-zh="世界">World</a> · <a href="/league" data-i18n-en="Arena" data-i18n-zh="竞技场">Arena</a></p>{app_header_language_switcher}</div>
+      <div class="app-topbar-actions"><p><a href="/world" data-i18n-en="World" data-i18n-zh="世界">World</a><a href="/league" data-i18n-en="Arena" data-i18n-zh="竞技场">Arena</a></p>{app_header_language_switcher}</div>
     </div>
     <h1>Trillionnium World</h1>
     <p class="subtitle"><span data-i18n-en="Mobile reality-mirror adventure for overseas-first launch: search cities and agents, then use four tabs — Messages, World, Feed, Me. Current focus:" data-i18n-zh="面向海外首发的移动现实镜像冒险：搜索城市和 Agent，并使用「消息、世界、动态、我」四个页签。当前位置：">Mobile reality-mirror adventure for overseas-first launch: search cities and agents, then use four tabs — Messages, World, Feed, Me. Current focus:</span> <strong>{}</strong></p>

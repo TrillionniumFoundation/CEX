@@ -1160,6 +1160,7 @@ pub(super) async fn get_world_web_shell(
     .overlay-toggle.is-off {{ opacity:.58; background:rgba(255,255,255,.04); border-color:rgba(255,255,255,.12); color:var(--muted); }}
     .mini {{ display:grid; gap:7px; padding:14px; border-radius:16px; background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.08); }}
     #world-real-map {{ min-height:520px; border-radius:22px; overflow:hidden; border:1px solid rgba(100,227,255,.24); box-shadow:0 24px 90px rgba(0,0,0,.42); background:#0b1220; }}
+    #world-real-map .leaflet-control-zoom a {{ width:40px; height:40px; line-height:40px; font-size:20px; }}
     .asset strong {{ color:var(--green); }}
     .mini span,.mini small,.timeline small,.timeline em {{ color:var(--muted); }}
     .timeline {{ list-style:none; padding:0; margin:0; display:grid; gap:10px; }}
@@ -1204,6 +1205,9 @@ pub(super) async fn get_world_web_shell(
       .stat b {{ font-size:16px; }}
       .world-map-player-summary,.world-map-loop-steps {{ grid-template-columns:1fr; }}
       .world-map-loop-steps li {{ min-height:auto; padding:10px 12px; }}
+      main > section {{ order:3; }}
+      #world-map-shell-panel {{ order:1; }}
+      #world-pulse-strip {{ order:2; }}
       .map-shell {{ gap:12px; }}
       #world-real-map {{ min-height:min(58svh,430px); border-radius:18px; }}
       .map-stream-hud,.overlay-toggle-bar,.focus-stack {{ gap:6px; }}
@@ -1267,7 +1271,7 @@ pub(super) async fn get_world_web_shell(
         </div>
       </details>
     </section>
-    <section class="panel">
+    <section id="world-map-shell-panel" class="panel">
       <div class="map-shell">
         <div class="map-copy">
           <div class="pill" data-i18n-en="Reality Mirror Map" data-i18n-zh="现实镜像地图">Reality Mirror Map</div>

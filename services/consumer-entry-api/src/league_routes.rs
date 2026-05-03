@@ -424,7 +424,7 @@ pub(super) async fn get_league_web_shell(
     h2 {{ margin:0 0 16px; letter-spacing:-.03em; }}
     .subtitle {{ color:var(--muted); font-size:18px; max-width:760px; }}
     .hero-card,.card,.panel {{ border:1px solid rgba(255,255,255,.11); background:linear-gradient(145deg,rgba(255,255,255,.09),rgba(255,255,255,.035)); box-shadow:0 24px 80px rgba(0,0,0,.35); backdrop-filter: blur(14px); border-radius:24px; }}
-    .hero-card {{ padding:24px; }}
+    .hero-card {{ padding:24px; display:grid; gap:14px; }}
     .stats {{ display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin-top:22px; }}
     .stat {{ padding:18px; background:rgba(255,255,255,.06); border-radius:18px; }}
     .stat b {{ display:block; font-size:26px; color:var(--gold); }}
@@ -454,8 +454,10 @@ pub(super) async fn get_league_web_shell(
     .timeline {{ list-style:none; padding:0; margin:0; display:grid; gap:10px; }}
     .timeline li {{ display:grid; grid-template-columns:1.3fr .6fr 1.1fr; gap:10px; padding:12px; border-radius:14px; background:rgba(255,255,255,.055); }}
     code {{ color:var(--cyan); background:rgba(100,227,255,.08); padding:3px 7px; border-radius:8px; }}
-    .cta {{ color:var(--bg); background:linear-gradient(135deg,var(--gold),#ff8d4d); padding:14px 18px; border-radius:16px; display:inline-block; font-weight:800; }}
-    @media (max-width:900px) {{ header {{ grid-template-columns:1fr; padding:22px 16px 12px; }} h1 {{ font-size:clamp(42px,14vw,68px); }} .subtitle {{ font-size:14px; line-height:1.42; }} .grid,.stats,.play,.mini-grid {{ grid-template-columns:1fr; }} .language-switcher {{ padding:5px 6px 5px 8px; font-size:11px; }} .language-switcher select {{ min-width:82px; max-width:112px; padding:6px 22px 6px 8px; font-size:11px; }} }}
+    .cta {{ color:var(--bg); background:linear-gradient(135deg,var(--gold),#ff8d4d); padding:14px 18px; border-radius:16px; display:inline-flex; justify-content:center; align-items:center; min-height:48px; font-weight:800; text-decoration:none; }}
+    .cta.secondary {{ color:var(--text); background:rgba(255,255,255,.07); border:1px solid rgba(100,227,255,.22); }}
+    .league-hero-actions {{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }}
+    @media (max-width:900px) {{ header {{ grid-template-columns:1fr; padding:22px 16px 10px; gap:14px; }} h1 {{ font-size:clamp(42px,14vw,64px); }} .subtitle {{ font-size:14px; line-height:1.42; }} .grid,.play,.mini-grid {{ grid-template-columns:1fr; }} .stats {{ grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin-top:10px; }} .stat {{ padding:14px; min-height:86px; }} .stat b {{ font-size:24px; }} .hero-card {{ padding:18px; border-radius:20px; }} .league-hero-actions {{ grid-template-columns:repeat(3,minmax(0,1fr)); gap:7px; }} .league-hero-actions .cta {{ font-size:12px; }} .cta {{ min-height:44px; padding:10px 12px; border-radius:14px; }} .language-switcher {{ padding:5px 6px 5px 8px; font-size:11px; }} .language-switcher select {{ min-width:82px; max-width:112px; padding:6px 22px 6px 8px; font-size:11px; }} }}
   </style>
 </head>
 <body>
@@ -468,7 +470,12 @@ pub(super) async fn get_league_web_shell(
     <aside class="hero-card">
       <strong data-i18n-en="Playable Now" data-i18n-zh="当前可玩版本">Playable Now</strong>
       <p class="subtitle" data-i18n-en="Matrix/Element and the web lobby are ready for the global beta; choose your UI language in system settings." data-i18n-zh="现在可以通过 Matrix/Element 和网页大厅进入；界面语言在系统设置中选择。">Matrix/Element and the web lobby are ready for the global beta; choose your UI language in system settings.</p>
-      <a class="cta" data-i18n-en="Enter via /league" data-i18n-zh="通过 /league 入场">Enter via /league</a>
+      <a class="cta" href='#league-battle-console' data-i18n-en="Enter via /league" data-i18n-zh="通过 /league 入场">Enter via /league</a>
+      <div class="league-hero-actions" aria-label="League quick actions" data-i18n-aria-label-en="League quick actions" data-i18n-aria-label-zh="League 快捷行动">
+        <a class="cta secondary" href='#league-playable-modes' data-i18n-en="Choose Mode" data-i18n-zh="选择玩法">Choose Mode</a>
+        <a class="cta secondary" href='#league-battle-console' data-i18n-en="Draft Squad" data-i18n-zh="配置阵容">Draft Squad</a>
+        <a class="cta secondary" href='#league-progression' data-i18n-en="View Progress" data-i18n-zh="查看成长">View Progress</a>
+      </div>
     </aside>
   </header>
   <main>
@@ -479,11 +486,11 @@ pub(super) async fn get_league_web_shell(
       <div class="stat"><span data-i18n-en="Rewards" data-i18n-zh="奖励">Rewards</span><b>{rewards:.2}</b></div>
       <div class="stat"><span data-i18n-en="Items" data-i18n-zh="道具">Items</span><b>{items}</b></div>
     </section>
-    <section>
+    <section id="league-playable-modes">
       <h2 data-i18n-en="Playable Modes" data-i18n-zh="可进入玩法">Playable Modes</h2>
       <div class="grid">{match_cards}</div>
     </section>
-    <section class="panel">
+    <section id="league-progression" class="panel">
       <h2 data-i18n-en="Progression System" data-i18n-zh="角色成长系统">Progression System</h2>
       <p class="subtitle" data-i18n-en="Schools, skill trees, equipment/tools, skins, multi-Agent capability, experience data, and task-success-based levels." data-i18n-zh="门派系统、技能树、装备/工具、皮肤、多 Agent 能力、经验数据积累和以任务成功数量为核心的等级系统。">Schools, skill trees, equipment/tools, skins, multi-Agent capability, experience data, and task-success-based levels.</p>
       <div class="commands"><code data-i18n-en="{progression_line_en}" data-i18n-zh="{progression_line_zh}">{progression_line_en}</code><code>/progression</code><code>/skills</code><code>/tools</code><code>/skins</code></div>
@@ -493,7 +500,7 @@ pub(super) async fn get_league_web_shell(
       <p class="subtitle" data-i18n-en="Reality-mirror open world for global players: cities, studios, markets, Agent residents, items, and free actions." data-i18n-zh="面向全球玩家的现实镜像开放世界：城市、工坊、集市、Agent 居民、道具和自由行动。">Reality-mirror open world for global players: cities, studios, markets, Agent residents, items, and free actions.</p>
       <div class="commands"><code>/world</code><code data-i18n-en="/world action Launch an AI Design Studio" data-i18n-zh="/world action 我要开一家 AI 设计工坊">/world action Launch an AI Design Studio</code><code><span data-i18n-en="Items" data-i18n-zh="道具">Items</span> {world_assets}</code><code><span data-i18n-en="Events" data-i18n-zh="事件">Events</span> {world_events}</code></div>
     </section>
-    <section class="play">
+    <section id="league-battle-console" class="play">
       <div class="panel">
         <h2 data-i18n-en="Web Battle Console" data-i18n-zh="网页战斗台">Web Battle Console</h2>
         <p class="subtitle">{console_note}</p>
