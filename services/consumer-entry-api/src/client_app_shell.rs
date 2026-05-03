@@ -736,13 +736,13 @@ pub(super) async fn get_client_app_web_shell(
       #app-tab-map > .app-tab-header {{ order:0; }}
       #app-tab-map > .map-shell {{ order:1; display:contents; }}
       #app-tab-map > .map-shell > #real-world-map {{ order:1; }}
-      #app-tab-map > .map-shell > .map-panel {{ order:3; display:grid; gap:12px; }}
-      #app-tab-map > section:not(.map-shell) {{ order:4; max-height:420px; overflow:auto; padding-right:4px; }}
-      #app-first-playable-onboarding {{ order:2; }}
-      #app-map-route-panel {{ order:-4; }}
-      #app-map-action-panel {{ order:-3; }}
-      #app-map-camera-actions {{ order:-2; }}
-      #app-map-route-panel,#app-map-action-panel {{ padding:14px; }}
+      #app-tab-map > .map-shell > .map-panel {{ order:5; display:grid; gap:12px; max-height:520px; overflow:auto; }}
+      #app-tab-map > section:not(.map-shell) {{ order:7; max-height:420px; overflow:auto; padding-right:4px; }}
+      #app-first-playable-onboarding {{ order:4; }}
+      #app-map-route-panel {{ order:2; max-height:340px; overflow:auto; }}
+      #app-map-action-panel {{ order:3; max-height:260px; overflow:auto; }}
+      #app-map-camera-actions {{ order:5; }}
+      #app-map-route-panel,#app-map-action-panel {{ padding:14px; margin-top:0 !important; }}
       #app-map-route-panel p,#app-map-action-panel p {{ margin:4px 0; line-height:1.35; }}
       #app-map-route-event-brief-status,#app-map-route-link-status {{ display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }}
       #app-map-route-actions,#app-map-action-rail {{ max-height:170px; overflow:auto; }}
@@ -860,6 +860,7 @@ pub(super) async fn get_client_app_web_shell(
           <p id="app-map-overlay-status" class="subtitle" data-i18n-en="Active layers: density, regions, tiles, prefetch rings, live events." data-i18n-zh="当前图层：密度、区域、地图块、预热圈、实时事件。">Active layers: density, regions, tiles, prefetch rings, live events.</p>
           <p id="app-map-overlay-legend" class="subtitle" data-i18n-en="Layer legend: regional anchors · active tiles · prefetch rings · live-event pulses." data-i18n-zh="图层说明：区域锚点 · 活跃地图块 · 预热探索圈 · 实时事件脉冲。">Layer legend: regional anchors · active tiles · prefetch rings · live-event pulses.</p>
         </details>
+      </div>
         <div id="app-map-action-panel" class="module" style="margin-top:14px; padding:16px 18px;">
           <strong data-i18n-en="Map Action Rail" data-i18n-zh="地图行动栏">Map Action Rail</strong>
           <span id="app-map-focus-summary" data-i18n-en="Waiting for map focus…" data-i18n-zh="等待选择地图焦点…">Waiting for map focus…</span>
@@ -877,7 +878,6 @@ pub(super) async fn get_client_app_web_shell(
           </div>
           <div id="app-map-route-actions" class="focus-stack"></div>
         </div>
-      </div>
       <div id="real-world-map" data-engine="{}" data-provider="{}" aria-label="Reality mirror map" data-i18n-aria-label-en="Reality mirror map" data-i18n-aria-label-zh="现实镜像地图"></div>
     </section>
     <section>
