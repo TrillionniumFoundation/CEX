@@ -719,6 +719,10 @@ pub(super) async fn get_client_app_web_shell(
       .app-search-clear {{ padding:9px 10px; border-radius:13px; }}
       .app-ux-status {{ margin-top:7px; min-height:24px; }}
       #app-tab-map {{ order:1; }}
+      #app-tab-map.is-active {{ display:contents; }}
+      #app-tab-map > .app-tab-header {{ order:0; }}
+      #app-tab-map > .map-shell {{ order:1; }}
+      #app-tab-map > section:not(.map-shell) {{ order:3; }}
       #app-first-playable-onboarding {{ order:2; }}
       #app-tab-messages {{ order:3; }}
       #app-tab-feed {{ order:4; }}

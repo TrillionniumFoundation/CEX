@@ -1171,14 +1171,15 @@ pub(super) async fn get_world_web_shell(
     .cta.secondary {{ color:var(--text); background:rgba(255,255,255,.07); border:1px solid rgba(100,227,255,.24); }}
     @media (max-width:1050px) {{ header.world-hero,.play,.map-shell {{ grid-template-columns:1fr; }} .grid,.mini-grid,.world-adventure-steps {{ grid-template-columns:1fr; }} .stats.world-pulse-strip {{ grid-template-columns:repeat(3,minmax(0,1fr)); }} #world-real-map {{ order:-1; }} }}
     @media (max-width:720px) {{
-      header.world-hero {{ padding:16px 14px 8px; gap:12px; }}
-      .world-hero-main {{ min-height:auto; gap:10px; }}
+      header.world-hero {{ padding:12px 14px 6px; gap:8px; }}
+      .world-hero-main {{ min-height:auto; gap:8px; }}
       .world-hero-kicker {{ gap:8px; }}
-      h1 {{ font-size:clamp(40px,15vw,62px); letter-spacing:-.068em; }}
+      h1 {{ font-size:clamp(36px,13vw,54px); letter-spacing:-.068em; }}
       h2 {{ margin-bottom:10px; }}
       .subtitle {{ font-size:14px; line-height:1.42; }}
+      .world-hero-title .subtitle {{ margin:0; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }}
       .pill {{ font-size:10px; padding:4px 8px; }}
-      .world-mobile-promise {{ gap:6px; }}
+      .world-mobile-promise {{ display:none; }}
       .world-mobile-promise span {{ padding:6px 8px; font-size:11px; }}
       .language-switcher {{ padding:5px 6px 5px 8px; font-size:11px; }}
       .language-switcher select {{ min-width:82px; max-width:112px; padding:6px 22px 6px 8px; font-size:11px; }}
@@ -1186,8 +1187,9 @@ pub(super) async fn get_world_web_shell(
       .world-hero-actions .cta,.hero-card .cta,.world-map-player-summary .cta {{ min-height:44px; padding:10px 11px; border-radius:14px; font-size:13px; }}
       button,input,textarea,select,.focus-chip,.overlay-toggle {{ min-height:44px; }}
       .hero-card,.panel,.card {{ padding:15px; border-radius:20px; }}
-      .hero-card {{ gap:10px; }}
+      .hero-card {{ gap:8px; }}
       .hero-card strong {{ font-size:18px; }}
+      .hero-card .cta {{ display:none; }}
       .world-hero-steps {{ grid-template-columns:repeat(3,minmax(0,1fr)); gap:7px; }}
       .world-hero-steps li {{ padding:8px; border-radius:13px; }}
       .world-hero-steps b {{ font-size:12px; }}
@@ -1206,10 +1208,12 @@ pub(super) async fn get_world_web_shell(
       .world-map-player-summary,.world-map-loop-steps {{ grid-template-columns:1fr; }}
       .world-map-loop-steps li {{ min-height:auto; padding:10px 12px; }}
       main > section {{ order:3; }}
-      #world-map-shell-panel {{ order:1; }}
+      #world-map-shell-panel {{ display:contents; order:1; }}
       #world-pulse-strip {{ order:2; }}
+      #world-map-shell-panel .map-shell {{ display:contents; }}
+      #world-map-shell-panel .map-copy {{ order:3; border:1px solid rgba(255,255,255,.12); background:linear-gradient(145deg,rgba(255,255,255,.09),rgba(255,255,255,.035)); border-radius:20px; padding:15px; }}
       .map-shell {{ gap:12px; }}
-      #world-real-map {{ min-height:min(58svh,430px); border-radius:18px; }}
+      #world-real-map {{ order:1; min-height:min(54svh,410px); border-radius:18px; }}
       .map-stream-hud,.overlay-toggle-bar,.focus-stack {{ gap:6px; }}
       .hud-chip,.focus-chip,.overlay-toggle {{ padding:7px 9px; font-size:12px; }}
       .timeline li {{ grid-template-columns:1fr; }}
