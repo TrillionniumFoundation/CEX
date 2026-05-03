@@ -1249,11 +1249,14 @@ pub(super) async fn get_world_web_shell(
       .stat b {{ font-size:16px; }}
       .world-map-player-summary,.world-map-loop-steps {{ grid-template-columns:1fr; }}
       .world-map-loop-steps li {{ min-height:auto; padding:10px 12px; }}
-      main > section {{ order:3; }}
+      main > section {{ order:6; }}
       #world-map-shell-panel {{ display:contents; order:1; }}
       #world-pulse-strip {{ order:2; }}
+      main > .play {{ order:3; }}
+      #world-commerce-panel {{ order:4; }}
+      #world-map-move-panel {{ order:5; }}
       #world-map-shell-panel .map-shell {{ display:contents; }}
-      #world-map-shell-panel .map-copy {{ order:3; border:1px solid rgba(255,255,255,.12); background:linear-gradient(145deg,rgba(255,255,255,.09),rgba(255,255,255,.035)); border-radius:20px; padding:15px; }}
+      #world-map-shell-panel .map-copy {{ order:7; border:1px solid rgba(255,255,255,.12); background:linear-gradient(145deg,rgba(255,255,255,.09),rgba(255,255,255,.035)); border-radius:20px; padding:15px; }}
       .map-shell {{ gap:12px; }}
       #world-real-map {{ order:1; min-height:min(54svh,410px); border-radius:18px; }}
       .map-stream-hud,.overlay-toggle-bar,.focus-stack {{ gap:6px; }}

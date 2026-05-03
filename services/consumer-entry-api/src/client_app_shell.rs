@@ -734,7 +734,9 @@ pub(super) async fn get_client_app_web_shell(
       #app-tab-map {{ order:1; }}
       #app-tab-map.is-active {{ display:contents; }}
       #app-tab-map > .app-tab-header {{ order:0; }}
-      #app-tab-map > .map-shell {{ order:1; }}
+      #app-tab-map > .map-shell {{ order:1; display:contents; }}
+      #app-tab-map > .map-shell > #real-world-map {{ order:1; }}
+      #app-tab-map > .map-shell > .map-panel {{ order:3; }}
       #app-tab-map > section:not(.map-shell) {{ order:3; }}
       #app-first-playable-onboarding {{ order:2; }}
       #app-tab-messages {{ order:3; }}

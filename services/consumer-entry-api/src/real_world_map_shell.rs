@@ -8,7 +8,7 @@ pub(super) fn trillionnium_language_settings_html() -> &'static str {
   <label for="trillionnium-language-select" class="sr-only" data-i18n-en="Language" data-i18n-zh="语言">Language</label>
   <select id="trillionnium-language-select" data-trillionnium-language-select aria-label="Language" data-i18n-aria-label-en="Language" data-i18n-aria-label-zh="语言">
     <option value="en">English</option>
-    <option value="zh">中文</option>
+    <option value="zh" data-i18n-en="Chinese" data-i18n-zh="中文">Chinese</option>
     <option value="__future" disabled data-i18n-en="More languages coming" data-i18n-zh="更多语言即将加入">More languages coming</option>
   </select>
   <p class="subtitle" data-i18n-en="Saved locally on this device." data-i18n-zh="语言设置会保存在当前设备。">Saved locally on this device.</p>
@@ -21,7 +21,7 @@ pub(super) fn trillionnium_language_inline_switcher_html(id: &str) -> String {
   <span data-i18n-en="Language" data-i18n-zh="语言">Language</span>
   <select id="{id}" data-trillionnium-language-select aria-label="Language" data-i18n-aria-label-en="Language" data-i18n-aria-label-zh="语言">
     <option value="en">English</option>
-    <option value="zh">中文</option>
+    <option value="zh" data-i18n-en="Chinese" data-i18n-zh="中文">Chinese</option>
     <option value="__future" disabled data-i18n-en="More languages coming" data-i18n-zh="更多语言即将加入">More languages coming</option>
   </select>
 </label>"#,
