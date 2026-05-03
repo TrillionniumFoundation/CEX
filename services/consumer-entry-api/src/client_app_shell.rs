@@ -717,20 +717,24 @@ pub(super) async fn get_client_app_web_shell(
     .app-me-grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:16px; }}
     .app-search-hidden {{ display:none !important; }}
     @media (max-width: 820px) {{
-      header {{ padding:12px 14px 10px; }}
+      header {{ padding:9px 12px 8px; }}
       main {{ padding:10px 14px 34px; gap:12px; }}
-      h1 {{ font-size:30px; }}
-      .subtitle {{ font-size:14px; line-height:1.4; }}
-      .app-topbar-meta {{ align-items:flex-start; gap:8px; margin-bottom:8px; }}
-      .app-topbar-actions {{ gap:7px; }}
-      .app-topbar-actions a {{ min-height:44px; padding:0 11px; }}
-      .app-beta-chip {{ padding:6px 9px; font-size:11px; }}
-      .language-switcher {{ padding:5px 6px 5px 8px; font-size:11px; }}
-      .language-switcher select {{ min-width:82px; max-width:112px; padding:6px 22px 6px 8px; font-size:11px; }}
-      .app-search-shell {{ gap:8px; }}
-      .app-search-input {{ padding:11px 13px; border-radius:15px; }}
-      .app-search-clear {{ padding:9px 10px; border-radius:13px; }}
-      .app-ux-status {{ margin-top:7px; min-height:24px; }}
+      h1 {{ font-size:25px; }}
+      header > .subtitle {{ margin:4px 0 0; display:-webkit-box; -webkit-line-clamp:1; -webkit-box-orient:vertical; overflow:hidden; }}
+      .subtitle {{ font-size:13px; line-height:1.34; }}
+      .app-topbar-meta {{ display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:7px; margin-bottom:5px; }}
+      .app-topbar-meta > p {{ margin:0; min-width:0; }}
+      .app-topbar-actions {{ gap:5px; flex-wrap:nowrap; }}
+      .app-topbar-actions a {{ min-height:36px; padding:0 8px; font-size:11px; }}
+      .app-beta-chip {{ max-width:150px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; padding:5px 8px; font-size:10px; }}
+      header .language-switcher {{ min-height:36px; padding:4px 5px 4px 7px; font-size:10px; }}
+      header .language-switcher select {{ min-height:36px; min-width:76px; max-width:102px; padding:5px 20px 5px 7px; font-size:10px; }}
+      .app-search-shell {{ gap:7px; margin-top:7px; }}
+      .app-search-input {{ padding:9px 12px; border-radius:14px; font-size:14px; }}
+      .app-search-clear {{ padding:8px 9px; border-radius:12px; }}
+      .app-ux-status {{ margin-top:5px; min-height:22px; }}
+      .app-ux-pill {{ padding:5px 9px; font-size:11px; }}
+
       #app-tab-map {{ order:1; }}
       #app-tab-map.is-active {{ display:contents; }}
       #app-tab-map > .app-tab-header {{ order:0; }}
@@ -751,7 +755,7 @@ pub(super) async fn get_client_app_web_shell(
       #app-tab-feed {{ order:4; }}
       #app-tab-me {{ order:5; }}
       .map-shell {{ grid-template-columns:1fr; gap:12px; margin-bottom:12px; }}
-      #real-world-map {{ order:-1; min-height:min(54svh,390px); border-radius:20px; }}
+      #real-world-map {{ order:-1; min-height:min(34svh,300px); border-radius:20px; }}
       .map-panel,.module {{ padding:15px; border-radius:19px; }}
       .map-stream-hud,.overlay-toggle-bar,.focus-stack {{ gap:6px; }}
       .hud-chip,.focus-chip,.overlay-toggle {{ padding:7px 9px; font-size:12px; min-height:44px; }}
