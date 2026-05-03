@@ -5,7 +5,7 @@ use shared_config::{
     load_identity_scoped_admin_tokens, load_ledger_scoped_admin_tokens, select_audit_read_token,
     select_execution_manage_token, select_execution_read_or_manage_token,
     select_identity_manage_token, select_identity_read_or_manage_token, select_ledger_manage_token,
-    select_ledger_read_or_manage_token,
+    select_ledger_read_or_manage_token, ScopedAdminToken,
 };
 use std::{
     env,
@@ -33,8 +33,11 @@ fn scripts_dir() -> PathBuf {
 }
 
 fn run_powershell_script(script_name: &str, extra_args: &[&str]) -> String {
-    let script_path = scripts_dir().join(script_name);
+    let script_dir = scripts_dir();
+    let repo_root = script_dir.parent().expect("repo root");
+    let script_path = script_dir.join(script_name);
     let output = Command::new("powershell")
+        .current_dir(repo_root)
         .arg("-NoProfile")
         .arg("-ExecutionPolicy")
         .arg("Bypass")
@@ -221,12 +224,19 @@ fn resolve_identity_api_key_list_token() -> String {
         .clone()
 }
 
-fn resolve_audit_admin_token() -> String {
+fn resolve_audit_admin_token_record() -> ScopedAdminToken {
     let tokens = load_audit_scoped_admin_tokens();
     select_audit_read_token(&tokens)
         .expect("audit read token")
-        .token
         .clone()
+}
+
+fn resolve_audit_admin_token() -> String {
+    resolve_audit_admin_token_record().token
+}
+
+fn resolve_audit_trace_org_id() -> Option<String> {
+    resolve_audit_admin_token_record().org_ids.first().cloned()
 }
 
 fn resolve_execution_manage_token() -> String {
@@ -1725,12 +1735,14 @@ async fn blackbox_runtime_audit_persistence_matches_regression() {
     assert_health(&client).await;
 
     let trace_id = Uuid::new_v4();
+    let audit_org_id = resolve_audit_trace_org_id();
     let nonce = Uuid::new_v4().to_string();
     let (create_status, created) = post_json(
         &client,
         "http://127.0.0.1:7004/v1/audit/events",
         json!({
             "trace_id": trace_id,
+            "org_id": audit_org_id,
             "actor_type": "runtime-blackbox",
             "actor_id": "local-dev",
             "event_type": "audit.persistence.probe",
