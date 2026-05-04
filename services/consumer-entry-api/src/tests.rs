@@ -7,10 +7,11 @@ use super::{
     build_matrix_room_rate_limit_key, build_matrix_session_rate_limit_key,
     build_matrix_user_rate_limit_key, build_router, client_app_json, client_feed_json,
     default_league_state, encode_league_web_session, evaluate_identity_binding_reload_governance,
-    get_client_app_web_shell, get_world_web_shell, league_hash_id, league_state_hash,
-    league_state_repository_write_set_for_command, league_state_sql_cutover_plan_json,
-    league_state_sql_shadow_validation_json, load_identity_binding_revision_approval_state,
-    load_identity_binding_store, load_rate_limit_cache, load_session_auth_issuer_registry,
+    get_client_app_web_shell, get_world_web_shell, league_hash_id, league_hidden_test_event,
+    league_state_hash, league_state_repository_write_set_for_command,
+    league_state_sql_cutover_plan_json, league_state_sql_shadow_validation_json,
+    load_identity_binding_revision_approval_state, load_identity_binding_store,
+    load_rate_limit_cache, load_session_auth_issuer_registry,
     load_session_auth_issuer_registry_revision_approval_state,
     normalized_repository_client_feed_read_model_sql, normalized_repository_command_shadow_sql,
     normalized_repository_direct_write_contract_json,
@@ -1649,6 +1650,52 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(world_html.contains("indexedRouteActionButtonHtml"));
     assert!(world_html.contains("routeFlowActionAttrs"));
     assert!(world_html.contains("\"contract_version\":1"));
+    assert!(world_html.contains("customer deliverable"));
+    assert!(world_html.contains("evidence package, risk controls, next action"));
+    assert!(world_html.contains("客户交付方案"));
+}
+
+#[test]
+fn world_first_session_default_prompts_pass_hidden_test_anchors() {
+    let default_bodies = [
+        (
+            "world_action_default",
+            "Launch an AI Design Studio for global customers: define the customer deliverable, evidence package, risk controls, next action, self-review, and League quest handoff.",
+        ),
+        (
+            "world_asset_default",
+            "Upgrade this world item for a customer deliverable: strengthen capability, evidence package, risk controls, next action loop, self-review, and side-quest handoff.",
+        ),
+        (
+            "world_company_default",
+            "Launch a global-facing studio hub with this item: define customer deliverables, evidence package, risk controls, next action loop, self-review, and the first bounty route.",
+        ),
+        (
+            "world_listing_default",
+            "Publish a global bounty card: specify deliverables, reward logic, evidence package, commitments, risk controls, self-review, and next action.",
+        ),
+        (
+            "world_buy_default",
+            "Accept this quest card and open an adventure commission: confirm deliverables, evidence package, rating standards, risk controls, and next action.",
+        ),
+        (
+            "world_contract_default",
+            "World contract report: customer deliverable, evidence package, risk review, next step, rating standards, and self-review.",
+        ),
+    ];
+
+    for (label, body) in default_bodies {
+        let (hidden_event, flags) = league_hidden_test_event(body, "world_first_session");
+        assert!(
+            flags.is_empty(),
+            "{label} should not trigger hidden-test review flags: {flags:?}"
+        );
+        assert!(
+            hidden_event.score >= 70.0,
+            "{label} should pass hidden-test anchors, got {}",
+            hidden_event.score
+        );
+    }
 }
 
 #[test]

@@ -1500,7 +1500,7 @@ pub(super) async fn get_world_web_shell(
           {csrf_input}
           <input type="hidden" name="matrix_user_id" value="{current_matrix_user_id}" />
           <select id="world-action-location" name="location_id">{location_options}</select>
-          <textarea id="world-action-body" name="body" data-i18n-value-en="Launch an AI Design Studio for overseas/global players: recruit Agents, complete real global commissions, and convert key opportunities into League quests." data-i18n-value-zh="我要在全球镜像城市建立 AI 设计工坊，招募 Agent，完成海外真实委托，并把关键机会转成 League 任务。">Launch an AI Design Studio for overseas/global players: recruit Agents, complete real global commissions, and convert key opportunities into League quests.</textarea>
+          <textarea id="world-action-body" name="body" data-i18n-value-en="Launch an AI Design Studio for global customers: define the customer deliverable, evidence package, risk controls, next action, self-review, and League quest handoff." data-i18n-value-zh="我要在全球镜像城市建立 AI 设计工坊：写清客户交付方案、证据包、风险控制、下一步行动、自检复盘，并把机会转成 League 任务。">Launch an AI Design Studio for global customers: define the customer deliverable, evidence package, risk controls, next action, self-review, and League quest handoff.</textarea>
           <button type="submit" data-i18n-en="Submit World Action" data-i18n-zh="提交世界行动">Submit World Action</button>
         </form>
       </div>
@@ -1524,7 +1524,7 @@ pub(super) async fn get_world_web_shell(
         {csrf_input}
         <input type="hidden" name="matrix_user_id" value="{current_matrix_user_id}" />
         <input id="world-asset-id" name="asset_id" value="{latest_asset_id}" placeholder="自动填充或 latest" />
-        <textarea id="world-asset-body" name="body" data-i18n-value-en="Upgrade this world item: strengthen capability, evidence, risk control, action loop, and the next side quest." data-i18n-value-zh="升级这件世界道具：强化能力、证据、风险控制、行动循环和下一条支线。">Upgrade this world item: strengthen capability, evidence, risk control, action loop, and the next side quest.</textarea>
+        <textarea id="world-asset-body" name="body" data-i18n-value-en="Upgrade this world item for a customer deliverable: strengthen capability, evidence package, risk controls, next action loop, self-review, and side-quest handoff." data-i18n-value-zh="升级这件世界道具用于客户交付方案：强化能力、证据包、风险控制、下一步行动循环、自检复盘和支线交接。">Upgrade this world item for a customer deliverable: strengthen capability, evidence package, risk controls, next action loop, self-review, and side-quest handoff.</textarea>
         <button type="submit" data-i18n-en="Upgrade Item" data-i18n-zh="升级道具">Upgrade Item</button>
       </form>
     </section>
@@ -1535,7 +1535,7 @@ pub(super) async fn get_world_web_shell(
         {csrf_input}
         <input type="hidden" name="matrix_user_id" value="{current_matrix_user_id}" />
         <input id="world-company-asset-id" name="asset_id" value="{latest_asset_id}" placeholder="自动填充或 latest" />
-        <textarea id="world-company-body" name="body" data-i18n-value-en="Launch a global-facing studio hub with this item: define capability, target clients, action loop, evidence, and the first bounty route." data-i18n-value-zh="用这件道具建立面向海外玩家的工坊据点：定义能力、服务对象、行动循环、证据和第一条悬赏路线。">Launch a global-facing studio hub with this item: define capability, target clients, action loop, evidence, and the first bounty route.</textarea>
+        <textarea id="world-company-body" name="body" data-i18n-value-en="Launch a global-facing studio hub with this item: define customer deliverables, evidence package, risk controls, next action loop, self-review, and the first bounty route." data-i18n-value-zh="用这件道具建立面向海外玩家的工坊据点：定义客户交付方案、证据包、风险控制、下一步行动循环、自检复盘和第一条悬赏路线。">Launch a global-facing studio hub with this item: define customer deliverables, evidence package, risk controls, next action loop, self-review, and the first bounty route.</textarea>
         <button type="submit" data-i18n-en="Launch Studio" data-i18n-zh="建立工坊">Launch Studio</button>
       </form>
     </section>
@@ -1623,7 +1623,7 @@ pub(super) async fn get_world_web_shell(
         {csrf_input}
         <input type="hidden" name="matrix_user_id" value="{current_matrix_user_id}" />
         <input id="world-contract-completion-id" name="contract_id" value="{latest_contract_id}" placeholder="自动填充或契约 ID" />
-        <textarea id="world-contract-completion-body" name="body" data-i18n-value-en="World contract report: result, evidence, risk review, next step, and rating standards." data-i18n-value-zh="世界契约战报：成果、证据、风险复盘、下一步和评级标准。">World contract report: result, evidence, risk review, next step, and rating standards.</textarea>
+        <textarea id="world-contract-completion-body" name="body" data-i18n-value-en="World contract report: customer deliverable, evidence package, risk review, next step, rating standards, and self-review." data-i18n-value-zh="世界契约战报：客户交付方案、证据包、风险复盘、下一步、评级标准和自检复盘。">World contract report: customer deliverable, evidence package, risk review, next step, rating standards, and self-review.</textarea>
         <button type="submit" data-i18n-en="Complete Contract" data-i18n-zh="完成契约">Complete Contract</button>
       </form>
     </section>
