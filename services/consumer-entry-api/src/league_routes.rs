@@ -1966,17 +1966,11 @@ pub(super) async fn submit_league_match(
         player.xp += score.round() as i64;
         player.reputation += (score / 10.0).round() as i64;
         player.rating += ((score - 50.0) / 2.0).round() as i64;
-        if judgement.payout_status == "eligible" {
-            player.earned_credits += reward_amount;
-        }
         if score >= 80.0 {
             player.wins += 1;
         }
         entry.submissions += 1;
         entry.best_score = entry.best_score.max(score);
-        if judgement.payout_status == "eligible" {
-            entry.rewards_earned += reward_amount;
-        }
         league
             .players_by_matrix_user
             .insert(matrix_user_id.clone(), player.clone());
@@ -1985,11 +1979,6 @@ pub(super) async fn submit_league_match(
             .insert(league_entry_key(&match_id, &matrix_user_id), entry.clone());
         league.submissions.insert(submission_id, submission.clone());
         league.rewards.push(reward.clone());
-        if judgement.payout_status == "eligible" {
-            league
-                .inventory_items
-                .push(league_item_for_submission(&submission));
-        }
         let snapshot = league.clone();
         (player, entry, submission, reward, snapshot)
     };
@@ -2004,7 +1993,11 @@ pub(super) async fn submit_league_match(
     reward.ledger_balance_after = settlement.balance_after;
     reward.ledger_error = settlement.error;
 
-    let snapshot = {
+    let settlement_completed = matches!(
+        reward.ledger_status.as_deref(),
+        Some("settled") | Some("duplicate")
+    );
+    let (response_player, response_entry, snapshot) = {
         let mut league = state.inner.league_state.lock().await;
         if let Some(stored_reward) = league
             .rewards
@@ -2013,7 +2006,37 @@ pub(super) async fn submit_league_match(
         {
             *stored_reward = reward.clone();
         }
-        league.clone()
+        if settlement_completed {
+            if let Some(stored_player) = league.players_by_matrix_user.get_mut(&matrix_user_id) {
+                stored_player.earned_credits += reward.amount;
+            }
+            if let Some(stored_entry) = league
+                .entries
+                .get_mut(&league_entry_key(&match_id, &matrix_user_id))
+            {
+                stored_entry.rewards_earned += reward.amount;
+            }
+            if !league
+                .inventory_items
+                .iter()
+                .any(|item| item.source_submission_id == submission.submission_id)
+            {
+                league
+                    .inventory_items
+                    .push(league_item_for_submission(&submission));
+            }
+        }
+        let response_player = league
+            .players_by_matrix_user
+            .get(&matrix_user_id)
+            .cloned()
+            .unwrap_or_else(|| player.clone());
+        let response_entry = league
+            .entries
+            .get(&league_entry_key(&match_id, &matrix_user_id))
+            .cloned()
+            .unwrap_or_else(|| entry.clone());
+        (response_player, response_entry, league.clone())
     };
 
     if let Err(response) = persist_league_state(&state, &snapshot).await {
@@ -2026,8 +2049,8 @@ pub(super) async fn submit_league_match(
             "kind": "league_submission",
             "league": "trillionnium_league",
             "match": league_match,
-            "player": player,
-            "entry": entry,
+            "player": response_player,
+            "entry": response_entry,
             "submission": submission,
             "reward": reward,
             "room_id": payload.room_id,
@@ -2427,7 +2450,16 @@ pub(super) async fn get_league_player_rewards(
         .filter(|reward| reward.matrix_user_id == matrix_user_id)
         .cloned()
         .collect();
-    let total_earned: f64 = rewards.iter().map(|reward| reward.amount).sum();
+    let total_earned: f64 = rewards
+        .iter()
+        .filter(|reward| {
+            matches!(
+                reward.ledger_status.as_deref(),
+                Some("settled") | Some("duplicate")
+            )
+        })
+        .map(|reward| reward.amount)
+        .sum();
     (
         StatusCode::OK,
         Json(json!({

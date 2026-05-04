@@ -3891,6 +3891,59 @@ async fn world_commerce_e2e_uses_real_configured_ledger_for_consume_refund_reope
 }
 
 #[tokio::test]
+async fn league_submission_requires_ledger_settlement_before_earned_rewards() {
+    let state = test_state(test_config(), IdentityBindings::default(), HashMap::new());
+    let app = build_router(state.clone());
+    let (status, submission) = send_json_request(
+        &app,
+        "POST",
+        "/v1/league/matches/daily-dungeon-001/submit",
+        &[],
+        json!({
+            "matrix_user_id": "@alice:local.dev",
+            "body": "Submit a final deliverable with evidence package, risk controls, next action, cost-aware strategy, self-review, and clear reward settlement proof."
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "league submit failed: {submission}");
+    assert_eq!(
+        submission["reward"]["ledger_status"],
+        "skipped_missing_room"
+    );
+    assert!(submission["reward"]["amount"].as_f64().unwrap_or(0.0) > 0.0);
+    assert_eq!(submission["player"]["earned_credits"], 0.0);
+    assert_eq!(submission["entry"]["rewards_earned"], 0.0);
+
+    let league = state.inner.league_state.lock().await;
+    let player = league
+        .players_by_matrix_user
+        .get("@alice:local.dev")
+        .expect("player should be created by league submission");
+    assert_eq!(player.earned_credits, 0.0);
+    let entry = league
+        .entries
+        .values()
+        .find(|entry| {
+            entry.match_id == "daily-dungeon-001" && entry.matrix_user_id == "@alice:local.dev"
+        })
+        .expect("entry should be created by league submission");
+    assert_eq!(entry.rewards_earned, 0.0);
+    assert!(league.inventory_items.is_empty());
+    drop(league);
+
+    let (status, rewards) = send_json_request(
+        &app,
+        "GET",
+        "/v1/league/players/@alice:local.dev/rewards",
+        &[],
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "league rewards failed: {rewards}");
+    assert_eq!(rewards["total_earned"], 0.0);
+}
+
+#[tokio::test]
 async fn world_contract_completion_requires_ledger_settlement_before_earned_credits() {
     let state = test_state(test_config(), IdentityBindings::default(), HashMap::new());
     {
