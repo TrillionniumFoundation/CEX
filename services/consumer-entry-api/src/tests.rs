@@ -1583,6 +1583,7 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(app_html.contains("routeTaskGraphActionButtonsHtml"));
     assert!(app_html.contains("indexedRouteActionButtonHtml"));
     assert!(app_html.contains("routeFlowActionAttrs"));
+    assert!(app_html.contains("routePlayabilityBody"));
     assert!(app_html.contains("\"contract_version\":1"));
 
     let world_html = get_world_web_shell(
@@ -1649,10 +1650,53 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(world_html.contains("routeTaskGraphActionButtonsHtml"));
     assert!(world_html.contains("indexedRouteActionButtonHtml"));
     assert!(world_html.contains("routeFlowActionAttrs"));
+    assert!(world_html.contains("routePlayabilityBody"));
     assert!(world_html.contains("\"contract_version\":1"));
     assert!(world_html.contains("customer deliverable"));
     assert!(world_html.contains("evidence package, risk controls, next action"));
     assert!(world_html.contains("客户交付方案"));
+}
+
+fn assert_hidden_test_ready_prompt(label: &str, body: &str) {
+    let (hidden_event, flags) = league_hidden_test_event(body, "world_first_session");
+    assert!(
+        flags.is_empty(),
+        "{label} should not trigger hidden-test review flags: {flags:?}"
+    );
+    assert!(
+        hidden_event.score >= 70.0,
+        "{label} should pass hidden-test anchors, got {}",
+        hidden_event.score
+    );
+}
+
+fn route_command_body(command: &str) -> String {
+    let trimmed = command.trim();
+    for prefix in [
+        "/upgrade latest",
+        "/company latest",
+        "/sell latest",
+        "/buy latest",
+        "/work deliver latest",
+        "/work accept latest",
+        "/work reject latest",
+        "/work reopen latest",
+        "/work cancel latest",
+        "/world action",
+        "/contract",
+    ] {
+        if let Some(body) = trimmed.strip_prefix(prefix) {
+            return body.trim().to_string();
+        }
+    }
+    if let Some(rest) = trimmed.strip_prefix("/complete ") {
+        return rest
+            .trim()
+            .split_once(' ')
+            .map(|(_, body)| body.trim().to_string())
+            .unwrap_or_default();
+    }
+    trimmed.to_string()
 }
 
 #[test]
@@ -1685,16 +1729,7 @@ fn world_first_session_default_prompts_pass_hidden_test_anchors() {
     ];
 
     for (label, body) in default_bodies {
-        let (hidden_event, flags) = league_hidden_test_event(body, "world_first_session");
-        assert!(
-            flags.is_empty(),
-            "{label} should not trigger hidden-test review flags: {flags:?}"
-        );
-        assert!(
-            hidden_event.score >= 70.0,
-            "{label} should pass hidden-test anchors, got {}",
-            hidden_event.score
-        );
+        assert_hidden_test_ready_prompt(label, body);
     }
 }
 
@@ -1977,13 +2012,45 @@ fn client_app_map_hub_projects_route_preview() {
                 && task["suggested_textarea_id"] == "world-action-body"
                 && task["next_opportunity_action_label"] == "打开任务牌路线"
         }));
+    let route_tasks = app["map_hub"]["route_task_graph"]["tasks"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let route_task = route_tasks
+        .iter()
+        .find(|task| task["task_id"] == "task-route-preview-1")
+        .expect("route task should exist");
+    assert_hidden_test_ready_prompt(
+        "route_next_opportunity_body",
+        route_task["next_opportunity_body"].as_str().unwrap_or(""),
+    );
+    assert_hidden_test_ready_prompt(
+        "route_next_opportunity_command",
+        &route_command_body(
+            route_task["next_opportunity_command"]
+                .as_str()
+                .unwrap_or(""),
+        ),
+    );
+    assert_hidden_test_ready_prompt(
+        "route_suggested_body",
+        route_task["suggested_body"].as_str().unwrap_or(""),
+    );
+    assert_hidden_test_ready_prompt(
+        "route_suggested_matrix_command",
+        &route_command_body(
+            route_task["suggested_matrix_command"]
+                .as_str()
+                .unwrap_or(""),
+        ),
+    );
     assert_eq!(
         app["map_hub"]["route_story"]["next_task_id"],
         json!("task-route-preview-1")
     );
     assert_eq!(
         app["map_hub"]["route_story"]["next_command_hint"],
-        json!("/world action 跟进已完成任务 task-route-preview-1：围绕 契约战报 world-completion-route-preview 记录成果证据、委托方反馈、复盘和下一条支线。")
+        json!("/world action 跟进已完成任务 task-route-preview-1：围绕 契约战报 world-completion-route-preview 记录成果证据、委托方反馈、复盘和下一条支线。 补齐客户交付方案、风险控制、下一步行动。")
     );
     assert_eq!(
         app["map_hub"]["route_story"]["next_opportunity_target"]["panel_id"],
@@ -2006,6 +2073,7 @@ fn world_route_command_target_maps_structured_web_targets() {
     assert_eq!(listing.textarea_id, "world-listing-body");
     assert_eq!(listing.action_label, "打开任务牌路线");
     assert!(listing.body.contains("回访委托方"));
+    assert_hidden_test_ready_prompt("listing_route_target", &listing.body);
 
     let purchase = crate::world_route_command_target(
         "/buy latest 接取当前任务牌，并附上评级标准、成果范围和时间要求。",
@@ -2016,6 +2084,7 @@ fn world_route_command_target_maps_structured_web_targets() {
     assert_eq!(purchase.textarea_id, "world-buy-body");
     assert_eq!(purchase.action_label, "打开接取路线");
     assert!(purchase.body.contains("评级标准"));
+    assert_hidden_test_ready_prompt("purchase_route_target", &purchase.body);
 
     let completion = crate::world_route_command_target(
         "/complete world-contract-123 提交最终成果、证据包、风险复盘和下一步协作建议。",
@@ -2026,6 +2095,7 @@ fn world_route_command_target_maps_structured_web_targets() {
     assert_eq!(completion.textarea_id, "world-contract-completion-body");
     assert_eq!(completion.action_label, "打开契约完成路线");
     assert!(completion.body.contains("提交最终成果"));
+    assert_hidden_test_ready_prompt("completion_route_target", &completion.body);
 
     let rejection = crate::world_route_command_target(
         "/work reject latest 缺少原始文件、尺寸说明和修改承诺，请先补齐。",
@@ -2036,6 +2106,7 @@ fn world_route_command_target_maps_structured_web_targets() {
     assert_eq!(rejection.textarea_id, "world-work-reject-body");
     assert_eq!(rejection.action_label, "打开返工路线");
     assert!(rejection.body.contains("缺少原始文件"));
+    assert_hidden_test_ready_prompt("rejection_route_target", &rejection.body);
 }
 
 #[test]

@@ -1066,6 +1066,23 @@ pub(super) fn real_world_map_route_target_resolution_js() -> &'static str {
 pub(super) fn real_world_map_route_status_js() -> &'static str {
     r#"      const routeUiLanguage = () => mapLanguage() === 'zh' ? 'zh' : 'en';
       const routePhrase = (en, zh) => routeUiLanguage() === 'zh' ? zh : en;
+      const routePlayabilityBody = (body) => {
+        const text = String(body || '').trim();
+        if (!text) return '';
+        const lower = text.toLowerCase();
+        const hasCjk = /[\u3400-\u9fff]/.test(text);
+        const missingEn = [];
+        const missingZh = [];
+        if (!(lower.includes('deliver') || lower.includes('customer') || text.includes('客户') || text.includes('交付') || text.includes('方案'))) { missingEn.push('customer deliverable'); missingZh.push('客户交付方案'); }
+        if (!(lower.includes('evidence') || lower.includes('source') || lower.includes('data') || text.includes('证据') || text.includes('依据'))) { missingEn.push('evidence package'); missingZh.push('证据包'); }
+        if (!(lower.includes('risk') || text.includes('风险'))) { missingEn.push('risk controls'); missingZh.push('风险控制'); }
+        if (!(lower.includes('next') || text.includes('下一步') || text.includes('计划'))) { missingEn.push('next action'); missingZh.push('下一步行动'); }
+        if (!(lower.includes('review') || lower.includes('self-check') || lower.includes('self check') || text.includes('自评') || text.includes('自检') || text.includes('复盘'))) { missingEn.push('self-review'); missingZh.push('自检复盘'); }
+        if (!missingEn.length) return text;
+        const endsSentence = /[.!?。！？]$/.test(text);
+        if (hasCjk) return text + (endsSentence ? ' ' : '；') + '补齐' + missingZh.join('、') + '。';
+        return text + (endsSentence ? ' ' : '; ') + 'add ' + missingEn.join(', ') + '.';
+      };
       const routeOpportunitySegment = (task) => {
         const kind = String(((task || {}).next_opportunity_kind) || '').trim();
         return kind ? routePhrase(' · branch ' + mapText(kind), ' · 支线 ' + kind) : '';
@@ -1368,7 +1385,7 @@ pub(super) fn real_world_map_route_contract_accessors_js() -> &'static str {
         }
         const leadIn = String(settings.leadIn || '：继续推进');
         const detailText = detail.join(' · ') || String(settings.emptyDetail || '当前路线');
-        const suffix = String(settings.suffix || '。明确成果、证据、评级标准、风险和下一步行动。');
+        const suffix = String(settings.suffix || '。明确客户交付方案、证据包、评级标准、风险控制、下一步行动和自检复盘。');
         return appendSelectionEventSignal(selectionTitle + leadIn + detailText + suffix, selection);
       };
       const buildTaskFollowUpDraftBody = (selection, taskId, detailText) => {
@@ -1520,7 +1537,7 @@ pub(super) fn real_world_map_route_target_builders_js() -> &'static str {
             action_label: routeAction.label || '世界路线交接',
             command: '/world',
             web_panel_id: routeAction.panelId || routeActionPanelId(),
-            web_action_body: routeAction.body || '',
+            web_action_body: routePlayabilityBody(routeAction.body || ''),
             web_target_input_id: routeAction.inputId || null,
             web_target_value: routeAction.value || null,
             web_target_textarea_id: routeAction.textareaId || null,
@@ -1556,7 +1573,7 @@ pub(super) fn real_world_map_route_target_builders_js() -> &'static str {
           eventResult: target.eventResult || '',
           eventTaskId: target.eventTaskId || '',
           status: target.status || '',
-          body: target.body || '',
+          body: routePlayabilityBody(target.body || ''),
         };
       };
       const buildWorldWorkLaneAction = (laneId, workOrderId, options) => {

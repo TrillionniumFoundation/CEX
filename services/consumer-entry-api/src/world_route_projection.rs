@@ -125,6 +125,134 @@ fn world_route_english_visible_text(value: &str) -> String {
     }
 }
 
+fn world_route_has_delivery_anchor(value: &str, lower: &str) -> bool {
+    lower.contains("deliver")
+        || lower.contains("customer")
+        || value.contains("客户")
+        || value.contains("交付")
+        || value.contains("方案")
+}
+
+fn world_route_has_evidence_anchor(value: &str, lower: &str) -> bool {
+    lower.contains("evidence")
+        || lower.contains("source")
+        || lower.contains("data")
+        || value.contains("证据")
+        || value.contains("依据")
+}
+
+fn world_route_has_risk_anchor(value: &str, lower: &str) -> bool {
+    lower.contains("risk") || value.contains("风险")
+}
+
+fn world_route_has_next_anchor(value: &str, lower: &str) -> bool {
+    lower.contains("next") || value.contains("下一步") || value.contains("计划")
+}
+
+fn world_route_has_review_anchor(value: &str, lower: &str) -> bool {
+    lower.contains("review")
+        || lower.contains("self-check")
+        || lower.contains("self check")
+        || value.contains("自评")
+        || value.contains("自检")
+        || value.contains("复盘")
+}
+
+fn world_route_playability_anchor_body(body: String) -> String {
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    let has_cjk = contains_cjk_text(trimmed);
+    let mut missing_en = Vec::new();
+    let mut missing_zh = Vec::new();
+    if !world_route_has_delivery_anchor(trimmed, &lower) {
+        missing_en.push("customer deliverable");
+        missing_zh.push("客户交付方案");
+    }
+    if !world_route_has_evidence_anchor(trimmed, &lower) {
+        missing_en.push("evidence package");
+        missing_zh.push("证据包");
+    }
+    if !world_route_has_risk_anchor(trimmed, &lower) {
+        missing_en.push("risk controls");
+        missing_zh.push("风险控制");
+    }
+    if !world_route_has_next_anchor(trimmed, &lower) {
+        missing_en.push("next action");
+        missing_zh.push("下一步行动");
+    }
+    if !world_route_has_review_anchor(trimmed, &lower) {
+        missing_en.push("self-review");
+        missing_zh.push("自检复盘");
+    }
+    if missing_en.is_empty() {
+        return trimmed.to_string();
+    }
+
+    let ends_sentence = trimmed
+        .chars()
+        .last()
+        .map(|ch| matches!(ch, '.' | '。' | '!' | '！' | '?' | '？'))
+        .unwrap_or(false);
+    let separator = if ends_sentence {
+        " "
+    } else if has_cjk {
+        "；"
+    } else {
+        "; "
+    };
+    if has_cjk {
+        format!("{}{}补齐{}。", trimmed, separator, missing_zh.join("、"))
+    } else {
+        format!("{}{}add {}.", trimmed, separator, missing_en.join(", "))
+    }
+}
+
+fn world_route_playability_anchor_command(command: String) -> String {
+    let trimmed = command.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    for prefix in [
+        "/upgrade latest",
+        "/company latest",
+        "/sell latest",
+        "/buy latest",
+        "/work deliver latest",
+        "/work accept latest",
+        "/work reject latest",
+        "/work reopen latest",
+        "/work cancel latest",
+        "/world action",
+        "/contract",
+    ] {
+        if let Some(body) = trimmed.strip_prefix(prefix) {
+            let body = world_route_playability_anchor_body(body.trim().to_string());
+            return if body.is_empty() {
+                trimmed.to_string()
+            } else {
+                format!("{prefix} {body}")
+            };
+        }
+    }
+    if let Some(rest) = trimmed.strip_prefix("/complete ") {
+        let rest = rest.trim();
+        let (contract_id, body) = rest
+            .split_once(' ')
+            .map(|(contract_id, body)| (contract_id.trim(), body.trim()))
+            .unwrap_or((rest, ""));
+        let body = world_route_playability_anchor_body(body.to_string());
+        return if body.is_empty() {
+            trimmed.to_string()
+        } else {
+            format!("/complete {contract_id} {body}")
+        };
+    }
+    trimmed.to_string()
+}
+
 struct WorldRouteProjectionContext<'a> {
     world: &'a WorldState,
     indexes: WorldIndexes,
@@ -668,7 +796,7 @@ impl WorldRouteCommandTarget {
             input_id: input_id.to_string(),
             input_value,
             textarea_id: textarea_id.to_string(),
-            body,
+            body: world_route_playability_anchor_body(body),
         }
     }
 }
@@ -703,6 +831,10 @@ impl ClientFeedActionTarget {
         textarea_id: Value,
         body_base: Value,
     ) -> Self {
+        let body_base = match body_base {
+            Value::String(value) => json!(world_route_playability_anchor_body(value)),
+            other => other,
+        };
         Self {
             action_label,
             panel_id,
@@ -1412,7 +1544,7 @@ impl<'a> WorldRouteTaskDerivationContext<'a> {
     }
 
     fn next_opportunity(&self) -> WorldRouteOpportunity {
-        match self.latest_bucket {
+        let mut opportunity = match self.latest_bucket {
             "completion" => WorldRouteOpportunity {
                 kind: "repeat_order_upsell_referral".to_string(),
                 hint: format!(
@@ -1552,11 +1684,15 @@ impl<'a> WorldRouteTaskDerivationContext<'a> {
                     self.latest_title
                 ),
             },
-        }
+        };
+        opportunity.command = world_route_playability_anchor_command(opportunity.command);
+        opportunity
     }
 
     fn suggested_action(&self) -> WorldRouteSuggestedAction {
-        if self.latest_bucket == "completion" && !self.latest_completion_id.is_empty() {
+        let mut action = if self.latest_bucket == "completion"
+            && !self.latest_completion_id.is_empty()
+        {
             WorldRouteSuggestedAction {
                 route_target: world_route_action_console_target(
                     "起草战报后续",
@@ -1599,7 +1735,9 @@ impl<'a> WorldRouteTaskDerivationContext<'a> {
                     self.task_id, self.latest_event_title
                 ),
             }
-        }
+        };
+        action.matrix_command = world_route_playability_anchor_command(action.matrix_command);
+        action
     }
 }
 
@@ -1717,7 +1855,9 @@ impl WorldRouteStoryView {
             next_task_id: String::new(),
             next_action_label: fallback_target.action_label.clone(),
             next_panel_id: fallback_target.panel_id.clone(),
-            next_command_hint: "/world action 继续推进下一步机会。".to_string(),
+            next_command_hint: world_route_playability_anchor_command(
+                "/world action 继续推进下一步机会。".to_string(),
+            ),
             next_location_id: fallback_location_id,
             next_node_id: String::new(),
             next_opportunity_node_id: String::new(),
@@ -1727,7 +1867,9 @@ impl WorldRouteStoryView {
             next_feedback_focus: "证据和下一步待补齐。".to_string(),
             next_opportunity_hint: "Opportunity hint pending.".to_string(),
             next_opportunity_playbook: "Opportunity playbook pending.".to_string(),
-            next_opportunity_command: "/world action 继续推进下一步机会。".to_string(),
+            next_opportunity_command: world_route_playability_anchor_command(
+                "/world action 继续推进下一步机会。".to_string(),
+            ),
             next_opportunity_target: WorldRouteStoryOpportunityTarget {
                 action_label: fallback_target.action_label,
                 panel_id: fallback_target.panel_id,
@@ -2101,11 +2243,12 @@ impl WorldRouteTaskGraphView {
                 .and_then(Value::as_str)
                 .unwrap_or("Opportunity playbook pending.")
                 .to_string(),
-            next_opportunity_command: task
-                .get("next_opportunity_command")
-                .and_then(Value::as_str)
-                .unwrap_or("/world action 继续推进下一步机会。")
-                .to_string(),
+            next_opportunity_command: world_route_playability_anchor_command(
+                task.get("next_opportunity_command")
+                    .and_then(Value::as_str)
+                    .unwrap_or("/world action 继续推进下一步机会。")
+                    .to_string(),
+            ),
             next_opportunity_action_label: task
                 .get("next_opportunity_action_label")
                 .and_then(Value::as_str)
@@ -2136,11 +2279,12 @@ impl WorldRouteTaskGraphView {
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_string(),
-            next_opportunity_body: task
-                .get("next_opportunity_body")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string(),
+            next_opportunity_body: world_route_playability_anchor_body(
+                task.get("next_opportunity_body")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+            ),
             suggested_action_label: task
                 .get("suggested_action_label")
                 .and_then(Value::as_str)
@@ -2166,21 +2310,23 @@ impl WorldRouteTaskGraphView {
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_string(),
-            suggested_matrix_command: task
-                .get("suggested_matrix_command")
-                .and_then(Value::as_str)
-                .unwrap_or("/world action 跟进当前任务并记录证据、阻塞和下一步。")
-                .to_string(),
+            suggested_matrix_command: world_route_playability_anchor_command(
+                task.get("suggested_matrix_command")
+                    .and_then(Value::as_str)
+                    .unwrap_or("/world action 跟进当前任务并记录证据、阻塞和下一步。")
+                    .to_string(),
+            ),
             suggested_node_id: task
                 .get("suggested_node_id")
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_string(),
-            suggested_body: task
-                .get("suggested_body")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string(),
+            suggested_body: world_route_playability_anchor_body(
+                task.get("suggested_body")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+            ),
         }
     }
 
