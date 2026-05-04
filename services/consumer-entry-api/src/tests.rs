@@ -3944,6 +3944,54 @@ async fn league_submission_requires_ledger_settlement_before_earned_rewards() {
 }
 
 #[tokio::test]
+async fn league_web_submit_requires_ledger_settlement_before_earned_rewards() {
+    let state = test_state(test_config(), IdentityBindings::default(), HashMap::new());
+    let app = build_router(state.clone());
+    let body = "action=submit&matrix_user_id=%40alice%3Alocal.dev&match_id=daily-dungeon-001&body=Web+submit+final+deliverable+with+evidence+risk+controls+self-review+next+action+and+settlement+proof";
+    let request = Request::builder()
+        .method("POST")
+        .uri("/league/web/action")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(Body::from(body))
+        .expect("build league web submit request");
+    let response = app
+        .clone()
+        .oneshot(request)
+        .await
+        .expect("league web submit response");
+    assert!(
+        response.status().is_redirection(),
+        "league web submit should redirect back to shell"
+    );
+
+    let league = state.inner.league_state.lock().await;
+    let player = league
+        .players_by_matrix_user
+        .get("@alice:local.dev")
+        .expect("player should be created by league web submit");
+    assert_eq!(player.earned_credits, 0.0);
+    let entry = league
+        .entries
+        .values()
+        .find(|entry| {
+            entry.match_id == "daily-dungeon-001" && entry.matrix_user_id == "@alice:local.dev"
+        })
+        .expect("entry should be created by league web submit");
+    assert_eq!(entry.rewards_earned, 0.0);
+    assert!(league.inventory_items.is_empty());
+    let reward = league
+        .rewards
+        .iter()
+        .find(|reward| reward.matrix_user_id == "@alice:local.dev")
+        .expect("reward should be recorded for audit/review");
+    assert_eq!(
+        reward.ledger_status.as_deref(),
+        Some("skipped_missing_account")
+    );
+    assert!(reward.amount > 0.0);
+}
+
+#[tokio::test]
 async fn world_contract_completion_requires_ledger_settlement_before_earned_credits() {
     let state = test_state(test_config(), IdentityBindings::default(), HashMap::new());
     {

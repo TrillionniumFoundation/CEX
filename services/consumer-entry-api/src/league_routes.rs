@@ -977,17 +977,11 @@ pub(super) async fn post_league_web_action(
                 player.xp += score.round() as i64;
                 player.reputation += (score / 10.0).round() as i64;
                 player.rating += ((score - 50.0) / 2.0).round() as i64;
-                if judgement.payout_status == "eligible" {
-                    player.earned_credits += reward_amount;
-                }
                 if score >= 80.0 {
                     player.wins += 1;
                 }
                 entry.submissions += 1;
                 entry.best_score = entry.best_score.max(score);
-                if judgement.payout_status == "eligible" {
-                    entry.rewards_earned += reward_amount;
-                }
                 league
                     .players_by_matrix_user
                     .insert(matrix_user_id.clone(), player.clone());
@@ -998,11 +992,6 @@ pub(super) async fn post_league_web_action(
                     .submissions
                     .insert(submission_id.clone(), submission.clone());
                 league.rewards.push(reward.clone());
-                if judgement.payout_status == "eligible" {
-                    league
-                        .inventory_items
-                        .push(league_item_for_submission(&submission));
-                }
                 (submission, reward)
             };
             let submit_payload = LeagueSubmitRequest {
@@ -1025,13 +1014,38 @@ pub(super) async fn post_league_web_action(
             reward.ledger_balance_after = settlement.balance_after;
             reward.ledger_error = settlement.error;
 
+            let settlement_completed = matches!(
+                reward.ledger_status.as_deref(),
+                Some("settled") | Some("duplicate")
+            );
             let mut league = state.inner.league_state.lock().await;
             if let Some(stored_reward) = league
                 .rewards
                 .iter_mut()
                 .find(|stored| stored.reward_id == reward.reward_id)
             {
-                *stored_reward = reward;
+                *stored_reward = reward.clone();
+            }
+            if settlement_completed {
+                if let Some(stored_player) = league.players_by_matrix_user.get_mut(&matrix_user_id)
+                {
+                    stored_player.earned_credits += reward.amount;
+                }
+                if let Some(stored_entry) = league
+                    .entries
+                    .get_mut(&league_entry_key(&match_id, &matrix_user_id))
+                {
+                    stored_entry.rewards_earned += reward.amount;
+                }
+                if !league
+                    .inventory_items
+                    .iter()
+                    .any(|item| item.source_submission_id == submission.submission_id)
+                {
+                    league
+                        .inventory_items
+                        .push(league_item_for_submission(&submission));
+                }
             }
             league.clone()
         }
