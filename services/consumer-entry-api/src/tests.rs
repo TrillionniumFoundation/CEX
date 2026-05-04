@@ -4412,6 +4412,95 @@ async fn world_cancel_does_not_emit_refund_economy_without_buyer_refund() {
 }
 
 #[tokio::test]
+async fn world_reopen_does_not_emit_progression_without_buyer_reserve() {
+    let mut config = test_config();
+    config.runtime_profile = RuntimeProfile::Production;
+    let state = test_state(config, IdentityBindings::default(), HashMap::new());
+    let app = build_router(state.clone());
+    let buyer_matrix_user_id = "@world-unreserved-reopen-buyer:local.dev";
+    let seller_matrix_user_id = "@world-unreserved-reopen-seller:local.dev";
+    let company_id = "company-unreserved-reopen";
+    let shop_id = "shop-unreserved-reopen";
+    let listing_id = "listing-unreserved-reopen";
+    let purchase_id = "purchase-unreserved-reopen";
+    let work_order_id = "work-unreserved-reopen";
+    {
+        let mut league = state.inner.league_state.lock().await;
+        league.world.world_purchases.push(WorldPurchase {
+            purchase_id: purchase_id.to_string(),
+            listing_id: listing_id.to_string(),
+            shop_id: shop_id.to_string(),
+            company_id: company_id.to_string(),
+            buyer_matrix_user_id: buyer_matrix_user_id.to_string(),
+            seller_matrix_user_id: seller_matrix_user_id.to_string(),
+            price_credits: 55,
+            status: "rejected_refunded".to_string(),
+            ledger_status: Some("seller_chargeback_consumed".to_string()),
+            ledger_account_id: Some("seller-account".to_string()),
+            ledger_entry_id: Some("seller-chargeback-entry".to_string()),
+            ledger_balance_after: Some(0.0),
+            ledger_error: None,
+            buyer_ledger_status: Some("refunded".to_string()),
+            buyer_ledger_account_id: Some("buyer-account".to_string()),
+            buyer_ledger_entry_id: Some("buyer-refund-entry".to_string()),
+            buyer_ledger_balance_after: Some(55.0),
+            buyer_ledger_error: None,
+            buyer_consume_status: Some("refunded".to_string()),
+            buyer_consume_entry_id: Some("buyer-refund-consume-entry".to_string()),
+            buyer_consume_balance_after: Some(55.0),
+            buyer_consume_error: None,
+            created_at_epoch: 1_777_897_980,
+        });
+        league.world.world_work_orders.push(WorldWorkOrder {
+            work_order_id: work_order_id.to_string(),
+            purchase_id: purchase_id.to_string(),
+            listing_id: listing_id.to_string(),
+            buyer_matrix_user_id: buyer_matrix_user_id.to_string(),
+            seller_matrix_user_id: seller_matrix_user_id.to_string(),
+            company_id: company_id.to_string(),
+            status: "rejected_refunded".to_string(),
+            brief: "Rejected work awaiting paid reopen reserve".to_string(),
+            value_score: 55,
+            created_at_epoch: 1_777_897_980,
+        });
+    }
+
+    let (status, reopen) = send_json_request(
+        &app,
+        "POST",
+        &format!("/v1/world/work-orders/{work_order_id}/reopen"),
+        &[],
+        json!({
+            "matrix_user_id": buyer_matrix_user_id,
+            "body": "Buyer requests a revision reopen, but omits room context so the new reserve cannot settle."
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "reopen response: {reopen}");
+    assert_eq!(
+        reopen["buyer_reopen_reserve_status"],
+        "skipped_missing_room"
+    );
+    assert_eq!(reopen["purchase"]["status"], "reopen_reserve_hold");
+    assert_eq!(reopen["work_order"]["status"], "reopen_reserve_hold");
+    assert_eq!(reopen["reopen"]["status"], "reopen_reserve_hold");
+    assert!(reopen["economy_event"].is_null());
+    assert!(reopen["standing"].is_null());
+
+    let league = state.inner.league_state.lock().await;
+    assert!(!league
+        .world
+        .world_economy_events
+        .iter()
+        .any(|event| { event.subject_id == work_order_id && event.event_kind == "work_reopened" }));
+    assert!(!league
+        .world
+        .world_faction_standings
+        .iter()
+        .any(|standing| standing.matrix_user_id == buyer_matrix_user_id));
+}
+
+#[tokio::test]
 async fn league_submission_requires_ledger_settlement_before_earned_rewards() {
     let state = test_state(test_config(), IdentityBindings::default(), HashMap::new());
     let app = build_router(state.clone());

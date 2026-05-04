@@ -2641,37 +2641,12 @@ pub(super) async fn reopen_world_work_order_inner(
             created_at_epoch: now,
         };
         league.world.world_work_orders[work_index].status = "reopen_pending_reserve".to_string();
-        let economy_event = WorldEconomyEvent {
-            economy_event_id: league_hash_id(
-                "world-econ",
-                &format!("{}:{}:{}", matrix_user_id, reopen.reopen_id, now),
-            ),
-            matrix_user_id: matrix_user_id.clone(),
-            event_kind: "work_reopened".to_string(),
-            subject_id: work_order_seed.work_order_id.clone(),
-            credits_delta: 0,
-            reputation_delta: 1,
-            created_at_epoch: now,
-        };
-        let standing = upsert_world_faction_standing(
-            &mut league,
-            &matrix_user_id,
-            "faction-market-guild",
-            1,
-            now,
-        );
         league.world.world_work_reopens.push(reopen.clone());
-        league
-            .world
-            .world_economy_events
-            .push(economy_event.clone());
         (
             league.clone(),
             league.world.world_work_orders[work_index].clone(),
             purchase_seed,
             reopen,
-            economy_event,
-            standing,
         )
     };
     let buyer_reopen_reserve = reserve_reopened_world_purchase_with_ledger(
@@ -2687,6 +2662,8 @@ pub(super) async fn reopen_world_work_order_inner(
         let mut work_order = snapshot.1.clone();
         let mut purchase = snapshot.2.clone();
         let mut reopen = snapshot.3.clone();
+        let mut economy_event = None;
+        let mut standing = None;
         let buyer_reserved =
             buyer_reopen_reserve.status == "reserved" || buyer_reopen_reserve.status == "duplicate";
         purchase.buyer_ledger_status = Some(if buyer_reserved {
@@ -2717,6 +2694,35 @@ pub(super) async fn reopen_world_work_order_inner(
         } else {
             "reopen_reserve_failed".to_string()
         };
+        if buyer_reserved {
+            let reopened_event = WorldEconomyEvent {
+                economy_event_id: league_hash_id(
+                    "world-econ",
+                    &format!(
+                        "{}:{}:{}",
+                        reopen.matrix_user_id, reopen.reopen_id, reopen.created_at_epoch
+                    ),
+                ),
+                matrix_user_id: reopen.matrix_user_id.clone(),
+                event_kind: "work_reopened".to_string(),
+                subject_id: work_order.work_order_id.clone(),
+                credits_delta: 0,
+                reputation_delta: 1,
+                created_at_epoch: reopen.created_at_epoch,
+            };
+            standing = Some(upsert_world_faction_standing(
+                &mut league,
+                &reopen.matrix_user_id,
+                "faction-market-guild",
+                1,
+                reopen.created_at_epoch,
+            ));
+            league
+                .world
+                .world_economy_events
+                .push(reopened_event.clone());
+            economy_event = Some(reopened_event);
+        }
         indexes.replace_purchase_by_id(&mut league.world, &purchase);
         indexes.replace_work_order_by_id(&mut league.world, &work_order);
         indexes.replace_reopen_by_id(&mut league.world, &reopen);
@@ -2725,8 +2731,8 @@ pub(super) async fn reopen_world_work_order_inner(
             work_order,
             purchase,
             reopen,
-            snapshot.4.clone(),
-            snapshot.5.clone(),
+            economy_event,
+            standing,
         )
     };
     if let Err(response) =
