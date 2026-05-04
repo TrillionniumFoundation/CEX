@@ -141,6 +141,11 @@ fn mobile_shell_ux_contract_green(app: &Value) -> bool {
         "p1_strategy_choices_visible",
         "p2_retention_telemetry_visible",
         "failure_recovery_lane_visible",
+        "economy_tradeoff_cards_visible",
+        "retention_calendar_visible",
+        "playability_funnel_visible",
+        "anti_cheese_policy_visible",
+        "ops_refresh_hooks_visible",
     ]
     .iter()
     .all(|expected| readiness_checks.iter().any(|check| check == expected))
@@ -501,6 +506,61 @@ fn trillionnium_world_playability_scorecard_json(
         && coach_check("coach_lanes_cover_p0_p1_p2")
         && coach_check("coach_actions_link_world_panels")
         && coach_check("coach_uses_live_runtime_counts");
+    let economy_retention_ops = app
+        .get("economy_retention_ops")
+        .cloned()
+        .or_else(|| playability_coach.get("economy_retention_ops").cloned())
+        .unwrap_or_else(|| json!({}));
+    let ops_readiness_checks = economy_retention_ops
+        .get("readiness_checks")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let ops_check = |check_id: &str| ops_readiness_checks.iter().any(|check| check == check_id);
+    let ops_contract_v1 = economy_retention_ops
+        .get("contract_version")
+        .and_then(Value::as_str)
+        == Some("trillionnium_economy_retention_ops_v1");
+    let ops_tradeoff_cards_green = ops_contract_v1
+        && ops_check("economy_tradeoff_cards_visible")
+        && economy_retention_ops
+            .get("economy_tradeoff_cards")
+            .and_then(Value::as_array)
+            .is_some_and(|cards| cards.len() >= 4);
+    let ops_retention_calendar_green = ops_contract_v1
+        && ops_check("retention_calendar_visible")
+        && ops_check("ops_refresh_hooks_visible")
+        && economy_retention_ops
+            .get("retention_calendar")
+            .and_then(|calendar| calendar.get("season_loop"))
+            .and_then(Value::as_str)
+            .is_some_and(|loop_copy| !loop_copy.trim().is_empty())
+        && economy_retention_ops
+            .get("ops_refresh_hooks")
+            .and_then(Value::as_array)
+            .is_some_and(|hooks| hooks.len() >= 4);
+    let ops_funnel_green = ops_contract_v1
+        && ops_check("playability_funnel_visible")
+        && economy_retention_ops
+            .get("playability_funnel")
+            .and_then(|funnel| funnel.get("steps"))
+            .and_then(Value::as_array)
+            .is_some_and(|steps| steps.len() >= 7)
+        && economy_retention_ops
+            .get("playability_funnel")
+            .and_then(|funnel| funnel.get("total_steps"))
+            .and_then(Value::as_i64)
+            .unwrap_or(0)
+            >= 7;
+    let ops_anti_cheese_green = ops_contract_v1
+        && ops_check("anti_cheese_policy_visible")
+        && ops_check("cooldown_policy_visible")
+        && economy_retention_ops
+            .get("anti_cheese_policy")
+            .and_then(|policy| policy.get("cooldown_seconds"))
+            .and_then(Value::as_i64)
+            .unwrap_or(0)
+            >= 300;
     let app_module_count = app.get("module_count").and_then(Value::as_u64).unwrap_or(0);
     let mobile_shell_ux_green = mobile_shell_ux_contract_green(&app);
     let feed_item_count = app
@@ -825,7 +885,7 @@ fn trillionnium_world_playability_scorecard_json(
             ("acceptance_consumes_escrow", consumed_purchase_count > 0),
             ("refunds_recorded", refunded_rejection_count > 0 && refunded_cancellation_count > 0),
             ("economy_events_dense", world.world_economy_events.len() >= 20),
-            ("faction_strategy_tradeoffs_visible", !world.world_faction_standings.is_empty() && coach_check("p1_economy_tradeoffs_visible") && playability_coach.get("strategy_depth").and_then(|strategy| strategy.get("economy_choices")).and_then(Value::as_array).is_some_and(|choices| choices.len() >= 4)),
+            ("faction_strategy_tradeoffs_visible", !world.world_faction_standings.is_empty() && coach_check("p1_economy_tradeoffs_visible") && playability_coach.get("strategy_depth").and_then(|strategy| strategy.get("economy_choices")).and_then(Value::as_array).is_some_and(|choices| choices.len() >= 4) && ops_tradeoff_cards_green),
             ("player_rewards_positive", positive_reward_count > 0),
             ("wallet_module_available", app.get("wallet").and_then(|wallet| wallet.get("ledger_actions")).and_then(Value::as_array).is_some_and(|actions| actions.len() >= 4)),
         ],
@@ -861,7 +921,7 @@ fn trillionnium_world_playability_scorecard_json(
             ("tools_unlocked", unlocked_tool_count >= 4),
             ("skins_unlocked", unlocked_skin_count >= 3),
             ("feed_history_dense", feed_item_count >= 20),
-            ("route_backlog_and_daily_return_hook_visible", route_task_graph_count >= 10 && coach_check("p2_daily_return_hook_visible") && playability_coach.get("retention_ops").and_then(|ops| ops.get("daily_return_hooks")).and_then(Value::as_array).is_some_and(|hooks| hooks.len() >= 4)),
+            ("route_backlog_and_daily_return_hook_visible", route_task_graph_count >= 10 && coach_check("p2_daily_return_hook_visible") && playability_coach.get("retention_ops").and_then(|ops| ops.get("daily_return_hooks")).and_then(Value::as_array).is_some_and(|hooks| hooks.len() >= 4) && ops_retention_calendar_green),
             ("multiple_match_modes", league.matches.len() >= 4),
             ("world_assets_persist", !world.world_assets.is_empty()),
         ],
@@ -896,9 +956,9 @@ fn trillionnium_world_playability_scorecard_json(
             ("real_user_beta_overall_100", trillionnium_world_real_user_beta.get("overall_percent").and_then(Value::as_u64) == Some(100)),
             ("public_commercial_overall_100", trillionnium_world_public_commercial_product.get("overall_percent").and_then(Value::as_u64) == Some(100)),
             ("feed_api_path_configured", feed_api_path_configured),
-            ("playability_runtime_contracts_exposed", route_contract_version_present && coach_p0_p1_p2_green && world_home_playability_runtime_green),
+            ("playability_runtime_contracts_exposed", route_contract_version_present && coach_p0_p1_p2_green && world_home_playability_runtime_green && ops_contract_v1),
             ("mobile_contract_readiness_dense", mobile_readiness_checks.len() >= 10),
-            ("scorecard_has_runtime_data", feed_item_count >= 20 && route_task_graph_count >= 10),
+            ("scorecard_has_runtime_funnel_data", feed_item_count >= 20 && route_task_graph_count >= 10 && ops_funnel_green),
             ("repository_backed_world_state_dense", world.world_economy_events.len() >= 20 && !world.world_contract_completions.is_empty()),
         ],
     );
@@ -915,7 +975,7 @@ fn trillionnium_world_playability_scorecard_json(
             ("public_commercial_gate_100", trillionnium_world_public_commercial_product.get("overall_percent").and_then(Value::as_u64) == Some(100)),
             ("mobile_shell_contract_green", mobile_shell_ux_green),
             ("feed_api_path_configured", feed_api_path_configured),
-            ("playability_runtime_contracts_present", route_contract_version_present && coach_p0_p1_p2_green && world_home_playability_runtime_green),
+            ("playability_runtime_contracts_present", route_contract_version_present && coach_p0_p1_p2_green && world_home_playability_runtime_green && ops_contract_v1),
             ("score_events_runtime_present", score_event_count >= 6),
             ("world_state_dense_enough_for_smoke", feed_item_count >= 20 && world.world_economy_events.len() >= 20),
         ],
@@ -967,7 +1027,7 @@ fn trillionnium_world_playability_scorecard_json(
             ("experience_data_points_dense", experience_data_points >= 50),
             ("skills_tools_skins_unlocked", unlocked_skill_count >= 5 && unlocked_tool_count >= 4 && unlocked_skin_count >= 3),
             ("feed_history_dense", feed_item_count >= 20),
-            ("coach_retention_ops_visible", route_task_graph_count >= 10 && coach_lane("p2_retention_ops") && coach_check("p2_telemetry_contract_visible")),
+            ("coach_retention_ops_visible", route_task_graph_count >= 10 && coach_lane("p2_retention_ops") && coach_check("p2_telemetry_contract_visible") && ops_retention_calendar_green && ops_anti_cheese_green),
             ("multiple_match_modes", league.matches.len() >= 4),
             ("world_events_dense", world.world_events.len() >= 3 && world.world_economy_events.len() >= 20),
             ("replayable_market_and_work_loops", world.world_listings.len() >= 3 && world.world_work_orders.len() >= 3),
@@ -984,7 +1044,7 @@ fn trillionnium_world_playability_scorecard_json(
             ("purchase_reserve_consume_loop", !world.world_purchases.is_empty() && reserved_purchase_count > 0 && consumed_purchase_count > 0),
             ("refund_and_reopen_strategy_loop", refunded_rejection_count > 0 && refunded_cancellation_count > 0 && !world.world_work_reopens.is_empty()),
             ("settled_contract_rewards", settled_contract_completion_count > 0 && positive_reward_count > 0),
-            ("coach_strategy_depth_visible", app.get("wallet").and_then(|wallet| wallet.get("ledger_actions")).and_then(Value::as_array).is_some_and(|actions| actions.len() >= 4) && coach_lane("p1_strategy_depth") && coach_check("p1_economy_tradeoffs_visible") && coach_check("p1_social_coop_choices_visible")),
+            ("coach_strategy_depth_visible", app.get("wallet").and_then(|wallet| wallet.get("ledger_actions")).and_then(Value::as_array).is_some_and(|actions| actions.len() >= 4) && coach_lane("p1_strategy_depth") && coach_check("p1_economy_tradeoffs_visible") && coach_check("p1_social_coop_choices_visible") && ops_tradeoff_cards_green),
             ("factions_and_standings_present", world.world_factions.len() >= 4 && !world.world_faction_standings.is_empty()),
             ("relationship_graph_and_nearby_agents", !world.world_relationships.is_empty() && social_contact_count >= 3),
             ("guild_and_raid_coop_modes", league.guilds.len() >= 2 && league.matches.contains_key("guild-raid-001")),

@@ -1187,9 +1187,30 @@ fn world_client_surfaces_expose_projection_layer_contracts() {
         "p1_economy_tradeoffs_visible",
         "p1_social_coop_choices_visible",
         "p2_telemetry_contract_visible",
+        "economy_tradeoff_cards_visible",
+        "retention_calendar_visible",
+        "playability_funnel_visible",
+        "anti_cheese_policy_visible",
+        "ops_refresh_hooks_visible",
     ] {
         assert!(coach_checks.iter().any(|check| check == expected_check));
     }
+    assert_eq!(
+        app["economy_retention_ops"]["contract_version"],
+        "trillionnium_economy_retention_ops_v1"
+    );
+    assert!(app["economy_retention_ops"]["economy_tradeoff_cards"]
+        .as_array()
+        .is_some_and(|cards| cards.len() >= 4));
+    assert!(app["economy_retention_ops"]["playability_funnel"]["steps"]
+        .as_array()
+        .is_some_and(|steps| steps.len() >= 7));
+    assert!(
+        app["economy_retention_ops"]["anti_cheese_policy"]["cooldown_seconds"]
+            .as_i64()
+            .unwrap_or(0)
+            >= 300
+    );
 }
 
 #[test]
@@ -1368,6 +1389,11 @@ fn client_app_map_hub_projects_stream_counts() {
         "p1_strategy_choices_visible",
         "p2_retention_telemetry_visible",
         "failure_recovery_lane_visible",
+        "economy_tradeoff_cards_visible",
+        "retention_calendar_visible",
+        "playability_funnel_visible",
+        "anti_cheese_policy_visible",
+        "ops_refresh_hooks_visible",
     ] {
         assert!(mobile_shell_checks.iter().any(|value| value == check));
     }
@@ -1491,6 +1517,11 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(app_html.contains("route_task_graph_next_action_visible"));
     assert!(app_html.contains("playability_coach_visible"));
     assert!(app_html.contains("p2_retention_telemetry_visible"));
+    assert!(app_html.contains("app-economy-retention-ops"));
+    assert!(app_html.contains("economy_tradeoff_cards_visible"));
+    assert!(app_html.contains("playability_funnel_visible"));
+    assert!(app_html.contains("anti_cheese_policy_visible"));
+    assert!(app_html.contains("data-economy-tradeoff=\"high_reward_delivery\""));
     assert!(app_html.contains("/v1/client/feed/@alice:local.dev"));
     assert!(app_html.contains("app-feed-api-status"));
     assert!(app_html.contains("app-feed-filter-actions"));
@@ -5494,6 +5525,21 @@ async fn health_endpoint_exposes_identity_governance_overview() {
             .unwrap()
             .iter()
             .any(|check| check["check_id"] == "coach_strategy_depth_visible")
+    );
+    assert!(
+        body["trillionnium_world_playability_scorecard"]["axes"]["observability_gates"]["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|check| check["check_id"] == "scorecard_has_runtime_funnel_data")
+    );
+    assert!(
+        body["trillionnium_world_playability_scorecard"]["user_metric_axes"]
+            ["long_term_replayability"]["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|check| check["check_id"] == "coach_retention_ops_visible")
     );
 
     let _ = std::fs::remove_file(&temp_bindings_path);

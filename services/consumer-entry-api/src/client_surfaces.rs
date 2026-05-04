@@ -1,6 +1,8 @@
 use super::*;
 
 const TRILLIONNIUM_PLAYABILITY_COACH_CONTRACT_VERSION: &str = "trillionnium_playability_coach_v1";
+const TRILLIONNIUM_ECONOMY_RETENTION_OPS_CONTRACT_VERSION: &str =
+    "trillionnium_economy_retention_ops_v1";
 
 #[derive(Debug, Clone)]
 pub(super) struct ClientRouteWorldContext {
@@ -1548,7 +1550,264 @@ impl<'a> ClientAppProjectionContext<'a> {
                 "p0_next_best_action_visible",
                 "p1_strategy_choices_visible",
                 "p2_retention_telemetry_visible",
-                "failure_recovery_lane_visible"
+                "failure_recovery_lane_visible",
+                "economy_tradeoff_cards_visible",
+                "retention_calendar_visible",
+                "playability_funnel_visible",
+                "anti_cheese_policy_visible",
+                "ops_refresh_hooks_visible"
+            ]
+        })
+    }
+
+    fn economy_retention_ops_json(
+        &self,
+        feed: &Value,
+        progression: &Value,
+        map_metrics: &ClientAppMapHubMetrics,
+    ) -> Value {
+        let matrix_user_id = self.matrix_user_id;
+        let now = Utc::now().timestamp();
+        let feed_item_count = feed.get("item_count").and_then(Value::as_u64).unwrap_or(0) as i64;
+        let progression_level = progression
+            .get("level")
+            .and_then(Value::as_i64)
+            .unwrap_or(1);
+        let successful_task_count = progression
+            .get("successful_task_count")
+            .and_then(Value::as_i64)
+            .unwrap_or(0);
+        let world_action_count = self
+            .world
+            .world_events
+            .iter()
+            .filter(|event| event.actor_matrix_user_id == matrix_user_id)
+            .count() as i64;
+        let purchase_count = self
+            .world
+            .world_purchases
+            .iter()
+            .filter(|purchase| {
+                purchase.buyer_matrix_user_id == matrix_user_id
+                    || purchase.seller_matrix_user_id == matrix_user_id
+            })
+            .count() as i64;
+        let work_order_count = self
+            .world
+            .world_work_orders
+            .iter()
+            .filter(|work_order| {
+                work_order.buyer_matrix_user_id == matrix_user_id
+                    || work_order.seller_matrix_user_id == matrix_user_id
+            })
+            .count() as i64;
+        let delivery_count = self
+            .world
+            .world_work_deliveries
+            .iter()
+            .filter(|delivery| delivery.matrix_user_id == matrix_user_id)
+            .count() as i64;
+        let completion_count = self
+            .world
+            .world_contract_completions
+            .iter()
+            .filter(|completion| completion.matrix_user_id == matrix_user_id)
+            .count() as i64;
+        let submission_count = self
+            .league
+            .submissions
+            .values()
+            .filter(|submission| submission.matrix_user_id == matrix_user_id)
+            .count() as i64;
+        let acceptance_count = self
+            .world
+            .world_work_acceptances
+            .iter()
+            .filter(|acceptance| acceptance.matrix_user_id == matrix_user_id)
+            .count() as i64;
+        let recovery_count = self
+            .world
+            .world_work_rejections
+            .iter()
+            .filter(|rejection| rejection.matrix_user_id == matrix_user_id)
+            .count()
+            + self
+                .world
+                .world_work_reopens
+                .iter()
+                .filter(|reopen| reopen.matrix_user_id == matrix_user_id)
+                .count()
+            + self
+                .world
+                .world_work_cancellations
+                .iter()
+                .filter(|cancellation| cancellation.matrix_user_id == matrix_user_id)
+                .count();
+        let rating_or_recovery_count = acceptance_count + recovery_count as i64;
+        let reward_count = self
+            .league
+            .rewards
+            .iter()
+            .filter(|reward| reward.matrix_user_id == matrix_user_id)
+            .count() as i64
+            + completion_count
+            + acceptance_count;
+        let listed_count = self
+            .world
+            .world_listings
+            .iter()
+            .filter(|listing| listing.status == "listed")
+            .count() as i64;
+        let review_hold_count = self
+            .league
+            .submissions
+            .values()
+            .filter(|submission| {
+                submission.matrix_user_id == matrix_user_id
+                    && submission.payout_status.as_deref() == Some("review_hold")
+            })
+            .count() as i64
+            + self
+                .world
+                .world_work_orders
+                .iter()
+                .filter(|work_order| {
+                    (work_order.buyer_matrix_user_id == matrix_user_id
+                        || work_order.seller_matrix_user_id == matrix_user_id)
+                        && matches!(
+                            work_order.status.as_str(),
+                            "delivery_review_hold" | "reopen_reserve_hold" | "payment_hold"
+                        )
+                })
+                .count() as i64;
+        let anti_cheat_flag_count = self
+            .league
+            .submissions
+            .values()
+            .filter(|submission| submission.matrix_user_id == matrix_user_id)
+            .flat_map(|submission| submission.anti_cheat_flags.iter())
+            .count() as i64;
+        let route_backlog_count = self.route_artifacts.task_views.len() as i64;
+        let mut active_days = HashSet::new();
+        for epoch in self
+            .world
+            .world_events
+            .iter()
+            .filter(|event| event.actor_matrix_user_id == matrix_user_id)
+            .map(|event| event.created_at_epoch)
+            .chain(
+                self.world
+                    .world_purchases
+                    .iter()
+                    .filter(|purchase| {
+                        purchase.buyer_matrix_user_id == matrix_user_id
+                            || purchase.seller_matrix_user_id == matrix_user_id
+                    })
+                    .map(|purchase| purchase.created_at_epoch),
+            )
+            .chain(
+                self.world
+                    .world_work_deliveries
+                    .iter()
+                    .filter(|delivery| delivery.matrix_user_id == matrix_user_id)
+                    .map(|delivery| delivery.created_at_epoch),
+            )
+            .chain(
+                self.league
+                    .submissions
+                    .values()
+                    .filter(|submission| submission.matrix_user_id == matrix_user_id)
+                    .map(|submission| submission.created_at_epoch),
+            )
+        {
+            active_days.insert(epoch / 86_400);
+        }
+        let funnel_steps = vec![
+            json!({"step_id": "first_focus_selected", "label": "Map focus selected / 选择地图焦点", "count": if self.world.world_player_positions.contains_key(matrix_user_id) { 1 } else { 0 }, "completed": self.world.world_player_positions.contains_key(matrix_user_id)}),
+            json!({"step_id": "world_action_started", "label": "World action started / 开始世界行动", "count": world_action_count, "completed": world_action_count > 0}),
+            json!({"step_id": "commission_accepted", "label": "Commission accepted / 接取委托", "count": purchase_count.max(work_order_count), "completed": purchase_count > 0 || work_order_count > 0}),
+            json!({"step_id": "result_submitted", "label": "Result submitted / 提交成果", "count": delivery_count + completion_count + submission_count, "completed": delivery_count + completion_count + submission_count > 0}),
+            json!({"step_id": "rating_or_recovery_chosen", "label": "Rating or recovery chosen / 评级或恢复路径", "count": rating_or_recovery_count, "completed": rating_or_recovery_count > 0}),
+            json!({"step_id": "reward_read", "label": "Reward read / 奖励可读", "count": reward_count, "completed": reward_count > 0}),
+            json!({"step_id": "next_route_queued", "label": "Next route queued / 下一条路线已排队", "count": route_backlog_count, "completed": route_backlog_count > 0}),
+        ];
+        let completed_funnel_steps = funnel_steps
+            .iter()
+            .filter(|step| {
+                step.get("completed")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+            })
+            .count();
+        let funnel_completion_percent =
+            ((completed_funnel_steps as f64 / funnel_steps.len() as f64) * 100.0).round() as i64;
+        json!({
+            "contract_version": TRILLIONNIUM_ECONOMY_RETENTION_OPS_CONTRACT_VERSION,
+            "status": "instrumented",
+            "matrix_user_id": matrix_user_id,
+            "live_counts": {
+                "feed_item_count": feed_item_count,
+                "route_backlog_count": route_backlog_count,
+                "world_action_count": world_action_count,
+                "purchase_count": purchase_count,
+                "work_order_count": work_order_count,
+                "delivery_count": delivery_count,
+                "rating_or_recovery_count": rating_or_recovery_count,
+                "reward_count": reward_count,
+                "listed_count": listed_count,
+                "review_hold_count": review_hold_count,
+                "anti_cheat_flag_count": anti_cheat_flag_count,
+                "active_day_count": active_days.len(),
+                "progression_level": progression_level,
+                "successful_task_count": successful_task_count,
+                "live_event_count": map_metrics.live_event_count,
+            },
+            "economy_tradeoff_cards": [
+                {"card_id": "high_reward_delivery", "label": "High reward delivery / 高收益交付", "upside": "credits + reputation", "risk": "review_hold if evidence is weak", "source_sink": "buyer escrow → seller settlement", "live_count": work_order_count, "command": "/work deliver latest <evidence + next>"},
+                {"card_id": "safe_refund_reopen", "label": "Safe refund / reopen / 安全退款重开", "upside": "protect trust and retry", "risk": "slower payout, but no dead end", "source_sink": "refund reserve → reopen reserve", "live_count": recovery_count, "command": "/work reject|reopen latest <gaps>"},
+                {"card_id": "faction_reputation", "label": "Faction reputation / 阵营声望", "upside": "rank unlock and better routes", "risk": "profit is slower than direct sales", "source_sink": "standing delta", "live_count": self.world.world_faction_standings.len(), "command": "/world action build faction reputation with evidence"},
+                {"card_id": "company_supply", "label": "Company supply / 公司供给", "upside": "repeatable listings and market depth", "risk": "requires quality and refresh cadence", "source_sink": "asset → company → listing", "live_count": listed_count, "command": "/world listing <offer + price + proof>"}
+            ],
+            "retention_calendar": {
+                "season_id": "preseason-zero",
+                "daily_loop": "pick one route backlog item, finish one delivery/rating, queue tomorrow's route",
+                "weekly_loop": "guild raid window + market refresh + faction standing push",
+                "season_loop": "unlock target + public leaderboard + economy refresh",
+                "next_reset_epoch": now + 86_400,
+                "return_reason": "A player should come back for queued route payoff, market movement, raid window, and next unlock."
+            },
+            "playability_funnel": {
+                "funnel_id": "first_session_focus_to_reward_then_next_route",
+                "completed_steps": completed_funnel_steps,
+                "total_steps": funnel_steps.len(),
+                "completion_percent": funnel_completion_percent,
+                "steps": funnel_steps,
+            },
+            "anti_cheese_policy": {
+                "policy_id": "trillionnium_playability_anti_cheese_v1",
+                "cooldown_seconds": 300,
+                "review_hold_count": review_hold_count,
+                "anti_cheat_flag_count": anti_cheat_flag_count,
+                "signals": ["too_short", "repetition_suspected", "hidden_tests_failed", "hidden_missing_evidence", "judge_disagreement"],
+                "player_copy": "Fast play is welcome; duplicate or evidence-free farming goes to review hold instead of silent payout."
+            },
+            "ops_refresh_hooks": [
+                {"hook_id": "daily_route_refresh", "cadence": "daily", "owner_surface": "/app", "status": "declared"},
+                {"hook_id": "weekly_guild_raid_window", "cadence": "weekly", "owner_surface": "/league", "status": "declared"},
+                {"hook_id": "market_supply_refresh", "cadence": "daily", "owner_surface": "/world", "status": "declared"},
+                {"hook_id": "season_scoreboard_reset", "cadence": "seasonal", "owner_surface": "/league/season", "status": "declared"}
+            ],
+            "readiness_checks": [
+                "economy_tradeoff_cards_visible",
+                "retention_calendar_visible",
+                "playability_funnel_visible",
+                "anti_cheese_policy_visible",
+                "ops_refresh_hooks_visible",
+                "live_counts_connected",
+                "funnel_steps_cover_first_reward",
+                "risk_reward_language_visible",
+                "season_loop_visible",
+                "cooldown_policy_visible"
             ]
         })
     }
@@ -1612,6 +1871,7 @@ impl<'a> ClientAppProjectionContext<'a> {
             .iter()
             .filter(|work_order| matches!(work_order.status.as_str(), "open" | "payment_hold"))
             .count();
+        let economy_retention_ops = self.economy_retention_ops_json(feed, progression, map_metrics);
         json!({
             "contract_version": TRILLIONNIUM_PLAYABILITY_COACH_CONTRACT_VERSION,
             "optimization_scope": "p0_p1_p2_full_playability",
@@ -1726,6 +1986,7 @@ impl<'a> ClientAppProjectionContext<'a> {
                 ],
                 "funnel_target": "first_session_focus_to_reward_then_next_route"
             },
+            "economy_retention_ops": economy_retention_ops,
             "readiness_checks": [
                 "p0_next_best_action_visible",
                 "p0_failure_recovery_copy_visible",
@@ -1733,6 +1994,11 @@ impl<'a> ClientAppProjectionContext<'a> {
                 "p1_social_coop_choices_visible",
                 "p2_daily_return_hook_visible",
                 "p2_telemetry_contract_visible",
+                "economy_tradeoff_cards_visible",
+                "retention_calendar_visible",
+                "playability_funnel_visible",
+                "anti_cheese_policy_visible",
+                "ops_refresh_hooks_visible",
                 "coach_lanes_cover_p0_p1_p2",
                 "coach_actions_link_world_panels",
                 "coach_uses_live_runtime_counts",
@@ -1785,6 +2051,10 @@ impl<'a> ClientAppProjectionContext<'a> {
             .get("next_best_actions")
             .cloned()
             .unwrap_or_else(|| json!([]));
+        let economy_retention_ops = playability_coach
+            .get("economy_retention_ops")
+            .cloned()
+            .unwrap_or_else(|| json!({}));
         let map_hub = app_context.into_client_app_map_hub_json(&map_metrics);
         json!({
             "kind": "trillionnium_client_app",
@@ -1801,6 +2071,7 @@ impl<'a> ClientAppProjectionContext<'a> {
             "onboarding": onboarding,
             "playability_coach": playability_coach,
             "next_best_actions": next_best_actions,
+            "economy_retention_ops": economy_retention_ops,
             "map": map,
             "feed": feed,
             "map_hub": map_hub,
