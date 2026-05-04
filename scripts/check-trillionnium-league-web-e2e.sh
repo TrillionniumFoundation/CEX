@@ -162,7 +162,7 @@ code, url, body = post_form('/world/web/asset', headers=cookie_header, **{
     'matrix_user_id': matrix_user_id,
     'csrf': csrf,
     'asset_id': 'latest',
-    'body': f'Web asset upgrade {marker}: 道具定位、证据包、风险控制清单、行动节奏、评级标准、下一条支线和自检。',
+    'body': f'Web asset upgrade {marker}: 客户交付方案、道具定位、证据包、风险控制清单、行动节奏、评级标准、下一步计划和自检。',
 })
 assert code == 200 and 'Trillionnium World' in body, ('world_asset', code, url)
 actions.append({'action': 'world_asset', 'status': code, 'url': url})
@@ -171,7 +171,7 @@ code, url, body = post_form('/world/web/company', headers=cookie_header, **{
     'matrix_user_id': matrix_user_id,
     'csrf': csrf,
     'asset_id': 'latest',
-    'body': f'Web workshop launch {marker}: 工坊定位、委托目标画像、奖励路径、行动循环、证据、风险控制、评级标准和下一条支线。',
+    'body': f'Web workshop launch {marker}: 工坊定位、客户交付方案、委托目标画像、奖励路径、行动循环、证据、风险控制、评级标准和下一步计划。',
 })
 assert code == 200 and 'Trillionnium World' in body, ('world_company', code, url)
 actions.append({'action': 'world_company', 'status': code, 'url': url})

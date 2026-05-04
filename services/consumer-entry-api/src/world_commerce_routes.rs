@@ -147,7 +147,6 @@ pub(super) async fn upgrade_world_asset_inner(
             )
                 .into_response();
         }
-        let mut player = ensure_league_player(&mut league, &matrix_user_id, None);
         let level_before = league.world.world_assets[asset_index].upgrade_level.max(1);
         let points_before = league.world.world_assets[asset_index].upgrade_points.max(0);
         let value_delta = if judgement.payout_status == "eligible" {
@@ -188,12 +187,15 @@ pub(super) async fn upgrade_world_asset_inner(
             level_after: level_after.max(level_before),
             created_at_epoch: now,
         };
-        player.xp += judgement.score.round() as i64;
-        player.reputation += (judgement.score / 10.0).round() as i64;
-        player.rating += ((judgement.score - 50.0) / 4.0).round() as i64;
-        league
-            .players_by_matrix_user
-            .insert(matrix_user_id.clone(), player);
+        if judgement.payout_status == "eligible" {
+            let mut player = ensure_league_player(&mut league, &matrix_user_id, None);
+            player.xp += judgement.score.round() as i64;
+            player.reputation += (judgement.score / 10.0).round() as i64;
+            player.rating += ((judgement.score - 50.0) / 4.0).round() as i64;
+            league
+                .players_by_matrix_user
+                .insert(matrix_user_id.clone(), player);
+        }
         league.world.world_asset_upgrades.push(upgrade.clone());
         (
             league.clone(),
@@ -373,10 +375,17 @@ pub(super) async fn create_world_company_inner(
             )
                 .into_response();
         }
-        let mut player = ensure_league_player(&mut league, &matrix_user_id, None);
-        let revenue_score = ((asset.value_score as f64) * 0.6 + judgement.score).round() as i64;
-        let reputation_score =
-            ((asset.upgrade_level.max(1) * 10) as f64 + judgement.score / 2.0).round() as i64;
+        let released = judgement.payout_status == "eligible";
+        let revenue_score = if released {
+            ((asset.value_score as f64) * 0.6 + judgement.score).round() as i64
+        } else {
+            0
+        };
+        let reputation_score = if released {
+            ((asset.upgrade_level.max(1) * 10) as f64 + judgement.score / 2.0).round() as i64
+        } else {
+            0
+        };
         let level = 1 + (revenue_score / 100).max(0);
         let company_kind = if body.contains("店") || body.to_ascii_lowercase().contains("shop") {
             "shop"
@@ -401,7 +410,7 @@ pub(super) async fn create_world_company_inner(
                 "Reality Venture Company".to_string()
             },
             company_kind: company_kind.to_string(),
-            status: if judgement.payout_status == "eligible" {
+            status: if released {
                 "operating".to_string()
             } else {
                 "review_hold".to_string()
@@ -422,7 +431,7 @@ pub(super) async fn create_world_company_inner(
             name: format!("{} Storefront", company.name),
             shop_kind: company_kind.to_string(),
             status: company.status.clone(),
-            listing_count: 1,
+            listing_count: if released { 1 } else { 0 },
             gross_merchandise_score: revenue_score.max(0),
             created_at_epoch: now,
         };
@@ -438,48 +447,60 @@ pub(super) async fn create_world_company_inner(
             title: body.chars().take(42).collect::<String>(),
             listing_kind: "service_offer".to_string(),
             status: company.status.clone(),
-            price_credits: (revenue_score / 2).max(10),
-            quality_score: judgement.score.round() as i64,
+            price_credits: if released {
+                (revenue_score / 2).max(10)
+            } else {
+                0
+            },
+            quality_score: if released {
+                judgement.score.round() as i64
+            } else {
+                0
+            },
             created_at_epoch: now,
         };
-        let economy_event = WorldEconomyEvent {
-            economy_event_id: league_hash_id(
-                "world-econ",
-                &format!("{}:{}:{}", matrix_user_id, listing.listing_id, now),
-            ),
-            matrix_user_id: matrix_user_id.clone(),
-            event_kind: "company_launch".to_string(),
-            subject_id: company.company_id.clone(),
-            credits_delta: listing.price_credits,
-            reputation_delta: reputation_score,
-            created_at_epoch: now,
+        let economy_event = if released {
+            Some(WorldEconomyEvent {
+                economy_event_id: league_hash_id(
+                    "world-econ",
+                    &format!("{}:{}:{}", matrix_user_id, listing.listing_id, now),
+                ),
+                matrix_user_id: matrix_user_id.clone(),
+                event_kind: "company_launch".to_string(),
+                subject_id: company.company_id.clone(),
+                credits_delta: listing.price_credits,
+                reputation_delta: reputation_score,
+                created_at_epoch: now,
+            })
+        } else {
+            None
         };
-        if judgement.payout_status == "eligible" {
+        if released {
+            let mut player = ensure_league_player(&mut league, &matrix_user_id, None);
             player.xp += judgement.score.round() as i64;
             player.reputation += (judgement.score / 6.0).round() as i64;
             player.rating += ((judgement.score - 50.0) / 4.0).round() as i64;
+            league.world.world_relationships.push(WorldRelationship {
+                relationship_id: league_hash_id(
+                    "world-rel",
+                    &format!("{}:{}:{}", matrix_user_id, company.company_id, now),
+                ),
+                from_id: matrix_user_id.clone(),
+                to_id: company.company_id.clone(),
+                relation_kind: "owner".to_string(),
+                strength: reputation_score,
+                updated_at_epoch: now,
+            });
+            league
+                .players_by_matrix_user
+                .insert(matrix_user_id.clone(), player);
         }
-        league
-            .players_by_matrix_user
-            .insert(matrix_user_id.clone(), player);
-        league.world.world_relationships.push(WorldRelationship {
-            relationship_id: league_hash_id(
-                "world-rel",
-                &format!("{}:{}:{}", matrix_user_id, company.company_id, now),
-            ),
-            from_id: matrix_user_id.clone(),
-            to_id: company.company_id.clone(),
-            relation_kind: "owner".to_string(),
-            strength: reputation_score,
-            updated_at_epoch: now,
-        });
         league.world.world_companies.push(company.clone());
         league.world.world_shops.push(shop.clone());
         league.world.world_listings.push(listing.clone());
-        league
-            .world
-            .world_economy_events
-            .push(economy_event.clone());
+        if let Some(economy_event) = economy_event.clone() {
+            league.world.world_economy_events.push(economy_event);
+        }
         (
             league.clone(),
             company,
@@ -655,6 +676,17 @@ pub(super) async fn create_world_listing_inner(
             return (
                 StatusCode::FORBIDDEN,
                 Json(json!({ "error": "world company belongs to another player", "company_id": company_seed.company_id })),
+            )
+                .into_response();
+        }
+        if company_seed.status != "operating" {
+            return (
+                StatusCode::CONFLICT,
+                Json(json!({
+                    "error": "world company is not operating",
+                    "company_id": company_seed.company_id,
+                    "status": company_seed.status,
+                })),
             )
                 .into_response();
         }

@@ -424,7 +424,7 @@ async function main() {
   await submitWorldForm(page, 'form[action="/world/web/action"]', marker, 'played=1');
   steps.push({ name: 'world_action_browser_submit', ok: true });
 
-  await page.locator('#world-company-body').fill('建立一个 AI 设计工坊：写清委托目标画像、可提交成果、证据来源包、风险控制、行动循环、下一条支线和自检记录。');
+  await page.locator('#world-company-body').fill('建立一个 AI 设计工坊：写清客户交付方案、委托目标画像、可提交成果、证据来源包、风险控制、行动循环、下一步计划和自检记录。');
   await submitWorldForm(page, 'form[action="/world/web/company"]', marker, 'company=created');
   steps.push({ name: 'world_company_browser_submit', ok: true });
 

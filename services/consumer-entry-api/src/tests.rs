@@ -26,9 +26,9 @@ use super::{
     LeagueStateRepositorySnapshot, LeagueSubmission, LeagueWebSessionClaims, MatrixMessageRequest,
     ProductUserIdentity, RateLimitCache, ReplayCache, RuntimeProfile,
     SessionAuthIssuerRegistryIssuer, SessionAuthIssuerRegistryMetadata,
-    SessionAuthIssuerRegistryRuntimeState, UserSessionAuthClaims, WorldCompany, WorldContract,
-    WorldContractCompletion, WorldEconomyEvent, WorldEvent, WorldListing, WorldMapNode,
-    WorldPlayerPosition, WorldPurchase, WorldRelationship, WorldShop, WorldWorkOrder,
+    SessionAuthIssuerRegistryRuntimeState, UserSessionAuthClaims, WorldAsset, WorldCompany,
+    WorldContract, WorldContractCompletion, WorldEconomyEvent, WorldEvent, WorldListing,
+    WorldMapNode, WorldPlayerPosition, WorldPurchase, WorldRelationship, WorldShop, WorldWorkOrder,
     DEFAULT_LEAGUE_LLM_JUDGE_TIMEOUT_MS, DEFAULT_LEAGUE_WEB_SESSION_TTL_SECS,
     DEFAULT_MAX_TEXT_CHARS, TRILLIONNIUM_REPOSITORY_MIGRATION_FLOOR, USER_SESSION_ASSERTION_HEADER,
     USER_SESSION_SIGNATURE_HEADER, WORLD_ROUTE_ACTION_TEXTAREA_ID, WORLD_ROUTE_CONTRACTS_PANEL_ID,
@@ -3610,7 +3610,7 @@ async fn world_commerce_e2e_uses_real_configured_ledger_for_consume_refund_reope
         json!({
             "matrix_user_id": seller_matrix_user_id,
             "asset_id": "latest",
-            "body": "建立 AI 设计工坊：写清委托成果、证据来源包、风险清单、下一步行动和自检记录。"
+            "body": "建立 AI 设计工坊：写清客户交付方案、委托成果、证据来源包、风险清单、下一步行动和自检记录。"
         }),
     )
     .await;
@@ -4574,6 +4574,163 @@ async fn world_delivery_review_hold_does_not_grant_faction_or_seller_progress() 
         .world_faction_standings
         .iter()
         .any(|standing| standing.matrix_user_id == seller_matrix_user_id));
+}
+
+#[tokio::test]
+async fn world_asset_upgrade_review_hold_does_not_grant_player_progress() {
+    let mut config = test_config();
+    config.runtime_profile = RuntimeProfile::Production;
+    let state = test_state(config, IdentityBindings::default(), HashMap::new());
+    let app = build_router(state.clone());
+    let matrix_user_id = "@world-asset-review-hold:local.dev";
+    let asset_id = "asset-review-hold-upgrade";
+    {
+        let mut league = state.inner.league_state.lock().await;
+        league.world.world_assets.push(WorldAsset {
+            asset_id: asset_id.to_string(),
+            owner_matrix_user_id: matrix_user_id.to_string(),
+            location_id: "starter-studio".to_string(),
+            asset_kind: "studio".to_string(),
+            name: "Review Hold Upgrade Guard Asset".to_string(),
+            status: "seeded".to_string(),
+            value_score: 40,
+            upgrade_level: 1,
+            upgrade_points: 0,
+            last_upgrade_kind: None,
+            created_at_epoch: 1_777_901_000,
+        });
+    }
+
+    let (status, upgrade) = send_json_request(
+        &app,
+        "POST",
+        &format!("/v1/world/assets/{asset_id}/upgrade"),
+        &[],
+        json!({
+            "matrix_user_id": matrix_user_id,
+            "body": "copy copy copy copy copy copy copy copy copy copy copy copy copy copy copy copy"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "asset upgrade response: {upgrade}");
+    assert_eq!(upgrade["upgrade"]["status"], "review_hold");
+    assert_eq!(upgrade["upgrade"]["value_delta"], 0);
+    assert_eq!(upgrade["asset"]["value_score"], 40);
+    assert_eq!(upgrade["asset"]["upgrade_points"], 0);
+
+    let league = state.inner.league_state.lock().await;
+    let asset = league
+        .world
+        .world_assets
+        .iter()
+        .find(|asset| asset.asset_id == asset_id)
+        .expect("asset should remain present");
+    assert_eq!(asset.value_score, 40);
+    assert_eq!(asset.upgrade_points, 0);
+    assert_eq!(asset.upgrade_level, 1);
+    assert!(!league.players_by_matrix_user.contains_key(matrix_user_id));
+}
+
+#[tokio::test]
+async fn world_company_review_hold_does_not_release_commercial_progression_or_followup_listings() {
+    let mut config = test_config();
+    config.runtime_profile = RuntimeProfile::Production;
+    let state = test_state(config, IdentityBindings::default(), HashMap::new());
+    let app = build_router(state.clone());
+    let matrix_user_id = "@world-company-review-hold:local.dev";
+    let asset_id = "asset-review-hold-company";
+    {
+        let mut league = state.inner.league_state.lock().await;
+        league.world.world_assets.push(WorldAsset {
+            asset_id: asset_id.to_string(),
+            owner_matrix_user_id: matrix_user_id.to_string(),
+            location_id: "starter-studio".to_string(),
+            asset_kind: "studio".to_string(),
+            name: "Review Hold Company Guard Asset".to_string(),
+            status: "seeded".to_string(),
+            value_score: 120,
+            upgrade_level: 2,
+            upgrade_points: 90,
+            last_upgrade_kind: Some("manual_upgrade".to_string()),
+            created_at_epoch: 1_777_901_010,
+        });
+    }
+
+    let (status, company_response) = send_json_request(
+        &app,
+        "POST",
+        "/v1/world/companies",
+        &[],
+        json!({
+            "matrix_user_id": matrix_user_id,
+            "asset_id": asset_id,
+            "body": "copy copy copy copy copy copy copy copy copy copy copy copy copy copy copy copy"
+        }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "company review hold response: {company_response}"
+    );
+    assert_eq!(company_response["payout_status"], "review_hold");
+    assert_eq!(company_response["company"]["status"], "review_hold");
+    assert_eq!(company_response["company"]["revenue_score"], 0);
+    assert_eq!(company_response["company"]["reputation_score"], 0);
+    assert_eq!(company_response["shop"]["listing_count"], 0);
+    assert_eq!(company_response["shop"]["gross_merchandise_score"], 0);
+    assert_eq!(company_response["listing"]["status"], "review_hold");
+    assert_eq!(company_response["listing"]["price_credits"], 0);
+    assert_eq!(company_response["listing"]["quality_score"], 0);
+    assert!(company_response["economy_event"].is_null());
+
+    let company_id = company_response["company"]["company_id"]
+        .as_str()
+        .expect("company id")
+        .to_string();
+    let (listing_status, listing_response) = send_json_request(
+        &app,
+        "POST",
+        "/v1/world/listings",
+        &[],
+        json!({
+            "matrix_user_id": matrix_user_id,
+            "company_id": company_id,
+            "body": "Publish a legitimate deliverable with customer evidence, risk controls, next action, self review, and market promise."
+        }),
+    )
+    .await;
+    assert_eq!(
+        listing_status,
+        StatusCode::CONFLICT,
+        "review-hold company should not publish listings: {listing_response}"
+    );
+    assert_eq!(listing_response["status"], "review_hold");
+
+    let league = state.inner.league_state.lock().await;
+    assert!(!league.players_by_matrix_user.contains_key(matrix_user_id));
+    assert!(!league
+        .world
+        .world_economy_events
+        .iter()
+        .any(|event| { event.subject_id == company_id || event.matrix_user_id == matrix_user_id }));
+    assert!(
+        !league.world.world_relationships.iter().any(|relationship| {
+            relationship.from_id == matrix_user_id
+                && relationship.to_id == company_id
+                && relationship.relation_kind == "owner"
+        })
+    );
+    assert_eq!(
+        league
+            .world
+            .world_listings
+            .iter()
+            .filter(|listing| listing.company_id == company_id)
+            .count(),
+        1,
+        "only the held bootstrap listing should exist"
+    );
 }
 
 #[tokio::test]
