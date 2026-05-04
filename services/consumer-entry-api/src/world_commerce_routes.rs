@@ -282,7 +282,7 @@ pub(super) async fn post_world_web_asset_upgrade(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .unwrap_or("Upgrade this World asset with a stronger offer, proof, risk control, and operating loop.")
+        .unwrap_or("Upgrade this world item for a customer deliverable: strengthen capability, evidence package, risk controls, next action loop, self-review, and side-quest handoff.")
         .to_string();
     let request = WorldAssetUpgradeRequest {
         matrix_user_id,
@@ -585,7 +585,7 @@ pub(super) async fn post_world_web_company(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .unwrap_or("Launch a Trillionnium World company from this asset with offer, market, operating loop, proof, and next revenue path.")
+        .unwrap_or("Launch a global-facing studio hub with this item: define customer deliverables, evidence package, risk controls, next action loop, self-review, and the first bounty route.")
         .to_string();
     let request = WorldCompanyRequest {
         matrix_user_id,
@@ -1322,7 +1322,7 @@ pub(super) async fn buy_world_listing_inner(
         payload
             .body
             .as_deref()
-            .unwrap_or("Buy this listing and open a work order with deliverable, evidence, acceptance standard, and next action."),
+            .unwrap_or("Accept this quest card and open an adventure commission: confirm customer deliverables, evidence package, rating standards, risk controls, next action, and self-review."),
         state.config().max_text_chars,
     ) {
         Ok(value) => value,
@@ -2245,7 +2245,7 @@ pub(super) async fn post_world_web_work_accept(
                 .as_deref()
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
-                .unwrap_or("Buyer acceptance: delivered work accepted with proof, quality note, next collaboration, and reputation confirmation.")
+                .unwrap_or("Buyer acceptance: confirm customer deliverable, evidence package, quality note, risk controls, next collaboration, reputation confirmation, and self-review.")
                 .to_string(),
         },
     )
@@ -2586,7 +2586,7 @@ pub(super) async fn post_world_web_work_reject(
                 .as_deref()
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
-                .unwrap_or("Buyer rejection: delivery is not accepted, refund the reserved buyer funds, reopen the relationship with revision requirements and evidence gaps.")
+                .unwrap_or("Buyer rejection: delivery is not accepted; record customer deliverable gap, evidence package, refund risk controls, revision requirements, next action, and self-review.")
                 .to_string(),
         },
     )
@@ -2865,7 +2865,7 @@ pub(super) async fn post_world_web_work_reopen(
                 .as_deref()
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
-                .unwrap_or("Buyer reopen: reserve funds again, list revision requirements, evidence gaps, acceptance standard, and next redelivery action.")
+                .unwrap_or("Buyer reopen: reserve funds again, list customer deliverable revisions, evidence gaps, risk controls, acceptance standard, next redelivery action, and self-review.")
                 .to_string(),
         },
     )
@@ -3209,7 +3209,7 @@ pub(super) async fn post_world_web_work_cancel(
                 .as_deref()
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
-                .unwrap_or("Buyer cancel: cancel this open work before delivery, refund reserved buyer funds, record reason, and close the work order.")
+                .unwrap_or("Buyer cancel: record customer deliverable status, evidence package, refund risk controls, next action, and self-review before closing the work order.")
                 .to_string(),
         },
     )
@@ -3661,7 +3661,7 @@ pub(super) async fn post_world_web_contract_complete(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .unwrap_or("World contract delivery: deliverable, evidence, risk review, next step, acceptance standard.")
+        .unwrap_or("World contract report: customer deliverable, evidence package, risk review, next step, rating standards, and self-review.")
         .to_string();
     let request = WorldContractCompleteRequest {
         matrix_user_id,

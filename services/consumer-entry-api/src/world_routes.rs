@@ -1041,7 +1041,7 @@ pub(super) async fn post_world_web_action(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .unwrap_or("我要在镜像城市开一家 AI 设计公司，招募 Agent，服务真实客户。")
+        .unwrap_or("Launch an AI Design Studio for global customers: define the customer deliverable, evidence package, risk controls, next action, self-review, and League quest handoff.")
         .to_string();
     let request = WorldActionRequest {
         matrix_user_id,

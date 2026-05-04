@@ -1566,7 +1566,7 @@ pub(super) async fn get_world_web_shell(
           {csrf_input}
           <input type="hidden" name="matrix_user_id" value="{current_matrix_user_id}" />
           <input id="world-buy-listing-id" name="listing_id" value="{latest_listing_id}" placeholder="自动填充或 latest" />
-          <textarea id="world-buy-body" name="body" data-i18n-value-en="Accept this quest card and open an adventure commission: confirm deliverables, evidence package, rating standards, risk controls, and next action." data-i18n-value-zh="接取这个任务牌，开启冒险委托：确认成果、证据包、评级标准、风险控制和下一步行动。">Accept this quest card and open an adventure commission: confirm deliverables, evidence package, rating standards, risk controls, and next action.</textarea>
+          <textarea id="world-buy-body" name="body" data-i18n-value-en="Accept this quest card and open an adventure commission: confirm customer deliverables, evidence package, rating standards, risk controls, next action, and self-review." data-i18n-value-zh="接取这个任务牌，开启冒险委托：确认客户交付方案、证据包、评级标准、风险控制、下一步行动和自检复盘。">Accept this quest card and open an adventure commission: confirm customer deliverables, evidence package, rating standards, risk controls, next action, and self-review.</textarea>
           <button type="submit" data-i18n-en="Accept Quest Card" data-i18n-zh="接取任务牌">Accept Quest Card</button>
         </form>
       <div id="world-work-deliveries-live" class="mini-grid" style="margin-top:12px">{work_delivery_cards}</div>
@@ -1582,7 +1582,7 @@ pub(super) async fn get_world_web_shell(
         {csrf_input}
         <input type="hidden" name="matrix_user_id" value="{current_matrix_user_id}" />
         <input id="world-work-accept-id" name="work_order_id" value="{latest_work_order_id}" placeholder="自动填充或 latest" />
-        <textarea id="world-work-accept-body" name="body" data-i18n-value-en="Rating passed: confirm result evidence, quality note, next side quest, and reputation reward." data-i18n-value-zh="评级通过：确认成果证据、质量备注、下一条支线和声望奖励。">Rating passed: confirm result evidence, quality note, next side quest, and reputation reward.</textarea>
+        <textarea id="world-work-accept-body" name="body" data-i18n-value-en="Rating passed: confirm customer deliverable, evidence package, quality note, risk controls, next side quest, reputation reward, and self-review." data-i18n-value-zh="评级通过：确认客户交付方案、证据包、质量备注、风险控制、下一条支线、声望奖励和自检复盘。">Rating passed: confirm customer deliverable, evidence package, quality note, risk controls, next side quest, reputation reward, and self-review.</textarea>
         <button type="submit" data-i18n-en="Pass Rating" data-i18n-zh="评级通过">Pass Rating</button>
       </form>
       <div id="world-work-rejections-live" class="mini-grid" style="margin-top:12px">{work_rejection_cards}</div>
@@ -1590,7 +1590,7 @@ pub(super) async fn get_world_web_shell(
         {csrf_input}
         <input type="hidden" name="matrix_user_id" value="{current_matrix_user_id}" />
         <input id="world-work-reject-id" name="work_order_id" value="{latest_work_order_id}" placeholder="自动填充或 latest" />
-        <textarea id="world-work-reject-body" name="body" data-i18n-value-en="Revision required: record failure reason, evidence gap, reward refund, revision requirement, and next action." data-i18n-value-zh="需要返工：记录未通过原因、证据缺口、奖励退回、返工要求和下一步行动。">Revision required: record failure reason, evidence gap, reward refund, revision requirement, and next action.</textarea>
+        <textarea id="world-work-reject-body" name="body" data-i18n-value-en="Revision required: record customer deliverable gap, evidence package, refund risk controls, revision requirement, next action, and self-review." data-i18n-value-zh="需要返工：记录客户交付缺口、证据包、退款风险控制、返工要求、下一步行动和自检复盘。">Revision required: record customer deliverable gap, evidence package, refund risk controls, revision requirement, next action, and self-review.</textarea>
         <button type="submit" data-i18n-en="Request Revision" data-i18n-zh="要求返工">Request Revision</button>
       </form>
       <div id="world-work-reopens-live" class="mini-grid" style="margin-top:12px">{work_reopen_cards}</div>
@@ -1598,7 +1598,7 @@ pub(super) async fn get_world_web_shell(
         {csrf_input}
         <input type="hidden" name="matrix_user_id" value="{current_matrix_user_id}" />
         <input id="world-work-reopen-id" name="work_order_id" value="{latest_work_order_id}" placeholder="自动填充或 latest" />
-        <textarea id="world-work-reopen-body" name="body" data-i18n-value-en="Reopen commission: escrow reward again, list revision requirements, evidence gaps, rating standards, and resubmission action." data-i18n-value-zh="重开委托：重新托管奖励，列出返工要求、证据缺口、评级标准和再次提交行动。">Reopen commission: escrow reward again, list revision requirements, evidence gaps, rating standards, and resubmission action.</textarea>
+        <textarea id="world-work-reopen-body" name="body" data-i18n-value-en="Reopen commission: escrow reward again, list customer deliverable revisions, evidence gaps, risk controls, rating standards, next resubmission action, and self-review." data-i18n-value-zh="重开委托：重新托管奖励，列出客户交付返工、证据缺口、风险控制、评级标准、下一步再次提交行动和自检复盘。">Reopen commission: escrow reward again, list customer deliverable revisions, evidence gaps, risk controls, rating standards, next resubmission action, and self-review.</textarea>
         <button type="submit" data-i18n-en="Reopen Commission" data-i18n-zh="重开委托">Reopen Commission</button>
       </form>
       <div id="world-work-cancellations-live" class="mini-grid" style="margin-top:12px">{work_cancellation_cards}</div>
@@ -1606,7 +1606,7 @@ pub(super) async fn get_world_web_shell(
         {csrf_input}
         <input type="hidden" name="matrix_user_id" value="{current_matrix_user_id}" />
         <input id="world-work-cancel-id" name="work_order_id" value="{latest_work_order_id}" placeholder="自动填充或 latest" />
-        <textarea id="world-work-cancel-body" name="body" data-i18n-value-en="Cancel commission: end the route before result submission, refund escrowed reward, record reason, and close the commission." data-i18n-value-zh="放弃委托：在成果提交前结束路线、退回托管奖励、记录原因并关闭委托。">Cancel commission: end the route before result submission, refund escrowed reward, record reason, and close the commission.</textarea>
+        <textarea id="world-work-cancel-body" name="body" data-i18n-value-en="Cancel commission: record customer deliverable status, evidence package, refund risk controls, next action, and self-review before closing the route." data-i18n-value-zh="放弃委托：记录客户交付状态、证据包、退款风险控制、下一步行动和自检复盘，再关闭路线。">Cancel commission: record customer deliverable status, evidence package, refund risk controls, next action, and self-review before closing the route.</textarea>
         <button type="submit" data-i18n-en="Cancel Commission" data-i18n-zh="放弃委托">Cancel Commission</button>
       </form>
       </details>

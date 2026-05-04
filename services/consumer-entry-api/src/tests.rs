@@ -1654,10 +1654,70 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(world_html.contains("\"contract_version\":1"));
     assert!(world_html.contains("customer deliverable"));
     assert!(world_html.contains("evidence package, risk controls, next action"));
+    assert!(world_html.contains("world-work-cancel-body"));
+    assert!(world_html.contains("refund risk controls, next action, and self-review"));
     assert!(world_html.contains("客户交付方案"));
+    assert!(world_html.contains("退款风险控制"));
+}
+
+fn prompt_has_delivery_anchor(body: &str, lower: &str) -> bool {
+    lower.contains("deliver")
+        || lower.contains("customer")
+        || body.contains("客户")
+        || body.contains("交付")
+        || body.contains("成果")
+        || body.contains("方案")
+}
+
+fn prompt_has_evidence_anchor(body: &str, lower: &str) -> bool {
+    lower.contains("evidence")
+        || lower.contains("proof")
+        || lower.contains("source")
+        || lower.contains("data")
+        || body.contains("证据")
+        || body.contains("依据")
+}
+
+fn prompt_has_risk_anchor(body: &str, lower: &str) -> bool {
+    lower.contains("risk") || body.contains("风险")
+}
+
+fn prompt_has_next_anchor(body: &str, lower: &str) -> bool {
+    lower.contains("next") || body.contains("下一步") || body.contains("计划")
+}
+
+fn prompt_has_review_anchor(body: &str, lower: &str) -> bool {
+    lower.contains("review")
+        || lower.contains("self-check")
+        || lower.contains("self check")
+        || lower.contains("self-review")
+        || body.contains("自评")
+        || body.contains("自检")
+        || body.contains("复盘")
 }
 
 fn assert_hidden_test_ready_prompt(label: &str, body: &str) {
+    let lower = body.to_ascii_lowercase();
+    assert!(
+        prompt_has_delivery_anchor(body, &lower),
+        "{label} missing customer/deliverable anchor: {body}"
+    );
+    assert!(
+        prompt_has_evidence_anchor(body, &lower),
+        "{label} missing evidence anchor: {body}"
+    );
+    assert!(
+        prompt_has_risk_anchor(body, &lower),
+        "{label} missing risk anchor: {body}"
+    );
+    assert!(
+        prompt_has_next_anchor(body, &lower),
+        "{label} missing next-action anchor: {body}"
+    );
+    assert!(
+        prompt_has_review_anchor(body, &lower),
+        "{label} missing self-review anchor: {body}"
+    );
     let (hidden_event, flags) = league_hidden_test_event(body, "world_first_session");
     assert!(
         flags.is_empty(),
@@ -1720,11 +1780,51 @@ fn world_first_session_default_prompts_pass_hidden_test_anchors() {
         ),
         (
             "world_buy_default",
-            "Accept this quest card and open an adventure commission: confirm deliverables, evidence package, rating standards, risk controls, and next action.",
+            "Accept this quest card and open an adventure commission: confirm customer deliverables, evidence package, rating standards, risk controls, next action, and self-review.",
+        ),
+        (
+            "world_work_deliver_default",
+            "Result package: deliverable, evidence package, rating checklist, risk review, next action, and self-check notes.",
+        ),
+        (
+            "world_work_accept_default",
+            "Rating passed: confirm customer deliverable, evidence package, quality note, risk controls, next side quest, reputation reward, and self-review.",
+        ),
+        (
+            "world_work_reject_default",
+            "Revision required: record customer deliverable gap, evidence package, refund risk controls, revision requirement, next action, and self-review.",
+        ),
+        (
+            "world_work_reopen_default",
+            "Reopen commission: escrow reward again, list customer deliverable revisions, evidence gaps, risk controls, rating standards, next resubmission action, and self-review.",
+        ),
+        (
+            "world_work_cancel_default",
+            "Cancel commission: record customer deliverable status, evidence package, refund risk controls, next action, and self-review before closing the route.",
         ),
         (
             "world_contract_default",
             "World contract report: customer deliverable, evidence package, risk review, next step, rating standards, and self-review.",
+        ),
+        (
+            "world_listing_web_fallback",
+            "Publish a Trillionnium World service listing with deliverable, price logic, evidence package, customer promise, risk controls, self-review, and next action.",
+        ),
+        (
+            "world_work_accept_web_fallback",
+            "Buyer acceptance: confirm customer deliverable, evidence package, quality note, risk controls, next collaboration, reputation confirmation, and self-review.",
+        ),
+        (
+            "world_work_reject_web_fallback",
+            "Buyer rejection: delivery is not accepted; record customer deliverable gap, evidence package, refund risk controls, revision requirements, next action, and self-review.",
+        ),
+        (
+            "world_work_reopen_web_fallback",
+            "Buyer reopen: reserve funds again, list customer deliverable revisions, evidence gaps, risk controls, acceptance standard, next redelivery action, and self-review.",
+        ),
+        (
+            "world_work_cancel_web_fallback",
+            "Buyer cancel: record customer deliverable status, evidence package, refund risk controls, next action, and self-review before closing the work order.",
         ),
     ];
 
