@@ -7,7 +7,7 @@ use super::{
     build_matrix_room_rate_limit_key, build_matrix_session_rate_limit_key,
     build_matrix_user_rate_limit_key, build_router, client_app_json, client_feed_json,
     default_league_state, encode_league_web_session, evaluate_identity_binding_reload_governance,
-    get_client_app_web_shell, get_world_web_shell, league_state_hash,
+    get_client_app_web_shell, get_world_web_shell, league_hash_id, league_state_hash,
     league_state_repository_write_set_for_command, league_state_sql_cutover_plan_json,
     league_state_sql_shadow_validation_json, load_identity_binding_revision_approval_state,
     load_identity_binding_store, load_rate_limit_cache, load_session_auth_issuer_registry,
@@ -22,8 +22,9 @@ use super::{
     world_map_viewport_json, world_route_ui_contract_json, AppState, AppStateInner,
     ConsumerEntryConfig, ConsumerEntryMetrics, CreateChatTaskRequest, IdentityBindingAuditState,
     IdentityBindingEntry, IdentityBindingMetadata, IdentityBindingRevisionApprovalState,
-    IdentityBindingStore, IdentityBindings, LeagueStateRepositorySnapshot, LeagueWebSessionClaims,
-    MatrixMessageRequest, ProductUserIdentity, RateLimitCache, ReplayCache, RuntimeProfile,
+    IdentityBindingStore, IdentityBindings, LeagueMatchEntry, LeaguePlayer, LeagueReward,
+    LeagueStateRepositorySnapshot, LeagueSubmission, LeagueWebSessionClaims, MatrixMessageRequest,
+    ProductUserIdentity, RateLimitCache, ReplayCache, RuntimeProfile,
     SessionAuthIssuerRegistryIssuer, SessionAuthIssuerRegistryMetadata,
     SessionAuthIssuerRegistryRuntimeState, UserSessionAuthClaims, WorldContract,
     WorldContractCompletion, WorldEconomyEvent, WorldEvent, WorldMapNode, WorldPlayerPosition,
@@ -3989,6 +3990,140 @@ async fn league_web_submit_requires_ledger_settlement_before_earned_rewards() {
         Some("skipped_missing_account")
     );
     assert!(reward.amount > 0.0);
+}
+
+#[tokio::test]
+async fn league_review_cannot_reapprove_or_reject_released_reward() {
+    let state = test_state(test_config(), IdentityBindings::default(), HashMap::new());
+    let app = build_router(state.clone());
+    let submission_id = "submission-review-release-guard".to_string();
+    let reward_id = league_hash_id("reward", &submission_id);
+    let match_id = "daily-dungeon-001".to_string();
+    let matrix_user_id = "@alice:local.dev".to_string();
+    let player_id = "player-review-release-guard".to_string();
+    let entry_id = "entry-review-release-guard".to_string();
+    {
+        let mut league = state.inner.league_state.lock().await;
+        league.players_by_matrix_user.insert(
+            matrix_user_id.clone(),
+            LeaguePlayer {
+                player_id: player_id.clone(),
+                matrix_user_id: matrix_user_id.clone(),
+                display_name: "Alice".to_string(),
+                class_tag: "scout".to_string(),
+                rank_tier: "bronze".to_string(),
+                rating: 1000,
+                xp: 100,
+                reputation: 10,
+                battles: 0,
+                submissions: 1,
+                wins: 1,
+                earned_credits: 7.0,
+                created_at_epoch: 1_777_897_900,
+            },
+        );
+        league.entries.insert(
+            format!("{match_id}\u{1f}{matrix_user_id}"),
+            LeagueMatchEntry {
+                entry_id: entry_id.clone(),
+                match_id: match_id.clone(),
+                player_id: player_id.clone(),
+                matrix_user_id: matrix_user_id.clone(),
+                status: "active".to_string(),
+                battles_started: 0,
+                submissions: 1,
+                best_score: 86.0,
+                rewards_earned: 7.0,
+                joined_at_epoch: 1_777_897_900,
+            },
+        );
+        league.submissions.insert(
+            submission_id.clone(),
+            LeagueSubmission {
+                submission_id: submission_id.clone(),
+                match_id: match_id.clone(),
+                entry_id: entry_id.clone(),
+                player_id: player_id.clone(),
+                matrix_user_id: matrix_user_id.clone(),
+                task_id: None,
+                body: "already released review reward".to_string(),
+                score: 86.0,
+                grade: "A".to_string(),
+                reward_amount: 7.0,
+                judge_status: Some("accepted".to_string()),
+                payout_status: Some("approved_release".to_string()),
+                anti_cheat_flags: Vec::new(),
+                score_events: Vec::new(),
+                created_at_epoch: 1_777_897_901,
+            },
+        );
+        league.rewards.push(LeagueReward {
+            reward_id: reward_id.clone(),
+            match_id: match_id.clone(),
+            entry_id: entry_id.clone(),
+            player_id: player_id.clone(),
+            matrix_user_id: matrix_user_id.clone(),
+            amount: 7.0,
+            currency_unit: "credit".to_string(),
+            reason: "already_released_duplicate".to_string(),
+            ledger_status: Some("duplicate".to_string()),
+            ledger_account_id: Some("acct-alice".to_string()),
+            ledger_entry_id: Some("ledger-entry-once".to_string()),
+            ledger_balance_after: Some(7.0),
+            ledger_error: None,
+            review_status: Some("approved".to_string()),
+            reviewed_by: Some("ops".to_string()),
+            review_note: Some("released once".to_string()),
+            reviewed_at_epoch: Some(1_777_897_902),
+            created_at_epoch: 1_777_897_901,
+        });
+    }
+
+    let (status, approval) = send_json_request(
+        &app,
+        "POST",
+        &format!("/v1/league/reviews/{reward_id}/approve"),
+        &[],
+        json!({"reviewer_id": "ops", "note": "approve again"}),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "approval response: {approval}"
+    );
+    assert_eq!(approval["error"], "league reward already released");
+
+    let (status, rejection) = send_json_request(
+        &app,
+        "POST",
+        &format!("/v1/league/reviews/{reward_id}/reject"),
+        &[],
+        json!({"reviewer_id": "ops", "note": "reject after release"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "reject response: {rejection}");
+    assert_eq!(rejection["error"], "league reward already released");
+
+    let league = state.inner.league_state.lock().await;
+    let player = league
+        .players_by_matrix_user
+        .get(&matrix_user_id)
+        .expect("released player should remain present");
+    assert_eq!(player.earned_credits, 7.0);
+    let entry = league
+        .entries
+        .values()
+        .find(|entry| entry.entry_id == entry_id)
+        .expect("released entry should remain present");
+    assert_eq!(entry.rewards_earned, 7.0);
+    let reward = league
+        .rewards
+        .iter()
+        .find(|reward| reward.reward_id == reward_id)
+        .expect("released reward should remain present");
+    assert_eq!(reward.ledger_status.as_deref(), Some("duplicate"));
+    assert_eq!(reward.review_status.as_deref(), Some("approved"));
 }
 
 #[tokio::test]

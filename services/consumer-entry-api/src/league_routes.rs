@@ -1259,6 +1259,13 @@ fn league_submission_for_reward<'a>(
         .find(|submission| league_hash_id("reward", &submission.submission_id) == reward.reward_id)
 }
 
+fn league_reward_already_released(reward: &LeagueReward) -> bool {
+    matches!(
+        reward.ledger_status.as_deref(),
+        Some("settled") | Some("duplicate")
+    ) || reward.review_status.as_deref() == Some("approved")
+}
+
 pub(super) async fn get_league_held_reviews(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1335,10 +1342,10 @@ pub(super) async fn approve_league_review(
             )
                 .into_response();
         };
-        if reward.ledger_status.as_deref() == Some("settled") {
+        if league_reward_already_released(&reward) {
             return (
                 StatusCode::CONFLICT,
-                Json(json!({ "error": "league reward already settled", "reward_id": reward_id })),
+                Json(json!({ "error": "league reward already released", "reward_id": reward_id })),
             )
                 .into_response();
         }
@@ -1473,6 +1480,13 @@ pub(super) async fn reject_league_review(
                 .into_response();
         };
         let reward = league.rewards[reward_index].clone();
+        if league_reward_already_released(&reward) {
+            return (
+                StatusCode::CONFLICT,
+                Json(json!({ "error": "league reward already released", "reward_id": reward_id })),
+            )
+                .into_response();
+        }
         let submission_id = league_submission_for_reward(&league, &reward)
             .map(|submission| submission.submission_id.clone());
         if let Some(submission_id) = submission_id {
