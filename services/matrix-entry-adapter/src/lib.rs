@@ -4663,6 +4663,140 @@ fn build_league_quest_matrix_reply(_matches: Option<&Value>) -> Value {
     })
 }
 
+fn matrix_route_contains_cjk(value: &str) -> bool {
+    value
+        .chars()
+        .any(|ch| ('\u{3400}'..='\u{9fff}').contains(&ch))
+}
+
+fn matrix_route_has_delivery_anchor(value: &str, lower: &str) -> bool {
+    lower.contains("deliver")
+        || lower.contains("customer")
+        || value.contains("客户")
+        || value.contains("交付")
+        || value.contains("方案")
+}
+
+fn matrix_route_has_evidence_anchor(value: &str, lower: &str) -> bool {
+    lower.contains("evidence")
+        || lower.contains("source")
+        || lower.contains("data")
+        || value.contains("证据")
+        || value.contains("依据")
+}
+
+fn matrix_route_has_risk_anchor(value: &str, lower: &str) -> bool {
+    lower.contains("risk") || value.contains("风险")
+}
+
+fn matrix_route_has_next_anchor(value: &str, lower: &str) -> bool {
+    lower.contains("next") || value.contains("下一步") || value.contains("计划")
+}
+
+fn matrix_route_has_review_anchor(value: &str, lower: &str) -> bool {
+    lower.contains("review")
+        || lower.contains("self-check")
+        || lower.contains("self check")
+        || value.contains("自评")
+        || value.contains("自检")
+        || value.contains("复盘")
+}
+
+fn matrix_route_playability_anchor_body(body: String) -> String {
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    let has_cjk = matrix_route_contains_cjk(trimmed);
+    let mut missing_en = Vec::new();
+    let mut missing_zh = Vec::new();
+    if !matrix_route_has_delivery_anchor(trimmed, &lower) {
+        missing_en.push("customer deliverable");
+        missing_zh.push("客户交付方案");
+    }
+    if !matrix_route_has_evidence_anchor(trimmed, &lower) {
+        missing_en.push("evidence package");
+        missing_zh.push("证据包");
+    }
+    if !matrix_route_has_risk_anchor(trimmed, &lower) {
+        missing_en.push("risk controls");
+        missing_zh.push("风险控制");
+    }
+    if !matrix_route_has_next_anchor(trimmed, &lower) {
+        missing_en.push("next action");
+        missing_zh.push("下一步行动");
+    }
+    if !matrix_route_has_review_anchor(trimmed, &lower) {
+        missing_en.push("self-review");
+        missing_zh.push("自检复盘");
+    }
+    if missing_en.is_empty() {
+        return trimmed.to_string();
+    }
+
+    let ends_sentence = trimmed
+        .chars()
+        .last()
+        .map(|ch| matches!(ch, '.' | '。' | '!' | '！' | '?' | '？'))
+        .unwrap_or(false);
+    let separator = if ends_sentence {
+        " "
+    } else if has_cjk {
+        "；"
+    } else {
+        "; "
+    };
+    if has_cjk {
+        format!("{}{}补齐{}。", trimmed, separator, missing_zh.join("、"))
+    } else {
+        format!("{}{}add {}.", trimmed, separator, missing_en.join(", "))
+    }
+}
+
+fn matrix_route_playability_anchor_command(command: String) -> String {
+    let trimmed = command.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    for prefix in [
+        "/upgrade latest",
+        "/company latest",
+        "/sell latest",
+        "/buy latest",
+        "/work deliver latest",
+        "/work accept latest",
+        "/work reject latest",
+        "/work reopen latest",
+        "/work cancel latest",
+        "/world action",
+        "/contract",
+    ] {
+        if let Some(body) = trimmed.strip_prefix(prefix) {
+            let body = matrix_route_playability_anchor_body(body.trim().to_string());
+            return if body.is_empty() {
+                trimmed.to_string()
+            } else {
+                format!("{prefix} {body}")
+            };
+        }
+    }
+    if let Some(rest) = trimmed.strip_prefix("/complete ") {
+        let rest = rest.trim();
+        let (contract_id, body) = rest
+            .split_once(' ')
+            .map(|(contract_id, body)| (contract_id.trim(), body.trim()))
+            .unwrap_or((rest, ""));
+        let body = matrix_route_playability_anchor_body(body.to_string());
+        return if body.is_empty() {
+            trimmed.to_string()
+        } else {
+            format!("/complete {contract_id} {body}")
+        };
+    }
+    trimmed.to_string()
+}
+
 fn extract_route_next_hint(
     route_task_graph: Option<&Value>,
 ) -> (
@@ -4706,6 +4840,7 @@ fn extract_route_next_hint(
         .and_then(Value::as_str)
         .unwrap_or("/world action 跟进当前任务并记录证据、阻塞和下一步。")
         .to_string();
+    let route_next_command_hint = matrix_route_playability_anchor_command(route_next_command_hint);
     let route_next_location_id = route_next_task
         .get("latest_location_id")
         .and_then(Value::as_str)
@@ -4778,6 +4913,8 @@ fn extract_route_story_slots(
         .and_then(Value::as_str)
         .unwrap_or("/contract 围绕当前机会整理目标、证据、风险、验收标准和下一步。")
         .to_string();
+    let route_next_opportunity_command =
+        matrix_route_playability_anchor_command(route_next_opportunity_command);
     (
         route_next_opportunity_kind,
         route_next_outcome_summary,
@@ -4905,6 +5042,7 @@ fn route_opportunity_target_from_command(
     if target.body.trim().is_empty() {
         target.body = trimmed.to_string();
     }
+    target.body = matrix_route_playability_anchor_body(target.body);
     if target.node_id.trim().is_empty() {
         target.node_id = route_focus_panel_default_node_id(&target.panel_id).to_string();
     }
@@ -4922,7 +5060,7 @@ fn route_opportunity_target_from_story_value(
         return fallback;
     };
 
-    RouteOpportunityTarget {
+    let mut target = RouteOpportunityTarget {
         action_label: target_value
             .get("action_label")
             .and_then(Value::as_str)
@@ -4958,7 +5096,9 @@ fn route_opportunity_target_from_story_value(
             .and_then(Value::as_str)
             .unwrap_or(&fallback.node_id)
             .to_string(),
-    }
+    };
+    target.body = matrix_route_playability_anchor_body(target.body);
+    target
 }
 
 fn route_focus_panel_default_node_id(route_next_panel_id: &str) -> &'static str {
@@ -5053,11 +5193,13 @@ impl RouteStoryCardContext {
             .and_then(Value::as_str)
             .unwrap_or(&fallback_route_next_panel_id)
             .to_string();
-        let route_next_command_hint = route_story
-            .and_then(|story| story.get("next_command_hint"))
-            .and_then(Value::as_str)
-            .unwrap_or(&fallback_route_next_command_hint)
-            .to_string();
+        let route_next_command_hint = matrix_route_playability_anchor_command(
+            route_story
+                .and_then(|story| story.get("next_command_hint"))
+                .and_then(Value::as_str)
+                .unwrap_or(&fallback_route_next_command_hint)
+                .to_string(),
+        );
         let route_next_location_id = route_story
             .and_then(|story| story.get("next_location_id"))
             .and_then(Value::as_str)
@@ -5103,11 +5245,13 @@ impl RouteStoryCardContext {
             .and_then(Value::as_str)
             .unwrap_or(&fallback_route_next_opportunity_playbook)
             .to_string();
-        let route_next_opportunity_command = route_story
-            .and_then(|story| story.get("next_opportunity_command"))
-            .and_then(Value::as_str)
-            .unwrap_or(&fallback_route_next_opportunity_command)
-            .to_string();
+        let route_next_opportunity_command = matrix_route_playability_anchor_command(
+            route_story
+                .and_then(|story| story.get("next_opportunity_command"))
+                .and_then(Value::as_str)
+                .unwrap_or(&fallback_route_next_opportunity_command)
+                .to_string(),
+        );
         let (route_next_node_id, route_next_opportunity_node_id) = resolve_route_focus_nodes(
             &route_next_panel_id,
             &route_next_node_id,
@@ -5267,7 +5411,7 @@ impl RouteStoryCardContext {
             route_task_id_or_fallback(&self.route_next_task_id, fallback_task_id);
         self.route_next_action_label = action_label.to_string();
         self.route_next_panel_id = panel_id.to_string();
-        self.route_next_command_hint = command_hint;
+        self.route_next_command_hint = matrix_route_playability_anchor_command(command_hint);
         self.route_next_location_id =
             route_location_or_fallback(&self.route_next_location_id, fallback_location_id);
         self.route_next_node_id = node_id.to_string();
@@ -5498,7 +5642,7 @@ fn specialize_route_opportunity(
         "revision_recovery" | "reopen_recovery" | "smaller_scope_requalification"
     );
 
-    match surface {
+    let (hint, playbook, command) = match surface {
         "assets" => {
             let hint = if is_growth_kind {
                 format!(
@@ -5660,7 +5804,12 @@ fn specialize_route_opportunity(
             route_next_opportunity_playbook.to_string(),
             route_next_opportunity_command.to_string(),
         ),
-    }
+    };
+    (
+        hint,
+        playbook,
+        matrix_route_playability_anchor_command(command),
+    )
 }
 
 #[derive(Debug, Clone)]
@@ -7987,6 +8136,59 @@ mod tests {
     use std::sync::{Arc, RwLock as StdRwLock};
     use tokio::sync::Mutex;
 
+    fn matrix_route_command_body(command: &str) -> String {
+        let trimmed = command.trim();
+        for prefix in [
+            "/upgrade latest",
+            "/company latest",
+            "/sell latest",
+            "/buy latest",
+            "/work deliver latest",
+            "/work accept latest",
+            "/work reject latest",
+            "/work reopen latest",
+            "/work cancel latest",
+            "/world action",
+            "/contract",
+        ] {
+            if let Some(body) = trimmed.strip_prefix(prefix) {
+                return body.trim().to_string();
+            }
+        }
+        if let Some(rest) = trimmed.strip_prefix("/complete ") {
+            return rest
+                .trim()
+                .split_once(' ')
+                .map(|(_, body)| body.trim().to_string())
+                .unwrap_or_default();
+        }
+        trimmed.to_string()
+    }
+
+    fn assert_matrix_route_hidden_anchor_ready(label: &str, body: &str) {
+        let lower = body.to_ascii_lowercase();
+        assert!(
+            super::matrix_route_has_delivery_anchor(body, &lower),
+            "{label} missing delivery/customer anchor: {body}"
+        );
+        assert!(
+            super::matrix_route_has_evidence_anchor(body, &lower),
+            "{label} missing evidence anchor: {body}"
+        );
+        assert!(
+            super::matrix_route_has_risk_anchor(body, &lower),
+            "{label} missing risk anchor: {body}"
+        );
+        assert!(
+            super::matrix_route_has_next_anchor(body, &lower),
+            "{label} missing next-action anchor: {body}"
+        );
+        assert!(
+            super::matrix_route_has_review_anchor(body, &lower),
+            "{label} missing review/self-check anchor: {body}"
+        );
+    }
+
     #[test]
     fn specialize_route_opportunity_uses_surface_specific_commands() {
         let base = super::specialize_route_opportunity(
@@ -8042,6 +8244,14 @@ mod tests {
         assert!(assets.2.starts_with("/upgrade latest "));
         assert!(companies.2.starts_with("/company latest "));
         assert!(shops.2.starts_with("/sell latest "));
+        for (label, command) in [
+            ("world", &base.2),
+            ("assets", &assets.2),
+            ("companies", &companies.2),
+            ("shops", &shops.2),
+        ] {
+            assert_matrix_route_hidden_anchor_ready(label, &matrix_route_command_body(command));
+        }
         assert!(assets.0.contains("Asset") || assets.0.contains("asset"));
         assert!(companies.0.contains("company") || companies.0.contains("Company"));
         assert!(shops.0.contains("listing") || shops.0.contains("market"));
@@ -8085,6 +8295,10 @@ mod tests {
                 || world.1.contains("evidence gap")
         );
         assert!(world.2.starts_with("/world action "));
+        assert_matrix_route_hidden_anchor_ready(
+            "recovery_world",
+            &matrix_route_command_body(&world.2),
+        );
         assert!(
             listing.0.contains("scope")
                 || listing.0.contains("listing")
@@ -8096,6 +8310,10 @@ mod tests {
                 || listing.1.contains("scope")
         );
         assert!(listing.2.starts_with("/sell latest "));
+        assert_matrix_route_hidden_anchor_ready(
+            "recovery_listing",
+            &matrix_route_command_body(&listing.2),
+        );
     }
 
     #[test]
@@ -8201,9 +8419,14 @@ mod tests {
                 .and_then(Value::as_str),
             Some("world-action-body")
         );
-        assert_eq!(
-            card.get("route_next_command_hint").and_then(Value::as_str),
-            Some("/world action story follow-up")
+        let route_next_command_hint = card
+            .get("route_next_command_hint")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        assert!(route_next_command_hint.starts_with("/world action story follow-up"));
+        assert_matrix_route_hidden_anchor_ready(
+            "route_story_command_hint",
+            &matrix_route_command_body(route_next_command_hint),
         );
         assert_eq!(
             card.get("route_story")
@@ -8674,7 +8897,12 @@ mod tests {
             assert_eq!(target.input_id, expected_input_id);
             assert_eq!(target.input_value, expected_input_value);
             assert_eq!(target.textarea_id, expected_textarea_id);
-            assert_eq!(target.body, expected_body);
+            assert!(
+                target.body.starts_with(expected_body),
+                "target body should preserve original body prefix: {}",
+                target.body
+            );
+            assert_matrix_route_hidden_anchor_ready(command, &target.body);
             assert_eq!(target.node_id, "client-board");
         }
     }
