@@ -1196,6 +1196,13 @@ pub(super) async fn get_world_web_shell(
     .play .timeline {{ max-height:680px; overflow:auto; padding-right:4px; }}
     .map-shell {{ display:grid; grid-template-columns:minmax(320px,.9fr) minmax(360px,1.1fr); gap:18px; align-items:start; }}
     #world-map-shell-panel .map-copy {{ max-height:680px; overflow:auto; }}
+    #world-commerce-panel {{ max-height:840px; overflow:auto; }}
+    #world-map-move-panel {{ max-height:680px; overflow:auto; }}
+    #world-assets-panel,
+    #world-companies-panel,
+    #world-listings-panel,
+    #world-contracts-panel,
+    main > section.panel:not(#world-map-shell-panel):not(#world-commerce-panel):not(#world-map-move-panel) {{ max-height:620px; overflow:auto; }}
     form {{ display:grid; gap:10px; margin:0; }}
     input,textarea,select {{ width:100%; color:var(--text); background:rgba(255,255,255,.07); border:1px solid rgba(255,255,255,.14); border-radius:14px; padding:12px 14px; font:inherit; }}
     textarea {{ min-height:140px; resize:vertical; }}
