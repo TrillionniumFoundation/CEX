@@ -1011,6 +1011,19 @@ fn league_web_session_readonly_validates_cookie_without_requiring_csrf() {
     assert!(authorize_league_web_session_readonly(&state, &empty_headers, false).is_err());
 }
 
+#[tokio::test]
+async fn league_web_shell_explains_score_and_reward_formula() {
+    let app = build_router(AppState::new(test_config()));
+    let (status, body) = send_text_request(&app, "GET", "/league", &[]).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("id=\"league-scoring-rewards\""));
+    assert!(body.contains("Scoring &amp; Rewards") || body.contains("Scoring & Rewards"));
+    assert!(body.contains("Reward formula"));
+    assert!(body.contains("Reward = score"));
+    assert!(body.contains("delivery 30%"));
+    assert!(body.contains("cex") || body.contains("score-mini"));
+}
+
 #[test]
 fn world_map_viewport_includes_prefetch_density_and_live_events() {
     let mut league = default_league_state();
@@ -1304,6 +1317,7 @@ fn client_app_map_hub_projects_stream_counts() {
         "aria_live_ux_status_visible",
         "offline_feed_fallback_status_visible",
         "web_session_feed_hydration_visible",
+        "next_action_rail_visible",
     ] {
         assert!(mobile_shell_checks.iter().any(|value| value == check));
     }
@@ -5365,6 +5379,50 @@ async fn health_endpoint_exposes_identity_governance_overview() {
             .iter()
             .any(|check| check["check_id"] == "active_listing_ready")
     );
+    assert_eq!(
+        body["trillionnium_world_playability_scorecard"]["contract_version"],
+        "trillionnium_world_playability_scorecard_v1"
+    );
+    assert_eq!(
+        body["trillionnium_world_playability_scorecard"]["target"],
+        "all_5_user_playability_metrics_score_10_of_10"
+    );
+    assert_eq!(
+        body["trillionnium_world_playability_scorecard"]["diagnostic_target"],
+        "all_10_playability_sub_axes_score_10_of_10"
+    );
+    assert_eq!(
+        body["trillionnium_world_playability_scorecard"]["score_unit"],
+        "0_to_10"
+    );
+    assert!(
+        body["trillionnium_world_playability_scorecard"]["axis_order"]
+            .as_array()
+            .is_some_and(|axes| axes.len() == 10)
+    );
+    assert!(
+        body["trillionnium_world_playability_scorecard"]["user_metric_order"]
+            .as_array()
+            .is_some_and(|axes| axes.len() == 5)
+    );
+    assert!(
+        body["trillionnium_world_playability_scorecard"]["user_metric_overall_score"].is_number()
+    );
+    assert!(
+        body["trillionnium_world_playability_scorecard"]["axes"]["intent_mapping"]["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|check| check["check_id"] == "six_core_intents_covered")
+    );
+    assert!(
+        body["trillionnium_world_playability_scorecard"]["user_metric_axes"]
+            ["real_player_comprehension_cost"]["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|check| check["check_id"] == "league_score_breakdown_explainable")
+    );
 
     let _ = std::fs::remove_file(&temp_bindings_path);
     let _ = std::fs::remove_file(&temp_approval_path);
@@ -5461,6 +5519,30 @@ async fn metrics_endpoint_exposes_identity_governance_gauges() {
     ));
     assert!(body.contains(
         "cex_consumer_entry_trillionnium_world_public_commercial_product_public_world_depth_percent"
+    ));
+    assert!(
+        body.contains("cex_consumer_entry_trillionnium_world_playability_scorecard_overall_score")
+    );
+    assert!(body.contains(
+        "cex_consumer_entry_trillionnium_world_playability_scorecard_onboarding_3_minute_loop_score"
+    ));
+    assert!(body.contains(
+        "cex_consumer_entry_trillionnium_world_playability_scorecard_intent_mapping_score"
+    ));
+    assert!(body.contains(
+        "cex_consumer_entry_trillionnium_world_playability_scorecard_observability_gates_score"
+    ));
+    assert!(body.contains(
+        "cex_consumer_entry_trillionnium_world_playability_scorecard_user_metric_overall_score"
+    ));
+    assert!(body.contains(
+        "cex_consumer_entry_trillionnium_world_playability_scorecard_technical_reliability_score"
+    ));
+    assert!(body.contains(
+        "cex_consumer_entry_trillionnium_world_playability_scorecard_real_player_comprehension_cost_score"
+    ));
+    assert!(body.contains(
+        "cex_consumer_entry_trillionnium_world_playability_scorecard_economy_social_strategy_depth_score"
     ));
 
     let _ = std::fs::remove_file(&temp_bindings_path);

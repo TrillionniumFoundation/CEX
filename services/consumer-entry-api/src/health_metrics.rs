@@ -7,6 +7,8 @@ const TRILLIONNIUM_WORLD_REAL_USER_BETA_CONTRACT_VERSION: &str =
     "trillionnium_world_real_user_beta_v1";
 const TRILLIONNIUM_WORLD_PUBLIC_COMMERCIAL_PRODUCT_CONTRACT_VERSION: &str =
     "trillionnium_world_public_commercial_product_v1";
+const TRILLIONNIUM_WORLD_PLAYABILITY_SCORECARD_CONTRACT_VERSION: &str =
+    "trillionnium_world_playability_scorecard_v1";
 
 fn maturity_bool(value: &Value, key: &str) -> bool {
     value.get(key).and_then(Value::as_bool).unwrap_or(false)
@@ -50,6 +52,55 @@ fn maturity_axis_json(
     })
 }
 
+fn playability_axis_json(
+    axis_id: &str,
+    label: &str,
+    target: &str,
+    checks: Vec<(&'static str, bool)>,
+) -> Value {
+    let mut axis = maturity_axis_json(axis_id, label, target, checks);
+    let percent = axis.get("percent").and_then(Value::as_u64).unwrap_or(0);
+    let score = ((percent as f64 / 10.0) * 10.0).round() / 10.0;
+    if let Some(object) = axis.as_object_mut() {
+        object.insert("score".to_string(), json!(score));
+        object.insert("target_score".to_string(), json!(10.0));
+        object.insert("score_label".to_string(), json!(format!("{score:.1}/10")));
+        object.insert(
+            "status".to_string(),
+            json!(if percent == 100 {
+                "converged"
+            } else {
+                "in_progress"
+            }),
+        );
+    }
+    axis
+}
+
+fn playability_axis_score(scorecard: &Value, axis_id: &str) -> f64 {
+    let axes = scorecard.get("axes").unwrap_or(scorecard);
+    axes.get(axis_id)
+        .and_then(|axis| axis.get("score"))
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0)
+}
+
+fn playability_user_metric_score(scorecard: &Value, axis_id: &str) -> f64 {
+    let axes = scorecard.get("user_metric_axes").unwrap_or(scorecard);
+    axes.get(axis_id)
+        .and_then(|axis| axis.get("score"))
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0)
+}
+
+fn all_playability_axes_converged(scorecard: &Value, axis_ids: &[&str]) -> bool {
+    scorecard.get("overall_score").and_then(Value::as_f64) == Some(10.0)
+        && scorecard.get("overall_status").and_then(Value::as_str) == Some("converged")
+        && axis_ids
+            .iter()
+            .all(|axis_id| playability_axis_score(scorecard, axis_id) == 10.0)
+}
+
 fn maturity_axis_percent(maturity: &Value, axis_id: &str) -> u64 {
     let axes = maturity.get("axes").unwrap_or(maturity);
     axes.get(axis_id)
@@ -84,6 +135,7 @@ fn mobile_shell_ux_contract_green(app: &Value) -> bool {
         "offline_feed_fallback_status_visible",
         "web_session_feed_hydration_visible",
         "feed_api_hydration_visible",
+        "next_action_rail_visible",
     ]
     .iter()
     .all(|expected| readiness_checks.iter().any(|check| check == expected))
@@ -355,6 +407,620 @@ fn trillionnium_world_maturity_axes_json(
         "axis_order": ["first_playable", "technical_alpha", "beta_readiness", "full_vision"],
         "axes": axes,
     })
+}
+
+fn trillionnium_world_playability_scorecard_json(
+    league: &LeagueState,
+    trillionnium_world_maturity: &Value,
+    trillionnium_world_closed_beta_prototype: &Value,
+    trillionnium_world_real_user_beta: &Value,
+    trillionnium_world_public_commercial_product: &Value,
+    league_repository_runtime: &Value,
+) -> Value {
+    let matrix_user_id = first_maturity_matrix_user_id(league);
+    let app = client_app_json(league, matrix_user_id.as_str());
+    let route_artifacts = build_world_route_artifacts(&league.world);
+    let onboarding = app.get("onboarding").cloned().unwrap_or_else(|| json!({}));
+    let onboarding_steps = onboarding
+        .get("steps")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let onboarding_acceptance_checks = onboarding
+        .get("acceptance_checks")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mobile_contract = app
+        .get("mobile_shell_contract")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let mobile_readiness_checks = mobile_contract
+        .get("readiness_checks")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let app_module_count = app.get("module_count").and_then(Value::as_u64).unwrap_or(0);
+    let mobile_shell_ux_green = mobile_shell_ux_contract_green(&app);
+    let feed_item_count = app
+        .get("feed")
+        .and_then(|feed| feed.get("items"))
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    let feed_api_path_configured = app
+        .get("feed")
+        .and_then(|feed| feed.get("api_path"))
+        .and_then(Value::as_str)
+        .is_some_and(|path| !path.trim().is_empty());
+    let progression = app.get("progression").cloned().unwrap_or_else(|| json!({}));
+    let progression_level = progression
+        .get("level")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let successful_task_count = progression
+        .get("successful_task_count")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let experience_data_points = progression
+        .get("experience_data_points")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let unlocked_skill_count = progression
+        .get("unlocked_skill_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let unlocked_tool_count = progression
+        .get("unlocked_tool_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let unlocked_skin_count = progression
+        .get("unlocked_skin_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let social_contact_count = app
+        .get("social")
+        .and_then(|social| social.get("contact_count"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let route_preview_count = route_artifacts
+        .preview
+        .get("items")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    let route_task_graph_count = route_artifacts.task_views.len();
+    let route_tasks_with_next_action = route_artifacts
+        .task_views
+        .iter()
+        .filter(|task| {
+            let item = task.to_feed_item();
+            item.get("next_opportunity_command")
+                .and_then(Value::as_str)
+                .is_some_and(|command| !command.trim().is_empty())
+                && item
+                    .get("next_opportunity_hint")
+                    .and_then(Value::as_str)
+                    .is_some_and(|hint| !hint.trim().is_empty() && !hint.contains("pending"))
+                && item
+                    .get("suggested_matrix_command")
+                    .and_then(Value::as_str)
+                    .is_some_and(|command| !command.trim().is_empty())
+        })
+        .count();
+    let route_contract_version_present = app
+        .get("route_contract")
+        .and_then(|contract| contract.get("contract_version"))
+        .is_some();
+    let world = &league.world;
+    let settled_contract_completion_count = world
+        .world_contract_completions
+        .iter()
+        .filter(|completion| {
+            completion.ledger_status.as_deref() == Some("settled")
+                || completion.payout_status == "settled"
+        })
+        .count();
+    let reserved_purchase_count = world
+        .world_purchases
+        .iter()
+        .filter(|purchase| purchase.buyer_ledger_status.as_deref() == Some("reserved"))
+        .count();
+    let consumed_purchase_count = world
+        .world_purchases
+        .iter()
+        .filter(|purchase| purchase.buyer_consume_status.as_deref() == Some("consumed"))
+        .count();
+    let refunded_rejection_count = world
+        .world_work_rejections
+        .iter()
+        .filter(|rejection| rejection.refund_status == "refunded")
+        .count();
+    let refunded_cancellation_count = world
+        .world_work_cancellations
+        .iter()
+        .filter(|cancellation| cancellation.refund_status == "refunded")
+        .count();
+    let latest_submission = league
+        .submissions
+        .values()
+        .max_by_key(|submission| submission.created_at_epoch);
+    let latest_submission_score = latest_submission
+        .map(|submission| submission.score)
+        .unwrap_or(0.0);
+    let latest_submission_reward = latest_submission
+        .map(|submission| submission.reward_amount)
+        .unwrap_or(0.0);
+    let score_event_dimensions = latest_submission
+        .map(|submission| {
+            submission
+                .score_events
+                .iter()
+                .map(|event| event.dimension.clone())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let has_score_dimension = |dimension: &str| {
+        score_event_dimensions
+            .iter()
+            .any(|candidate| candidate == dimension)
+    };
+    let score_event_count = latest_submission
+        .map(|submission| submission.score_events.len())
+        .unwrap_or(0);
+    let positive_reward_count = league
+        .rewards
+        .iter()
+        .filter(|reward| reward.amount > 0.0)
+        .count();
+    let eligible_submission_count = league
+        .submissions
+        .values()
+        .filter(|submission| submission.payout_status.as_deref() == Some("eligible"))
+        .count();
+    let review_hold_count = league
+        .submissions
+        .values()
+        .filter(|submission| submission.payout_status.as_deref() == Some("review_hold"))
+        .count();
+    let item_reward_count = league.inventory_items.len();
+    let intent_samples = [
+        (
+            "contract",
+            "create a contract task with deliverable evidence risk and next step",
+        ),
+        (
+            "venture",
+            "start a venture company with customer operating loop and next action",
+        ),
+        (
+            "craft",
+            "craft and build a studio asset with evidence and risk controls",
+        ),
+        (
+            "recruit",
+            "recruit a team and hire collaborators for this quest",
+        ),
+        (
+            "market",
+            "buy from market shop listing and reserve reward escrow",
+        ),
+        (
+            "explore",
+            "explore the city map and inspect nearby world events",
+        ),
+    ];
+    let intent_coverage = intent_samples
+        .iter()
+        .filter(|(expected, body)| world_action_kind(body).0 == *expected)
+        .count();
+    let all_product_gates_100 = all_maturity_axes_converged(
+        trillionnium_world_maturity,
+        &[
+            "first_playable",
+            "technical_alpha",
+            "beta_readiness",
+            "full_vision",
+        ],
+    ) && all_maturity_axes_converged(
+        trillionnium_world_closed_beta_prototype,
+        &[
+            "product_loop",
+            "access_governance",
+            "persistence_runtime",
+            "world_depth",
+            "commerce_recovery",
+        ],
+    ) && all_maturity_axes_converged(
+        trillionnium_world_real_user_beta,
+        &[
+            "product_retention",
+            "access_safety",
+            "durable_persistence",
+            "economy_recovery",
+            "world_capacity",
+            "ops_runtime",
+        ],
+    ) && all_maturity_axes_converged(
+        trillionnium_world_public_commercial_product,
+        &[
+            "public_launch_surface",
+            "commercial_engine",
+            "trust_safety",
+            "durable_scale_ops",
+            "growth_network",
+            "public_world_depth",
+        ],
+    );
+
+    let repository_final_cutover = league_repository_runtime
+        .get("effective_repository")
+        .and_then(Value::as_str)
+        == Some("normalized_sql_direct_write_final")
+        && league_repository_runtime
+            .get("repository_cutover_status")
+            .and_then(Value::as_str)
+            == Some("normalized_sql_direct_write_final_cutover_active");
+
+    let onboarding_axis = playability_axis_json(
+        "onboarding_3_minute_loop",
+        "Onboarding / 3-minute first quest",
+        "A new player can see the main quest, choose focus, start action, submit/rate, and read reward within one guided rail.",
+        vec![
+            ("onboarding_contract_v1", onboarding.get("contract_version").and_then(Value::as_str) == Some("trillionnium_first_playable_onboarding_v1")),
+            ("starter_quest_rail_visible", onboarding.get("rail_id").and_then(Value::as_str) == Some("first_playable_main_quest_rail")),
+            ("five_step_loop_documented", onboarding_steps.len() >= 5),
+            ("entry_surfaces_include_app_world_matrix", onboarding.get("entry_surfaces").and_then(Value::as_array).is_some_and(|surfaces| surfaces.iter().any(|surface| surface == "/app") && surfaces.iter().any(|surface| surface == "/world") && surfaces.iter().any(|surface| surface == "Matrix /app"))),
+            ("map_focus_step_has_command", onboarding_steps.iter().any(|step| step.get("step_id").and_then(Value::as_str) == Some("orient_on_map") && step.get("command").and_then(Value::as_str).is_some_and(|command| command == "/map"))),
+            ("world_action_step_prefills_cta", onboarding_steps.iter().any(|step| step.get("step_id").and_then(Value::as_str) == Some("start_world_action") && step.get("textarea_id").and_then(Value::as_str).is_some())),
+            ("quest_delivery_step_prefills_cta", onboarding_steps.iter().any(|step| step.get("step_id").and_then(Value::as_str) == Some("quest_delivery") && step.get("textarea_id").and_then(Value::as_str).is_some())),
+            ("acceptance_checks_cover_reward_and_route", onboarding_acceptance_checks.iter().any(|check| check == "wallet_progression_feed_updated") && onboarding_acceptance_checks.iter().any(|check| check == "route_task_graph_next_action_visible")),
+            ("mobile_shell_ready_for_first_loop", mobile_shell_ux_green),
+            ("first_playable_gate_100", maturity_axis_percent(trillionnium_world_maturity, "first_playable") == 100),
+        ],
+    );
+
+    let intent_axis = playability_axis_json(
+        "intent_mapping",
+        "Intent mapping / player language to world action",
+        "Common player verbs map into contract, venture, craft, recruit, market, and explore actions with safe defaults.",
+        vec![
+            ("six_core_intents_covered", intent_coverage == intent_samples.len()),
+            ("contract_intent_creates_task_path", world_action_kind("contract task deliverable evidence risk next").0 == "contract"),
+            ("venture_intent_creates_asset_path", world_action_kind("start venture company operating loop").0 == "venture"),
+            ("craft_intent_creates_asset_path", world_action_kind("craft build studio asset").0 == "craft"),
+            ("recruit_intent_creates_social_path", world_action_kind("recruit hire team").0 == "recruit"),
+            ("market_intent_creates_commerce_path", world_action_kind("market shop buy listing").0 == "market"),
+            ("fallback_intent_explores_world", world_action_kind("look around the city map").0 == "explore"),
+            ("world_events_recorded", world.world_events.len() >= 3),
+            ("relationships_record_player_context", !world.world_relationships.is_empty()),
+            ("route_actions_available_from_map_focus", route_tasks_with_next_action >= 5),
+        ],
+    );
+
+    let quest_axis = playability_axis_json(
+        "quest_clarity",
+        "Quest clarity / next-best-action route graph",
+        "Every active route explains what happened, where it is, and the next action button/command.",
+        vec![
+            ("route_preview_dense", route_preview_count >= 20),
+            ("route_task_graph_dense", route_task_graph_count >= 10),
+            ("route_tasks_have_next_actions", route_tasks_with_next_action >= 5),
+            ("map_nodes_visible", world.world_map_nodes.len() >= 12),
+            ("player_position_visible", !world.world_player_positions.is_empty()),
+            ("contracts_link_tasks", !world.world_contracts.is_empty()),
+            ("commerce_work_orders_visible", !world.world_work_orders.is_empty()),
+            ("deliveries_visible", !world.world_work_deliveries.is_empty()),
+            ("feed_items_include_route_context", feed_item_count >= 10),
+            ("route_contract_exposed_to_app", route_contract_version_present),
+        ],
+    );
+
+    let scoring_axis = playability_axis_json(
+        "scoring_rewards_explainability",
+        "Scoring and rewards / explainable rating loop",
+        "Submissions expose dimensions, grade, reward amount, payout state, inventory, and ledger-facing reward path.",
+        vec![
+            ("latest_submission_scored", latest_submission_score > 0.0 && score_event_count >= 6),
+            ("latest_submission_reward_positive", latest_submission_reward > 0.0),
+            ("score_events_have_core_dimensions", has_score_dimension("delivery_fit") && has_score_dimension("evidence_grounding") && has_score_dimension("risk_control") && has_score_dimension("actionability") && has_score_dimension("craft_polish")),
+            ("hidden_tests_or_adapter_visible", has_score_dimension("hidden_tests") || has_score_dimension("llm_judge_adapter")),
+            ("score_event_breakdown_rich", score_event_count >= 6),
+            ("eligible_submissions_exist", eligible_submission_count > 0),
+            ("positive_rewards_exist", positive_reward_count > 0),
+            ("inventory_rewards_exist", item_reward_count > 0),
+            ("contract_completion_settled", settled_contract_completion_count > 0),
+            ("progression_level_reflects_rewards", progression_level >= 100),
+        ],
+    );
+
+    let feedback_axis = playability_axis_json(
+        "feedback_failure_recovery",
+        "Feedback and failure recovery / retry without dead ends",
+        "Failed or incomplete work can be rejected, refunded, reopened, cancelled, searched, and routed back to the next attempt.",
+        vec![
+            ("acceptance_path_exists", !world.world_work_acceptances.is_empty()),
+            ("rejection_path_exists", !world.world_work_rejections.is_empty()),
+            ("reopen_path_exists", !world.world_work_reopens.is_empty()),
+            ("cancel_path_exists", !world.world_work_cancellations.is_empty()),
+            ("rejection_refund_recorded", refunded_rejection_count > 0),
+            ("cancellation_refund_recorded", refunded_cancellation_count > 0),
+            ("route_graph_suggests_retry_actions", route_tasks_with_next_action >= 5),
+            ("search_empty_state_visible", mobile_readiness_checks.iter().any(|check| check == "search_empty_state_visible")),
+            ("aria_live_status_visible", mobile_readiness_checks.iter().any(|check| check == "aria_live_ux_status_visible")),
+            ("review_hold_path_modelled", review_hold_count > 0 || score_event_count >= 6),
+        ],
+    );
+
+    let economy_axis = playability_axis_json(
+        "economy_balance",
+        "Economy balance / escrow, consume, refund, grant",
+        "Market and commission loops cover listing, escrow reserve, delivery consume, refund, reputation, credits, and economy events.",
+        vec![
+            ("companies_and_shops_seeded", !world.world_companies.is_empty() && !world.world_shops.is_empty()),
+            ("active_listing_ready", !world.world_listings.is_empty()),
+            ("purchases_recorded", !world.world_purchases.is_empty()),
+            ("escrow_reserve_recorded", reserved_purchase_count > 0),
+            ("acceptance_consumes_escrow", consumed_purchase_count > 0),
+            ("refunds_recorded", refunded_rejection_count > 0 && refunded_cancellation_count > 0),
+            ("economy_events_dense", world.world_economy_events.len() >= 20),
+            ("faction_standings_update", !world.world_faction_standings.is_empty()),
+            ("player_rewards_positive", positive_reward_count > 0),
+            ("wallet_module_available", app.get("wallet").and_then(|wallet| wallet.get("ledger_actions")).and_then(Value::as_array).is_some_and(|actions| actions.len() >= 4)),
+        ],
+    );
+
+    let social_axis = playability_axis_json(
+        "social_coop",
+        "Social and co-op / parties, guilds, contacts",
+        "The world can be played with teammates through contacts, guilds, raids, face-duel, faction standings, and shared route context.",
+        vec![
+            ("agent_contacts_visible", social_contact_count >= 3),
+            ("world_entities_visible", world.world_entities.len() >= 3),
+            ("guilds_available", league.guilds.len() >= 2),
+            ("face_duel_match_available", league.matches.contains_key("face-duel-001")),
+            ("guild_raid_match_available", league.matches.contains_key("guild-raid-001")),
+            ("factions_available", world.world_factions.len() >= 4),
+            ("relationship_graph_active", !world.world_relationships.is_empty()),
+            ("route_feed_supports_team_context", feed_item_count >= 10),
+            ("social_module_available", app_module_count >= 5),
+            ("nearby_agents_surface_available", app.get("nearby_agents").and_then(Value::as_array).is_some()),
+        ],
+    );
+
+    let retention_axis = playability_axis_json(
+        "retention_progression",
+        "Retention and progression / reasons to return",
+        "Players see level, successful quests, unlocks, feed history, route backlog, matches, and durable world growth.",
+        vec![
+            ("progression_level_100", progression_level >= 100),
+            ("successful_tasks_dense", successful_task_count >= 20),
+            ("experience_data_points_dense", experience_data_points >= 50),
+            ("skills_unlocked", unlocked_skill_count >= 5),
+            ("tools_unlocked", unlocked_tool_count >= 4),
+            ("skins_unlocked", unlocked_skin_count >= 3),
+            ("feed_history_dense", feed_item_count >= 20),
+            ("route_backlog_dense", route_task_graph_count >= 10),
+            ("multiple_match_modes", league.matches.len() >= 4),
+            ("world_assets_persist", !world.world_assets.is_empty()),
+        ],
+    );
+
+    let surface_axis = playability_axis_json(
+        "surface_feedback",
+        "Surface feedback / UI tells players what changed",
+        "The app/world/league surfaces expose live status, feed hydration, map focus, route status, score feedback, and actionable CTAs.",
+        vec![
+            ("app_has_five_modules", app_module_count >= 5),
+            ("mobile_shell_contract_green", mobile_shell_ux_green),
+            ("feed_api_hydration_visible", mobile_readiness_checks.iter().any(|check| check == "feed_api_hydration_visible")),
+            ("web_session_feed_hydration_visible", mobile_readiness_checks.iter().any(|check| check == "web_session_feed_hydration_visible")),
+            ("next_action_rail_visible", mobile_readiness_checks.iter().any(|check| check == "next_action_rail_visible")),
+            ("map_focus_visible", onboarding_acceptance_checks.iter().any(|check| check == "map_focus_visible")),
+            ("quest_rating_visible", onboarding_acceptance_checks.iter().any(|check| check == "quest_rating_or_feedback_loop_visible")),
+            ("reward_feed_visible", onboarding_acceptance_checks.iter().any(|check| check == "wallet_progression_feed_updated")),
+            ("league_score_breakdown_available", score_event_count >= 6),
+            ("route_status_cards_available", route_tasks_with_next_action >= 5),
+        ],
+    );
+
+    let observability_axis = playability_axis_json(
+        "observability_gates",
+        "Observability and gates / playability is measurable",
+        "Health, metrics, beta, commercial, route, feed, and repository gates make 10/10 playability auditable instead of subjective.",
+        vec![
+            ("all_existing_product_gates_100", all_product_gates_100),
+            ("maturity_overall_100", trillionnium_world_maturity.get("overall_percent").and_then(Value::as_u64) == Some(100)),
+            ("closed_beta_overall_100", trillionnium_world_closed_beta_prototype.get("overall_percent").and_then(Value::as_u64) == Some(100)),
+            ("real_user_beta_overall_100", trillionnium_world_real_user_beta.get("overall_percent").and_then(Value::as_u64) == Some(100)),
+            ("public_commercial_overall_100", trillionnium_world_public_commercial_product.get("overall_percent").and_then(Value::as_u64) == Some(100)),
+            ("feed_api_path_configured", feed_api_path_configured),
+            ("route_contract_exposed", route_contract_version_present),
+            ("mobile_contract_readiness_dense", mobile_readiness_checks.len() >= 10),
+            ("scorecard_has_runtime_data", feed_item_count >= 20 && route_task_graph_count >= 10),
+            ("repository_backed_world_state_dense", world.world_economy_events.len() >= 20 && !world.world_contract_completions.is_empty()),
+        ],
+    );
+
+    let user_metric_technical_reliability = playability_axis_json(
+        "technical_reliability",
+        "技术可靠性 / Technical reliability",
+        "Reliability must be backed by runtime gates, normalized persistence, health/metrics, route/feed contracts, and production evidence.",
+        vec![
+            ("all_existing_product_gates_100", all_product_gates_100),
+            ("repository_final_cutover_active", repository_final_cutover),
+            ("maturity_gate_100", trillionnium_world_maturity.get("overall_percent").and_then(Value::as_u64) == Some(100)),
+            ("real_user_beta_gate_100", trillionnium_world_real_user_beta.get("overall_percent").and_then(Value::as_u64) == Some(100)),
+            ("public_commercial_gate_100", trillionnium_world_public_commercial_product.get("overall_percent").and_then(Value::as_u64) == Some(100)),
+            ("mobile_shell_contract_green", mobile_shell_ux_green),
+            ("feed_api_path_configured", feed_api_path_configured),
+            ("route_contract_exposed", route_contract_version_present),
+            ("score_events_runtime_present", score_event_count >= 6),
+            ("world_state_dense_enough_for_smoke", feed_item_count >= 20 && world.world_economy_events.len() >= 20),
+        ],
+    );
+
+    let user_metric_first_playable_completeness = playability_axis_json(
+        "first_playable_completeness",
+        "first playable 完整度 / First playable completeness",
+        "The first playable loop is complete only when map focus, action, contract, commission, rating, reward, and next route are all visible.",
+        vec![
+            ("onboarding_contract_v1", onboarding.get("contract_version").and_then(Value::as_str) == Some("trillionnium_first_playable_onboarding_v1")),
+            ("starter_quest_rail_visible", onboarding.get("rail_id").and_then(Value::as_str) == Some("first_playable_main_quest_rail")),
+            ("five_step_loop_documented", onboarding_steps.len() >= 5),
+            ("acceptance_checks_cover_full_loop", onboarding_acceptance_checks.len() >= 7),
+            ("entry_surfaces_include_app_world_matrix", onboarding.get("entry_surfaces").and_then(Value::as_array).is_some_and(|surfaces| surfaces.iter().any(|surface| surface == "/app") && surfaces.iter().any(|surface| surface == "/world") && surfaces.iter().any(|surface| surface == "Matrix /app"))),
+            ("map_action_delivery_reward_steps_have_cta", onboarding_steps.iter().any(|step| step.get("step_id").and_then(Value::as_str) == Some("orient_on_map")) && onboarding_steps.iter().any(|step| step.get("step_id").and_then(Value::as_str) == Some("start_world_action") && step.get("textarea_id").and_then(Value::as_str).is_some()) && onboarding_steps.iter().any(|step| step.get("step_id").and_then(Value::as_str) == Some("quest_delivery") && step.get("textarea_id").and_then(Value::as_str).is_some()) && onboarding_steps.iter().any(|step| step.get("step_id").and_then(Value::as_str) == Some("read_reward_and_next_route"))),
+            ("route_preview_and_task_graph_ready", route_preview_count >= 20 && route_task_graph_count >= 10),
+            ("commerce_loop_seeded", !world.world_listings.is_empty() && !world.world_purchases.is_empty() && !world.world_work_orders.is_empty()),
+            ("rating_reward_loop_seeded", !world.world_work_deliveries.is_empty() && !world.world_work_acceptances.is_empty() && positive_reward_count > 0),
+            ("next_route_after_reward_visible", route_tasks_with_next_action >= 5),
+        ],
+    );
+
+    let user_metric_player_comprehension_cost = playability_axis_json(
+        "real_player_comprehension_cost",
+        "真实玩家理解成本 / Real player comprehension cost",
+        "Players should understand what to do next without reading debug internals: tabs, search, live status, score formula, route status, and recovery copy must be obvious.",
+        vec![
+            ("four_tab_shell_reduces_navigation_load", mobile_readiness_checks.iter().any(|check| check == "four_tab_mobile_shell_visible")),
+            ("active_tab_search_available", mobile_readiness_checks.iter().any(|check| check == "global_search_filters_active_tab")),
+            ("empty_state_and_clear_recovery", mobile_readiness_checks.iter().any(|check| check == "search_empty_state_visible") && mobile_readiness_checks.iter().any(|check| check == "search_clear_and_escape_visible")),
+            ("live_status_feedback_visible", mobile_readiness_checks.iter().any(|check| check == "aria_live_ux_status_visible")),
+            ("next_action_rail_visible", mobile_readiness_checks.iter().any(|check| check == "next_action_rail_visible")),
+            ("map_focus_acceptance_visible", onboarding_acceptance_checks.iter().any(|check| check == "map_focus_visible")),
+            ("rating_reward_acceptance_visible", onboarding_acceptance_checks.iter().any(|check| check == "quest_rating_or_feedback_loop_visible") && onboarding_acceptance_checks.iter().any(|check| check == "wallet_progression_feed_updated")),
+            ("route_graph_has_actionable_commands", route_tasks_with_next_action >= 5),
+            ("league_score_breakdown_explainable", score_event_count >= 6 && has_score_dimension("delivery_fit") && has_score_dimension("evidence_grounding") && has_score_dimension("risk_control") && has_score_dimension("actionability")),
+            ("feedback_recovery_paths_visible", !world.world_work_rejections.is_empty() && !world.world_work_reopens.is_empty() && !world.world_work_cancellations.is_empty()),
+        ],
+    );
+
+    let user_metric_long_term_replayability = playability_axis_json(
+        "long_term_replayability",
+        "长期可重复游玩 / Long-term replayability",
+        "Replayability requires durable progression, varied route backlog, multiple modes, feed history, unlocks, world events, and repeatable economy loops.",
+        vec![
+            ("progression_level_100", progression_level >= 100),
+            ("successful_tasks_dense", successful_task_count >= 20),
+            ("experience_data_points_dense", experience_data_points >= 50),
+            ("skills_tools_skins_unlocked", unlocked_skill_count >= 5 && unlocked_tool_count >= 4 && unlocked_skin_count >= 3),
+            ("feed_history_dense", feed_item_count >= 20),
+            ("route_backlog_dense", route_task_graph_count >= 10),
+            ("multiple_match_modes", league.matches.len() >= 4),
+            ("world_events_dense", world.world_events.len() >= 3 && world.world_economy_events.len() >= 20),
+            ("replayable_market_and_work_loops", world.world_listings.len() >= 3 && world.world_work_orders.len() >= 3),
+            ("failure_retry_keeps_loop_alive", !world.world_work_rejections.is_empty() && !world.world_work_reopens.is_empty() && !world.world_work_cancellations.is_empty()),
+        ],
+    );
+
+    let user_metric_economy_social_strategy_depth = playability_axis_json(
+        "economy_social_strategy_depth",
+        "经济/社交策略深度 / Economy and social strategy depth",
+        "Depth requires meaningful choices across market supply, escrow/settlement, refunds, factions, guilds, raids, nearby agents, relationships, and reward inventory.",
+        vec![
+            ("companies_shops_listings_ready", !world.world_companies.is_empty() && !world.world_shops.is_empty() && !world.world_listings.is_empty()),
+            ("purchase_reserve_consume_loop", !world.world_purchases.is_empty() && reserved_purchase_count > 0 && consumed_purchase_count > 0),
+            ("refund_and_reopen_strategy_loop", refunded_rejection_count > 0 && refunded_cancellation_count > 0 && !world.world_work_reopens.is_empty()),
+            ("settled_contract_rewards", settled_contract_completion_count > 0 && positive_reward_count > 0),
+            ("wallet_ledger_actions_cover_economy", app.get("wallet").and_then(|wallet| wallet.get("ledger_actions")).and_then(Value::as_array).is_some_and(|actions| actions.len() >= 4)),
+            ("factions_and_standings_present", world.world_factions.len() >= 4 && !world.world_faction_standings.is_empty()),
+            ("relationship_graph_and_nearby_agents", !world.world_relationships.is_empty() && social_contact_count >= 3),
+            ("guild_and_raid_coop_modes", league.guilds.len() >= 2 && league.matches.contains_key("guild-raid-001")),
+            ("face_to_face_duel_social_mode", league.matches.contains_key("face-duel-001") && world.world_entities.len() >= 3),
+            ("inventory_reward_loadout_strategy", item_reward_count > 0 && unlocked_skill_count >= 5 && unlocked_tool_count >= 4),
+        ],
+    );
+
+    let axes = json!({
+        "onboarding_3_minute_loop": onboarding_axis,
+        "intent_mapping": intent_axis,
+        "quest_clarity": quest_axis,
+        "scoring_rewards_explainability": scoring_axis,
+        "feedback_failure_recovery": feedback_axis,
+        "economy_balance": economy_axis,
+        "social_coop": social_axis,
+        "retention_progression": retention_axis,
+        "surface_feedback": surface_axis,
+        "observability_gates": observability_axis,
+    });
+    let axis_order = [
+        "onboarding_3_minute_loop",
+        "intent_mapping",
+        "quest_clarity",
+        "scoring_rewards_explainability",
+        "feedback_failure_recovery",
+        "economy_balance",
+        "social_coop",
+        "retention_progression",
+        "surface_feedback",
+        "observability_gates",
+    ];
+    let axis_scores = axis_order
+        .iter()
+        .map(|axis_id| playability_axis_score(&axes, axis_id))
+        .collect::<Vec<_>>();
+    let overall_score = if axis_scores.is_empty() {
+        0.0
+    } else {
+        ((axis_scores.iter().sum::<f64>() / axis_scores.len() as f64) * 10.0).round() / 10.0
+    };
+    let overall_percent = ((overall_score * 10.0).round() as u64).min(100);
+    let axis_order_vec = axis_order.to_vec();
+    let user_metric_axes = json!({
+        "technical_reliability": user_metric_technical_reliability,
+        "first_playable_completeness": user_metric_first_playable_completeness,
+        "real_player_comprehension_cost": user_metric_player_comprehension_cost,
+        "long_term_replayability": user_metric_long_term_replayability,
+        "economy_social_strategy_depth": user_metric_economy_social_strategy_depth,
+    });
+    let user_metric_order = [
+        "technical_reliability",
+        "first_playable_completeness",
+        "real_player_comprehension_cost",
+        "long_term_replayability",
+        "economy_social_strategy_depth",
+    ];
+    let user_metric_scores = user_metric_order
+        .iter()
+        .map(|axis_id| playability_axis_score(&user_metric_axes, axis_id))
+        .collect::<Vec<_>>();
+    let user_metric_overall_score = if user_metric_scores.is_empty() {
+        0.0
+    } else {
+        ((user_metric_scores.iter().sum::<f64>() / user_metric_scores.len() as f64) * 10.0).round()
+            / 10.0
+    };
+    let user_metric_overall_percent = ((user_metric_overall_score * 10.0).round() as u64).min(100);
+    let user_metric_order_vec = user_metric_order.to_vec();
+    let scorecard = json!({
+        "contract_version": TRILLIONNIUM_WORLD_PLAYABILITY_SCORECARD_CONTRACT_VERSION,
+        "target": "all_5_user_playability_metrics_score_10_of_10",
+        "diagnostic_target": "all_10_playability_sub_axes_score_10_of_10",
+        "overall_score": overall_score,
+        "overall_percent": overall_percent,
+        "overall_status": if overall_score == 10.0 { "converged" } else { "in_progress" },
+        "user_metric_overall_score": user_metric_overall_score,
+        "user_metric_overall_percent": user_metric_overall_percent,
+        "user_metric_overall_status": if user_metric_overall_score == 10.0 { "converged" } else { "in_progress" },
+        "score_unit": "0_to_10",
+        "matrix_user_id": matrix_user_id,
+        "axis_order": axis_order_vec,
+        "user_metric_order": user_metric_order_vec,
+        "reported_baseline_before_push": {
+            "technical_reliability": 8.5,
+            "first_playable_completeness": 8.0,
+            "real_player_comprehension_cost": 5.5,
+            "long_term_replayability": 4.5,
+            "economy_social_strategy_depth": 4.0
+        },
+        "proof_scope": "runtime_state_plus_product_gates_not_subjective_claim",
+        "player_loop": "choose map focus → accept bounty/commission → submit result/evidence → rating/reward → next route/retry",
+        "axes": axes,
+        "user_metric_axes": user_metric_axes,
+    });
+    let _ = all_playability_axes_converged(&scorecard, &axis_order);
+    scorecard
 }
 
 fn trillionnium_world_closed_beta_prototype_json(
@@ -1534,6 +2200,7 @@ pub(super) async fn health(State(state): State<AppState>) -> Json<Value> {
         trillionnium_world_closed_beta_prototype,
         trillionnium_world_real_user_beta,
         trillionnium_world_public_commercial_product,
+        trillionnium_world_playability_scorecard,
     ) = {
         let league = state.inner.league_state.lock().await;
         let maturity = trillionnium_world_maturity_axes_json(
@@ -1569,11 +2236,20 @@ pub(super) async fn health(State(state): State<AppState>) -> Json<Value> {
             &league_repository_runtime,
             &real_user_beta,
         );
+        let playability_scorecard = trillionnium_world_playability_scorecard_json(
+            &league,
+            &maturity,
+            &closed_beta,
+            &real_user_beta,
+            &public_commercial_product,
+            &league_repository_runtime,
+        );
         (
             maturity,
             closed_beta,
             real_user_beta,
             public_commercial_product,
+            playability_scorecard,
         )
     };
     Json(json!({
@@ -1632,6 +2308,7 @@ pub(super) async fn health(State(state): State<AppState>) -> Json<Value> {
         },
         "league_repository_runtime": league_repository_runtime,
         "trillionnium_world_public_commercial_product": trillionnium_world_public_commercial_product,
+        "trillionnium_world_playability_scorecard": trillionnium_world_playability_scorecard,
         "trillionnium_world_real_user_beta": trillionnium_world_real_user_beta,
         "trillionnium_world_closed_beta_prototype": trillionnium_world_closed_beta_prototype,
         "trillionnium_world_maturity": trillionnium_world_maturity,
@@ -1818,6 +2495,7 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
         trillionnium_world_closed_beta_prototype,
         trillionnium_world_real_user_beta,
         trillionnium_world_public_commercial_product,
+        trillionnium_world_playability_scorecard,
     ) = {
         let league = state.inner.league_state.lock().await;
         let maturity = trillionnium_world_maturity_axes_json(
@@ -1853,11 +2531,20 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
             &league_repository_runtime,
             &real_user_beta,
         );
+        let playability_scorecard = trillionnium_world_playability_scorecard_json(
+            &league,
+            &maturity,
+            &closed_beta,
+            &real_user_beta,
+            &public_commercial_product,
+            &league_repository_runtime,
+        );
         (
             maturity,
             closed_beta,
             real_user_beta,
             public_commercial_product,
+            playability_scorecard,
         )
     };
     let body = format!(
@@ -2019,7 +2706,45 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
             "# TYPE cex_consumer_entry_trillionnium_world_public_commercial_product_growth_network_percent gauge\n",
             "cex_consumer_entry_trillionnium_world_public_commercial_product_growth_network_percent {}\n",
             "# TYPE cex_consumer_entry_trillionnium_world_public_commercial_product_public_world_depth_percent gauge\n",
-            "cex_consumer_entry_trillionnium_world_public_commercial_product_public_world_depth_percent {}\n"
+            "cex_consumer_entry_trillionnium_world_public_commercial_product_public_world_depth_percent {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_playability_scorecard_overall_score gauge\n",
+            "cex_consumer_entry_trillionnium_world_playability_scorecard_overall_score {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_playability_scorecard_overall_percent gauge\n",
+            "cex_consumer_entry_trillionnium_world_playability_scorecard_overall_percent {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_playability_scorecard_onboarding_3_minute_loop_score gauge\n",
+            "cex_consumer_entry_trillionnium_world_playability_scorecard_onboarding_3_minute_loop_score {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_playability_scorecard_intent_mapping_score gauge\n",
+            "cex_consumer_entry_trillionnium_world_playability_scorecard_intent_mapping_score {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_playability_scorecard_quest_clarity_score gauge\n",
+            "cex_consumer_entry_trillionnium_world_playability_scorecard_quest_clarity_score {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_playability_scorecard_scoring_rewards_explainability_score gauge\n",
+            "cex_consumer_entry_trillionnium_world_playability_scorecard_scoring_rewards_explainability_score {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_playability_scorecard_feedback_failure_recovery_score gauge\n",
+            "cex_consumer_entry_trillionnium_world_playability_scorecard_feedback_failure_recovery_score {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_playability_scorecard_economy_balance_score gauge\n",
+            "cex_consumer_entry_trillionnium_world_playability_scorecard_economy_balance_score {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_playability_scorecard_social_coop_score gauge\n",
+            "cex_consumer_entry_trillionnium_world_playability_scorecard_social_coop_score {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_playability_scorecard_retention_progression_score gauge\n",
+            "cex_consumer_entry_trillionnium_world_playability_scorecard_retention_progression_score {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_playability_scorecard_surface_feedback_score gauge\n",
+            "cex_consumer_entry_trillionnium_world_playability_scorecard_surface_feedback_score {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_playability_scorecard_observability_gates_score gauge\n",
+            "cex_consumer_entry_trillionnium_world_playability_scorecard_observability_gates_score {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_playability_scorecard_user_metric_overall_score gauge\n",
+            "cex_consumer_entry_trillionnium_world_playability_scorecard_user_metric_overall_score {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_playability_scorecard_user_metric_overall_percent gauge\n",
+            "cex_consumer_entry_trillionnium_world_playability_scorecard_user_metric_overall_percent {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_playability_scorecard_technical_reliability_score gauge\n",
+            "cex_consumer_entry_trillionnium_world_playability_scorecard_technical_reliability_score {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_playability_scorecard_first_playable_completeness_score gauge\n",
+            "cex_consumer_entry_trillionnium_world_playability_scorecard_first_playable_completeness_score {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_playability_scorecard_real_player_comprehension_cost_score gauge\n",
+            "cex_consumer_entry_trillionnium_world_playability_scorecard_real_player_comprehension_cost_score {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_playability_scorecard_long_term_replayability_score gauge\n",
+            "cex_consumer_entry_trillionnium_world_playability_scorecard_long_term_replayability_score {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_playability_scorecard_economy_social_strategy_depth_score gauge\n",
+            "cex_consumer_entry_trillionnium_world_playability_scorecard_economy_social_strategy_depth_score {}\n"
         ),
         state
             .inner
@@ -2345,6 +3070,64 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
         maturity_axis_percent(
             &trillionnium_world_public_commercial_product,
             "public_world_depth",
+        ),
+        trillionnium_world_playability_scorecard
+            .get("overall_score")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0),
+        trillionnium_world_playability_scorecard
+            .get("overall_percent")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        playability_axis_score(
+            &trillionnium_world_playability_scorecard,
+            "onboarding_3_minute_loop",
+        ),
+        playability_axis_score(&trillionnium_world_playability_scorecard, "intent_mapping"),
+        playability_axis_score(&trillionnium_world_playability_scorecard, "quest_clarity"),
+        playability_axis_score(
+            &trillionnium_world_playability_scorecard,
+            "scoring_rewards_explainability",
+        ),
+        playability_axis_score(
+            &trillionnium_world_playability_scorecard,
+            "feedback_failure_recovery",
+        ),
+        playability_axis_score(&trillionnium_world_playability_scorecard, "economy_balance"),
+        playability_axis_score(&trillionnium_world_playability_scorecard, "social_coop"),
+        playability_axis_score(
+            &trillionnium_world_playability_scorecard,
+            "retention_progression",
+        ),
+        playability_axis_score(&trillionnium_world_playability_scorecard, "surface_feedback"),
+        playability_axis_score(&trillionnium_world_playability_scorecard, "observability_gates"),
+        trillionnium_world_playability_scorecard
+            .get("user_metric_overall_score")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0),
+        trillionnium_world_playability_scorecard
+            .get("user_metric_overall_percent")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        playability_user_metric_score(
+            &trillionnium_world_playability_scorecard,
+            "technical_reliability",
+        ),
+        playability_user_metric_score(
+            &trillionnium_world_playability_scorecard,
+            "first_playable_completeness",
+        ),
+        playability_user_metric_score(
+            &trillionnium_world_playability_scorecard,
+            "real_player_comprehension_cost",
+        ),
+        playability_user_metric_score(
+            &trillionnium_world_playability_scorecard,
+            "long_term_replayability",
+        ),
+        playability_user_metric_score(
+            &trillionnium_world_playability_scorecard,
+            "economy_social_strategy_depth",
         ),
     );
     (

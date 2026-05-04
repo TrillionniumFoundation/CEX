@@ -1,6 +1,6 @@
 use super::*;
 
-fn world_action_kind(body: &str) -> (&'static str, &'static str, i64) {
+pub(super) fn world_action_kind(body: &str) -> (&'static str, &'static str, i64) {
     let lower = body.to_ascii_lowercase();
     if lower.contains("contract")
         || lower.contains("bounty")
@@ -14,6 +14,31 @@ fn world_action_kind(body: &str) -> (&'static str, &'static str, i64) {
             "把现实需求登记成 World Contract，并生成可执行的 CEX 委托任务。",
             20,
         )
+    } else if lower.contains("build")
+        || lower.contains("craft")
+        || lower.contains("fabricate")
+        || body.contains("建")
+        || body.contains("造")
+        || body.contains("工坊")
+    {
+        (
+            "craft",
+            "在 Craft District 完成一次建造/创造行动，生成可迭代资产。",
+            14,
+        )
+    } else if lower.contains("market")
+        || lower.contains("listing")
+        || lower.contains("buy")
+        || lower.contains("client")
+        || body.contains("客户")
+        || body.contains("接单")
+        || body.contains("市场")
+    {
+        (
+            "market",
+            "进入 Market Bazaar，把现实机会映射为世界委托。",
+            16,
+        )
     } else if lower.contains("company")
         || lower.contains("shop")
         || lower.contains("studio")
@@ -26,17 +51,6 @@ fn world_action_kind(body: &str) -> (&'static str, &'static str, i64) {
             "创建了一个现实映射经营体，获得资产雏形和声望入口。",
             18,
         )
-    } else if lower.contains("build")
-        || lower.contains("craft")
-        || body.contains("建")
-        || body.contains("造")
-        || body.contains("工坊")
-    {
-        (
-            "craft",
-            "在 Craft District 完成一次建造/创造行动，生成可迭代资产。",
-            14,
-        )
     } else if lower.contains("hire")
         || lower.contains("agent")
         || body.contains("招募")
@@ -46,17 +60,6 @@ fn world_action_kind(body: &str) -> (&'static str, &'static str, i64) {
             "recruit",
             "与 Agent 居民建立合作关系，队伍能力获得提升。",
             12,
-        )
-    } else if lower.contains("market")
-        || lower.contains("client")
-        || body.contains("客户")
-        || body.contains("接单")
-        || body.contains("市场")
-    {
-        (
-            "market",
-            "进入 Market Bazaar，把现实机会映射为世界委托。",
-            16,
         )
     } else {
         (

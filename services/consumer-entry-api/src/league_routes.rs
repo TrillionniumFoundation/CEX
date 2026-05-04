@@ -38,6 +38,16 @@ fn league_visible_copy(value: &str) -> String {
             "No hallucination survives the raid. / 幻觉过不了团本审核。",
         ),
         ("rubric_scored", "rubric scored / 按规则评分"),
+        ("eligible", "eligible / 可领奖"),
+        ("review_hold", "review hold / 复核暂缓"),
+        ("approved_release", "approved release / 已批准发放"),
+        ("delivery_fit", "Deliverable fit / 成果适配"),
+        ("evidence_grounding", "Evidence grounding / 证据扎实度"),
+        ("risk_control", "Risk control / 风险控制"),
+        ("actionability", "Next action / 下一步可执行性"),
+        ("craft_polish", "Craft polish / 完成度"),
+        ("hidden_tests", "Hidden tests / 隐藏测试"),
+        ("llm_judge_adapter", "Judge adapter / 模型裁判"),
         ("pending", "pending / 待结算"),
         ("Level", "Level / 等级"),
         ("Skills/Tools/Skins", "Skills/Tools/Skins / 技能/工具/外观"),
@@ -418,6 +428,67 @@ pub(super) async fn get_league_web_shell(
         unlocked_tool_count,
         unlocked_skin_count,
     );
+    let latest_submission = league
+        .submissions
+        .values()
+        .max_by_key(|submission| submission.created_at_epoch);
+    let score_breakdown_cards = latest_submission
+        .map(|submission| {
+            submission
+                .score_events
+                .iter()
+                .map(|event| {
+                    let weighted_points = event.score * event.weight;
+                    let width = event.score.clamp(0.0, 100.0);
+                    format!(
+                        "<article class=\"mini score-mini\"><strong>{}</strong><span>{:.1}/100 · weight {:.0}% · +{:.1} pts</span><div class=\"score-bar\" aria-label=\"score {:.1}\"><i style=\"width:{:.1}%\"></i></div><small>{}</small></article>",
+                        escape_league_visible_text(&event.dimension),
+                        event.score,
+                        event.weight * 100.0,
+                        weighted_points,
+                        event.score,
+                        width,
+                        escape_league_visible_text(&event.judge_kind),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .filter(|html| !html.is_empty())
+        .unwrap_or_else(|| {
+            "<article class=\"mini score-mini\"><strong data-i18n-en=\"No scored submission yet\" data-i18n-zh=\"还没有评分成果\">No scored submission yet</strong><span data-i18n-en=\"Submit a result to see the rubric breakdown.\" data-i18n-zh=\"提交成果后会显示评分拆解。\">Submit a result to see the rubric breakdown.</span><code>/submit daily-dungeon-001 &lt;result&gt;</code></article>".to_string()
+        });
+    let latest_rating_line_en = latest_submission
+        .map(|submission| {
+            format!(
+                "Latest rating: {:.1}/100 · Grade {} · Reward {:.2} credits · Status {}",
+                submission.score,
+                league_visible_copy_for_language(&submission.grade, "en"),
+                submission.reward_amount,
+                league_visible_copy_for_language(
+                    submission.payout_status.as_deref().unwrap_or("eligible"),
+                    "en",
+                ),
+            )
+        })
+        .unwrap_or_else(|| "Latest rating appears after the first submitted result.".to_string());
+    let latest_rating_line_zh = latest_submission
+        .map(|submission| {
+            format!(
+                "最近评分：{:.1}/100 · 等级 {} · 奖励 {:.2} 点 · 状态 {}",
+                submission.score,
+                league_visible_copy_for_language(&submission.grade, "zh"),
+                submission.reward_amount,
+                league_visible_copy_for_language(
+                    submission.payout_status.as_deref().unwrap_or("eligible"),
+                    "zh",
+                ),
+            )
+        })
+        .unwrap_or_else(|| "提交第一份成果后会出现最近评分。".to_string());
+    let reward_formula_en = "Reward = score ÷ 20 × mode multiplier. Multipliers: Daily 1.0×, Guild Raid 1.25×, Bounty Arena 1.5×. Anti-cheat flags hold payout for review instead of deleting progress.";
+    let reward_formula_zh = "奖励 = 分数 ÷ 20 × 玩法倍率。倍率：每日副本 1.0×、公会团本 1.25×、悬赏竞技场 1.5×。反作弊命中时暂缓发放但不抹掉进度。";
+
     let league_header_language_switcher =
         trillionnium_language_inline_switcher_html("trillionnium-league-language-select");
 
@@ -472,13 +543,20 @@ pub(super) async fn get_league_web_shell(
     .mini-grid {{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }}
     .mini {{ display:grid; gap:7px; padding:14px; border-radius:16px; background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.08); }}
     .mini span, .timeline small {{ color:var(--muted); }}
+    .score-grid {{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; margin-top:12px; max-height:250px; overflow:auto; padding-right:4px; }}
+    .score-mini {{ align-content:start; padding:11px; gap:5px; }}
+    .score-bar {{ height:7px; border-radius:999px; overflow:hidden; background:rgba(255,255,255,.09); }}
+    .score-bar i {{ display:block; height:100%; border-radius:inherit; background:linear-gradient(90deg,var(--cyan),var(--gold)); }}
+    .reward-formula {{ display:grid; gap:6px; padding:12px; border-radius:16px; background:rgba(248,195,91,.08); border:1px solid rgba(248,195,91,.2); color:var(--muted); }}
+    .score-breakdown-drawer {{ margin-top:10px; }}
+    .score-breakdown-drawer summary {{ min-height:44px; display:flex; align-items:center; font-weight:800; color:var(--cyan); cursor:pointer; }}
     .timeline {{ list-style:none; padding:0; margin:0; display:grid; gap:10px; }}
     .timeline li {{ display:grid; grid-template-columns:1.3fr .6fr 1.1fr; gap:10px; padding:12px; border-radius:14px; background:rgba(255,255,255,.055); }}
     code {{ color:var(--cyan); background:rgba(100,227,255,.08); padding:3px 7px; border-radius:8px; overflow-wrap:anywhere; word-break:break-word; }}
     .cta {{ color:var(--bg); background:linear-gradient(135deg,var(--gold),#ff8d4d); padding:14px 18px; border-radius:16px; display:inline-flex; justify-content:center; align-items:center; min-height:48px; font-weight:800; text-decoration:none; }}
     .cta.secondary {{ color:var(--text); background:rgba(255,255,255,.07); border:1px solid rgba(100,227,255,.22); }}
     .league-hero-actions {{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }}
-    @media (max-width:900px) {{ header {{ grid-template-columns:1fr; padding:18px 16px 8px; gap:12px; }} h1 {{ font-size:clamp(38px,13vw,58px); }} .subtitle {{ font-size:14px; line-height:1.42; }} header > section .subtitle {{ margin:8px 0 0; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }} main > section {{ order:8; }} .grid,.play,.mini-grid {{ grid-template-columns:minmax(0,1fr); }} .stats {{ order:1; display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); overflow:visible; gap:8px; margin-top:8px; padding-bottom:0; }} .stat {{ min-height:68px; min-width:0; padding:10px 8px; }} .stat b {{ font-size:clamp(17px,5.4vw,22px); letter-spacing:-.03em; }} .stat span {{ font-size:11px; }} #league-playable-modes {{ order:2; }} #league-playable-modes .grid {{ grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }} #league-playable-modes .card {{ display:grid; gap:5px; min-height:0; padding:11px; }} #league-playable-modes .card h3 {{ margin:2px 0; font-size:15px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }} #league-playable-modes .card p {{ display:none; }} #league-playable-modes .card footer {{ gap:5px; margin-top:2px; font-size:10px; }} #league-playable-modes .pill {{ padding:4px 7px; font-size:9px; letter-spacing:.08em; }} #league-battle-console {{ order:3; }} #league-battle-console .panel {{ padding:18px; }} #league-battle-console textarea {{ min-height:70px; }} #league-battle-console .timeline {{ max-height:420px; overflow:auto; padding-right:4px; }} #league-battle-console .timeline li {{ grid-template-columns:1fr; gap:6px; padding:10px; }} #league-progression {{ order:4; }} #league-world-bridge {{ order:5; }} .card {{ min-height:auto; padding:16px; }} .card h3 {{ font-size:20px; line-height:1.15; }} .card p {{ margin:8px 0; line-height:1.45; }} .card footer {{ font-size:12px; }} .hero-card {{ padding:16px; border-radius:20px; gap:10px; }} .hero-card .subtitle {{ margin:0; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }} .league-hero-actions {{ grid-template-columns:repeat(3,minmax(0,1fr)); gap:7px; }} .league-hero-actions .cta {{ font-size:12px; }} .cta {{ min-height:44px; padding:10px 12px; border-radius:14px; }} .language-switcher {{ padding:5px 6px 5px 8px; font-size:11px; }} .language-switcher select {{ min-height:40px; min-width:82px; max-width:112px; padding:6px 22px 6px 8px; font-size:11px; }} }}
+    @media (max-width:900px) {{ header {{ grid-template-columns:1fr; padding:18px 16px 8px; gap:12px; }} h1 {{ font-size:clamp(38px,13vw,58px); }} .subtitle {{ font-size:14px; line-height:1.42; }} header > section .subtitle {{ margin:8px 0 0; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }} main > section {{ order:8; }} .grid,.play,.mini-grid {{ grid-template-columns:minmax(0,1fr); }} .score-grid {{ grid-template-columns:repeat(2,minmax(0,1fr)); max-height:220px; }} .score-mini small {{ display:none; }} .stats {{ order:1; display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); overflow:visible; gap:8px; margin-top:8px; padding-bottom:0; }} .stat {{ min-height:68px; min-width:0; padding:10px 8px; }} .stat b {{ font-size:clamp(17px,5.4vw,22px); letter-spacing:-.03em; }} .stat span {{ font-size:11px; }} #league-playable-modes {{ order:2; }} #league-playable-modes .grid {{ grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }} #league-playable-modes .card {{ display:grid; gap:5px; min-height:0; padding:11px; }} #league-playable-modes .card h3 {{ margin:2px 0; font-size:15px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }} #league-playable-modes .card p {{ display:none; }} #league-playable-modes .card footer {{ gap:5px; margin-top:2px; font-size:10px; }} #league-playable-modes .pill {{ padding:4px 7px; font-size:9px; letter-spacing:.08em; }} #league-battle-console {{ order:3; }} #league-battle-console .panel {{ padding:18px; }} #league-battle-console textarea {{ min-height:70px; }} #league-battle-console .timeline {{ max-height:320px; overflow:auto; padding-right:4px; }} #league-battle-console .timeline li {{ grid-template-columns:1fr; gap:6px; padding:10px; }} #league-progression {{ order:4; }} #league-world-bridge {{ order:5; }} .card {{ min-height:auto; padding:16px; }} .card h3 {{ font-size:20px; line-height:1.15; }} .card p {{ margin:8px 0; line-height:1.45; }} .card footer {{ font-size:12px; }} .hero-card {{ padding:16px; border-radius:20px; gap:10px; }} .hero-card .subtitle {{ margin:0; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }} .league-hero-actions {{ grid-template-columns:repeat(3,minmax(0,1fr)); gap:7px; }} .league-hero-actions .cta {{ font-size:12px; }} .cta {{ min-height:44px; padding:10px 12px; border-radius:14px; }} .language-switcher {{ padding:5px 6px 5px 8px; font-size:11px; }} .language-switcher select {{ min-height:40px; min-width:82px; max-width:112px; padding:6px 22px 6px 8px; font-size:11px; }} }}
   </style>
 </head>
 <body>
@@ -544,6 +622,12 @@ pub(super) async fn get_league_web_shell(
         <ul class="timeline">{timeline}</ul>
       </div>
     </section>
+    <section id="league-scoring-rewards" class="panel">
+      <h2 data-i18n-en="Scoring & Rewards" data-i18n-zh="评分与奖励">Scoring & Rewards</h2>
+      <p class="subtitle" data-i18n-en="{latest_rating_line_en}" data-i18n-zh="{latest_rating_line_zh}">{latest_rating_line_en}</p>
+      <div class="reward-formula"><strong data-i18n-en="Reward formula" data-i18n-zh="奖励公式">Reward formula</strong><span data-i18n-en="{reward_formula_en}" data-i18n-zh="{reward_formula_zh}">{reward_formula_en}</span><code>delivery 30% · evidence 24% · risk 18% · next action 16% · polish 12%</code></div>
+      <details class="dev-details score-breakdown-drawer"><summary data-i18n-en="Rubric breakdown" data-i18n-zh="展开评分明细">Rubric breakdown</summary><div class="score-grid">{score_breakdown_cards}</div></details>
+    </section>
     <section class="panel">
       <h2 data-i18n-en="Guild Halls" data-i18n-zh="公会大厅">Guild Halls</h2>
       <div class="mini-grid">{guild_cards}</div>
@@ -569,6 +653,11 @@ pub(super) async fn get_league_web_shell(
         guild_cards = guild_cards,
         progression_line_en = escape_html_text(&progression_line_en),
         progression_line_zh = escape_html_text(&progression_line_zh),
+        latest_rating_line_en = escape_html_text(&latest_rating_line_en),
+        latest_rating_line_zh = escape_html_text(&latest_rating_line_zh),
+        reward_formula_en = escape_html_text(reward_formula_en),
+        reward_formula_zh = escape_html_text(reward_formula_zh),
+        score_breakdown_cards = score_breakdown_cards,
         timeline = timeline,
         loadout_line = loadout_line,
         top_loot = escape_html_text(&top_loot),

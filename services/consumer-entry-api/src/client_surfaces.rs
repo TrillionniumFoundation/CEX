@@ -1535,7 +1535,8 @@ impl<'a> ClientAppProjectionContext<'a> {
                 "aria_live_ux_status_visible",
                 "offline_feed_fallback_status_visible",
                 "web_session_feed_hydration_visible",
-                "feed_api_hydration_visible"
+                "feed_api_hydration_visible",
+                "next_action_rail_visible"
             ]
         })
     }

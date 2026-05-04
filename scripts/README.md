@@ -63,6 +63,14 @@ CEX_ENV_FILE=run/local-production/.env ./scripts/check-trillionnium-ui-audit.sh
 
 The audit checks English-mode visible CJK leaks, actionable horizontal overflow, first-viewport tapability, and mobile/tablet/desktop ordering/height budgets for the current first-playable UI. It writes JSON plus first-viewport screenshots under `run/trillionnium-ui-audit/`.
 
+For the hard Trillionnium playability scorecard gate, run:
+
+```bash
+CEX_ENV_FILE=run/local-production/.env ./scripts/check-trillionnium-world-playability-scorecard.sh
+```
+
+The scorecard reads `consumer-entry-api /health` plus `/metrics` and requires the five user-facing product metrics to be `10.0/10`: technical reliability, first playable completeness, real-player comprehension cost, long-term replayability, and economy/social strategy depth. It also keeps 10 diagnostic sub-axes (onboarding, intent mapping, quest clarity, scoring/reward explainability, feedback/recovery, economy balance, social/co-op, retention/progression, surface feedback, observability) at `10.0/10`. It writes JSON under `run/playability-scorecard/`. The real-user-beta and public-commercial wrappers also require this scorecard before they pass.
+
 Set `CEX_ENABLE_QUEUED_WORKER=0` when you need deterministic gate/debug behavior without background queue consumption. Set `CEX_ENABLE_ENTRY_SERVICES=0` only when you explicitly want the older core-only local runtime.
 
 If you want CEX to use a repo-local isolated OpenClaw scope instead of the default `~/.openclaw` / `main` agent, bootstrap it once with:
@@ -123,7 +131,7 @@ CEX_PROVIDER_PROBE_MODEL=google/gemini-2.5-flash   CEX_SOAK_DURATION_SECONDS=300
 
 The soak writes JSONL plus a summary under `run/soak/` and exits non-zero on any failed tick or provider probe.
 
-The current readiness evidence matrix and known non-100% blockers are tracked in `docs/production-readiness-evidence-v1.md`. The final scoped Linux self-hosted signoff entrypoint is `scripts/check-production-signoff.sh`; it requires a clean repo, production readiness, and fresh 2h+ soak evidence. In production mode, readiness also requires a fresh successful `scripts/drill-db-backup-restore.sh` summary by default; set `CEX_DB_BACKUP_RESTORE_DRILL_REQUIRED=0` only for local smoke/debug runs.
+The current readiness evidence matrix and known non-100% blockers are tracked in `docs/production-readiness-evidence-v1.md`. The final scoped Linux self-hosted signoff entrypoint is `scripts/check-production-signoff.sh`; it requires a clean repo, production readiness, and fresh 2h+ soak evidence. In production mode, readiness also requires the Trillionnium five user-facing playability metrics at 10/10 plus a fresh successful `scripts/drill-db-backup-restore.sh` summary by default; set `CEX_DB_BACKUP_RESTORE_DRILL_REQUIRED=0` only for local smoke/debug runs.
 
 A production-posture env skeleton is available at `.env.production.example`; it enumerates the non-default keys, ingress/session-auth controls, durable edge stores, identity governance files, and provider probe settings that the default production readiness mode expects. `scripts/bootstrap-local-production-env.sh` writes owner-only local env and policy files; production readiness rejects a `CEX_ENV_FILE` that is group/other readable. Set `CEX_REQUIRED_BLOCK_CAPABILITY_PREFIXES` to require the live execution policy bundle to block known non-launch providers before signoff. Production readiness also requires a fresh monitoring deploy verification metadata file by default (`CEX_MONITORING_DEPLOY_METADATA_PATH`).
 
