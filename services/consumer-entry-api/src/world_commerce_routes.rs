@@ -2001,61 +2001,13 @@ pub(super) async fn accept_world_work_order_inner(
             created_at_epoch: now,
         };
         league.world.world_work_orders[work_index].status = "accepted_pending_payment".to_string();
-        if let Some(company_index) = indexes
-            .company_index_by_id
-            .get(&work_order_seed.company_id)
-            .copied()
-        {
-            if let Some(company) = league.world.world_companies.get_mut(company_index) {
-                company.reputation_score += reputation_delta;
-                company.level = 1 + (company.revenue_score / 100).max(0);
-            }
-        }
-        let mut buyer = ensure_league_player(&mut league, &matrix_user_id, None);
-        buyer.xp += 3;
-        buyer.reputation += 1;
-        league
-            .players_by_matrix_user
-            .insert(matrix_user_id.clone(), buyer);
-        let mut seller =
-            ensure_league_player(&mut league, &work_order_seed.seller_matrix_user_id, None);
-        seller.xp += reputation_delta;
-        seller.reputation += reputation_delta;
-        seller.rating += (reputation_delta / 2).max(1);
-        league
-            .players_by_matrix_user
-            .insert(work_order_seed.seller_matrix_user_id.clone(), seller);
-        let standing = upsert_world_faction_standing(
-            &mut league,
-            &work_order_seed.seller_matrix_user_id,
-            "faction-market-guild",
-            reputation_delta,
-            now,
-        );
-        let economy_event = WorldEconomyEvent {
-            economy_event_id: league_hash_id(
-                "world-econ",
-                &format!("{}:{}:{}", matrix_user_id, acceptance.acceptance_id, now),
-            ),
-            matrix_user_id: work_order_seed.seller_matrix_user_id.clone(),
-            event_kind: "work_accepted".to_string(),
-            subject_id: work_order_seed.work_order_id.clone(),
-            credits_delta: 0,
-            reputation_delta,
-            created_at_epoch: now,
-        };
         league.world.world_work_acceptances.push(acceptance.clone());
-        league
-            .world
-            .world_economy_events
-            .push(economy_event.clone());
         (
             league.clone(),
             league.world.world_work_orders[work_index].clone(),
             purchase_seed,
             acceptance,
-            economy_event,
-            standing,
+            reputation_delta,
         )
     };
     let buyer_consume =
@@ -2066,6 +2018,8 @@ pub(super) async fn accept_world_work_order_inner(
         let mut work_order = snapshot.1.clone();
         let mut purchase = snapshot.2.clone();
         let mut acceptance = snapshot.3.clone();
+        let mut economy_event = None;
+        let mut standing = None;
         let buyer_consumed =
             buyer_consume.status == "consumed" || buyer_consume.status == "duplicate";
         purchase.buyer_consume_status = Some(buyer_consume.status.clone());
@@ -2096,13 +2050,69 @@ pub(super) async fn accept_world_work_order_inner(
         indexes.replace_purchase_by_id(&mut league.world, &purchase);
         indexes.replace_work_order_by_id(&mut league.world, &work_order);
         indexes.replace_acceptance_by_id(&mut league.world, &acceptance);
+        if buyer_consumed {
+            if let Some(company_index) = indexes
+                .company_index_by_id
+                .get(&work_order.company_id)
+                .copied()
+            {
+                if let Some(company) = league.world.world_companies.get_mut(company_index) {
+                    company.reputation_score += snapshot.4;
+                    company.level = 1 + (company.revenue_score / 100).max(0);
+                }
+            }
+            let mut buyer =
+                ensure_league_player(&mut league, &work_order.buyer_matrix_user_id, None);
+            buyer.xp += 3;
+            buyer.reputation += 1;
+            league
+                .players_by_matrix_user
+                .insert(work_order.buyer_matrix_user_id.clone(), buyer);
+            let mut seller =
+                ensure_league_player(&mut league, &work_order.seller_matrix_user_id, None);
+            seller.xp += snapshot.4;
+            seller.reputation += snapshot.4;
+            seller.rating += (snapshot.4 / 2).max(1);
+            league
+                .players_by_matrix_user
+                .insert(work_order.seller_matrix_user_id.clone(), seller);
+            let accepted_event = WorldEconomyEvent {
+                economy_event_id: league_hash_id(
+                    "world-econ",
+                    &format!(
+                        "{}:{}:{}",
+                        work_order.buyer_matrix_user_id,
+                        acceptance.acceptance_id,
+                        acceptance.created_at_epoch
+                    ),
+                ),
+                matrix_user_id: work_order.seller_matrix_user_id.clone(),
+                event_kind: "work_accepted".to_string(),
+                subject_id: work_order.work_order_id.clone(),
+                credits_delta: 0,
+                reputation_delta: snapshot.4,
+                created_at_epoch: acceptance.created_at_epoch,
+            };
+            standing = Some(upsert_world_faction_standing(
+                &mut league,
+                &work_order.seller_matrix_user_id,
+                "faction-market-guild",
+                snapshot.4,
+                acceptance.created_at_epoch,
+            ));
+            league
+                .world
+                .world_economy_events
+                .push(accepted_event.clone());
+            economy_event = Some(accepted_event);
+        }
         (
             league.clone(),
             work_order,
             purchase,
             acceptance,
-            snapshot.4.clone(),
-            snapshot.5.clone(),
+            economy_event,
+            standing,
         )
     };
     if let Err(response) =

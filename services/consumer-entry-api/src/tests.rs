@@ -28,9 +28,9 @@ use super::{
     SessionAuthIssuerRegistryIssuer, SessionAuthIssuerRegistryMetadata,
     SessionAuthIssuerRegistryRuntimeState, UserSessionAuthClaims, WorldCompany, WorldContract,
     WorldContractCompletion, WorldEconomyEvent, WorldEvent, WorldListing, WorldMapNode,
-    WorldPlayerPosition, WorldRelationship, WorldShop, DEFAULT_LEAGUE_LLM_JUDGE_TIMEOUT_MS,
-    DEFAULT_LEAGUE_WEB_SESSION_TTL_SECS, DEFAULT_MAX_TEXT_CHARS,
-    TRILLIONNIUM_REPOSITORY_MIGRATION_FLOOR, USER_SESSION_ASSERTION_HEADER,
+    WorldPlayerPosition, WorldPurchase, WorldRelationship, WorldShop, WorldWorkOrder,
+    DEFAULT_LEAGUE_LLM_JUDGE_TIMEOUT_MS, DEFAULT_LEAGUE_WEB_SESSION_TTL_SECS,
+    DEFAULT_MAX_TEXT_CHARS, TRILLIONNIUM_REPOSITORY_MIGRATION_FLOOR, USER_SESSION_ASSERTION_HEADER,
     USER_SESSION_SIGNATURE_HEADER, WORLD_ROUTE_ACTION_TEXTAREA_ID, WORLD_ROUTE_CONTRACTS_PANEL_ID,
     WORLD_ROUTE_CONTRACT_INPUT_ID, WORLD_ROUTE_WORK_DELIVER_TEXTAREA_ID,
 };
@@ -4009,6 +4009,143 @@ async fn world_buy_does_not_release_commercial_progression_without_buyer_reserve
         .iter()
         .any(|standing| standing.matrix_user_id == buyer_matrix_user_id
             || standing.matrix_user_id == seller_matrix_user_id));
+}
+
+#[tokio::test]
+async fn world_accept_does_not_release_reputation_without_buyer_consume() {
+    let mut config = test_config();
+    config.runtime_profile = RuntimeProfile::Production;
+    let state = test_state(config, IdentityBindings::default(), HashMap::new());
+    let app = build_router(state.clone());
+    let buyer_matrix_user_id = "@world-unconsumed-buyer:local.dev";
+    let seller_matrix_user_id = "@world-unconsumed-seller:local.dev";
+    let company_id = "company-unconsumed-accept";
+    let shop_id = "shop-unconsumed-accept";
+    let listing_id = "listing-unconsumed-accept";
+    let purchase_id = "purchase-unconsumed-accept";
+    let work_order_id = "work-unconsumed-accept";
+    {
+        let mut league = state.inner.league_state.lock().await;
+        league.world.world_companies.push(WorldCompany {
+            company_id: company_id.to_string(),
+            owner_matrix_user_id: seller_matrix_user_id.to_string(),
+            asset_id: "asset-unconsumed-accept".to_string(),
+            location_id: "starter-studio".to_string(),
+            name: "Unconsumed Accept Guard Studio".to_string(),
+            company_kind: "studio".to_string(),
+            status: "operating".to_string(),
+            revenue_score: 180,
+            reputation_score: 20,
+            level: 2,
+            created_at_epoch: 1_777_897_950,
+        });
+        league.world.world_shops.push(WorldShop {
+            shop_id: shop_id.to_string(),
+            company_id: company_id.to_string(),
+            owner_matrix_user_id: seller_matrix_user_id.to_string(),
+            location_id: "starter-studio".to_string(),
+            name: "Unconsumed Accept Guard Storefront".to_string(),
+            shop_kind: "studio".to_string(),
+            status: "operating".to_string(),
+            listing_count: 1,
+            gross_merchandise_score: 180,
+            created_at_epoch: 1_777_897_950,
+        });
+        league.world.world_listings.push(WorldListing {
+            listing_id: listing_id.to_string(),
+            shop_id: shop_id.to_string(),
+            company_id: company_id.to_string(),
+            owner_matrix_user_id: seller_matrix_user_id.to_string(),
+            asset_id: "asset-unconsumed-accept".to_string(),
+            title: "Unconsumed accept guard offer".to_string(),
+            listing_kind: "service_offer".to_string(),
+            status: "listed".to_string(),
+            price_credits: 90,
+            quality_score: 80,
+            created_at_epoch: 1_777_897_950,
+        });
+        league.world.world_purchases.push(WorldPurchase {
+            purchase_id: purchase_id.to_string(),
+            listing_id: listing_id.to_string(),
+            shop_id: shop_id.to_string(),
+            company_id: company_id.to_string(),
+            buyer_matrix_user_id: buyer_matrix_user_id.to_string(),
+            seller_matrix_user_id: seller_matrix_user_id.to_string(),
+            price_credits: 90,
+            status: "reserved".to_string(),
+            ledger_status: Some("settled".to_string()),
+            ledger_account_id: Some("seller-account".to_string()),
+            ledger_entry_id: Some("seller-grant-entry".to_string()),
+            ledger_balance_after: Some(90.0),
+            ledger_error: None,
+            buyer_ledger_status: Some("reserved".to_string()),
+            buyer_ledger_account_id: Some("buyer-account".to_string()),
+            buyer_ledger_entry_id: Some("buyer-reserve-entry".to_string()),
+            buyer_ledger_balance_after: Some(0.0),
+            buyer_ledger_error: None,
+            buyer_consume_status: Some("pending_acceptance".to_string()),
+            buyer_consume_entry_id: None,
+            buyer_consume_balance_after: None,
+            buyer_consume_error: None,
+            created_at_epoch: 1_777_897_950,
+        });
+        league.world.world_work_orders.push(WorldWorkOrder {
+            work_order_id: work_order_id.to_string(),
+            purchase_id: purchase_id.to_string(),
+            listing_id: listing_id.to_string(),
+            buyer_matrix_user_id: buyer_matrix_user_id.to_string(),
+            seller_matrix_user_id: seller_matrix_user_id.to_string(),
+            company_id: company_id.to_string(),
+            status: "delivered".to_string(),
+            brief: "Delivered work awaiting buyer consume".to_string(),
+            value_score: 90,
+            created_at_epoch: 1_777_897_950,
+        });
+    }
+
+    let (status, acceptance) = send_json_request(
+        &app,
+        "POST",
+        &format!("/v1/world/work-orders/{work_order_id}/accept"),
+        &[],
+        json!({
+            "matrix_user_id": buyer_matrix_user_id,
+            "body": "Buyer accepts the work textually, but omits room context so ledger consume cannot release the reserved payment."
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "accept response: {acceptance}");
+    assert_eq!(acceptance["buyer_consume_status"], "skipped_missing_room");
+    assert_eq!(acceptance["purchase"]["status"], "accepted_payment_hold");
+    assert_eq!(acceptance["work_order"]["status"], "accepted_payment_hold");
+    assert_eq!(acceptance["acceptance"]["status"], "accepted_payment_hold");
+    assert!(acceptance["economy_event"].is_null());
+    assert!(acceptance["standing"].is_null());
+
+    let league = state.inner.league_state.lock().await;
+    let company = league
+        .world
+        .world_companies
+        .iter()
+        .find(|company| company.company_id == company_id)
+        .expect("company should remain present");
+    assert_eq!(company.reputation_score, 20);
+    assert!(!league
+        .players_by_matrix_user
+        .contains_key(buyer_matrix_user_id));
+    assert!(!league
+        .players_by_matrix_user
+        .contains_key(seller_matrix_user_id));
+    assert!(!league
+        .world
+        .world_economy_events
+        .iter()
+        .any(|event| { event.subject_id == work_order_id && event.event_kind == "work_accepted" }));
+    assert!(!league
+        .world
+        .world_faction_standings
+        .iter()
+        .any(|standing| standing.matrix_user_id == seller_matrix_user_id));
 }
 
 #[tokio::test]
