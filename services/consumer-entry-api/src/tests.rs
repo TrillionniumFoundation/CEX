@@ -4734,6 +4734,109 @@ async fn world_company_review_hold_does_not_release_commercial_progression_or_fo
 }
 
 #[tokio::test]
+async fn world_contract_review_hold_does_not_upgrade_asset_or_player_progress() {
+    let mut config = test_config();
+    config.runtime_profile = RuntimeProfile::Production;
+    let state = test_state(config, IdentityBindings::default(), HashMap::new());
+    let matrix_user_id = "@world-contract-review-hold:local.dev";
+    let contract_id = "world-contract-review-hold-guard";
+    let asset_id = "asset-contract-review-hold-guard";
+    {
+        let mut league = state.inner.league_state.lock().await;
+        let starter_location_id = league
+            .world
+            .world_map_nodes
+            .get("starter-studio")
+            .map(|node| node.location_id.clone())
+            .unwrap_or_else(|| "starter-studio".to_string());
+        league.world.world_events.push(WorldEvent {
+            event_id: "world-event-review-hold-contract".to_string(),
+            actor_matrix_user_id: matrix_user_id.to_string(),
+            room_id: Some("!room:local.dev".to_string()),
+            location_id: starter_location_id.clone(),
+            event_kind: "world_contract".to_string(),
+            body: "Review hold contract should not release progression".to_string(),
+            result: "queued".to_string(),
+            impact_score: 7,
+            cex_task_id: Some("task-review-hold-contract".to_string()),
+            cex_status: Some("Running".to_string()),
+            created_at_epoch: 1_777_902_000,
+        });
+        league.world.world_contracts.push(WorldContract {
+            contract_id: contract_id.to_string(),
+            event_id: "world-event-review-hold-contract".to_string(),
+            actor_matrix_user_id: matrix_user_id.to_string(),
+            location_id: starter_location_id.clone(),
+            task_id: "task-review-hold-contract".to_string(),
+            title: "Review hold contract progression guard".to_string(),
+            body: "Completion must pass review before upgrading assets or players".to_string(),
+            status: "open".to_string(),
+            cex_status: Some("Running".to_string()),
+            value_score: 64,
+            created_at_epoch: 1_777_902_001,
+        });
+        league.world.world_assets.push(WorldAsset {
+            asset_id: asset_id.to_string(),
+            owner_matrix_user_id: matrix_user_id.to_string(),
+            location_id: starter_location_id,
+            asset_kind: "contract_proof".to_string(),
+            name: "Review Hold Contract Asset".to_string(),
+            status: "active".to_string(),
+            value_score: 70,
+            upgrade_level: 2,
+            upgrade_points: 10,
+            last_upgrade_kind: None,
+            created_at_epoch: 1_777_902_002,
+        });
+    }
+    let app = build_router(state.clone());
+    let (status, completion) = send_json_request(
+        &app,
+        "POST",
+        &format!("/v1/world/contracts/{contract_id}/complete"),
+        &[],
+        json!({
+            "matrix_user_id": matrix_user_id,
+            "body": "copy copy copy copy copy copy copy copy copy copy copy copy copy copy copy copy"
+        }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "contract review-hold completion failed: {completion}"
+    );
+    assert_eq!(completion["completion"]["payout_status"], "review_hold");
+    assert_eq!(completion["completion"]["ledger_status"], "held_review");
+    assert_eq!(completion["contract"]["status"], "review_hold");
+    assert_eq!(completion["contract"]["cex_status"], "review_hold");
+    assert_eq!(completion["contract"]["value_score"], 64);
+
+    let league = state.inner.league_state.lock().await;
+    assert!(!league.players_by_matrix_user.contains_key(matrix_user_id));
+    let contract = league
+        .world
+        .world_contracts
+        .iter()
+        .find(|contract| contract.contract_id == contract_id)
+        .expect("contract should remain present");
+    assert_eq!(contract.status, "review_hold");
+    assert_eq!(contract.cex_status.as_deref(), Some("review_hold"));
+    assert_eq!(contract.value_score, 64);
+    let asset = league
+        .world
+        .world_assets
+        .iter()
+        .find(|asset| asset.asset_id == asset_id)
+        .expect("asset should remain present");
+    assert_eq!(asset.status, "active");
+    assert_eq!(asset.value_score, 70);
+    assert_eq!(asset.upgrade_level, 2);
+    assert_eq!(asset.upgrade_points, 10);
+    assert!(asset.last_upgrade_kind.is_none());
+}
+
+#[tokio::test]
 async fn league_submission_requires_ledger_settlement_before_earned_rewards() {
     let state = test_state(test_config(), IdentityBindings::default(), HashMap::new());
     let app = build_router(state.clone());

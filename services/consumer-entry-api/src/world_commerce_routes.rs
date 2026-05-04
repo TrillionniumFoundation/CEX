@@ -3450,7 +3450,6 @@ pub(super) async fn complete_world_contract_inner(
         let now = Utc::now().timestamp();
         let mut league = state.inner.league_state.lock().await;
         let indexes = build_world_indexes(&league.world);
-        let mut player = ensure_league_player(&mut league, &matrix_user_id, None);
         let completion_id = league_hash_id(
             "world-contract-completion",
             &format!("{}:{}:{}", contract.contract_id, now, body),
@@ -3474,45 +3473,56 @@ pub(super) async fn complete_world_contract_inner(
             ledger_error: None,
             created_at_epoch: now,
         };
+        let released = judgement.payout_status == "eligible";
         let asset_delta = (judgement.score / 5.0).round() as i64;
         if let Some(contract_index) = indexes.contract_index(&contract.contract_id) {
             let stored_contract = &mut league.world.world_contracts[contract_index];
-            stored_contract.status = if judgement.payout_status == "eligible" {
+            stored_contract.status = if released {
                 "completed_pending_settlement".to_string()
             } else {
                 "review_hold".to_string()
             };
-            stored_contract.value_score += asset_delta.max(1);
-            stored_contract.cex_status = Some("completed".to_string());
-        }
-        if let Some(asset_index) = indexes.latest_asset_index_for_owner(&matrix_user_id) {
-            let asset = &mut league.world.world_assets[asset_index];
-            asset.value_score += asset_delta.max(1);
-            asset.upgrade_points += asset_delta.max(1);
-            asset.upgrade_level = asset.upgrade_level.max(1) + (asset.upgrade_points / 60).max(0);
-            asset.last_upgrade_kind = Some("contract_completion".to_string());
-            asset.status = "upgraded_by_contract".to_string();
-        } else {
-            league.world.world_assets.push(WorldAsset {
-                asset_id: league_hash_id("world-asset", &completion_id),
-                owner_matrix_user_id: matrix_user_id.clone(),
-                location_id: contract.location_id.clone(),
-                asset_kind: "contract_proof".to_string(),
-                name: "World Contract Proof".to_string(),
-                status: "active".to_string(),
-                value_score: asset_delta.max(1),
-                upgrade_level: 1,
-                upgrade_points: asset_delta.max(1),
-                last_upgrade_kind: Some("contract_completion".to_string()),
-                created_at_epoch: now,
+            stored_contract.cex_status = Some(if released {
+                "completed".to_string()
+            } else {
+                "review_hold".to_string()
             });
+            if released {
+                stored_contract.value_score += asset_delta.max(1);
+            }
         }
-        player.xp += judgement.score.round() as i64;
-        player.reputation += (judgement.score / 8.0).round() as i64;
-        player.rating += ((judgement.score - 50.0) / 3.0).round() as i64;
-        league
-            .players_by_matrix_user
-            .insert(matrix_user_id.clone(), player);
+        if released {
+            if let Some(asset_index) = indexes.latest_asset_index_for_owner(&matrix_user_id) {
+                let asset = &mut league.world.world_assets[asset_index];
+                asset.value_score += asset_delta.max(1);
+                asset.upgrade_points += asset_delta.max(1);
+                asset.upgrade_level =
+                    asset.upgrade_level.max(1) + (asset.upgrade_points / 60).max(0);
+                asset.last_upgrade_kind = Some("contract_completion".to_string());
+                asset.status = "upgraded_by_contract".to_string();
+            } else {
+                league.world.world_assets.push(WorldAsset {
+                    asset_id: league_hash_id("world-asset", &completion_id),
+                    owner_matrix_user_id: matrix_user_id.clone(),
+                    location_id: contract.location_id.clone(),
+                    asset_kind: "contract_proof".to_string(),
+                    name: "World Contract Proof".to_string(),
+                    status: "active".to_string(),
+                    value_score: asset_delta.max(1),
+                    upgrade_level: 1,
+                    upgrade_points: asset_delta.max(1),
+                    last_upgrade_kind: Some("contract_completion".to_string()),
+                    created_at_epoch: now,
+                });
+            }
+            let mut player = ensure_league_player(&mut league, &matrix_user_id, None);
+            player.xp += judgement.score.round() as i64;
+            player.reputation += (judgement.score / 8.0).round() as i64;
+            player.rating += ((judgement.score - 50.0) / 3.0).round() as i64;
+            league
+                .players_by_matrix_user
+                .insert(matrix_user_id.clone(), player);
+        }
         league
             .world
             .world_contract_completions
