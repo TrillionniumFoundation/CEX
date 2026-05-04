@@ -233,11 +233,67 @@ impl<'a> WorldHomeProjectionContext<'a> {
         fields
     }
 
+    fn playability_runtime_json(&self) -> Value {
+        let reviewable_work_count = self
+            .world
+            .world_work_orders
+            .iter()
+            .filter(|work_order| {
+                matches!(
+                    work_order.status.as_str(),
+                    "delivered" | "delivery_review_hold"
+                )
+            })
+            .count();
+        let recovery_count = self.world.world_work_rejections.len()
+            + self.world.world_work_reopens.len()
+            + self.world.world_work_cancellations.len();
+        json!({
+            "contract_version": "trillionnium_world_playability_runtime_v1",
+            "optimization_scope": "p0_p1_p2_full_playability",
+            "player_loop": "map focus → bounty/contract → commission → submit/rate/recover → reward → next route",
+            "lanes": [
+                {"lane_id": "p0_first_session", "surface": "/app", "target": "first 3-minute playable loop"},
+                {"lane_id": "p1_strategy_depth", "surface": "/world", "target": "economy, faction, guild, and recovery tradeoffs"},
+                {"lane_id": "p2_retention_ops", "surface": "/league", "target": "daily route backlog, weekly raid, unlocks, and telemetry"}
+            ],
+            "runtime_counts": {
+                "map_nodes": self.world.world_map_nodes.len(),
+                "contracts": self.world.world_contracts.len(),
+                "listings": self.world.world_listings.len(),
+                "work_orders": self.world.world_work_orders.len(),
+                "reviewable_work_orders": reviewable_work_count,
+                "recovery_records": recovery_count,
+                "economy_events": self.world.world_economy_events.len(),
+                "relationships": self.world.world_relationships.len(),
+                "faction_standings": self.world.world_faction_standings.len(),
+            },
+            "telemetry_events": [
+                "first_focus_selected",
+                "world_action_started",
+                "commission_accepted",
+                "result_submitted",
+                "rating_or_recovery_chosen",
+                "reward_read",
+                "next_route_queued"
+            ],
+            "readiness_checks": [
+                "world_home_exposes_p0_p1_p2_lanes",
+                "runtime_counts_cover_recovery_and_economy",
+                "telemetry_funnel_declared"
+            ]
+        })
+    }
+
     fn projection_fields(&self) -> Map<String, Value> {
         let mut projection = self.static_fields();
         projection.extend(self.world_collection_fields());
         projection.extend(self.map_runtime_fields());
         projection.extend(self.route_runtime_fields());
+        projection.insert(
+            "playability_runtime".to_string(),
+            self.playability_runtime_json(),
+        );
         projection.insert("counts".to_string(), self.counts_json());
         projection
     }

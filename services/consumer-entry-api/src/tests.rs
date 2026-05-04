@@ -1085,6 +1085,19 @@ fn world_client_surfaces_expose_projection_layer_contracts() {
         home["index_layer"],
         "WorldIndexes::world_home_sorted_ids_v1"
     );
+    assert_eq!(
+        home["playability_runtime"]["contract_version"],
+        "trillionnium_world_playability_runtime_v1"
+    );
+    assert_eq!(
+        home["playability_runtime"]["optimization_scope"],
+        "p0_p1_p2_full_playability"
+    );
+    assert!(home["playability_runtime"]["lanes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|lane| lane["lane_id"] == "p1_strategy_depth"));
 
     let map = world_map_json(&league, matrix_user_id);
     assert_eq!(map["projection_layer"], "world_map_projection_v1");
@@ -1145,6 +1158,38 @@ fn world_client_surfaces_expose_projection_layer_contracts() {
         .unwrap()
         .iter()
         .any(|check| check == "matrix_app_card_exposes_onboarding"));
+    assert_eq!(
+        app["playability_coach"]["contract_version"],
+        "trillionnium_playability_coach_v1"
+    );
+    assert_eq!(
+        app["playability_coach"]["optimization_scope"],
+        "p0_p1_p2_full_playability"
+    );
+    let coach_lanes = app["playability_coach"]["lanes"].as_array().unwrap();
+    for expected_lane in ["p0_first_session", "p1_strategy_depth", "p2_retention_ops"] {
+        assert!(coach_lanes
+            .iter()
+            .any(|lane| lane["lane_id"] == expected_lane));
+    }
+    assert!(
+        app["playability_coach"]["next_best_actions"]
+            .as_array()
+            .unwrap()
+            .len()
+            >= 4
+    );
+    let coach_checks = app["playability_coach"]["readiness_checks"]
+        .as_array()
+        .unwrap();
+    for expected_check in [
+        "p0_next_best_action_visible",
+        "p1_economy_tradeoffs_visible",
+        "p1_social_coop_choices_visible",
+        "p2_telemetry_contract_visible",
+    ] {
+        assert!(coach_checks.iter().any(|check| check == expected_check));
+    }
 }
 
 #[test]
@@ -1318,6 +1363,11 @@ fn client_app_map_hub_projects_stream_counts() {
         "offline_feed_fallback_status_visible",
         "web_session_feed_hydration_visible",
         "next_action_rail_visible",
+        "playability_coach_visible",
+        "p0_next_best_action_visible",
+        "p1_strategy_choices_visible",
+        "p2_retention_telemetry_visible",
+        "failure_recovery_lane_visible",
     ] {
         assert!(mobile_shell_checks.iter().any(|value| value == check));
     }
@@ -1429,11 +1479,18 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(app_html.contains("动态"));
     assert!(app_html.contains("我"));
     assert!(app_html.contains("app-first-playable-onboarding"));
+    assert!(app_html.contains("app-playability-coach"));
     assert!(app_html.contains("新手主线"));
     assert!(app_html.contains("first_playable_loop_100"));
     assert!(app_html.contains("trillionnium_first_playable_onboarding_v1"));
+    assert!(app_html.contains("trillionnium_playability_coach_v1"));
+    assert!(app_html.contains("data-playability-lane=\"p0_first_session\""));
+    assert!(app_html.contains("data-playability-lane=\"p1_strategy_depth\""));
+    assert!(app_html.contains("data-playability-lane=\"p2_retention_ops\""));
     assert!(app_html.contains("data-onboarding-step=\"quest_delivery\""));
     assert!(app_html.contains("route_task_graph_next_action_visible"));
+    assert!(app_html.contains("playability_coach_visible"));
+    assert!(app_html.contains("p2_retention_telemetry_visible"));
     assert!(app_html.contains("/v1/client/feed/@alice:local.dev"));
     assert!(app_html.contains("app-feed-api-status"));
     assert!(app_html.contains("app-feed-filter-actions"));
@@ -5422,6 +5479,21 @@ async fn health_endpoint_exposes_identity_governance_overview() {
             .unwrap()
             .iter()
             .any(|check| check["check_id"] == "league_score_breakdown_explainable")
+    );
+    assert!(
+        body["trillionnium_world_playability_scorecard"]["axes"]["surface_feedback"]["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|check| check["check_id"] == "playability_coach_visible")
+    );
+    assert!(
+        body["trillionnium_world_playability_scorecard"]["user_metric_axes"]
+            ["economy_social_strategy_depth"]["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|check| check["check_id"] == "coach_strategy_depth_visible")
     );
 
     let _ = std::fs::remove_file(&temp_bindings_path);

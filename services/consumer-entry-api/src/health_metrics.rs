@@ -136,6 +136,11 @@ fn mobile_shell_ux_contract_green(app: &Value) -> bool {
         "web_session_feed_hydration_visible",
         "feed_api_hydration_visible",
         "next_action_rail_visible",
+        "playability_coach_visible",
+        "p0_next_best_action_visible",
+        "p1_strategy_choices_visible",
+        "p2_retention_telemetry_visible",
+        "failure_recovery_lane_visible",
     ]
     .iter()
     .all(|expected| readiness_checks.iter().any(|check| check == expected))
@@ -419,6 +424,17 @@ fn trillionnium_world_playability_scorecard_json(
 ) -> Value {
     let matrix_user_id = first_maturity_matrix_user_id(league);
     let app = client_app_json(league, matrix_user_id.as_str());
+    let world_home = world_home_json(league);
+    let world_home_playability_runtime_green = world_home
+        .get("playability_runtime")
+        .and_then(|runtime| runtime.get("contract_version"))
+        .and_then(Value::as_str)
+        == Some("trillionnium_world_playability_runtime_v1")
+        && world_home
+            .get("playability_runtime")
+            .and_then(|runtime| runtime.get("readiness_checks"))
+            .and_then(Value::as_array)
+            .is_some_and(|checks| checks.len() >= 3);
     let route_artifacts = build_world_route_artifacts(&league.world);
     let onboarding = app.get("onboarding").cloned().unwrap_or_else(|| json!({}));
     let onboarding_steps = onboarding
@@ -440,6 +456,51 @@ fn trillionnium_world_playability_scorecard_json(
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
+    let playability_coach = app
+        .get("playability_coach")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let coach_lanes = playability_coach
+        .get("lanes")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let coach_next_best_actions = playability_coach
+        .get("next_best_actions")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let coach_readiness_checks = playability_coach
+        .get("readiness_checks")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let coach_check = |check_id: &str| coach_readiness_checks.iter().any(|check| check == check_id);
+    let coach_lane = |lane_id: &str| {
+        coach_lanes.iter().any(|lane| {
+            lane.get("lane_id").and_then(Value::as_str) == Some(lane_id)
+                && lane
+                    .get("player_goal")
+                    .and_then(Value::as_str)
+                    .is_some_and(|goal| !goal.trim().is_empty())
+                && lane
+                    .get("command")
+                    .and_then(Value::as_str)
+                    .is_some_and(|command| !command.trim().is_empty())
+        })
+    };
+    let coach_contract_v1 = playability_coach
+        .get("contract_version")
+        .and_then(Value::as_str)
+        == Some("trillionnium_playability_coach_v1");
+    let coach_p0_p1_p2_green = coach_contract_v1
+        && coach_lane("p0_first_session")
+        && coach_lane("p1_strategy_depth")
+        && coach_lane("p2_retention_ops")
+        && coach_next_best_actions.len() >= 4
+        && coach_check("coach_lanes_cover_p0_p1_p2")
+        && coach_check("coach_actions_link_world_panels")
+        && coach_check("coach_uses_live_runtime_counts");
     let app_module_count = app.get("module_count").and_then(Value::as_u64).unwrap_or(0);
     let mobile_shell_ux_green = mobile_shell_ux_contract_green(&app);
     let feed_item_count = app
@@ -674,7 +735,7 @@ fn trillionnium_world_playability_scorecard_json(
             ("map_focus_step_has_command", onboarding_steps.iter().any(|step| step.get("step_id").and_then(Value::as_str) == Some("orient_on_map") && step.get("command").and_then(Value::as_str).is_some_and(|command| command == "/map"))),
             ("world_action_step_prefills_cta", onboarding_steps.iter().any(|step| step.get("step_id").and_then(Value::as_str) == Some("start_world_action") && step.get("textarea_id").and_then(Value::as_str).is_some())),
             ("quest_delivery_step_prefills_cta", onboarding_steps.iter().any(|step| step.get("step_id").and_then(Value::as_str) == Some("quest_delivery") && step.get("textarea_id").and_then(Value::as_str).is_some())),
-            ("acceptance_checks_cover_reward_and_route", onboarding_acceptance_checks.iter().any(|check| check == "wallet_progression_feed_updated") && onboarding_acceptance_checks.iter().any(|check| check == "route_task_graph_next_action_visible")),
+            ("acceptance_checks_and_coach_cover_reward_route", onboarding_acceptance_checks.iter().any(|check| check == "wallet_progression_feed_updated") && onboarding_acceptance_checks.iter().any(|check| check == "route_task_graph_next_action_visible") && coach_contract_v1 && coach_lane("p0_first_session") && coach_check("p0_next_best_action_visible")),
             ("mobile_shell_ready_for_first_loop", mobile_shell_ux_green),
             ("first_playable_gate_100", maturity_axis_percent(trillionnium_world_maturity, "first_playable") == 100),
         ],
@@ -745,7 +806,7 @@ fn trillionnium_world_playability_scorecard_json(
             ("cancel_path_exists", !world.world_work_cancellations.is_empty()),
             ("rejection_refund_recorded", refunded_rejection_count > 0),
             ("cancellation_refund_recorded", refunded_cancellation_count > 0),
-            ("route_graph_suggests_retry_actions", route_tasks_with_next_action >= 5),
+            ("retry_actions_and_coach_failure_lane_visible", route_tasks_with_next_action >= 5 && coach_check("p0_failure_recovery_copy_visible") && playability_coach.get("failure_recovery").and_then(|recovery| recovery.get("states")).and_then(Value::as_array).is_some_and(|states| states.len() >= 5)),
             ("search_empty_state_visible", mobile_readiness_checks.iter().any(|check| check == "search_empty_state_visible")),
             ("aria_live_status_visible", mobile_readiness_checks.iter().any(|check| check == "aria_live_ux_status_visible")),
             ("review_hold_path_modelled", review_hold_count > 0 || score_event_count >= 6),
@@ -764,7 +825,7 @@ fn trillionnium_world_playability_scorecard_json(
             ("acceptance_consumes_escrow", consumed_purchase_count > 0),
             ("refunds_recorded", refunded_rejection_count > 0 && refunded_cancellation_count > 0),
             ("economy_events_dense", world.world_economy_events.len() >= 20),
-            ("faction_standings_update", !world.world_faction_standings.is_empty()),
+            ("faction_strategy_tradeoffs_visible", !world.world_faction_standings.is_empty() && coach_check("p1_economy_tradeoffs_visible") && playability_coach.get("strategy_depth").and_then(|strategy| strategy.get("economy_choices")).and_then(Value::as_array).is_some_and(|choices| choices.len() >= 4)),
             ("player_rewards_positive", positive_reward_count > 0),
             ("wallet_module_available", app.get("wallet").and_then(|wallet| wallet.get("ledger_actions")).and_then(Value::as_array).is_some_and(|actions| actions.len() >= 4)),
         ],
@@ -781,7 +842,7 @@ fn trillionnium_world_playability_scorecard_json(
             ("face_duel_match_available", league.matches.contains_key("face-duel-001")),
             ("guild_raid_match_available", league.matches.contains_key("guild-raid-001")),
             ("factions_available", world.world_factions.len() >= 4),
-            ("relationship_graph_active", !world.world_relationships.is_empty()),
+            ("relationship_and_coop_strategy_visible", !world.world_relationships.is_empty() && coach_check("p1_social_coop_choices_visible") && playability_coach.get("strategy_depth").and_then(|strategy| strategy.get("social_choices")).and_then(Value::as_array).is_some_and(|choices| choices.len() >= 4)),
             ("route_feed_supports_team_context", feed_item_count >= 10),
             ("social_module_available", app_module_count >= 5),
             ("nearby_agents_surface_available", app.get("nearby_agents").and_then(Value::as_array).is_some()),
@@ -800,7 +861,7 @@ fn trillionnium_world_playability_scorecard_json(
             ("tools_unlocked", unlocked_tool_count >= 4),
             ("skins_unlocked", unlocked_skin_count >= 3),
             ("feed_history_dense", feed_item_count >= 20),
-            ("route_backlog_dense", route_task_graph_count >= 10),
+            ("route_backlog_and_daily_return_hook_visible", route_task_graph_count >= 10 && coach_check("p2_daily_return_hook_visible") && playability_coach.get("retention_ops").and_then(|ops| ops.get("daily_return_hooks")).and_then(Value::as_array).is_some_and(|hooks| hooks.len() >= 4)),
             ("multiple_match_modes", league.matches.len() >= 4),
             ("world_assets_persist", !world.world_assets.is_empty()),
         ],
@@ -815,7 +876,7 @@ fn trillionnium_world_playability_scorecard_json(
             ("mobile_shell_contract_green", mobile_shell_ux_green),
             ("feed_api_hydration_visible", mobile_readiness_checks.iter().any(|check| check == "feed_api_hydration_visible")),
             ("web_session_feed_hydration_visible", mobile_readiness_checks.iter().any(|check| check == "web_session_feed_hydration_visible")),
-            ("next_action_rail_visible", mobile_readiness_checks.iter().any(|check| check == "next_action_rail_visible")),
+            ("playability_coach_visible", mobile_readiness_checks.iter().any(|check| check == "next_action_rail_visible") && mobile_readiness_checks.iter().any(|check| check == "playability_coach_visible") && coach_p0_p1_p2_green),
             ("map_focus_visible", onboarding_acceptance_checks.iter().any(|check| check == "map_focus_visible")),
             ("quest_rating_visible", onboarding_acceptance_checks.iter().any(|check| check == "quest_rating_or_feedback_loop_visible")),
             ("reward_feed_visible", onboarding_acceptance_checks.iter().any(|check| check == "wallet_progression_feed_updated")),
@@ -835,7 +896,7 @@ fn trillionnium_world_playability_scorecard_json(
             ("real_user_beta_overall_100", trillionnium_world_real_user_beta.get("overall_percent").and_then(Value::as_u64) == Some(100)),
             ("public_commercial_overall_100", trillionnium_world_public_commercial_product.get("overall_percent").and_then(Value::as_u64) == Some(100)),
             ("feed_api_path_configured", feed_api_path_configured),
-            ("route_contract_exposed", route_contract_version_present),
+            ("playability_runtime_contracts_exposed", route_contract_version_present && coach_p0_p1_p2_green && world_home_playability_runtime_green),
             ("mobile_contract_readiness_dense", mobile_readiness_checks.len() >= 10),
             ("scorecard_has_runtime_data", feed_item_count >= 20 && route_task_graph_count >= 10),
             ("repository_backed_world_state_dense", world.world_economy_events.len() >= 20 && !world.world_contract_completions.is_empty()),
@@ -854,7 +915,7 @@ fn trillionnium_world_playability_scorecard_json(
             ("public_commercial_gate_100", trillionnium_world_public_commercial_product.get("overall_percent").and_then(Value::as_u64) == Some(100)),
             ("mobile_shell_contract_green", mobile_shell_ux_green),
             ("feed_api_path_configured", feed_api_path_configured),
-            ("route_contract_exposed", route_contract_version_present),
+            ("playability_runtime_contracts_present", route_contract_version_present && coach_p0_p1_p2_green && world_home_playability_runtime_green),
             ("score_events_runtime_present", score_event_count >= 6),
             ("world_state_dense_enough_for_smoke", feed_item_count >= 20 && world.world_economy_events.len() >= 20),
         ],
@@ -870,7 +931,7 @@ fn trillionnium_world_playability_scorecard_json(
             ("five_step_loop_documented", onboarding_steps.len() >= 5),
             ("acceptance_checks_cover_full_loop", onboarding_acceptance_checks.len() >= 7),
             ("entry_surfaces_include_app_world_matrix", onboarding.get("entry_surfaces").and_then(Value::as_array).is_some_and(|surfaces| surfaces.iter().any(|surface| surface == "/app") && surfaces.iter().any(|surface| surface == "/world") && surfaces.iter().any(|surface| surface == "Matrix /app"))),
-            ("map_action_delivery_reward_steps_have_cta", onboarding_steps.iter().any(|step| step.get("step_id").and_then(Value::as_str) == Some("orient_on_map")) && onboarding_steps.iter().any(|step| step.get("step_id").and_then(Value::as_str) == Some("start_world_action") && step.get("textarea_id").and_then(Value::as_str).is_some()) && onboarding_steps.iter().any(|step| step.get("step_id").and_then(Value::as_str) == Some("quest_delivery") && step.get("textarea_id").and_then(Value::as_str).is_some()) && onboarding_steps.iter().any(|step| step.get("step_id").and_then(Value::as_str) == Some("read_reward_and_next_route"))),
+            ("coach_next_best_actions_cover_first_loop", coach_lane("p0_first_session") && coach_next_best_actions.iter().any(|action| action.get("metric").and_then(Value::as_str) == Some("first_playable_completeness")) && onboarding_steps.iter().any(|step| step.get("step_id").and_then(Value::as_str) == Some("orient_on_map")) && onboarding_steps.iter().any(|step| step.get("step_id").and_then(Value::as_str) == Some("start_world_action") && step.get("textarea_id").and_then(Value::as_str).is_some()) && onboarding_steps.iter().any(|step| step.get("step_id").and_then(Value::as_str) == Some("quest_delivery") && step.get("textarea_id").and_then(Value::as_str).is_some()) && onboarding_steps.iter().any(|step| step.get("step_id").and_then(Value::as_str) == Some("read_reward_and_next_route"))),
             ("route_preview_and_task_graph_ready", route_preview_count >= 20 && route_task_graph_count >= 10),
             ("commerce_loop_seeded", !world.world_listings.is_empty() && !world.world_purchases.is_empty() && !world.world_work_orders.is_empty()),
             ("rating_reward_loop_seeded", !world.world_work_deliveries.is_empty() && !world.world_work_acceptances.is_empty() && positive_reward_count > 0),
@@ -887,7 +948,7 @@ fn trillionnium_world_playability_scorecard_json(
             ("active_tab_search_available", mobile_readiness_checks.iter().any(|check| check == "global_search_filters_active_tab")),
             ("empty_state_and_clear_recovery", mobile_readiness_checks.iter().any(|check| check == "search_empty_state_visible") && mobile_readiness_checks.iter().any(|check| check == "search_clear_and_escape_visible")),
             ("live_status_feedback_visible", mobile_readiness_checks.iter().any(|check| check == "aria_live_ux_status_visible")),
-            ("next_action_rail_visible", mobile_readiness_checks.iter().any(|check| check == "next_action_rail_visible")),
+            ("coach_reduces_comprehension_cost", mobile_readiness_checks.iter().any(|check| check == "next_action_rail_visible") && coach_check("p0_next_best_action_visible") && coach_check("p0_failure_recovery_copy_visible")),
             ("map_focus_acceptance_visible", onboarding_acceptance_checks.iter().any(|check| check == "map_focus_visible")),
             ("rating_reward_acceptance_visible", onboarding_acceptance_checks.iter().any(|check| check == "quest_rating_or_feedback_loop_visible") && onboarding_acceptance_checks.iter().any(|check| check == "wallet_progression_feed_updated")),
             ("route_graph_has_actionable_commands", route_tasks_with_next_action >= 5),
@@ -906,7 +967,7 @@ fn trillionnium_world_playability_scorecard_json(
             ("experience_data_points_dense", experience_data_points >= 50),
             ("skills_tools_skins_unlocked", unlocked_skill_count >= 5 && unlocked_tool_count >= 4 && unlocked_skin_count >= 3),
             ("feed_history_dense", feed_item_count >= 20),
-            ("route_backlog_dense", route_task_graph_count >= 10),
+            ("coach_retention_ops_visible", route_task_graph_count >= 10 && coach_lane("p2_retention_ops") && coach_check("p2_telemetry_contract_visible")),
             ("multiple_match_modes", league.matches.len() >= 4),
             ("world_events_dense", world.world_events.len() >= 3 && world.world_economy_events.len() >= 20),
             ("replayable_market_and_work_loops", world.world_listings.len() >= 3 && world.world_work_orders.len() >= 3),
@@ -923,7 +984,7 @@ fn trillionnium_world_playability_scorecard_json(
             ("purchase_reserve_consume_loop", !world.world_purchases.is_empty() && reserved_purchase_count > 0 && consumed_purchase_count > 0),
             ("refund_and_reopen_strategy_loop", refunded_rejection_count > 0 && refunded_cancellation_count > 0 && !world.world_work_reopens.is_empty()),
             ("settled_contract_rewards", settled_contract_completion_count > 0 && positive_reward_count > 0),
-            ("wallet_ledger_actions_cover_economy", app.get("wallet").and_then(|wallet| wallet.get("ledger_actions")).and_then(Value::as_array).is_some_and(|actions| actions.len() >= 4)),
+            ("coach_strategy_depth_visible", app.get("wallet").and_then(|wallet| wallet.get("ledger_actions")).and_then(Value::as_array).is_some_and(|actions| actions.len() >= 4) && coach_lane("p1_strategy_depth") && coach_check("p1_economy_tradeoffs_visible") && coach_check("p1_social_coop_choices_visible")),
             ("factions_and_standings_present", world.world_factions.len() >= 4 && !world.world_faction_standings.is_empty()),
             ("relationship_graph_and_nearby_agents", !world.world_relationships.is_empty() && social_contact_count >= 3),
             ("guild_and_raid_coop_modes", league.guilds.len() >= 2 && league.matches.contains_key("guild-raid-001")),

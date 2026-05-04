@@ -126,6 +126,17 @@ fn client_app_readiness_label(value: &str) -> String {
         "route_task_graph_next_action_visible" => {
             "Route next action visible / 路线下一步可见".to_string()
         }
+        "playability_coach_visible" => "Playability coach visible / 可玩性教练可见".to_string(),
+        "p0_next_best_action_visible" => "P0 next-best action visible / P0 下一步可见".to_string(),
+        "p1_strategy_choices_visible" => {
+            "P1 strategy choices visible / P1 策略选择可见".to_string()
+        }
+        "p2_retention_telemetry_visible" => {
+            "P2 retention telemetry visible / P2 留存观测可见".to_string()
+        }
+        "failure_recovery_lane_visible" => {
+            "Failure recovery lane visible / 失败恢复路线可见".to_string()
+        }
         "visible" => "Visible / 可见".to_string(),
         "ready" => "Ready / 已准备".to_string(),
         _ => client_app_visible_copy(value),
@@ -603,6 +614,55 @@ pub(super) async fn get_client_app_web_shell(
         })
         .collect::<Vec<_>>()
         .join("\n");
+    let playability_coach = app.get("playability_coach");
+    let playability_coach_version = playability_coach
+        .and_then(|coach| coach.get("contract_version"))
+        .and_then(Value::as_str)
+        .unwrap_or("trillionnium_playability_coach_v1");
+    let playability_coach_lane_cards = playability_coach
+        .and_then(|coach| coach.get("lanes"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .take(3)
+        .map(|lane| {
+            let lane_id = lane.get("lane_id").and_then(Value::as_str).unwrap_or("lane");
+            let priority = lane.get("priority").and_then(Value::as_str).unwrap_or("P0");
+            let label = lane
+                .get("label")
+                .and_then(Value::as_str)
+                .unwrap_or("Playability lane / 可玩性路线");
+            let player_goal = lane
+                .get("player_goal")
+                .and_then(Value::as_str)
+                .unwrap_or("Keep the next action, tradeoff, and return reason visible.");
+            let cta_label = lane
+                .get("cta_label")
+                .and_then(Value::as_str)
+                .unwrap_or("Continue / 继续");
+            let command = lane
+                .get("command")
+                .and_then(Value::as_str)
+                .unwrap_or("/app");
+            let command_preview = match lane_id {
+                "p0_first_session" => "/world action <goal + evidence + risk + next>",
+                "p1_strategy_depth" => "/world action compare market/faction/guild/recovery",
+                "p2_retention_ops" => "/progression plan next unlock + weekly raid",
+                _ => command,
+            };
+            format!(
+                "<article class=\"coach-card\" data-playability-lane=\"{}\"><span>{}</span><strong>{}</strong><p>{}</p><code>{}</code><a class=\"quest-cta coach-cta\" href=\"/world\">{}</a></article>",
+                escape_html_text(lane_id),
+                escape_html_text(priority),
+                escape_client_app_visible_text(label),
+                escape_client_app_visible_text(player_goal),
+                escape_html_text(command_preview),
+                escape_client_app_visible_text(cta_label),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
     let app_data_json = serde_json::to_string(&app)
         .unwrap_or_else(|_| "{}".to_string())
         .replace("</", "<\\/");
@@ -719,6 +779,13 @@ pub(super) async fn get_client_app_web_shell(
     .app-player-loop-steps li {{ display:grid; gap:4px; min-height:86px; border:1px solid rgba(248,195,91,.2); background:rgba(248,195,91,.07); border-radius:16px; padding:12px; }}
     .app-player-loop-steps b {{ color:var(--gold); }}
     .app-player-loop-steps span {{ color:var(--muted); font-size:13px; line-height:1.35; }}
+    .playability-coach-lanes {{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:9px; margin:10px 0 0; }}
+    .coach-card {{ display:grid; gap:5px; min-width:0; border:1px solid rgba(100,227,255,.2); background:rgba(7,8,20,.34); border-radius:16px; padding:10px; }}
+    .coach-card span {{ color:var(--cyan); font-weight:950; font-size:12px; }}
+    .coach-card strong {{ color:var(--gold); font-size:14px; line-height:1.2; }}
+    .coach-card p {{ margin:0; color:var(--muted); font-size:12px; line-height:1.35; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }}
+    .coach-card code {{ font-size:11px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
+    .coach-cta {{ min-height:38px; padding:0 10px; font-size:12px; }}
     .app-map-product-strip {{ display:grid; gap:10px; grid-template-columns:minmax(0,1fr) auto; align-items:center; border:1px solid rgba(100,227,255,.18); background:rgba(100,227,255,.055); border-radius:18px; padding:12px; margin:12px 0; }}
     .app-map-product-strip strong {{ display:block; color:var(--gold); margin-bottom:4px; }}
     .app-map-product-strip .quest-cta {{ min-width:154px; }}
@@ -813,6 +880,11 @@ pub(super) async fn get_client_app_web_shell(
       .app-player-loop-steps li {{ min-height:auto; padding:8px; border-radius:13px; }}
       .app-player-loop-steps b {{ font-size:12px; }}
       .app-player-loop-steps span {{ display:none; }}
+      .playability-coach-lanes {{ gap:6px; margin-top:8px; }}
+      .coach-card {{ padding:8px; border-radius:13px; }}
+      .coach-card strong {{ font-size:11px; }}
+      .coach-card p,.coach-card code {{ display:none; }}
+      .coach-cta {{ min-height:36px; padding:0 7px; font-size:10px; }}
       #app-first-playable-steps {{ display:none; }}
     }}
     @media (min-width: 601px) and (max-width: 820px) {{
@@ -867,6 +939,7 @@ pub(super) async fn get_client_app_web_shell(
         <li><b data-i18n-en="2 · Accept bounty" data-i18n-zh="2 · 接取悬赏">2 · Accept bounty</b><span data-i18n-en="Turn the focus into a playable quest card." data-i18n-zh="把焦点变成可玩的任务牌。">Turn the focus into a playable quest card.</span></li>
         <li><b data-i18n-en="3 · Submit & claim" data-i18n-zh="3 · 提交并领奖">3 · Submit & claim</b><span data-i18n-en="Submit results, pass rating, and claim reward." data-i18n-zh="提交成果，通过评级并领取奖励。">Submit results, pass rating, and claim reward.</span></li>
       </ol>
+      <section id="app-playability-coach" class="playability-coach-lanes" data-contract-version="{}" aria-label="P0 P1 P2 playability coach" data-i18n-aria-label-en="P0 P1 P2 playability coach" data-i18n-aria-label-zh="P0 P1 P2 可玩性教练">{}</section>
       <details class="dev-details app-progress-drawer"><summary data-i18n-en="Progress checks" data-i18n-zh="进度检查">Progress checks</summary><div id="app-first-playable-checks" class="map-stream-hud">{}</div></details>
       <section id="app-first-playable-steps" class="grid">{}</section>
     </section>
@@ -1636,6 +1709,8 @@ pub(super) async fn get_client_app_web_shell(
         escape_client_app_visible_text(onboarding_label),
         escape_client_app_visible_text(onboarding_goal),
         escape_client_app_visible_text(&client_app_readiness_label(onboarding_completion_target)),
+        escape_html_text(playability_coach_version),
+        playability_coach_lane_cards,
         onboarding_acceptance_chips,
         onboarding_step_cards,
         message_cards,

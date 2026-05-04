@@ -1,5 +1,7 @@
 use super::*;
 
+const TRILLIONNIUM_PLAYABILITY_COACH_CONTRACT_VERSION: &str = "trillionnium_playability_coach_v1";
+
 #[derive(Debug, Clone)]
 pub(super) struct ClientRouteWorldContext {
     active_region_id: String,
@@ -1477,6 +1479,11 @@ impl<'a> ClientAppProjectionContext<'a> {
                 "web_session_feed_hydration_visible",
                 "next_action_rail_visible",
                 "feed_api_hydration_visible",
+                "playability_coach_visible",
+                "p0_next_best_action_visible",
+                "p1_strategy_choices_visible",
+                "p2_retention_telemetry_visible",
+                "failure_recovery_lane_visible",
                 "matrix_app_card_exposes_onboarding"
             ],
             "full_vision_hooks": [
@@ -1536,7 +1543,200 @@ impl<'a> ClientAppProjectionContext<'a> {
                 "offline_feed_fallback_status_visible",
                 "web_session_feed_hydration_visible",
                 "feed_api_hydration_visible",
-                "next_action_rail_visible"
+                "next_action_rail_visible",
+                "playability_coach_visible",
+                "p0_next_best_action_visible",
+                "p1_strategy_choices_visible",
+                "p2_retention_telemetry_visible",
+                "failure_recovery_lane_visible"
+            ]
+        })
+    }
+
+    fn playability_coach_json(
+        &self,
+        active_region_id: &str,
+        current_node_id: &str,
+        current_node_name: &str,
+        onboarding: &Value,
+        feed: &Value,
+        progression: &Value,
+        map_metrics: &ClientAppMapHubMetrics,
+        nearby_agents: &[WorldEntity],
+    ) -> Value {
+        let feed_item_count = feed.get("item_count").and_then(Value::as_u64).unwrap_or(0);
+        let progression_level = progression
+            .get("level")
+            .and_then(Value::as_i64)
+            .unwrap_or(1);
+        let successful_task_count = progression
+            .get("successful_task_count")
+            .and_then(Value::as_i64)
+            .unwrap_or(0);
+        let first_action_command = onboarding
+            .get("steps")
+            .and_then(Value::as_array)
+            .and_then(|steps| {
+                steps.iter().find_map(|step| {
+                    (step.get("step_id").and_then(Value::as_str) == Some("start_world_action"))
+                        .then(|| step.get("command").and_then(Value::as_str))
+                        .flatten()
+                })
+            })
+            .unwrap_or("/world action Draft the first global bounty with goal, evidence, risk, and next step.");
+        let reviewable_work_count = self
+            .world
+            .world_work_orders
+            .iter()
+            .filter(|work_order| {
+                matches!(
+                    work_order.status.as_str(),
+                    "delivered" | "delivery_review_hold"
+                )
+            })
+            .count();
+        let reopenable_work_count = self
+            .world
+            .world_work_orders
+            .iter()
+            .filter(|work_order| {
+                matches!(
+                    work_order.status.as_str(),
+                    "rejected_refunded" | "rejected_refund_hold" | "rejected_refund_failed"
+                )
+            })
+            .count();
+        let open_work_count = self
+            .world
+            .world_work_orders
+            .iter()
+            .filter(|work_order| matches!(work_order.status.as_str(), "open" | "payment_hold"))
+            .count();
+        json!({
+            "contract_version": TRILLIONNIUM_PLAYABILITY_COACH_CONTRACT_VERSION,
+            "optimization_scope": "p0_p1_p2_full_playability",
+            "status": "optimized",
+            "player_promise": "one glance should tell the player what to do now, why it matters, what can go wrong, and why they should return tomorrow",
+            "context": {
+                "matrix_user_id": self.matrix_user_id,
+                "active_region_id": active_region_id,
+                "current_node_id": current_node_id,
+                "current_node_name": current_node_name,
+                "feed_item_count": feed_item_count,
+                "live_event_count": map_metrics.live_event_count,
+                "nearby_poi_count": map_metrics.nearby_poi_count,
+                "nearby_agent_count": nearby_agents.len(),
+                "progression_level": progression_level,
+                "successful_task_count": successful_task_count,
+            },
+            "lanes": [
+                {
+                    "lane_id": "p0_first_session",
+                    "priority": "P0",
+                    "label": "P0 · First 3-minute quest / 首局三分钟主线",
+                    "player_goal": "Choose focus → accept bounty → submit evidence → read rating/reward",
+                    "visible_surface_id": "app-first-playable-onboarding",
+                    "cta_label": "Start World Quest / 开始世界任务",
+                    "command": first_action_command,
+                    "success_signal": "first_playable_loop_100"
+                },
+                {
+                    "lane_id": "p1_strategy_depth",
+                    "priority": "P1",
+                    "label": "P1 · Strategy choices / 策略选择",
+                    "player_goal": "Pick between market profit, faction reputation, team raid, or safe refund/reopen",
+                    "visible_surface_id": "app-playability-coach",
+                    "cta_label": "Compare Routes / 比较路线",
+                    "command": "/app feed strategy",
+                    "success_signal": "economy_social_strategy_depth_visible"
+                },
+                {
+                    "lane_id": "p2_retention_ops",
+                    "priority": "P2",
+                    "label": "P2 · Return reasons / 回访理由",
+                    "player_goal": "Daily route backlog, weekly guild raid, unlock plan, and telemetry-backed polish",
+                    "visible_surface_id": "app-tab-me",
+                    "cta_label": "Check Progression / 查看成长",
+                    "command": "/progression",
+                    "success_signal": "retention_telemetry_contract_visible"
+                }
+            ],
+            "next_best_actions": [
+                {
+                    "action_id": "p0_start_focus",
+                    "priority": 1,
+                    "metric": "first_playable_completeness",
+                    "label": "Start from current map focus / 从当前地图焦点开始",
+                    "panel_id": WORLD_ROUTE_ACTION_PANEL_ID,
+                    "command": first_action_command,
+                    "success_signal": "world_event_created"
+                },
+                {
+                    "action_id": "p0_rate_or_recover",
+                    "priority": 2,
+                    "metric": "real_player_comprehension_cost",
+                    "label": "Rate, reopen, or refund current commission / 评级、重开或退款当前委托",
+                    "panel_id": WORLD_ROUTE_COMMERCE_PANEL_ID,
+                    "command": "/work accept|reject|reopen latest <reason + evidence gaps>",
+                    "success_signal": "quest_rating_or_feedback_loop_visible"
+                },
+                {
+                    "action_id": "p1_choose_strategy",
+                    "priority": 3,
+                    "metric": "economy_social_strategy_depth",
+                    "label": "Choose profit, reputation, or co-op route / 选择收益、声望或协作路线",
+                    "panel_id": WORLD_ROUTE_COMMERCE_PANEL_ID,
+                    "command": "/world action compare market, faction, guild, and recovery routes",
+                    "success_signal": "strategy_tradeoff_visible"
+                },
+                {
+                    "action_id": "p2_return_hook",
+                    "priority": 4,
+                    "metric": "long_term_replayability",
+                    "label": "Queue tomorrow's route and weekly raid / 排明日路线与每周团本",
+                    "panel_id": "app-tab-me",
+                    "command": "/progression plan next unlock and weekly guild raid",
+                    "success_signal": "daily_return_hook_visible"
+                }
+            ],
+            "failure_recovery": {
+                "visible_surface_id": "app-playability-coach",
+                "states": ["delivery_review_hold", "rejected_pending_refund", "rejected_refunded", "reopen_reserve_hold", "cancelled_refunded"],
+                "reviewable_work_count": reviewable_work_count,
+                "reopenable_work_count": reopenable_work_count,
+                "open_work_count": open_work_count,
+                "player_copy": "If a result fails, the player sees why, which funds moved, and the exact reopen/refund route instead of a dead end."
+            },
+            "strategy_depth": {
+                "economy_choices": ["high_reward_delivery", "safe_refund_reopen", "faction_reputation", "company_listing_supply"],
+                "social_choices": ["nearby_agent_help", "guild_raid", "face_duel", "relationship_route"],
+                "risk_tradeoffs": ["speed_vs_evidence", "profit_vs_reputation", "solo_vs_coop", "accept_vs_revise"]
+            },
+            "retention_ops": {
+                "season_loop": "daily route backlog + weekly guild raid + market refresh + unlock target",
+                "daily_return_hooks": ["next_route_backlog", "unlock_progress", "market_result", "guild_raid_window"],
+                "telemetry_events": [
+                    "first_focus_selected",
+                    "world_action_started",
+                    "commission_accepted",
+                    "result_submitted",
+                    "rating_or_recovery_chosen",
+                    "reward_read",
+                    "next_route_queued"
+                ],
+                "funnel_target": "first_session_focus_to_reward_then_next_route"
+            },
+            "readiness_checks": [
+                "p0_next_best_action_visible",
+                "p0_failure_recovery_copy_visible",
+                "p1_economy_tradeoffs_visible",
+                "p1_social_coop_choices_visible",
+                "p2_daily_return_hook_visible",
+                "p2_telemetry_contract_visible",
+                "coach_lanes_cover_p0_p1_p2",
+                "coach_actions_link_world_panels",
+                "coach_uses_live_runtime_counts",
+                "coach_visible_in_mobile_app"
             ]
         })
     }
@@ -1571,6 +1771,20 @@ impl<'a> ClientAppProjectionContext<'a> {
             &map_metrics,
         );
         let mobile_shell_contract = self.mobile_shell_contract_json();
+        let playability_coach = self.playability_coach_json(
+            active_region_id.as_str(),
+            current_node_id.as_str(),
+            current_node_name.as_str(),
+            &onboarding,
+            &feed,
+            &progression,
+            &map_metrics,
+            &nearby_agents,
+        );
+        let next_best_actions = playability_coach
+            .get("next_best_actions")
+            .cloned()
+            .unwrap_or_else(|| json!([]));
         let map_hub = app_context.into_client_app_map_hub_json(&map_metrics);
         json!({
             "kind": "trillionnium_client_app",
@@ -1585,6 +1799,8 @@ impl<'a> ClientAppProjectionContext<'a> {
             "route_contract": world_route_ui_contract_json(),
             "mobile_shell_contract": mobile_shell_contract,
             "onboarding": onboarding,
+            "playability_coach": playability_coach,
+            "next_best_actions": next_best_actions,
             "map": map,
             "feed": feed,
             "map_hub": map_hub,
