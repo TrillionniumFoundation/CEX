@@ -4277,6 +4277,141 @@ async fn world_reject_does_not_emit_refund_economy_without_buyer_refund() {
 }
 
 #[tokio::test]
+async fn world_cancel_does_not_emit_refund_economy_without_buyer_refund() {
+    let mut config = test_config();
+    config.runtime_profile = RuntimeProfile::Production;
+    let state = test_state(config, IdentityBindings::default(), HashMap::new());
+    let app = build_router(state.clone());
+    let buyer_matrix_user_id = "@world-uncancel-refund-buyer:local.dev";
+    let seller_matrix_user_id = "@world-uncancel-refund-seller:local.dev";
+    let company_id = "company-uncancel-refund";
+    let shop_id = "shop-uncancel-refund";
+    let listing_id = "listing-uncancel-refund";
+    let purchase_id = "purchase-uncancel-refund";
+    let work_order_id = "work-uncancel-refund";
+    {
+        let mut league = state.inner.league_state.lock().await;
+        league.world.world_companies.push(WorldCompany {
+            company_id: company_id.to_string(),
+            owner_matrix_user_id: seller_matrix_user_id.to_string(),
+            asset_id: "asset-uncancel-refund".to_string(),
+            location_id: "starter-studio".to_string(),
+            name: "Unrefunded Cancel Guard Studio".to_string(),
+            company_kind: "studio".to_string(),
+            status: "operating".to_string(),
+            revenue_score: 140,
+            reputation_score: 22,
+            level: 2,
+            created_at_epoch: 1_777_897_970,
+        });
+        league.world.world_shops.push(WorldShop {
+            shop_id: shop_id.to_string(),
+            company_id: company_id.to_string(),
+            owner_matrix_user_id: seller_matrix_user_id.to_string(),
+            location_id: "starter-studio".to_string(),
+            name: "Unrefunded Cancel Guard Storefront".to_string(),
+            shop_kind: "studio".to_string(),
+            status: "operating".to_string(),
+            listing_count: 1,
+            gross_merchandise_score: 140,
+            created_at_epoch: 1_777_897_970,
+        });
+        league.world.world_listings.push(WorldListing {
+            listing_id: listing_id.to_string(),
+            shop_id: shop_id.to_string(),
+            company_id: company_id.to_string(),
+            owner_matrix_user_id: seller_matrix_user_id.to_string(),
+            asset_id: "asset-uncancel-refund".to_string(),
+            title: "Unrefunded cancel guard offer".to_string(),
+            listing_kind: "service_offer".to_string(),
+            status: "listed".to_string(),
+            price_credits: 65,
+            quality_score: 68,
+            created_at_epoch: 1_777_897_970,
+        });
+        league.world.world_purchases.push(WorldPurchase {
+            purchase_id: purchase_id.to_string(),
+            listing_id: listing_id.to_string(),
+            shop_id: shop_id.to_string(),
+            company_id: company_id.to_string(),
+            buyer_matrix_user_id: buyer_matrix_user_id.to_string(),
+            seller_matrix_user_id: seller_matrix_user_id.to_string(),
+            price_credits: 65,
+            status: "reserved".to_string(),
+            ledger_status: Some("settled".to_string()),
+            ledger_account_id: Some("seller-account".to_string()),
+            ledger_entry_id: Some("seller-grant-entry".to_string()),
+            ledger_balance_after: Some(65.0),
+            ledger_error: None,
+            buyer_ledger_status: Some("reserved".to_string()),
+            buyer_ledger_account_id: Some("buyer-account".to_string()),
+            buyer_ledger_entry_id: Some("buyer-reserve-entry".to_string()),
+            buyer_ledger_balance_after: Some(0.0),
+            buyer_ledger_error: None,
+            buyer_consume_status: Some("pending_acceptance".to_string()),
+            buyer_consume_entry_id: None,
+            buyer_consume_balance_after: None,
+            buyer_consume_error: None,
+            created_at_epoch: 1_777_897_970,
+        });
+        league.world.world_work_orders.push(WorldWorkOrder {
+            work_order_id: work_order_id.to_string(),
+            purchase_id: purchase_id.to_string(),
+            listing_id: listing_id.to_string(),
+            buyer_matrix_user_id: buyer_matrix_user_id.to_string(),
+            seller_matrix_user_id: seller_matrix_user_id.to_string(),
+            company_id: company_id.to_string(),
+            status: "open".to_string(),
+            brief: "Open work awaiting cancellation refund".to_string(),
+            value_score: 65,
+            created_at_epoch: 1_777_897_970,
+        });
+    }
+
+    let (status, cancellation) = send_json_request(
+        &app,
+        "POST",
+        &format!("/v1/world/work-orders/{work_order_id}/cancel"),
+        &[],
+        json!({
+            "matrix_user_id": buyer_matrix_user_id,
+            "body": "Buyer cancels the work, but omits room context so ledger refund cannot happen."
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "cancel response: {cancellation}");
+    assert_eq!(
+        cancellation["buyer_cancel_refund_status"],
+        "skipped_missing_room"
+    );
+    assert_eq!(
+        cancellation["seller_chargeback_status"],
+        "skipped_buyer_not_refunded"
+    );
+    assert_eq!(cancellation["purchase"]["status"], "cancelled_refund_hold");
+    assert_eq!(
+        cancellation["work_order"]["status"],
+        "cancelled_refund_hold"
+    );
+    assert_eq!(
+        cancellation["cancellation"]["status"],
+        "cancelled_refund_hold"
+    );
+    assert!(cancellation["economy_event"].is_null());
+    assert!(cancellation["standing"].is_null());
+
+    let league = state.inner.league_state.lock().await;
+    assert!(!league.world.world_economy_events.iter().any(|event| {
+        event.subject_id == work_order_id && event.event_kind == "work_cancelled"
+    }));
+    assert!(!league
+        .world
+        .world_faction_standings
+        .iter()
+        .any(|standing| standing.matrix_user_id == buyer_matrix_user_id));
+}
+
+#[tokio::test]
 async fn league_submission_requires_ledger_settlement_before_earned_rewards() {
     let state = test_state(test_config(), IdentityBindings::default(), HashMap::new());
     let app = build_router(state.clone());
