@@ -1286,7 +1286,7 @@ pub(super) async fn get_league_held_reviews(
                 || reward
                     .review_status
                     .as_deref()
-                    .is_some_and(|status| status == "pending_review")
+                    .is_some_and(|status| status == "pending_review" || status == "approval_failed")
         })
         .map(|reward| {
             json!({

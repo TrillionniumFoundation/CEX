@@ -4127,6 +4127,67 @@ async fn league_review_cannot_reapprove_or_reject_released_reward() {
 }
 
 #[tokio::test]
+async fn league_review_queue_keeps_approval_failed_rewards_visible() {
+    let state = test_state(test_config(), IdentityBindings::default(), HashMap::new());
+    let app = build_router(state.clone());
+    let submission_id = "submission-approval-failed-visible".to_string();
+    let reward_id = league_hash_id("reward", &submission_id);
+    {
+        let mut league = state.inner.league_state.lock().await;
+        league.submissions.insert(
+            submission_id.clone(),
+            LeagueSubmission {
+                submission_id: submission_id.clone(),
+                match_id: "daily-dungeon-001".to_string(),
+                entry_id: "entry-approval-failed-visible".to_string(),
+                player_id: "player-approval-failed-visible".to_string(),
+                matrix_user_id: "@alice:local.dev".to_string(),
+                task_id: None,
+                body: "approval failed should remain visible".to_string(),
+                score: 82.0,
+                grade: "A".to_string(),
+                reward_amount: 6.0,
+                judge_status: Some("accepted".to_string()),
+                payout_status: Some("approved_release".to_string()),
+                anti_cheat_flags: Vec::new(),
+                score_events: Vec::new(),
+                created_at_epoch: 1_777_897_930,
+            },
+        );
+        league.rewards.push(LeagueReward {
+            reward_id: reward_id.clone(),
+            match_id: "daily-dungeon-001".to_string(),
+            entry_id: "entry-approval-failed-visible".to_string(),
+            player_id: "player-approval-failed-visible".to_string(),
+            matrix_user_id: "@alice:local.dev".to_string(),
+            amount: 6.0,
+            currency_unit: "credit".to_string(),
+            reason: "approval_failed_retry_needed".to_string(),
+            ledger_status: Some("failed_ledger".to_string()),
+            ledger_account_id: Some("acct-alice".to_string()),
+            ledger_entry_id: None,
+            ledger_balance_after: None,
+            ledger_error: Some("transient ledger failure".to_string()),
+            review_status: Some("approval_failed".to_string()),
+            reviewed_by: Some("ops".to_string()),
+            review_note: Some("retry after ledger recovers".to_string()),
+            reviewed_at_epoch: Some(1_777_897_931),
+            created_at_epoch: 1_777_897_930,
+        });
+    }
+
+    let (status, queue) =
+        send_json_request(&app, "GET", "/v1/league/reviews/held", &[], json!({})).await;
+    assert_eq!(status, StatusCode::OK, "held reviews response: {queue}");
+    assert_eq!(queue["held_count"], 1);
+    assert_eq!(queue["held"][0]["reward"]["reward_id"], reward_id);
+    assert_eq!(
+        queue["held"][0]["reward"]["review_status"],
+        "approval_failed"
+    );
+}
+
+#[tokio::test]
 async fn world_contract_completion_requires_ledger_settlement_before_earned_credits() {
     let state = test_state(test_config(), IdentityBindings::default(), HashMap::new());
     {
