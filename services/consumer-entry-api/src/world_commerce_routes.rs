@@ -1788,13 +1788,17 @@ pub(super) async fn deliver_world_work_order_inner(
                 .players_by_matrix_user
                 .insert(matrix_user_id.clone(), seller);
         }
-        let standing = upsert_world_faction_standing(
-            &mut league,
-            &matrix_user_id,
-            faction_id,
-            reputation_delta.max(1),
-            now,
-        );
+        let standing = if reputation_delta > 0 {
+            Some(upsert_world_faction_standing(
+                &mut league,
+                &matrix_user_id,
+                faction_id,
+                reputation_delta,
+                now,
+            ))
+        } else {
+            None
+        };
         let economy_event = WorldEconomyEvent {
             economy_event_id: league_hash_id(
                 "world-econ",

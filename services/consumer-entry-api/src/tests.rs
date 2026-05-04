@@ -4501,6 +4501,82 @@ async fn world_reopen_does_not_emit_progression_without_buyer_reserve() {
 }
 
 #[tokio::test]
+async fn world_delivery_review_hold_does_not_grant_faction_or_seller_progress() {
+    let mut config = test_config();
+    config.runtime_profile = RuntimeProfile::Production;
+    let state = test_state(config, IdentityBindings::default(), HashMap::new());
+    let app = build_router(state.clone());
+    let buyer_matrix_user_id = "@world-delivery-review-buyer:local.dev";
+    let seller_matrix_user_id = "@world-delivery-review-seller:local.dev";
+    let company_id = "company-delivery-review-hold";
+    let listing_id = "listing-delivery-review-hold";
+    let purchase_id = "purchase-delivery-review-hold";
+    let work_order_id = "work-delivery-review-hold";
+    {
+        let mut league = state.inner.league_state.lock().await;
+        league.world.world_companies.push(WorldCompany {
+            company_id: company_id.to_string(),
+            owner_matrix_user_id: seller_matrix_user_id.to_string(),
+            asset_id: "asset-delivery-review-hold".to_string(),
+            location_id: "starter-studio".to_string(),
+            name: "Delivery Review Hold Guard Studio".to_string(),
+            company_kind: "studio".to_string(),
+            status: "operating".to_string(),
+            revenue_score: 120,
+            reputation_score: 30,
+            level: 2,
+            created_at_epoch: 1_777_897_990,
+        });
+        league.world.world_work_orders.push(WorldWorkOrder {
+            work_order_id: work_order_id.to_string(),
+            purchase_id: purchase_id.to_string(),
+            listing_id: listing_id.to_string(),
+            buyer_matrix_user_id: buyer_matrix_user_id.to_string(),
+            seller_matrix_user_id: seller_matrix_user_id.to_string(),
+            company_id: company_id.to_string(),
+            status: "open".to_string(),
+            brief: "Open work awaiting seller delivery".to_string(),
+            value_score: 80,
+            created_at_epoch: 1_777_897_990,
+        });
+    }
+
+    let (status, delivery) = send_json_request(
+        &app,
+        "POST",
+        &format!("/v1/world/work-orders/{work_order_id}/deliver"),
+        &[],
+        json!({
+            "matrix_user_id": seller_matrix_user_id,
+            "body": "copy copy copy copy copy copy copy copy copy copy copy copy copy copy copy copy"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "delivery response: {delivery}");
+    assert_eq!(delivery["delivery"]["status"], "review_hold");
+    assert_eq!(delivery["work_order"]["status"], "delivery_review_hold");
+    assert_eq!(delivery["economy_event"]["reputation_delta"], 0);
+    assert!(delivery["standing"].is_null());
+
+    let league = state.inner.league_state.lock().await;
+    let company = league
+        .world
+        .world_companies
+        .iter()
+        .find(|company| company.company_id == company_id)
+        .expect("company should remain present");
+    assert_eq!(company.reputation_score, 30);
+    assert!(!league
+        .players_by_matrix_user
+        .contains_key(seller_matrix_user_id));
+    assert!(!league
+        .world
+        .world_faction_standings
+        .iter()
+        .any(|standing| standing.matrix_user_id == seller_matrix_user_id));
+}
+
+#[tokio::test]
 async fn league_submission_requires_ledger_settlement_before_earned_rewards() {
     let state = test_state(test_config(), IdentityBindings::default(), HashMap::new());
     let app = build_router(state.clone());
