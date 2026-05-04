@@ -3777,8 +3777,17 @@ async fn world_commerce_e2e_uses_real_configured_ledger_for_consume_refund_reope
         "world reject two failed: {reject_two}"
     );
     assert_eq!(reject_two["buyer_refund_status"], "refunded");
+    assert_eq!(
+        reject_two["seller_chargeback_status"],
+        "seller_chargeback_consumed"
+    );
     assert_eq!(reject_two["purchase"]["status"], "rejected_refunded");
+    assert_eq!(
+        reject_two["purchase"]["ledger_status"],
+        "seller_chargeback_consumed"
+    );
     assert!(reject_two["buyer_refund_entry_id"].as_str().is_some());
+    assert!(reject_two["seller_chargeback_entry_id"].as_str().is_some());
 
     let (status, reopen_two) = send_json_request(
         &app,
@@ -3822,7 +3831,15 @@ async fn world_commerce_e2e_uses_real_configured_ledger_for_consume_refund_reope
         "world cancel two failed: {cancel_two}"
     );
     assert_eq!(cancel_two["buyer_cancel_refund_status"], "refunded");
+    assert_eq!(
+        cancel_two["seller_chargeback_status"],
+        "skipped_seller_not_settled"
+    );
     assert_eq!(cancel_two["purchase"]["status"], "cancelled_refunded");
+    assert_eq!(
+        cancel_two["purchase"]["ledger_status"],
+        "seller_chargeback_consumed"
+    );
     assert!(cancel_two["buyer_cancel_refund_entry_id"]
         .as_str()
         .is_some());
@@ -3849,7 +3866,7 @@ async fn world_commerce_e2e_uses_real_configured_ledger_for_consume_refund_reope
     );
     assert_eq!(
         seller_account["balance"].as_f64().unwrap(),
-        seller_net_credits + seller_net_two_credits
+        seller_net_credits
     );
 
     let league = state.inner.league_state.lock().await;
@@ -3864,8 +3881,13 @@ async fn world_commerce_e2e_uses_real_configured_ledger_for_consume_refund_reope
         .world_purchases
         .iter()
         .any(|purchase| purchase.status == "cancelled_refunded"
+            && purchase.ledger_status.as_deref() == Some("seller_chargeback_consumed")
             && purchase.buyer_ledger_status.as_deref() == Some("reopened_reserved")
             && purchase.buyer_consume_status.as_deref() == Some("refunded")));
+    assert!(league.world.world_economy_events.iter().any(|event| {
+        event.event_kind == "seller_chargeback"
+            && event.credits_delta == -(seller_net_two_credits as i64)
+    }));
 }
 
 async fn send_text_request(

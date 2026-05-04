@@ -2,6 +2,17 @@ use super::*;
 
 const TRILLIONNIUM_MARKET_SIMULATOR_CONTRACT_VERSION: &str = "trillionnium_market_simulator_v1";
 
+fn world_market_tax_credits_for_price(price_credits: i64) -> i64 {
+    (price_credits.max(1) / 20).max(1)
+}
+
+fn world_seller_net_credits_for_price(price_credits: i64) -> i64 {
+    price_credits
+        .max(1)
+        .saturating_sub(world_market_tax_credits_for_price(price_credits))
+        .max(0)
+}
+
 fn world_market_simulation_json(world: &WorldState, listing: &WorldListing, now: i64) -> Value {
     let base_price = listing.price_credits.max(1);
     let recent_window_seconds = 86_400;
@@ -25,8 +36,8 @@ fn world_market_simulation_json(world: &WorldState, listing: &WorldListing, now:
     let quality_premium = (listing.quality_score / 25).clamp(0, 20);
     let dynamic_price_credits =
         (base_price + demand_premium + scarcity_premium + quality_premium).max(1);
-    let market_tax_credits = (dynamic_price_credits / 20).max(1);
-    let seller_net_credits = (dynamic_price_credits - market_tax_credits).max(0);
+    let market_tax_credits = world_market_tax_credits_for_price(dynamic_price_credits);
+    let seller_net_credits = world_seller_net_credits_for_price(dynamic_price_credits);
     let demand_index = (100 + recent_company_purchase_count * 8 + quality_premium).clamp(50, 200);
     let scarcity_index =
         (100 + scarcity_premium * 5 - active_company_listing_count * 2).clamp(40, 180);
@@ -924,14 +935,15 @@ pub(super) async fn settle_world_purchase_ledger_action(
     reference_id: String,
     message: &str,
     failure_context: &str,
+    amount_override_credits: Option<i64>,
 ) -> LeagueLedgerSettlement {
-    let ledger_amount_credits = if action == "grant" {
-        purchase
-            .price_credits
-            .saturating_sub((purchase.price_credits / 20).max(1))
-    } else {
-        purchase.price_credits
-    };
+    let ledger_amount_credits = amount_override_credits.unwrap_or_else(|| {
+        if action == "grant" {
+            world_seller_net_credits_for_price(purchase.price_credits)
+        } else {
+            purchase.price_credits
+        }
+    });
     if ledger_amount_credits <= 0 {
         return LeagueLedgerSettlement {
             status: "skipped_zero_price".to_string(),
@@ -1086,6 +1098,7 @@ pub(super) async fn reserve_world_purchase_with_ledger(
         purchase.purchase_id.clone(),
         "world listing purchase reserve",
         "matrix identity could not be resolved for world purchase reserve",
+        None,
     )
     .await
 }
@@ -1106,6 +1119,7 @@ pub(super) async fn settle_world_purchase_with_ledger(
         purchase.listing_id.clone(),
         "world listing purchase settlement",
         "matrix identity could not be resolved for world purchase settlement",
+        None,
     )
     .await
 }
@@ -1126,6 +1140,7 @@ pub(super) async fn consume_world_purchase_with_ledger(
         purchase.purchase_id.clone(),
         "world listing purchase consume",
         "matrix identity could not be resolved for world purchase consume",
+        None,
     )
     .await
 }
@@ -1150,6 +1165,83 @@ pub(super) async fn refund_world_purchase_with_ledger(
         purchase.purchase_id.clone(),
         "world listing purchase refund",
         "matrix identity could not be resolved for world purchase refund",
+        None,
+    )
+    .await
+}
+
+pub(super) async fn chargeback_world_purchase_seller_with_ledger(
+    state: &AppState,
+    room_id: Option<&str>,
+    purchase: &WorldPurchase,
+    chargeback_scope: &str,
+) -> LeagueLedgerSettlement {
+    if !matches!(
+        purchase.ledger_status.as_deref(),
+        Some("settled") | Some("duplicate")
+    ) {
+        return LeagueLedgerSettlement {
+            status: "skipped_seller_not_settled".to_string(),
+            account_id: purchase.ledger_account_id.clone(),
+            error: Some("seller settlement is not active for chargeback".to_string()),
+            ..Default::default()
+        };
+    }
+    let seller_net_credits = world_seller_net_credits_for_price(purchase.price_credits);
+    if seller_net_credits <= 0 {
+        return LeagueLedgerSettlement {
+            status: "skipped_zero_seller_net".to_string(),
+            account_id: purchase.ledger_account_id.clone(),
+            ..Default::default()
+        };
+    }
+    let reserve = settle_world_purchase_ledger_action(
+        state,
+        room_id,
+        &purchase.seller_matrix_user_id,
+        purchase,
+        "reserve",
+        "seller_chargeback_reserved",
+        format!(
+            "world_purchase_seller_chargeback_reserve:{}:{}",
+            purchase.purchase_id, chargeback_scope
+        ),
+        purchase.purchase_id.clone(),
+        "world listing seller chargeback reserve",
+        "matrix identity could not be resolved for world seller chargeback reserve",
+        Some(seller_net_credits),
+    )
+    .await;
+    if !matches!(
+        reserve.status.as_str(),
+        "seller_chargeback_reserved" | "duplicate"
+    ) {
+        return LeagueLedgerSettlement {
+            status: "seller_chargeback_reserve_failed".to_string(),
+            account_id: reserve.account_id,
+            entry_id: reserve.entry_id,
+            balance_after: reserve.balance_after,
+            error: reserve.error.or(Some(format!(
+                "seller chargeback reserve did not complete: {}",
+                reserve.status
+            ))),
+        };
+    }
+    settle_world_purchase_ledger_action(
+        state,
+        room_id,
+        &purchase.seller_matrix_user_id,
+        purchase,
+        "consume",
+        "seller_chargeback_consumed",
+        format!(
+            "world_purchase_seller_chargeback_consume:{}:{}",
+            purchase.purchase_id, chargeback_scope
+        ),
+        purchase.purchase_id.clone(),
+        "world listing seller chargeback consume",
+        "matrix identity could not be resolved for world seller chargeback consume",
+        Some(seller_net_credits),
     )
     .await
 }
@@ -1174,6 +1266,7 @@ pub(super) async fn reserve_reopened_world_purchase_with_ledger(
         purchase.purchase_id.clone(),
         "world listing purchase reopen reserve",
         "matrix identity could not be resolved for world purchase reopen reserve",
+        None,
     )
     .await
 }
@@ -1238,6 +1331,7 @@ pub(super) async fn buy_world_listing_inner(
             .get("dynamic_price_credits")
             .and_then(Value::as_i64)
             .unwrap_or_else(|| listing.price_credits.max(1));
+        let seller_net_credits = world_seller_net_credits_for_price(price_credits);
         let reputation_delta = (listing.quality_score / 5).max(1);
         let purchase_nonce = league.world.world_purchases.len();
         let work_order_nonce = league.world.world_work_orders.len();
@@ -1321,7 +1415,7 @@ pub(super) async fn buy_world_listing_inner(
             matrix_user_id: listing.owner_matrix_user_id.clone(),
             event_kind: "listing_purchase".to_string(),
             subject_id: purchase.purchase_id.clone(),
-            credits_delta: price_credits,
+            credits_delta: seller_net_credits,
             reputation_delta,
             created_at_epoch: now,
         };
@@ -1441,7 +1535,8 @@ pub(super) async fn buy_world_listing_inner(
                 .players_by_matrix_user
                 .get_mut(&purchase.seller_matrix_user_id)
             {
-                player.earned_credits += purchase.price_credits as f64;
+                player.earned_credits +=
+                    world_seller_net_credits_for_price(purchase.price_credits) as f64;
             }
         }
         (league.clone(), purchase, work_order)
@@ -2198,14 +2293,30 @@ pub(super) async fn reject_world_work_order_inner(
         &snapshot.3.rejection_id,
     )
     .await;
+    let buyer_refunded = buyer_refund.status == "refunded" || buyer_refund.status == "duplicate";
+    let seller_chargeback = if buyer_refunded {
+        chargeback_world_purchase_seller_with_ledger(
+            &state,
+            payload.room_id.as_deref(),
+            &snapshot.2,
+            &snapshot.3.rejection_id,
+        )
+        .await
+    } else {
+        LeagueLedgerSettlement {
+            status: "skipped_buyer_not_refunded".to_string(),
+            error: Some(
+                "seller chargeback skipped because buyer refund did not complete".to_string(),
+            ),
+            ..Default::default()
+        }
+    };
     let final_snapshot = {
         let mut league = state.inner.league_state.lock().await;
         let indexes = build_world_indexes(&league.world);
         let mut work_order = snapshot.1.clone();
         let mut purchase = snapshot.2.clone();
         let mut rejection = snapshot.3.clone();
-        let buyer_refunded =
-            buyer_refund.status == "refunded" || buyer_refund.status == "duplicate";
         purchase.buyer_consume_status = Some(if buyer_refunded {
             "refunded".to_string()
         } else {
@@ -2221,6 +2332,54 @@ pub(super) async fn reject_world_work_order_inner(
         } else {
             "rejected_refund_failed".to_string()
         };
+        if buyer_refunded {
+            let seller_charged_back = matches!(
+                seller_chargeback.status.as_str(),
+                "seller_chargeback_consumed" | "duplicate"
+            );
+            purchase.ledger_status = Some(if seller_charged_back {
+                "seller_chargeback_consumed".to_string()
+            } else if seller_chargeback.status.starts_with("skipped") {
+                seller_chargeback.status.clone()
+            } else {
+                "seller_chargeback_failed".to_string()
+            });
+            purchase.ledger_entry_id = seller_chargeback
+                .entry_id
+                .clone()
+                .or_else(|| purchase.ledger_entry_id.clone());
+            purchase.ledger_balance_after = seller_chargeback
+                .balance_after
+                .or(purchase.ledger_balance_after);
+            purchase.ledger_error = seller_chargeback.error.clone();
+            if seller_charged_back {
+                let seller_net_credits = world_seller_net_credits_for_price(purchase.price_credits);
+                if let Some(player) = league
+                    .players_by_matrix_user
+                    .get_mut(&purchase.seller_matrix_user_id)
+                {
+                    player.earned_credits =
+                        (player.earned_credits - seller_net_credits as f64).max(0.0);
+                }
+                league.world.world_economy_events.push(WorldEconomyEvent {
+                    economy_event_id: league_hash_id(
+                        "world-seller-chargeback",
+                        &format!(
+                            "{}:{}:{}",
+                            purchase.seller_matrix_user_id,
+                            rejection.rejection_id,
+                            Utc::now().timestamp()
+                        ),
+                    ),
+                    matrix_user_id: purchase.seller_matrix_user_id.clone(),
+                    event_kind: "seller_chargeback".to_string(),
+                    subject_id: purchase.purchase_id.clone(),
+                    credits_delta: -seller_net_credits,
+                    reputation_delta: 0,
+                    created_at_epoch: Utc::now().timestamp(),
+                });
+            }
+        }
         work_order.status = purchase.status.clone();
         rejection.refund_status = buyer_refund.status.clone();
         rejection.status = if buyer_refunded {
@@ -2265,6 +2424,9 @@ pub(super) async fn reject_world_work_order_inner(
             "buyer_refund_status": buyer_refund.status,
             "buyer_refund_entry_id": buyer_refund.entry_id,
             "buyer_refund_error": buyer_refund.error,
+            "seller_chargeback_status": seller_chargeback.status,
+            "seller_chargeback_entry_id": seller_chargeback.entry_id,
+            "seller_chargeback_error": seller_chargeback.error,
             "route_preview": route_preview,
             "route_task_graph": route_task_graph,
         })),
@@ -2751,14 +2913,31 @@ pub(super) async fn cancel_world_work_order_inner(
         &snapshot.3.cancellation_id,
     )
     .await;
+    let buyer_refunded =
+        buyer_cancel_refund.status == "refunded" || buyer_cancel_refund.status == "duplicate";
+    let seller_chargeback = if buyer_refunded {
+        chargeback_world_purchase_seller_with_ledger(
+            &state,
+            payload.room_id.as_deref(),
+            &snapshot.2,
+            &snapshot.3.cancellation_id,
+        )
+        .await
+    } else {
+        LeagueLedgerSettlement {
+            status: "skipped_buyer_not_refunded".to_string(),
+            error: Some(
+                "seller chargeback skipped because buyer refund did not complete".to_string(),
+            ),
+            ..Default::default()
+        }
+    };
     let final_snapshot = {
         let mut league = state.inner.league_state.lock().await;
         let indexes = build_world_indexes(&league.world);
         let mut work_order = snapshot.1.clone();
         let mut purchase = snapshot.2.clone();
         let mut cancellation = snapshot.3.clone();
-        let buyer_refunded =
-            buyer_cancel_refund.status == "refunded" || buyer_cancel_refund.status == "duplicate";
         purchase.buyer_consume_status = Some(if buyer_refunded {
             "refunded".to_string()
         } else {
@@ -2774,6 +2953,53 @@ pub(super) async fn cancel_world_work_order_inner(
         } else {
             "cancelled_refund_failed".to_string()
         };
+        if buyer_refunded {
+            let seller_charged_back = matches!(
+                seller_chargeback.status.as_str(),
+                "seller_chargeback_consumed" | "duplicate"
+            );
+            if seller_charged_back || !seller_chargeback.status.starts_with("skipped") {
+                purchase.ledger_status = Some(if seller_charged_back {
+                    "seller_chargeback_consumed".to_string()
+                } else {
+                    "seller_chargeback_failed".to_string()
+                });
+                purchase.ledger_entry_id = seller_chargeback
+                    .entry_id
+                    .clone()
+                    .or_else(|| purchase.ledger_entry_id.clone());
+                purchase.ledger_balance_after = seller_chargeback
+                    .balance_after
+                    .or(purchase.ledger_balance_after);
+                purchase.ledger_error = seller_chargeback.error.clone();
+            }
+            if seller_charged_back {
+                let seller_net_credits = world_seller_net_credits_for_price(purchase.price_credits);
+                if let Some(player) = league
+                    .players_by_matrix_user
+                    .get_mut(&purchase.seller_matrix_user_id)
+                {
+                    player.earned_credits =
+                        (player.earned_credits - seller_net_credits as f64).max(0.0);
+                }
+                let now = Utc::now().timestamp();
+                league.world.world_economy_events.push(WorldEconomyEvent {
+                    economy_event_id: league_hash_id(
+                        "world-seller-chargeback",
+                        &format!(
+                            "{}:{}:{}",
+                            purchase.seller_matrix_user_id, cancellation.cancellation_id, now
+                        ),
+                    ),
+                    matrix_user_id: purchase.seller_matrix_user_id.clone(),
+                    event_kind: "seller_chargeback".to_string(),
+                    subject_id: purchase.purchase_id.clone(),
+                    credits_delta: -seller_net_credits,
+                    reputation_delta: 0,
+                    created_at_epoch: now,
+                });
+            }
+        }
         work_order.status = purchase.status.clone();
         cancellation.refund_status = buyer_cancel_refund.status.clone();
         cancellation.status = purchase.status.clone();
@@ -2812,6 +3038,9 @@ pub(super) async fn cancel_world_work_order_inner(
             "buyer_cancel_refund_status": buyer_cancel_refund.status,
             "buyer_cancel_refund_entry_id": buyer_cancel_refund.entry_id,
             "buyer_cancel_refund_error": buyer_cancel_refund.error,
+            "seller_chargeback_status": seller_chargeback.status,
+            "seller_chargeback_entry_id": seller_chargeback.entry_id,
+            "seller_chargeback_error": seller_chargeback.error,
             "route_preview": route_preview,
             "route_task_graph": route_task_graph,
         })),
