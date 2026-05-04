@@ -1687,6 +1687,25 @@ impl<'a> ClientAppProjectionContext<'a> {
             .filter(|submission| submission.matrix_user_id == matrix_user_id)
             .flat_map(|submission| submission.anti_cheat_flags.iter())
             .count() as i64;
+        let playability_telemetry_event_count = self
+            .world
+            .world_economy_events
+            .iter()
+            .filter(|event| event.event_kind == "playability_telemetry")
+            .count() as i64;
+        let market_tax_sink_count = self
+            .world
+            .world_economy_events
+            .iter()
+            .filter(|event| event.event_kind == "market_tax_sink")
+            .count() as i64;
+        let encounter_state_event_count = self
+            .league
+            .submissions
+            .values()
+            .flat_map(|submission| submission.score_events.iter())
+            .filter(|event| event.dimension == "encounter_state")
+            .count() as i64;
         let route_backlog_count = self.route_artifacts.task_views.len() as i64;
         let mut active_days = HashSet::new();
         for epoch in self
@@ -1757,6 +1776,9 @@ impl<'a> ClientAppProjectionContext<'a> {
                 "listed_count": listed_count,
                 "review_hold_count": review_hold_count,
                 "anti_cheat_flag_count": anti_cheat_flag_count,
+                "playability_telemetry_event_count": playability_telemetry_event_count,
+                "market_tax_sink_count": market_tax_sink_count,
+                "encounter_state_event_count": encounter_state_event_count,
                 "active_day_count": active_days.len(),
                 "progression_level": progression_level,
                 "successful_task_count": successful_task_count,
@@ -1788,8 +1810,24 @@ impl<'a> ClientAppProjectionContext<'a> {
                 "cooldown_seconds": 300,
                 "review_hold_count": review_hold_count,
                 "anti_cheat_flag_count": anti_cheat_flag_count,
-                "signals": ["too_short", "repetition_suspected", "hidden_tests_failed", "hidden_missing_evidence", "judge_disagreement"],
+                "signals": ["too_short", "repetition_suspected", "hidden_tests_failed", "hidden_missing_evidence", "judge_disagreement", "duplicate_action_signature", "repeat_kind_cooldown_pressure"],
                 "player_copy": "Fast play is welcome; duplicate or evidence-free farming goes to review hold instead of silent payout."
+            },
+            "engine_contracts": {
+                "world_action_engine": "trillionnium_world_action_engine_v1",
+                "market_simulator": "trillionnium_market_simulator_v1",
+                "league_encounter_state": "trillionnium_league_encounter_state_v1",
+                "telemetry_stream": "world_economy_events:playability_telemetry",
+                "balance_config": "trillionnium_playability_balance_config_v1"
+            },
+            "playability_balance_config": {
+                "contract_version": "trillionnium_playability_balance_config_v1",
+                "world_action_cooldown_seconds": 300,
+                "market_tax_rate_percent": 5,
+                "demand_window_seconds": 86400,
+                "league_mode_multipliers": {"daily_dungeon": 1.0, "guild_raid": 1.25, "bounty_arena": 1.5},
+                "review_hold_signals": ["duplicate_action_signature", "too_short", "hidden_tests_failed", "judge_disagreement"],
+                "tunable_without_ui_rewrite": true
             },
             "ops_refresh_hooks": [
                 {"hook_id": "daily_route_refresh", "cadence": "daily", "owner_surface": "/app", "status": "declared"},
@@ -1807,7 +1845,12 @@ impl<'a> ClientAppProjectionContext<'a> {
                 "funnel_steps_cover_first_reward",
                 "risk_reward_language_visible",
                 "season_loop_visible",
-                "cooldown_policy_visible"
+                "cooldown_policy_visible",
+                "backend_outcome_engine_visible",
+                "market_simulator_visible",
+                "league_encounter_state_visible",
+                "persistent_telemetry_stream_visible",
+                "balance_config_visible"
             ]
         })
     }

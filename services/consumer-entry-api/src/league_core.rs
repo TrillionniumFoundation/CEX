@@ -708,6 +708,56 @@ pub(super) fn league_item_for_submission(submission: &LeagueSubmission) -> Leagu
     }
 }
 
+fn league_encounter_state_event(body: &str, mode: &str) -> LeagueScoreEvent {
+    let lower = body.to_ascii_lowercase();
+    let required_roles: Vec<&str> = match mode {
+        "guild_raid" => vec!["scout", "builder", "auditor", "closer"],
+        "bounty_arena" => vec!["scout", "auditor", "closer"],
+        "world_work_delivery" => vec!["builder", "auditor", "closer"],
+        _ => vec!["scout", "builder", "closer"],
+    };
+    let covered_roles = required_roles
+        .iter()
+        .filter(|role| lower.contains(**role) || body.contains("分工") || body.contains("团队"))
+        .count();
+    let opponent_pressure = match mode {
+        "bounty_arena" => 86,
+        "guild_raid" => 78,
+        "world_work_delivery" => 72,
+        _ => 64,
+    };
+    let phase = if lower.contains("risk") || body.contains("风险") {
+        "counterplay_locked"
+    } else if lower.contains("evidence") || body.contains("证据") {
+        "proof_window"
+    } else {
+        "opening_read"
+    };
+    let encounter_score = (((covered_roles as f64 / required_roles.len() as f64) * 50.0)
+        + if phase == "counterplay_locked" {
+            50.0
+        } else {
+            30.0
+        })
+    .min(100.0);
+    LeagueScoreEvent {
+        dimension: "encounter_state".to_string(),
+        score: (encounter_score * 10.0).round() / 10.0,
+        weight: 0.0,
+        judge_kind: "encounter_state_v1".to_string(),
+        evidence: json!({
+            "contract_version": "trillionnium_league_encounter_state_v1",
+            "mode": mode,
+            "phase": phase,
+            "opponent_pressure": opponent_pressure,
+            "required_roles": required_roles,
+            "covered_role_count": covered_roles,
+            "player_counterplay": ["deliverable", "evidence", "risk_control", "next_action", "team_role"],
+            "next_turn_hint": "Pick a role, answer the pressure point, submit evidence, then lock reward or recovery.",
+        }),
+    }
+}
+
 pub(super) fn judge_league_submission(body: &str, mode: &str) -> LeagueJudgement {
     let chars = body.chars().count() as f64;
     let lower = body.to_ascii_lowercase();
@@ -732,7 +782,7 @@ pub(super) fn judge_league_submission(body: &str, mode: &str) -> LeagueJudgement
     let polish_score =
         ((chars / 1.4).clamp(40.0, 88.0) + if has_review { 8.0 } else { 0.0 }).min(96.0);
 
-    let events = vec![
+    let mut events = vec![
         LeagueScoreEvent {
             dimension: "delivery_fit".to_string(),
             score: delivery_score,
@@ -769,6 +819,7 @@ pub(super) fn judge_league_submission(body: &str, mode: &str) -> LeagueJudgement
             evidence: json!({"chars": chars, "has_self_review": has_review}),
         },
     ];
+    events.push(league_encounter_state_event(body, mode));
     let score = events
         .iter()
         .map(|event| event.score * event.weight)

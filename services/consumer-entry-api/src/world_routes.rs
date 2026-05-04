@@ -1,5 +1,8 @@
 use super::*;
 
+const TRILLIONNIUM_WORLD_ACTION_ENGINE_CONTRACT_VERSION: &str =
+    "trillionnium_world_action_engine_v1";
+
 pub(super) fn world_action_kind(body: &str) -> (&'static str, &'static str, i64) {
     let lower = body.to_ascii_lowercase();
     if lower.contains("contract")
@@ -68,6 +71,169 @@ pub(super) fn world_action_kind(body: &str) -> (&'static str, &'static str, i64)
             10,
         )
     }
+}
+
+fn world_action_quality_signal(body: &str) -> (i64, Vec<&'static str>) {
+    let lower = body.to_ascii_lowercase();
+    let mut score = 0;
+    let mut missing = Vec::new();
+    let signals = [
+        (
+            "deliverable",
+            lower.contains("deliverable") || body.contains("成果") || body.contains("交付"),
+        ),
+        (
+            "evidence",
+            lower.contains("evidence")
+                || lower.contains("source")
+                || lower.contains("proof")
+                || body.contains("证据")
+                || body.contains("依据"),
+        ),
+        (
+            "risk_control",
+            lower.contains("risk") || body.contains("风险") || body.contains("风控"),
+        ),
+        (
+            "next_action",
+            lower.contains("next") || body.contains("下一步") || body.contains("计划"),
+        ),
+        (
+            "self_review",
+            lower.contains("review") || body.contains("自检") || body.contains("复盘"),
+        ),
+    ];
+    for (signal, present) in signals {
+        if present {
+            score += 1;
+        } else {
+            missing.push(signal);
+        }
+    }
+    if body.chars().count() >= 80 {
+        score += 1;
+    }
+    (score, missing)
+}
+
+fn world_action_playability_outcome(
+    league: &LeagueState,
+    matrix_user_id: &str,
+    kind: &str,
+    base_result: &str,
+    body: &str,
+    base_impact: i64,
+    now: i64,
+) -> (Value, String, i64) {
+    let cooldown_seconds = 300;
+    let normalized_body = body.trim().to_ascii_lowercase();
+    let recent_events: Vec<&WorldEvent> = league
+        .world
+        .world_events
+        .iter()
+        .filter(|event| {
+            event.actor_matrix_user_id == matrix_user_id
+                && event.event_kind == kind
+                && now.saturating_sub(event.created_at_epoch) <= cooldown_seconds
+        })
+        .collect();
+    let duplicate_count = recent_events
+        .iter()
+        .filter(|event| event.body.trim().to_ascii_lowercase() == normalized_body)
+        .count() as i64;
+    let remaining_cooldown_seconds = recent_events
+        .iter()
+        .filter(|event| event.body.trim().to_ascii_lowercase() == normalized_body)
+        .map(|event| cooldown_seconds - now.saturating_sub(event.created_at_epoch))
+        .max()
+        .unwrap_or(0)
+        .max(0);
+    let (quality_score, missing_signals) = world_action_quality_signal(body);
+    let mut risk_flags: Vec<String> = missing_signals
+        .iter()
+        .map(|signal| format!("missing_{signal}"))
+        .collect();
+    if duplicate_count > 0 {
+        risk_flags.push("duplicate_action_signature".to_string());
+    }
+    if !recent_events.is_empty() && duplicate_count == 0 {
+        risk_flags.push("repeat_kind_cooldown_pressure".to_string());
+    }
+    if body.chars().count() < 32 {
+        risk_flags.push("too_short_for_full_reward".to_string());
+    }
+    risk_flags.sort();
+    risk_flags.dedup();
+    let quality_bonus = (quality_score - 3).max(0) * 2;
+    let duplicate_penalty = duplicate_count * base_impact.max(4) / 2;
+    let cooldown_penalty = if !recent_events.is_empty() && duplicate_count == 0 {
+        2
+    } else {
+        0
+    };
+    let missing_penalty = missing_signals.len() as i64;
+    let final_impact =
+        (base_impact + quality_bonus - duplicate_penalty - cooldown_penalty - missing_penalty)
+            .clamp(1, base_impact + 8);
+    let success_tier = if duplicate_count > 0 {
+        "cooldown_limited"
+    } else if missing_signals.is_empty() && quality_score >= 6 {
+        "critical_success"
+    } else if missing_signals.len() <= 2 {
+        "solid_success"
+    } else {
+        "partial_success"
+    };
+    let status = if duplicate_count > 0 {
+        "cooldown_limited"
+    } else if missing_signals.len() >= 3 {
+        "needs_recovery_choice"
+    } else {
+        "resolved"
+    };
+    let next_choice = match kind {
+        "contract" => "/world/web/contract-complete or /work deliver latest",
+        "market" => "/world/web/listing-buy then /work deliver latest",
+        "craft" | "venture" => "/world/web/company then /world/web/listing",
+        "recruit" => "/league/web/action team or /league/web/action raid",
+        _ => "/map then choose a nearby action node",
+    };
+    let recovery_hint = if duplicate_count > 0 {
+        "Wait for cooldown or change the evidence/body before farming the same action."
+    } else if missing_signals.is_empty() {
+        "Push the next route while the reward window is warm."
+    } else {
+        "Add the missing deliverable/evidence/risk/next-action signals, then retry or route to review."
+    };
+    let result_text = format!(
+        "{} Outcome={success_tier}; impact {base_impact}->{final_impact}; next={next_choice}; recovery={recovery_hint}",
+        base_result
+    );
+    let outcome = json!({
+        "contract_version": TRILLIONNIUM_WORLD_ACTION_ENGINE_CONTRACT_VERSION,
+        "status": status,
+        "success_tier": success_tier,
+        "action_kind": kind,
+        "base_impact": base_impact,
+        "final_impact": final_impact,
+        "quality_score": quality_score,
+        "energy_cost": (base_impact / 4).max(1),
+        "difficulty": match kind {
+            "contract" | "market" => "medium",
+            "venture" => "hard",
+            "craft" | "recruit" => "medium_light",
+            _ => "light",
+        },
+        "cooldown_seconds": cooldown_seconds,
+        "remaining_cooldown_seconds": remaining_cooldown_seconds,
+        "duplicate_count": duplicate_count,
+        "risk_flags": risk_flags,
+        "missing_signals": missing_signals,
+        "next_choice": next_choice,
+        "recovery_hint": recovery_hint,
+        "telemetry_step": format!("world_action_{kind}_{success_tier}"),
+    });
+    (outcome, result_text, final_impact)
 }
 
 fn world_default_location_for_kind(kind: &str) -> &'static str {
@@ -603,7 +769,17 @@ async fn create_world_contract_task(
 async fn record_world_action(
     state: &AppState,
     payload: WorldActionRequest,
-) -> Result<(LeagueState, WorldEvent, Option<WorldContract>, Value), Response> {
+) -> Result<
+    (
+        LeagueState,
+        WorldEvent,
+        Option<WorldContract>,
+        Value,
+        Value,
+        WorldEconomyEvent,
+    ),
+    Response,
+> {
     let matrix_user_id = match normalize_league_matrix_user(&payload.matrix_user_id) {
         Some(value) => value,
         None => {
@@ -618,7 +794,7 @@ async fn record_world_action(
         Ok(value) => value,
         Err(response) => return Err(response),
     };
-    let (kind, result, impact) = world_action_kind(&body);
+    let (kind, result, base_impact) = world_action_kind(&body);
     let snapshot = {
         let mut league = state.inner.league_state.lock().await;
         let mut player = ensure_league_player(&mut league, &matrix_user_id, None);
@@ -629,6 +805,15 @@ async fn record_world_action(
             .unwrap_or_else(|| world_default_location_for_kind(kind))
             .to_string();
         let now = Utc::now().timestamp();
+        let (playability_outcome, resolved_result, impact) = world_action_playability_outcome(
+            &league,
+            &matrix_user_id,
+            kind,
+            result,
+            &body,
+            base_impact,
+            now,
+        );
         let event = WorldEvent {
             event_id: league_hash_id(
                 "world-event",
@@ -639,7 +824,7 @@ async fn record_world_action(
             location_id: location_id.clone(),
             event_kind: kind.to_string(),
             body: body.clone(),
-            result: result.to_string(),
+            result: resolved_result,
             impact_score: impact,
             cex_task_id: payload.cex_task_id.clone(),
             cex_status: payload.cex_status.clone(),
@@ -702,9 +887,36 @@ async fn record_world_action(
         league
             .players_by_matrix_user
             .insert(matrix_user_id.clone(), player);
+        let telemetry_event = WorldEconomyEvent {
+            economy_event_id: league_hash_id(
+                "world-playability-telemetry",
+                &format!("{}:{}:{}", matrix_user_id, event.event_id, now),
+            ),
+            matrix_user_id: matrix_user_id.clone(),
+            event_kind: "playability_telemetry".to_string(),
+            subject_id: playability_outcome
+                .get("telemetry_step")
+                .and_then(Value::as_str)
+                .unwrap_or("world_action")
+                .to_string(),
+            credits_delta: 0,
+            reputation_delta: impact - base_impact,
+            created_at_epoch: now,
+        };
         league.world.world_events.push(event.clone());
+        league
+            .world
+            .world_economy_events
+            .push(telemetry_event.clone());
         let home = world_home_json(&league);
-        (league.clone(), event, created_contract, home)
+        (
+            league.clone(),
+            event,
+            created_contract,
+            home,
+            playability_outcome,
+            telemetry_event,
+        )
     };
     Ok(snapshot)
 }
@@ -763,6 +975,8 @@ pub(super) async fn post_world_action(
             "contract": snapshot.2,
             "task": task,
             "home": snapshot.3,
+            "playability_outcome": snapshot.4,
+            "playability_telemetry": snapshot.5,
         })),
     )
         .into_response()
@@ -827,12 +1041,16 @@ pub(super) async fn post_world_web_action(
     };
     let snapshot = match record_world_action(&state, request).await {
         Ok(value) => value,
-        Err(response) => return response,
+        Err(_response) => {
+            return Redirect::to("/world?played=0&recovery=action-input#world-action-console")
+                .into_response()
+        }
     };
-    if let Err(response) =
+    if let Err(_response) =
         persist_league_state_after_command(&state, &snapshot.0, "world_action").await
     {
-        return response;
+        return Redirect::to("/world?played=0&recovery=persistence#world-action-console")
+            .into_response();
     }
-    Redirect::to("/world?played=1").into_response()
+    Redirect::to("/world?played=1#world-action-console").into_response()
 }

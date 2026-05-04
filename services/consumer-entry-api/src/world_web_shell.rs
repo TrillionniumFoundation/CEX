@@ -167,6 +167,7 @@ fn world_map_status_label(value: &str) -> String {
 pub(super) async fn get_world_web_shell(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Query(query): Query<HashMap<String, String>>,
 ) -> Html<String> {
     let web_session = authorize_league_web_session_readonly(&state, &headers, true)
         .ok()
@@ -184,12 +185,26 @@ pub(super) async fn get_world_web_shell(
             )
         })
         .unwrap_or_default();
-    let console_note = if web_session.is_some() {
+    let console_note = if query.get("played").map(String::as_str) == Some("1") {
+        "行动已结算：世界事件、奖励影响和下一步路线已写入。"
+    } else if query.contains_key("recovery") {
+        "行动没有丢失：请按恢复卡补齐证据、风险和下一步后重试。"
+    } else if web_session.is_some() {
         "已登录的世界会话：行动会绑定当前玩家并通过 CSRF 保护。"
     } else if matches!(state.config().runtime_profile, RuntimeProfile::LocalDev) {
         "本地开发世界：探索城市、打造道具、招募 Agent，并把现实机会镜像成冒险事件。"
     } else {
         "只读世界：提交行动前需要先获取签名 /league/web/session。"
+    };
+    let recovery_notice_html = if query.contains_key("recovery") {
+        r#"<article id="world-action-recovery-card" class="mini recovery-card" data-recovery="world_action_failure">
+          <strong data-i18n-en="Recovery route ready" data-i18n-zh="恢复路线已准备">Recovery route ready</strong>
+          <span data-i18n-en="Your web action hit a validation or persistence guard. Add deliverable, evidence, risk control, and next action, then resubmit from the same console." data-i18n-zh="网页行动触发了校验或持久化保护。补齐成果、证据、风险控制和下一步，然后从同一个行动台重新提交。">Your web action hit a validation or persistence guard. Add deliverable, evidence, risk control, and next action, then resubmit from the same console.</span>
+          <code>/world action deliverable + evidence + risk + next</code>
+        </article>"#
+            .to_string()
+    } else {
+        String::new()
     };
     let league = state.inner.league_state.lock().await;
     let world_indexes = build_world_indexes(&league.world);
@@ -1480,6 +1495,7 @@ pub(super) async fn get_world_web_shell(
       <div id="world-action-console" class="panel">
         <h2 data-i18n-en="World Action Console" data-i18n-zh="世界行动台">World Action Console</h2>
         <p id="world-action-console-status" class="subtitle">{console_note}</p>
+        {recovery_notice_html}
         <form method="post" action="/world/web/action">
           {csrf_input}
           <input type="hidden" name="matrix_user_id" value="{current_matrix_user_id}" />

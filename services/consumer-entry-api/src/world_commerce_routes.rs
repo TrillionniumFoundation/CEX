@@ -1,5 +1,56 @@
 use super::*;
 
+const TRILLIONNIUM_MARKET_SIMULATOR_CONTRACT_VERSION: &str = "trillionnium_market_simulator_v1";
+
+fn world_market_simulation_json(world: &WorldState, listing: &WorldListing, now: i64) -> Value {
+    let base_price = listing.price_credits.max(1);
+    let recent_window_seconds = 86_400;
+    let recent_company_purchase_count = world
+        .world_purchases
+        .iter()
+        .filter(|purchase| {
+            purchase.company_id == listing.company_id
+                && now.saturating_sub(purchase.created_at_epoch) <= recent_window_seconds
+        })
+        .count() as i64;
+    let active_company_listing_count = world
+        .world_listings
+        .iter()
+        .filter(|candidate| {
+            candidate.company_id == listing.company_id && candidate.status == "listed"
+        })
+        .count() as i64;
+    let demand_premium = ((recent_company_purchase_count * base_price) / 20).clamp(0, 50);
+    let scarcity_premium = ((3 - active_company_listing_count).max(0) * 2).clamp(0, 12);
+    let quality_premium = (listing.quality_score / 25).clamp(0, 20);
+    let dynamic_price_credits =
+        (base_price + demand_premium + scarcity_premium + quality_premium).max(1);
+    let market_tax_credits = (dynamic_price_credits / 20).max(1);
+    let seller_net_credits = (dynamic_price_credits - market_tax_credits).max(0);
+    let demand_index = (100 + recent_company_purchase_count * 8 + quality_premium).clamp(50, 200);
+    let scarcity_index =
+        (100 + scarcity_premium * 5 - active_company_listing_count * 2).clamp(40, 180);
+    json!({
+        "contract_version": TRILLIONNIUM_MARKET_SIMULATOR_CONTRACT_VERSION,
+        "status": "priced",
+        "listing_id": listing.listing_id,
+        "company_id": listing.company_id,
+        "base_price_credits": base_price,
+        "dynamic_price_credits": dynamic_price_credits,
+        "demand_premium_credits": demand_premium,
+        "scarcity_premium_credits": scarcity_premium,
+        "quality_premium_credits": quality_premium,
+        "market_tax_credits": market_tax_credits,
+        "seller_net_credits": seller_net_credits,
+        "demand_index": demand_index,
+        "scarcity_index": scarcity_index,
+        "recent_company_purchase_count": recent_company_purchase_count,
+        "active_company_listing_count": active_company_listing_count,
+        "sinks": ["market_tax", "review_hold_delay", "refund_risk"],
+        "strategy_hint": "High demand raises price; scarce quality supply earns more but pays a visible market tax.",
+    })
+}
+
 pub(super) async fn get_world_assets(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1173,7 +1224,11 @@ pub(super) async fn buy_world_listing_inner(
             .or_else(|| indexes.shop_location_id(&listing.shop_id))
             .unwrap_or("zbj-market-gate");
         let faction_id = world_faction_for_location(location_id);
-        let price_credits = listing.price_credits.max(1);
+        let market_simulation = world_market_simulation_json(&league.world, &listing, now);
+        let price_credits = market_simulation
+            .get("dynamic_price_credits")
+            .and_then(Value::as_i64)
+            .unwrap_or_else(|| listing.price_credits.max(1));
         let reputation_delta = (listing.quality_score / 5).max(1);
         let purchase_nonce = league.world.world_purchases.len();
         let work_order_nonce = league.world.world_work_orders.len();
@@ -1261,6 +1316,21 @@ pub(super) async fn buy_world_listing_inner(
             reputation_delta,
             created_at_epoch: now,
         };
+        let market_tax_event = WorldEconomyEvent {
+            economy_event_id: league_hash_id(
+                "world-market-tax",
+                &format!("{}:{}:{}", buyer_matrix_user_id, purchase.purchase_id, now),
+            ),
+            matrix_user_id: buyer_matrix_user_id.clone(),
+            event_kind: "market_tax_sink".to_string(),
+            subject_id: purchase.purchase_id.clone(),
+            credits_delta: -market_simulation
+                .get("market_tax_credits")
+                .and_then(Value::as_i64)
+                .unwrap_or(1),
+            reputation_delta: 0,
+            created_at_epoch: now,
+        };
         league.world.world_relationships.push(WorldRelationship {
             relationship_id: league_hash_id(
                 "world-rel",
@@ -1287,6 +1357,7 @@ pub(super) async fn buy_world_listing_inner(
             .world
             .world_economy_events
             .push(economy_event.clone());
+        league.world.world_economy_events.push(market_tax_event);
         let company = company_index.map(|index| league.world.world_companies[index].clone());
         let shop = shop_index.map(|index| league.world.world_shops[index].clone());
         (
@@ -1299,6 +1370,7 @@ pub(super) async fn buy_world_listing_inner(
             economy_event,
             seller_standing,
             buyer_standing,
+            market_simulation,
         )
     };
     let buyer_reserve = reserve_world_purchase_with_ledger(&state, &payload, &snapshot.1).await;
@@ -1388,6 +1460,7 @@ pub(super) async fn buy_world_listing_inner(
             "economy_event": snapshot.6,
             "seller_standing": snapshot.7,
             "buyer_standing": snapshot.8,
+            "market_simulation": snapshot.9,
             "buyer_ledger_status": buyer_reserve.status,
             "buyer_ledger_entry_id": buyer_reserve.entry_id,
             "buyer_ledger_error": buyer_reserve.error,

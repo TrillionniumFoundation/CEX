@@ -168,8 +168,19 @@ pub(super) async fn get_league_season(
                 "player_count": league.players_by_matrix_user.len(),
                 "battle_count": league.battles.len(),
                 "submission_count": league.submissions.len(),
-                "reward_count": league.rewards.len()
+                "reward_count": league.rewards.len(),
+                "ops_contract_version": "trillionnium_season_ops_v1",
+                "next_daily_reset_epoch": Utc::now().timestamp() + 86_400,
+                "next_weekly_raid_epoch": Utc::now().timestamp() + 604_800,
+                "market_refresh_policy": "restock sparse high-quality listings and apply demand/scarcity pricing",
+                "scoreboard_reset_policy": "seasonal reset preserves earned inventory while refreshing leaderboards"
             },
+            "ops_hooks": [
+                {"hook_id": "daily_route_refresh", "cadence": "daily", "status": "scheduled_contract"},
+                {"hook_id": "weekly_guild_raid_window", "cadence": "weekly", "status": "scheduled_contract"},
+                {"hook_id": "market_supply_refresh", "cadence": "daily", "status": "scheduled_contract"},
+                {"hook_id": "season_scoreboard_reset", "cadence": "seasonal", "status": "scheduled_contract"}
+            ],
             "leaderboards": {
                 "players": top_players,
                 "guilds": guild_standings,

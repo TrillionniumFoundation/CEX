@@ -1022,6 +1022,18 @@ async fn league_web_shell_explains_score_and_reward_formula() {
     assert!(body.contains("Reward = score"));
     assert!(body.contains("delivery 30%"));
     assert!(body.contains("cex") || body.contains("score-mini"));
+    let judgement = crate::judge_league_submission(
+        "Guild raid delivery with scout, builder, evidence, risk controls, next step, and team review.",
+        "guild_raid",
+    );
+    assert!(judgement.score_events.iter().any(|event| {
+        event.dimension == "encounter_state"
+            && event
+                .evidence
+                .get("contract_version")
+                .and_then(Value::as_str)
+                == Some("trillionnium_league_encounter_state_v1")
+    }));
 }
 
 #[test]
@@ -1210,6 +1222,22 @@ fn world_client_surfaces_expose_projection_layer_contracts() {
             .as_i64()
             .unwrap_or(0)
             >= 300
+    );
+    assert_eq!(
+        app["economy_retention_ops"]["engine_contracts"]["world_action_engine"],
+        "trillionnium_world_action_engine_v1"
+    );
+    assert_eq!(
+        app["economy_retention_ops"]["engine_contracts"]["market_simulator"],
+        "trillionnium_market_simulator_v1"
+    );
+    assert_eq!(
+        app["economy_retention_ops"]["engine_contracts"]["league_encounter_state"],
+        "trillionnium_league_encounter_state_v1"
+    );
+    assert_eq!(
+        app["economy_retention_ops"]["playability_balance_config"]["contract_version"],
+        "trillionnium_playability_balance_config_v1"
     );
 }
 
@@ -1546,9 +1574,13 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(app_html.contains("routeFlowActionAttrs"));
     assert!(app_html.contains("\"contract_version\":1"));
 
-    let world_html = get_world_web_shell(axum::extract::State(state), HeaderMap::new())
-        .await
-        .0;
+    let world_html = get_world_web_shell(
+        axum::extract::State(state.clone()),
+        HeaderMap::new(),
+        axum::extract::Query(HashMap::new()),
+    )
+    .await
+    .0;
     assert!(world_html.contains("data-focus-kind=\"event\""));
     assert!(world_html.contains("data-task-id=\"task-web-event-focus-1\""));
     assert!(world_html.contains("findLiveEventByFocus"));
@@ -1557,6 +1589,17 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(world_html.contains("mapEventFocusButton"));
     assert!(world_html.contains("mapViewportCardModel"));
     assert!(world_html.contains("mapViewportCardHtml"));
+    let mut recovery_query = HashMap::new();
+    recovery_query.insert("recovery".to_string(), "action-input".to_string());
+    let world_recovery_html = get_world_web_shell(
+        axum::extract::State(state.clone()),
+        HeaderMap::new(),
+        axum::extract::Query(recovery_query),
+    )
+    .await
+    .0;
+    assert!(world_recovery_html.contains("world-action-recovery-card"));
+    assert!(world_recovery_html.contains("data-recovery=\"world_action_failure\""));
     assert!(world_html.contains("buildMapFocusFromButton"));
     assert!(world_html.contains("buildSelectionFocusFromButton"));
     assert!(world_html.contains("filterLiveEventStream"));
@@ -3461,6 +3504,20 @@ async fn world_commerce_e2e_uses_real_configured_ledger_for_consume_refund_reope
     )
     .await;
     assert_eq!(status, StatusCode::OK, "world action failed: {action}");
+    assert_eq!(
+        action["playability_outcome"]["contract_version"],
+        "trillionnium_world_action_engine_v1"
+    );
+    assert!(
+        action["playability_outcome"]["final_impact"]
+            .as_i64()
+            .unwrap_or(0)
+            >= 1
+    );
+    assert_eq!(
+        action["playability_telemetry"]["event_kind"],
+        "playability_telemetry"
+    );
 
     let (status, company) = send_json_request(
         &app,
@@ -3514,6 +3571,18 @@ async fn world_commerce_e2e_uses_real_configured_ledger_for_consume_refund_reope
     assert_eq!(status, StatusCode::OK, "world buy one failed: {buy_one}");
     assert_eq!(buy_one["buyer_ledger_status"], "reserved");
     assert_eq!(buy_one["ledger_status"], "settled");
+    assert_eq!(
+        buy_one["market_simulation"]["contract_version"],
+        "trillionnium_market_simulator_v1"
+    );
+    assert!(
+        buy_one["market_simulation"]["dynamic_price_credits"]
+            .as_i64()
+            .unwrap_or(0)
+            >= buy_one["market_simulation"]["base_price_credits"]
+                .as_i64()
+                .unwrap_or(0)
+    );
     assert!(buy_one["buyer_ledger_entry_id"].as_str().is_some());
     assert!(buy_one["ledger_entry_id"].as_str().is_some());
     let price_credits = buy_one["purchase"]["price_credits"]
@@ -3569,6 +3638,13 @@ async fn world_commerce_e2e_uses_real_configured_ledger_for_consume_refund_reope
     assert_eq!(status, StatusCode::OK, "world buy two failed: {buy_two}");
     assert_eq!(buy_two["buyer_ledger_status"], "reserved");
     assert_eq!(buy_two["ledger_status"], "settled");
+    let price_two_credits = buy_two["purchase"]["price_credits"]
+        .as_i64()
+        .expect("price two credits") as f64;
+    assert!(
+        price_two_credits >= price_credits,
+        "market simulator should not lower same-day repeat demand price"
+    );
     let work_two_id = buy_two["work_order"]["work_order_id"]
         .as_str()
         .expect("work order two id")
@@ -3682,7 +3758,7 @@ async fn world_commerce_e2e_uses_real_configured_ledger_for_consume_refund_reope
     );
     assert_eq!(
         seller_account["balance"].as_f64().unwrap(),
-        price_credits * 2.0
+        price_credits + price_two_credits
     );
 
     let league = state.inner.league_state.lock().await;
