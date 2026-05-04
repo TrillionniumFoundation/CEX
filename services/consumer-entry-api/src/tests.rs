@@ -3890,6 +3890,83 @@ async fn world_commerce_e2e_uses_real_configured_ledger_for_consume_refund_reope
     }));
 }
 
+#[tokio::test]
+async fn world_contract_completion_requires_ledger_settlement_before_earned_credits() {
+    let state = test_state(test_config(), IdentityBindings::default(), HashMap::new());
+    {
+        let mut league = state.inner.league_state.lock().await;
+        let starter_location_id = league
+            .world
+            .world_map_nodes
+            .get("starter-studio")
+            .map(|node| node.location_id.clone())
+            .unwrap_or_else(|| "starter-studio".to_string());
+        league.world.world_events.push(WorldEvent {
+            event_id: "world-event-unsettled-contract".to_string(),
+            actor_matrix_user_id: "@alice:local.dev".to_string(),
+            room_id: Some("!room:local.dev".to_string()),
+            location_id: starter_location_id.clone(),
+            event_kind: "world_contract".to_string(),
+            body: "Contract completion payout settlement guard".to_string(),
+            result: "queued".to_string(),
+            impact_score: 7,
+            cex_task_id: Some("task-unsettled-contract".to_string()),
+            cex_status: Some("Running".to_string()),
+            created_at_epoch: 1_777_895_900,
+        });
+        league.world.world_contracts.push(WorldContract {
+            contract_id: "world-contract-unsettled-payout".to_string(),
+            event_id: "world-event-unsettled-contract".to_string(),
+            actor_matrix_user_id: "@alice:local.dev".to_string(),
+            location_id: starter_location_id,
+            task_id: "task-unsettled-contract".to_string(),
+            title: "Unsettled payout guard".to_string(),
+            body: "Complete only after real ledger settlement".to_string(),
+            status: "open".to_string(),
+            cex_status: Some("Running".to_string()),
+            value_score: 64,
+            created_at_epoch: 1_777_895_901,
+        });
+    }
+    let app = build_router(state.clone());
+    let (status, completion) = send_json_request(
+        &app,
+        "POST",
+        "/v1/world/contracts/world-contract-unsettled-payout/complete",
+        &[],
+        json!({
+            "matrix_user_id": "@alice:local.dev",
+            "body": "Completion includes final deliverable, evidence package, risk controls, next action, rubric self review, and clear settlement proof."
+        }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "contract completion failed: {completion}"
+    );
+    assert_eq!(
+        completion["completion"]["ledger_status"],
+        "skipped_missing_room"
+    );
+    assert!(
+        completion["completion"]["reward_amount"]
+            .as_f64()
+            .unwrap_or(0.0)
+            > 0.0
+    );
+    let league = state.inner.league_state.lock().await;
+    let player = league
+        .players_by_matrix_user
+        .get("@alice:local.dev")
+        .expect("player should be created by completion");
+    assert_eq!(player.earned_credits, 0.0);
+    assert!(
+        player.xp > 0,
+        "non-credit progression can still be recorded"
+    );
+}
+
 async fn send_text_request(
     app: &axum::Router,
     method: &str,

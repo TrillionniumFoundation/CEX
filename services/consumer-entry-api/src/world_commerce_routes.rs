@@ -3413,9 +3413,6 @@ pub(super) async fn complete_world_contract_inner(
         player.xp += judgement.score.round() as i64;
         player.reputation += (judgement.score / 8.0).round() as i64;
         player.rating += ((judgement.score - 50.0) / 3.0).round() as i64;
-        if judgement.payout_status == "eligible" {
-            player.earned_credits += judgement.reward_amount;
-        }
         league
             .players_by_matrix_user
             .insert(matrix_user_id.clone(), player);
@@ -3441,7 +3438,18 @@ pub(super) async fn complete_world_contract_inner(
     let snapshot = {
         let mut league = state.inner.league_state.lock().await;
         let indexes = build_world_indexes(&league.world);
+        let settlement_completed = matches!(
+            completion.ledger_status.as_deref(),
+            Some("settled") | Some("duplicate")
+        );
         indexes.replace_contract_completion_by_id(&mut league.world, &completion);
+        if settlement_completed {
+            let mut player = ensure_league_player(&mut league, &matrix_user_id, None);
+            player.earned_credits += completion.reward_amount;
+            league
+                .players_by_matrix_user
+                .insert(matrix_user_id.clone(), player);
+        }
         if let Some(contract_index) = indexes.contract_index(&contract.contract_id) {
             let mut stored_contract = league.world.world_contracts[contract_index].clone();
             stored_contract.status = match completion.ledger_status.as_deref() {
