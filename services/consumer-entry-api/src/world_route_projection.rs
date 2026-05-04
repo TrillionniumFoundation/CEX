@@ -1,7 +1,128 @@
 use super::*;
 
 fn escape_world_route_visible_text(value: &str) -> String {
-    i18n_span_from_bilingual_slash_copy(value).unwrap_or_else(|| escape_html_text(value))
+    if let Some(copy) = i18n_span_from_bilingual_slash_copy(value) {
+        return copy;
+    }
+    if contains_cjk_text(value) {
+        let english = world_route_english_visible_text(value);
+        return i18n_span_from_bilingual_slash_copy(&format!("{} / {}", english, value))
+            .unwrap_or_else(|| escape_html_text(&english));
+    }
+    escape_html_text(value)
+}
+
+fn world_route_english_visible_text(value: &str) -> String {
+    if !contains_cjk_text(value) {
+        return value.to_string();
+    }
+
+    let replacements = [
+        ("评级后升级悬赏", "post-rating bounty upgrade"),
+        ("评级通过", "rating passed"),
+        ("高阶范围", "upgraded scope"),
+        ("赏金阶梯", "bounty ladder"),
+        ("时间线", "timeline"),
+        ("质量备注", "quality note"),
+        ("成果证据", "result evidence"),
+        ("委托方反馈", "client feedback"),
+        ("世界状态变化", "world-state changes"),
+        ("复盘", "review"),
+        ("评级标准", "rating criteria"),
+        ("缺失证据", "missing evidence"),
+        ("异议", "objections"),
+        ("委托目标", "commission goal"),
+        ("里程碑", "milestone"),
+        ("第一轮成果", "first result"),
+        ("战果总结待生成", "Outcome summary pending"),
+        ("结果摘要整理中", "Outcome summary pending"),
+        ("路线摘要整理中", "Route summary pending"),
+        ("证据和下一步整理中", "Evidence and next step pending"),
+        ("支线提示待生成", "Branch hint pending"),
+        ("支线打法待生成", "Branch playbook pending"),
+        ("继续推进下一步机会", "continue the next opportunity"),
+        ("跟进已完成任务", "follow up completed task"),
+        ("跟进战报", "follow up battle report"),
+        ("完成委托方评级", "complete client rating"),
+        ("提交第一轮成果", "submit first result"),
+        ("重新提交成果", "resubmit result"),
+        ("打开任务牌路线", "Open bounty route"),
+        ("打开契约路线", "Open contract route"),
+        ("起草任务后续", "Draft task follow-up"),
+        ("起草后续行动", "Draft next action"),
+        ("起草后续支线", "Draft next branch"),
+        ("推进下一条支线", "Advance next branch"),
+        ("下一条支线", "next branch"),
+        ("下一次协作", "next collaboration"),
+        ("下一步", "next step"),
+        ("支线", "branch"),
+        ("事件", "events"),
+        ("委托", "commissions"),
+        ("契约", "contracts"),
+        ("战报", "battle reports"),
+        ("证据", "evidence"),
+        ("风险", "risks"),
+        ("目标", "goals"),
+        ("质量", "quality"),
+        ("成果", "result"),
+        ("声望奖励", "reputation reward"),
+        ("记录", "record"),
+        ("确认", "confirm"),
+        ("输出", "produce"),
+        ("围绕", "around"),
+        ("列出", "list"),
+        ("补齐", "fill"),
+        ("重述", "restate"),
+        ("调整", "adjust"),
+        ("收紧", "tighten"),
+        ("重新打开", "reopen"),
+        ("完成", "complete"),
+        ("锁定", "lock"),
+        ("趁上下文新鲜", "while context is fresh"),
+        ("快速", "quickly"),
+        ("热度消退前", "before momentum fades"),
+        ("埋好", "prepare"),
+        ("复述", "restate"),
+        ("尽快", "quickly"),
+        ("让路线进入", "move the route into"),
+        ("和", "and"),
+    ];
+
+    let mut translated = value.trim().to_string();
+    for (from, to) in replacements {
+        translated = translated.replace(from, to);
+    }
+    let mut normalized_punctuation = String::new();
+    for ch in translated.chars() {
+        match ch {
+            '：' => normalized_punctuation.push_str(": "),
+            '，' | '、' => normalized_punctuation.push_str(", "),
+            '；' => normalized_punctuation.push_str("; "),
+            '。' => normalized_punctuation.push('.'),
+            '！' => normalized_punctuation.push('!'),
+            '？' => normalized_punctuation.push('?'),
+            _ => normalized_punctuation.push(ch),
+        }
+    }
+    translated = normalized_punctuation;
+
+    if contains_cjk_text(&translated) {
+        translated = translated
+            .chars()
+            .filter(|ch| {
+                !(('\u{3400}'..='\u{9fff}').contains(ch)
+                    || ('\u{f900}'..='\u{faff}').contains(ch)
+                    || matches!(ch, '、' | '，' | '。' | '：' | '；' | '！' | '？'))
+            })
+            .collect::<String>();
+    }
+
+    let normalized = translated.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.trim().is_empty() {
+        "Route detail pending.".to_string()
+    } else {
+        normalized
+    }
 }
 
 struct WorldRouteProjectionContext<'a> {
@@ -1869,7 +1990,7 @@ impl WorldRouteActionButtonView<'_> {
             "<button type=\"button\" class=\"focus-chip {}\"{}>{}</button>",
             escape_html_text(class_name),
             self.target_attrs_html(),
-            escape_html_text(self.label),
+            escape_world_route_visible_text(self.label),
         )
     }
 }
@@ -2153,7 +2274,7 @@ impl WorldRouteTaskGraphView {
         let opportunity_action =
             self.opportunity_action_button_html("trillionnium-app-route-flow-action");
         format!(
-            "<article class=\"module app-route-task-graph-item\" data-task-id=\"{}\" data-location-id=\"{}\"><strong>{}</strong><span>{} · {} · 支线 {}</span><p>{} 事件 · {} 委托 · {} 战报</p><p>{}</p><p><strong>下一条支线</strong> · {}</p><p>{}</p><div class=\"focus-stack\"><code>{}</code></div><div class=\"focus-stack\">{}{}</div></article>",
+            "<article class=\"module app-route-task-graph-item\" data-task-id=\"{}\" data-location-id=\"{}\"><strong>{}</strong><span>{} · {} · branch {}</span><p>{} events · {} commissions · {} battle reports</p><p>{}</p><p><strong>Next branch</strong> · {}</p><p>{}</p><div class=\"focus-stack\"><code>{}</code></div><div class=\"focus-stack\">{}{}</div></article>",
             escape_html_text(&self.task_id),
             escape_html_text(&self.latest_location_id),
             escape_html_text(&self.task_id),
@@ -2177,7 +2298,7 @@ impl WorldRouteTaskGraphView {
         let opportunity_action =
             self.opportunity_action_button_html("trillionnium-route-flow-action");
         format!(
-            "<article class=\"mini task-graph\" data-task-id=\"{}\" data-location-id=\"{}\"><strong>{}</strong><span>{} · {} · 支线 {}</span><code>{}</code><small>{} 事件 · {} 委托 · {} 战报</small><small>{}</small><small><strong>下一条支线</strong> · {}</small><div class=\"focus-stack\"><code>{}</code></div><div class=\"focus-stack\">{}{}</div></article>",
+            "<article class=\"mini task-graph\" data-task-id=\"{}\" data-location-id=\"{}\"><strong>{}</strong><span>{} · {} · branch {}</span><code>{}</code><small>{} events · {} commissions · {} battle reports</small><small>{}</small><small><strong>Next branch</strong> · {}</small><div class=\"focus-stack\"><code>{}</code></div><div class=\"focus-stack\">{}{}</div></article>",
             escape_html_text(&self.task_id),
             escape_html_text(&self.latest_location_id),
             escape_html_text(&self.task_id),

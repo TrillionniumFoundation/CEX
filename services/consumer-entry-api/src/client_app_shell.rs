@@ -723,6 +723,14 @@ pub(super) async fn get_client_app_web_shell(
     .app-map-product-strip strong {{ display:block; color:var(--gold); margin-bottom:4px; }}
     .app-map-product-strip .quest-cta {{ min-width:154px; }}
     .map-technical-drawer,.app-progress-drawer {{ border:1px solid rgba(255,255,255,.1); background:rgba(255,255,255,.035); border-radius:18px; padding:10px; }}
+    #app-tile-shards-live,
+    #app-region-shards-live,
+    #app-poi-hotspots-live,
+    #app-prefetch-queue-live,
+    #app-live-events-live,
+    #app-feed-items-live,
+    #app-route-preview-live,
+    #app-route-task-graph-live {{ max-height:460px; overflow:auto; padding-right:4px; }}
     .dev-details {{ margin-top:10px; color:var(--muted); }}
     .dev-details summary {{ cursor:pointer; width:max-content; border:1px solid rgba(255,255,255,.1); border-radius:999px; padding:8px 12px; min-height:36px; display:inline-flex; align-items:center; background:rgba(255,255,255,.05); color:rgba(246,247,251,.72); font-size:12px; font-weight:800; }}
     .app-tab-panel {{ display:none; gap:16px; }}
@@ -767,6 +775,14 @@ pub(super) async fn get_client_app_web_shell(
       #app-tab-map > .map-shell > #real-world-map {{ order:1; }}
       #app-tab-map > .map-shell > .map-panel {{ order:5; display:grid; gap:12px; max-height:520px; overflow:auto; }}
       #app-tab-map > section:not(.map-shell) {{ order:7; max-height:420px; overflow:auto; padding-right:4px; }}
+      #app-tile-shards-live,
+      #app-region-shards-live,
+      #app-poi-hotspots-live,
+      #app-prefetch-queue-live,
+      #app-live-events-live,
+      #app-feed-items-live,
+      #app-route-preview-live,
+      #app-route-task-graph-live {{ max-height:340px; }}
       #app-first-playable-onboarding {{ order:4; }}
       #app-map-route-panel {{ order:2; max-height:340px; overflow:auto; }}
       #app-map-action-panel {{ order:3; max-height:260px; overflow:auto; }}
