@@ -360,6 +360,8 @@ pub(super) fn build_world_indexes(world: &WorldState) -> WorldIndexes {
                 | "seller_settlement_failed"
                 | "reopen_reserve_hold"
                 | "reopen_reserve_failed"
+                | "reopen_seller_settlement_pending"
+                | "reopen_seller_settlement_failed"
         ) {
             indexes
                 .latest_cancellable_work_order_by_buyer

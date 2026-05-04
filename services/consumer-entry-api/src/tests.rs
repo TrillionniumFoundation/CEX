@@ -4027,9 +4027,17 @@ async fn world_commerce_e2e_uses_real_configured_ledger_for_consume_refund_reope
         "world reopen two failed: {reopen_two}"
     );
     assert_eq!(reopen_two["buyer_reopen_reserve_status"], "reserved");
+    assert_eq!(
+        reopen_two["seller_reopen_settlement_status"],
+        "reopened_settled"
+    );
     assert_eq!(reopen_two["purchase"]["status"], "reopened_reserved");
+    assert_eq!(reopen_two["purchase"]["ledger_status"], "reopened_settled");
     assert_eq!(reopen_two["work_order"]["status"], "open");
     assert!(reopen_two["buyer_reopen_reserve_entry_id"]
+        .as_str()
+        .is_some());
+    assert!(reopen_two["seller_reopen_settlement_entry_id"]
         .as_str()
         .is_some());
 
@@ -4053,7 +4061,7 @@ async fn world_commerce_e2e_uses_real_configured_ledger_for_consume_refund_reope
     assert_eq!(cancel_two["buyer_cancel_refund_status"], "refunded");
     assert_eq!(
         cancel_two["seller_chargeback_status"],
-        "skipped_seller_not_settled"
+        "seller_chargeback_consumed"
     );
     assert_eq!(cancel_two["purchase"]["status"], "cancelled_refunded");
     assert_eq!(
@@ -4227,6 +4235,147 @@ async fn world_buy_does_not_release_commercial_progression_without_buyer_reserve
         .iter()
         .any(|standing| standing.matrix_user_id == buyer_matrix_user_id
             || standing.matrix_user_id == seller_matrix_user_id));
+}
+
+#[tokio::test]
+async fn world_work_delivery_and_acceptance_require_active_seller_settlement() {
+    let mut config = test_config();
+    config.runtime_profile = RuntimeProfile::Production;
+    let state = test_state(config, IdentityBindings::default(), HashMap::new());
+    let app = build_router(state.clone());
+    let buyer_matrix_user_id = "@world-unsettled-buyer:local.dev";
+    let seller_matrix_user_id = "@world-unsettled-seller:local.dev";
+    let company_id = "company-unsettled-work";
+    let shop_id = "shop-unsettled-work";
+    let listing_id = "listing-unsettled-work";
+    let deliver_purchase_id = "purchase-unsettled-deliver";
+    let deliver_work_order_id = "work-unsettled-deliver";
+    let accept_purchase_id = "purchase-unsettled-accept";
+    let accept_work_order_id = "work-unsettled-accept";
+    {
+        let mut league = state.inner.league_state.lock().await;
+        league.world.world_companies.push(WorldCompany {
+            company_id: company_id.to_string(),
+            owner_matrix_user_id: seller_matrix_user_id.to_string(),
+            asset_id: "asset-unsettled-work".to_string(),
+            location_id: "starter-studio".to_string(),
+            name: "Unsettled Work Guard Studio".to_string(),
+            company_kind: "studio".to_string(),
+            status: "operating".to_string(),
+            revenue_score: 180,
+            reputation_score: 24,
+            level: 2,
+            created_at_epoch: 1_777_897_945,
+        });
+        for (purchase_id, work_order_id, work_status) in [
+            (deliver_purchase_id, deliver_work_order_id, "open"),
+            (accept_purchase_id, accept_work_order_id, "delivered"),
+        ] {
+            league.world.world_purchases.push(WorldPurchase {
+                purchase_id: purchase_id.to_string(),
+                listing_id: listing_id.to_string(),
+                shop_id: shop_id.to_string(),
+                company_id: company_id.to_string(),
+                buyer_matrix_user_id: buyer_matrix_user_id.to_string(),
+                seller_matrix_user_id: seller_matrix_user_id.to_string(),
+                price_credits: 95,
+                status: "seller_settlement_failed".to_string(),
+                ledger_status: Some("failed_ledger".to_string()),
+                ledger_account_id: Some("seller-account".to_string()),
+                ledger_entry_id: None,
+                ledger_balance_after: None,
+                ledger_error: Some("seller grant failed".to_string()),
+                buyer_ledger_status: Some("reserved".to_string()),
+                buyer_ledger_account_id: Some("buyer-account".to_string()),
+                buyer_ledger_entry_id: Some("buyer-reserve-entry".to_string()),
+                buyer_ledger_balance_after: Some(0.0),
+                buyer_ledger_error: None,
+                buyer_consume_status: Some("pending_acceptance".to_string()),
+                buyer_consume_entry_id: None,
+                buyer_consume_balance_after: None,
+                buyer_consume_error: None,
+                created_at_epoch: 1_777_897_945,
+            });
+            league.world.world_work_orders.push(WorldWorkOrder {
+                work_order_id: work_order_id.to_string(),
+                purchase_id: purchase_id.to_string(),
+                listing_id: listing_id.to_string(),
+                buyer_matrix_user_id: buyer_matrix_user_id.to_string(),
+                seller_matrix_user_id: seller_matrix_user_id.to_string(),
+                company_id: company_id.to_string(),
+                status: work_status.to_string(),
+                brief: "Unsettled work should not release progress".to_string(),
+                value_score: 95,
+                created_at_epoch: 1_777_897_945,
+            });
+        }
+    }
+
+    let anchored_delivery_body = "Seller delivery includes customer deliverable, evidence package, source notes, risk controls, next action, and self-review.";
+    let (status, delivery) = send_json_request(
+        &app,
+        "POST",
+        &format!("/v1/world/work-orders/{deliver_work_order_id}/deliver"),
+        &[],
+        json!({
+            "matrix_user_id": seller_matrix_user_id,
+            "room_id": "!world-unsettled-work:local.dev",
+            "body": anchored_delivery_body
+        }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "delivery response: {delivery}"
+    );
+    assert_eq!(
+        delivery["error"],
+        "world purchase seller settlement is not active"
+    );
+    assert_eq!(delivery["ledger_status"], "failed_ledger");
+
+    let (status, acceptance) = send_json_request(
+        &app,
+        "POST",
+        &format!("/v1/world/work-orders/{accept_work_order_id}/accept"),
+        &[],
+        json!({
+            "matrix_user_id": buyer_matrix_user_id,
+            "room_id": "!world-unsettled-work:local.dev",
+            "body": "Buyer acceptance checks customer deliverable, evidence package, risk controls, next action, and self-review."
+        }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "acceptance response: {acceptance}"
+    );
+    assert_eq!(
+        acceptance["error"],
+        "world purchase seller settlement is not active"
+    );
+    assert_eq!(acceptance["ledger_status"], "failed_ledger");
+
+    let league = state.inner.league_state.lock().await;
+    let company = league
+        .world
+        .world_companies
+        .iter()
+        .find(|company| company.company_id == company_id)
+        .expect("company should remain present");
+    assert_eq!(company.reputation_score, 24);
+    assert!(league.world.world_work_deliveries.is_empty());
+    assert!(league.world.world_work_acceptances.is_empty());
+    assert!(!league
+        .players_by_matrix_user
+        .contains_key(seller_matrix_user_id));
+    assert!(!league
+        .world
+        .world_economy_events
+        .iter()
+        .any(|event| event.event_kind == "work_delivered" || event.event_kind == "work_accepted"));
 }
 
 #[tokio::test]
@@ -4699,6 +4848,10 @@ async fn world_reopen_does_not_emit_progression_without_buyer_reserve() {
         reopen["buyer_reopen_reserve_status"],
         "skipped_missing_room"
     );
+    assert_eq!(
+        reopen["seller_reopen_settlement_status"],
+        "skipped_buyer_reopen_reserve"
+    );
     assert_eq!(reopen["purchase"]["status"], "reopen_reserve_hold");
     assert_eq!(reopen["work_order"]["status"], "reopen_reserve_hold");
     assert_eq!(reopen["reopen"]["status"], "reopen_reserve_hold");
@@ -4716,6 +4869,157 @@ async fn world_reopen_does_not_emit_progression_without_buyer_reserve() {
         .world_faction_standings
         .iter()
         .any(|standing| standing.matrix_user_id == buyer_matrix_user_id));
+}
+
+#[tokio::test]
+async fn world_reopen_does_not_open_without_seller_resettlement() {
+    let (ledger_base_url, ledger_admin_token) = start_real_ledger_service_for_world_e2e().await;
+    let http = Client::new();
+    let buyer_account_id =
+        create_real_ledger_account(&http, &ledger_base_url, &ledger_admin_token, 250.0).await;
+
+    let buyer_matrix_user_id = "@world-reopen-unsettled-buyer:local.dev";
+    let seller_matrix_user_id = "@world-reopen-unsettled-seller:local.dev";
+    let room_id = "!world-reopen-unsettled:local.dev";
+    let mut bindings = IdentityBindings::default();
+    bindings.matrix_users.insert(
+        buyer_matrix_user_id.to_string(),
+        IdentityBindingEntry {
+            product_user_id: None,
+            org_id: Some("world-reopen-unsettled-org".to_string()),
+            account_id: Some(buyer_account_id.clone()),
+        },
+    );
+    let mut config = test_config();
+    config.runtime_profile = RuntimeProfile::Production;
+    config.ledger_base_url = ledger_base_url.clone();
+    config.ledger_admin_token = Some(ledger_admin_token.clone());
+    let state = test_state(config, bindings, HashMap::new());
+    let app = build_router(state.clone());
+
+    let company_id = "company-reopen-unsettled";
+    let shop_id = "shop-reopen-unsettled";
+    let listing_id = "listing-reopen-unsettled";
+    let purchase_id = "purchase-reopen-unsettled";
+    let work_order_id = "work-reopen-unsettled";
+    {
+        let mut league = state.inner.league_state.lock().await;
+        league.world.world_purchases.push(WorldPurchase {
+            purchase_id: purchase_id.to_string(),
+            listing_id: listing_id.to_string(),
+            shop_id: shop_id.to_string(),
+            company_id: company_id.to_string(),
+            buyer_matrix_user_id: buyer_matrix_user_id.to_string(),
+            seller_matrix_user_id: seller_matrix_user_id.to_string(),
+            price_credits: 75,
+            status: "rejected_refunded".to_string(),
+            ledger_status: Some("seller_chargeback_consumed".to_string()),
+            ledger_account_id: Some("seller-account".to_string()),
+            ledger_entry_id: Some("seller-chargeback-entry".to_string()),
+            ledger_balance_after: Some(0.0),
+            ledger_error: None,
+            buyer_ledger_status: Some("refunded".to_string()),
+            buyer_ledger_account_id: Some(buyer_account_id.clone()),
+            buyer_ledger_entry_id: Some("buyer-refund-entry".to_string()),
+            buyer_ledger_balance_after: Some(250.0),
+            buyer_ledger_error: None,
+            buyer_consume_status: Some("refunded".to_string()),
+            buyer_consume_entry_id: Some("buyer-refund-consume-entry".to_string()),
+            buyer_consume_balance_after: Some(250.0),
+            buyer_consume_error: None,
+            created_at_epoch: 1_777_897_985,
+        });
+        league.world.world_work_orders.push(WorldWorkOrder {
+            work_order_id: work_order_id.to_string(),
+            purchase_id: purchase_id.to_string(),
+            listing_id: listing_id.to_string(),
+            buyer_matrix_user_id: buyer_matrix_user_id.to_string(),
+            seller_matrix_user_id: seller_matrix_user_id.to_string(),
+            company_id: company_id.to_string(),
+            status: "rejected_refunded".to_string(),
+            brief: "Rejected work should not reopen until seller is resettled".to_string(),
+            value_score: 75,
+            created_at_epoch: 1_777_897_985,
+        });
+    }
+
+    let (status, reopen) = send_json_request(
+        &app,
+        "POST",
+        &format!("/v1/world/work-orders/{work_order_id}/reopen"),
+        &[],
+        json!({
+            "matrix_user_id": buyer_matrix_user_id,
+            "room_id": room_id,
+            "body": "Buyer reopens with customer deliverable revisions, evidence package, risk controls, next action, and self-review."
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "reopen response: {reopen}");
+    assert_eq!(reopen["buyer_reopen_reserve_status"], "reserved");
+    assert_eq!(
+        reopen["seller_reopen_settlement_status"],
+        "skipped_missing_account"
+    );
+    assert_eq!(
+        reopen["purchase"]["status"],
+        "reopen_seller_settlement_pending"
+    );
+    assert_eq!(
+        reopen["work_order"]["status"],
+        "reopen_seller_settlement_pending"
+    );
+    assert!(reopen["economy_event"].is_null());
+    assert!(reopen["standing"].is_null());
+
+    let (status, delivery) = send_json_request(
+        &app,
+        "POST",
+        &format!("/v1/world/work-orders/{work_order_id}/deliver"),
+        &[],
+        json!({
+            "matrix_user_id": seller_matrix_user_id,
+            "room_id": room_id,
+            "body": "Seller delivery includes customer deliverable, evidence package, risk controls, next action, and self-review."
+        }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "delivery response: {delivery}"
+    );
+    assert_eq!(delivery["error"], "work order is not deliverable");
+
+    let (status, cancel) = send_json_request(
+        &app,
+        "POST",
+        &format!("/v1/world/work-orders/{work_order_id}/cancel"),
+        &[],
+        json!({
+            "matrix_user_id": buyer_matrix_user_id,
+            "room_id": room_id,
+            "body": "Buyer cancels after seller settlement did not open: customer deliverable status, evidence package, risk controls, next action, and self-review."
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "cancel response: {cancel}");
+    assert_eq!(cancel["buyer_cancel_refund_status"], "refunded");
+    assert_eq!(
+        cancel["seller_chargeback_status"],
+        "skipped_seller_not_settled"
+    );
+    assert_eq!(cancel["purchase"]["status"], "cancelled_refunded");
+
+    let buyer_account = get_real_ledger_account(
+        &http,
+        &ledger_base_url,
+        &ledger_admin_token,
+        &buyer_account_id,
+    )
+    .await;
+    assert_eq!(buyer_account["reserved"].as_f64().unwrap(), 0.0);
+    assert_eq!(buyer_account["balance"].as_f64().unwrap(), 250.0);
 }
 
 #[tokio::test]
@@ -4743,6 +5047,31 @@ async fn world_delivery_review_hold_does_not_grant_faction_or_seller_progress() 
             revenue_score: 120,
             reputation_score: 30,
             level: 2,
+            created_at_epoch: 1_777_897_990,
+        });
+        league.world.world_purchases.push(WorldPurchase {
+            purchase_id: purchase_id.to_string(),
+            listing_id: listing_id.to_string(),
+            shop_id: "shop-delivery-review-hold".to_string(),
+            company_id: company_id.to_string(),
+            buyer_matrix_user_id: buyer_matrix_user_id.to_string(),
+            seller_matrix_user_id: seller_matrix_user_id.to_string(),
+            price_credits: 80,
+            status: "reserved".to_string(),
+            ledger_status: Some("settled".to_string()),
+            ledger_account_id: Some("seller-account".to_string()),
+            ledger_entry_id: Some("seller-grant-entry".to_string()),
+            ledger_balance_after: Some(80.0),
+            ledger_error: None,
+            buyer_ledger_status: Some("reserved".to_string()),
+            buyer_ledger_account_id: Some("buyer-account".to_string()),
+            buyer_ledger_entry_id: Some("buyer-reserve-entry".to_string()),
+            buyer_ledger_balance_after: Some(0.0),
+            buyer_ledger_error: None,
+            buyer_consume_status: Some("pending_acceptance".to_string()),
+            buyer_consume_entry_id: None,
+            buyer_consume_balance_after: None,
+            buyer_consume_error: None,
             created_at_epoch: 1_777_897_990,
         });
         league.world.world_work_orders.push(WorldWorkOrder {

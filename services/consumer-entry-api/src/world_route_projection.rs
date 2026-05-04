@@ -18,6 +18,14 @@ fn world_route_english_visible_text(value: &str) -> String {
     }
 
     let replacements = [
+        ("回访/升级悬赏", "follow-up or upgrade bounty"),
+        ("升级悬赏", "upgrade bounty"),
+        ("回访", "follow-up"),
+        ("基于", "based on"),
+        ("提供", "provide"),
+        ("下一阶段", "next-stage"),
+        ("赏金", "bounty"),
+        ("推荐理由", "recommendation rationale"),
         ("评级后升级悬赏", "post-rating bounty upgrade"),
         ("评级通过", "rating passed"),
         ("高阶范围", "upgraded scope"),

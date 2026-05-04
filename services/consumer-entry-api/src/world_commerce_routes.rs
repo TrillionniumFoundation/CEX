@@ -13,6 +13,13 @@ fn world_seller_net_credits_for_price(price_credits: i64) -> i64 {
         .max(0)
 }
 
+fn world_purchase_seller_settlement_active(purchase: &WorldPurchase) -> bool {
+    matches!(
+        purchase.ledger_status.as_deref(),
+        Some("settled") | Some("duplicate") | Some("reopened_settled")
+    )
+}
+
 fn world_market_simulation_json(world: &WorldState, listing: &WorldListing, now: i64) -> Value {
     let base_price = listing.price_credits.max(1);
     let recent_window_seconds = 86_400;
@@ -1208,10 +1215,7 @@ pub(super) async fn chargeback_world_purchase_seller_with_ledger(
     purchase: &WorldPurchase,
     chargeback_scope: &str,
 ) -> LeagueLedgerSettlement {
-    if !matches!(
-        purchase.ledger_status.as_deref(),
-        Some("settled") | Some("duplicate")
-    ) {
+    if !world_purchase_seller_settlement_active(purchase) {
         return LeagueLedgerSettlement {
             status: "skipped_seller_not_settled".to_string(),
             account_id: purchase.ledger_account_id.clone(),
@@ -1298,6 +1302,31 @@ pub(super) async fn reserve_reopened_world_purchase_with_ledger(
         purchase.purchase_id.clone(),
         "world listing purchase reopen reserve",
         "matrix identity could not be resolved for world purchase reopen reserve",
+        None,
+    )
+    .await
+}
+
+pub(super) async fn settle_reopened_world_purchase_with_ledger(
+    state: &AppState,
+    room_id: Option<&str>,
+    purchase: &WorldPurchase,
+    reopen: &WorldWorkReopen,
+) -> LeagueLedgerSettlement {
+    settle_world_purchase_ledger_action(
+        state,
+        room_id,
+        &purchase.seller_matrix_user_id,
+        purchase,
+        "grant",
+        "reopened_settled",
+        format!(
+            "world_purchase_reopen_settlement:{}:{}",
+            purchase.purchase_id, reopen.reopen_id
+        ),
+        purchase.listing_id.clone(),
+        "world listing purchase reopen settlement",
+        "matrix identity could not be resolved for world purchase reopen settlement",
         None,
     )
     .await
@@ -1770,6 +1799,31 @@ pub(super) async fn deliver_world_work_order_inner(
                 .into_response();
         }
         let work_order_seed = league.world.world_work_orders[work_index].clone();
+        let Some(purchase_index) = indexes
+            .purchase_index_by_id
+            .get(&work_order_seed.purchase_id)
+            .copied()
+        else {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "world purchase not found for work order", "work_order_id": work_order_id, "purchase_id": work_order_seed.purchase_id })),
+            )
+                .into_response();
+        };
+        let purchase_seed = league.world.world_purchases[purchase_index].clone();
+        if !world_purchase_seller_settlement_active(&purchase_seed) {
+            return (
+                StatusCode::CONFLICT,
+                Json(json!({
+                    "error": "world purchase seller settlement is not active",
+                    "work_order_id": work_order_id,
+                    "purchase_id": purchase_seed.purchase_id,
+                    "purchase_status": purchase_seed.status,
+                    "ledger_status": purchase_seed.ledger_status,
+                })),
+            )
+                .into_response();
+        }
         let faction_id = "faction-market-guild";
         let delivery_status = if judgement.payout_status == "eligible" {
             "delivered"
@@ -2020,6 +2074,19 @@ pub(super) async fn accept_world_work_order_inner(
                 .into_response();
         };
         let purchase_seed = league.world.world_purchases[purchase_index].clone();
+        if !world_purchase_seller_settlement_active(&purchase_seed) {
+            return (
+                StatusCode::CONFLICT,
+                Json(json!({
+                    "error": "world purchase seller settlement is not active",
+                    "work_order_id": work_order_id,
+                    "purchase_id": purchase_seed.purchase_id,
+                    "purchase_status": purchase_seed.status,
+                    "ledger_status": purchase_seed.ledger_status,
+                })),
+            )
+                .into_response();
+        }
         let reputation_delta = (work_order_seed.value_score / 20).max(1);
         let acceptance = WorldWorkAcceptance {
             acceptance_id: league_hash_id(
@@ -2692,6 +2759,30 @@ pub(super) async fn reopen_world_work_order_inner(
         &snapshot.3,
     )
     .await;
+    let buyer_reserved =
+        buyer_reopen_reserve.status == "reserved" || buyer_reopen_reserve.status == "duplicate";
+    let seller_reopen_settlement = if buyer_reserved {
+        settle_reopened_world_purchase_with_ledger(
+            &state,
+            payload.room_id.as_deref(),
+            &snapshot.2,
+            &snapshot.3,
+        )
+        .await
+    } else {
+        LeagueLedgerSettlement {
+            status: "skipped_buyer_reopen_reserve".to_string(),
+            error: Some(
+                "seller reopen settlement skipped because buyer reserve did not complete"
+                    .to_string(),
+            ),
+            ..Default::default()
+        }
+    };
+    let seller_resettled = matches!(
+        seller_reopen_settlement.status.as_str(),
+        "reopened_settled" | "duplicate"
+    );
     let final_snapshot = {
         let mut league = state.inner.league_state.lock().await;
         let indexes = build_world_indexes(&league.world);
@@ -2700,8 +2791,6 @@ pub(super) async fn reopen_world_work_order_inner(
         let mut reopen = snapshot.3.clone();
         let mut economy_event = None;
         let mut standing = None;
-        let buyer_reserved =
-            buyer_reopen_reserve.status == "reserved" || buyer_reopen_reserve.status == "duplicate";
         purchase.buyer_ledger_status = Some(if buyer_reserved {
             "reopened_reserved".to_string()
         } else {
@@ -2710,27 +2799,46 @@ pub(super) async fn reopen_world_work_order_inner(
         purchase.buyer_ledger_entry_id = buyer_reopen_reserve.entry_id.clone();
         purchase.buyer_ledger_balance_after = buyer_reopen_reserve.balance_after;
         purchase.buyer_ledger_error = buyer_reopen_reserve.error.clone();
+        if buyer_reserved {
+            purchase.ledger_status = Some(seller_reopen_settlement.status.clone());
+            purchase.ledger_account_id = seller_reopen_settlement.account_id.clone();
+            purchase.ledger_entry_id = seller_reopen_settlement.entry_id.clone();
+            purchase.ledger_balance_after = seller_reopen_settlement.balance_after;
+            purchase.ledger_error = seller_reopen_settlement.error.clone();
+        }
         purchase.status = if buyer_reserved {
-            "reopened_reserved".to_string()
+            if seller_resettled {
+                "reopened_reserved".to_string()
+            } else if seller_reopen_settlement.status.starts_with("skipped") {
+                "reopen_seller_settlement_pending".to_string()
+            } else {
+                "reopen_seller_settlement_failed".to_string()
+            }
         } else if buyer_reopen_reserve.status.starts_with("skipped") {
             "reopen_reserve_hold".to_string()
         } else {
             "reopen_reserve_failed".to_string()
         };
-        work_order.status = if buyer_reserved {
+        work_order.status = if seller_resettled {
             "open".to_string()
         } else {
             purchase.status.clone()
         };
         reopen.reserve_status = buyer_reopen_reserve.status.clone();
         reopen.status = if buyer_reserved {
-            "reopened".to_string()
+            if seller_resettled {
+                "reopened".to_string()
+            } else if seller_reopen_settlement.status.starts_with("skipped") {
+                "reopen_seller_settlement_pending".to_string()
+            } else {
+                "reopen_seller_settlement_failed".to_string()
+            }
         } else if buyer_reopen_reserve.status.starts_with("skipped") {
             "reopen_reserve_hold".to_string()
         } else {
             "reopen_reserve_failed".to_string()
         };
-        if buyer_reserved {
+        if seller_resettled {
             let reopened_event = WorldEconomyEvent {
                 economy_event_id: league_hash_id(
                     "world-econ",
@@ -2794,6 +2902,9 @@ pub(super) async fn reopen_world_work_order_inner(
             "buyer_reopen_reserve_status": buyer_reopen_reserve.status,
             "buyer_reopen_reserve_entry_id": buyer_reopen_reserve.entry_id,
             "buyer_reopen_reserve_error": buyer_reopen_reserve.error,
+            "seller_reopen_settlement_status": seller_reopen_settlement.status,
+            "seller_reopen_settlement_entry_id": seller_reopen_settlement.entry_id,
+            "seller_reopen_settlement_error": seller_reopen_settlement.error,
             "route_preview": route_preview,
             "route_task_graph": route_task_graph,
         })),
@@ -2924,6 +3035,8 @@ pub(super) async fn cancel_world_work_order_inner(
                 | "seller_settlement_failed"
                 | "reopen_reserve_hold"
                 | "reopen_reserve_failed"
+                | "reopen_seller_settlement_pending"
+                | "reopen_seller_settlement_failed"
         ) {
             let status = league.world.world_work_orders[work_index].status.clone();
             return (
