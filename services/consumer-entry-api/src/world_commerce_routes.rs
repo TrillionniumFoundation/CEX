@@ -2299,37 +2299,12 @@ pub(super) async fn reject_world_work_order_inner(
             created_at_epoch: now,
         };
         league.world.world_work_orders[work_index].status = "rejected_pending_refund".to_string();
-        let economy_event = WorldEconomyEvent {
-            economy_event_id: league_hash_id(
-                "world-econ",
-                &format!("{}:{}:{}", matrix_user_id, rejection.rejection_id, now),
-            ),
-            matrix_user_id: matrix_user_id.clone(),
-            event_kind: "work_rejected".to_string(),
-            subject_id: work_order_seed.work_order_id.clone(),
-            credits_delta: -purchase_seed.price_credits,
-            reputation_delta: 0,
-            created_at_epoch: now,
-        };
-        let standing = upsert_world_faction_standing(
-            &mut league,
-            &matrix_user_id,
-            "faction-market-guild",
-            1,
-            now,
-        );
         league.world.world_work_rejections.push(rejection.clone());
-        league
-            .world
-            .world_economy_events
-            .push(economy_event.clone());
         (
             league.clone(),
             league.world.world_work_orders[work_index].clone(),
             purchase_seed,
             rejection,
-            economy_event,
-            standing,
         )
     };
     let buyer_refund = refund_world_purchase_with_ledger(
@@ -2363,6 +2338,8 @@ pub(super) async fn reject_world_work_order_inner(
         let mut work_order = snapshot.1.clone();
         let mut purchase = snapshot.2.clone();
         let mut rejection = snapshot.3.clone();
+        let mut economy_event = None;
+        let mut standing = None;
         purchase.buyer_consume_status = Some(if buyer_refunded {
             "refunded".to_string()
         } else {
@@ -2379,6 +2356,35 @@ pub(super) async fn reject_world_work_order_inner(
             "rejected_refund_failed".to_string()
         };
         if buyer_refunded {
+            let rejected_event = WorldEconomyEvent {
+                economy_event_id: league_hash_id(
+                    "world-econ",
+                    &format!(
+                        "{}:{}:{}",
+                        rejection.matrix_user_id,
+                        rejection.rejection_id,
+                        rejection.created_at_epoch
+                    ),
+                ),
+                matrix_user_id: rejection.matrix_user_id.clone(),
+                event_kind: "work_rejected".to_string(),
+                subject_id: work_order.work_order_id.clone(),
+                credits_delta: -purchase.price_credits,
+                reputation_delta: 0,
+                created_at_epoch: rejection.created_at_epoch,
+            };
+            standing = Some(upsert_world_faction_standing(
+                &mut league,
+                &rejection.matrix_user_id,
+                "faction-market-guild",
+                1,
+                rejection.created_at_epoch,
+            ));
+            league
+                .world
+                .world_economy_events
+                .push(rejected_event.clone());
+            economy_event = Some(rejected_event);
             let seller_charged_back = matches!(
                 seller_chargeback.status.as_str(),
                 "seller_chargeback_consumed" | "duplicate"
@@ -2443,8 +2449,8 @@ pub(super) async fn reject_world_work_order_inner(
             work_order,
             purchase,
             rejection,
-            snapshot.4.clone(),
-            snapshot.5.clone(),
+            economy_event,
+            standing,
         )
     };
     if let Err(response) =
