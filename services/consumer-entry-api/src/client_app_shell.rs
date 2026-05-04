@@ -732,6 +732,13 @@ pub(super) async fn get_client_app_web_shell(
     .app-bottom-tab {{ min-height:44px; display:inline-flex; align-items:center; justify-content:center; border:1px solid rgba(255,255,255,.1); background:rgba(255,255,255,.05); color:var(--muted); border-radius:16px; padding:10px 8px; font-weight:800; cursor:pointer; }}
     .app-bottom-tab.is-active {{ color:var(--text); background:rgba(100,227,255,.12); border-color:rgba(100,227,255,.32); }}
     .app-bottom-tab:focus-visible, .focus-chip:focus-visible, .overlay-toggle:focus-visible, .app-search-input:focus-visible, .app-search-clear:focus-visible {{ outline:2px solid var(--cyan); outline-offset:2px; }}
+    @media (min-width: 821px) {{
+      body {{ padding-bottom:0; }}
+      header {{ position:relative; }}
+      main {{ padding-top:16px; }}
+      .app-bottom-tabs {{ position:sticky; top:0; bottom:auto; z-index:25; margin:0 min(5vw,32px); grid-template-columns:repeat(4,minmax(130px,1fr)); padding:12px; border:1px solid rgba(255,255,255,.1); border-top:0; border-radius:0 0 22px 22px; box-shadow:0 18px 60px rgba(0,0,0,.24); }}
+      .app-bottom-tab {{ border-radius:14px; }}
+    }}
     .app-me-grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:16px; }}
     .app-search-hidden {{ display:none !important; }}
     @media (max-width: 820px) {{
@@ -818,6 +825,12 @@ pub(super) async fn get_client_app_web_shell(
     </div>
     <div id="app-search-empty-state" class="app-search-empty" role="status" aria-live="polite" data-i18n-en="No results · Try another keyword or tab." data-i18n-zh="无匹配结果 · 换个关键词或切换底部 Tab。">No results · Try another keyword or tab.</div>
   </header>
+  <nav class="app-bottom-tabs" aria-label="Main navigation" data-i18n-aria-label-en="Main navigation" data-i18n-aria-label-zh="主导航" role="tablist">
+    <button id="app-tab-button-messages" type="button" class="app-bottom-tab" data-app-tab="messages" role="tab" data-i18n-en="Messages" data-i18n-zh="消息" aria-controls="app-tab-messages" aria-selected="false" tabindex="-1">Messages</button>
+    <button id="app-tab-button-map" type="button" class="app-bottom-tab is-active" data-app-tab="map" role="tab" data-i18n-en="World" data-i18n-zh="世界" aria-controls="app-tab-map" aria-selected="true" tabindex="0">World</button>
+    <button id="app-tab-button-feed" type="button" class="app-bottom-tab" data-app-tab="feed" role="tab" data-i18n-en="Feed" data-i18n-zh="动态" aria-controls="app-tab-feed" aria-selected="false" tabindex="-1">Feed</button>
+    <button id="app-tab-button-me" type="button" class="app-bottom-tab" data-app-tab="me" role="tab" data-i18n-en="Me" data-i18n-zh="我" aria-controls="app-tab-me" aria-selected="false" tabindex="-1">Me</button>
+  </nav>
   <main class="app-mobile-shell">
     <section id="app-first-playable-onboarding" class="module quest-hero" aria-label="First playable main quest rail" data-i18n-aria-label-en="First playable main quest rail" data-i18n-aria-label-zh="第一条可玩主线">
       <span class="badge" data-i18n-en="Starter Quest" data-i18n-zh="新手主线">Starter Quest</span>
@@ -964,12 +977,6 @@ pub(super) async fn get_client_app_web_shell(
       </section>
     </section>
   </main>
-  <nav class="app-bottom-tabs" aria-label="Mobile main navigation" data-i18n-aria-label-en="Mobile main navigation" data-i18n-aria-label-zh="移动端主导航" role="tablist">
-    <button id="app-tab-button-messages" type="button" class="app-bottom-tab" data-app-tab="messages" role="tab" data-i18n-en="Messages" data-i18n-zh="消息" aria-controls="app-tab-messages" aria-selected="false" tabindex="-1">Messages</button>
-    <button id="app-tab-button-map" type="button" class="app-bottom-tab is-active" data-app-tab="map" role="tab" data-i18n-en="World" data-i18n-zh="世界" aria-controls="app-tab-map" aria-selected="true" tabindex="0">World</button>
-    <button id="app-tab-button-feed" type="button" class="app-bottom-tab" data-app-tab="feed" role="tab" data-i18n-en="Feed" data-i18n-zh="动态" aria-controls="app-tab-feed" aria-selected="false" tabindex="-1">Feed</button>
-    <button id="app-tab-button-me" type="button" class="app-bottom-tab" data-app-tab="me" role="tab" data-i18n-en="Me" data-i18n-zh="我" aria-controls="app-tab-me" aria-selected="false" tabindex="-1">Me</button>
-  </nav>
   {}
   <script id="trillionnium-app-data" type="application/json">{}</script>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>

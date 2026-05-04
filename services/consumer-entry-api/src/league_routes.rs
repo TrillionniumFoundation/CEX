@@ -438,7 +438,7 @@ pub(super) async fn get_league_web_shell(
     .subtitle {{ color:var(--muted); font-size:18px; max-width:760px; }}
     .hero-card,.card,.panel {{ min-width:0; border:1px solid rgba(255,255,255,.11); background:linear-gradient(145deg,rgba(255,255,255,.09),rgba(255,255,255,.035)); box-shadow:0 24px 80px rgba(0,0,0,.35); backdrop-filter: blur(14px); border-radius:24px; }}
     .hero-card {{ padding:24px; display:grid; gap:14px; }}
-    .stats {{ display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin-top:22px; }}
+    .stats {{ display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:14px; margin-top:22px; }}
     .stat {{ padding:18px; background:rgba(255,255,255,.06); border-radius:18px; }}
     .stat b {{ display:block; font-size:26px; color:var(--gold); }}
     main {{ padding:20px min(6vw,72px) 60px; display:grid; gap:24px; min-width:0; }}
@@ -490,7 +490,7 @@ pub(super) async fn get_league_web_shell(
     </section>
     <aside class="hero-card">
       <strong data-i18n-en="Playable Now" data-i18n-zh="当前可玩版本">Playable Now</strong>
-      <p class="subtitle" data-i18n-en="Matrix/Element and the web lobby are ready for the global beta; choose your UI language in system settings." data-i18n-zh="现在可以通过 Matrix/Element 和网页大厅进入；界面语言在系统设置中选择。">Matrix/Element and the web lobby are ready for the global beta; choose your UI language in system settings.</p>
+      <p class="subtitle" data-i18n-en="Pick a mode, draft your Agent squad, submit a result, then watch rewards and rank move in one loop." data-i18n-zh="选择玩法、配置 Agent 阵容、提交成果，然后在同一条循环里看到奖励和段位变化。">Pick a mode, draft your Agent squad, submit a result, then watch rewards and rank move in one loop.</p>
       <a class="cta" href='#league-battle-console' data-i18n-en="Enter via /league" data-i18n-zh="通过 /league 入场">Enter via /league</a>
       <div class="league-hero-actions" aria-label="League quick actions" data-i18n-aria-label-en="League quick actions" data-i18n-aria-label-zh="League 快捷行动">
         <a class="cta secondary" href='#league-playable-modes' data-i18n-en="Choose Mode" data-i18n-zh="选择玩法">Choose Mode</a>
