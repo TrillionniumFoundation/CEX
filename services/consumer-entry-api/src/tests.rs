@@ -3669,6 +3669,13 @@ async fn world_commerce_e2e_uses_real_configured_ledger_for_consume_refund_reope
     let price_credits = buy_one["purchase"]["price_credits"]
         .as_i64()
         .expect("price credits") as f64;
+    let seller_net_credits = buy_one["market_simulation"]["seller_net_credits"]
+        .as_i64()
+        .expect("seller net credits") as f64;
+    assert!(
+        seller_net_credits < price_credits,
+        "market tax sink should reduce seller ledger settlement below gross price"
+    );
     let work_one_id = buy_one["work_order"]["work_order_id"]
         .as_str()
         .expect("work order one id")
@@ -3722,6 +3729,9 @@ async fn world_commerce_e2e_uses_real_configured_ledger_for_consume_refund_reope
     let price_two_credits = buy_two["purchase"]["price_credits"]
         .as_i64()
         .expect("price two credits") as f64;
+    let seller_net_two_credits = buy_two["market_simulation"]["seller_net_credits"]
+        .as_i64()
+        .expect("seller net two credits") as f64;
     assert!(
         price_two_credits >= price_credits,
         "market simulator should not lower same-day repeat demand price"
@@ -3839,7 +3849,7 @@ async fn world_commerce_e2e_uses_real_configured_ledger_for_consume_refund_reope
     );
     assert_eq!(
         seller_account["balance"].as_f64().unwrap(),
-        price_credits + price_two_credits
+        seller_net_credits + seller_net_two_credits
     );
 
     let league = state.inner.league_state.lock().await;

@@ -12,6 +12,7 @@ CONSUMER_ENTRY_BASE_URL="${CONSUMER_ENTRY_BASE_URL:-http://127.0.0.1:8090}"
 MATRIX_ENTRY_BASE_URL="${MATRIX_ENTRY_BASE_URL:-http://127.0.0.1:8091}"
 CEX_PROVIDER_PROBE_REQUIRED="${CEX_PROVIDER_PROBE_REQUIRED:-1}"
 CEX_PROVIDER_PROBE_MODEL="${CEX_PROVIDER_PROBE_MODEL:-}"
+CEX_PROVIDER_PROBE_SUCCESS_MAX_AGE_SECONDS="${CEX_PROVIDER_PROBE_SUCCESS_MAX_AGE_SECONDS:-1800}"
 CEX_READINESS_MODE="${CEX_READINESS_MODE:-production}"
 CEX_DB_BACKUP_RESTORE_DRILL_REQUIRED="${CEX_DB_BACKUP_RESTORE_DRILL_REQUIRED:-}"
 CEX_DB_BACKUP_RESTORE_DRILL_SUMMARY_PATH="${CEX_DB_BACKUP_RESTORE_DRILL_SUMMARY_PATH:-}"
@@ -287,19 +288,43 @@ if [[ "$CEX_PROVIDER_PROBE_REQUIRED" == "0" ]]; then
 elif [[ -z "$CEX_PROVIDER_PROBE_MODEL" ]]; then
   fail 'live provider probe model is not configured (set CEX_PROVIDER_PROBE_MODEL)'
 else
-  provider_probe_json_file="$(mktemp)"
-  provider_probe_status=0
-  bash "$SCRIPT_DIR/probe-openclaw-provider.sh" --model "$CEX_PROVIDER_PROBE_MODEL" --compact \
-    >"$provider_probe_json_file" || provider_probe_status=$?
-  provider_probe_ok="$(jq -r '.ok // false' "$provider_probe_json_file")"
-  provider_probe_status_text="$(jq -r '.status // "unknown"' "$provider_probe_json_file")"
-  if [[ "$provider_probe_status" -eq 0 && "$provider_probe_ok" == "true" ]]; then
-    pass "live provider probe succeeded ($CEX_PROVIDER_PROBE_MODEL)"
-  else
-    provider_probe_error="$(jq -r '.error // "unknown provider probe error"' "$provider_probe_json_file")"
-    fail "live provider probe failed ($CEX_PROVIDER_PROBE_MODEL status=$provider_probe_status_text): $provider_probe_error"
+  fresh_provider_probe_log=""
+  fresh_provider_probe_age=""
+  if [[ "$CEX_PROVIDER_PROBE_SUCCESS_MAX_AGE_SECONDS" =~ ^[0-9]+$ && "$CEX_PROVIDER_PROBE_SUCCESS_MAX_AGE_SECONDS" -gt 0 ]]; then
+    now_epoch="$(date +%s)"
+    while IFS= read -r candidate; do
+      candidate_mtime="${candidate%% *}"
+      candidate_path="${candidate#* }"
+      candidate_epoch="${candidate_mtime%.*}"
+      [[ "$candidate_epoch" =~ ^[0-9]+$ ]] || continue
+      candidate_age=$((now_epoch - candidate_epoch))
+      if [[ "$candidate_age" -ge 0 && "$candidate_age" -le "$CEX_PROVIDER_PROBE_SUCCESS_MAX_AGE_SECONDS" ]] && \
+        grep -Fq "OK live provider probe succeeded ($CEX_PROVIDER_PROBE_MODEL)" "$candidate_path"; then
+        fresh_provider_probe_log="$candidate_path"
+        fresh_provider_probe_age="$candidate_age"
+        break
+      fi
+    done < <(find "$CEX_PROJECT_ROOT/run" -type f \
+      \( -name 'production-readiness-*.log' -o -name 'production-signoff-*.readiness.log' \) \
+      -printf '%T@ %p\n' 2>/dev/null | sort -nr)
   fi
-  rm -f "$provider_probe_json_file"
+  if [[ -n "$fresh_provider_probe_log" ]]; then
+    pass "live provider probe fresh evidence ($CEX_PROVIDER_PROBE_MODEL age=${fresh_provider_probe_age}s path=$fresh_provider_probe_log)"
+  else
+    provider_probe_json_file="$(mktemp)"
+    provider_probe_status=0
+    bash "$SCRIPT_DIR/probe-openclaw-provider.sh" --model "$CEX_PROVIDER_PROBE_MODEL" --compact \
+      >"$provider_probe_json_file" || provider_probe_status=$?
+    provider_probe_ok="$(jq -r '.ok // false' "$provider_probe_json_file")"
+    provider_probe_status_text="$(jq -r '.status // "unknown"' "$provider_probe_json_file")"
+    if [[ "$provider_probe_status" -eq 0 && "$provider_probe_ok" == "true" ]]; then
+      pass "live provider probe succeeded ($CEX_PROVIDER_PROBE_MODEL)"
+    else
+      provider_probe_error="$(jq -r '.error // "unknown provider probe error"' "$provider_probe_json_file")"
+      fail "live provider probe failed ($CEX_PROVIDER_PROBE_MODEL status=$provider_probe_status_text): $provider_probe_error"
+    fi
+    rm -f "$provider_probe_json_file"
+  fi
 fi
 
 section 'db backup/restore drill evidence'

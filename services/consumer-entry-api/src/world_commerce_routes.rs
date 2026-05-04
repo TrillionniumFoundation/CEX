@@ -925,7 +925,14 @@ pub(super) async fn settle_world_purchase_ledger_action(
     message: &str,
     failure_context: &str,
 ) -> LeagueLedgerSettlement {
-    if purchase.price_credits <= 0 {
+    let ledger_amount_credits = if action == "grant" {
+        purchase
+            .price_credits
+            .saturating_sub((purchase.price_credits / 20).max(1))
+    } else {
+        purchase.price_credits
+    };
+    if ledger_amount_credits <= 0 {
         return LeagueLedgerSettlement {
             status: "skipped_zero_price".to_string(),
             ..Default::default()
@@ -980,7 +987,9 @@ pub(super) async fn settle_world_purchase_ledger_action(
     );
     let body = json!({
         "account_id": account_id,
-        "amount": purchase.price_credits as f64,
+        "amount": ledger_amount_credits as f64,
+        "gross_amount": purchase.price_credits as f64,
+        "market_tax_amount": if action == "grant" { (purchase.price_credits - ledger_amount_credits) as f64 } else { 0.0 },
         "idempotency_key": idempotency_key,
         "reference_id": reference_id,
     });

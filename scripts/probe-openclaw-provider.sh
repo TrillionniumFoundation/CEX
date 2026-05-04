@@ -130,6 +130,17 @@ if [[ "$exit_code" -eq 124 || "$exit_code" -eq 137 ]]; then
   exit 2
 fi
 
+if [[ ! -s "$stdout_file" ]]; then
+  stderr_excerpt="$(head -c 800 "$stderr_file" | tr '\n' ' ' | sed 's/[[:space:]][[:space:]]*/ /g')"
+  jq -n \
+    --arg model "$MODEL" \
+    --arg transport "$TRANSPORT" \
+    --argjson exit_code "$exit_code" \
+    --arg stderr "$stderr_excerpt" \
+    '{ok:false,status:"provider_error",model:$model,transport:$transport,exit_code:$exit_code,error:(if ($stderr|length) > 0 then $stderr else "openclaw provider probe returned no stdout" end)}' | render
+  exit 2
+fi
+
 if ! jq empty "$stdout_file" >/dev/null 2>&1; then
   stderr_excerpt="$(head -c 800 "$stderr_file" | tr '\n' ' ' | sed 's/[[:space:]][[:space:]]*/ /g')"
   stdout_excerpt="$(head -c 800 "$stdout_file" | tr '\n' ' ' | sed 's/[[:space:]][[:space:]]*/ /g')"
@@ -143,13 +154,26 @@ if ! jq empty "$stdout_file" >/dev/null 2>&1; then
   exit 2
 fi
 
+if [[ "$exit_code" -ne 0 ]]; then
+  stderr_excerpt="$(head -c 800 "$stderr_file" | tr '\n' ' ' | sed 's/[[:space:]][[:space:]]*/ /g')"
+  stdout_excerpt="$(head -c 800 "$stdout_file" | tr '\n' ' ' | sed 's/[[:space:]][[:space:]]*/ /g')"
+  jq -n \
+    --arg model "$MODEL" \
+    --arg transport "$TRANSPORT" \
+    --argjson exit_code "$exit_code" \
+    --arg stdout "$stdout_excerpt" \
+    --arg stderr "$stderr_excerpt" \
+    '{ok:false,status:"provider_error",model:$model,transport:$transport,exit_code:$exit_code,error:(if ($stderr|length) > 0 then $stderr else "openclaw provider probe exited non-zero" end),stdout_excerpt:$stdout}' | render
+  exit 2
+fi
+
 probe_json="$(cat "$stdout_file")"
 output_text="$(jq -r '[.outputs[]?.text // empty] | join("\n")' <<<"$probe_json")"
 stderr_text="$(cat "$stderr_file")"
 combined_text="$output_text
 $stderr_text"
 
-bad_pattern='⚠️|billing error|insufficient balance|usage limit|free plan|auth|unauthorized|invalid api key|api key|rate limit|timed out|timeout|unavailable|provider probe timed out|returned .*error|rawError|isError=true'
+bad_pattern='⚠️|billing error|insufficient balance|usage limit|quota|RESOURCE_EXHAUSTED|free plan|auth|unauthorized|invalid api key|api key|rate limit|timed out|timeout|unavailable|provider probe timed out|returned .*error|rawError|isError=true'
 if grep -Eiq "$bad_pattern" <<<"$combined_text"; then
   surface_error="$(printf '%s' "$output_text" | head -c 800 | tr '\n' ' ' | sed 's/[[:space:]][[:space:]]*/ /g')"
   if [[ -z "$surface_error" ]]; then
