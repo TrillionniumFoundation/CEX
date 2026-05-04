@@ -692,7 +692,7 @@ pub(super) async fn get_client_app_web_shell(
     .app-topbar-actions p {{ margin:0; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }}
     .app-topbar-actions a {{ min-height:40px; display:inline-flex; align-items:center; justify-content:center; padding:0 12px; border:1px solid rgba(248,195,91,.24); border-radius:999px; background:rgba(248,195,91,.08); text-decoration:none; font-weight:900; }}
     .language-switcher {{ display:inline-flex; align-items:center; gap:8px; width:max-content; max-width:100%; border:1px solid rgba(100,227,255,.24); background:rgba(255,255,255,.065); color:var(--cyan); border-radius:999px; padding:6px 8px 6px 10px; font-size:12px; font-weight:900; }}
-    .language-switcher select {{ width:auto; min-width:92px; max-width:130px; margin:0; border:0; background:rgba(7,8,20,.72); color:var(--text); border-radius:999px; padding:7px 26px 7px 10px; font:inherit; font-size:12px; }}
+    .language-switcher select {{ width:auto; min-height:40px; min-width:92px; max-width:130px; margin:0; border:0; background:rgba(7,8,20,.72); color:var(--text); border-radius:999px; padding:7px 26px 7px 10px; font:inherit; font-size:12px; }}
     .app-search-shell {{ position:relative; display:flex; gap:12px; align-items:center; }}
     .app-search-input {{ width:100%; border-radius:18px; border:1px solid rgba(255,255,255,.12); background:rgba(255,255,255,.08); color:var(--text); padding:14px 16px; font-size:15px; box-shadow:0 10px 30px rgba(0,0,0,.18) inset; }}
     .app-search-input::placeholder {{ color:rgba(246,247,251,.56); }}
@@ -743,12 +743,12 @@ pub(super) async fn get_client_app_web_shell(
       .app-topbar-meta {{ display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:7px; margin-bottom:5px; }}
       .app-topbar-meta > p {{ margin:0; min-width:0; }}
       .app-topbar-actions {{ gap:5px; flex-wrap:nowrap; }}
-      .app-topbar-actions a {{ min-height:36px; padding:0 8px; font-size:11px; }}
+      .app-topbar-actions a {{ min-height:40px; padding:0 8px; font-size:11px; }}
       .app-beta-chip {{ max-width:150px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; padding:5px 8px; font-size:10px; }}
-      header .language-switcher {{ min-height:36px; padding:4px 5px 4px 7px; font-size:10px; }}
-      header .language-switcher select {{ min-height:36px; min-width:76px; max-width:102px; padding:5px 20px 5px 7px; font-size:10px; }}
+      header .language-switcher {{ min-height:40px; padding:4px 5px 4px 7px; font-size:10px; }}
+      header .language-switcher select {{ min-height:40px; min-width:76px; max-width:102px; padding:5px 20px 5px 7px; font-size:10px; }}
       .app-search-shell {{ gap:7px; margin-top:7px; }}
-      .app-search-input {{ padding:9px 12px; border-radius:14px; font-size:14px; }}
+      .app-search-input {{ min-height:40px; padding:10px 12px; border-radius:14px; font-size:14px; }}
       .app-search-clear {{ padding:8px 9px; border-radius:12px; }}
       .app-ux-status {{ margin-top:5px; min-height:22px; }}
       .app-ux-pill {{ padding:5px 9px; font-size:11px; }}
@@ -791,6 +791,12 @@ pub(super) async fn get_client_app_web_shell(
       .app-player-loop-steps b {{ font-size:12px; }}
       .app-player-loop-steps span {{ display:none; }}
       #app-first-playable-steps {{ display:none; }}
+    }}
+    @media (min-width: 601px) and (max-width: 820px) {{
+      #real-world-map {{ min-height:min(28svh,260px); }}
+      .app-map-product-strip {{ position:static; margin:0; box-shadow:none; backdrop-filter:none; }}
+      .app-map-product-strip .quest-cta {{ min-height:44px; }}
+      #app-map-route-panel {{ max-height:320px; }}
     }}
   </style>
 </head>

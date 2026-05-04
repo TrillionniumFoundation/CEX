@@ -1143,7 +1143,7 @@ pub(super) async fn get_world_web_shell(
     .hero-card {{ display:grid; gap:14px; align-content:space-between; }}
     .hero-card strong {{ color:var(--gold); font-size:22px; }}
     .language-switcher {{ display:inline-flex; align-items:center; gap:8px; width:max-content; max-width:100%; border:1px solid rgba(100,227,255,.24); background:rgba(255,255,255,.065); color:var(--cyan); border-radius:999px; padding:6px 8px 6px 10px; font-size:12px; font-weight:900; }}
-    .language-switcher select {{ width:auto; min-width:92px; max-width:130px; margin:0; border:0; background:rgba(7,8,20,.72); color:var(--text); border-radius:999px; padding:7px 26px 7px 10px; font:inherit; font-size:12px; }}
+    .language-switcher select {{ width:auto; min-height:40px; min-width:92px; max-width:130px; margin:0; border:0; background:rgba(7,8,20,.72); color:var(--text); border-radius:999px; padding:7px 26px 7px 10px; font:inherit; font-size:12px; }}
     .world-hero-steps {{ list-style:none; padding:0; margin:0; display:grid; gap:9px; }}
     .world-hero-steps li {{ display:grid; gap:3px; padding:10px 12px; border:1px solid rgba(255,255,255,.1); border-radius:16px; background:rgba(255,255,255,.055); }}
     .world-hero-steps b {{ color:var(--text); }}
@@ -1219,7 +1219,37 @@ pub(super) async fn get_world_web_shell(
     code {{ color:var(--cyan); background:rgba(100,227,255,.08); padding:3px 7px; border-radius:8px; max-width:100%; overflow-wrap:anywhere; word-break:break-word; white-space:normal; }}
     .cta {{ color:var(--bg); background:linear-gradient(135deg,var(--gold),#7dff9b); padding:14px 18px; border-radius:16px; display:inline-flex; justify-content:center; align-items:center; font-weight:800; text-decoration:none; }}
     .cta.secondary {{ color:var(--text); background:rgba(255,255,255,.07); border:1px solid rgba(100,227,255,.24); }}
-    @media (max-width:1050px) {{ header.world-hero,.play,.map-shell {{ grid-template-columns:1fr; }} .grid,.mini-grid,.world-adventure-steps {{ grid-template-columns:1fr; }} .stats.world-pulse-strip {{ grid-template-columns:repeat(3,minmax(0,1fr)); }} #world-real-map {{ order:-1; }} }}
+    @media (max-width:1050px) {{
+      header.world-hero {{ padding:22px min(4vw,34px) 12px; gap:14px; grid-template-columns:1fr; }}
+      .world-hero-main {{ min-height:auto; gap:12px; }}
+      .world-hero-title .subtitle {{ margin:0; }}
+      .hero-card {{ gap:10px; }}
+      .world-hero-steps {{ grid-template-columns:repeat(3,minmax(0,1fr)); }}
+      main {{ padding:14px min(4vw,34px) 56px; gap:18px; }}
+      .play,.map-shell {{ grid-template-columns:1fr; }}
+      .grid,.mini-grid,.world-adventure-steps {{ grid-template-columns:1fr; }}
+      .stats.world-pulse-strip {{ grid-template-columns:repeat(3,minmax(0,1fr)); }}
+      main > section {{ order:6; }}
+      #world-map-shell-panel {{ display:contents; order:1; }}
+      #world-pulse-strip {{ order:2; }}
+      main > .play {{ order:3; }}
+      #world-commerce-panel {{ order:4; }}
+      #world-map-move-panel {{ order:5; }}
+      #world-map-shell-panel .map-shell {{ display:contents; }}
+      #world-real-map {{ order:1; min-height:min(54svh,460px); }}
+      #world-map-shell-panel .map-copy {{ order:7; max-height:560px; overflow:auto; border:1px solid rgba(255,255,255,.12); background:linear-gradient(145deg,rgba(255,255,255,.09),rgba(255,255,255,.035)); border-radius:22px; padding:20px; }}
+      #world-map-move-panel .mini-grid,
+      #world-commerce-panel #world-purchase-cards-live,
+      #world-commerce-panel #world-work-orders-live,
+      #world-assets-panel .mini-grid,
+      #world-companies-panel .mini-grid,
+      #world-listings-panel .mini-grid,
+      #world-contract-cards-live,
+      #world-route-task-graph-live,
+      main > section.panel > .mini-grid,
+      main > section > .grid {{ max-height:420px; overflow:auto; padding-right:4px; }}
+      .play .timeline,.timeline {{ max-height:420px; overflow:auto; padding-right:4px; }}
+    }}
     @media (max-width:720px) {{
       header.world-hero {{ padding:12px 14px 6px; gap:8px; }}
       .world-hero-main {{ min-height:auto; gap:8px; }}
@@ -1232,7 +1262,7 @@ pub(super) async fn get_world_web_shell(
       .world-mobile-promise {{ display:none; }}
       .world-mobile-promise span {{ padding:6px 8px; font-size:11px; }}
       .language-switcher {{ padding:5px 6px 5px 8px; font-size:11px; }}
-      .language-switcher select {{ min-width:82px; max-width:112px; padding:6px 22px 6px 8px; font-size:11px; }}
+      .language-switcher select {{ min-height:40px; min-width:82px; max-width:112px; padding:6px 22px 6px 8px; font-size:11px; }}
       .world-hero-actions {{ display:grid; grid-template-columns:1fr 1fr; gap:8px; }}
       .world-hero-actions .cta,.hero-card .cta,.world-map-player-summary .cta {{ min-height:44px; padding:10px 11px; border-radius:14px; font-size:13px; }}
       button,input,textarea,select,.focus-chip,.overlay-toggle {{ min-height:44px; }}

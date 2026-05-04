@@ -23,6 +23,15 @@ const profiles = [
     },
   },
   {
+    name: 'tablet',
+    context: { viewport: { width: 768, height: 1024 }, isMobile: true, deviceScaleFactor: 2 },
+    limits: {
+      app: { maxScrollH: 5400, maxMapY: 700, maxRouteY: 1000, maxActionY: 1400, maxOnboardingY: 2000 },
+      world: { maxScrollH: 12500, maxMapY: 850, maxPulseY: 1500, maxActionY: 2000 },
+      league: { maxScrollH: 3900, maxStatsY: 650, maxModesY: 950, maxConsoleY: 1300 },
+    },
+  },
+  {
     name: 'desktop',
     context: { viewport: { width: 1280, height: 800 } },
     limits: {
@@ -92,31 +101,35 @@ function hOf(result, key) {
 function checkCommon(result) {
   assertMetric(result.visibleCjk.length === 0, `${result.profile}/${result.name} visible English UI leaks CJK`, result.visibleCjk.slice(0, 10));
   assertMetric(result.actionableOverflow.length === 0, `${result.profile}/${result.name} has actionable horizontal overflow`, result.actionableOverflow.slice(0, 10));
+  assertMetric(result.coveredActionables.length === 0, `${result.profile}/${result.name} has covered first-viewport actionables`, result.coveredActionables.slice(0, 10));
+  if (result.profile !== 'desktop') {
+    assertMetric(result.smallTouchTargets.length === 0, `${result.profile}/${result.name} has small first-viewport touch targets`, result.smallTouchTargets.slice(0, 10));
+  }
 }
 
 function checkMobile(result, limits) {
-  assertMetric(result.scrollH <= limits.maxScrollH, `mobile/${result.name} scroll height regressed`, { scrollH: result.scrollH, limit: limits.maxScrollH });
+  assertMetric(result.scrollH <= limits.maxScrollH, `${result.profile}/${result.name} scroll height regressed`, { scrollH: result.scrollH, limit: limits.maxScrollH });
   if (result.name === 'app') {
     const map = yOf(result, 'map');
     const route = yOf(result, 'route');
     const action = yOf(result, 'action');
     const onboarding = yOf(result, 'onboarding');
     const denseCopy = yOf(result, 'denseCopy');
-    assertMetric(map < route && route < action && action < onboarding && onboarding < denseCopy, 'mobile/app must keep map → route → action → onboarding → dense copy order', { map, route, action, onboarding, denseCopy });
-    assertMetric(map <= limits.maxMapY && route <= limits.maxRouteY && action <= limits.maxActionY && onboarding <= limits.maxOnboardingY, 'mobile/app key modules are too deep', { map, route, action, onboarding, limits });
+    assertMetric(map < route && route < action && action < onboarding && onboarding < denseCopy, `${result.profile}/app must keep map → route → action → onboarding → dense copy order`, { map, route, action, onboarding, denseCopy });
+    assertMetric(map <= limits.maxMapY && route <= limits.maxRouteY && action <= limits.maxActionY && onboarding <= limits.maxOnboardingY, `${result.profile}/app key modules are too deep`, { map, route, action, onboarding, limits });
   } else if (result.name === 'world') {
     const map = yOf(result, 'map');
     const pulse = yOf(result, 'pulse');
     const action = yOf(result, 'action');
-    assertMetric(map < pulse && pulse < action, 'mobile/world must keep map → pulse → action order', { map, pulse, action });
-    assertMetric(map <= limits.maxMapY && pulse <= limits.maxPulseY && action <= limits.maxActionY, 'mobile/world key modules are too deep', { map, pulse, action, limits });
+    assertMetric(map < pulse && pulse < action, `${result.profile}/world must keep map → pulse → action order`, { map, pulse, action });
+    assertMetric(map <= limits.maxMapY && pulse <= limits.maxPulseY && action <= limits.maxActionY, `${result.profile}/world key modules are too deep`, { map, pulse, action, limits });
   } else if (result.name === 'league') {
     const stats = yOf(result, 'stats');
     const modes = yOf(result, 'modes');
     const console = yOf(result, 'console');
     const progression = yOf(result, 'progression');
-    assertMetric(stats < modes && modes < console && console < progression, 'mobile/league must keep stats → modes → console → progression order', { stats, modes, console, progression });
-    assertMetric(stats <= limits.maxStatsY && modes <= limits.maxModesY && console <= limits.maxConsoleY, 'mobile/league key modules are too deep', { stats, modes, console, limits });
+    assertMetric(stats < modes && modes < console && console < progression, `${result.profile}/league must keep stats → modes → console → progression order`, { stats, modes, console, progression });
+    assertMetric(stats <= limits.maxStatsY && modes <= limits.maxModesY && console <= limits.maxConsoleY, `${result.profile}/league key modules are too deep`, { stats, modes, console, limits });
   }
 }
 
@@ -183,6 +196,52 @@ async function auditPage(page, profile, target) {
       };
     };
     const visibleElements = Array.from(document.querySelectorAll('body *')).filter(visible);
+    const isAuditedActionable = (el) => {
+      if (!el.matches('button,a[href],input,select,textarea,[role="button"],summary')) return false;
+      if (isLeafletArtifact(el)) return false;
+      if (el.closest('[aria-hidden="true"],[inert]')) return false;
+      if (el.disabled || el.getAttribute('aria-disabled') === 'true') return false;
+      return true;
+    };
+    const actionableInfo = (el) => {
+      const r = el.getBoundingClientRect();
+      return {
+        tag: el.tagName.toLowerCase(),
+        id: el.id,
+        cls: String(el.className || ''),
+        x: Math.round(r.left),
+        y: Math.round(r.top),
+        right: Math.round(r.right),
+        bottom: Math.round(r.bottom),
+        w: Math.round(r.width),
+        h: Math.round(r.height),
+        txt: text(el).slice(0, 120) || el.getAttribute('aria-label') || el.getAttribute('placeholder') || '',
+      };
+    };
+    const firstViewportActionables = visibleElements
+      .filter(isAuditedActionable)
+      .filter((el) => {
+        const r = el.getBoundingClientRect();
+        return r.top < vh && r.bottom > 0;
+      });
+    const coveredActionables = firstViewportActionables
+      .map((el) => {
+        const r = el.getBoundingClientRect();
+        const x = Math.min(Math.max(r.left + r.width / 2, 1), vw - 1);
+        const y = Math.min(Math.max(r.top + r.height / 2, 1), vh - 1);
+        const top = document.elementFromPoint(x, y);
+        return { el, top, info: actionableInfo(el), topInfo: top ? actionableInfo(top) : null };
+      })
+      .filter(({ el, top }) => !top || (top !== el && !el.contains(top) && !top.contains(el)))
+      .map(({ info, topInfo }) => ({ ...info, coveredBy: topInfo }))
+      .slice(0, 30);
+    const smallTouchTargets = firstViewportActionables
+      .filter((el) => {
+        const r = el.getBoundingClientRect();
+        return r.width < 40 || r.height < 40;
+      })
+      .map(actionableInfo)
+      .slice(0, 30);
     const visibleCjk = visibleElements
       .filter((el) => !el.closest('.language-switcher'))
       .filter((el) => !['OPTION', 'SCRIPT', 'STYLE', 'NOSCRIPT'].includes(el.tagName))
@@ -200,16 +259,8 @@ async function auditPage(page, profile, target) {
     const actionableOverflow = overflowRaw.filter((item) => !item.leaflet && !item.svg);
     const key = {};
     for (const [keyName, selector] of Object.entries(selectors)) key[keyName] = info(selector);
-    const firstViewportButtons = Array.from(document.querySelectorAll('button,a,input,select,textarea'))
-      .filter(visible)
-      .filter((el) => {
-        const r = el.getBoundingClientRect();
-        return r.top < vh && r.bottom > 0;
-      })
-      .map((el) => {
-        const r = el.getBoundingClientRect();
-        return { tag: el.tagName.toLowerCase(), id: el.id, y: Math.round(r.top), bottom: Math.round(r.bottom), txt: text(el).slice(0, 90) || el.getAttribute('aria-label') || el.getAttribute('placeholder') || '' };
-      })
+    const firstViewportButtons = firstViewportActionables
+      .map(actionableInfo)
       .slice(0, 40);
     return {
       profile: profileName,
@@ -219,6 +270,8 @@ async function auditPage(page, profile, target) {
       visibleCjk,
       overflowRaw,
       actionableOverflow,
+      coveredActionables,
+      smallTouchTargets,
       key,
       firstViewportButtons,
       firstViewportText: text(document.body).slice(0, 1400),
@@ -240,8 +293,8 @@ try {
       try {
         result = await auditPage(page, profile, target);
         checkCommon(result);
-        if (profile.name === 'mobile') checkMobile(result, profile.limits[target.name]);
-        else checkDesktop(result, profile.limits[target.name]);
+        if (profile.name === 'desktop') checkDesktop(result, profile.limits[target.name]);
+        else checkMobile(result, profile.limits[target.name]);
         result.ok = true;
         results.push(result);
       } catch (error) {
