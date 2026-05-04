@@ -26,10 +26,11 @@ use super::{
     LeagueStateRepositorySnapshot, LeagueSubmission, LeagueWebSessionClaims, MatrixMessageRequest,
     ProductUserIdentity, RateLimitCache, ReplayCache, RuntimeProfile,
     SessionAuthIssuerRegistryIssuer, SessionAuthIssuerRegistryMetadata,
-    SessionAuthIssuerRegistryRuntimeState, UserSessionAuthClaims, WorldContract,
-    WorldContractCompletion, WorldEconomyEvent, WorldEvent, WorldMapNode, WorldPlayerPosition,
-    WorldRelationship, DEFAULT_LEAGUE_LLM_JUDGE_TIMEOUT_MS, DEFAULT_LEAGUE_WEB_SESSION_TTL_SECS,
-    DEFAULT_MAX_TEXT_CHARS, TRILLIONNIUM_REPOSITORY_MIGRATION_FLOOR, USER_SESSION_ASSERTION_HEADER,
+    SessionAuthIssuerRegistryRuntimeState, UserSessionAuthClaims, WorldCompany, WorldContract,
+    WorldContractCompletion, WorldEconomyEvent, WorldEvent, WorldListing, WorldMapNode,
+    WorldPlayerPosition, WorldRelationship, WorldShop, DEFAULT_LEAGUE_LLM_JUDGE_TIMEOUT_MS,
+    DEFAULT_LEAGUE_WEB_SESSION_TTL_SECS, DEFAULT_MAX_TEXT_CHARS,
+    TRILLIONNIUM_REPOSITORY_MIGRATION_FLOOR, USER_SESSION_ASSERTION_HEADER,
     USER_SESSION_SIGNATURE_HEADER, WORLD_ROUTE_ACTION_TEXTAREA_ID, WORLD_ROUTE_CONTRACTS_PANEL_ID,
     WORLD_ROUTE_CONTRACT_INPUT_ID, WORLD_ROUTE_WORK_DELIVER_TEXTAREA_ID,
 };
@@ -3889,6 +3890,125 @@ async fn world_commerce_e2e_uses_real_configured_ledger_for_consume_refund_reope
         event.event_kind == "seller_chargeback"
             && event.credits_delta == -(seller_net_two_credits as i64)
     }));
+}
+
+#[tokio::test]
+async fn world_buy_does_not_release_commercial_progression_without_buyer_reserve() {
+    let mut config = test_config();
+    config.runtime_profile = RuntimeProfile::Production;
+    let state = test_state(config, IdentityBindings::default(), HashMap::new());
+    let app = build_router(state.clone());
+    let buyer_matrix_user_id = "@world-unreserved-buyer:local.dev";
+    let seller_matrix_user_id = "@world-unreserved-seller:local.dev";
+    let company_id = "company-unreserved-buy";
+    let shop_id = "shop-unreserved-buy";
+    let listing_id = "listing-unreserved-buy";
+    {
+        let mut league = state.inner.league_state.lock().await;
+        league.world.world_companies.push(WorldCompany {
+            company_id: company_id.to_string(),
+            owner_matrix_user_id: seller_matrix_user_id.to_string(),
+            asset_id: "asset-unreserved-buy".to_string(),
+            location_id: "starter-studio".to_string(),
+            name: "Unreserved Buy Guard Studio".to_string(),
+            company_kind: "studio".to_string(),
+            status: "operating".to_string(),
+            revenue_score: 100,
+            reputation_score: 20,
+            level: 2,
+            created_at_epoch: 1_777_897_940,
+        });
+        league.world.world_shops.push(WorldShop {
+            shop_id: shop_id.to_string(),
+            company_id: company_id.to_string(),
+            owner_matrix_user_id: seller_matrix_user_id.to_string(),
+            location_id: "starter-studio".to_string(),
+            name: "Unreserved Buy Guard Storefront".to_string(),
+            shop_kind: "studio".to_string(),
+            status: "operating".to_string(),
+            listing_count: 1,
+            gross_merchandise_score: 100,
+            created_at_epoch: 1_777_897_940,
+        });
+        league.world.world_listings.push(WorldListing {
+            listing_id: listing_id.to_string(),
+            shop_id: shop_id.to_string(),
+            company_id: company_id.to_string(),
+            owner_matrix_user_id: seller_matrix_user_id.to_string(),
+            asset_id: "asset-unreserved-buy".to_string(),
+            title: "Unreserved buy guard offer".to_string(),
+            listing_kind: "service_offer".to_string(),
+            status: "listed".to_string(),
+            price_credits: 80,
+            quality_score: 75,
+            created_at_epoch: 1_777_897_940,
+        });
+    }
+
+    let (status, buy) = send_json_request(
+        &app,
+        "POST",
+        &format!("/v1/world/listings/{listing_id}/buy"),
+        &[],
+        json!({
+            "matrix_user_id": buyer_matrix_user_id,
+            "body": "Buyer attempts to start a paid world commission without a Matrix room, ledger reserve, evidence trail, or settlement proof."
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "world buy response: {buy}");
+    assert_eq!(buy["buyer_ledger_status"], "skipped_missing_room");
+    assert_eq!(buy["ledger_status"], "skipped_buyer_reserve");
+    assert_eq!(buy["purchase"]["status"], "payment_hold");
+    assert_eq!(buy["work_order"]["status"], "payment_hold");
+    assert!(buy["economy_event"].is_null());
+    assert!(buy["seller_standing"].is_null());
+    assert!(buy["buyer_standing"].is_null());
+    let purchase_id = buy["purchase"]["purchase_id"]
+        .as_str()
+        .expect("purchase id")
+        .to_string();
+
+    let league = state.inner.league_state.lock().await;
+    let company = league
+        .world
+        .world_companies
+        .iter()
+        .find(|company| company.company_id == company_id)
+        .expect("company should remain present");
+    assert_eq!(company.revenue_score, 100);
+    assert_eq!(company.reputation_score, 20);
+    assert_eq!(company.level, 2);
+    let shop = league
+        .world
+        .world_shops
+        .iter()
+        .find(|shop| shop.shop_id == shop_id)
+        .expect("shop should remain present");
+    assert_eq!(shop.gross_merchandise_score, 100);
+    assert!(!league
+        .players_by_matrix_user
+        .contains_key(buyer_matrix_user_id));
+    assert!(!league
+        .players_by_matrix_user
+        .contains_key(seller_matrix_user_id));
+    assert!(!league.world.world_economy_events.iter().any(|event| {
+        event.subject_id == purchase_id
+            && (event.event_kind == "listing_purchase" || event.event_kind == "market_tax_sink")
+    }));
+    assert!(
+        !league.world.world_relationships.iter().any(|relationship| {
+            relationship.from_id == buyer_matrix_user_id
+                && relationship.to_id == company_id
+                && relationship.relation_kind == "customer"
+        })
+    );
+    assert!(!league
+        .world
+        .world_faction_standings
+        .iter()
+        .any(|standing| standing.matrix_user_id == buyer_matrix_user_id
+            || standing.matrix_user_id == seller_matrix_user_id));
 }
 
 #[tokio::test]

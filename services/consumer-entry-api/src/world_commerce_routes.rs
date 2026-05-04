@@ -1331,7 +1331,6 @@ pub(super) async fn buy_world_listing_inner(
             .get("dynamic_price_credits")
             .and_then(Value::as_i64)
             .unwrap_or_else(|| listing.price_credits.max(1));
-        let seller_net_credits = world_seller_net_credits_for_price(price_credits);
         let reputation_delta = (listing.quality_score / 5).max(1);
         let purchase_nonce = league.world.world_purchases.len();
         let work_order_nonce = league.world.world_work_orders.len();
@@ -1384,83 +1383,8 @@ pub(super) async fn buy_world_listing_inner(
             value_score: price_credits + listing.quality_score.max(0),
             created_at_epoch: now,
         };
-        if let Some(index) = shop_index {
-            league.world.world_shops[index].gross_merchandise_score += price_credits;
-        }
-        if let Some(index) = company_index {
-            league.world.world_companies[index].revenue_score += price_credits;
-            league.world.world_companies[index].reputation_score += reputation_delta;
-            league.world.world_companies[index].level =
-                1 + (league.world.world_companies[index].revenue_score / 100).max(0);
-        }
-        let mut buyer = ensure_league_player(&mut league, &buyer_matrix_user_id, None);
-        buyer.xp += (listing.quality_score / 10).max(1);
-        buyer.reputation += 1;
-        buyer.rating += 1;
-        league
-            .players_by_matrix_user
-            .insert(buyer_matrix_user_id.clone(), buyer);
-        let mut seller = ensure_league_player(&mut league, &listing.owner_matrix_user_id, None);
-        seller.xp += (listing.quality_score / 2).max(1);
-        seller.reputation += reputation_delta;
-        seller.rating += (listing.quality_score / 10).max(1);
-        league
-            .players_by_matrix_user
-            .insert(listing.owner_matrix_user_id.clone(), seller);
-        let economy_event = WorldEconomyEvent {
-            economy_event_id: league_hash_id(
-                "world-econ",
-                &format!("{}:{}:{}", buyer_matrix_user_id, purchase.purchase_id, now),
-            ),
-            matrix_user_id: listing.owner_matrix_user_id.clone(),
-            event_kind: "listing_purchase".to_string(),
-            subject_id: purchase.purchase_id.clone(),
-            credits_delta: seller_net_credits,
-            reputation_delta,
-            created_at_epoch: now,
-        };
-        let market_tax_event = WorldEconomyEvent {
-            economy_event_id: league_hash_id(
-                "world-market-tax",
-                &format!("{}:{}:{}", buyer_matrix_user_id, purchase.purchase_id, now),
-            ),
-            matrix_user_id: buyer_matrix_user_id.clone(),
-            event_kind: "market_tax_sink".to_string(),
-            subject_id: purchase.purchase_id.clone(),
-            credits_delta: -market_simulation
-                .get("market_tax_credits")
-                .and_then(Value::as_i64)
-                .unwrap_or(1),
-            reputation_delta: 0,
-            created_at_epoch: now,
-        };
-        league.world.world_relationships.push(WorldRelationship {
-            relationship_id: league_hash_id(
-                "world-rel",
-                &format!("{}:{}:{}", buyer_matrix_user_id, listing.company_id, now),
-            ),
-            from_id: buyer_matrix_user_id.clone(),
-            to_id: listing.company_id.clone(),
-            relation_kind: "customer".to_string(),
-            strength: reputation_delta,
-            updated_at_epoch: now,
-        });
-        let seller_standing = upsert_world_faction_standing(
-            &mut league,
-            &listing.owner_matrix_user_id,
-            faction_id,
-            reputation_delta,
-            now,
-        );
-        let buyer_standing =
-            upsert_world_faction_standing(&mut league, &buyer_matrix_user_id, faction_id, 1, now);
         league.world.world_purchases.push(purchase.clone());
         league.world.world_work_orders.push(work_order.clone());
-        league
-            .world
-            .world_economy_events
-            .push(economy_event.clone());
-        league.world.world_economy_events.push(market_tax_event);
         let company = company_index.map(|index| league.world.world_companies[index].clone());
         let shop = shop_index.map(|index| league.world.world_shops[index].clone());
         (
@@ -1470,10 +1394,9 @@ pub(super) async fn buy_world_listing_inner(
             listing,
             company,
             shop,
-            economy_event,
-            seller_standing,
-            buyer_standing,
             market_simulation,
+            reputation_delta,
+            faction_id.to_string(),
         )
     };
     let buyer_reserve = reserve_world_purchase_with_ledger(&state, &payload, &snapshot.1).await;
@@ -1499,6 +1422,11 @@ pub(super) async fn buy_world_listing_inner(
         let indexes = build_world_indexes(&league.world);
         let mut purchase = snapshot.1.clone();
         let mut work_order = snapshot.2.clone();
+        let mut company = snapshot.4.clone();
+        let mut shop = snapshot.5.clone();
+        let mut economy_event = None;
+        let mut seller_standing = None;
+        let mut buyer_standing = None;
         let released = settlement.status == "settled" || settlement.status == "duplicate";
         purchase.buyer_ledger_status = Some(buyer_reserve.status.clone());
         purchase.buyer_ledger_account_id = buyer_reserve.account_id.clone();
@@ -1531,15 +1459,123 @@ pub(super) async fn buy_world_listing_inner(
         indexes.replace_purchase_by_id(&mut league.world, &purchase);
         indexes.replace_work_order_by_id(&mut league.world, &work_order);
         if released {
-            if let Some(player) = league
-                .players_by_matrix_user
-                .get_mut(&purchase.seller_matrix_user_id)
-            {
-                player.earned_credits +=
-                    world_seller_net_credits_for_price(purchase.price_credits) as f64;
+            if let Some(index) = indexes.shop_index(&purchase.shop_id) {
+                league.world.world_shops[index].gross_merchandise_score += purchase.price_credits;
             }
+            if let Some(index) = indexes.company_index(&purchase.company_id) {
+                league.world.world_companies[index].revenue_score += purchase.price_credits;
+                league.world.world_companies[index].reputation_score += snapshot.7;
+                league.world.world_companies[index].level =
+                    1 + (league.world.world_companies[index].revenue_score / 100).max(0);
+            }
+            let mut buyer = ensure_league_player(&mut league, &purchase.buyer_matrix_user_id, None);
+            buyer.xp += (snapshot.3.quality_score / 10).max(1);
+            buyer.reputation += 1;
+            buyer.rating += 1;
+            league
+                .players_by_matrix_user
+                .insert(purchase.buyer_matrix_user_id.clone(), buyer);
+            let mut seller =
+                ensure_league_player(&mut league, &purchase.seller_matrix_user_id, None);
+            seller.xp += (snapshot.3.quality_score / 2).max(1);
+            seller.reputation += snapshot.7;
+            seller.rating += (snapshot.3.quality_score / 10).max(1);
+            seller.earned_credits +=
+                world_seller_net_credits_for_price(purchase.price_credits) as f64;
+            league
+                .players_by_matrix_user
+                .insert(purchase.seller_matrix_user_id.clone(), seller);
+            let purchase_event = WorldEconomyEvent {
+                economy_event_id: league_hash_id(
+                    "world-econ",
+                    &format!(
+                        "{}:{}:{}",
+                        purchase.buyer_matrix_user_id,
+                        purchase.purchase_id,
+                        purchase.created_at_epoch
+                    ),
+                ),
+                matrix_user_id: purchase.seller_matrix_user_id.clone(),
+                event_kind: "listing_purchase".to_string(),
+                subject_id: purchase.purchase_id.clone(),
+                credits_delta: world_seller_net_credits_for_price(purchase.price_credits),
+                reputation_delta: snapshot.7,
+                created_at_epoch: purchase.created_at_epoch,
+            };
+            let market_tax_event = WorldEconomyEvent {
+                economy_event_id: league_hash_id(
+                    "world-market-tax",
+                    &format!(
+                        "{}:{}:{}",
+                        purchase.buyer_matrix_user_id,
+                        purchase.purchase_id,
+                        purchase.created_at_epoch
+                    ),
+                ),
+                matrix_user_id: purchase.buyer_matrix_user_id.clone(),
+                event_kind: "market_tax_sink".to_string(),
+                subject_id: purchase.purchase_id.clone(),
+                credits_delta: -snapshot
+                    .6
+                    .get("market_tax_credits")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(1),
+                reputation_delta: 0,
+                created_at_epoch: purchase.created_at_epoch,
+            };
+            league.world.world_relationships.push(WorldRelationship {
+                relationship_id: league_hash_id(
+                    "world-rel",
+                    &format!(
+                        "{}:{}:{}",
+                        purchase.buyer_matrix_user_id,
+                        purchase.company_id,
+                        purchase.created_at_epoch
+                    ),
+                ),
+                from_id: purchase.buyer_matrix_user_id.clone(),
+                to_id: purchase.company_id.clone(),
+                relation_kind: "customer".to_string(),
+                strength: snapshot.7,
+                updated_at_epoch: purchase.created_at_epoch,
+            });
+            seller_standing = Some(upsert_world_faction_standing(
+                &mut league,
+                &purchase.seller_matrix_user_id,
+                &snapshot.8,
+                snapshot.7,
+                purchase.created_at_epoch,
+            ));
+            buyer_standing = Some(upsert_world_faction_standing(
+                &mut league,
+                &purchase.buyer_matrix_user_id,
+                &snapshot.8,
+                1,
+                purchase.created_at_epoch,
+            ));
+            league
+                .world
+                .world_economy_events
+                .push(purchase_event.clone());
+            league.world.world_economy_events.push(market_tax_event);
+            company = indexes
+                .company_index(&purchase.company_id)
+                .map(|index| league.world.world_companies[index].clone());
+            shop = indexes
+                .shop_index(&purchase.shop_id)
+                .map(|index| league.world.world_shops[index].clone());
+            economy_event = Some(purchase_event);
         }
-        (league.clone(), purchase, work_order)
+        (
+            league.clone(),
+            purchase,
+            work_order,
+            company,
+            shop,
+            economy_event,
+            seller_standing,
+            buyer_standing,
+        )
     };
     if let Err(response) =
         persist_league_state_after_command(&state, &final_snapshot.0, "world_buy").await
@@ -1559,12 +1595,12 @@ pub(super) async fn buy_world_listing_inner(
             "purchase": final_snapshot.1,
             "work_order": final_snapshot.2,
             "listing": snapshot.3,
-            "company": snapshot.4,
-            "shop": snapshot.5,
-            "economy_event": snapshot.6,
-            "seller_standing": snapshot.7,
-            "buyer_standing": snapshot.8,
-            "market_simulation": snapshot.9,
+            "company": final_snapshot.3,
+            "shop": final_snapshot.4,
+            "economy_event": final_snapshot.5,
+            "seller_standing": final_snapshot.6,
+            "buyer_standing": final_snapshot.7,
+            "market_simulation": snapshot.6,
             "buyer_ledger_status": buyer_reserve.status,
             "buyer_ledger_entry_id": buyer_reserve.entry_id,
             "buyer_ledger_error": buyer_reserve.error,
