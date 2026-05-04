@@ -1808,6 +1808,8 @@ impl<'a> ClientAppProjectionContext<'a> {
             "anti_cheese_policy": {
                 "policy_id": "trillionnium_playability_anti_cheese_v1",
                 "cooldown_seconds": 300,
+                "duplicate_gate": "review_hold_zero_reward",
+                "backend_gate_enforced": true,
                 "review_hold_count": review_hold_count,
                 "anti_cheat_flag_count": anti_cheat_flag_count,
                 "signals": ["too_short", "repetition_suspected", "hidden_tests_failed", "hidden_missing_evidence", "judge_disagreement", "duplicate_action_signature", "repeat_kind_cooldown_pressure"],
@@ -1846,6 +1848,7 @@ impl<'a> ClientAppProjectionContext<'a> {
                 "risk_reward_language_visible",
                 "season_loop_visible",
                 "cooldown_policy_visible",
+                "anti_cheese_gate_enforced_visible",
                 "backend_outcome_engine_visible",
                 "market_simulator_visible",
                 "league_encounter_state_visible",

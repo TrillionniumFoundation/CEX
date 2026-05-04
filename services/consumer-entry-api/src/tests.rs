@@ -1224,6 +1224,14 @@ fn world_client_surfaces_expose_projection_layer_contracts() {
             >= 300
     );
     assert_eq!(
+        app["economy_retention_ops"]["anti_cheese_policy"]["duplicate_gate"],
+        "review_hold_zero_reward"
+    );
+    assert_eq!(
+        app["economy_retention_ops"]["anti_cheese_policy"]["backend_gate_enforced"],
+        true
+    );
+    assert_eq!(
         app["economy_retention_ops"]["engine_contracts"]["world_action_engine"],
         "trillionnium_world_action_engine_v1"
     );
@@ -3453,6 +3461,79 @@ async fn chat_identity_binding_rejects_unknown_product_user_registry_ref() {
     };
 
     assert!(resolve_chat_identity(&state, &payload).await.is_err());
+}
+
+#[tokio::test]
+async fn world_action_duplicate_cooldown_enforces_review_hold_without_rewards() {
+    let state = test_state(test_config(), IdentityBindings::default(), HashMap::new());
+    let app = build_router(state.clone());
+    let matrix_user_id = "@anti-cheese:local.dev";
+    let body = "craft a repeatable anti-cheese proof with deliverable, evidence, risk control, next action, self review, and a concrete durable world outcome.";
+    let payload = json!({
+        "matrix_user_id": matrix_user_id,
+        "room_id": "!anti-cheese:local.dev",
+        "location_id": "starter-studio",
+        "body": body
+    });
+
+    let (status, first) =
+        send_json_request(&app, "POST", "/v1/world/action", &[], payload.clone()).await;
+    assert_eq!(status, StatusCode::OK, "first world action failed: {first}");
+    assert_eq!(first["playability_outcome"]["payout_status"], "settled");
+    assert!(
+        first["playability_outcome"]["final_impact"]
+            .as_i64()
+            .unwrap_or(0)
+            > 0
+    );
+
+    let (status, duplicate) =
+        send_json_request(&app, "POST", "/v1/world/action", &[], payload).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "duplicate world action should be held, not crash: {duplicate}"
+    );
+    assert_eq!(duplicate["playability_outcome"]["status"], "review_hold");
+    assert_eq!(
+        duplicate["playability_outcome"]["success_tier"],
+        "cooldown_review_hold"
+    );
+    assert_eq!(
+        duplicate["playability_outcome"]["payout_status"],
+        "review_hold"
+    );
+    assert_eq!(
+        duplicate["playability_outcome"]["anti_cheese_gate_enforced"],
+        true
+    );
+    assert_eq!(duplicate["playability_outcome"]["final_impact"], 0);
+    assert_eq!(
+        duplicate["playability_outcome"]["reward_delta_reputation"],
+        0
+    );
+    assert!(
+        duplicate["playability_outcome"]["remaining_cooldown_seconds"]
+            .as_i64()
+            .unwrap_or(0)
+            > 0
+    );
+    assert!(duplicate["playability_outcome"]["risk_flags"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|flag| flag == "duplicate_action_signature"));
+    assert_eq!(duplicate["playability_telemetry"]["reputation_delta"], 0);
+
+    let league = state.inner.league_state.lock().await;
+    let duplicate_event = league
+        .world
+        .world_events
+        .iter()
+        .rev()
+        .find(|event| event.actor_matrix_user_id == matrix_user_id)
+        .expect("duplicate event recorded");
+    assert_eq!(duplicate_event.impact_score, 0);
 }
 
 #[tokio::test]

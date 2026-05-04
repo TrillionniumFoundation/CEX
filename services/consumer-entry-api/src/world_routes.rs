@@ -172,11 +172,16 @@ fn world_action_playability_outcome(
         0
     };
     let missing_penalty = missing_signals.len() as i64;
-    let final_impact =
+    let computed_impact =
         (base_impact + quality_bonus - duplicate_penalty - cooldown_penalty - missing_penalty)
             .clamp(1, base_impact + 8);
+    let final_impact = if duplicate_count > 0 {
+        0
+    } else {
+        computed_impact
+    };
     let success_tier = if duplicate_count > 0 {
-        "cooldown_limited"
+        "cooldown_review_hold"
     } else if missing_signals.is_empty() && quality_score >= 6 {
         "critical_success"
     } else if missing_signals.len() <= 2 {
@@ -185,11 +190,16 @@ fn world_action_playability_outcome(
         "partial_success"
     };
     let status = if duplicate_count > 0 {
-        "cooldown_limited"
+        "review_hold"
     } else if missing_signals.len() >= 3 {
         "needs_recovery_choice"
     } else {
         "resolved"
+    };
+    let payout_status = if duplicate_count > 0 {
+        "review_hold"
+    } else {
+        "settled"
     };
     let next_choice = match kind {
         "contract" => "/world/web/contract-complete or /work deliver latest",
@@ -216,7 +226,13 @@ fn world_action_playability_outcome(
         "action_kind": kind,
         "base_impact": base_impact,
         "final_impact": final_impact,
+        "computed_impact_before_gate": computed_impact,
         "quality_score": quality_score,
+        "payout_status": payout_status,
+        "anti_cheese_gate_enforced": duplicate_count > 0,
+        "reward_delta_xp": final_impact,
+        "reward_delta_reputation": if payout_status == "review_hold" { 0 } else { (final_impact / 4).max(1) },
+        "reward_delta_rating": if payout_status == "review_hold" { 0 } else { (final_impact / 3).max(1) },
         "energy_cost": (base_impact / 4).max(1),
         "difficulty": match kind {
             "contract" | "market" => "medium",
@@ -881,9 +897,17 @@ async fn record_world_action(
             strength: impact,
             updated_at_epoch: now,
         });
+        let reward_delta_reputation = playability_outcome
+            .get("reward_delta_reputation")
+            .and_then(Value::as_i64)
+            .unwrap_or_else(|| (impact / 4).max(1));
+        let reward_delta_rating = playability_outcome
+            .get("reward_delta_rating")
+            .and_then(Value::as_i64)
+            .unwrap_or_else(|| (impact / 3).max(1));
         player.xp += impact;
-        player.reputation += (impact / 4).max(1);
-        player.rating += (impact / 3).max(1);
+        player.reputation += reward_delta_reputation;
+        player.rating += reward_delta_rating;
         league
             .players_by_matrix_user
             .insert(matrix_user_id.clone(), player);
@@ -900,7 +924,7 @@ async fn record_world_action(
                 .unwrap_or("world_action")
                 .to_string(),
             credits_delta: 0,
-            reputation_delta: impact - base_impact,
+            reputation_delta: reward_delta_reputation,
             created_at_epoch: now,
         };
         league.world.world_events.push(event.clone());

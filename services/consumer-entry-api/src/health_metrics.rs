@@ -555,12 +555,23 @@ fn trillionnium_world_playability_scorecard_json(
     let ops_anti_cheese_green = ops_contract_v1
         && ops_check("anti_cheese_policy_visible")
         && ops_check("cooldown_policy_visible")
+        && ops_check("anti_cheese_gate_enforced_visible")
         && economy_retention_ops
             .get("anti_cheese_policy")
             .and_then(|policy| policy.get("cooldown_seconds"))
             .and_then(Value::as_i64)
             .unwrap_or(0)
-            >= 300;
+            >= 300
+        && economy_retention_ops
+            .get("anti_cheese_policy")
+            .and_then(|policy| policy.get("duplicate_gate"))
+            .and_then(Value::as_str)
+            == Some("review_hold_zero_reward")
+        && economy_retention_ops
+            .get("anti_cheese_policy")
+            .and_then(|policy| policy.get("backend_gate_enforced"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
     let ops_engine_contracts_green = ops_contract_v1
         && ops_check("backend_outcome_engine_visible")
         && ops_check("market_simulator_visible")
