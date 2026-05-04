@@ -102,9 +102,7 @@ function checkCommon(result) {
   assertMetric(result.visibleCjk.length === 0, `${result.profile}/${result.name} visible English UI leaks CJK`, result.visibleCjk.slice(0, 10));
   assertMetric(result.actionableOverflow.length === 0, `${result.profile}/${result.name} has actionable horizontal overflow`, result.actionableOverflow.slice(0, 10));
   assertMetric(result.coveredActionables.length === 0, `${result.profile}/${result.name} has covered first-viewport actionables`, result.coveredActionables.slice(0, 10));
-  if (result.profile !== 'desktop') {
-    assertMetric(result.smallTouchTargets.length === 0, `${result.profile}/${result.name} has small first-viewport touch targets`, result.smallTouchTargets.slice(0, 10));
-  }
+  assertMetric(result.smallTouchTargets.length === 0, `${result.profile}/${result.name} has small first-viewport touch targets`, result.smallTouchTargets.slice(0, 10));
 }
 
 function checkMobile(result, limits) {

@@ -729,7 +729,7 @@ pub(super) async fn get_client_app_web_shell(
     .app-tab-panel.is-active {{ display:grid; }}
     .app-tab-header {{ display:grid; gap:6px; margin-bottom:4px; }}
     .app-bottom-tabs {{ position:fixed; left:0; right:0; bottom:0; z-index:30; display:grid; grid-template-columns:repeat(4,1fr); gap:8px; padding:10px min(4vw,24px) calc(10px + env(safe-area-inset-bottom, 0px)); border-top:1px solid rgba(255,255,255,.08); background:rgba(8,10,24,.92); backdrop-filter:blur(18px); }}
-    .app-bottom-tab {{ border:1px solid rgba(255,255,255,.1); background:rgba(255,255,255,.05); color:var(--muted); border-radius:16px; padding:10px 8px; font-weight:800; cursor:pointer; }}
+    .app-bottom-tab {{ min-height:44px; display:inline-flex; align-items:center; justify-content:center; border:1px solid rgba(255,255,255,.1); background:rgba(255,255,255,.05); color:var(--muted); border-radius:16px; padding:10px 8px; font-weight:800; cursor:pointer; }}
     .app-bottom-tab.is-active {{ color:var(--text); background:rgba(100,227,255,.12); border-color:rgba(100,227,255,.32); }}
     .app-bottom-tab:focus-visible, .focus-chip:focus-visible, .overlay-toggle:focus-visible, .app-search-input:focus-visible, .app-search-clear:focus-visible {{ outline:2px solid var(--cyan); outline-offset:2px; }}
     .app-me-grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:16px; }}

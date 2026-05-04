@@ -1248,7 +1248,19 @@ pub(super) async fn get_world_web_shell(
       #world-route-task-graph-live,
       main > section.panel > .mini-grid,
       main > section > .grid {{ max-height:420px; overflow:auto; padding-right:4px; }}
+      #world-commerce-panel {{ max-height:760px; overflow:auto; }}
+      #world-map-move-panel {{ max-height:620px; overflow:auto; }}
+      #world-assets-panel,
+      #world-companies-panel,
+      #world-listings-panel,
+      #world-contracts-panel,
+      main > section.panel:not(#world-map-shell-panel):not(#world-commerce-panel):not(#world-map-move-panel) {{ max-height:540px; overflow:auto; }}
       .play .timeline,.timeline {{ max-height:420px; overflow:auto; padding-right:4px; }}
+    }}
+    @media (min-width:721px) and (max-width:1050px) {{
+      .hero-card {{ grid-template-columns:auto minmax(0,1fr) auto; align-items:center; }}
+      .hero-card strong {{ font-size:18px; }}
+      .hero-card .cta {{ min-height:44px; white-space:nowrap; }}
     }}
     @media (max-width:720px) {{
       header.world-hero {{ padding:12px 14px 6px; gap:8px; }}
@@ -1299,7 +1311,14 @@ pub(super) async fn get_world_web_shell(
       #world-real-map {{ order:1; min-height:min(54svh,410px); border-radius:18px; }}
       .map-stream-hud,.overlay-toggle-bar,.focus-stack {{ gap:6px; }}
       .hud-chip,.focus-chip,.overlay-toggle {{ padding:7px 9px; font-size:12px; }}
-      #world-map-shell-panel .map-copy {{ max-height:680px; overflow:auto; }}
+      #world-map-shell-panel .map-copy {{ max-height:560px; overflow:auto; }}
+      #world-commerce-panel {{ max-height:680px; }}
+      #world-map-move-panel {{ max-height:540px; }}
+      #world-assets-panel,
+      #world-companies-panel,
+      #world-listings-panel,
+      #world-contracts-panel,
+      main > section.panel:not(#world-map-shell-panel):not(#world-commerce-panel):not(#world-map-move-panel) {{ max-height:460px; }}
       #world-map-move-panel .mini-grid,
       #world-commerce-panel #world-purchase-cards-live,
       #world-commerce-panel #world-work-orders-live,

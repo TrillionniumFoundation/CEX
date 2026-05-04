@@ -61,7 +61,7 @@ For the Trillionnium `/app`, `/world`, and `/league` browser surfaces, run the d
 CEX_ENV_FILE=run/local-production/.env ./scripts/check-trillionnium-ui-audit.sh
 ```
 
-The audit checks English-mode visible CJK leaks, actionable horizontal overflow, and mobile/tablet/desktop ordering/height budgets for the current first-playable UI. It writes JSON plus first-viewport screenshots under `run/trillionnium-ui-audit/`.
+The audit checks English-mode visible CJK leaks, actionable horizontal overflow, first-viewport tapability, and mobile/tablet/desktop ordering/height budgets for the current first-playable UI. It writes JSON plus first-viewport screenshots under `run/trillionnium-ui-audit/`.
 
 Set `CEX_ENABLE_QUEUED_WORKER=0` when you need deterministic gate/debug behavior without background queue consumption. Set `CEX_ENABLE_ENTRY_SERVICES=0` only when you explicitly want the older core-only local runtime.
 
