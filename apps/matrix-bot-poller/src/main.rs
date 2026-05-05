@@ -88,6 +88,7 @@ async fn main() {
         match sync_response {
             Ok(resp) if resp.status().is_success() => match resp.json::<SyncResponse>().await {
                 Ok(body) => {
+                    let mut forwarding_failed = false;
                     if let Some(rooms) = body.rooms {
                         if let Some(joined_rooms) = rooms.join {
                             for (room_id, room_state) in joined_rooms {
@@ -144,19 +145,11 @@ async fn main() {
 
                                         if is_duplicate {
                                             warn!(
-                                                room = %room_id,
-                                                event_id = %event_id_for_log,
+                                                    room = %room_id,
+                                                    event_id = %event_id_for_log,
                                                 "skipping duplicate event"
                                             );
                                             continue;
-                                        }
-
-                                        if let Some(id) = event_id.clone() {
-                                            state.recent_event_ids.push_front(id);
-                                            trim_recent_event_ids(
-                                                &mut state,
-                                                config.max_recent_event_ids,
-                                            );
                                         }
 
                                         let timestamp_ms = raw_event
@@ -164,7 +157,7 @@ async fn main() {
                                             .and_then(Value::as_i64);
 
                                         let inbound = json!({
-                                            "event_id": event_id,
+                                            "event_id": event_id.clone(),
                                             "event_type": "m.room.message",
                                             "room_id": room_id,
                                             "sender": sender,
@@ -186,13 +179,39 @@ async fn main() {
                                         let relay_resp =
                                             http.post(relay_url).json(&inbound).send().await;
 
-                                        if let Err(err) = relay_resp {
-                                            warn!(
-                                                %err,
-                                                room = %room_id,
-                                                event_id = %event_id_for_log,
-                                                "failed to forward event to relay"
-                                            );
+                                        match relay_resp {
+                                            Ok(resp) if resp.status().is_success() => {
+                                                if let Some(id) = event_id.clone() {
+                                                    state.recent_event_ids.push_front(id);
+                                                    trim_recent_event_ids(
+                                                        &mut state,
+                                                        config.max_recent_event_ids,
+                                                    );
+                                                }
+                                            }
+                                            Ok(resp) => {
+                                                let status = resp.status();
+                                                let txt = resp.text().await.unwrap_or_else(|_| {
+                                                    "<non-text body>".to_string()
+                                                });
+                                                forwarding_failed = true;
+                                                warn!(
+                                                    %status,
+                                                    body = %txt,
+                                                    room = %room_id,
+                                                    event_id = %event_id_for_log,
+                                                    "relay rejected event; not advancing matrix sync token"
+                                                );
+                                            }
+                                            Err(err) => {
+                                                forwarding_failed = true;
+                                                warn!(
+                                                    %err,
+                                                    room = %room_id,
+                                                    event_id = %event_id_for_log,
+                                                    "failed to forward event to relay; not advancing matrix sync token"
+                                                );
+                                            }
                                         }
                                     }
                                 }
@@ -200,7 +219,13 @@ async fn main() {
                         }
                     }
 
-                    state.next_batch = Some(body.next_batch.clone());
+                    if forwarding_failed {
+                        warn!(
+                            "matrix sync token held back because at least one event failed to forward"
+                        );
+                    } else {
+                        state.next_batch = Some(body.next_batch.clone());
+                    }
                     if let Err(err) = save_state(&state_path, &state) {
                         warn!(%err, "failed to persist matrix sync state");
                     }
