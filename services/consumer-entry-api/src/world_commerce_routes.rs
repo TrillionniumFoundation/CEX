@@ -722,9 +722,19 @@ pub(super) async fn create_world_listing_inner(
                 league.world.world_shops.len() - 1
             }
         };
-        let quality_score = judgement.score.round() as i64;
-        let price_credits =
-            (((company_seed.revenue_score.max(10) as f64) * 0.35) + judgement.score).round() as i64;
+        let released = judgement.payout_status == "eligible";
+        let quality_score = if released {
+            judgement.score.round() as i64
+        } else {
+            0
+        };
+        let price_credits = if released {
+            ((((company_seed.revenue_score.max(10) as f64) * 0.35) + judgement.score).round()
+                as i64)
+                .max(10)
+        } else {
+            0
+        };
         let listing = WorldListing {
             listing_id: league_hash_id(
                 "world-listing",
@@ -745,56 +755,54 @@ pub(super) async fn create_world_listing_inner(
             } else {
                 "service_offer".to_string()
             },
-            status: if judgement.payout_status == "eligible" {
+            status: if released {
                 "listed".to_string()
             } else {
                 "review_hold".to_string()
             },
-            price_credits: price_credits.max(10),
+            price_credits,
             quality_score,
             created_at_epoch: now,
         };
-        let economy_event = WorldEconomyEvent {
-            economy_event_id: league_hash_id(
-                "world-econ",
-                &format!("{}:{}:{}", matrix_user_id, listing.listing_id, now),
-            ),
-            matrix_user_id: matrix_user_id.clone(),
-            event_kind: "listing_published".to_string(),
-            subject_id: listing.listing_id.clone(),
-            credits_delta: if judgement.payout_status == "eligible" {
-                listing.price_credits
-            } else {
-                0
-            },
-            reputation_delta: if judgement.payout_status == "eligible" {
-                (judgement.score / 5.0).round() as i64
-            } else {
-                0
-            },
-            created_at_epoch: now,
+        let economy_event = if released {
+            Some(WorldEconomyEvent {
+                economy_event_id: league_hash_id(
+                    "world-econ",
+                    &format!("{}:{}:{}", matrix_user_id, listing.listing_id, now),
+                ),
+                matrix_user_id: matrix_user_id.clone(),
+                event_kind: "listing_published".to_string(),
+                subject_id: listing.listing_id.clone(),
+                credits_delta: listing.price_credits,
+                reputation_delta: (judgement.score / 5.0).round() as i64,
+                created_at_epoch: now,
+            })
+        } else {
+            None
         };
-        if judgement.payout_status == "eligible" {
+        if released {
+            let reputation_delta = economy_event
+                .as_ref()
+                .map(|event| event.reputation_delta)
+                .unwrap_or_default();
             league.world.world_shops[shop_index].listing_count += 1;
             league.world.world_shops[shop_index].gross_merchandise_score += listing.price_credits;
             league.world.world_companies[company_index].revenue_score += listing.price_credits;
-            league.world.world_companies[company_index].reputation_score +=
-                economy_event.reputation_delta;
+            league.world.world_companies[company_index].reputation_score += reputation_delta;
             league.world.world_companies[company_index].level =
                 1 + (league.world.world_companies[company_index].revenue_score / 100).max(0);
             let mut player = ensure_league_player(&mut league, &matrix_user_id, None);
             player.xp += quality_score;
-            player.reputation += economy_event.reputation_delta;
+            player.reputation += reputation_delta;
             player.rating += ((judgement.score - 50.0) / 5.0).round() as i64;
             league
                 .players_by_matrix_user
                 .insert(matrix_user_id.clone(), player);
         }
         league.world.world_listings.push(listing.clone());
-        league
-            .world
-            .world_economy_events
-            .push(economy_event.clone());
+        if let Some(economy_event) = economy_event.clone() {
+            league.world.world_economy_events.push(economy_event);
+        }
         let company = league.world.world_companies[company_index].clone();
         let shop = league.world.world_shops[shop_index].clone();
         (
@@ -1512,8 +1520,10 @@ pub(super) async fn buy_world_listing_inner(
         purchase.ledger_entry_id = settlement.entry_id.clone();
         purchase.ledger_balance_after = settlement.balance_after;
         purchase.ledger_error = settlement.error.clone();
-        work_order.status = if buyer_reserved {
+        work_order.status = if released || local_dev_ledger_bypass {
             "open".to_string()
+        } else if buyer_reserved {
+            purchase.status.clone()
         } else {
             "payment_hold".to_string()
         };
@@ -1885,26 +1895,29 @@ pub(super) async fn deliver_world_work_order_inner(
         } else {
             None
         };
-        let economy_event = WorldEconomyEvent {
-            economy_event_id: league_hash_id(
-                "world-econ",
-                &format!(
-                    "{}:{}:{}",
-                    matrix_user_id, work_order_seed.work_order_id, now
+        let economy_event = if reputation_delta > 0 {
+            Some(WorldEconomyEvent {
+                economy_event_id: league_hash_id(
+                    "world-econ",
+                    &format!(
+                        "{}:{}:{}",
+                        matrix_user_id, work_order_seed.work_order_id, now
+                    ),
                 ),
-            ),
-            matrix_user_id: matrix_user_id.clone(),
-            event_kind: "work_delivered".to_string(),
-            subject_id: work_order_seed.work_order_id.clone(),
-            credits_delta: 0,
-            reputation_delta,
-            created_at_epoch: now,
+                matrix_user_id: matrix_user_id.clone(),
+                event_kind: "work_delivered".to_string(),
+                subject_id: work_order_seed.work_order_id.clone(),
+                credits_delta: 0,
+                reputation_delta,
+                created_at_epoch: now,
+            })
+        } else {
+            None
         };
         league.world.world_work_deliveries.push(delivery.clone());
-        league
-            .world
-            .world_economy_events
-            .push(economy_event.clone());
+        if let Some(economy_event) = economy_event.clone() {
+            league.world.world_economy_events.push(economy_event);
+        }
         (
             league.clone(),
             league.world.world_work_orders[work_index].clone(),

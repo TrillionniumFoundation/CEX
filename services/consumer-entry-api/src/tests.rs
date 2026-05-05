@@ -4238,6 +4238,134 @@ async fn world_buy_does_not_release_commercial_progression_without_buyer_reserve
 }
 
 #[tokio::test]
+async fn world_buy_does_not_open_work_without_seller_settlement() {
+    let (ledger_base_url, ledger_admin_token) = start_real_ledger_service_for_world_e2e().await;
+    let http = Client::new();
+    let buyer_account_id =
+        create_real_ledger_account(&http, &ledger_base_url, &ledger_admin_token, 500.0).await;
+
+    let buyer_matrix_user_id = "@world-unsettled-buy-buyer:local.dev";
+    let seller_matrix_user_id = "@world-unsettled-buy-seller:local.dev";
+    let room_id = "!world-unsettled-buy:local.dev";
+    let company_id = "company-unsettled-buy";
+    let shop_id = "shop-unsettled-buy";
+    let listing_id = "listing-unsettled-buy";
+    let mut bindings = IdentityBindings::default();
+    bindings.matrix_users.insert(
+        buyer_matrix_user_id.to_string(),
+        IdentityBindingEntry {
+            product_user_id: None,
+            org_id: Some("world-unsettled-buy-org".to_string()),
+            account_id: Some(buyer_account_id),
+        },
+    );
+    let mut config = test_config();
+    config.runtime_profile = RuntimeProfile::Production;
+    config.ledger_base_url = ledger_base_url;
+    config.ledger_admin_token = Some(ledger_admin_token);
+    let state = test_state(config, bindings, HashMap::new());
+    let app = build_router(state.clone());
+    {
+        let mut league = state.inner.league_state.lock().await;
+        league.world.world_companies.push(WorldCompany {
+            company_id: company_id.to_string(),
+            owner_matrix_user_id: seller_matrix_user_id.to_string(),
+            asset_id: "asset-unsettled-buy".to_string(),
+            location_id: "starter-studio".to_string(),
+            name: "Unsettled Buy Guard Studio".to_string(),
+            company_kind: "studio".to_string(),
+            status: "operating".to_string(),
+            revenue_score: 140,
+            reputation_score: 28,
+            level: 2,
+            created_at_epoch: 1_777_897_942,
+        });
+        league.world.world_shops.push(WorldShop {
+            shop_id: shop_id.to_string(),
+            company_id: company_id.to_string(),
+            owner_matrix_user_id: seller_matrix_user_id.to_string(),
+            location_id: "starter-studio".to_string(),
+            name: "Unsettled Buy Guard Storefront".to_string(),
+            shop_kind: "studio".to_string(),
+            status: "operating".to_string(),
+            listing_count: 1,
+            gross_merchandise_score: 140,
+            created_at_epoch: 1_777_897_942,
+        });
+        league.world.world_listings.push(WorldListing {
+            listing_id: listing_id.to_string(),
+            shop_id: shop_id.to_string(),
+            company_id: company_id.to_string(),
+            owner_matrix_user_id: seller_matrix_user_id.to_string(),
+            asset_id: "asset-unsettled-buy".to_string(),
+            title: "Unsettled buy guard offer".to_string(),
+            listing_kind: "service_offer".to_string(),
+            status: "listed".to_string(),
+            price_credits: 90,
+            quality_score: 82,
+            created_at_epoch: 1_777_897_942,
+        });
+    }
+
+    let (status, buy) = send_json_request(
+        &app,
+        "POST",
+        &format!("/v1/world/listings/{listing_id}/buy"),
+        &[],
+        json!({
+            "matrix_user_id": buyer_matrix_user_id,
+            "room_id": room_id,
+            "body": "Buyer reserves a world commission with customer deliverable, evidence package, risk controls, next action, and self-review, but seller has no ledger account."
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "world buy response: {buy}");
+    assert_eq!(buy["buyer_ledger_status"], "reserved");
+    assert_eq!(buy["ledger_status"], "skipped_missing_account");
+    assert_eq!(buy["purchase"]["status"], "seller_settlement_pending");
+    assert_eq!(buy["work_order"]["status"], "seller_settlement_pending");
+    assert!(buy["economy_event"].is_null());
+    assert!(buy["seller_standing"].is_null());
+    assert!(buy["buyer_standing"].is_null());
+
+    let work_order_id = buy["work_order"]["work_order_id"]
+        .as_str()
+        .expect("work order id")
+        .to_string();
+    let (delivery_status, delivery) = send_json_request(
+        &app,
+        "POST",
+        &format!("/v1/world/work-orders/{work_order_id}/deliver"),
+        &[],
+        json!({
+            "matrix_user_id": seller_matrix_user_id,
+            "room_id": room_id,
+            "body": "Seller tries to deliver before settlement with deliverable, evidence package, risk controls, next action, and self-review."
+        }),
+    )
+    .await;
+    assert_eq!(
+        delivery_status,
+        StatusCode::CONFLICT,
+        "delivery response: {delivery}"
+    );
+    assert_eq!(delivery["error"], "work order is not deliverable");
+
+    let league = state.inner.league_state.lock().await;
+    assert!(!league
+        .world
+        .world_economy_events
+        .iter()
+        .any(|event| event.subject_id == buy["purchase"]["purchase_id"].as_str().unwrap()));
+    assert!(!league
+        .players_by_matrix_user
+        .contains_key(buyer_matrix_user_id));
+    assert!(!league
+        .players_by_matrix_user
+        .contains_key(seller_matrix_user_id));
+}
+
+#[tokio::test]
 async fn world_work_delivery_and_acceptance_require_active_seller_settlement() {
     let mut config = test_config();
     config.runtime_profile = RuntimeProfile::Production;
@@ -5102,7 +5230,7 @@ async fn world_delivery_review_hold_does_not_grant_faction_or_seller_progress() 
     assert_eq!(status, StatusCode::OK, "delivery response: {delivery}");
     assert_eq!(delivery["delivery"]["status"], "review_hold");
     assert_eq!(delivery["work_order"]["status"], "delivery_review_hold");
-    assert_eq!(delivery["economy_event"]["reputation_delta"], 0);
+    assert!(delivery["economy_event"].is_null());
     assert!(delivery["standing"].is_null());
 
     let league = state.inner.league_state.lock().await;
@@ -5116,6 +5244,12 @@ async fn world_delivery_review_hold_does_not_grant_faction_or_seller_progress() 
     assert!(!league
         .players_by_matrix_user
         .contains_key(seller_matrix_user_id));
+    assert!(!league
+        .world
+        .world_economy_events
+        .iter()
+        .any(|event| event.subject_id == work_order_id
+            || event.matrix_user_id == seller_matrix_user_id));
     assert!(!league
         .world
         .world_faction_standings
@@ -5278,6 +5412,97 @@ async fn world_company_review_hold_does_not_release_commercial_progression_or_fo
         1,
         "only the held bootstrap listing should exist"
     );
+}
+
+#[tokio::test]
+async fn world_listing_review_hold_does_not_release_market_artifacts_or_events() {
+    let mut config = test_config();
+    config.runtime_profile = RuntimeProfile::Production;
+    let state = test_state(config, IdentityBindings::default(), HashMap::new());
+    let app = build_router(state.clone());
+    let matrix_user_id = "@world-listing-review-hold:local.dev";
+    let company_id = "company-review-hold-listing";
+    let shop_id = "shop-review-hold-listing";
+    {
+        let mut league = state.inner.league_state.lock().await;
+        league.world.world_companies.push(WorldCompany {
+            company_id: company_id.to_string(),
+            owner_matrix_user_id: matrix_user_id.to_string(),
+            asset_id: "asset-review-hold-listing".to_string(),
+            location_id: "starter-studio".to_string(),
+            name: "Listing Review Hold Guard Studio".to_string(),
+            company_kind: "studio".to_string(),
+            status: "operating".to_string(),
+            revenue_score: 220,
+            reputation_score: 44,
+            level: 3,
+            created_at_epoch: 1_777_901_020,
+        });
+        league.world.world_shops.push(WorldShop {
+            shop_id: shop_id.to_string(),
+            company_id: company_id.to_string(),
+            owner_matrix_user_id: matrix_user_id.to_string(),
+            location_id: "starter-studio".to_string(),
+            name: "Listing Review Hold Guard Storefront".to_string(),
+            shop_kind: "studio".to_string(),
+            status: "operating".to_string(),
+            listing_count: 2,
+            gross_merchandise_score: 220,
+            created_at_epoch: 1_777_901_020,
+        });
+    }
+
+    let (status, listing_response) = send_json_request(
+        &app,
+        "POST",
+        "/v1/world/listings",
+        &[],
+        json!({
+            "matrix_user_id": matrix_user_id,
+            "company_id": company_id,
+            "body": "copy copy copy copy copy copy copy copy copy copy copy copy copy copy copy copy"
+        }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "listing review-hold response: {listing_response}"
+    );
+    assert_eq!(listing_response["payout_status"], "review_hold");
+    assert_eq!(listing_response["listing"]["status"], "review_hold");
+    assert_eq!(listing_response["listing"]["price_credits"], 0);
+    assert_eq!(listing_response["listing"]["quality_score"], 0);
+    assert!(listing_response["economy_event"].is_null());
+
+    let listing_id = listing_response["listing"]["listing_id"]
+        .as_str()
+        .expect("listing id")
+        .to_string();
+    let league = state.inner.league_state.lock().await;
+    let company = league
+        .world
+        .world_companies
+        .iter()
+        .find(|company| company.company_id == company_id)
+        .expect("company should remain present");
+    assert_eq!(company.revenue_score, 220);
+    assert_eq!(company.reputation_score, 44);
+    assert_eq!(company.level, 3);
+    let shop = league
+        .world
+        .world_shops
+        .iter()
+        .find(|shop| shop.shop_id == shop_id)
+        .expect("shop should remain present");
+    assert_eq!(shop.listing_count, 2);
+    assert_eq!(shop.gross_merchandise_score, 220);
+    assert!(!league.players_by_matrix_user.contains_key(matrix_user_id));
+    assert!(!league
+        .world
+        .world_economy_events
+        .iter()
+        .any(|event| event.subject_id == listing_id || event.matrix_user_id == matrix_user_id));
 }
 
 #[tokio::test]
