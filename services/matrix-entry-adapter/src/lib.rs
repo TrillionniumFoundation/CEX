@@ -6152,8 +6152,10 @@ fn build_trillionnium_client_app_matrix_reply(value: &Value) -> Value {
             })
         })
         .unwrap_or("/world action Start the first bounty: define customer deliverable, evidence package, risk controls, next action, and self-review.");
+    let quick_path_summary = "Quick Path: choose map focus → run one bounty → submit/review reward";
+    let command_disclosure = "Full Commands: use these when you are ready to submit real work with deliverable, evidence, risk, next action, and self-review anchors.";
     let body = format!(
-        "📱 Trillionnium Client App\nStart Here: {onboarding_label} · {onboarding_step_count} steps · target {onboarding_completion_target}\nStart Command: {onboarding_start_command}\nNow: {next_action} @ {next_location}\nWhy: {next_outcome}\nNext Command: {next_command}\nOpportunity Command: {opportunity_command}\nWorld: {map_node} · {nearby_poi_count} POIs · {live_event_count} live events · {tile_shard_count} tiles\nProgression: Lv.{progression_level} {progression_rank} · {successful_task_count} successes · skills/tools/skins {unlocked_skill_count}/{unlocked_tool_count}/{unlocked_skin_count}\n入口：/map /duel nearby /social /wallet /progression",
+        "📱 Trillionnium Client App\n{quick_path_summary}\nStart Here: {onboarding_label} · {onboarding_step_count} steps · target {onboarding_completion_target}\nStart Command: {onboarding_start_command}\nNow: {next_action} @ {next_location}\nWhy: {next_outcome}\n{command_disclosure}\nNext Command: {next_command}\nOpportunity Command: {opportunity_command}\nWorld: {map_node} · {nearby_poi_count} POIs · {live_event_count} live events · {tile_shard_count} tiles\nProgression: Lv.{progression_level} {progression_rank} · {successful_task_count} successes · skills/tools/skins {unlocked_skill_count}/{unlocked_tool_count}/{unlocked_skin_count}\n入口：/map /duel nearby /social /wallet /progression",
         next_action = &route.route_next_action_label,
         next_location = &route.route_next_location_id,
         next_outcome = &route.route_next_outcome_summary,
@@ -6165,7 +6167,7 @@ fn build_trillionnium_client_app_matrix_reply(value: &Value) -> Value {
         "body": body,
         "format": "org.matrix.custom.html",
         "formatted_body": format!(
-            "<blockquote><h3>📱 Trillionnium Client App</h3><p><strong>Start Here</strong>: {} · {} steps · target <code>{}</code></p><p><strong>Start Command</strong>: <code>{}</code></p><p><strong>Now</strong>: {} @ <code>{}</code></p><p><strong>Why</strong>: {}</p><p><strong>Next Command</strong>: <code>{}</code></p><p><strong>Opportunity Command</strong>: <code>{}</code></p><p><strong>World</strong>: <code>{}</code> · {} POIs · {} live events · {} tiles</p><p><strong>Progression</strong>: Lv.{} {} · {} successes · skills/tools/skins {}/{}/{}</p><p><code>/map</code> <code>/duel nearby</code> <code>/social</code> <code>/wallet</code> <code>/progression</code></p></blockquote>",
+            "<blockquote><h3>📱 Trillionnium Client App</h3><p><strong>Quick Path</strong>: choose map focus → run one bounty → submit/review reward</p><p><strong>Start Here</strong>: {} · {} steps · target <code>{}</code></p><p><strong>Start Command</strong>: <code>{}</code></p><p><strong>Now</strong>: {} @ <code>{}</code></p><p><strong>Why</strong>: {}</p><p><strong>Full Commands</strong>: use these when you are ready to submit real work with deliverable, evidence, risk, next action, and self-review anchors.</p><p><strong>Next Command</strong>: <code>{}</code></p><p><strong>Opportunity Command</strong>: <code>{}</code></p><p><strong>World</strong>: <code>{}</code> · {} POIs · {} live events · {} tiles</p><p><strong>Progression</strong>: Lv.{} {} · {} successes · skills/tools/skins {}/{}/{}</p><p><code>/map</code> <code>/duel nearby</code> <code>/social</code> <code>/wallet</code> <code>/progression</code></p></blockquote>",
             escape_html(onboarding_label), onboarding_step_count, escape_html(onboarding_completion_target), escape_html(onboarding_start_command), escape_html(&route.route_next_action_label), escape_html(&route.route_next_location_id), escape_html(&route.route_next_outcome_summary), escape_html(&route.route_next_command_hint), escape_html(&route.route_next_opportunity_command), escape_html(map_node), nearby_poi_count, live_event_count, tile_shard_count, progression_level, escape_html(progression_rank), successful_task_count, unlocked_skill_count, unlocked_tool_count, unlocked_skin_count,
         ),
         "cex_card": route_story_card_json(json!({
@@ -6198,6 +6200,8 @@ fn build_trillionnium_client_app_matrix_reply(value: &Value) -> Value {
             "onboarding_label": onboarding_label,
             "onboarding_completion_target": onboarding_completion_target,
             "onboarding_step_count": onboarding_step_count,
+            "onboarding_quick_path_summary": quick_path_summary,
+            "onboarding_command_disclosure": command_disclosure,
             "onboarding_start_command": onboarding_start_command,
             "has_face_duel": true,
             "has_social": true,
@@ -8914,8 +8918,11 @@ mod tests {
             .get("body")
             .and_then(Value::as_str)
             .unwrap_or_default();
+        assert!(body.contains("Quick Path:"));
+        assert!(body.contains("run one bounty"));
         assert!(body.contains("Start Here:"));
         assert!(body.contains("Start Command:"));
+        assert!(body.contains("Full Commands:"));
         assert!(body.contains("Next Command:"));
         assert!(body.contains("Opportunity Command:"));
         assert!(!body.contains("Renderer Adapter:"));
@@ -8927,6 +8934,16 @@ mod tests {
                 .and_then(Value::as_str),
             Some("/world action Start the first bounty: define customer deliverable, evidence package, risk controls, next action, and self-review.")
         );
+        assert_eq!(
+            card.get("onboarding_quick_path_summary")
+                .and_then(Value::as_str),
+            Some("Quick Path: choose map focus → run one bounty → submit/review reward")
+        );
+        assert!(card
+            .get("onboarding_command_disclosure")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("Full Commands"));
         assert_eq!(
             card.get("map_runtime_handle_name").and_then(Value::as_str),
             Some("mapRuntime")
