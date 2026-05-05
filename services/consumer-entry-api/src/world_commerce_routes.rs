@@ -3600,7 +3600,6 @@ pub(super) async fn complete_world_contract_inner(
             created_at_epoch: now,
         };
         let released = judgement.payout_status == "eligible";
-        let asset_delta = (judgement.score / 5.0).round() as i64;
         if let Some(contract_index) = indexes.contract_index(&contract.contract_id) {
             let stored_contract = &mut league.world.world_contracts[contract_index];
             stored_contract.status = if released {
@@ -3609,45 +3608,10 @@ pub(super) async fn complete_world_contract_inner(
                 "review_hold".to_string()
             };
             stored_contract.cex_status = Some(if released {
-                "completed".to_string()
+                "settlement_pending".to_string()
             } else {
                 "review_hold".to_string()
             });
-            if released {
-                stored_contract.value_score += asset_delta.max(1);
-            }
-        }
-        if released {
-            if let Some(asset_index) = indexes.latest_asset_index_for_owner(&matrix_user_id) {
-                let asset = &mut league.world.world_assets[asset_index];
-                asset.value_score += asset_delta.max(1);
-                asset.upgrade_points += asset_delta.max(1);
-                asset.upgrade_level =
-                    asset.upgrade_level.max(1) + (asset.upgrade_points / 60).max(0);
-                asset.last_upgrade_kind = Some("contract_completion".to_string());
-                asset.status = "upgraded_by_contract".to_string();
-            } else {
-                league.world.world_assets.push(WorldAsset {
-                    asset_id: league_hash_id("world-asset", &completion_id),
-                    owner_matrix_user_id: matrix_user_id.clone(),
-                    location_id: contract.location_id.clone(),
-                    asset_kind: "contract_proof".to_string(),
-                    name: "World Contract Proof".to_string(),
-                    status: "active".to_string(),
-                    value_score: asset_delta.max(1),
-                    upgrade_level: 1,
-                    upgrade_points: asset_delta.max(1),
-                    last_upgrade_kind: Some("contract_completion".to_string()),
-                    created_at_epoch: now,
-                });
-            }
-            let mut player = ensure_league_player(&mut league, &matrix_user_id, None);
-            player.xp += judgement.score.round() as i64;
-            player.reputation += (judgement.score / 8.0).round() as i64;
-            player.rating += ((judgement.score - 50.0) / 3.0).round() as i64;
-            league
-                .players_by_matrix_user
-                .insert(matrix_user_id.clone(), player);
         }
         league
             .world
@@ -3679,9 +3643,37 @@ pub(super) async fn complete_world_contract_inner(
         if settlement_completed {
             let mut player = ensure_league_player(&mut league, &matrix_user_id, None);
             player.earned_credits += completion.reward_amount;
+            player.xp += completion.score.round() as i64;
+            player.reputation += (completion.score / 8.0).round() as i64;
+            player.rating += ((completion.score - 50.0) / 3.0).round() as i64;
             league
                 .players_by_matrix_user
                 .insert(matrix_user_id.clone(), player);
+
+            let asset_delta = (completion.score / 5.0).round() as i64;
+            if let Some(asset_index) = indexes.latest_asset_index_for_owner(&matrix_user_id) {
+                let asset = &mut league.world.world_assets[asset_index];
+                asset.value_score += asset_delta.max(1);
+                asset.upgrade_points += asset_delta.max(1);
+                asset.upgrade_level =
+                    asset.upgrade_level.max(1) + (asset.upgrade_points / 60).max(0);
+                asset.last_upgrade_kind = Some("contract_completion".to_string());
+                asset.status = "upgraded_by_contract".to_string();
+            } else {
+                league.world.world_assets.push(WorldAsset {
+                    asset_id: league_hash_id("world-asset", &completion.completion_id),
+                    owner_matrix_user_id: matrix_user_id.clone(),
+                    location_id: contract.location_id.clone(),
+                    asset_kind: "contract_proof".to_string(),
+                    name: "World Contract Proof".to_string(),
+                    status: "active".to_string(),
+                    value_score: asset_delta.max(1),
+                    upgrade_level: 1,
+                    upgrade_points: asset_delta.max(1),
+                    last_upgrade_kind: Some("contract_completion".to_string()),
+                    created_at_epoch: completion.created_at_epoch,
+                });
+            }
         }
         if let Some(contract_index) = indexes.contract_index(&contract.contract_id) {
             let mut stored_contract = league.world.world_contracts[contract_index].clone();
@@ -3691,6 +3683,20 @@ pub(super) async fn complete_world_contract_inner(
                 Some(status) => format!("completed_{status}"),
                 None => stored_contract.status.clone(),
             };
+            stored_contract.cex_status = Some(match completion.ledger_status.as_deref() {
+                Some("settled") | Some("duplicate") => "completed".to_string(),
+                Some("held_review") => "review_hold".to_string(),
+                Some("skipped_zero_reward") => "completed_no_reward".to_string(),
+                Some(_) => "settlement_blocked".to_string(),
+                None => stored_contract
+                    .cex_status
+                    .clone()
+                    .unwrap_or_else(|| "settlement_pending".to_string()),
+            });
+            if settlement_completed {
+                let asset_delta = (completion.score / 5.0).round() as i64;
+                stored_contract.value_score += asset_delta.max(1);
+            }
             indexes.replace_contract_by_id(&mut league.world, &stored_contract);
         }
         league.clone()

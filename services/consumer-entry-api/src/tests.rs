@@ -6419,10 +6419,13 @@ async fn league_review_queue_keeps_approval_failed_rewards_visible() {
 }
 
 #[tokio::test]
-async fn world_contract_completion_requires_ledger_settlement_before_earned_credits() {
+async fn world_contract_completion_requires_ledger_settlement_before_progression() {
     let state = test_state(test_config(), IdentityBindings::default(), HashMap::new());
+    let initial_asset_count;
+    let initial_contract_value = 64;
     {
         let mut league = state.inner.league_state.lock().await;
+        initial_asset_count = league.world.world_assets.len();
         let starter_location_id = league
             .world
             .world_map_nodes
@@ -6452,7 +6455,7 @@ async fn world_contract_completion_requires_ledger_settlement_before_earned_cred
             body: "Complete only after real ledger settlement".to_string(),
             status: "open".to_string(),
             cex_status: Some("Running".to_string()),
-            value_score: 64,
+            value_score: initial_contract_value,
             created_at_epoch: 1_777_895_901,
         });
     }
@@ -6484,14 +6487,28 @@ async fn world_contract_completion_requires_ledger_settlement_before_earned_cred
             > 0.0
     );
     let league = state.inner.league_state.lock().await;
-    let player = league
-        .players_by_matrix_user
-        .get("@alice:local.dev")
-        .expect("player should be created by completion");
-    assert_eq!(player.earned_credits, 0.0);
     assert!(
-        player.xp > 0,
-        "non-credit progression can still be recorded"
+        !league
+            .players_by_matrix_user
+            .contains_key("@alice:local.dev"),
+        "contract completion must not create/reward player progression before ledger settlement"
+    );
+    assert_eq!(
+        league.world.world_assets.len(),
+        initial_asset_count,
+        "contract completion must not mint or upgrade assets before ledger settlement"
+    );
+    let stored_contract = league
+        .world
+        .world_contracts
+        .iter()
+        .find(|contract| contract.contract_id == "world-contract-unsettled-payout")
+        .expect("stored contract");
+    assert_eq!(stored_contract.value_score, initial_contract_value);
+    assert_eq!(stored_contract.status, "completed_skipped_missing_room");
+    assert_eq!(
+        stored_contract.cex_status.as_deref(),
+        Some("settlement_blocked")
     );
 }
 
