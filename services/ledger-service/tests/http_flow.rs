@@ -277,6 +277,38 @@ async fn ledger_endpoints_reject_admin_token_for_other_org() {
 }
 
 #[tokio::test]
+async fn fail_fast_placeholder_repository_rejects_memory_only_account_creation() {
+    let state = AppState::new_for_tests(
+        PostgresLedgerRepository::new_placeholder(),
+        true,
+        Some("local-dev-admin-token".to_string()),
+        vec!["ledger:manage".to_string(), "ledger:read".to_string()],
+        Vec::new(),
+    );
+    let app = build_router(state.clone());
+
+    let (status, body) = send_json(
+        app,
+        "POST",
+        "/v1/accounts",
+        json!({
+            "org_id": "00000000-0000-0000-0000-00000000ce01",
+            "account_type": "user",
+            "currency_unit": "credit",
+            "initial_balance": 100.0
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(body["error"]
+        .as_str()
+        .expect("repository error")
+        .contains("create_account repository failure: postgres pool not initialized"));
+    assert!(state.accounts.read().await.is_empty());
+}
+
+#[tokio::test]
 async fn grant_adds_balance_without_reserved_funds() {
     let app = build_router(test_state());
     let (account_id, _) = create_account(app.clone(), 100.0).await;

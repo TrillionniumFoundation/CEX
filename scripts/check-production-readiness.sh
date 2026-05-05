@@ -21,6 +21,7 @@ CEX_REQUIRED_BLOCK_CAPABILITY_PREFIXES="${CEX_REQUIRED_BLOCK_CAPABILITY_PREFIXES
 CEX_MONITORING_DEPLOY_VERIFY_REQUIRED="${CEX_MONITORING_DEPLOY_VERIFY_REQUIRED:-}"
 CEX_MONITORING_DEPLOY_METADATA_PATH="${CEX_MONITORING_DEPLOY_METADATA_PATH:-$CEX_PROJECT_ROOT/run/monitoring-live-target/metadata/monitoring-deploy-metadata.yml}"
 CEX_MONITORING_DEPLOY_MAX_AGE_SECONDS="${CEX_MONITORING_DEPLOY_MAX_AGE_SECONDS:-86400}"
+LEDGER_FAIL_FAST="${LEDGER_FAIL_FAST:-true}"
 
 case "$CEX_READINESS_MODE" in
   local|production) ;;
@@ -101,6 +102,10 @@ else
   if secret_is_default_or_empty "${EXECUTION_ADMIN_TOKEN:-}"; then
     posture_failures=$((posture_failures + 1))
     fail 'production posture requires non-default execution admin token'
+  fi
+  if ! required_bool_true "${LEDGER_FAIL_FAST:-}"; then
+    posture_failures=$((posture_failures + 1))
+    fail 'production posture requires LEDGER_FAIL_FAST=true'
   fi
   if [[ -z "${CONSUMER_ENTRY_INGRESS_TOKEN:-}" ]]; then
     posture_failures=$((posture_failures + 1))

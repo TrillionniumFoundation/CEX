@@ -1,6 +1,6 @@
 use async_trait::async_trait;
-use sqlx::{PgPool, Row};
-use std::sync::Arc;
+use sqlx::{postgres::PgPoolOptions, PgPool, Row};
+use std::{sync::Arc, time::Duration};
 use uuid::Uuid;
 
 use crate::{
@@ -24,8 +24,15 @@ impl PostgresLedgerRepository {
     pub async fn connect_from_env() -> Result<Self, String> {
         let database_url =
             std::env::var("DATABASE_URL").map_err(|_| "DATABASE_URL is not set".to_string())?;
+        let connect_timeout_seconds = std::env::var("LEDGER_DATABASE_CONNECT_TIMEOUT_SECONDS")
+            .ok()
+            .and_then(|raw| raw.parse::<u64>().ok())
+            .filter(|seconds| *seconds > 0)
+            .unwrap_or(5);
 
-        let pool = PgPool::connect(&database_url)
+        let pool = PgPoolOptions::new()
+            .acquire_timeout(Duration::from_secs(connect_timeout_seconds))
+            .connect(&database_url)
             .await
             .map_err(|e| format!("failed to connect postgres: {e}"))?;
 
