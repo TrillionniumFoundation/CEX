@@ -813,7 +813,6 @@ async fn record_world_action(
     let (kind, result, base_impact) = world_action_kind(&body);
     let snapshot = {
         let mut league = state.inner.league_state.lock().await;
-        let mut player = ensure_league_player(&mut league, &matrix_user_id, None);
         let location_id = payload
             .location_id
             .as_deref()
@@ -830,6 +829,20 @@ async fn record_world_action(
             base_impact,
             now,
         );
+        let released = playability_outcome
+            .get("payout_status")
+            .and_then(Value::as_str)
+            != Some("review_hold");
+        let released_cex_task_id = if released {
+            payload.cex_task_id.clone()
+        } else {
+            None
+        };
+        let released_cex_status = if released {
+            payload.cex_status.clone()
+        } else {
+            None
+        };
         let event = WorldEvent {
             event_id: league_hash_id(
                 "world-event",
@@ -842,12 +855,12 @@ async fn record_world_action(
             body: body.clone(),
             result: resolved_result,
             impact_score: impact,
-            cex_task_id: payload.cex_task_id.clone(),
-            cex_status: payload.cex_status.clone(),
+            cex_task_id: released_cex_task_id.clone(),
+            cex_status: released_cex_status.clone(),
             created_at_epoch: now,
         };
         let mut created_contract = None;
-        if let Some(task_id) = payload.cex_task_id.clone() {
+        if let Some(task_id) = released_cex_task_id.clone() {
             let contract = WorldContract {
                 contract_id: league_hash_id("world-contract", &event.event_id),
                 event_id: event.event_id.clone(),
@@ -857,14 +870,14 @@ async fn record_world_action(
                 title: "World Contract".to_string(),
                 body: body.clone(),
                 status: "task_created".to_string(),
-                cex_status: payload.cex_status.clone(),
+                cex_status: released_cex_status.clone(),
                 value_score: impact,
                 created_at_epoch: now,
             };
             league.world.world_contracts.push(contract.clone());
             created_contract = Some(contract);
         }
-        if matches!(kind, "venture" | "craft") {
+        if released && matches!(kind, "venture" | "craft") {
             league.world.world_assets.push(WorldAsset {
                 asset_id: league_hash_id(
                     "world-asset",
@@ -886,17 +899,19 @@ async fn record_world_action(
                 created_at_epoch: now,
             });
         }
-        league.world.world_relationships.push(WorldRelationship {
-            relationship_id: league_hash_id(
-                "world-rel",
-                &format!("{}:{}:{}", matrix_user_id, location_id, now),
-            ),
-            from_id: matrix_user_id.clone(),
-            to_id: location_id.clone(),
-            relation_kind: kind.to_string(),
-            strength: impact,
-            updated_at_epoch: now,
-        });
+        if released {
+            league.world.world_relationships.push(WorldRelationship {
+                relationship_id: league_hash_id(
+                    "world-rel",
+                    &format!("{}:{}:{}", matrix_user_id, location_id, now),
+                ),
+                from_id: matrix_user_id.clone(),
+                to_id: location_id.clone(),
+                relation_kind: kind.to_string(),
+                strength: impact,
+                updated_at_epoch: now,
+            });
+        }
         let reward_delta_reputation = playability_outcome
             .get("reward_delta_reputation")
             .and_then(Value::as_i64)
@@ -905,12 +920,15 @@ async fn record_world_action(
             .get("reward_delta_rating")
             .and_then(Value::as_i64)
             .unwrap_or_else(|| (impact / 3).max(1));
-        player.xp += impact;
-        player.reputation += reward_delta_reputation;
-        player.rating += reward_delta_rating;
-        league
-            .players_by_matrix_user
-            .insert(matrix_user_id.clone(), player);
+        if released {
+            let mut player = ensure_league_player(&mut league, &matrix_user_id, None);
+            player.xp += impact;
+            player.reputation += reward_delta_reputation;
+            player.rating += reward_delta_rating;
+            league
+                .players_by_matrix_user
+                .insert(matrix_user_id.clone(), player);
+        }
         let telemetry_event = WorldEconomyEvent {
             economy_event_id: league_hash_id(
                 "world-playability-telemetry",
@@ -928,10 +946,12 @@ async fn record_world_action(
             created_at_epoch: now,
         };
         league.world.world_events.push(event.clone());
-        league
-            .world
-            .world_economy_events
-            .push(telemetry_event.clone());
+        if released {
+            league
+                .world
+                .world_economy_events
+                .push(telemetry_event.clone());
+        }
         let home = world_home_json(&league);
         (
             league.clone(),
@@ -969,7 +989,26 @@ pub(super) async fn post_world_action(
         Err(response) => return response,
     };
     let (kind, _result, _impact) = world_action_kind(&body);
-    let task = if kind == "contract" && payload.cex_task_id.is_none() {
+    let held_by_review = if kind == "contract" && payload.cex_task_id.is_none() {
+        let league = state.inner.league_state.lock().await;
+        let (base_kind, base_result, base_impact) = world_action_kind(&body);
+        let (playability_outcome, _, _) = world_action_playability_outcome(
+            &league,
+            &matrix_user_id,
+            base_kind,
+            base_result,
+            &body,
+            base_impact,
+            Utc::now().timestamp(),
+        );
+        playability_outcome
+            .get("payout_status")
+            .and_then(Value::as_str)
+            == Some("review_hold")
+    } else {
+        false
+    };
+    let task = if kind == "contract" && payload.cex_task_id.is_none() && !held_by_review {
         match create_world_contract_task(&state, &headers, &payload, &matrix_user_id, &body).await {
             Ok(task) => {
                 payload.cex_task_id = Some(task.task_id.clone());

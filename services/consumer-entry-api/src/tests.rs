@@ -3706,6 +3706,28 @@ async fn world_action_duplicate_cooldown_enforces_review_hold_without_rewards() 
             .unwrap_or(0)
             > 0
     );
+    let (
+        asset_count_after_first,
+        relationship_count_after_first,
+        economy_event_count_after_first,
+        player_xp_after_first,
+        player_reputation_after_first,
+        player_rating_after_first,
+    ) = {
+        let league = state.inner.league_state.lock().await;
+        let player = league
+            .players_by_matrix_user
+            .get(matrix_user_id)
+            .expect("first action should create player progress");
+        (
+            league.world.world_assets.len(),
+            league.world.world_relationships.len(),
+            league.world.world_economy_events.len(),
+            player.xp,
+            player.reputation,
+            player.rating,
+        )
+    };
 
     let (status, duplicate) =
         send_json_request(&app, "POST", "/v1/world/action", &[], payload).await;
@@ -3746,6 +3768,22 @@ async fn world_action_duplicate_cooldown_enforces_review_hold_without_rewards() 
     assert_eq!(duplicate["playability_telemetry"]["reputation_delta"], 0);
 
     let league = state.inner.league_state.lock().await;
+    assert_eq!(league.world.world_assets.len(), asset_count_after_first);
+    assert_eq!(
+        league.world.world_relationships.len(),
+        relationship_count_after_first
+    );
+    assert_eq!(
+        league.world.world_economy_events.len(),
+        economy_event_count_after_first
+    );
+    let player = league
+        .players_by_matrix_user
+        .get(matrix_user_id)
+        .expect("duplicate should not remove player");
+    assert_eq!(player.xp, player_xp_after_first);
+    assert_eq!(player.reputation, player_reputation_after_first);
+    assert_eq!(player.rating, player_rating_after_first);
     let duplicate_event = league
         .world
         .world_events
@@ -3754,6 +3792,119 @@ async fn world_action_duplicate_cooldown_enforces_review_hold_without_rewards() 
         .find(|event| event.actor_matrix_user_id == matrix_user_id)
         .expect("duplicate event recorded");
     assert_eq!(duplicate_event.impact_score, 0);
+}
+
+#[tokio::test]
+async fn world_action_review_hold_does_not_attach_contract_task_or_progression_artifacts() {
+    let mut config = test_config();
+    config.cex_gateway_base_url = "http://127.0.0.1:9".to_string();
+    let state = test_state(config, IdentityBindings::default(), HashMap::new());
+    let app = build_router(state.clone());
+    let matrix_user_id = "@anti-cheese-contract:local.dev";
+    let body = "contract commission for a durable customer deliverable with evidence package, risk controls, next action, self-review, and concrete acceptance criteria.";
+    let first_payload = json!({
+        "matrix_user_id": matrix_user_id,
+        "room_id": "!anti-cheese-contract:local.dev",
+        "location_id": "zbj-market-gate",
+        "body": body,
+        "cex_task_id": "task-contract-first",
+        "cex_status": "received"
+    });
+    let duplicate_payload = json!({
+        "matrix_user_id": matrix_user_id,
+        "room_id": "!anti-cheese-contract:local.dev",
+        "location_id": "zbj-market-gate",
+        "body": body,
+        "cex_task_id": "task-contract-duplicate",
+        "cex_status": "received"
+    });
+    let duplicate_without_task_payload = json!({
+        "matrix_user_id": matrix_user_id,
+        "room_id": "!anti-cheese-contract:local.dev",
+        "location_id": "zbj-market-gate",
+        "body": body
+    });
+
+    let (status, first) =
+        send_json_request(&app, "POST", "/v1/world/action", &[], first_payload).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "first contract action failed: {first}"
+    );
+    assert_eq!(first["playability_outcome"]["payout_status"], "settled");
+    assert_eq!(first["contract"]["task_id"], "task-contract-first");
+
+    let (contract_count_after_first, relationship_count_after_first, economy_count_after_first) = {
+        let league = state.inner.league_state.lock().await;
+        (
+            league.world.world_contracts.len(),
+            league.world.world_relationships.len(),
+            league.world.world_economy_events.len(),
+        )
+    };
+
+    let (status, duplicate) =
+        send_json_request(&app, "POST", "/v1/world/action", &[], duplicate_payload).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "duplicate contract action should be held, not crash: {duplicate}"
+    );
+    assert_eq!(
+        duplicate["playability_outcome"]["payout_status"],
+        "review_hold"
+    );
+    assert_eq!(duplicate["playability_outcome"]["final_impact"], 0);
+    assert!(duplicate["contract"].is_null());
+    assert!(duplicate["event"]["cex_task_id"].is_null());
+    assert!(duplicate["event"]["cex_status"].is_null());
+
+    let league = state.inner.league_state.lock().await;
+    assert_eq!(
+        league.world.world_contracts.len(),
+        contract_count_after_first
+    );
+    assert_eq!(
+        league.world.world_relationships.len(),
+        relationship_count_after_first
+    );
+    assert_eq!(
+        league.world.world_economy_events.len(),
+        economy_count_after_first
+    );
+    assert!(!league
+        .world
+        .world_contracts
+        .iter()
+        .any(|contract| contract.task_id == "task-contract-duplicate"));
+    drop(league);
+
+    let (status, skipped_task_duplicate) = send_json_request(
+        &app,
+        "POST",
+        "/v1/world/action",
+        &[],
+        duplicate_without_task_payload,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "held duplicate should not try to reach cex gateway: {skipped_task_duplicate}"
+    );
+    assert!(skipped_task_duplicate["task"].is_null());
+    assert!(skipped_task_duplicate["contract"].is_null());
+    assert_eq!(
+        skipped_task_duplicate["playability_outcome"]["payout_status"],
+        "review_hold"
+    );
+
+    let league = state.inner.league_state.lock().await;
+    assert_eq!(
+        league.world.world_contracts.len(),
+        contract_count_after_first
+    );
 }
 
 #[tokio::test]
