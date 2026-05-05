@@ -35,6 +35,7 @@ pub(super) struct WorldIndexes {
     pub(super) latest_asset_index_by_owner: HashMap<String, usize>,
     pub(super) company_index_by_id: HashMap<String, usize>,
     pub(super) latest_company_index_by_owner: HashMap<String, usize>,
+    pub(super) latest_operating_company_index_by_owner: HashMap<String, usize>,
     pub(super) company_location_by_id: HashMap<String, String>,
     pub(super) shop_index_by_company_id: HashMap<String, usize>,
     pub(super) shop_index_by_id: HashMap<String, usize>,
@@ -269,6 +270,11 @@ pub(super) fn build_world_indexes(world: &WorldState) -> WorldIndexes {
         indexes
             .latest_company_index_by_owner
             .insert(company.owner_matrix_user_id.clone(), index);
+        if company.status == "operating" {
+            indexes
+                .latest_operating_company_index_by_owner
+                .insert(company.owner_matrix_user_id.clone(), index);
+        }
         indexes
             .company_location_by_id
             .insert(company.company_id.clone(), company.location_id.clone());
@@ -433,8 +439,9 @@ impl WorldIndexes {
         matrix_user_id: &str,
     ) -> Option<usize> {
         if company_id == "latest" {
-            self.latest_company_index_by_owner
+            self.latest_operating_company_index_by_owner
                 .get(matrix_user_id)
+                .or_else(|| self.latest_company_index_by_owner.get(matrix_user_id))
                 .copied()
         } else {
             self.company_index_by_id.get(company_id).copied()
@@ -555,8 +562,9 @@ impl WorldIndexes {
     }
 
     pub(super) fn latest_company_index_for_owner(&self, matrix_user_id: &str) -> Option<usize> {
-        self.latest_company_index_by_owner
+        self.latest_operating_company_index_by_owner
             .get(matrix_user_id)
+            .or_else(|| self.latest_company_index_by_owner.get(matrix_user_id))
             .copied()
     }
 

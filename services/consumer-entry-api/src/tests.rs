@@ -6431,6 +6431,119 @@ async fn world_company_review_hold_does_not_release_commercial_progression_or_fo
 }
 
 #[tokio::test]
+async fn latest_company_listing_prefers_operating_company_over_newer_review_hold() {
+    let mut config = test_config();
+    config.runtime_profile = RuntimeProfile::Production;
+    let state = test_state(config, IdentityBindings::default(), HashMap::new());
+    let app = build_router(state.clone());
+    let matrix_user_id = "@world-latest-company-review-hold:local.dev";
+    let operating_company_id = "company-operating-latest-guard";
+    let held_asset_id = "asset-latest-company-review-hold";
+    {
+        let mut league = state.inner.league_state.lock().await;
+        league.world.world_companies.push(WorldCompany {
+            company_id: operating_company_id.to_string(),
+            owner_matrix_user_id: matrix_user_id.to_string(),
+            asset_id: "asset-operating-latest-guard".to_string(),
+            location_id: "starter-studio".to_string(),
+            name: "Operating Latest Guard Studio".to_string(),
+            company_kind: "studio".to_string(),
+            status: "operating".to_string(),
+            revenue_score: 160,
+            reputation_score: 70,
+            level: 2,
+            created_at_epoch: 1_777_901_020,
+        });
+        league.world.world_shops.push(WorldShop {
+            shop_id: "shop-operating-latest-guard".to_string(),
+            company_id: operating_company_id.to_string(),
+            owner_matrix_user_id: matrix_user_id.to_string(),
+            location_id: "starter-studio".to_string(),
+            name: "Operating Latest Guard Storefront".to_string(),
+            shop_kind: "studio".to_string(),
+            status: "operating".to_string(),
+            listing_count: 0,
+            gross_merchandise_score: 0,
+            created_at_epoch: 1_777_901_021,
+        });
+        league.world.world_assets.push(WorldAsset {
+            asset_id: held_asset_id.to_string(),
+            owner_matrix_user_id: matrix_user_id.to_string(),
+            location_id: "starter-studio".to_string(),
+            asset_kind: "studio".to_string(),
+            name: "Held Latest Guard Asset".to_string(),
+            status: "seeded".to_string(),
+            value_score: 120,
+            upgrade_level: 2,
+            upgrade_points: 90,
+            last_upgrade_kind: Some("manual_upgrade".to_string()),
+            created_at_epoch: 1_777_901_022,
+        });
+    }
+
+    let (held_status, held_company_response) = send_json_request(
+        &app,
+        "POST",
+        "/v1/world/companies",
+        &[],
+        json!({
+            "matrix_user_id": matrix_user_id,
+            "asset_id": held_asset_id,
+            "body": "copy copy copy copy copy copy copy copy copy copy copy copy copy copy copy copy"
+        }),
+    )
+    .await;
+    assert_eq!(held_status, StatusCode::OK);
+    assert_eq!(held_company_response["payout_status"], "review_hold");
+    let held_company_id = held_company_response["company"]["company_id"]
+        .as_str()
+        .expect("held company id")
+        .to_string();
+
+    let (listing_status, listing_response) = send_json_request(
+        &app,
+        "POST",
+        "/v1/world/listings",
+        &[],
+        json!({
+            "matrix_user_id": matrix_user_id,
+            "company_id": "latest",
+            "body": "Publish the legitimate operating studio offer with customer deliverable, evidence package, risk controls, self review, acceptance standard, and next action."
+        }),
+    )
+    .await;
+    assert_eq!(
+        listing_status,
+        StatusCode::OK,
+        "latest should not be shadowed by a newer review-held company: {listing_response}"
+    );
+    assert_eq!(
+        listing_response["listing"]["company_id"],
+        operating_company_id
+    );
+    assert_eq!(listing_response["listing"]["status"], "listed");
+
+    let league = state.inner.league_state.lock().await;
+    let operating_shop = league
+        .world
+        .world_shops
+        .iter()
+        .find(|shop| shop.company_id == operating_company_id)
+        .expect("operating shop");
+    assert_eq!(operating_shop.listing_count, 1);
+    assert_eq!(
+        league
+            .world
+            .world_listings
+            .iter()
+            .filter(|listing| listing.company_id == held_company_id)
+            .count(),
+        1,
+        "held company should still only have its review-held bootstrap listing"
+    );
+}
+
+#[tokio::test]
 async fn world_listing_review_hold_does_not_release_market_artifacts_or_events() {
     let mut config = test_config();
     config.runtime_profile = RuntimeProfile::Production;
