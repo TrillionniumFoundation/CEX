@@ -20,6 +20,15 @@ fn world_purchase_seller_settlement_active(purchase: &WorldPurchase) -> bool {
     )
 }
 
+fn world_purchase_rejection_settlement_released(purchase: &WorldPurchase) -> bool {
+    purchase.status == "rejected_refunded"
+        && matches!(purchase.buyer_consume_status.as_deref(), Some("refunded"))
+        && matches!(
+            purchase.ledger_status.as_deref(),
+            Some("seller_chargeback_consumed")
+        )
+}
+
 fn world_contract_completion_released(completion: &WorldContractCompletion) -> bool {
     matches!(
         completion.ledger_status.as_deref(),
@@ -2756,6 +2765,20 @@ pub(super) async fn reopen_world_work_order_inner(
                 .into_response();
         };
         let purchase_seed = league.world.world_purchases[purchase_index].clone();
+        if !world_purchase_rejection_settlement_released(&purchase_seed) {
+            return (
+                StatusCode::CONFLICT,
+                Json(json!({
+                    "error": "world work rejection settlement is not complete",
+                    "work_order_id": work_order_id,
+                    "purchase_id": purchase_seed.purchase_id,
+                    "purchase_status": purchase_seed.status,
+                    "buyer_refund_status": purchase_seed.buyer_consume_status,
+                    "seller_chargeback_status": purchase_seed.ledger_status,
+                })),
+            )
+                .into_response();
+        }
         let reopen = WorldWorkReopen {
             reopen_id: league_hash_id(
                 "world-reopen",
