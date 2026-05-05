@@ -1096,7 +1096,9 @@ pub(super) fn league_successful_task_count(league: &LeagueState, matrix_user_id:
         .submissions
         .values()
         .filter(|submission| {
-            submission.matrix_user_id == matrix_user_id && submission.score >= 60.0
+            let payout_status = submission.payout_status.as_deref().unwrap_or("eligible");
+            let released = payout_status == "eligible" || payout_status == "approved_release";
+            submission.matrix_user_id == matrix_user_id && submission.score >= 60.0 && released
         })
         .count() as i64;
     let contract_completions = league
@@ -1104,14 +1106,20 @@ pub(super) fn league_successful_task_count(league: &LeagueState, matrix_user_id:
         .world_contract_completions
         .iter()
         .filter(|completion| {
-            completion.matrix_user_id == matrix_user_id && completion.score >= 60.0
+            completion.matrix_user_id == matrix_user_id
+                && completion.score >= 60.0
+                && completion.payout_status == "eligible"
         })
         .count() as i64;
     let work_deliveries = league
         .world
         .world_work_deliveries
         .iter()
-        .filter(|delivery| delivery.matrix_user_id == matrix_user_id && delivery.score >= 60.0)
+        .filter(|delivery| {
+            delivery.matrix_user_id == matrix_user_id
+                && delivery.score >= 60.0
+                && delivery.status == "delivered"
+        })
         .count() as i64;
     let accepted_work = league
         .world
@@ -1125,7 +1133,11 @@ pub(super) fn league_successful_task_count(league: &LeagueState, matrix_user_id:
         .world
         .world_asset_upgrades
         .iter()
-        .filter(|upgrade| upgrade.matrix_user_id == matrix_user_id && upgrade.score >= 60.0)
+        .filter(|upgrade| {
+            upgrade.matrix_user_id == matrix_user_id
+                && upgrade.score >= 60.0
+                && upgrade.status == "upgraded"
+        })
         .count() as i64;
     league_submissions + contract_completions + work_deliveries + accepted_work + asset_upgrades
 }

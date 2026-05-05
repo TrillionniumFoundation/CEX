@@ -973,21 +973,24 @@ pub(super) async fn post_league_web_action(
                     reviewed_at_epoch: None,
                     created_at_epoch: now,
                 };
-                player.submissions += 1;
-                player.xp += score.round() as i64;
-                player.reputation += (score / 10.0).round() as i64;
-                player.rating += ((score - 50.0) / 2.0).round() as i64;
-                if score >= 80.0 {
-                    player.wins += 1;
+                let released = judgement.payout_status == "eligible";
+                if released {
+                    player.submissions += 1;
+                    player.xp += score.round() as i64;
+                    player.reputation += (score / 10.0).round() as i64;
+                    player.rating += ((score - 50.0) / 2.0).round() as i64;
+                    if score >= 80.0 {
+                        player.wins += 1;
+                    }
+                    entry.submissions += 1;
+                    entry.best_score = entry.best_score.max(score);
+                    league
+                        .players_by_matrix_user
+                        .insert(matrix_user_id.clone(), player.clone());
+                    league
+                        .entries
+                        .insert(league_entry_key(&match_id, &matrix_user_id), entry.clone());
                 }
-                entry.submissions += 1;
-                entry.best_score = entry.best_score.max(score);
-                league
-                    .players_by_matrix_user
-                    .insert(matrix_user_id.clone(), player.clone());
-                league
-                    .entries
-                    .insert(league_entry_key(&match_id, &matrix_user_id), entry.clone());
                 league
                     .submissions
                     .insert(submission_id.clone(), submission.clone());
@@ -1990,21 +1993,24 @@ pub(super) async fn submit_league_match(
             reviewed_at_epoch: None,
             created_at_epoch: now,
         };
-        player.submissions += 1;
-        player.xp += score.round() as i64;
-        player.reputation += (score / 10.0).round() as i64;
-        player.rating += ((score - 50.0) / 2.0).round() as i64;
-        if score >= 80.0 {
-            player.wins += 1;
+        let released = judgement.payout_status == "eligible";
+        if released {
+            player.submissions += 1;
+            player.xp += score.round() as i64;
+            player.reputation += (score / 10.0).round() as i64;
+            player.rating += ((score - 50.0) / 2.0).round() as i64;
+            if score >= 80.0 {
+                player.wins += 1;
+            }
+            entry.submissions += 1;
+            entry.best_score = entry.best_score.max(score);
+            league
+                .players_by_matrix_user
+                .insert(matrix_user_id.clone(), player.clone());
+            league
+                .entries
+                .insert(league_entry_key(&match_id, &matrix_user_id), entry.clone());
         }
-        entry.submissions += 1;
-        entry.best_score = entry.best_score.max(score);
-        league
-            .players_by_matrix_user
-            .insert(matrix_user_id.clone(), player.clone());
-        league
-            .entries
-            .insert(league_entry_key(&match_id, &matrix_user_id), entry.clone());
         league.submissions.insert(submission_id, submission.clone());
         league.rewards.push(reward.clone());
         let snapshot = league.clone();

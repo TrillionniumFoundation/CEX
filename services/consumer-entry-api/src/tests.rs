@@ -5760,6 +5760,134 @@ async fn world_contract_review_hold_does_not_upgrade_asset_or_player_progress() 
 }
 
 #[tokio::test]
+async fn league_submission_review_hold_does_not_release_progression_or_success_count() {
+    let state = test_state(test_config(), IdentityBindings::default(), HashMap::new());
+    let app = build_router(state.clone());
+    let matrix_user_id = "@league-review-hold:local.dev";
+    let (status, submission) = send_json_request(
+        &app,
+        "POST",
+        "/v1/league/matches/daily-dungeon-001/submit",
+        &[],
+        json!({
+            "matrix_user_id": matrix_user_id,
+            "room_id": "!league-review-hold:local.dev",
+            "body": "copy copy copy final customer deliverable with evidence package, risk controls, next action, self-review, and clear reward settlement proof."
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "league submit failed: {submission}");
+    assert_eq!(submission["submission"]["payout_status"], "review_hold");
+    assert_eq!(submission["reward"]["ledger_status"], "held_review");
+    assert!(submission["submission"]["score"].as_f64().unwrap_or(0.0) >= 60.0);
+    assert_eq!(submission["player"]["submissions"], 0);
+    assert_eq!(submission["player"]["wins"], 0);
+    assert_eq!(submission["player"]["xp"], 0);
+    assert_eq!(submission["player"]["reputation"], 0);
+    assert_eq!(submission["player"]["rating"], 1000);
+    assert_eq!(submission["entry"]["submissions"], 0);
+    assert_eq!(submission["entry"]["best_score"], 0.0);
+    assert_eq!(submission["entry"]["rewards_earned"], 0.0);
+
+    let (progression_status, progression) = send_json_request(
+        &app,
+        "GET",
+        &format!("/v1/league/players/{matrix_user_id}/progression"),
+        &[],
+        json!({}),
+    )
+    .await;
+    assert_eq!(
+        progression_status,
+        StatusCode::OK,
+        "progression failed: {progression}"
+    );
+    assert_eq!(progression["successful_task_count"], 0);
+    assert_eq!(progression["level"], 1);
+
+    let league = state.inner.league_state.lock().await;
+    let player = league
+        .players_by_matrix_user
+        .get(matrix_user_id)
+        .expect("player should exist for audit trail");
+    assert_eq!(player.submissions, 0);
+    assert_eq!(player.wins, 0);
+    assert_eq!(player.xp, 0);
+    assert_eq!(player.reputation, 0);
+    assert_eq!(player.rating, 1000);
+    let entry = league
+        .entries
+        .values()
+        .find(|entry| {
+            entry.match_id == "daily-dungeon-001" && entry.matrix_user_id == matrix_user_id
+        })
+        .expect("entry should exist for audit trail");
+    assert_eq!(entry.submissions, 0);
+    assert_eq!(entry.best_score, 0.0);
+    assert_eq!(entry.rewards_earned, 0.0);
+    assert!(league.inventory_items.is_empty());
+}
+
+#[tokio::test]
+async fn league_web_submit_review_hold_does_not_release_progression() {
+    let state = test_state(test_config(), IdentityBindings::default(), HashMap::new());
+    let app = build_router(state.clone());
+    let matrix_user_id = "@league-web-review-hold:local.dev";
+    let body = "action=submit&matrix_user_id=%40league-web-review-hold%3Alocal.dev&match_id=daily-dungeon-001&body=copy+copy+copy+final+customer+deliverable+with+evidence+package+risk+controls+self-review+next+action+and+settlement+proof";
+    let request = Request::builder()
+        .method("POST")
+        .uri("/league/web/action")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(Body::from(body))
+        .expect("build league web review hold submit request");
+    let response = app
+        .clone()
+        .oneshot(request)
+        .await
+        .expect("league web review hold submit response");
+    assert!(
+        response.status().is_redirection(),
+        "league web submit should redirect back to shell"
+    );
+
+    let league = state.inner.league_state.lock().await;
+    let player = league
+        .players_by_matrix_user
+        .get(matrix_user_id)
+        .expect("player should exist for audit trail");
+    assert_eq!(player.submissions, 0);
+    assert_eq!(player.wins, 0);
+    assert_eq!(player.xp, 0);
+    assert_eq!(player.reputation, 0);
+    assert_eq!(player.rating, 1000);
+    let entry = league
+        .entries
+        .values()
+        .find(|entry| {
+            entry.match_id == "daily-dungeon-001" && entry.matrix_user_id == matrix_user_id
+        })
+        .expect("entry should exist for audit trail");
+    assert_eq!(entry.submissions, 0);
+    assert_eq!(entry.best_score, 0.0);
+    assert_eq!(entry.rewards_earned, 0.0);
+    let submission = league
+        .submissions
+        .values()
+        .find(|submission| submission.matrix_user_id == matrix_user_id)
+        .expect("submission should be recorded for review");
+    assert_eq!(submission.payout_status.as_deref(), Some("review_hold"));
+    assert!(submission.score >= 60.0);
+    let reward = league
+        .rewards
+        .iter()
+        .find(|reward| reward.matrix_user_id == matrix_user_id)
+        .expect("reward should be recorded for review");
+    assert_eq!(reward.ledger_status.as_deref(), Some("held_review"));
+    assert_eq!(reward.review_status.as_deref(), Some("pending_review"));
+    assert!(league.inventory_items.is_empty());
+}
+
+#[tokio::test]
 async fn league_submission_requires_ledger_settlement_before_earned_rewards() {
     let state = test_state(test_config(), IdentityBindings::default(), HashMap::new());
     let app = build_router(state.clone());
