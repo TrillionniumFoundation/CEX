@@ -1111,7 +1111,17 @@ pub(super) fn league_successful_task_count(league: &LeagueState, matrix_user_id:
         .filter(|submission| {
             let payout_status = submission.payout_status.as_deref().unwrap_or("eligible");
             let released = payout_status == "eligible" || payout_status == "approved_release";
-            submission.matrix_user_id == matrix_user_id && submission.score >= 60.0 && released
+            let ledger_released = league.rewards.iter().any(|reward| {
+                reward.reward_id == league_hash_id("reward", &submission.submission_id)
+                    && matches!(
+                        reward.ledger_status.as_deref(),
+                        Some("settled") | Some("duplicate")
+                    )
+            });
+            submission.matrix_user_id == matrix_user_id
+                && submission.score >= 60.0
+                && released
+                && ledger_released
         })
         .count() as i64;
     let contract_completions = league
@@ -1122,6 +1132,10 @@ pub(super) fn league_successful_task_count(league: &LeagueState, matrix_user_id:
             completion.matrix_user_id == matrix_user_id
                 && completion.score >= 60.0
                 && completion.payout_status == "eligible"
+                && matches!(
+                    completion.ledger_status.as_deref(),
+                    Some("settled") | Some("duplicate")
+                )
         })
         .count() as i64;
     let work_deliveries = league

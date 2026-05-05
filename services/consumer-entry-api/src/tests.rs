@@ -5965,7 +5965,13 @@ async fn league_submission_requires_ledger_settlement_before_earned_rewards() {
     );
     assert!(submission["reward"]["amount"].as_f64().unwrap_or(0.0) > 0.0);
     assert_eq!(submission["player"]["earned_credits"], 0.0);
+    assert_eq!(submission["player"]["submissions"], 0);
+    assert_eq!(submission["player"]["xp"], 0);
+    assert_eq!(submission["player"]["reputation"], 0);
+    assert_eq!(submission["player"]["rating"], 1000);
     assert_eq!(submission["entry"]["rewards_earned"], 0.0);
+    assert_eq!(submission["entry"]["submissions"], 0);
+    assert_eq!(submission["entry"]["best_score"], 0.0);
 
     let league = state.inner.league_state.lock().await;
     let player = league
@@ -5973,6 +5979,10 @@ async fn league_submission_requires_ledger_settlement_before_earned_rewards() {
         .get("@alice:local.dev")
         .expect("player should be created by league submission");
     assert_eq!(player.earned_credits, 0.0);
+    assert_eq!(player.submissions, 0);
+    assert_eq!(player.xp, 0);
+    assert_eq!(player.reputation, 0);
+    assert_eq!(player.rating, 1000);
     let entry = league
         .entries
         .values()
@@ -5981,8 +5991,22 @@ async fn league_submission_requires_ledger_settlement_before_earned_rewards() {
         })
         .expect("entry should be created by league submission");
     assert_eq!(entry.rewards_earned, 0.0);
+    assert_eq!(entry.submissions, 0);
+    assert_eq!(entry.best_score, 0.0);
     assert!(league.inventory_items.is_empty());
     drop(league);
+
+    let (status, progression) = send_json_request(
+        &app,
+        "GET",
+        "/v1/league/players/@alice:local.dev/progression",
+        &[],
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "progression failed: {progression}");
+    assert_eq!(progression["successful_task_count"], 0);
+    assert_eq!(progression["level"], 1);
 
     let (status, rewards) = send_json_request(
         &app,
@@ -6023,6 +6047,10 @@ async fn league_web_submit_requires_ledger_settlement_before_earned_rewards() {
         .get("@alice:local.dev")
         .expect("player should be created by league web submit");
     assert_eq!(player.earned_credits, 0.0);
+    assert_eq!(player.submissions, 0);
+    assert_eq!(player.xp, 0);
+    assert_eq!(player.reputation, 0);
+    assert_eq!(player.rating, 1000);
     let entry = league
         .entries
         .values()
@@ -6031,6 +6059,8 @@ async fn league_web_submit_requires_ledger_settlement_before_earned_rewards() {
         })
         .expect("entry should be created by league web submit");
     assert_eq!(entry.rewards_earned, 0.0);
+    assert_eq!(entry.submissions, 0);
+    assert_eq!(entry.best_score, 0.0);
     assert!(league.inventory_items.is_empty());
     let reward = league
         .rewards
@@ -6042,6 +6072,155 @@ async fn league_web_submit_requires_ledger_settlement_before_earned_rewards() {
         Some("skipped_missing_account")
     );
     assert!(reward.amount > 0.0);
+}
+
+#[tokio::test]
+async fn league_review_approval_failed_does_not_release_progression_or_success_count() {
+    let state = test_state(test_config(), IdentityBindings::default(), HashMap::new());
+    let app = build_router(state.clone());
+    let submission_id = "submission-review-approval-failed-no-progression".to_string();
+    let reward_id = league_hash_id("reward", &submission_id);
+    let match_id = "daily-dungeon-001".to_string();
+    let matrix_user_id = "@approval-failed-no-progress:local.dev".to_string();
+    let player_id = "player-approval-failed-no-progress".to_string();
+    let entry_id = "entry-approval-failed-no-progress".to_string();
+    {
+        let mut league = state.inner.league_state.lock().await;
+        league.players_by_matrix_user.insert(
+            matrix_user_id.clone(),
+            LeaguePlayer {
+                player_id: player_id.clone(),
+                matrix_user_id: matrix_user_id.clone(),
+                display_name: "Approval Failed".to_string(),
+                class_tag: "scout".to_string(),
+                rank_tier: "bronze".to_string(),
+                rating: 1000,
+                xp: 0,
+                reputation: 0,
+                battles: 0,
+                submissions: 0,
+                wins: 0,
+                earned_credits: 0.0,
+                created_at_epoch: 1_777_898_000,
+            },
+        );
+        league.entries.insert(
+            format!("{match_id}\u{1f}{matrix_user_id}"),
+            LeagueMatchEntry {
+                entry_id: entry_id.clone(),
+                match_id: match_id.clone(),
+                player_id: player_id.clone(),
+                matrix_user_id: matrix_user_id.clone(),
+                status: "active".to_string(),
+                battles_started: 0,
+                submissions: 0,
+                best_score: 0.0,
+                rewards_earned: 0.0,
+                joined_at_epoch: 1_777_898_000,
+            },
+        );
+        league.submissions.insert(
+            submission_id.clone(),
+            LeagueSubmission {
+                submission_id: submission_id.clone(),
+                match_id: match_id.clone(),
+                entry_id: entry_id.clone(),
+                player_id: player_id.clone(),
+                matrix_user_id: matrix_user_id.clone(),
+                task_id: None,
+                body: "held review submission pending human approval".to_string(),
+                score: 86.0,
+                grade: "A".to_string(),
+                reward_amount: 7.0,
+                judge_status: Some("rubric_hidden_pipeline_v2".to_string()),
+                payout_status: Some("review_hold".to_string()),
+                anti_cheat_flags: vec!["repetition_suspected".to_string()],
+                score_events: Vec::new(),
+                created_at_epoch: 1_777_898_001,
+            },
+        );
+        league.rewards.push(LeagueReward {
+            reward_id: reward_id.clone(),
+            match_id: match_id.clone(),
+            entry_id: entry_id.clone(),
+            player_id: player_id.clone(),
+            matrix_user_id: matrix_user_id.clone(),
+            amount: 7.0,
+            currency_unit: "credit".to_string(),
+            reason: "held_review_retry_without_account".to_string(),
+            ledger_status: Some("held_review".to_string()),
+            ledger_account_id: None,
+            ledger_entry_id: None,
+            ledger_balance_after: None,
+            ledger_error: Some("held for review".to_string()),
+            review_status: Some("pending_review".to_string()),
+            reviewed_by: None,
+            review_note: None,
+            reviewed_at_epoch: None,
+            created_at_epoch: 1_777_898_001,
+        });
+    }
+
+    let (status, approval) = send_json_request(
+        &app,
+        "POST",
+        &format!("/v1/league/reviews/{reward_id}/approve"),
+        &[],
+        json!({"reviewer_id": "ops", "note": "approve but ledger cannot release"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "approval response: {approval}");
+    assert_eq!(approval["review_status"], "approval_failed");
+    assert_ne!(approval["ledger_status"], "settled");
+
+    let (status, progression) = send_json_request(
+        &app,
+        "GET",
+        &format!("/v1/league/players/{matrix_user_id}/progression"),
+        &[],
+        json!({}),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "progression response: {progression}"
+    );
+    assert_eq!(progression["successful_task_count"], 0);
+    assert_eq!(progression["level"], 1);
+
+    let league = state.inner.league_state.lock().await;
+    let stored_submission = league
+        .submissions
+        .get(&submission_id)
+        .expect("submission remains for retry");
+    assert_eq!(
+        stored_submission.payout_status.as_deref(),
+        Some("review_hold")
+    );
+    assert!(stored_submission
+        .score_events
+        .iter()
+        .any(|event| event.dimension == "human_review_release_failed"));
+    let player = league
+        .players_by_matrix_user
+        .get(&matrix_user_id)
+        .expect("player should remain present");
+    assert_eq!(player.submissions, 0);
+    assert_eq!(player.wins, 0);
+    assert_eq!(player.xp, 0);
+    assert_eq!(player.reputation, 0);
+    assert_eq!(player.rating, 1000);
+    assert_eq!(player.earned_credits, 0.0);
+    let entry = league
+        .entries
+        .values()
+        .find(|entry| entry.entry_id == entry_id)
+        .expect("entry should remain present");
+    assert_eq!(entry.submissions, 0);
+    assert_eq!(entry.best_score, 0.0);
+    assert_eq!(entry.rewards_earned, 0.0);
+    assert!(league.inventory_items.is_empty());
 }
 
 #[tokio::test]
@@ -6200,8 +6379,8 @@ async fn league_review_queue_keeps_approval_failed_rewards_visible() {
                 grade: "A".to_string(),
                 reward_amount: 6.0,
                 judge_status: Some("accepted".to_string()),
-                payout_status: Some("approved_release".to_string()),
-                anti_cheat_flags: Vec::new(),
+                payout_status: Some("review_hold".to_string()),
+                anti_cheat_flags: vec!["approval_failed_retry".to_string()],
                 score_events: Vec::new(),
                 created_at_epoch: 1_777_897_930,
             },

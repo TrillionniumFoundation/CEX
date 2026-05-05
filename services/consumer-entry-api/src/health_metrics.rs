@@ -168,15 +168,34 @@ fn first_maturity_matrix_user_id(league: &LeagueState) -> String {
         .unwrap_or_else(|| "@alice:local.dev".to_string())
 }
 
+#[derive(Debug, Clone)]
+struct HealthWorldProjection {
+    matrix_user_id: String,
+    app: Value,
+    route_artifacts: WorldRouteArtifacts,
+}
+
+impl HealthWorldProjection {
+    fn new(league: &LeagueState) -> Self {
+        let matrix_user_id = first_maturity_matrix_user_id(league);
+        Self {
+            app: client_app_json(league, matrix_user_id.as_str()),
+            route_artifacts: build_world_route_artifacts(&league.world),
+            matrix_user_id,
+        }
+    }
+}
+
 fn trillionnium_world_maturity_axes_json(
     league: &LeagueState,
     config: &ConsumerEntryConfig,
     profile_ok: bool,
     league_repository_runtime: &Value,
+    projection: &HealthWorldProjection,
 ) -> Value {
-    let matrix_user_id = first_maturity_matrix_user_id(league);
-    let app = client_app_json(league, matrix_user_id.as_str());
-    let route_artifacts = build_world_route_artifacts(&league.world);
+    let matrix_user_id = projection.matrix_user_id.clone();
+    let app = projection.app.clone();
+    let route_artifacts = projection.route_artifacts.clone();
     let onboarding = app.get("onboarding").cloned().unwrap_or_else(|| json!({}));
     let onboarding_step_count = onboarding
         .get("steps")
@@ -426,9 +445,10 @@ fn trillionnium_world_playability_scorecard_json(
     trillionnium_world_real_user_beta: &Value,
     trillionnium_world_public_commercial_product: &Value,
     league_repository_runtime: &Value,
+    projection: &HealthWorldProjection,
 ) -> Value {
-    let matrix_user_id = first_maturity_matrix_user_id(league);
-    let app = client_app_json(league, matrix_user_id.as_str());
+    let matrix_user_id = projection.matrix_user_id.clone();
+    let app = projection.app.clone();
     let world_home = world_home_json(league);
     let world_home_playability_runtime_green = world_home
         .get("playability_runtime")
@@ -440,7 +460,7 @@ fn trillionnium_world_playability_scorecard_json(
             .and_then(|runtime| runtime.get("readiness_checks"))
             .and_then(Value::as_array)
             .is_some_and(|checks| checks.len() >= 3);
-    let route_artifacts = build_world_route_artifacts(&league.world);
+    let route_artifacts = projection.route_artifacts.clone();
     let onboarding = app.get("onboarding").cloned().unwrap_or_else(|| json!({}));
     let onboarding_steps = onboarding
         .get("steps")
@@ -1202,10 +1222,11 @@ fn trillionnium_world_closed_beta_prototype_json(
     session_auth_governance_valid: bool,
     league_repository_runtime: &Value,
     trillionnium_world_maturity: &Value,
+    projection: &HealthWorldProjection,
 ) -> Value {
-    let matrix_user_id = first_maturity_matrix_user_id(league);
-    let app = client_app_json(league, matrix_user_id.as_str());
-    let route_artifacts = build_world_route_artifacts(&league.world);
+    let matrix_user_id = projection.matrix_user_id.clone();
+    let app = projection.app.clone();
+    let route_artifacts = projection.route_artifacts.clone();
     let onboarding = app.get("onboarding").cloned().unwrap_or_else(|| json!({}));
     let onboarding_step_count = onboarding
         .get("steps")
@@ -1527,10 +1548,11 @@ fn trillionnium_world_real_user_beta_json(
     session_auth_governance_valid: bool,
     league_repository_runtime: &Value,
     trillionnium_world_closed_beta_prototype: &Value,
+    projection: &HealthWorldProjection,
 ) -> Value {
-    let matrix_user_id = first_maturity_matrix_user_id(league);
-    let app = client_app_json(league, matrix_user_id.as_str());
-    let route_artifacts = build_world_route_artifacts(&league.world);
+    let matrix_user_id = projection.matrix_user_id.clone();
+    let app = projection.app.clone();
+    let route_artifacts = projection.route_artifacts.clone();
     let onboarding = app.get("onboarding").cloned().unwrap_or_else(|| json!({}));
     let onboarding_step_count = onboarding
         .get("steps")
@@ -1916,10 +1938,11 @@ fn trillionnium_world_public_commercial_product_json(
     session_auth_governance_valid: bool,
     league_repository_runtime: &Value,
     trillionnium_world_real_user_beta: &Value,
+    projection: &HealthWorldProjection,
 ) -> Value {
-    let matrix_user_id = first_maturity_matrix_user_id(league);
-    let app = client_app_json(league, matrix_user_id.as_str());
-    let route_artifacts = build_world_route_artifacts(&league.world);
+    let matrix_user_id = projection.matrix_user_id.clone();
+    let app = projection.app.clone();
+    let route_artifacts = projection.route_artifacts.clone();
     let world = &league.world;
     let real_user_axes = [
         "product_retention",
@@ -2374,11 +2397,13 @@ pub(super) async fn health(State(state): State<AppState>) -> Json<Value> {
         trillionnium_world_playability_scorecard,
     ) = {
         let league = state.inner.league_state.lock().await;
+        let projection = HealthWorldProjection::new(&league);
         let maturity = trillionnium_world_maturity_axes_json(
             &league,
             state.config(),
             profile_ok,
             &league_repository_runtime,
+            &projection,
         );
         let closed_beta = trillionnium_world_closed_beta_prototype_json(
             &league,
@@ -2388,6 +2413,7 @@ pub(super) async fn health(State(state): State<AppState>) -> Json<Value> {
             session_auth_registry_governance_valid,
             &league_repository_runtime,
             &maturity,
+            &projection,
         );
         let real_user_beta = trillionnium_world_real_user_beta_json(
             &league,
@@ -2397,6 +2423,7 @@ pub(super) async fn health(State(state): State<AppState>) -> Json<Value> {
             session_auth_registry_governance_valid,
             &league_repository_runtime,
             &closed_beta,
+            &projection,
         );
         let public_commercial_product = trillionnium_world_public_commercial_product_json(
             &league,
@@ -2406,6 +2433,7 @@ pub(super) async fn health(State(state): State<AppState>) -> Json<Value> {
             session_auth_registry_governance_valid,
             &league_repository_runtime,
             &real_user_beta,
+            &projection,
         );
         let playability_scorecard = trillionnium_world_playability_scorecard_json(
             &league,
@@ -2414,6 +2442,7 @@ pub(super) async fn health(State(state): State<AppState>) -> Json<Value> {
             &real_user_beta,
             &public_commercial_product,
             &league_repository_runtime,
+            &projection,
         );
         (
             maturity,
@@ -2669,11 +2698,13 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
         trillionnium_world_playability_scorecard,
     ) = {
         let league = state.inner.league_state.lock().await;
+        let projection = HealthWorldProjection::new(&league);
         let maturity = trillionnium_world_maturity_axes_json(
             &league,
             state.config(),
             profile_ok_bool,
             &league_repository_runtime,
+            &projection,
         );
         let closed_beta = trillionnium_world_closed_beta_prototype_json(
             &league,
@@ -2683,6 +2714,7 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
             session_auth_registry_governance_valid,
             &league_repository_runtime,
             &maturity,
+            &projection,
         );
         let real_user_beta = trillionnium_world_real_user_beta_json(
             &league,
@@ -2692,6 +2724,7 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
             session_auth_registry_governance_valid,
             &league_repository_runtime,
             &closed_beta,
+            &projection,
         );
         let public_commercial_product = trillionnium_world_public_commercial_product_json(
             &league,
@@ -2701,6 +2734,7 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
             session_auth_registry_governance_valid,
             &league_repository_runtime,
             &real_user_beta,
+            &projection,
         );
         let playability_scorecard = trillionnium_world_playability_scorecard_json(
             &league,
@@ -2709,6 +2743,7 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
             &real_user_beta,
             &public_commercial_product,
             &league_repository_runtime,
+            &projection,
         );
         (
             maturity,
