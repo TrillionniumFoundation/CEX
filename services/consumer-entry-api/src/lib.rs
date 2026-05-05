@@ -799,6 +799,12 @@ struct LeagueRaidContribution {
     body: String,
     contribution_score: f64,
     progress_delta: f64,
+    #[serde(default)]
+    payout_status: Option<String>,
+    #[serde(default)]
+    anti_cheat_flags: Vec<String>,
+    #[serde(default)]
+    score_events: Vec<LeagueScoreEvent>,
     created_at_epoch: i64,
 }
 

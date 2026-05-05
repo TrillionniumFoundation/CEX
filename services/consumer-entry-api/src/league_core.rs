@@ -408,6 +408,9 @@ pub(super) fn league_raid_progress(league: &LeagueState, match_id: &str) -> Valu
         .raid_contributions
         .iter()
         .filter(|contribution| contribution.match_id == match_id)
+        .filter(|contribution| {
+            contribution.payout_status.as_deref().unwrap_or("eligible") == "eligible"
+        })
         .collect();
     let total_progress: f64 = contributions
         .iter()
@@ -502,7 +505,12 @@ pub(super) async fn record_league_raid_contribution(
             .guild_memberships
             .get(&matrix_user_id)
             .map(|membership| membership.guild_id.clone());
-        let progress_delta = (judgement.score / 8.0).clamp(4.0, 14.0);
+        let released = judgement.payout_status == "eligible";
+        let progress_delta = if released {
+            (judgement.score / 8.0).clamp(4.0, 14.0)
+        } else {
+            0.0
+        };
         let now = Utc::now().timestamp();
         let contribution = LeagueRaidContribution {
             contribution_id: league_hash_id(
@@ -518,18 +526,23 @@ pub(super) async fn record_league_raid_contribution(
             body: body.clone(),
             contribution_score: judgement.score,
             progress_delta,
+            payout_status: Some(judgement.payout_status.clone()),
+            anti_cheat_flags: judgement.anti_cheat_flags.clone(),
+            score_events: judgement.score_events.clone(),
             created_at_epoch: now,
         };
-        player.xp += (judgement.score / 2.0).round() as i64;
-        player.reputation += (judgement.score / 20.0).round() as i64;
-        player.rating += ((judgement.score - 50.0) / 6.0).round() as i64;
-        entry.battles_started += 1;
-        league
-            .players_by_matrix_user
-            .insert(matrix_user_id.clone(), player);
-        league
-            .entries
-            .insert(league_entry_key(match_id, &matrix_user_id), entry);
+        if released {
+            player.xp += (judgement.score / 2.0).round() as i64;
+            player.reputation += (judgement.score / 20.0).round() as i64;
+            player.rating += ((judgement.score - 50.0) / 6.0).round() as i64;
+            entry.battles_started += 1;
+            league
+                .players_by_matrix_user
+                .insert(matrix_user_id.clone(), player);
+            league
+                .entries
+                .insert(league_entry_key(match_id, &matrix_user_id), entry);
+        }
         league.raid_contributions.push(contribution.clone());
         let progress = league_raid_progress(&league, match_id);
         (league.clone(), contribution, progress)

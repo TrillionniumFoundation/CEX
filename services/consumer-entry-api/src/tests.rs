@@ -5888,6 +5888,62 @@ async fn league_web_submit_review_hold_does_not_release_progression() {
 }
 
 #[tokio::test]
+async fn league_raid_review_hold_does_not_release_progression_or_progress() {
+    let state = test_state(test_config(), IdentityBindings::default(), HashMap::new());
+    let app = build_router(state.clone());
+    let matrix_user_id = "@league-raid-review-hold:local.dev";
+    let (status, response) = send_json_request(
+        &app,
+        "POST",
+        "/v1/league/raids/guild-raid-001/contribute",
+        &[],
+        json!({
+            "matrix_user_id": matrix_user_id,
+            "room_id": "!league-raid-review-hold:local.dev",
+            "role": "scout",
+            "body": "copy copy copy final customer deliverable with evidence package, risk gate, next action, self-review, scout team coordination, and clear raid proof."
+        }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "raid contribution failed: {response}"
+    );
+    assert_eq!(response["contribution"]["payout_status"], "review_hold");
+    assert!(response["contribution"]["anti_cheat_flags"]
+        .as_array()
+        .is_some_and(|flags| !flags.is_empty()));
+    assert_eq!(response["contribution"]["progress_delta"], 0.0);
+    assert_eq!(response["progress"]["progress_percent"], 0.0);
+    assert_eq!(response["progress"]["contribution_count"], 0);
+    assert_eq!(response["progress"]["average_score"], 0.0);
+
+    let league = state.inner.league_state.lock().await;
+    let contribution = league
+        .raid_contributions
+        .iter()
+        .find(|contribution| contribution.matrix_user_id == matrix_user_id)
+        .expect("held contribution should remain as an audit record");
+    assert_eq!(contribution.payout_status.as_deref(), Some("review_hold"));
+    assert_eq!(contribution.progress_delta, 0.0);
+    assert!(!contribution.anti_cheat_flags.is_empty());
+    let player = league
+        .players_by_matrix_user
+        .get(matrix_user_id)
+        .expect("player shell should exist for audit trail");
+    assert_eq!(player.xp, 0);
+    assert_eq!(player.reputation, 0);
+    assert_eq!(player.rating, 1000);
+    let entry = league
+        .entries
+        .values()
+        .find(|entry| entry.match_id == "guild-raid-001" && entry.matrix_user_id == matrix_user_id)
+        .expect("entry shell should exist for audit trail");
+    assert_eq!(entry.battles_started, 0);
+}
+
+#[tokio::test]
 async fn league_submission_requires_ledger_settlement_before_earned_rewards() {
     let state = test_state(test_config(), IdentityBindings::default(), HashMap::new());
     let app = build_router(state.clone());
