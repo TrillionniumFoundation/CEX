@@ -822,8 +822,28 @@ pub(super) async fn get_world_web_shell(
     } else {
         work_order_cards
     };
-    let latest_work_order_id = world_indexes
-        .latest_work_order_index_for_actor(current_matrix_user_id)
+    let latest_deliverable_work_order_id = world_indexes
+        .resolve_deliverable_work_order_index("latest", current_matrix_user_id)
+        .and_then(|index| league.world.world_work_orders.get(index))
+        .map(|work| work.work_order_id.clone())
+        .unwrap_or_else(|| "latest".to_string());
+    let latest_acceptable_work_order_id = world_indexes
+        .resolve_acceptable_work_order_index("latest", current_matrix_user_id)
+        .and_then(|index| league.world.world_work_orders.get(index))
+        .map(|work| work.work_order_id.clone())
+        .unwrap_or_else(|| "latest".to_string());
+    let latest_rejectable_work_order_id = world_indexes
+        .resolve_rejectable_work_order_index("latest", current_matrix_user_id)
+        .and_then(|index| league.world.world_work_orders.get(index))
+        .map(|work| work.work_order_id.clone())
+        .unwrap_or_else(|| "latest".to_string());
+    let latest_reopenable_work_order_id = world_indexes
+        .resolve_reopenable_work_order_index("latest", current_matrix_user_id)
+        .and_then(|index| league.world.world_work_orders.get(index))
+        .map(|work| work.work_order_id.clone())
+        .unwrap_or_else(|| "latest".to_string());
+    let latest_cancellable_work_order_id = world_indexes
+        .resolve_cancellable_work_order_index("latest", current_matrix_user_id)
         .and_then(|index| league.world.world_work_orders.get(index))
         .map(|work| work.work_order_id.clone())
         .unwrap_or_else(|| "latest".to_string());
@@ -1573,7 +1593,7 @@ pub(super) async fn get_world_web_shell(
       <form id="world-work-deliver-form" method="post" action="/world/web/work-deliver" style="margin-top:16px">
         {csrf_input}
         <input type="hidden" name="matrix_user_id" value="{current_matrix_user_id}" />
-        <input id="world-work-deliver-id" name="work_order_id" value="{latest_work_order_id}" placeholder="自动填充或 latest" />
+        <input id="world-work-deliver-id" name="work_order_id" value="{latest_deliverable_work_order_id}" placeholder="自动填充或 latest" />
         <textarea id="world-work-deliver-body" name="body" data-i18n-value-en="Result package: deliverable, evidence package, rating checklist, risk review, next action, and self-check notes." data-i18n-value-zh="成果提交包：成果、证据包、评级清单、风险复盘、下一步行动和自检记录。">Result package: deliverable, evidence package, rating checklist, risk review, next action, and self-check notes.</textarea>
         <button type="submit" data-i18n-en="Submit Result" data-i18n-zh="提交成果">Submit Result</button>
       </form>
@@ -1581,7 +1601,7 @@ pub(super) async fn get_world_web_shell(
       <form id="world-work-accept-form" method="post" action="/world/web/work-accept" style="margin-top:16px">
         {csrf_input}
         <input type="hidden" name="matrix_user_id" value="{current_matrix_user_id}" />
-        <input id="world-work-accept-id" name="work_order_id" value="{latest_work_order_id}" placeholder="自动填充或 latest" />
+        <input id="world-work-accept-id" name="work_order_id" value="{latest_acceptable_work_order_id}" placeholder="自动填充或 latest" />
         <textarea id="world-work-accept-body" name="body" data-i18n-value-en="Rating passed: confirm customer deliverable, evidence package, quality note, risk controls, next side quest, reputation reward, and self-review." data-i18n-value-zh="评级通过：确认客户交付方案、证据包、质量备注、风险控制、下一条支线、声望奖励和自检复盘。">Rating passed: confirm customer deliverable, evidence package, quality note, risk controls, next side quest, reputation reward, and self-review.</textarea>
         <button type="submit" data-i18n-en="Pass Rating" data-i18n-zh="评级通过">Pass Rating</button>
       </form>
@@ -1589,7 +1609,7 @@ pub(super) async fn get_world_web_shell(
       <form id="world-work-reject-form" method="post" action="/world/web/work-reject" style="margin-top:16px">
         {csrf_input}
         <input type="hidden" name="matrix_user_id" value="{current_matrix_user_id}" />
-        <input id="world-work-reject-id" name="work_order_id" value="{latest_work_order_id}" placeholder="自动填充或 latest" />
+        <input id="world-work-reject-id" name="work_order_id" value="{latest_rejectable_work_order_id}" placeholder="自动填充或 latest" />
         <textarea id="world-work-reject-body" name="body" data-i18n-value-en="Revision required: record customer deliverable gap, evidence package, refund risk controls, revision requirement, next action, and self-review." data-i18n-value-zh="需要返工：记录客户交付缺口、证据包、退款风险控制、返工要求、下一步行动和自检复盘。">Revision required: record customer deliverable gap, evidence package, refund risk controls, revision requirement, next action, and self-review.</textarea>
         <button type="submit" data-i18n-en="Request Revision" data-i18n-zh="要求返工">Request Revision</button>
       </form>
@@ -1597,7 +1617,7 @@ pub(super) async fn get_world_web_shell(
       <form id="world-work-reopen-form" method="post" action="/world/web/work-reopen" style="margin-top:16px">
         {csrf_input}
         <input type="hidden" name="matrix_user_id" value="{current_matrix_user_id}" />
-        <input id="world-work-reopen-id" name="work_order_id" value="{latest_work_order_id}" placeholder="自动填充或 latest" />
+        <input id="world-work-reopen-id" name="work_order_id" value="{latest_reopenable_work_order_id}" placeholder="自动填充或 latest" />
         <textarea id="world-work-reopen-body" name="body" data-i18n-value-en="Reopen commission: escrow reward again, list customer deliverable revisions, evidence gaps, risk controls, rating standards, next resubmission action, and self-review." data-i18n-value-zh="重开委托：重新托管奖励，列出客户交付返工、证据缺口、风险控制、评级标准、下一步再次提交行动和自检复盘。">Reopen commission: escrow reward again, list customer deliverable revisions, evidence gaps, risk controls, rating standards, next resubmission action, and self-review.</textarea>
         <button type="submit" data-i18n-en="Reopen Commission" data-i18n-zh="重开委托">Reopen Commission</button>
       </form>
@@ -1605,7 +1625,7 @@ pub(super) async fn get_world_web_shell(
       <form id="world-work-cancel-form" method="post" action="/world/web/work-cancel" style="margin-top:16px">
         {csrf_input}
         <input type="hidden" name="matrix_user_id" value="{current_matrix_user_id}" />
-        <input id="world-work-cancel-id" name="work_order_id" value="{latest_work_order_id}" placeholder="自动填充或 latest" />
+        <input id="world-work-cancel-id" name="work_order_id" value="{latest_cancellable_work_order_id}" placeholder="自动填充或 latest" />
         <textarea id="world-work-cancel-body" name="body" data-i18n-value-en="Cancel commission: record customer deliverable status, evidence package, refund risk controls, next action, and self-review before closing the route." data-i18n-value-zh="放弃委托：记录客户交付状态、证据包、退款风险控制、下一步行动和自检复盘，再关闭路线。">Cancel commission: record customer deliverable status, evidence package, refund risk controls, next action, and self-review before closing the route.</textarea>
         <button type="submit" data-i18n-en="Cancel Commission" data-i18n-zh="放弃委托">Cancel Commission</button>
       </form>
@@ -2203,7 +2223,11 @@ pub(super) async fn get_world_web_shell(
         company_cards = company_cards,
         latest_company_id = escape_html_text(&latest_company_id),
         latest_listing_id = escape_html_text(&latest_listing_id),
-        latest_work_order_id = escape_html_text(&latest_work_order_id),
+        latest_deliverable_work_order_id = escape_html_text(&latest_deliverable_work_order_id),
+        latest_acceptable_work_order_id = escape_html_text(&latest_acceptable_work_order_id),
+        latest_rejectable_work_order_id = escape_html_text(&latest_rejectable_work_order_id),
+        latest_reopenable_work_order_id = escape_html_text(&latest_reopenable_work_order_id),
+        latest_cancellable_work_order_id = escape_html_text(&latest_cancellable_work_order_id),
         shop_cards = shop_cards,
         listing_cards = listing_cards,
         purchase_cards = purchase_cards,

@@ -1557,7 +1557,8 @@ pub(super) async fn buy_world_listing_inner(
         };
         indexes.replace_purchase_by_id(&mut league.world, &purchase);
         indexes.replace_work_order_by_id(&mut league.world, &work_order);
-        if released {
+        let self_dealing_purchase = purchase.buyer_matrix_user_id == purchase.seller_matrix_user_id;
+        if released && !self_dealing_purchase {
             if let Some(index) = indexes.shop_index(&purchase.shop_id) {
                 league.world.world_shops[index].gross_merchandise_score += purchase.price_credits;
             }
@@ -1664,6 +1665,29 @@ pub(super) async fn buy_world_listing_inner(
                 .shop_index(&purchase.shop_id)
                 .map(|index| league.world.world_shops[index].clone());
             economy_event = Some(purchase_event);
+        } else if released {
+            let market_tax_event = WorldEconomyEvent {
+                economy_event_id: league_hash_id(
+                    "world-market-tax",
+                    &format!(
+                        "{}:{}:{}",
+                        purchase.buyer_matrix_user_id,
+                        purchase.purchase_id,
+                        purchase.created_at_epoch
+                    ),
+                ),
+                matrix_user_id: purchase.buyer_matrix_user_id.clone(),
+                event_kind: "market_tax_sink".to_string(),
+                subject_id: purchase.purchase_id.clone(),
+                credits_delta: -snapshot
+                    .6
+                    .get("market_tax_credits")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(1),
+                reputation_delta: 0,
+                created_at_epoch: purchase.created_at_epoch,
+            };
+            league.world.world_economy_events.push(market_tax_event);
         }
         (
             league.clone(),
@@ -1889,7 +1913,9 @@ pub(super) async fn deliver_world_work_order_inner(
         } else {
             "delivery_review_hold".to_string()
         };
-        let reputation_delta = if delivery_status == "delivered" {
+        let self_dealing_work =
+            work_order_seed.buyer_matrix_user_id == work_order_seed.seller_matrix_user_id;
+        let reputation_delta = if delivery_status == "delivered" && !self_dealing_work {
             (judgement.score / 10.0).round() as i64
         } else {
             0
@@ -2194,7 +2220,8 @@ pub(super) async fn accept_world_work_order_inner(
         indexes.replace_purchase_by_id(&mut league.world, &purchase);
         indexes.replace_work_order_by_id(&mut league.world, &work_order);
         indexes.replace_acceptance_by_id(&mut league.world, &acceptance);
-        if buyer_consumed {
+        let self_dealing_work = work_order.buyer_matrix_user_id == work_order.seller_matrix_user_id;
+        if buyer_consumed && !self_dealing_work {
             if let Some(company_index) = indexes
                 .company_index_by_id
                 .get(&work_order.company_id)

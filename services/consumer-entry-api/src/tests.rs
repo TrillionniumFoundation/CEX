@@ -2357,6 +2357,112 @@ fn latest_contract_prefers_completable_contract_over_newer_terminal_contract() {
     );
 }
 
+#[tokio::test]
+async fn world_web_work_action_defaults_use_actionable_work_order_ids() {
+    let state = test_state(test_config(), IdentityBindings::default(), HashMap::new());
+    {
+        let mut league = state.inner.league_state.lock().await;
+        let mut push_work = |work_order_id: &str,
+                             buyer_matrix_user_id: &str,
+                             seller_matrix_user_id: &str,
+                             status: &str,
+                             created_at_epoch: i64| {
+            league.world.world_work_orders.push(WorldWorkOrder {
+                work_order_id: work_order_id.to_string(),
+                purchase_id: format!("purchase-{work_order_id}"),
+                listing_id: format!("listing-{work_order_id}"),
+                buyer_matrix_user_id: buyer_matrix_user_id.to_string(),
+                seller_matrix_user_id: seller_matrix_user_id.to_string(),
+                company_id: format!("company-{work_order_id}"),
+                status: status.to_string(),
+                brief: format!("{status} work order for web action default routing"),
+                value_score: 80,
+                created_at_epoch,
+            });
+        };
+        push_work(
+            "work-deliverable-web-default",
+            "@buyer-deliverable-web-default:local.dev",
+            "@alice:local.dev",
+            "open",
+            1_777_903_001,
+        );
+        push_work(
+            "work-acceptable-web-default",
+            "@alice:local.dev",
+            "@seller-acceptable-web-default:local.dev",
+            "delivered",
+            1_777_903_002,
+        );
+        push_work(
+            "work-rejectable-web-default",
+            "@alice:local.dev",
+            "@seller-rejectable-web-default:local.dev",
+            "rejected_chargeback_failed",
+            1_777_903_003,
+        );
+        push_work(
+            "work-reopenable-web-default",
+            "@alice:local.dev",
+            "@seller-reopenable-web-default:local.dev",
+            "rejected_refunded",
+            1_777_903_004,
+        );
+        push_work(
+            "work-cancellable-web-default",
+            "@alice:local.dev",
+            "@seller-cancellable-web-default:local.dev",
+            "cancelled_refund_failed",
+            1_777_903_005,
+        );
+        push_work(
+            "work-terminal-web-default",
+            "@alice:local.dev",
+            "@seller-terminal-web-default:local.dev",
+            "completed",
+            1_777_903_006,
+        );
+    }
+
+    let world_html = get_world_web_shell(
+        axum::extract::State(state.clone()),
+        HeaderMap::new(),
+        axum::extract::Query(HashMap::new()),
+    )
+    .await
+    .0;
+
+    assert!(world_html.contains(
+        "id=\"world-work-deliver-id\" name=\"work_order_id\" value=\"work-deliverable-web-default\""
+    ));
+    assert!(world_html.contains(
+        "id=\"world-work-accept-id\" name=\"work_order_id\" value=\"work-acceptable-web-default\""
+    ));
+    assert!(world_html.contains(
+        "id=\"world-work-reject-id\" name=\"work_order_id\" value=\"work-rejectable-web-default\""
+    ));
+    assert!(world_html.contains(
+        "id=\"world-work-reopen-id\" name=\"work_order_id\" value=\"work-reopenable-web-default\""
+    ));
+    assert!(world_html.contains(
+        "id=\"world-work-cancel-id\" name=\"work_order_id\" value=\"work-cancellable-web-default\""
+    ));
+    for form_id in [
+        "world-work-deliver-id",
+        "world-work-accept-id",
+        "world-work-reject-id",
+        "world-work-reopen-id",
+        "world-work-cancel-id",
+    ] {
+        assert!(
+            !world_html.contains(&format!(
+                "id=\"{form_id}\" name=\"work_order_id\" value=\"work-terminal-web-default\""
+            )),
+            "{form_id} should not default to a terminal work order"
+        );
+    }
+}
+
 #[test]
 fn world_route_recovery_opportunities_prioritize_settlement_retry_over_unavailable_next_steps() {
     let mut league = default_league_state();
@@ -4589,6 +4695,176 @@ async fn world_commerce_e2e_uses_real_configured_ledger_for_consume_refund_reope
         event.event_kind == "seller_chargeback"
             && event.credits_delta == -(seller_net_two_credits as i64)
     }));
+}
+
+#[tokio::test]
+async fn world_self_dealing_purchase_keeps_solo_loop_but_blocks_progression_farming() {
+    let (ledger_base_url, ledger_admin_token) = start_real_ledger_service_for_world_e2e().await;
+    let http = Client::new();
+    let account_id =
+        create_real_ledger_account(&http, &ledger_base_url, &ledger_admin_token, 1_000.0).await;
+
+    let matrix_user_id = "@world-self-deal:local.dev";
+    let room_id = "!world-self-deal:local.dev";
+    let company_id = "company-self-deal";
+    let shop_id = "shop-self-deal";
+    let listing_id = "listing-self-deal";
+    let mut bindings = IdentityBindings::default();
+    bindings.matrix_users.insert(
+        matrix_user_id.to_string(),
+        IdentityBindingEntry {
+            product_user_id: None,
+            org_id: Some("world-self-deal-org".to_string()),
+            account_id: Some(account_id),
+        },
+    );
+    let mut config = test_config();
+    config.runtime_profile = RuntimeProfile::Production;
+    config.ledger_base_url = ledger_base_url;
+    config.ledger_admin_token = Some(ledger_admin_token);
+    let state = test_state(config, bindings, HashMap::new());
+    let app = build_router(state.clone());
+    {
+        let mut league = state.inner.league_state.lock().await;
+        league.world.world_companies.push(WorldCompany {
+            company_id: company_id.to_string(),
+            owner_matrix_user_id: matrix_user_id.to_string(),
+            asset_id: "asset-self-deal".to_string(),
+            location_id: "starter-studio".to_string(),
+            name: "Self Deal Guard Studio".to_string(),
+            company_kind: "studio".to_string(),
+            status: "operating".to_string(),
+            revenue_score: 120,
+            reputation_score: 12,
+            level: 2,
+            created_at_epoch: 1_777_903_020,
+        });
+        league.world.world_shops.push(WorldShop {
+            shop_id: shop_id.to_string(),
+            company_id: company_id.to_string(),
+            owner_matrix_user_id: matrix_user_id.to_string(),
+            location_id: "starter-studio".to_string(),
+            name: "Self Deal Guard Storefront".to_string(),
+            shop_kind: "studio".to_string(),
+            status: "operating".to_string(),
+            listing_count: 1,
+            gross_merchandise_score: 120,
+            created_at_epoch: 1_777_903_020,
+        });
+        league.world.world_listings.push(WorldListing {
+            listing_id: listing_id.to_string(),
+            shop_id: shop_id.to_string(),
+            company_id: company_id.to_string(),
+            owner_matrix_user_id: matrix_user_id.to_string(),
+            asset_id: "asset-self-deal".to_string(),
+            title: "Self deal guard offer".to_string(),
+            listing_kind: "service_offer".to_string(),
+            status: "listed".to_string(),
+            price_credits: 80,
+            quality_score: 80,
+            created_at_epoch: 1_777_903_020,
+        });
+    }
+
+    let (status, buy) = send_json_request(
+        &app,
+        "POST",
+        &format!("/v1/world/listings/{listing_id}/buy"),
+        &[],
+        json!({
+            "matrix_user_id": matrix_user_id,
+            "room_id": room_id,
+            "body": "Solo rehearsal purchase: open a work loop with deliverable, evidence package, acceptance standard, risk controls, next action, and self-review without farming progression."
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "self buy response: {buy}");
+    assert_eq!(buy["buyer_ledger_status"], "reserved");
+    assert_eq!(buy["ledger_status"], "settled");
+    assert_eq!(buy["purchase"]["status"], "reserved");
+    assert_eq!(buy["work_order"]["status"], "open");
+    assert!(buy["economy_event"].is_null());
+    assert!(buy["seller_standing"].is_null());
+    assert!(buy["buyer_standing"].is_null());
+    let work_order_id = buy["work_order"]["work_order_id"]
+        .as_str()
+        .expect("work order id")
+        .to_string();
+
+    let (status, delivery) = send_json_request(
+        &app,
+        "POST",
+        &format!("/v1/world/work-orders/{work_order_id}/deliver"),
+        &[],
+        json!({
+            "matrix_user_id": matrix_user_id,
+            "room_id": room_id,
+            "body": "Solo rehearsal delivery: final deliverable, evidence package, acceptance checklist, risk review, next action, and self-review."
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "self delivery response: {delivery}");
+    assert_eq!(delivery["work_order"]["status"], "delivered");
+    assert!(delivery["economy_event"].is_null());
+    assert!(delivery["standing"].is_null());
+
+    let (status, acceptance) = send_json_request(
+        &app,
+        "POST",
+        &format!("/v1/world/work-orders/{work_order_id}/accept"),
+        &[],
+        json!({
+            "matrix_user_id": matrix_user_id,
+            "room_id": room_id,
+            "body": "Solo rehearsal acceptance: evidence reviewed, quality accepted, risk closed, next collaboration noted, and self-review complete."
+        }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "self acceptance response: {acceptance}"
+    );
+    assert_eq!(acceptance["work_order"]["status"], "completed");
+    assert_eq!(acceptance["buyer_consume_status"], "consumed");
+    assert!(acceptance["economy_event"].is_null());
+    assert!(acceptance["standing"].is_null());
+
+    let league = state.inner.league_state.lock().await;
+    let company = league
+        .world
+        .world_companies
+        .iter()
+        .find(|company| company.company_id == company_id)
+        .expect("company should remain present");
+    assert_eq!(company.revenue_score, 120);
+    assert_eq!(company.reputation_score, 12);
+    assert_eq!(company.level, 2);
+    let shop = league
+        .world
+        .world_shops
+        .iter()
+        .find(|shop| shop.shop_id == shop_id)
+        .expect("shop should remain present");
+    assert_eq!(shop.gross_merchandise_score, 120);
+    assert!(!league.players_by_matrix_user.contains_key(matrix_user_id));
+    assert!(!league.world.world_economy_events.iter().any(|event| {
+        event.subject_id == work_order_id
+            && matches!(
+                event.event_kind.as_str(),
+                "listing_purchase" | "work_delivered" | "work_accepted"
+            )
+    }));
+    assert!(league.world.world_economy_events.iter().any(|event| {
+        event.subject_id == buy["purchase"]["purchase_id"].as_str().unwrap()
+            && event.event_kind == "market_tax_sink"
+            && event.credits_delta < 0
+    }));
+    assert!(!league
+        .world
+        .world_faction_standings
+        .iter()
+        .any(|standing| standing.matrix_user_id == matrix_user_id));
 }
 
 #[tokio::test]

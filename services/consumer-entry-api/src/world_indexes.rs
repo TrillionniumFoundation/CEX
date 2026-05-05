@@ -46,7 +46,6 @@ pub(super) struct WorldIndexes {
     pub(super) purchase_index_by_id: HashMap<String, usize>,
     pub(super) work_order_index_by_id: HashMap<String, usize>,
     pub(super) work_order_location_by_id: HashMap<String, String>,
-    pub(super) latest_work_order_index_by_actor: HashMap<String, usize>,
     pub(super) event_indices_by_location: HashMap<String, Vec<usize>>,
     pub(super) latest_deliverable_work_order_by_seller: HashMap<String, usize>,
     pub(super) latest_acceptable_work_order_by_buyer: HashMap<String, usize>,
@@ -342,12 +341,6 @@ pub(super) fn build_world_indexes(world: &WorldState) -> WorldIndexes {
                 .cloned()
                 .unwrap_or_default(),
         );
-        indexes
-            .latest_work_order_index_by_actor
-            .insert(work_order.buyer_matrix_user_id.clone(), index);
-        indexes
-            .latest_work_order_index_by_actor
-            .insert(work_order.seller_matrix_user_id.clone(), index);
         if matches!(work_order.status.as_str(), "open" | "delivery_review_hold") {
             indexes
                 .latest_deliverable_work_order_by_seller
@@ -587,12 +580,6 @@ impl WorldIndexes {
 
     pub(super) fn latest_listed_listing_index(&self) -> Option<usize> {
         self.latest_listed_listing_index
-    }
-
-    pub(super) fn latest_work_order_index_for_actor(&self, matrix_user_id: &str) -> Option<usize> {
-        self.latest_work_order_index_by_actor
-            .get(matrix_user_id)
-            .copied()
     }
 
     pub(super) fn resolve_work_order_index(
