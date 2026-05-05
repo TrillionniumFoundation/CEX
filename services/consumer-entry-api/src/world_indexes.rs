@@ -457,9 +457,31 @@ impl WorldIndexes {
         }
     }
 
-    pub(super) fn resolve_listing_index(&self, listing_id: &str) -> Option<usize> {
+    pub(super) fn latest_buyable_listing_index_for_buyer(
+        &self,
+        world: &WorldState,
+        matrix_user_id: &str,
+    ) -> Option<usize> {
+        world
+            .world_listings
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(_, listing)| {
+                listing.status == "listed" && listing.owner_matrix_user_id != matrix_user_id
+            })
+            .map(|(index, _)| index)
+            .or(self.latest_listed_listing_index)
+    }
+
+    pub(super) fn resolve_buyable_listing_index(
+        &self,
+        world: &WorldState,
+        listing_id: &str,
+        matrix_user_id: &str,
+    ) -> Option<usize> {
         if listing_id == "latest" {
-            self.latest_listed_listing_index
+            self.latest_buyable_listing_index_for_buyer(world, matrix_user_id)
         } else {
             self.listing_index_by_id.get(listing_id).copied()
         }
@@ -576,10 +598,6 @@ impl WorldIndexes {
             .get(matrix_user_id)
             .or_else(|| self.latest_company_index_by_owner.get(matrix_user_id))
             .copied()
-    }
-
-    pub(super) fn latest_listed_listing_index(&self) -> Option<usize> {
-        self.latest_listed_listing_index
     }
 
     pub(super) fn resolve_work_order_index(

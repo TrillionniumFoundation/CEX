@@ -754,7 +754,7 @@ pub(super) async fn get_world_web_shell(
         listing_cards
     };
     let latest_listing_id = world_indexes
-        .latest_listed_listing_index()
+        .latest_buyable_listing_index_for_buyer(&league.world, current_matrix_user_id)
         .and_then(|index| league.world.world_listings.get(index))
         .map(|listing| listing.listing_id.clone())
         .unwrap_or_else(|| "latest".to_string());

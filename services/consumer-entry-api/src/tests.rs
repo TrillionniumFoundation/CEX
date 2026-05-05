@@ -2463,6 +2463,81 @@ async fn world_web_work_action_defaults_use_actionable_work_order_ids() {
     }
 }
 
+#[tokio::test]
+async fn world_buy_latest_prefers_other_players_listed_bounty_before_self_listing() {
+    let state = test_state(test_config(), IdentityBindings::default(), HashMap::new());
+    let app = build_router(state.clone());
+    {
+        let mut league = state.inner.league_state.lock().await;
+        league.world.world_listings.push(WorldListing {
+            listing_id: "listing-other-buyable-default".to_string(),
+            shop_id: "shop-other-buyable-default".to_string(),
+            company_id: "company-other-buyable-default".to_string(),
+            owner_matrix_user_id: "@seller-buyable-default:local.dev".to_string(),
+            asset_id: "asset-other-buyable-default".to_string(),
+            title: "Other player bounty should be accepted first".to_string(),
+            listing_kind: "service_offer".to_string(),
+            status: "listed".to_string(),
+            price_credits: 60,
+            quality_score: 70,
+            created_at_epoch: 1_777_903_010,
+        });
+        league.world.world_listings.push(WorldListing {
+            listing_id: "listing-self-newer-default".to_string(),
+            shop_id: "shop-self-newer-default".to_string(),
+            company_id: "company-self-newer-default".to_string(),
+            owner_matrix_user_id: "@alice:local.dev".to_string(),
+            asset_id: "asset-self-newer-default".to_string(),
+            title: "Newer self bounty should not hijack accept latest".to_string(),
+            listing_kind: "service_offer".to_string(),
+            status: "listed".to_string(),
+            price_credits: 80,
+            quality_score: 85,
+            created_at_epoch: 1_777_903_020,
+        });
+    }
+
+    let world_html = get_world_web_shell(
+        axum::extract::State(state.clone()),
+        HeaderMap::new(),
+        axum::extract::Query(HashMap::new()),
+    )
+    .await
+    .0;
+    assert!(world_html.contains(
+        "id=\"world-buy-listing-id\" name=\"listing_id\" value=\"listing-other-buyable-default\""
+    ));
+    assert!(!world_html.contains(
+        "id=\"world-buy-listing-id\" name=\"listing_id\" value=\"listing-self-newer-default\""
+    ));
+
+    let (status, buy) = send_json_request(
+        &app,
+        "POST",
+        "/v1/world/listings/latest/buy",
+        &[],
+        json!({
+            "matrix_user_id": "@alice:local.dev",
+            "room_id": "!buyable-default:local.dev",
+            "body": "Accept latest should pick another player's bounty when available: deliverable, evidence, rating standard, risk controls, next action, and self-review."
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "buy latest response: {buy}");
+    assert_eq!(
+        buy["listing"]["listing_id"],
+        "listing-other-buyable-default"
+    );
+    assert_eq!(
+        buy["work_order"]["seller_matrix_user_id"],
+        "@seller-buyable-default:local.dev"
+    );
+    assert_eq!(
+        buy["work_order"]["buyer_matrix_user_id"],
+        "@alice:local.dev"
+    );
+}
+
 #[test]
 fn world_route_recovery_opportunities_prioritize_settlement_retry_over_unavailable_next_steps() {
     let mut league = default_league_state();

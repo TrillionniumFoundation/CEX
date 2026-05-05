@@ -1397,7 +1397,11 @@ pub(super) async fn buy_world_listing_inner(
         let now = Utc::now().timestamp();
         let mut league = state.inner.league_state.lock().await;
         let indexes = build_world_indexes(&league.world);
-        let Some(listing_index) = indexes.resolve_listing_index(&listing_id) else {
+        let Some(listing_index) = indexes.resolve_buyable_listing_index(
+            &league.world,
+            &listing_id,
+            &buyer_matrix_user_id,
+        ) else {
             return (
                 StatusCode::NOT_FOUND,
                 Json(json!({ "error": "world listing not found", "listing_id": listing_id })),
