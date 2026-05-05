@@ -2480,6 +2480,13 @@ pub(super) async fn reject_world_work_order_inner(
         let mut rejection = snapshot.3.clone();
         let mut economy_event = None;
         let mut standing = None;
+        let seller_charged_back = buyer_refunded
+            && matches!(
+                seller_chargeback.status.as_str(),
+                "seller_chargeback_consumed" | "duplicate"
+            );
+        let seller_chargeback_cleared = buyer_refunded
+            && (seller_charged_back || seller_chargeback.status.starts_with("skipped"));
         purchase.buyer_consume_status = Some(if buyer_refunded {
             "refunded".to_string()
         } else {
@@ -2489,46 +2496,17 @@ pub(super) async fn reject_world_work_order_inner(
         purchase.buyer_consume_balance_after = buyer_refund.balance_after;
         purchase.buyer_consume_error = buyer_refund.error.clone();
         purchase.status = if buyer_refunded {
-            "rejected_refunded".to_string()
+            if seller_chargeback_cleared {
+                "rejected_refunded".to_string()
+            } else {
+                "rejected_chargeback_failed".to_string()
+            }
         } else if buyer_refund.status.starts_with("skipped") {
             "rejected_refund_hold".to_string()
         } else {
             "rejected_refund_failed".to_string()
         };
         if buyer_refunded {
-            let rejected_event = WorldEconomyEvent {
-                economy_event_id: league_hash_id(
-                    "world-econ",
-                    &format!(
-                        "{}:{}:{}",
-                        rejection.matrix_user_id,
-                        rejection.rejection_id,
-                        rejection.created_at_epoch
-                    ),
-                ),
-                matrix_user_id: rejection.matrix_user_id.clone(),
-                event_kind: "work_rejected".to_string(),
-                subject_id: work_order.work_order_id.clone(),
-                credits_delta: -purchase.price_credits,
-                reputation_delta: 0,
-                created_at_epoch: rejection.created_at_epoch,
-            };
-            standing = Some(upsert_world_faction_standing(
-                &mut league,
-                &rejection.matrix_user_id,
-                "faction-market-guild",
-                1,
-                rejection.created_at_epoch,
-            ));
-            league
-                .world
-                .world_economy_events
-                .push(rejected_event.clone());
-            economy_event = Some(rejected_event);
-            let seller_charged_back = matches!(
-                seller_chargeback.status.as_str(),
-                "seller_chargeback_consumed" | "duplicate"
-            );
             purchase.ledger_status = Some(if seller_charged_back {
                 "seller_chargeback_consumed".to_string()
             } else if seller_chargeback.status.starts_with("skipped") {
@@ -2544,6 +2522,37 @@ pub(super) async fn reject_world_work_order_inner(
                 .balance_after
                 .or(purchase.ledger_balance_after);
             purchase.ledger_error = seller_chargeback.error.clone();
+            if seller_chargeback_cleared {
+                let rejected_event = WorldEconomyEvent {
+                    economy_event_id: league_hash_id(
+                        "world-econ",
+                        &format!(
+                            "{}:{}:{}",
+                            rejection.matrix_user_id,
+                            rejection.rejection_id,
+                            rejection.created_at_epoch
+                        ),
+                    ),
+                    matrix_user_id: rejection.matrix_user_id.clone(),
+                    event_kind: "work_rejected".to_string(),
+                    subject_id: work_order.work_order_id.clone(),
+                    credits_delta: -purchase.price_credits,
+                    reputation_delta: 0,
+                    created_at_epoch: rejection.created_at_epoch,
+                };
+                standing = Some(upsert_world_faction_standing(
+                    &mut league,
+                    &rejection.matrix_user_id,
+                    "faction-market-guild",
+                    1,
+                    rejection.created_at_epoch,
+                ));
+                league
+                    .world
+                    .world_economy_events
+                    .push(rejected_event.clone());
+                economy_event = Some(rejected_event);
+            }
             if seller_charged_back {
                 let seller_net_credits = world_seller_net_credits_for_price(purchase.price_credits);
                 if let Some(player) = league
@@ -2574,13 +2583,7 @@ pub(super) async fn reject_world_work_order_inner(
         }
         work_order.status = purchase.status.clone();
         rejection.refund_status = buyer_refund.status.clone();
-        rejection.status = if buyer_refunded {
-            "rejected_refunded".to_string()
-        } else if buyer_refund.status.starts_with("skipped") {
-            "rejected_refund_hold".to_string()
-        } else {
-            "rejected_refund_failed".to_string()
-        };
+        rejection.status = purchase.status.clone();
         indexes.replace_purchase_by_id(&mut league.world, &purchase);
         indexes.replace_work_order_by_id(&mut league.world, &work_order);
         indexes.replace_rejection_by_id(&mut league.world, &rejection);
@@ -3170,6 +3173,13 @@ pub(super) async fn cancel_world_work_order_inner(
         let mut cancellation = snapshot.3.clone();
         let mut economy_event = None;
         let mut standing = None;
+        let seller_charged_back = buyer_refunded
+            && matches!(
+                seller_chargeback.status.as_str(),
+                "seller_chargeback_consumed" | "duplicate"
+            );
+        let seller_chargeback_cleared = buyer_refunded
+            && (seller_charged_back || seller_chargeback.status.starts_with("skipped"));
         purchase.buyer_consume_status = Some(if buyer_refunded {
             "refunded".to_string()
         } else {
@@ -3179,46 +3189,17 @@ pub(super) async fn cancel_world_work_order_inner(
         purchase.buyer_consume_balance_after = buyer_cancel_refund.balance_after;
         purchase.buyer_consume_error = buyer_cancel_refund.error.clone();
         purchase.status = if buyer_refunded {
-            "cancelled_refunded".to_string()
+            if seller_chargeback_cleared {
+                "cancelled_refunded".to_string()
+            } else {
+                "cancelled_chargeback_failed".to_string()
+            }
         } else if buyer_cancel_refund.status.starts_with("skipped") {
             "cancelled_refund_hold".to_string()
         } else {
             "cancelled_refund_failed".to_string()
         };
         if buyer_refunded {
-            let cancelled_event = WorldEconomyEvent {
-                economy_event_id: league_hash_id(
-                    "world-econ",
-                    &format!(
-                        "{}:{}:{}",
-                        cancellation.matrix_user_id,
-                        cancellation.cancellation_id,
-                        cancellation.created_at_epoch
-                    ),
-                ),
-                matrix_user_id: cancellation.matrix_user_id.clone(),
-                event_kind: "work_cancelled".to_string(),
-                subject_id: work_order.work_order_id.clone(),
-                credits_delta: -purchase.price_credits,
-                reputation_delta: 0,
-                created_at_epoch: cancellation.created_at_epoch,
-            };
-            standing = Some(upsert_world_faction_standing(
-                &mut league,
-                &cancellation.matrix_user_id,
-                "faction-market-guild",
-                1,
-                cancellation.created_at_epoch,
-            ));
-            league
-                .world
-                .world_economy_events
-                .push(cancelled_event.clone());
-            economy_event = Some(cancelled_event);
-            let seller_charged_back = matches!(
-                seller_chargeback.status.as_str(),
-                "seller_chargeback_consumed" | "duplicate"
-            );
             if seller_charged_back || !seller_chargeback.status.starts_with("skipped") {
                 purchase.ledger_status = Some(if seller_charged_back {
                     "seller_chargeback_consumed".to_string()
@@ -3233,6 +3214,37 @@ pub(super) async fn cancel_world_work_order_inner(
                     .balance_after
                     .or(purchase.ledger_balance_after);
                 purchase.ledger_error = seller_chargeback.error.clone();
+            }
+            if seller_chargeback_cleared {
+                let cancelled_event = WorldEconomyEvent {
+                    economy_event_id: league_hash_id(
+                        "world-econ",
+                        &format!(
+                            "{}:{}:{}",
+                            cancellation.matrix_user_id,
+                            cancellation.cancellation_id,
+                            cancellation.created_at_epoch
+                        ),
+                    ),
+                    matrix_user_id: cancellation.matrix_user_id.clone(),
+                    event_kind: "work_cancelled".to_string(),
+                    subject_id: work_order.work_order_id.clone(),
+                    credits_delta: -purchase.price_credits,
+                    reputation_delta: 0,
+                    created_at_epoch: cancellation.created_at_epoch,
+                };
+                standing = Some(upsert_world_faction_standing(
+                    &mut league,
+                    &cancellation.matrix_user_id,
+                    "faction-market-guild",
+                    1,
+                    cancellation.created_at_epoch,
+                ));
+                league
+                    .world
+                    .world_economy_events
+                    .push(cancelled_event.clone());
+                economy_event = Some(cancelled_event);
             }
             if seller_charged_back {
                 let seller_net_credits = world_seller_net_credits_for_price(purchase.price_credits);

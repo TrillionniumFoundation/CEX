@@ -5058,6 +5058,310 @@ async fn world_cancel_does_not_emit_refund_economy_without_buyer_refund() {
 }
 
 #[tokio::test]
+async fn world_reject_does_not_release_refund_progression_without_seller_chargeback() {
+    let (ledger_base_url, ledger_admin_token) = start_real_ledger_service_for_world_e2e().await;
+    let http = Client::new();
+    let buyer_account_id =
+        create_real_ledger_account(&http, &ledger_base_url, &ledger_admin_token, 250.0).await;
+    let seller_account_id =
+        create_real_ledger_account(&http, &ledger_base_url, &ledger_admin_token, 0.0).await;
+    apply_real_ledger_action(
+        &http,
+        &ledger_base_url,
+        &ledger_admin_token,
+        "reserve",
+        &buyer_account_id,
+        70.0,
+        "seed-reject-chargeback-buyer-reserve",
+    )
+    .await;
+
+    let buyer_matrix_user_id = "@world-reject-chargeback-buyer:local.dev";
+    let seller_matrix_user_id = "@world-reject-chargeback-seller:local.dev";
+    let room_id = "!world-reject-chargeback:local.dev";
+    let mut bindings = IdentityBindings::default();
+    bindings.matrix_users.insert(
+        buyer_matrix_user_id.to_string(),
+        IdentityBindingEntry {
+            product_user_id: None,
+            org_id: Some("world-reject-chargeback-org".to_string()),
+            account_id: Some(buyer_account_id.clone()),
+        },
+    );
+    bindings.matrix_users.insert(
+        seller_matrix_user_id.to_string(),
+        IdentityBindingEntry {
+            product_user_id: None,
+            org_id: Some("world-reject-chargeback-org".to_string()),
+            account_id: Some(seller_account_id.clone()),
+        },
+    );
+    let mut config = test_config();
+    config.runtime_profile = RuntimeProfile::Production;
+    config.ledger_base_url = ledger_base_url.clone();
+    config.ledger_admin_token = Some(ledger_admin_token.clone());
+    let state = test_state(config, bindings, HashMap::new());
+    let app = build_router(state.clone());
+    let purchase_id = "purchase-reject-chargeback-blocked";
+    let work_order_id = "work-reject-chargeback-blocked";
+    {
+        let mut league = state.inner.league_state.lock().await;
+        league.world.world_purchases.push(WorldPurchase {
+            purchase_id: purchase_id.to_string(),
+            listing_id: "listing-reject-chargeback-blocked".to_string(),
+            shop_id: "shop-reject-chargeback-blocked".to_string(),
+            company_id: "company-reject-chargeback-blocked".to_string(),
+            buyer_matrix_user_id: buyer_matrix_user_id.to_string(),
+            seller_matrix_user_id: seller_matrix_user_id.to_string(),
+            price_credits: 70,
+            status: "reserved".to_string(),
+            ledger_status: Some("settled".to_string()),
+            ledger_account_id: Some(seller_account_id.clone()),
+            ledger_entry_id: Some("seller-original-settlement-entry".to_string()),
+            ledger_balance_after: Some(63.0),
+            ledger_error: None,
+            buyer_ledger_status: Some("reserved".to_string()),
+            buyer_ledger_account_id: Some(buyer_account_id.clone()),
+            buyer_ledger_entry_id: Some("buyer-original-reserve-entry".to_string()),
+            buyer_ledger_balance_after: Some(250.0),
+            buyer_ledger_error: None,
+            buyer_consume_status: Some("pending_acceptance".to_string()),
+            buyer_consume_entry_id: None,
+            buyer_consume_balance_after: None,
+            buyer_consume_error: None,
+            created_at_epoch: 1_777_897_981,
+        });
+        league.world.world_work_orders.push(WorldWorkOrder {
+            work_order_id: work_order_id.to_string(),
+            purchase_id: purchase_id.to_string(),
+            listing_id: "listing-reject-chargeback-blocked".to_string(),
+            buyer_matrix_user_id: buyer_matrix_user_id.to_string(),
+            seller_matrix_user_id: seller_matrix_user_id.to_string(),
+            company_id: "company-reject-chargeback-blocked".to_string(),
+            status: "delivered".to_string(),
+            brief: "Delivered work whose seller chargeback will fail".to_string(),
+            value_score: 70,
+            created_at_epoch: 1_777_897_981,
+        });
+    }
+
+    let (status, rejection) = send_json_request(
+        &app,
+        "POST",
+        &format!("/v1/world/work-orders/{work_order_id}/reject"),
+        &[],
+        json!({
+            "matrix_user_id": buyer_matrix_user_id,
+            "room_id": room_id,
+            "body": "Buyer rejects after evidence review, but seller chargeback cannot settle; keep world progression blocked until the clawback is recovered."
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "reject response: {rejection}");
+    assert_eq!(rejection["buyer_refund_status"], "refunded");
+    assert_eq!(
+        rejection["seller_chargeback_status"],
+        "seller_chargeback_reserve_failed"
+    );
+    assert_eq!(
+        rejection["purchase"]["status"],
+        "rejected_chargeback_failed"
+    );
+    assert_eq!(
+        rejection["work_order"]["status"],
+        "rejected_chargeback_failed"
+    );
+    assert_eq!(
+        rejection["rejection"]["status"],
+        "rejected_chargeback_failed"
+    );
+    assert!(rejection["economy_event"].is_null());
+    assert!(rejection["standing"].is_null());
+
+    let league = state.inner.league_state.lock().await;
+    assert!(!league
+        .world
+        .world_economy_events
+        .iter()
+        .any(|event| { event.subject_id == work_order_id && event.event_kind == "work_rejected" }));
+    assert!(!league
+        .world
+        .world_faction_standings
+        .iter()
+        .any(|standing| standing.matrix_user_id == buyer_matrix_user_id));
+    drop(league);
+
+    let buyer_account = get_real_ledger_account(
+        &http,
+        &ledger_base_url,
+        &ledger_admin_token,
+        &buyer_account_id,
+    )
+    .await;
+    assert_eq!(buyer_account["reserved"].as_f64().unwrap(), 0.0);
+    assert_eq!(buyer_account["balance"].as_f64().unwrap(), 250.0);
+    let seller_account = get_real_ledger_account(
+        &http,
+        &ledger_base_url,
+        &ledger_admin_token,
+        &seller_account_id,
+    )
+    .await;
+    assert_eq!(seller_account["balance"].as_f64().unwrap(), 0.0);
+}
+
+#[tokio::test]
+async fn world_cancel_does_not_release_refund_progression_without_seller_chargeback() {
+    let (ledger_base_url, ledger_admin_token) = start_real_ledger_service_for_world_e2e().await;
+    let http = Client::new();
+    let buyer_account_id =
+        create_real_ledger_account(&http, &ledger_base_url, &ledger_admin_token, 250.0).await;
+    let seller_account_id =
+        create_real_ledger_account(&http, &ledger_base_url, &ledger_admin_token, 0.0).await;
+    apply_real_ledger_action(
+        &http,
+        &ledger_base_url,
+        &ledger_admin_token,
+        "reserve",
+        &buyer_account_id,
+        65.0,
+        "seed-cancel-chargeback-buyer-reserve",
+    )
+    .await;
+
+    let buyer_matrix_user_id = "@world-cancel-chargeback-buyer:local.dev";
+    let seller_matrix_user_id = "@world-cancel-chargeback-seller:local.dev";
+    let room_id = "!world-cancel-chargeback:local.dev";
+    let mut bindings = IdentityBindings::default();
+    bindings.matrix_users.insert(
+        buyer_matrix_user_id.to_string(),
+        IdentityBindingEntry {
+            product_user_id: None,
+            org_id: Some("world-cancel-chargeback-org".to_string()),
+            account_id: Some(buyer_account_id.clone()),
+        },
+    );
+    bindings.matrix_users.insert(
+        seller_matrix_user_id.to_string(),
+        IdentityBindingEntry {
+            product_user_id: None,
+            org_id: Some("world-cancel-chargeback-org".to_string()),
+            account_id: Some(seller_account_id.clone()),
+        },
+    );
+    let mut config = test_config();
+    config.runtime_profile = RuntimeProfile::Production;
+    config.ledger_base_url = ledger_base_url.clone();
+    config.ledger_admin_token = Some(ledger_admin_token.clone());
+    let state = test_state(config, bindings, HashMap::new());
+    let app = build_router(state.clone());
+    let purchase_id = "purchase-cancel-chargeback-blocked";
+    let work_order_id = "work-cancel-chargeback-blocked";
+    {
+        let mut league = state.inner.league_state.lock().await;
+        league.world.world_purchases.push(WorldPurchase {
+            purchase_id: purchase_id.to_string(),
+            listing_id: "listing-cancel-chargeback-blocked".to_string(),
+            shop_id: "shop-cancel-chargeback-blocked".to_string(),
+            company_id: "company-cancel-chargeback-blocked".to_string(),
+            buyer_matrix_user_id: buyer_matrix_user_id.to_string(),
+            seller_matrix_user_id: seller_matrix_user_id.to_string(),
+            price_credits: 65,
+            status: "reserved".to_string(),
+            ledger_status: Some("settled".to_string()),
+            ledger_account_id: Some(seller_account_id.clone()),
+            ledger_entry_id: Some("seller-original-settlement-entry".to_string()),
+            ledger_balance_after: Some(58.0),
+            ledger_error: None,
+            buyer_ledger_status: Some("reserved".to_string()),
+            buyer_ledger_account_id: Some(buyer_account_id.clone()),
+            buyer_ledger_entry_id: Some("buyer-original-reserve-entry".to_string()),
+            buyer_ledger_balance_after: Some(250.0),
+            buyer_ledger_error: None,
+            buyer_consume_status: Some("pending_acceptance".to_string()),
+            buyer_consume_entry_id: None,
+            buyer_consume_balance_after: None,
+            buyer_consume_error: None,
+            created_at_epoch: 1_777_897_982,
+        });
+        league.world.world_work_orders.push(WorldWorkOrder {
+            work_order_id: work_order_id.to_string(),
+            purchase_id: purchase_id.to_string(),
+            listing_id: "listing-cancel-chargeback-blocked".to_string(),
+            buyer_matrix_user_id: buyer_matrix_user_id.to_string(),
+            seller_matrix_user_id: seller_matrix_user_id.to_string(),
+            company_id: "company-cancel-chargeback-blocked".to_string(),
+            status: "open".to_string(),
+            brief: "Open work whose seller chargeback will fail on cancellation".to_string(),
+            value_score: 65,
+            created_at_epoch: 1_777_897_982,
+        });
+    }
+
+    let (status, cancellation) = send_json_request(
+        &app,
+        "POST",
+        &format!("/v1/world/work-orders/{work_order_id}/cancel"),
+        &[],
+        json!({
+            "matrix_user_id": buyer_matrix_user_id,
+            "room_id": room_id,
+            "body": "Buyer cancels before delivery, but seller chargeback cannot settle; keep world progression blocked until the clawback is recovered."
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "cancel response: {cancellation}");
+    assert_eq!(cancellation["buyer_cancel_refund_status"], "refunded");
+    assert_eq!(
+        cancellation["seller_chargeback_status"],
+        "seller_chargeback_reserve_failed"
+    );
+    assert_eq!(
+        cancellation["purchase"]["status"],
+        "cancelled_chargeback_failed"
+    );
+    assert_eq!(
+        cancellation["work_order"]["status"],
+        "cancelled_chargeback_failed"
+    );
+    assert_eq!(
+        cancellation["cancellation"]["status"],
+        "cancelled_chargeback_failed"
+    );
+    assert!(cancellation["economy_event"].is_null());
+    assert!(cancellation["standing"].is_null());
+
+    let league = state.inner.league_state.lock().await;
+    assert!(!league.world.world_economy_events.iter().any(|event| {
+        event.subject_id == work_order_id && event.event_kind == "work_cancelled"
+    }));
+    assert!(!league
+        .world
+        .world_faction_standings
+        .iter()
+        .any(|standing| standing.matrix_user_id == buyer_matrix_user_id));
+    drop(league);
+
+    let buyer_account = get_real_ledger_account(
+        &http,
+        &ledger_base_url,
+        &ledger_admin_token,
+        &buyer_account_id,
+    )
+    .await;
+    assert_eq!(buyer_account["reserved"].as_f64().unwrap(), 0.0);
+    assert_eq!(buyer_account["balance"].as_f64().unwrap(), 250.0);
+    let seller_account = get_real_ledger_account(
+        &http,
+        &ledger_base_url,
+        &ledger_admin_token,
+        &seller_account_id,
+    )
+    .await;
+    assert_eq!(seller_account["balance"].as_f64().unwrap(), 0.0);
+}
+
+#[tokio::test]
 async fn world_reopen_does_not_emit_progression_without_buyer_reserve() {
     let mut config = test_config();
     config.runtime_profile = RuntimeProfile::Production;
@@ -6884,6 +7188,38 @@ async fn create_real_ledger_account(
         .as_str()
         .expect("created ledger account id")
         .to_string()
+}
+
+async fn apply_real_ledger_action(
+    http: &Client,
+    ledger_base_url: &str,
+    admin_token: &str,
+    action: &str,
+    account_id: &str,
+    amount: f64,
+    idempotency_key: &str,
+) -> Value {
+    let response = http
+        .post(format!("{}/v1/ledger/{action}", ledger_base_url))
+        .header("x-admin-token", admin_token)
+        .json(&json!({
+            "account_id": account_id,
+            "amount": amount,
+            "idempotency_key": idempotency_key,
+            "reference_id": idempotency_key,
+        }))
+        .send()
+        .await
+        .expect("apply real ledger action");
+    assert!(
+        response.status().is_success(),
+        "ledger action {action} failed with {}",
+        response.status()
+    );
+    response
+        .json::<Value>()
+        .await
+        .expect("decode ledger action response")
 }
 
 async fn get_real_ledger_account(
