@@ -6512,6 +6512,138 @@ async fn world_contract_completion_requires_ledger_settlement_before_progression
     );
 }
 
+#[tokio::test]
+async fn world_contract_completion_cannot_release_twice() {
+    let (ledger_base_url, ledger_admin_token) = start_real_ledger_service_for_world_e2e().await;
+    let http = Client::new();
+    let account_id =
+        create_real_ledger_account(&http, &ledger_base_url, &ledger_admin_token, 0.0).await;
+    let matrix_user_id = "@world-contract-repeat:local.dev";
+    let room_id = "!world-contract-repeat:local.dev";
+    let mut bindings = IdentityBindings::default();
+    bindings.matrix_users.insert(
+        matrix_user_id.to_string(),
+        IdentityBindingEntry {
+            product_user_id: None,
+            org_id: Some("world-contract-repeat-org".to_string()),
+            account_id: Some(account_id.clone()),
+        },
+    );
+    let mut config = test_config();
+    config.runtime_profile = RuntimeProfile::Production;
+    config.ledger_base_url = ledger_base_url.clone();
+    config.ledger_admin_token = Some(ledger_admin_token.clone());
+    let state = test_state(config, bindings, HashMap::new());
+    let initial_asset_count;
+    {
+        let mut league = state.inner.league_state.lock().await;
+        initial_asset_count = league.world.world_assets.len();
+        league.world.world_events.push(WorldEvent {
+            event_id: "world-event-repeat-contract".to_string(),
+            actor_matrix_user_id: matrix_user_id.to_string(),
+            room_id: Some(room_id.to_string()),
+            location_id: "starter-studio".to_string(),
+            event_kind: "world_contract".to_string(),
+            body: "Repeat completion guard event".to_string(),
+            result: "queued".to_string(),
+            impact_score: 9,
+            cex_task_id: Some("task-repeat-contract".to_string()),
+            cex_status: Some("Running".to_string()),
+            created_at_epoch: 1_777_895_910,
+        });
+        league.world.world_contracts.push(WorldContract {
+            contract_id: "world-contract-repeat-release".to_string(),
+            event_id: "world-event-repeat-contract".to_string(),
+            actor_matrix_user_id: matrix_user_id.to_string(),
+            location_id: "starter-studio".to_string(),
+            task_id: "task-repeat-contract".to_string(),
+            title: "Repeat release guard".to_string(),
+            body: "A settled contract must not mint a second reward.".to_string(),
+            status: "open".to_string(),
+            cex_status: Some("Running".to_string()),
+            value_score: 42,
+            created_at_epoch: 1_777_895_911,
+        });
+    }
+    let app = build_router(state.clone());
+    let first_body = json!({
+        "matrix_user_id": matrix_user_id,
+        "room_id": room_id,
+        "body": "Final customer deliverable with evidence package, risk controls, next action, self-review, settlement proof, measurable acceptance checklist, and remediation notes."
+    });
+    let (status, first_completion) = send_json_request(
+        &app,
+        "POST",
+        "/v1/world/contracts/world-contract-repeat-release/complete",
+        &[],
+        first_body,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "first completion: {first_completion}"
+    );
+    assert_eq!(first_completion["completion"]["ledger_status"], "settled");
+    let first_reward = first_completion["completion"]["reward_amount"]
+        .as_f64()
+        .expect("first reward amount");
+    assert!(first_reward > 0.0);
+
+    let (status, second_completion) = send_json_request(
+        &app,
+        "POST",
+        "/v1/world/contracts/world-contract-repeat-release/complete",
+        &[],
+        json!({
+            "matrix_user_id": matrix_user_id,
+            "room_id": room_id,
+            "body": "Second completion tries to repeat the settled payout with evidence, risk controls, next action, self-review, and settlement proof."
+        }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "second completion should be blocked: {second_completion}"
+    );
+    assert_eq!(
+        second_completion["error"],
+        "world contract is already completed"
+    );
+
+    let league = state.inner.league_state.lock().await;
+    assert_eq!(
+        league
+            .world
+            .world_contract_completions
+            .iter()
+            .filter(|completion| completion.contract_id == "world-contract-repeat-release")
+            .count(),
+        1,
+        "a settled contract must not append a second completion record"
+    );
+    let player = league
+        .players_by_matrix_user
+        .get(matrix_user_id)
+        .expect("settled contract should create player progression once");
+    assert_eq!(player.earned_credits, first_reward);
+    assert_eq!(league.world.world_assets.len(), initial_asset_count + 1);
+    let stored_contract = league
+        .world
+        .world_contracts
+        .iter()
+        .find(|contract| contract.contract_id == "world-contract-repeat-release")
+        .expect("stored repeat contract");
+    assert_eq!(stored_contract.status, "completed_settled");
+    assert_eq!(stored_contract.cex_status.as_deref(), Some("completed"));
+    drop(league);
+
+    let account =
+        get_real_ledger_account(&http, &ledger_base_url, &ledger_admin_token, &account_id).await;
+    assert_eq!(account["balance"].as_f64().unwrap(), first_reward);
+}
+
 async fn send_text_request(
     app: &axum::Router,
     method: &str,

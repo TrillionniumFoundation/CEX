@@ -20,6 +20,21 @@ fn world_purchase_seller_settlement_active(purchase: &WorldPurchase) -> bool {
     )
 }
 
+fn world_contract_completion_released(completion: &WorldContractCompletion) -> bool {
+    matches!(
+        completion.ledger_status.as_deref(),
+        Some("settled") | Some("duplicate") | Some("skipped_zero_reward")
+    )
+}
+
+fn world_contract_completion_final(contract: &WorldContract) -> bool {
+    matches!(contract.status.as_str(), "completed_settled")
+        || matches!(
+            contract.cex_status.as_deref(),
+            Some("completed") | Some("completed_no_reward")
+        )
+}
+
 fn world_market_simulation_json(world: &WorldState, listing: &WorldListing, now: i64) -> Value {
     let base_price = listing.price_credits.max(1);
     let recent_window_seconds = 86_400;
@@ -3559,6 +3574,27 @@ pub(super) async fn complete_world_contract_inner(
             )
                 .into_response();
         };
+        let released_completion_exists =
+            league
+                .world
+                .world_contract_completions
+                .iter()
+                .any(|completion| {
+                    completion.contract_id == contract.contract_id
+                        && world_contract_completion_released(completion)
+                });
+        if released_completion_exists || world_contract_completion_final(&contract) {
+            return (
+                StatusCode::CONFLICT,
+                Json(json!({
+                    "error": "world contract is already completed",
+                    "contract_id": contract.contract_id,
+                    "status": contract.status,
+                    "cex_status": contract.cex_status,
+                })),
+            )
+                .into_response();
+        }
         contract
     };
     if contract.actor_matrix_user_id != matrix_user_id {
