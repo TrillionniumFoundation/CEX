@@ -6517,6 +6517,49 @@ const TRILLIONNIUM_WORK_REOPEN_EXAMPLE_COMMAND: &str =
 const TRILLIONNIUM_WORK_CANCEL_EXAMPLE_COMMAND: &str =
     "/work cancel latest 取消原因：记录客户交付风险、证据包、退款控制、下一步校准行动和自检复盘。";
 
+fn matrix_reward_settlement_explanation(payout_status: &str, ledger_status: &str) -> &'static str {
+    if payout_status == "review_hold" {
+        return "说明：命中复核，奖励暂缓；补齐客户交付、证据包、风险控制和自检复盘后再释放。";
+    }
+    if matches!(ledger_status, "settled" | "duplicate") {
+        return "说明：账本已结算，奖励和进度已安全入账；现在可以查看奖励、排名或推进下一条路线。";
+    }
+    if ledger_status.contains("failed") || ledger_status.contains("error") {
+        return "说明：账本结算失败，奖励不会提前释放；先重试结算或检查账本/资金状态。";
+    }
+    "说明：评分已记录，奖励等待账本确认；结算成功后才会释放进度、库存和排行榜收益。"
+}
+
+fn matrix_purchase_escrow_explanation(
+    seller_ledger_status: &str,
+    buyer_ledger_status: &str,
+) -> &'static str {
+    if matches!(
+        seller_ledger_status,
+        "settled" | "duplicate" | "reopened_settled"
+    ) && matches!(buyer_ledger_status, "reserved" | "duplicate")
+    {
+        return "说明：买家托管已锁定、卖家结算已确认，工单可以安全交付。";
+    }
+    if buyer_ledger_status.contains("failed") || buyer_ledger_status.contains("pending") {
+        return "说明：买家托管还没完成，先恢复预留资金，避免无资金工单继续流转。";
+    }
+    if seller_ledger_status.contains("failed") || seller_ledger_status.contains("pending") {
+        return "说明：卖家结算还没完成，交付和进度会暂缓，避免未入账奖励被刷出。";
+    }
+    "说明：托管和卖家结算状态会决定工单能否安全交付；未确认前不提前释放经济进度。"
+}
+
+fn matrix_acceptance_settlement_explanation(buyer_consume_status: &str) -> &'static str {
+    if matches!(buyer_consume_status, "consumed" | "duplicate") {
+        return "说明：买家托管已消费，验收声望和后续协作已释放。";
+    }
+    if buyer_consume_status.contains("failed") || buyer_consume_status.contains("pending") {
+        return "说明：验收已记录但托管消费未完成，声望/进度会等资金结清后再释放。";
+    }
+    "说明：验收奖励受托管消费保护，资金确认后才会进入声望和下一步路线。"
+}
+
 fn build_trillionnium_world_assets_matrix_reply(value: &Value) -> Value {
     let asset_count = value
         .get("assets")
@@ -6734,18 +6777,20 @@ fn build_trillionnium_world_purchase_matrix_reply(value: &Value) -> Value {
         .specialize_opportunity("purchase");
     let route_text_block = route.text_block("Route Follow-up", true);
     let route_html_block = route.html_block("Route Follow-up", true);
+    let settlement_explanation =
+        matrix_purchase_escrow_explanation(ledger_status, buyer_ledger_status);
     let body = format!(
-        "💸 Listing Purchased\nPurchase: {purchase_id}\nWork Order: {work_order_id}\nPrice: {price}\nStatus: {status}\nSeller Ledger: {ledger_status}\nBuyer Reserve: {buyer_ledger_status}\nFaction Rank: {standing_rank}\n{route_text_block}\n查看工作：/work"
+        "💸 Listing Purchased\nPurchase: {purchase_id}\nWork Order: {work_order_id}\nPrice: {price}\nStatus: {status}\nSeller Ledger: {ledger_status}\nBuyer Reserve: {buyer_ledger_status}\nFaction Rank: {standing_rank}\n{settlement_explanation}\n{route_text_block}\n查看工作：/work"
     );
     json!({
         "msgtype": "m.text",
         "body": body,
         "format": "org.matrix.custom.html",
         "formatted_body": format!(
-            "<blockquote><h3>💸 Listing Purchased</h3><p><strong>Purchase</strong>: <code>{}</code></p><p><strong>Work</strong>: <code>{}</code></p><p><strong>Price</strong>: {} · <strong>Status</strong>: {}</p><p><strong>Seller Ledger</strong>: {} · <strong>Buyer Reserve</strong>: {}</p><p><strong>Faction</strong>: {}</p>{}<p><code>/work</code> <code>/factions</code></p></blockquote>",
-            escape_html(purchase_id), escape_html(work_order_id), price, escape_html(status), escape_html(ledger_status), escape_html(buyer_ledger_status), escape_html(standing_rank), route_html_block,
+            "<blockquote><h3>💸 Listing Purchased</h3><p><strong>Purchase</strong>: <code>{}</code></p><p><strong>Work</strong>: <code>{}</code></p><p><strong>Price</strong>: {} · <strong>Status</strong>: {}</p><p><strong>Seller Ledger</strong>: {} · <strong>Buyer Reserve</strong>: {}</p><p><strong>Faction</strong>: {}</p><p>{}</p>{}<p><code>/work</code> <code>/factions</code></p></blockquote>",
+            escape_html(purchase_id), escape_html(work_order_id), price, escape_html(status), escape_html(ledger_status), escape_html(buyer_ledger_status), escape_html(standing_rank), escape_html(settlement_explanation), route_html_block,
         ),
-        "cex_card": route_story_card_json(json!({"type": "trillionnium_world_listing_purchase", "version": 1, "world": "trillionnium_world", "purchase_id": purchase_id, "work_order_id": work_order_id, "price_credits": price, "status": status, "ledger_status": ledger_status, "buyer_ledger_status": buyer_ledger_status, "seller_faction_rank": standing_rank}), &route, true)
+        "cex_card": route_story_card_json(json!({"type": "trillionnium_world_listing_purchase", "version": 1, "world": "trillionnium_world", "purchase_id": purchase_id, "work_order_id": work_order_id, "price_credits": price, "status": status, "ledger_status": ledger_status, "buyer_ledger_status": buyer_ledger_status, "seller_faction_rank": standing_rank, "settlement_explanation": settlement_explanation}), &route, true)
     })
 }
 
@@ -6840,18 +6885,21 @@ fn build_trillionnium_world_work_delivery_matrix_reply(value: &Value) -> Value {
     let route = RouteStoryCardContext::from_value(value, "delivery-dock");
     let route_text_block = route.text_block("Route Follow-up", true);
     let route_html_block = route.html_block("Route Follow-up", true);
+    let accept_next_command = format!(
+        "/work accept {work_order_id} 验收确认：确认客户交付方案、证据包、风险控制、下一步合作行动和自检复盘。"
+    );
     let body = format!(
-        "📮 Work Delivered\nWork Order: {work_order_id}\nDelivery: {delivery_id}\nScore: {score:.1}\nStatus: {status}\nJudge: {judge_status}\n{route_text_block}\n下一步：/work accept {work_order_id} <验收>"
+        "📮 Work Delivered\nWork Order: {work_order_id}\nDelivery: {delivery_id}\nScore: {score:.1}\nStatus: {status}\nJudge: {judge_status}\n{route_text_block}\n下一步：{accept_next_command}"
     );
     json!({
         "msgtype": "m.text",
         "body": body,
         "format": "org.matrix.custom.html",
         "formatted_body": format!(
-            "<blockquote><h3>📮 Work Delivered</h3><p><strong>Work</strong>: <code>{}</code></p><p><strong>Delivery</strong>: <code>{}</code></p><p><strong>Score</strong>: {:.1} · <strong>Status</strong>: {} · <strong>Judge</strong>: {}</p>{}<p><code>/work accept {}</code></p></blockquote>",
-            escape_html(work_order_id), escape_html(delivery_id), score, escape_html(status), escape_html(judge_status), route_html_block, escape_html(work_order_id),
+            "<blockquote><h3>📮 Work Delivered</h3><p><strong>Work</strong>: <code>{}</code></p><p><strong>Delivery</strong>: <code>{}</code></p><p><strong>Score</strong>: {:.1} · <strong>Status</strong>: {} · <strong>Judge</strong>: {}</p>{}<p><code>{}</code></p></blockquote>",
+            escape_html(work_order_id), escape_html(delivery_id), score, escape_html(status), escape_html(judge_status), route_html_block, escape_html(&accept_next_command),
         ),
-        "cex_card": route_story_card_json(json!({"type": "trillionnium_world_work_delivery", "version": 1, "world": "trillionnium_world", "work_order_id": work_order_id, "delivery_id": delivery_id, "score": format!("{score:.1}"), "status": status, "judge_status": judge_status}), &route, true)
+        "cex_card": route_story_card_json(json!({"type": "trillionnium_world_work_delivery", "version": 1, "world": "trillionnium_world", "work_order_id": work_order_id, "delivery_id": delivery_id, "score": format!("{score:.1}"), "status": status, "judge_status": judge_status, "next_step_command": accept_next_command}), &route, true)
     })
 }
 
@@ -6883,18 +6931,19 @@ fn build_trillionnium_world_work_acceptance_matrix_reply(value: &Value) -> Value
     let route = RouteStoryCardContext::from_value(value, "delivery-dock");
     let route_text_block = route.text_block("Route Follow-up", true);
     let route_html_block = route.html_block("Route Follow-up", true);
+    let settlement_explanation = matrix_acceptance_settlement_explanation(buyer_consume_status);
     let body = format!(
-        "✅ Work Accepted\nWork Order: {work_order_id}\nAcceptance: {acceptance_id}\nStatus: {status}\nBuyer Consume: {buyer_consume_status}\nReputation: +{reputation_delta}\n{route_text_block}\n查看：/work /factions"
+        "✅ Work Accepted\nWork Order: {work_order_id}\nAcceptance: {acceptance_id}\nStatus: {status}\nBuyer Consume: {buyer_consume_status}\nReputation: +{reputation_delta}\n{settlement_explanation}\n{route_text_block}\n查看：/work /factions"
     );
     json!({
         "msgtype": "m.text",
         "body": body,
         "format": "org.matrix.custom.html",
         "formatted_body": format!(
-            "<blockquote><h3>✅ Work Accepted</h3><p><strong>Work</strong>: <code>{}</code></p><p><strong>Acceptance</strong>: <code>{}</code></p><p><strong>Status</strong>: {} · <strong>Buyer Consume</strong>: {} · <strong>Reputation</strong>: +{}</p>{}<p><code>/work</code> <code>/factions</code></p></blockquote>",
-            escape_html(work_order_id), escape_html(acceptance_id), escape_html(status), escape_html(buyer_consume_status), reputation_delta, route_html_block,
+            "<blockquote><h3>✅ Work Accepted</h3><p><strong>Work</strong>: <code>{}</code></p><p><strong>Acceptance</strong>: <code>{}</code></p><p><strong>Status</strong>: {} · <strong>Buyer Consume</strong>: {} · <strong>Reputation</strong>: +{}</p><p>{}</p>{}<p><code>/work</code> <code>/factions</code></p></blockquote>",
+            escape_html(work_order_id), escape_html(acceptance_id), escape_html(status), escape_html(buyer_consume_status), reputation_delta, escape_html(settlement_explanation), route_html_block,
         ),
-        "cex_card": route_story_card_json(json!({"type": "trillionnium_world_work_acceptance", "version": 1, "world": "trillionnium_world", "work_order_id": work_order_id, "acceptance_id": acceptance_id, "status": status, "reputation_delta": reputation_delta, "buyer_consume_status": buyer_consume_status}), &route, true)
+        "cex_card": route_story_card_json(json!({"type": "trillionnium_world_work_acceptance", "version": 1, "world": "trillionnium_world", "work_order_id": work_order_id, "acceptance_id": acceptance_id, "status": status, "reputation_delta": reputation_delta, "buyer_consume_status": buyer_consume_status, "settlement_explanation": settlement_explanation}), &route, true)
     })
 }
 
@@ -7086,18 +7135,21 @@ fn build_trillionnium_world_work_reopen_matrix_reply(value: &Value) -> Value {
     );
     let route_text_block = route.text_block("Route Follow-up", true);
     let route_html_block = route.html_block("Route Follow-up", true);
+    let deliver_next_command = format!(
+        "/work deliver {work_order_id} 返工交付包：提交修订后的客户交付方案、证据包、风险控制、下一步行动和自检复盘。"
+    );
     let body = format!(
-        "🔁 Work Reopened / Reserved\nWork Order: {work_order_id}\nReopen: {reopen_id}\nStatus: {status}\nBuyer Reserve: {reserve_status}\nWork: {work_status}\nPurchase: {purchase_status}\n{route_text_block}\n下一步：/work deliver {work_order_id} <返工交付>"
+        "🔁 Work Reopened / Reserved\nWork Order: {work_order_id}\nReopen: {reopen_id}\nStatus: {status}\nBuyer Reserve: {reserve_status}\nWork: {work_status}\nPurchase: {purchase_status}\n{route_text_block}\n下一步：{deliver_next_command}"
     );
     json!({
         "msgtype": "m.text",
         "body": body,
         "format": "org.matrix.custom.html",
         "formatted_body": format!(
-            "<blockquote><h3>🔁 Work Reopened / Reserved</h3><p><strong>Work</strong>: <code>{}</code></p><p><strong>Reopen</strong>: <code>{}</code></p><p><strong>Status</strong>: {} · <strong>Buyer Reserve</strong>: {} · <strong>Work</strong>: {} · <strong>Purchase</strong>: {}</p>{}<p><code>/work deliver {} &lt;返工交付&gt;</code></p></blockquote>",
-            escape_html(work_order_id), escape_html(reopen_id), escape_html(status), escape_html(reserve_status), escape_html(work_status), escape_html(purchase_status), route_html_block, escape_html(work_order_id),
+            "<blockquote><h3>🔁 Work Reopened / Reserved</h3><p><strong>Work</strong>: <code>{}</code></p><p><strong>Reopen</strong>: <code>{}</code></p><p><strong>Status</strong>: {} · <strong>Buyer Reserve</strong>: {} · <strong>Work</strong>: {} · <strong>Purchase</strong>: {}</p>{}<p><code>{}</code></p></blockquote>",
+            escape_html(work_order_id), escape_html(reopen_id), escape_html(status), escape_html(reserve_status), escape_html(work_status), escape_html(purchase_status), route_html_block, escape_html(&deliver_next_command),
         ),
-        "cex_card": route_story_card_json(json!({"type": "trillionnium_world_work_reopen", "version": 1, "world": "trillionnium_world", "work_order_id": work_order_id, "reopen_id": reopen_id, "status": status, "buyer_reopen_reserve_status": reserve_status, "work_status": work_status, "purchase_status": purchase_status}), &route, true)
+        "cex_card": route_story_card_json(json!({"type": "trillionnium_world_work_reopen", "version": 1, "world": "trillionnium_world", "work_order_id": work_order_id, "reopen_id": reopen_id, "status": status, "buyer_reopen_reserve_status": reserve_status, "work_status": work_status, "purchase_status": purchase_status, "next_step_command": deliver_next_command}), &route, true)
     })
 }
 
@@ -7334,18 +7386,19 @@ fn build_trillionnium_world_contract_completion_matrix_reply(value: &Value) -> V
         .get("judge_status")
         .and_then(Value::as_str)
         .unwrap_or("rubric_scored");
+    let settlement_explanation = matrix_reward_settlement_explanation("eligible", ledger_status);
     let body = format!(
-        "✅ World Contract Complete\nContract: {contract_id}\nScore: {score:.1}\nReward: {reward:.2}\nLedger: {ledger_status}\nJudge: {judge_status}\n查看世界：/world"
+        "✅ World Contract Complete\nContract: {contract_id}\nScore: {score:.1}\nReward: {reward:.2}\nLedger: {ledger_status}\nJudge: {judge_status}\n{settlement_explanation}\n查看世界：/world"
     );
     json!({
         "msgtype": "m.text",
         "body": body,
         "format": "org.matrix.custom.html",
         "formatted_body": format!(
-            "<blockquote><h3>✅ World Contract Complete</h3><p><strong>Contract</strong>: <code>{}</code></p><p><strong>Score</strong>: {:.1} · <strong>Reward</strong>: {:.2}</p><p><strong>Ledger</strong>: {} · <strong>Judge</strong>: {}</p><p><code>/world</code></p></blockquote>",
-            escape_html(contract_id), score, reward, escape_html(ledger_status), escape_html(judge_status),
+            "<blockquote><h3>✅ World Contract Complete</h3><p><strong>Contract</strong>: <code>{}</code></p><p><strong>Score</strong>: {:.1} · <strong>Reward</strong>: {:.2}</p><p><strong>Ledger</strong>: {} · <strong>Judge</strong>: {}</p><p>{}</p><p><code>/world</code></p></blockquote>",
+            escape_html(contract_id), score, reward, escape_html(ledger_status), escape_html(judge_status), escape_html(settlement_explanation),
         ),
-        "cex_card": {"type": "trillionnium_world_contract_completion", "version": 1, "world": "trillionnium_world", "contract_id": contract_id, "score": format!("{score:.1}"), "reward": format!("{reward:.2}"), "ledger_status": ledger_status, "judge_status": judge_status}
+        "cex_card": {"type": "trillionnium_world_contract_completion", "version": 1, "world": "trillionnium_world", "contract_id": contract_id, "score": format!("{score:.1}"), "reward": format!("{reward:.2}"), "ledger_status": ledger_status, "judge_status": judge_status, "settlement_explanation": settlement_explanation}
     })
 }
 
@@ -7838,8 +7891,9 @@ fn build_league_submission_matrix_reply(value: &Value) -> Value {
         .and_then(Value::as_array)
         .map(|events| events.len())
         .unwrap_or(0);
+    let settlement_explanation = matrix_reward_settlement_explanation(payout_status, ledger_status);
     let body = format!(
-        "🏁 League Submission 已评分\nMatch: {match_id}\nScore: {score:.1}\nGrade: {grade}\nReward: {reward_amount:.2} credit\nJudge: {judge_status} ({score_event_count} dims)\nPayout: {payout_status}\nLedger: {ledger_status}\n排行榜：/rank\n奖励：/rewards"
+        "🏁 League Submission 已评分\nMatch: {match_id}\nScore: {score:.1}\nGrade: {grade}\nReward: {reward_amount:.2} credit\nJudge: {judge_status} ({score_event_count} dims)\nPayout: {payout_status}\nLedger: {ledger_status}\n{settlement_explanation}\n排行榜：/rank\n奖励：/rewards"
     );
 
     json!({
@@ -7847,7 +7901,7 @@ fn build_league_submission_matrix_reply(value: &Value) -> Value {
         "body": body,
         "format": "org.matrix.custom.html",
         "formatted_body": format!(
-            "<blockquote><h3>🏁 League Submission 已评分</h3><p><strong>Match</strong>: <code>{}</code></p><p><strong>Score</strong>: {:.1}</p><p><strong>Grade</strong>: {}</p><p><strong>Reward</strong>: {:.2} credit</p><p><strong>Judge</strong>: {} / {} dims</p><p><strong>Payout</strong>: {}</p><p><strong>Ledger</strong>: {}</p><p><code>/rank</code> · <code>/rewards</code></p></blockquote>",
+            "<blockquote><h3>🏁 League Submission 已评分</h3><p><strong>Match</strong>: <code>{}</code></p><p><strong>Score</strong>: {:.1}</p><p><strong>Grade</strong>: {}</p><p><strong>Reward</strong>: {:.2} credit</p><p><strong>Judge</strong>: {} / {} dims</p><p><strong>Payout</strong>: {}</p><p><strong>Ledger</strong>: {}</p><p>{}</p><p><code>/rank</code> · <code>/rewards</code></p></blockquote>",
             escape_html(match_id),
             score,
             escape_html(grade),
@@ -7856,6 +7910,7 @@ fn build_league_submission_matrix_reply(value: &Value) -> Value {
             score_event_count,
             escape_html(payout_status),
             escape_html(ledger_status),
+            escape_html(settlement_explanation),
         ),
         "cex_card": {
             "type": "league_submission",
@@ -7872,6 +7927,7 @@ fn build_league_submission_matrix_reply(value: &Value) -> Value {
             "payout_status": payout_status,
             "ledger_status": ledger_status,
             "ledger_entry_id": ledger_entry_id,
+            "settlement_explanation": settlement_explanation,
         }
     })
 }
@@ -8434,6 +8490,138 @@ mod tests {
                     "{label} formatted body missing {command}: {formatted_body}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn trillionnium_matrix_reward_states_are_player_readable() {
+        let settled_submission = super::build_league_submission_matrix_reply(&json!({
+            "submission": {
+                "match_id": "daily-dungeon-001",
+                "submission_id": "sub-settled",
+                "score": 88.0,
+                "grade": "A",
+                "judge_status": "rubric_hidden_pipeline_v2",
+                "payout_status": "eligible",
+                "score_events": [{"dimension": "delivery"}]
+            },
+            "reward": {"amount": 4.4, "ledger_status": "settled", "ledger_entry_id": "entry-1"}
+        }));
+        let settled_body = settled_submission
+            .get("body")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        assert!(settled_body.contains("账本已结算"));
+        assert!(settled_body.contains("奖励和进度已安全入账"));
+        assert_eq!(
+            settled_submission
+                .get("cex_card")
+                .and_then(|card| card.get("settlement_explanation"))
+                .and_then(Value::as_str),
+            Some(
+                "说明：账本已结算，奖励和进度已安全入账；现在可以查看奖励、排名或推进下一条路线。"
+            )
+        );
+
+        let held_submission = super::build_league_submission_matrix_reply(&json!({
+            "submission": {
+                "match_id": "daily-dungeon-001",
+                "submission_id": "sub-held",
+                "score": 91.0,
+                "grade": "A",
+                "judge_status": "rubric_hidden_pipeline_v2",
+                "payout_status": "review_hold",
+                "score_events": [{"dimension": "delivery"}]
+            },
+            "reward": {"amount": 4.5, "ledger_status": "pending"}
+        }));
+        let held_body = held_submission
+            .get("body")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        assert!(held_body.contains("命中复核"));
+        assert!(held_body.contains("奖励暂缓"));
+        assert!(held_body.contains("证据包"));
+        assert!(held_body.contains("自检复盘"));
+
+        let contract_completion =
+            super::build_trillionnium_world_contract_completion_matrix_reply(&json!({
+                "completion": {
+                    "contract_id": "world-contract-001",
+                    "score": 86.0,
+                    "reward_amount": 4.3,
+                    "ledger_status": "settled",
+                    "judge_status": "rubric_hidden_pipeline_v2"
+                }
+            }));
+        assert!(contract_completion
+            .get("body")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("奖励和进度已安全入账"));
+
+        let purchase = super::build_trillionnium_world_purchase_matrix_reply(&json!({
+            "purchase": {"purchase_id": "world-purchase-001", "price_credits": 12, "status": "open", "ledger_status": "settled", "buyer_ledger_status": "reserved"},
+            "work_order": {"work_order_id": "world-work-001"}
+        }));
+        assert!(purchase
+            .get("body")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("买家托管已锁定、卖家结算已确认"));
+
+        let acceptance = super::build_trillionnium_world_work_acceptance_matrix_reply(&json!({
+            "work_order": {"work_order_id": "world-work-001"},
+            "acceptance": {"acceptance_id": "world-acceptance-001", "status": "accepted", "reputation_delta": 10},
+            "purchase": {"buyer_consume_status": "consumed"}
+        }));
+        assert!(acceptance
+            .get("body")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("买家托管已消费"));
+    }
+
+    #[test]
+    fn trillionnium_work_next_steps_are_full_player_commands() {
+        let delivery = super::build_trillionnium_world_work_delivery_matrix_reply(&json!({
+            "work_order": {"work_order_id": "world-work-accept-anchor"},
+            "delivery": {"delivery_id": "world-delivery-001", "score": 84.0, "status": "delivered", "judge_status": "rubric_hidden_pipeline_v2"}
+        }));
+        let reopen = super::build_trillionnium_world_work_reopen_matrix_reply(&json!({
+            "work_order": {"work_order_id": "world-work-deliver-anchor", "status": "open"},
+            "purchase": {"status": "reopened_reserved"},
+            "reopen": {"reopen_id": "world-reopen-001", "status": "reopened", "reserve_status": "reserved"}
+        }));
+
+        for (label, reply) in [("delivery", delivery), ("reopen", reopen)] {
+            let body = reply
+                .get("body")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let formatted_body = reply
+                .get("formatted_body")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            assert!(!body.contains("<验收>") && !body.contains("<返工交付>"));
+            assert!(
+                !formatted_body.contains("&lt;验收&gt;")
+                    && !formatted_body.contains("&lt;返工交付&gt;")
+            );
+            let command = reply
+                .get("cex_card")
+                .and_then(|card| card.get("next_step_command"))
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            assert!(
+                body.contains(command),
+                "{label} body missing {command}: {body}"
+            );
+            assert!(
+                formatted_body.contains(&super::escape_html(command)),
+                "{label} formatted body missing command: {formatted_body}"
+            );
+            assert_matrix_route_hidden_anchor_ready(label, command);
         }
     }
 
