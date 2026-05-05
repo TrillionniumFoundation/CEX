@@ -6498,6 +6498,25 @@ fn build_trillionnium_craft_action_matrix_reply(value: &Value) -> Value {
     reply
 }
 
+const TRILLIONNIUM_ASSET_UPGRADE_EXAMPLE_COMMAND: &str =
+    "/upgrade latest 资产化升级方案：沉淀客户交付方案、证据包、风险控制、下一步行动和自检复盘。";
+const TRILLIONNIUM_COMPANY_EXAMPLE_COMMAND: &str =
+    "/company latest 公司经营方案：定义客户交付方案、证据包、风险控制、下一步行动和自检复盘。";
+const TRILLIONNIUM_SELL_EXAMPLE_COMMAND: &str =
+    "/sell latest 服务上架方案：说明客户交付方案、证据包、风险控制、价格、下一步行动和自检复盘。";
+const TRILLIONNIUM_BUY_EXAMPLE_COMMAND: &str =
+    "/buy latest 采购需求：说明客户交付方案、证据包、风险控制、验收标准、下一步行动和自检复盘。";
+const TRILLIONNIUM_WORK_DELIVER_EXAMPLE_COMMAND: &str =
+    "/work deliver latest 交付包：提交客户交付方案、证据包、风险控制、下一步行动和自检复盘。";
+const TRILLIONNIUM_WORK_ACCEPT_EXAMPLE_COMMAND: &str =
+    "/work accept latest 验收确认：确认客户交付方案、证据包、风险控制、下一步合作行动和自检复盘。";
+const TRILLIONNIUM_WORK_REJECT_EXAMPLE_COMMAND: &str =
+    "/work reject latest 驳回说明：记录客户交付缺口、证据包、风险控制、下一步返工行动和自检复盘。";
+const TRILLIONNIUM_WORK_REOPEN_EXAMPLE_COMMAND: &str =
+    "/work reopen latest 返工要求：补齐客户交付方案、证据包、风险控制、下一步交付行动和自检复盘。";
+const TRILLIONNIUM_WORK_CANCEL_EXAMPLE_COMMAND: &str =
+    "/work cancel latest 取消原因：记录客户交付风险、证据包、退款控制、下一步校准行动和自检复盘。";
+
 fn build_trillionnium_world_assets_matrix_reply(value: &Value) -> Value {
     let asset_count = value
         .get("assets")
@@ -6520,16 +6539,17 @@ fn build_trillionnium_world_assets_matrix_reply(value: &Value) -> Value {
         RouteStoryCardContext::from_value(value, "asset-yard").specialize_opportunity("assets");
     let route_text_block = route.text_block("Route Follow-up", true);
     let route_html_block = route.html_block("Route Follow-up", true);
+    let example_command = TRILLIONNIUM_ASSET_UPGRADE_EXAMPLE_COMMAND;
     let body = format!(
-        "🏗️ World Assets\nAssets: {asset_count}\nUpgrades: {upgrade_count}\nTop Asset: {top_asset}\n{route_text_block}\n升级：/upgrade latest <方案>"
+        "🏗️ World Assets\nAssets: {asset_count}\nUpgrades: {upgrade_count}\nTop Asset: {top_asset}\n{route_text_block}\n升级：{example_command}"
     );
     json!({
         "msgtype": "m.text",
         "body": body,
         "format": "org.matrix.custom.html",
         "formatted_body": format!(
-            "<blockquote><h3>🏗️ World Assets</h3><p><strong>Assets</strong>: {} · <strong>Upgrades</strong>: {}</p><p><strong>Top</strong>: <code>{}</code></p>{}<p><code>/upgrade latest &lt;方案&gt;</code></p></blockquote>",
-            asset_count, upgrade_count, escape_html(top_asset), route_html_block,
+            "<blockquote><h3>🏗️ World Assets</h3><p><strong>Assets</strong>: {} · <strong>Upgrades</strong>: {}</p><p><strong>Top</strong>: <code>{}</code></p>{}<p><code>{}</code></p></blockquote>",
+            asset_count, upgrade_count, escape_html(top_asset), route_html_block, escape_html(example_command),
         ),
         "cex_card": route_story_card_json(json!({"type": "trillionnium_world_assets", "version": 1, "world": "trillionnium_world", "asset_count": asset_count, "upgrade_count": upgrade_count, "top_asset_id": top_asset}), &route, true)
     })
@@ -6552,16 +6572,17 @@ fn build_trillionnium_world_companies_matrix_reply(value: &Value) -> Value {
         .specialize_opportunity("companies");
     let route_text_block = route.text_block("Route Follow-up", true);
     let route_html_block = route.html_block("Route Follow-up", true);
+    let example_command = TRILLIONNIUM_COMPANY_EXAMPLE_COMMAND;
     let body = format!(
-        "🏢 World Companies\nCompanies: {company_count}\nTop Company: {top_company}\n{route_text_block}\n开公司：/company latest <方案>"
+        "🏢 World Companies\nCompanies: {company_count}\nTop Company: {top_company}\n{route_text_block}\n开公司：{example_command}"
     );
     json!({
         "msgtype": "m.text",
         "body": body,
         "format": "org.matrix.custom.html",
         "formatted_body": format!(
-            "<blockquote><h3>🏢 World Companies</h3><p><strong>Companies</strong>: {}</p><p><strong>Top</strong>: <code>{}</code></p>{}<p><code>/company latest &lt;方案&gt;</code></p></blockquote>",
-            company_count, escape_html(top_company), route_html_block,
+            "<blockquote><h3>🏢 World Companies</h3><p><strong>Companies</strong>: {}</p><p><strong>Top</strong>: <code>{}</code></p>{}<p><code>{}</code></p></blockquote>",
+            company_count, escape_html(top_company), route_html_block, escape_html(example_command),
         ),
         "cex_card": route_story_card_json(json!({"type": "trillionnium_world_companies", "version": 1, "world": "trillionnium_world", "company_count": company_count, "top_company_id": top_company}), &route, true)
     })
@@ -6622,16 +6643,17 @@ fn build_trillionnium_world_shops_matrix_reply(value: &Value) -> Value {
         RouteStoryCardContext::from_value(value, "client-board").specialize_opportunity("shops");
     let route_text_block = route.text_block("Route Follow-up", true);
     let route_html_block = route.html_block("Route Follow-up", true);
+    let example_command = TRILLIONNIUM_SELL_EXAMPLE_COMMAND;
     let body = format!(
-        "🛒 World Shops\nShops: {shop_count}\nListings: {listing_count}\nTop Shop: {top_shop}\n{route_text_block}\n上架：/sell latest <商品/服务>"
+        "🛒 World Shops\nShops: {shop_count}\nListings: {listing_count}\nTop Shop: {top_shop}\n{route_text_block}\n上架：{example_command}"
     );
     json!({
         "msgtype": "m.text",
         "body": body,
         "format": "org.matrix.custom.html",
         "formatted_body": format!(
-            "<blockquote><h3>🛒 World Shops</h3><p><strong>Shops</strong>: {} · <strong>Listings</strong>: {}</p><p><strong>Top</strong>: <code>{}</code></p>{}<p><code>/sell latest &lt;商品/服务&gt;</code></p></blockquote>",
-            shop_count, listing_count, escape_html(top_shop), route_html_block,
+            "<blockquote><h3>🛒 World Shops</h3><p><strong>Shops</strong>: {} · <strong>Listings</strong>: {}</p><p><strong>Top</strong>: <code>{}</code></p>{}<p><code>{}</code></p></blockquote>",
+            shop_count, listing_count, escape_html(top_shop), route_html_block, escape_html(example_command),
         ),
         "cex_card": route_story_card_json(json!({"type": "trillionnium_world_shops", "version": 1, "world": "trillionnium_world", "shop_count": shop_count, "listing_count": listing_count, "top_shop_id": top_shop}), &route, true)
     })
@@ -6774,16 +6796,22 @@ fn build_trillionnium_world_commerce_matrix_reply(value: &Value) -> Value {
         RouteStoryCardContext::from_value(value, "delivery-dock").specialize_opportunity("work");
     let route_text_block = route.text_block("Route Follow-up", true);
     let route_html_block = route.html_block("Route Follow-up", true);
+    let buy_example = TRILLIONNIUM_BUY_EXAMPLE_COMMAND;
+    let deliver_example = TRILLIONNIUM_WORK_DELIVER_EXAMPLE_COMMAND;
+    let accept_example = TRILLIONNIUM_WORK_ACCEPT_EXAMPLE_COMMAND;
+    let reject_example = TRILLIONNIUM_WORK_REJECT_EXAMPLE_COMMAND;
+    let reopen_example = TRILLIONNIUM_WORK_REOPEN_EXAMPLE_COMMAND;
+    let cancel_example = TRILLIONNIUM_WORK_CANCEL_EXAMPLE_COMMAND;
     let body = format!(
-        "🧾 World Commerce\nPurchases: {purchase_count}\nWork Orders: {work_count}\nDeliveries: {delivery_count}\nAcceptances: {acceptance_count}\nRejections: {rejection_count}\nReopens: {reopen_count}\nCancellations: {cancellation_count}\nLatest Work: {latest_work}\n{route_text_block}\n购买：/buy latest <需求>"
+        "🧾 World Commerce\nPurchases: {purchase_count}\nWork Orders: {work_count}\nDeliveries: {delivery_count}\nAcceptances: {acceptance_count}\nRejections: {rejection_count}\nReopens: {reopen_count}\nCancellations: {cancellation_count}\nLatest Work: {latest_work}\n{route_text_block}\n操作示例：\n购买：{buy_example}\n交付：{deliver_example}\n验收：{accept_example}\n拒收：{reject_example}\n返工：{reopen_example}\n取消：{cancel_example}"
     );
     json!({
         "msgtype": "m.text",
         "body": body,
         "format": "org.matrix.custom.html",
         "formatted_body": format!(
-            "<blockquote><h3>🧾 World Commerce</h3><p><strong>Purchases</strong>: {} · <strong>Work Orders</strong>: {} · <strong>Deliveries</strong>: {} · <strong>Acceptances</strong>: {} · <strong>Rejections</strong>: {} · <strong>Reopens</strong>: {} · <strong>Cancellations</strong>: {}</p><p><strong>Latest</strong>: <code>{}</code></p>{}<p><code>/buy latest &lt;需求&gt;</code> <code>/work deliver latest</code> <code>/work reject latest</code> <code>/work reopen latest</code> <code>/work cancel latest</code></p></blockquote>",
-            purchase_count, work_count, delivery_count, acceptance_count, rejection_count, reopen_count, cancellation_count, escape_html(latest_work), route_html_block,
+            "<blockquote><h3>🧾 World Commerce</h3><p><strong>Purchases</strong>: {} · <strong>Work Orders</strong>: {} · <strong>Deliveries</strong>: {} · <strong>Acceptances</strong>: {} · <strong>Rejections</strong>: {} · <strong>Reopens</strong>: {} · <strong>Cancellations</strong>: {}</p><p><strong>Latest</strong>: <code>{}</code></p>{}<p><code>{}</code></p><p><code>{}</code></p><p><code>{}</code></p><p><code>{}</code></p><p><code>{}</code></p><p><code>{}</code></p></blockquote>",
+            purchase_count, work_count, delivery_count, acceptance_count, rejection_count, reopen_count, cancellation_count, escape_html(latest_work), route_html_block, escape_html(buy_example), escape_html(deliver_example), escape_html(accept_example), escape_html(reject_example), escape_html(reopen_example), escape_html(cancel_example),
         ),
         "cex_card": route_story_card_json(json!({"type": "trillionnium_world_commerce", "version": 1, "world": "trillionnium_world", "purchase_count": purchase_count, "work_order_count": work_count, "delivery_count": delivery_count, "acceptance_count": acceptance_count, "rejection_count": rejection_count, "reopen_count": reopen_count, "cancellation_count": cancellation_count, "latest_work_order_id": latest_work}), &route, true)
     })
@@ -8310,6 +8338,103 @@ mod tests {
             super::matrix_route_has_review_anchor(body, &lower),
             "{label} missing review/self-check anchor: {body}"
         );
+    }
+
+    #[test]
+    fn trillionnium_world_overview_examples_are_playability_anchored() {
+        for (label, command) in [
+            (
+                "asset_upgrade_example",
+                super::TRILLIONNIUM_ASSET_UPGRADE_EXAMPLE_COMMAND,
+            ),
+            (
+                "company_example",
+                super::TRILLIONNIUM_COMPANY_EXAMPLE_COMMAND,
+            ),
+            ("sell_example", super::TRILLIONNIUM_SELL_EXAMPLE_COMMAND),
+            ("buy_example", super::TRILLIONNIUM_BUY_EXAMPLE_COMMAND),
+            (
+                "work_deliver_example",
+                super::TRILLIONNIUM_WORK_DELIVER_EXAMPLE_COMMAND,
+            ),
+            (
+                "work_accept_example",
+                super::TRILLIONNIUM_WORK_ACCEPT_EXAMPLE_COMMAND,
+            ),
+            (
+                "work_reject_example",
+                super::TRILLIONNIUM_WORK_REJECT_EXAMPLE_COMMAND,
+            ),
+            (
+                "work_reopen_example",
+                super::TRILLIONNIUM_WORK_REOPEN_EXAMPLE_COMMAND,
+            ),
+            (
+                "work_cancel_example",
+                super::TRILLIONNIUM_WORK_CANCEL_EXAMPLE_COMMAND,
+            ),
+        ] {
+            assert_matrix_route_hidden_anchor_ready(label, &matrix_route_command_body(command));
+        }
+
+        for (label, reply, expected_commands) in [
+            (
+                "assets_reply",
+                super::build_trillionnium_world_assets_matrix_reply(&json!({})),
+                vec![super::TRILLIONNIUM_ASSET_UPGRADE_EXAMPLE_COMMAND],
+            ),
+            (
+                "companies_reply",
+                super::build_trillionnium_world_companies_matrix_reply(&json!({})),
+                vec![super::TRILLIONNIUM_COMPANY_EXAMPLE_COMMAND],
+            ),
+            (
+                "shops_reply",
+                super::build_trillionnium_world_shops_matrix_reply(&json!({})),
+                vec![super::TRILLIONNIUM_SELL_EXAMPLE_COMMAND],
+            ),
+            (
+                "commerce_reply",
+                super::build_trillionnium_world_commerce_matrix_reply(&json!({})),
+                vec![
+                    super::TRILLIONNIUM_BUY_EXAMPLE_COMMAND,
+                    super::TRILLIONNIUM_WORK_DELIVER_EXAMPLE_COMMAND,
+                    super::TRILLIONNIUM_WORK_ACCEPT_EXAMPLE_COMMAND,
+                    super::TRILLIONNIUM_WORK_REJECT_EXAMPLE_COMMAND,
+                    super::TRILLIONNIUM_WORK_REOPEN_EXAMPLE_COMMAND,
+                    super::TRILLIONNIUM_WORK_CANCEL_EXAMPLE_COMMAND,
+                ],
+            ),
+        ] {
+            let body = reply
+                .get("body")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let formatted_body = reply
+                .get("formatted_body")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            assert!(
+                !body.contains("<方案>"),
+                "{label} still has terse body placeholder"
+            );
+            assert!(
+                !formatted_body.contains("&lt;方案&gt;")
+                    && !formatted_body.contains("&lt;需求&gt;")
+                    && !formatted_body.contains("&lt;商品/服务&gt;"),
+                "{label} still has terse formatted placeholder: {formatted_body}"
+            );
+            for command in expected_commands {
+                assert!(
+                    body.contains(command),
+                    "{label} body missing {command}: {body}"
+                );
+                assert!(
+                    formatted_body.contains(&super::escape_html(command)),
+                    "{label} formatted body missing {command}: {formatted_body}"
+                );
+            }
+        }
     }
 
     #[test]
