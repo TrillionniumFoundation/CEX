@@ -6094,8 +6094,6 @@ fn build_trillionnium_client_app_matrix_reply(value: &Value) -> Value {
         .unwrap_or("dense");
     let map_hub = value.get("map_hub").cloned().unwrap_or(Value::Null);
     let route = RouteStoryCardContext::from_value(&map_hub, map_node).specialize_opportunity("app");
-    let route_text_block = route.text_block("Route Cockpit", true);
-    let route_html_block = route.html_block("Route Cockpit", true);
     let primary_entry_module_id = value
         .get("primary_entry_module_id")
         .and_then(Value::as_str)
@@ -6143,22 +6141,32 @@ fn build_trillionnium_client_app_matrix_reply(value: &Value) -> Value {
         .and_then(Value::as_array)
         .map(|steps| steps.len() as u64)
         .unwrap_or(0);
+    let onboarding_start_command = onboarding
+        .and_then(|rail| rail.get("steps"))
+        .and_then(Value::as_array)
+        .and_then(|steps| {
+            steps.iter().find_map(|step| {
+                (step.get("step_id").and_then(Value::as_str) == Some("start_world_action"))
+                    .then(|| step.get("command").and_then(Value::as_str))
+                    .flatten()
+            })
+        })
+        .unwrap_or("/world action Start the first bounty: define customer deliverable, evidence package, risk controls, next action, and self-review.");
     let body = format!(
-        "📱 Trillionnium Client App\nModules: {module_count}\n{}\nPrimary Entry: {primary_entry_module_id}\nMap Engine: {map_engine_id} ({tile_provider})\nRenderer Adapter: {adapter_id} v{adapter_version} · handle {runtime_handle} · future {future_engine}\nCurrent Map: {map_node}\nActive Region: {active_region_id} · Tiles: {tile_shard_count} · Nearby POIs: {nearby_poi_count}\nMap Stream: {live_event_count} live events · {prefetch_count} prefetch tiles · {player_density_mode} density\nOnboarding: {onboarding_label} · {onboarding_step_count} steps · target {onboarding_completion_target}\n{route_text_block}\nProgression: Lv.{progression_level} {progression_rank} · {successful_task_count} successes · skills/tools/skins {unlocked_skill_count}/{unlocked_tool_count}/{unlocked_skin_count}\n入口：/map /duel nearby /social /wallet /progression",
-        module_names.join(" / "),
-        adapter_id = &renderer_adapter.adapter_id,
-        adapter_version = renderer_adapter.adapter_contract_version,
-        runtime_handle = &renderer_adapter.runtime_handle_name,
-        future_engine = &renderer_adapter.future_engine_candidate,
-        route_text_block = route_text_block,
+        "📱 Trillionnium Client App\nStart Here: {onboarding_label} · {onboarding_step_count} steps · target {onboarding_completion_target}\nStart Command: {onboarding_start_command}\nNow: {next_action} @ {next_location}\nWhy: {next_outcome}\nNext Command: {next_command}\nOpportunity Command: {opportunity_command}\nWorld: {map_node} · {nearby_poi_count} POIs · {live_event_count} live events · {tile_shard_count} tiles\nProgression: Lv.{progression_level} {progression_rank} · {successful_task_count} successes · skills/tools/skins {unlocked_skill_count}/{unlocked_tool_count}/{unlocked_skin_count}\n入口：/map /duel nearby /social /wallet /progression",
+        next_action = &route.route_next_action_label,
+        next_location = &route.route_next_location_id,
+        next_outcome = &route.route_next_outcome_summary,
+        next_command = &route.route_next_command_hint,
+        opportunity_command = &route.route_next_opportunity_command,
     );
     json!({
         "msgtype": "m.text",
         "body": body,
         "format": "org.matrix.custom.html",
         "formatted_body": format!(
-            "<blockquote><h3>📱 Trillionnium Client App</h3><p><strong>Modules</strong>: {} · {}</p><p><strong>Primary Entry</strong>: <code>{}</code></p><p><strong>Map Engine</strong>: <code>{}</code> · {} · <code>{}</code></p><p><strong>Renderer Adapter</strong>: <code>{}</code> v{} · <code>{}</code> · future <code>{}</code></p><p><strong>Current Map</strong>: <code>{}</code> · <strong>Tiles</strong>: {} · <strong>Nearby POIs</strong>: {}</p><p><strong>Map Stream</strong>: {} live events · {} prefetch tiles · {} density</p><p><strong>Onboarding</strong>: {} · {} steps · target <code>{}</code></p>{}<p><strong>Progression</strong>: Lv.{} {} · {} successes · skills/tools/skins {}/{}/{}</p><p><code>/map</code> <code>/duel nearby</code> <code>/social</code> <code>/wallet</code> <code>/progression</code></p></blockquote>",
-            module_count, escape_html(&module_names.join(" / ")), escape_html(primary_entry_module_id), escape_html(map_engine_id), escape_html(tile_provider), escape_html(active_region_id), escape_html(&renderer_adapter.adapter_id), renderer_adapter.adapter_contract_version, escape_html(&renderer_adapter.runtime_handle_name), escape_html(&renderer_adapter.future_engine_candidate), escape_html(map_node), tile_shard_count, nearby_poi_count, live_event_count, prefetch_count, escape_html(player_density_mode), escape_html(onboarding_label), onboarding_step_count, escape_html(onboarding_completion_target), route_html_block, progression_level, escape_html(progression_rank), successful_task_count, unlocked_skill_count, unlocked_tool_count, unlocked_skin_count,
+            "<blockquote><h3>📱 Trillionnium Client App</h3><p><strong>Start Here</strong>: {} · {} steps · target <code>{}</code></p><p><strong>Start Command</strong>: <code>{}</code></p><p><strong>Now</strong>: {} @ <code>{}</code></p><p><strong>Why</strong>: {}</p><p><strong>Next Command</strong>: <code>{}</code></p><p><strong>Opportunity Command</strong>: <code>{}</code></p><p><strong>World</strong>: <code>{}</code> · {} POIs · {} live events · {} tiles</p><p><strong>Progression</strong>: Lv.{} {} · {} successes · skills/tools/skins {}/{}/{}</p><p><code>/map</code> <code>/duel nearby</code> <code>/social</code> <code>/wallet</code> <code>/progression</code></p></blockquote>",
+            escape_html(onboarding_label), onboarding_step_count, escape_html(onboarding_completion_target), escape_html(onboarding_start_command), escape_html(&route.route_next_action_label), escape_html(&route.route_next_location_id), escape_html(&route.route_next_outcome_summary), escape_html(&route.route_next_command_hint), escape_html(&route.route_next_opportunity_command), escape_html(map_node), nearby_poi_count, live_event_count, tile_shard_count, progression_level, escape_html(progression_rank), successful_task_count, unlocked_skill_count, unlocked_tool_count, unlocked_skin_count,
         ),
         "cex_card": route_story_card_json(json!({
             "type": "trillionnium_client_app",
@@ -6190,6 +6198,7 @@ fn build_trillionnium_client_app_matrix_reply(value: &Value) -> Value {
             "onboarding_label": onboarding_label,
             "onboarding_completion_target": onboarding_completion_target,
             "onboarding_step_count": onboarding_step_count,
+            "onboarding_start_command": onboarding_start_command,
             "has_face_duel": true,
             "has_social": true,
             "has_wallet": true,
@@ -8901,11 +8910,23 @@ mod tests {
                 .and_then(Value::as_str),
             Some("first_playable_loop_100")
         );
-        assert!(reply
+        let body = reply
             .get("body")
             .and_then(Value::as_str)
-            .unwrap_or_default()
-            .contains("Onboarding:"));
+            .unwrap_or_default();
+        assert!(body.contains("Start Here:"));
+        assert!(body.contains("Start Command:"));
+        assert!(body.contains("Next Command:"));
+        assert!(body.contains("Opportunity Command:"));
+        assert!(!body.contains("Renderer Adapter:"));
+        assert!(!body.contains("future maplibre_gl_v1"));
+        assert!(!body.contains("Primary Entry:"));
+        assert!(body.contains("/world action story follow-up"));
+        assert_eq!(
+            card.get("onboarding_start_command")
+                .and_then(Value::as_str),
+            Some("/world action Start the first bounty: define customer deliverable, evidence package, risk controls, next action, and self-review.")
+        );
         assert_eq!(
             card.get("map_runtime_handle_name").and_then(Value::as_str),
             Some("mapRuntime")

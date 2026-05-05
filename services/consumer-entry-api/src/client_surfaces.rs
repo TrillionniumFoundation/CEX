@@ -1382,7 +1382,7 @@ impl<'a> ClientAppProjectionContext<'a> {
         map_metrics: &ClientAppMapHubMetrics,
     ) -> Value {
         let starter_world_action = format!(
-            "/world action Global bounty found at {} / 在这里发现一个全球悬赏：明确委托目标、成果、证据、风险和下一步。",
+            "/world action Global bounty found at {}: define customer deliverable, outcome standard, evidence package, risk controls, next action, and self-review.",
             current_node_name
         );
         json!({
@@ -1433,7 +1433,7 @@ impl<'a> ClientAppProjectionContext<'a> {
                     "surface": "World / Messages · 世界 / 消息",
                     "label": "Capture rated commission / 登记待评级委托",
                     "description": "Capture the world action as a trackable contract / 把世界行动收成可追踪契约，确保主线、消息和路线图都能看到同一个任务。",
-                    "command": "/contract <委托目标 + 成果标准 + 评级规则>",
+                    "command": "/contract Start bounty contract: define customer deliverable, outcome standard, evidence package, risk controls, rating rules, next action, and self-review.",
                     "web_panel_id": WORLD_ROUTE_CONTRACTS_PANEL_ID,
                     "success_signal": "Contract opened / 契约已开启",
                 },
@@ -1443,7 +1443,7 @@ impl<'a> ClientAppProjectionContext<'a> {
                     "surface": "Feed / World · 动态 / 世界",
                     "label": "Complete one bounty commission / 完成一次悬赏委托",
                     "description": "Run the full quest-card loop: accept, submit, rate/revise/reopen/cancel / 通过任务牌、接取、提交成果、评级/返工/重开/放弃跑完真实冒险循环。",
-                    "command": "/work deliver latest <成果内容 + 证据包 + 评级清单>",
+                    "command": "/work deliver latest First delivery: submit customer deliverable, evidence package, rating checklist, risk controls, next action, and self-review.",
                     "web_panel_id": WORLD_ROUTE_COMMERCE_PANEL_ID,
                     "input_id": WORLD_ROUTE_WORK_DELIVER_INPUT_ID,
                     "textarea_id": WORLD_ROUTE_WORK_DELIVER_TEXTAREA_ID,
@@ -1785,10 +1785,10 @@ impl<'a> ClientAppProjectionContext<'a> {
                 "live_event_count": map_metrics.live_event_count,
             },
             "economy_tradeoff_cards": [
-                {"card_id": "high_reward_delivery", "label": "High reward delivery / 高收益交付", "upside": "credits + reputation", "risk": "review_hold if evidence is weak", "source_sink": "buyer escrow → seller settlement", "live_count": work_order_count, "command": "/work deliver latest <evidence + next>"},
-                {"card_id": "safe_refund_reopen", "label": "Safe refund / reopen / 安全退款重开", "upside": "protect trust and retry", "risk": "slower payout, but no dead end", "source_sink": "refund reserve → reopen reserve", "live_count": recovery_count, "command": "/work reject|reopen latest <gaps>"},
-                {"card_id": "faction_reputation", "label": "Faction reputation / 阵营声望", "upside": "rank unlock and better routes", "risk": "profit is slower than direct sales", "source_sink": "standing delta", "live_count": self.world.world_faction_standings.len(), "command": "/world action build faction reputation with evidence"},
-                {"card_id": "company_supply", "label": "Company supply / 公司供给", "upside": "repeatable listings and market depth", "risk": "requires quality and refresh cadence", "source_sink": "asset → company → listing", "live_count": listed_count, "command": "/world listing <offer + price + proof>"}
+                {"card_id": "high_reward_delivery", "label": "High reward delivery / 高收益交付", "upside": "credits + reputation", "risk": "review_hold if evidence is weak", "source_sink": "buyer escrow → seller settlement", "live_count": work_order_count, "command": "/work deliver latest High-reward delivery: submit customer deliverable, evidence package, acceptance checklist, risk recap, next action, and self-review."},
+                {"card_id": "safe_refund_reopen", "label": "Safe refund / reopen / 安全退款重开", "upside": "protect trust and retry", "risk": "slower payout, but no dead end", "source_sink": "refund reserve → reopen reserve", "live_count": recovery_count, "command": "/work reject latest Safe refund: record customer delivery gap, evidence package issue, refund confirmation, seller chargeback risk, reopen condition, next action, and self-review.", "alternative_commands": ["/work reopen latest Revision route: restate customer deliverable, evidence package, rating standard, risk controls, next action, and self-review."]},
+                {"card_id": "faction_reputation", "label": "Faction reputation / 阵营声望", "upside": "rank unlock and better routes", "risk": "profit is slower than direct sales", "source_sink": "standing delta", "live_count": self.world.world_faction_standings.len(), "command": "/world action Build faction reputation: submit customer deliverable, evidence package, risk controls, next ally action, and self-review."},
+                {"card_id": "company_supply", "label": "Company supply / 公司供给", "upside": "repeatable listings and market depth", "risk": "requires quality and refresh cadence", "source_sink": "asset → company → listing", "live_count": listed_count, "command": "/sell latest Company supply listing: describe customer deliverable, price, evidence package, risk controls, acceptance standard, next action, and self-review."}
             ],
             "retention_calendar": {
                 "season_id": "preseason-zero",
@@ -1998,7 +1998,11 @@ impl<'a> ClientAppProjectionContext<'a> {
                     "metric": "real_player_comprehension_cost",
                     "label": "Rate, reopen, or refund current commission / 评级、重开或退款当前委托",
                     "panel_id": WORLD_ROUTE_COMMERCE_PANEL_ID,
-                    "command": "/work accept|reject|reopen latest <reason + evidence gaps>",
+                    "command": "/work accept latest Acceptance confirmation: verify customer deliverable, evidence package, risk controls, next collaboration action, and self-review.",
+                    "alternative_commands": [
+                        "/work reject latest Refund rejection: record customer delivery gap, evidence package issue, risk controls, refund state, next recovery action, and self-review.",
+                        "/work reopen latest Revision route: restate customer deliverable, evidence package, rating standard, risk controls, next action, and self-review."
+                    ],
                     "success_signal": "quest_rating_or_feedback_loop_visible"
                 },
                 {
@@ -2007,7 +2011,7 @@ impl<'a> ClientAppProjectionContext<'a> {
                     "metric": "economy_social_strategy_depth",
                     "label": "Choose profit, reputation, or co-op route / 选择收益、声望或协作路线",
                     "panel_id": WORLD_ROUTE_COMMERCE_PANEL_ID,
-                    "command": "/world action compare market, faction, guild, and recovery routes",
+                    "command": "/world action Compare routes: evaluate market profit, faction standing, guild cooperation, recovery path, customer deliverable, evidence package, risk controls, next action, and self-review.",
                     "success_signal": "strategy_tradeoff_visible"
                 },
                 {
@@ -2042,7 +2046,10 @@ impl<'a> ClientAppProjectionContext<'a> {
                 "settlement_recovery_work_count": settlement_recovery_work_count,
                 "reopenable_work_count": reopenable_work_count,
                 "open_work_count": open_work_count,
-                "settlement_recovery_command": "/work reject|cancel latest <retry settlement + ledger blocker>",
+                "settlement_recovery_command": "/work reject latest Settlement recovery: confirm customer delivery gap, evidence package, refund or chargeback state, ledger blocker, risk controls, next action, and self-review.",
+                "settlement_recovery_alternative_commands": [
+                    "/work cancel latest Cancellation settlement: confirm customer delivery cancellation reason, evidence package, refund state, seller chargeback, risk controls, next calibration, and self-review."
+                ],
                 "player_copy": "If a result fails, the player sees why, which funds moved, whether settlement retry must happen before reopen, and the exact reopen/refund route instead of a dead end."
             },
             "strategy_depth": {
@@ -2170,7 +2177,7 @@ impl<'a> ClientAppProjectionContext<'a> {
             "duel": {
                 "provider_style": "pokemon_face_to_face",
                 "match_id": "face-duel-001",
-                "command": "/duel nearby <出招>",
+                "command": "/duel nearby Scout opponent intent with Oracle Scout; record fairness evidence, risk controls, and next action.",
             }
         })
     }
@@ -2327,7 +2334,7 @@ impl<'a> ClientAppModulesProjection<'a> {
                 "live_event_count": self.map_metrics.live_event_count,
                 "player_density_mode": self.map_metrics.player_density_mode.clone(),
                 "primary_command": "/map",
-                "secondary_command": "/go <direction|node-id>",
+                "secondary_command": "/go west",
                 "summary": format!(
                     "{} / {} · 区域 {} · {} 个附近热点 · {} 个实时事件 · {} 密度",
                     self.current_node_name,
@@ -2343,7 +2350,7 @@ impl<'a> ClientAppModulesProjection<'a> {
                 "name": "面对面切磋",
                 "style": "宝可梦式附近对战",
                 "status": "可玩",
-                "primary_command": "/duel nearby <出招>",
+                "primary_command": "/duel nearby Scout opponent intent with Oracle Scout; record fairness evidence, risk controls, and next action.",
                 "match_id": "face-duel-001",
                 "summary": "面对面选择 Agent 阵容、出招、评分和奖励",
             }),

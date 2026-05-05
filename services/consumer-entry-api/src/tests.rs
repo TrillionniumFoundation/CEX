@@ -1252,6 +1252,56 @@ fn world_client_surfaces_expose_projection_layer_contracts() {
         app["economy_retention_ops"]["playability_balance_config"]["contract_version"],
         "trillionnium_playability_balance_config_v1"
     );
+
+    fn collect_slash_commands(value: &Value, commands: &mut Vec<String>) {
+        match value {
+            Value::Object(object) => {
+                for (key, child) in object {
+                    if key.ends_with("command") || key.ends_with("commands") {
+                        match child {
+                            Value::String(command) if command.trim_start().starts_with('/') => {
+                                commands.push(command.clone());
+                            }
+                            Value::Array(items) => {
+                                for item in items {
+                                    if let Some(command) = item.as_str() {
+                                        if command.trim_start().starts_with('/') {
+                                            commands.push(command.to_string());
+                                        }
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    collect_slash_commands(child, commands);
+                }
+            }
+            Value::Array(items) => {
+                for item in items {
+                    collect_slash_commands(item, commands);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut slash_commands = Vec::new();
+    collect_slash_commands(&app, &mut slash_commands);
+    assert!(slash_commands.len() >= 20);
+    for command in &slash_commands {
+        assert!(
+            !command.contains('|') && !command.contains('<') && !command.contains('>'),
+            "first-session/player command should be concrete, not syntax shorthand: {command}"
+        );
+        if command.starts_with("/work ")
+            || command.starts_with("/world action ")
+            || command.starts_with("/sell ")
+            || command.starts_with("/contract ")
+        {
+            assert_hidden_test_ready_prompt(command, &route_command_body(command));
+        }
+    }
 }
 
 #[test]
@@ -1297,10 +1347,24 @@ fn playability_coach_separates_settlement_recovery_from_reopenable_work() {
     ] {
         assert!(recovery_states.iter().any(|state| state == expected_state));
     }
-    assert!(recovery["settlement_recovery_command"]
+    let settlement_recovery_command = recovery["settlement_recovery_command"]
         .as_str()
-        .unwrap_or("")
-        .contains("reject|cancel"));
+        .unwrap_or("");
+    assert!(settlement_recovery_command.starts_with("/work reject latest"));
+    assert!(!settlement_recovery_command.contains('|'));
+    assert_hidden_test_ready_prompt(
+        "settlement_recovery_command",
+        &route_command_body(settlement_recovery_command),
+    );
+    let settlement_recovery_alternatives = recovery["settlement_recovery_alternative_commands"]
+        .as_array()
+        .unwrap();
+    assert!(settlement_recovery_alternatives
+        .iter()
+        .any(|command| command
+            .as_str()
+            .unwrap_or("")
+            .starts_with("/work cancel latest")));
     assert!(recovery["player_copy"]
         .as_str()
         .unwrap_or("")
@@ -1762,8 +1826,8 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(world_html.contains("evidence package, risk controls, next action"));
     assert!(world_html.contains("world-work-cancel-body"));
     assert!(world_html.contains("refund risk controls, next action, and self-review"));
-    assert!(world_html.contains("客户交付方案"));
-    assert!(world_html.contains("退款风险控制"));
+    assert!(world_html.contains("customer deliverable"));
+    assert!(world_html.contains("refund risk controls"));
 }
 
 fn prompt_has_delivery_anchor(body: &str, lower: &str) -> bool {
