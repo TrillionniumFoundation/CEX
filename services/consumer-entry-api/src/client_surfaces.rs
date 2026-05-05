@@ -1904,10 +1904,25 @@ impl<'a> ClientAppProjectionContext<'a> {
             .world
             .world_work_orders
             .iter()
+            .filter(|work_order| matches!(work_order.status.as_str(), "rejected_refunded"))
+            .count();
+        let settlement_recovery_work_count = self
+            .world
+            .world_work_orders
+            .iter()
             .filter(|work_order| {
                 matches!(
                     work_order.status.as_str(),
-                    "rejected_refunded" | "rejected_refund_hold" | "rejected_refund_failed"
+                    "rejected_refund_hold"
+                        | "rejected_refund_failed"
+                        | "rejected_pending_refund"
+                        | "rejected_chargeback_failed"
+                        | "rejected_pending_chargeback"
+                        | "cancelled_refund_hold"
+                        | "cancelled_refund_failed"
+                        | "cancel_pending_refund"
+                        | "cancelled_chargeback_failed"
+                        | "cancel_pending_chargeback"
                 )
             })
             .count();
@@ -2007,11 +2022,28 @@ impl<'a> ClientAppProjectionContext<'a> {
             ],
             "failure_recovery": {
                 "visible_surface_id": "app-playability-coach",
-                "states": ["delivery_review_hold", "rejected_pending_refund", "rejected_refunded", "reopen_reserve_hold", "cancelled_refunded"],
+                "states": [
+                    "delivery_review_hold",
+                    "rejected_pending_refund",
+                    "rejected_refund_hold",
+                    "rejected_refund_failed",
+                    "rejected_chargeback_failed",
+                    "rejected_pending_chargeback",
+                    "rejected_refunded",
+                    "reopen_reserve_hold",
+                    "cancel_pending_refund",
+                    "cancel_pending_chargeback",
+                    "cancelled_refund_hold",
+                    "cancelled_refund_failed",
+                    "cancelled_chargeback_failed",
+                    "cancelled_refunded"
+                ],
                 "reviewable_work_count": reviewable_work_count,
+                "settlement_recovery_work_count": settlement_recovery_work_count,
                 "reopenable_work_count": reopenable_work_count,
                 "open_work_count": open_work_count,
-                "player_copy": "If a result fails, the player sees why, which funds moved, and the exact reopen/refund route instead of a dead end."
+                "settlement_recovery_command": "/work reject|cancel latest <retry settlement + ledger blocker>",
+                "player_copy": "If a result fails, the player sees why, which funds moved, whether settlement retry must happen before reopen, and the exact reopen/refund route instead of a dead end."
             },
             "strategy_depth": {
                 "economy_choices": ["high_reward_delivery", "safe_refund_reopen", "faction_reputation", "company_listing_supply"],

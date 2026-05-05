@@ -1929,12 +1929,13 @@ pub(super) async fn get_world_web_shell(
         const latestWorkItem = findLatestVisibleByBuckets(visibleItems, ['purchase', 'work_order', 'delivery', 'acceptance', 'rejection', 'reopen', 'cancellation']);
         const latestTaskItem = findLatestVisibleByBuckets(visibleItems, ['event', 'contract']);
         const locationItem = firstVisibleWith('locationId');
-        const workOrderId = String((workItem && workItem.dataset.workOrderId) || '').trim();
+        const workOrderId = String(((latestWorkItem && latestWorkItem.dataset.workOrderId) || (workItem && workItem.dataset.workOrderId) || '')).trim();
         const activeTaskId = selectedTaskId || String((latestTaskItem && latestTaskItem.dataset.taskId) || '').trim();
         const linkedContractItem = findLatestVisibleByBucketAndTask(visibleItems, 'contract', activeTaskId);
         const linkedEventItem = findLatestVisibleByBucketAndTask(visibleItems, 'event', activeTaskId);
         const linkedEventCount = activeTaskId ? visibleItems.filter((item) => (item.dataset.routeBucket || '') === 'event' && String(item.dataset.taskId || '').trim() === activeTaskId).length : 0;
         const linkedContractCount = activeTaskId ? visibleItems.filter((item) => (item.dataset.routeBucket || '') === 'contract' && String(item.dataset.taskId || '').trim() === activeTaskId).length : 0;
+        const latestWorkBucket = String((latestWorkItem && latestWorkItem.dataset.routeBucket) || '').trim();
         const locationId = String((((selection || {{}}).locationId) || ((locationItem && locationItem.dataset.locationId) || ''))).trim();
         let filteredTaskGraph = routeTaskGraphItems;
         if (activeTaskId) {{
@@ -1961,7 +1962,7 @@ pub(super) async fn get_world_web_shell(
           workOrderId,
           contractId,
           listingId,
-          latestWorkBucket: String((latestWorkItem && latestWorkItem.dataset.routeBucket) || '').trim(),
+          latestWorkBucket,
         }});
         const draftBody = buildRouteActionDraft(selection, {{ locationId, taskId: activeTaskId, eventLabel, workOrderId, contractId, listingId, recommendedLabel: (nextStep || {{}}).label || '' }});
         if (workOrderId) {{
@@ -1973,8 +1974,8 @@ pub(super) async fn get_world_web_shell(
         if (routeFlowActions) {{
           const actions = [];
           const actionKeys = new Set();
-          if (nextStep) pushRouteFlowActionButton(actions, actionKeys, nextStep);
           if (opportunityAction) pushRouteFlowActionButton(actions, actionKeys, opportunityAction);
+          if (nextStep) pushRouteFlowActionButton(actions, actionKeys, nextStep);
           if (locationId || draftBody) {{
             pushRouteFlowActionButton(actions, actionKeys, buildDraftWorldAction(locationId, activeTaskId, draftBody));
           }}
@@ -2001,7 +2002,7 @@ pub(super) async fn get_world_web_shell(
               locationId: String(linkedEventItem.dataset.locationId || ''),
             }}));
           }}
-          if (workOrderId) {{
+          if (workOrderId && (!latestWorkBucket || ['purchase', 'work_order', 'reopen'].includes(latestWorkBucket))) {{
             pushRouteFlowActionButton(actions, actionKeys, buildWorldWorkLaneAction('delivery', workOrderId, {{ label: routePhrase('Advance commission', '推进委托'), locationId }}));
           }}
           if (contractId) {{
@@ -2034,7 +2035,7 @@ pub(super) async fn get_world_web_shell(
         const workLabel = routePhrase(workOrderId || 'no commission yet', workOrderId || '暂无委托');
         routeFlowStatus.textContent = routePhrase('Adventure route: ' + mapText(selection.title || 'focus') + ' → event ' + mapText(eventLabel) + ' · commission ' + workLabel + ' · contract ' + contractLabel + routeOpportunitySegment(opportunityTask) + '.', '冒险路线：' + (selection.title || '焦点') + ' → 事件 ' + eventLabel + ' · 委托 ' + workLabel + ' · 契约 ' + contractLabel + routeOpportunitySegment(opportunityTask) + '。');
         if (routeNextStepStatus) {{
-          routeNextStepStatus.textContent = ((nextStep || {{}}).status) || routePhrase('Recommended next step: draft a world action for the current route.', '推荐下一步：为当前路线起草世界行动。');
+          routeNextStepStatus.textContent = ((opportunityAction || {{}}).status) || ((nextStep || {{}}).status) || routePhrase('Recommended next step: draft a world action for the current route.', '推荐下一步：为当前路线起草世界行动。');
         }}
         if (routeEventBriefStatus) {{
           routeEventBriefStatus.textContent = routeEventBriefText(eventSignalText, false);
@@ -2043,7 +2044,8 @@ pub(super) async fn get_world_web_shell(
           routeLinkStatus.textContent = routeLinkStatusText({{ taskId: activeTaskId, linkedEventCount, linkedContractCount, opportunityTask, inFocus: true, emptyText: '关联任务路线：当前焦点没有事件/契约链接。' }});
         }}
         if (actionConsoleStatus) {{
-          actionConsoleStatus.textContent = routePhrase('Current world action: ' + mapText(selection.title || 'focus') + ' · ' + (locationId || 'unknown place') + ' · event ' + mapText(eventLabel) + ' · commission ' + workLabel + ' · contract ' + contractLabel + routeOpportunitySegment(opportunityTask) + ' · next step ' + mapText(((nextStep || {{}}).label) || 'Draft world action') + '.', '当前世界行动：' + (selection.title || '焦点') + ' · ' + (locationId || '未知地点') + ' · 事件 ' + eventLabel + ' · 委托 ' + workLabel + ' · 契约 ' + contractLabel + routeOpportunitySegment(opportunityTask) + ' · 下一步 ' + (((nextStep || {{}}).label) || '起草世界行动') + '。');
+          const effectiveNextAction = opportunityAction || nextStep || {{}};
+          actionConsoleStatus.textContent = routePhrase('Current world action: ' + mapText(selection.title || 'focus') + ' · ' + (locationId || 'unknown place') + ' · event ' + mapText(eventLabel) + ' · commission ' + workLabel + ' · contract ' + contractLabel + routeOpportunitySegment(opportunityTask) + ' · next step ' + mapText(effectiveNextAction.label || 'Draft world action') + '.', '当前世界行动：' + (selection.title || '焦点') + ' · ' + (locationId || '未知地点') + ' · 事件 ' + eventLabel + ' · 委托 ' + workLabel + ' · 契约 ' + contractLabel + routeOpportunitySegment(opportunityTask) + ' · 下一步 ' + (effectiveNextAction.label || '起草世界行动') + '。');
         }}
       }};
       {shared_map_focus_core_js}

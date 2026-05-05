@@ -348,10 +348,7 @@ pub(super) fn build_world_indexes(world: &WorldState) -> WorldIndexes {
                 .latest_rejectable_work_order_by_buyer
                 .insert(work_order.buyer_matrix_user_id.clone(), index);
         }
-        if matches!(
-            work_order.status.as_str(),
-            "rejected_refunded" | "rejected_refund_hold" | "rejected_refund_failed"
-        ) {
+        if work_order.status == "rejected_refunded" {
             indexes
                 .latest_reopenable_work_order_by_buyer
                 .insert(work_order.buyer_matrix_user_id.clone(), index);

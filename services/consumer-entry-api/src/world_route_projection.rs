@@ -37,6 +37,28 @@ fn world_route_english_visible_text(value: &str) -> String {
         ("世界状态变化", "world-state changes"),
         ("复盘", "review"),
         ("评级标准", "rating criteria"),
+        ("拒收清算", "rejection settlement"),
+        ("取消清算", "cancellation settlement"),
+        ("卖家扣回资金", "seller chargeback funds"),
+        ("卖家扣回", "seller chargeback"),
+        ("买家不二次退款", "buyer avoids double refund"),
+        ("买家退款", "buyer refund"),
+        ("账本错误", "ledger error"),
+        ("账本", "ledger"),
+        ("清账", "settle ledger"),
+        ("清算", "settlement"),
+        ("扣回", "chargeback"),
+        ("退款", "refund"),
+        ("重试", "retry"),
+        ("恢复", "recover"),
+        ("重开修订委托", "reopen revision commission"),
+        ("修订委托", "revision commission"),
+        ("修订成果", "revised result"),
+        ("重新校准需求", "recalibrate requirements"),
+        ("阻塞原因", "blocker reason"),
+        ("预留资金", "reserved funds"),
+        ("买家", "buyer"),
+        ("卖家", "seller"),
         ("缺失证据", "missing evidence"),
         ("异议", "objections"),
         ("委托目标", "commission goal"),
@@ -1466,6 +1488,32 @@ struct WorldRouteTaskDerivationContext<'a> {
 }
 
 impl<'a> WorldRouteTaskDerivationContext<'a> {
+    fn latest_status_needs_refund_retry(&self) -> bool {
+        matches!(
+            self.latest_status,
+            "rejected_refund_hold"
+                | "rejected_refund_failed"
+                | "rejected_pending_refund"
+                | "cancelled_refund_hold"
+                | "cancelled_refund_failed"
+                | "cancel_pending_refund"
+        )
+    }
+
+    fn latest_status_needs_chargeback_retry(&self) -> bool {
+        matches!(
+            self.latest_status,
+            "rejected_chargeback_failed"
+                | "rejected_pending_chargeback"
+                | "cancelled_chargeback_failed"
+                | "cancel_pending_chargeback"
+        )
+    }
+
+    fn latest_status_needs_settlement_retry(&self) -> bool {
+        self.latest_status_needs_refund_retry() || self.latest_status_needs_chargeback_retry()
+    }
+
     fn outcome_summary(&self) -> String {
         match self.latest_bucket {
             "completion" if !self.latest_completion_id.is_empty() => format!(
@@ -1591,18 +1639,46 @@ impl<'a> WorldRouteTaskDerivationContext<'a> {
                     self.latest_title
                 ),
             },
-            "rejection" => WorldRouteOpportunity {
-                kind: "revision_recovery".to_string(),
+            "rejection" if self.latest_status_needs_chargeback_retry() => {
+                WorldRouteOpportunity {
+                    kind: "rejection_chargeback_recovery".to_string(),
+                    hint: format!(
+                        "先恢复卖家扣回/账本清算，再重开修订路线；不要直接提交成果{}{}。",
+                        if self.latest_location_id.is_empty() { "" } else { " @ " },
+                        self.latest_location_id
+                    ),
+                    playbook: format!(
+                        "复核 {} 的拒收退款已完成且买家不会二次退款；补足卖家可扣回余额，重试拒收清算，清账后再重开修订。",
+                        self.latest_title
+                    ),
+                    command: "/work reject latest 重试拒收卖家扣回：确认买家不二次退款、卖家扣回资金已恢复、账本错误已清理，再决定是否重开修订。".to_string(),
+                }
+            }
+            "rejection" if self.latest_status_needs_refund_retry() => WorldRouteOpportunity {
+                kind: "rejection_refund_recovery".to_string(),
                 hint: format!(
-                    "调整委托方案，收紧评级标准，并重新打开下一条支线{}{}。",
+                    "先恢复买家退款清算，再处理卖家扣回和重开路线；不要直接提交成果{}{}。",
                     if self.latest_location_id.is_empty() { "" } else { " @ " },
                     self.latest_location_id
                 ),
                 playbook: format!(
-                    "列出 {} 的异议，补齐缺失证据，重述评级标准，再重新提交成果并打开下一条支线。",
+                    "复核 {} 的拒收退款阻塞原因，恢复买家预留/退款，再让拒收流程继续到卖家扣回和重开修订。",
                     self.latest_title
                 ),
-                command: "/work deliver latest 修订成果：补齐证据、修复缺口、重新对齐评级标准、风险复盘和下一步。".to_string(),
+                command: "/work reject latest 重试拒收退款：确认买家预留资金、退款状态、卖家扣回风险、证据缺口和下一步恢复计划。".to_string(),
+            },
+            "rejection" => WorldRouteOpportunity {
+                kind: "revision_reopen".to_string(),
+                hint: format!(
+                    "拒收清算完成后，先重开委托，再提交修订成果{}{}。",
+                    if self.latest_location_id.is_empty() { "" } else { " @ " },
+                    self.latest_location_id
+                ),
+                playbook: format!(
+                    "列出 {} 的异议，确认退款/扣回已清账，重述评级标准，先重开委托，再提交修订成果。",
+                    self.latest_title
+                ),
+                command: "/work reopen latest 重开修订委托：补齐证据缺口、重述客户交付方案、更新评级标准、风险控制、下一步行动和自检复盘。".to_string(),
             },
             "reopen" => WorldRouteOpportunity {
                 kind: "reopen_recovery".to_string(),
@@ -1617,6 +1693,21 @@ impl<'a> WorldRouteTaskDerivationContext<'a> {
                 ),
                 command: "/work deliver latest 重开后修订成果：补齐证据、修复重开要求、更新评级清单和下一步。".to_string(),
             },
+            "cancellation" if self.latest_status_needs_settlement_retry() => {
+                WorldRouteOpportunity {
+                    kind: "cancellation_settlement_recovery".to_string(),
+                    hint: format!(
+                        "先恢复取消退款/卖家扣回清算，再重新校准需求；不要直接发布新悬赏{}{}。",
+                        if self.latest_location_id.is_empty() { "" } else { " @ " },
+                        self.latest_location_id
+                    ),
+                    playbook: format!(
+                        "复核 {} 的取消清算状态，避免买家二次退款或卖家未扣回，重试取消流程，清账后再缩小范围重新发布。",
+                        self.latest_title
+                    ),
+                    command: "/work cancel latest 重试取消清算：确认买家不二次退款、卖家扣回资金已恢复、账本错误已清理、重新校准需求和下一步。".to_string(),
+                }
+            }
             "cancellation" => WorldRouteOpportunity {
                 kind: "smaller_scope_requalification".to_string(),
                 hint: format!(

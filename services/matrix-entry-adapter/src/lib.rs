@@ -5639,7 +5639,13 @@ fn specialize_route_opportunity(
     );
     let is_recovery_kind = matches!(
         route_next_opportunity_kind,
-        "revision_recovery" | "reopen_recovery" | "smaller_scope_requalification"
+        "revision_recovery"
+            | "revision_reopen"
+            | "reopen_recovery"
+            | "rejection_refund_recovery"
+            | "rejection_chargeback_recovery"
+            | "cancellation_settlement_recovery"
+            | "smaller_scope_requalification"
     );
 
     let (hint, playbook, command) = match surface {
@@ -6889,28 +6895,93 @@ fn build_trillionnium_world_work_rejection_matrix_reply(value: &Value) -> Value 
         .get("status")
         .and_then(Value::as_str)
         .unwrap_or("rejected_refunded");
+    let rejection_needs_refund_retry = matches!(
+        status,
+        "rejected_refund_hold" | "rejected_refund_failed" | "rejected_pending_refund"
+    );
+    let rejection_needs_chargeback_retry = matches!(
+        status,
+        "rejected_chargeback_failed" | "rejected_pending_chargeback"
+    );
+    let (
+        action_label,
+        command_hint,
+        stage_summary,
+        opportunity_kind,
+        feedback_focus,
+        opportunity_hint,
+        opportunity_playbook,
+    ) = if rejection_needs_chargeback_retry {
+        (
+            "Retry rejection settlement",
+            format!(
+                "/work reject latest 重试拒收卖家扣回：围绕 {} 确认买家不二次退款、卖家扣回资金、ledger blocker、evidence gap 和 next action。",
+                work_order_id
+            ),
+            format!(
+                "Work {} · {} → recover seller chargeback → reopen only after settlement",
+                work_order_id, status
+            ),
+            "rejection_chargeback_recovery",
+            "Buyer refund is already protected; recover seller chargeback before any reopen or redelivery.",
+            format!(
+                "Recover {} by retrying rejection settlement first, not by sending the player into a redelivery lane.",
+                work_order_id
+            ),
+            "Verify buyer is not refunded twice, restore seller chargeback funds, clear the ledger blocker, then reopen the revision route.",
+        )
+    } else if rejection_needs_refund_retry {
+        (
+            "Retry rejection refund",
+            format!(
+                "/work reject latest 重试拒收退款：围绕 {} 确认买家预留资金、refund blocker、卖家扣回风险、evidence gap 和 next action。",
+                work_order_id
+            ),
+            format!(
+                "Work {} · {} → recover buyer refund → continue settlement",
+                work_order_id, status
+            ),
+            "rejection_refund_recovery",
+            "Buyer refund is blocked; recover settlement before any reopen or redelivery.",
+            format!(
+                "Recover {} by retrying the refund leg before reopening the revision route.",
+                work_order_id
+            ),
+            "Restore buyer reserve/refund state, record the blocker, then continue seller chargeback and reopen only after settlement is clear.",
+        )
+    } else {
+        (
+            "Reopen revision route",
+            format!(
+                "/work reopen latest 重开返工委托：围绕 {} 补齐 evidence、修复 gap、重申 acceptance standard、timeline 和 next action。",
+                work_order_id
+            ),
+            format!(
+                "Work {} · {} → settlement clear → reopen revision route",
+                work_order_id, status
+            ),
+            "revision_reopen",
+            "Capture the buyer objections, patch missing proof, relock acceptance criteria, and reopen before redelivery.",
+            format!(
+                "Recover {} with a controlled reopen step before sending any revised result.",
+                work_order_id
+            ),
+            "List the rejection reasons, close each evidence gap, reserve the revision lane again, then redeliver with explicit proof checkpoints.",
+        )
+    };
     let route = RouteStoryCardContext::from_value(value, "delivery-dock").with_custom_follow_up(
         work_order_id,
-        "Prepare revision redelivery",
+        action_label,
         "world-commerce-panel",
-        format!(
-            "/work deliver latest 修订交付：围绕 {} 补齐 evidence、修复 gap、重申 acceptance standard、timeline 和 next action。",
-            work_order_id
-        ),
+        command_hint,
         "zbj-market-gate",
         "delivery-dock",
-        format!(
-            "Work {} · {} → patch evidence gaps → redeliver",
-            work_order_id, status
-        ),
-        "revision_recovery",
+        stage_summary,
+        opportunity_kind,
         format!("Work order {} · {}", work_order_id, status),
-        "Capture the buyer objections, patch missing proof, relock acceptance criteria, and stage a cleaner redelivery package.",
-        format!(
-            "Recover {} with a tighter revision pass before reopening any growth or upsell lane.",
-            work_order_id
-        ),
-        "List the rejection reasons, close each evidence gap, reset the acceptance bar, and redeliver with explicit proof checkpoints.",
+        feedback_focus,
+        opportunity_hint,
+        opportunity_playbook,
     );
     let route_text_block = route.text_block("Route Follow-up", true);
     let route_html_block = route.html_block("Route Follow-up", true);
@@ -7031,28 +7102,80 @@ fn build_trillionnium_world_work_cancellation_matrix_reply(value: &Value) -> Val
         .get("status")
         .and_then(Value::as_str)
         .unwrap_or("cancelled_refunded");
+    let cancellation_needs_refund_retry = matches!(
+        status,
+        "cancelled_refund_hold" | "cancelled_refund_failed" | "cancel_pending_refund"
+    );
+    let cancellation_needs_chargeback_retry = matches!(
+        status,
+        "cancelled_chargeback_failed" | "cancel_pending_chargeback"
+    );
+    let (
+        action_label,
+        panel_id,
+        command_hint,
+        node_id,
+        stage_summary,
+        opportunity_kind,
+        feedback_focus,
+        opportunity_hint,
+        opportunity_playbook,
+    ) = if cancellation_needs_refund_retry || cancellation_needs_chargeback_retry {
+        (
+            "Retry cancellation settlement",
+            "world-commerce-panel",
+            format!(
+                "/work cancel latest 重试取消清算：围绕 {} 确认买家不二次退款、卖家扣回资金、ledger blocker、重新校准需求和 next action。",
+                work_order_id
+            ),
+            "delivery-dock",
+            format!(
+                "Work {} · {} → recover cancellation settlement → requal only after ledger clear",
+                work_order_id, status
+            ),
+            "cancellation_settlement_recovery",
+            "Cancellation settlement is blocked; retry refund/chargeback before relisting or opening new scope.",
+            format!(
+                "Recover {} by clearing cancellation settlement before sending the player into a relist lane.",
+                work_order_id
+            ),
+            "Verify buyer is not refunded twice, restore seller chargeback funds if needed, clear the ledger blocker, then re-scope only after settlement is complete.",
+        )
+    } else {
+        (
+            "Launch smaller-scope requal",
+            "world-listings-panel",
+            format!(
+                "/sell latest 小范围试单方案：围绕 {} 重做更小 scope、deliverable、evidence、risk gate、price 和 next action。",
+                work_order_id
+            ),
+            "client-board",
+            format!(
+                "Work {} · {} → shrink scope and risk → relist",
+                work_order_id, status
+            ),
+            "smaller_scope_requalification",
+            "Reduce risk, tighten the starter deliverable, and relaunch only with proof the buyer can validate quickly.",
+            format!(
+                "Recover {} with a smaller-scoped or better-qualified offer before restarting the work lane.",
+                work_order_id
+            ),
+            "Re-scope the offer, lower the commitment surface, clarify evidence and acceptance, then relist a safer starter package.",
+        )
+    };
     let route = RouteStoryCardContext::from_value(value, "client-board").with_custom_follow_up(
         work_order_id,
-        "Launch smaller-scope requal",
-        "world-listings-panel",
-        format!(
-            "/sell latest 小范围试单方案：围绕 {} 重做更小 scope、deliverable、evidence、risk gate、price 和 next action。",
-            work_order_id
-        ),
+        action_label,
+        panel_id,
+        command_hint,
         "zbj-market-gate",
-        "client-board",
-        format!(
-            "Work {} · {} → shrink scope and risk → relist",
-            work_order_id, status
-        ),
-        "smaller_scope_requalification",
+        node_id,
+        stage_summary,
+        opportunity_kind,
         format!("Work order {} · {}", work_order_id, status),
-        "Reduce risk, tighten the starter deliverable, and relaunch only with proof the buyer can validate quickly.",
-        format!(
-            "Recover {} with a smaller-scoped or better-qualified offer before restarting the work lane.",
-            work_order_id
-        ),
-        "Re-scope the offer, lower the commitment surface, clarify evidence and acceptance, then relist a safer starter package.",
+        feedback_focus,
+        opportunity_hint,
+        opportunity_playbook,
     );
     let route_text_block = route.text_block("Route Follow-up", true);
     let route_html_block = route.html_block("Route Follow-up", true);
@@ -9351,6 +9474,28 @@ mod tests {
                 "next_opportunity_command": "/sell latest 复购方案：延续上一次完成结果，补充 deliverable、proof、price 和 next action。"
             }]}
         }));
+        let rejection_settlement = super::build_trillionnium_world_work_rejection_matrix_reply(
+            &json!({
+                "work_order": {"work_order_id": "world-work-order-004", "status": "rejected_chargeback_failed"},
+                "purchase": {"status": "rejected_chargeback_failed"},
+                "rejection": {"rejection_id": "world-rejection-004", "status": "rejected_chargeback_failed", "refund_status": "refunded"},
+                "route_preview": {"item_count": 2, "task_linked_count": 1},
+                "route_task_graph": {"task_count": 1, "tasks": [{
+                    "task_id": "task-route-013",
+                    "suggested_action_label": "Patch revision evidence",
+                    "suggested_panel_id": "world-action-console",
+                    "suggested_matrix_command": "/world action 记录修订范围、证据缺口和下一步。",
+                    "latest_location_id": "zbj-market-gate",
+                    "route_stage_summary": "2 events → 1 work orders → rejected chargeback failed",
+                    "outcome_summary": "Work order world-work-order-004 · rejected_chargeback_failed",
+                    "feedback_focus": "Recover seller chargeback before reopening.",
+                    "next_opportunity_kind": "repeat_order_upsell_referral",
+                    "next_opportunity_hint": "Do not upsell until settlement is clear.",
+                    "next_opportunity_playbook": "Clear settlement before growth.",
+                    "next_opportunity_command": "/sell latest stale growth command should be overridden."
+                }]}
+            }),
+        );
         let reopen = super::build_trillionnium_world_work_reopen_matrix_reply(&json!({
             "work_order": {"work_order_id": "world-work-order-002", "status": "open"},
             "purchase": {"status": "reopened_reserved"},
@@ -9391,6 +9536,27 @@ mod tests {
                 "next_opportunity_command": "/world action 记录复购机会、proof 包和下一步。"
             }]}
         }));
+        let cancellation_settlement =
+            super::build_trillionnium_world_work_cancellation_matrix_reply(&json!({
+                "work_order": {"work_order_id": "world-work-order-005", "status": "cancelled_chargeback_failed"},
+                "purchase": {"status": "cancelled_chargeback_failed"},
+                "cancellation": {"cancellation_id": "world-cancel-005", "status": "cancelled_chargeback_failed", "refund_status": "refunded"},
+                "route_preview": {"item_count": 2, "task_linked_count": 1},
+                "route_task_graph": {"task_count": 1, "tasks": [{
+                    "task_id": "task-route-014",
+                    "suggested_action_label": "Launch smaller pilot",
+                    "suggested_panel_id": "world-action-console",
+                    "suggested_matrix_command": "/world action 记录重资格筛选、starter scope 和下一步。",
+                    "latest_location_id": "zbj-market-gate",
+                    "route_stage_summary": "2 events → 1 work orders → cancellation chargeback failed",
+                    "outcome_summary": "Work order world-work-order-005 · cancelled_chargeback_failed",
+                    "feedback_focus": "Recover cancellation settlement before relisting.",
+                    "next_opportunity_kind": "repeat_order_upsell_referral",
+                    "next_opportunity_hint": "Do not relist until settlement is clear.",
+                    "next_opportunity_playbook": "Clear settlement before growth.",
+                    "next_opportunity_command": "/sell latest stale relist command should be overridden."
+                }]}
+            }));
 
         for (
             reply,
@@ -9406,13 +9572,24 @@ mod tests {
             (
                 &rejection,
                 "task-route-010",
-                "revision_recovery",
-                "/work deliver latest",
+                "revision_reopen",
+                "/work reopen latest",
                 "delivery-dock",
-                "Open delivery lane",
+                "Open reopen lane",
                 "world-commerce-panel",
-                "world-work-deliver-id",
-                "world-work-deliver-body",
+                "world-work-reopen-id",
+                "world-work-reopen-body",
+            ),
+            (
+                &rejection_settlement,
+                "task-route-013",
+                "rejection_chargeback_recovery",
+                "/work reject latest",
+                "delivery-dock",
+                "Open rejection lane",
+                "world-commerce-panel",
+                "world-work-reject-id",
+                "world-work-reject-body",
             ),
             (
                 &reopen,
@@ -9435,6 +9612,17 @@ mod tests {
                 "world-listings-panel",
                 "world-listing-company-id",
                 "world-listing-body",
+            ),
+            (
+                &cancellation_settlement,
+                "task-route-014",
+                "cancellation_settlement_recovery",
+                "/work cancel latest",
+                "delivery-dock",
+                "Open cancellation lane",
+                "world-commerce-panel",
+                "world-work-cancel-id",
+                "world-work-cancel-body",
             ),
         ] {
             let card = reply.get("cex_card").unwrap();

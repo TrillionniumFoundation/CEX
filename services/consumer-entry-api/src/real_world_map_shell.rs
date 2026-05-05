@@ -1272,6 +1272,7 @@ pub(super) fn real_world_map_route_flow_buttons_js() -> &'static str {
           locationId: task.latest_location_id || fallbackLocationId || '',
           targetNodeId: task.next_opportunity_node_id || '',
           taskId: task.task_id || '',
+          status: task.next_opportunity_hint || task.next_opportunity_command || '',
           body: task.next_opportunity_body || task.next_opportunity_command || '',
         });
       };
@@ -1293,7 +1294,7 @@ pub(super) fn real_world_map_route_flow_buttons_js() -> &'static str {
         const source = task || {};
         const suggestedAction = buildTaskSuggestedAction(source);
         const opportunityAction = buildRouteOpportunityAction(source, source.latest_location_id || '');
-        return routeFlowActionButtonHtml(suggestedAction, className) + routeFlowActionButtonHtml(opportunityAction, className);
+        return routeFlowActionButtonHtml(opportunityAction, className) + routeFlowActionButtonHtml(suggestedAction, className);
       };
       const indexedRouteActionButtonHtml = (action, index, className = 'trillionnium-app-route-action') => `<button type="button" class="focus-chip ${escapeHtml(className)}" data-route-action-index="${escapeHtml(index)}">${escapeHtml(mapText((action || {}).label || '路线行动'))}</button>`;
 "#

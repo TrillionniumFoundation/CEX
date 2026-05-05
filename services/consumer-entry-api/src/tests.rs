@@ -5,8 +5,9 @@ use super::{
     build_chat_session_rate_limit_key, build_chat_user_rate_limit_key, build_matrix_identity_scope,
     build_matrix_org_rate_limit_key, build_matrix_rate_limit_key, build_matrix_replay_key,
     build_matrix_room_rate_limit_key, build_matrix_session_rate_limit_key,
-    build_matrix_user_rate_limit_key, build_router, client_app_json, client_feed_json,
-    default_league_state, encode_league_web_session, evaluate_identity_binding_reload_governance,
+    build_matrix_user_rate_limit_key, build_router, build_world_indexes,
+    build_world_route_artifacts, client_app_json, client_feed_json, default_league_state,
+    encode_league_web_session, evaluate_identity_binding_reload_governance,
     get_client_app_web_shell, get_world_web_shell, league_hash_id, league_hidden_test_event,
     league_state_hash, league_state_repository_write_set_for_command,
     league_state_sql_cutover_plan_json, league_state_sql_shadow_validation_json,
@@ -29,9 +30,10 @@ use super::{
     SessionAuthIssuerRegistryIssuer, SessionAuthIssuerRegistryMetadata,
     SessionAuthIssuerRegistryRuntimeState, UserSessionAuthClaims, WorldAsset, WorldCompany,
     WorldContract, WorldContractCompletion, WorldEconomyEvent, WorldEvent, WorldListing,
-    WorldMapNode, WorldPlayerPosition, WorldPurchase, WorldRelationship, WorldShop, WorldWorkOrder,
-    DEFAULT_LEAGUE_LLM_JUDGE_TIMEOUT_MS, DEFAULT_LEAGUE_WEB_SESSION_TTL_SECS,
-    DEFAULT_MAX_TEXT_CHARS, TRILLIONNIUM_REPOSITORY_MIGRATION_FLOOR, USER_SESSION_ASSERTION_HEADER,
+    WorldMapNode, WorldPlayerPosition, WorldPurchase, WorldRelationship, WorldShop,
+    WorldWorkCancellation, WorldWorkOrder, WorldWorkRejection, DEFAULT_LEAGUE_LLM_JUDGE_TIMEOUT_MS,
+    DEFAULT_LEAGUE_WEB_SESSION_TTL_SECS, DEFAULT_MAX_TEXT_CHARS,
+    TRILLIONNIUM_REPOSITORY_MIGRATION_FLOOR, USER_SESSION_ASSERTION_HEADER,
     USER_SESSION_SIGNATURE_HEADER, WORLD_ROUTE_ACTION_TEXTAREA_ID, WORLD_ROUTE_CONTRACTS_PANEL_ID,
     WORLD_ROUTE_CONTRACT_INPUT_ID, WORLD_ROUTE_WORK_DELIVER_TEXTAREA_ID,
 };
@@ -1253,6 +1255,95 @@ fn world_client_surfaces_expose_projection_layer_contracts() {
 }
 
 #[test]
+fn playability_coach_separates_settlement_recovery_from_reopenable_work() {
+    let mut league = default_league_state();
+    league.world.world_work_orders.clear();
+    let mut push_work_order = |work_order_id: &str, status: &str, created_at_epoch: i64| {
+        league.world.world_work_orders.push(WorldWorkOrder {
+            work_order_id: work_order_id.to_string(),
+            purchase_id: format!("purchase-{work_order_id}"),
+            listing_id: format!("listing-{work_order_id}"),
+            buyer_matrix_user_id: "@alice:local.dev".to_string(),
+            seller_matrix_user_id: "@merchant:local.dev".to_string(),
+            company_id: "company-playability-recovery".to_string(),
+            status: status.to_string(),
+            brief: format!("{status} work order for playability coach"),
+            value_score: 60,
+            created_at_epoch,
+        });
+    };
+    push_work_order(
+        "rejected-chargeback",
+        "rejected_chargeback_failed",
+        1_777_231_001,
+    );
+    push_work_order("cancel-refund", "cancelled_refund_hold", 1_777_231_002);
+    push_work_order("reopenable", "rejected_refunded", 1_777_231_003);
+    push_work_order("reviewable", "delivery_review_hold", 1_777_231_004);
+    push_work_order("open", "open", 1_777_231_005);
+
+    let app = client_app_json(&league, "@alice:local.dev");
+    let recovery = &app["playability_coach"]["failure_recovery"];
+    assert_eq!(recovery["settlement_recovery_work_count"], 2);
+    assert_eq!(recovery["reopenable_work_count"], 1);
+    assert_eq!(recovery["reviewable_work_count"], 1);
+    assert_eq!(recovery["open_work_count"], 1);
+    let recovery_states = recovery["states"].as_array().unwrap();
+    for expected_state in [
+        "rejected_chargeback_failed",
+        "cancelled_refund_hold",
+        "cancelled_chargeback_failed",
+        "rejected_refunded",
+    ] {
+        assert!(recovery_states.iter().any(|state| state == expected_state));
+    }
+    assert!(recovery["settlement_recovery_command"]
+        .as_str()
+        .unwrap_or("")
+        .contains("reject|cancel"));
+    assert!(recovery["player_copy"]
+        .as_str()
+        .unwrap_or("")
+        .contains("settlement retry must happen before reopen"));
+}
+
+#[test]
+fn latest_reopenable_work_order_skips_unsettled_rejection_recovery() {
+    let mut league = default_league_state();
+    league.world.world_work_orders.clear();
+    let mut push_work_order = |work_order_id: &str, status: &str, created_at_epoch: i64| {
+        league.world.world_work_orders.push(WorldWorkOrder {
+            work_order_id: work_order_id.to_string(),
+            purchase_id: format!("purchase-{work_order_id}"),
+            listing_id: format!("listing-{work_order_id}"),
+            buyer_matrix_user_id: "@alice:local.dev".to_string(),
+            seller_matrix_user_id: "@merchant:local.dev".to_string(),
+            company_id: "company-playability-recovery".to_string(),
+            status: status.to_string(),
+            brief: format!("{status} work order for latest reopen selection"),
+            value_score: 60,
+            created_at_epoch,
+        });
+    };
+    push_work_order("settled-reopenable", "rejected_refunded", 1_777_231_001);
+    push_work_order("blocked-refund", "rejected_refund_failed", 1_777_231_002);
+    push_work_order(
+        "blocked-chargeback",
+        "rejected_chargeback_failed",
+        1_777_231_003,
+    );
+
+    let indexes = build_world_indexes(&league.world);
+    let selected_index = indexes
+        .resolve_reopenable_work_order_index("latest", "@alice:local.dev")
+        .expect("latest reopenable work should resolve to the settled rejection");
+    assert_eq!(
+        league.world.world_work_orders[selected_index].work_order_id,
+        "settled-reopenable"
+    );
+}
+
+#[test]
 fn real_world_map_engine_declares_shared_renderer_adapter() {
     let league = default_league_state();
     let nodes: Vec<WorldMapNode> = league.world.world_map_nodes.values().cloned().collect();
@@ -1584,6 +1675,7 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(app_html.contains("indexedRouteActionButtonHtml"));
     assert!(app_html.contains("routeFlowActionAttrs"));
     assert!(app_html.contains("routePlayabilityBody"));
+    assert!(app_html.contains("return routeFlowActionButtonHtml(opportunityAction, className) + routeFlowActionButtonHtml(suggestedAction, className);"));
     assert!(app_html.contains("\"contract_version\":1"));
 
     let world_html = get_world_web_shell(
@@ -1651,6 +1743,20 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(world_html.contains("indexedRouteActionButtonHtml"));
     assert!(world_html.contains("routeFlowActionAttrs"));
     assert!(world_html.contains("routePlayabilityBody"));
+    assert!(world_html.contains("return routeFlowActionButtonHtml(opportunityAction, className) + routeFlowActionButtonHtml(suggestedAction, className);"));
+    assert!(world_html
+        .contains("status: task.next_opportunity_hint || task.next_opportunity_command || ''"));
+    assert!(world_html.contains("((opportunityAction || {}).status) || ((nextStep || {}).status)"));
+    assert!(world_html.contains("const effectiveNextAction = opportunityAction || nextStep || {};"));
+    assert!(world_html.contains("((latestWorkItem && latestWorkItem.dataset.workOrderId) || (workItem && workItem.dataset.workOrderId) || '')"));
+    let exact_opportunity_push = world_html
+        .find("if (opportunityAction) pushRouteFlowActionButton(actions, actionKeys, opportunityAction);")
+        .expect("world route flow should render exact task opportunity");
+    let inferred_next_step_push = world_html
+        .find("if (nextStep) pushRouteFlowActionButton(actions, actionKeys, nextStep);")
+        .expect("world route flow should render inferred fallback next step");
+    assert!(exact_opportunity_push < inferred_next_step_push);
+    assert!(world_html.contains("['purchase', 'work_order', 'reopen'].includes(latestWorkBucket)"));
     assert!(world_html.contains("\"contract_version\":1"));
     assert!(world_html.contains("customer deliverable"));
     assert!(world_html.contains("evidence package, risk controls, next action"));
@@ -2207,6 +2313,180 @@ fn world_route_command_target_maps_structured_web_targets() {
     assert_eq!(rejection.action_label, "打开返工路线");
     assert!(rejection.body.contains("缺少原始文件"));
     assert_hidden_test_ready_prompt("rejection_route_target", &rejection.body);
+}
+
+#[test]
+fn world_route_recovery_opportunities_prioritize_settlement_retry_over_unavailable_next_steps() {
+    let mut league = default_league_state();
+    league.world.world_purchases.push(WorldPurchase {
+        purchase_id: "purchase-rejection-recovery-route".to_string(),
+        listing_id: "listing-rejection-recovery-route".to_string(),
+        shop_id: "shop-rejection-recovery-route".to_string(),
+        company_id: "company-rejection-recovery-route".to_string(),
+        buyer_matrix_user_id: "@route-recovery-buyer:local.dev".to_string(),
+        seller_matrix_user_id: "@route-recovery-seller:local.dev".to_string(),
+        price_credits: 70,
+        status: "rejected_chargeback_failed".to_string(),
+        ledger_status: Some("seller_chargeback_failed".to_string()),
+        ledger_account_id: Some("seller-recovery-account".to_string()),
+        ledger_entry_id: Some("seller-original-settlement".to_string()),
+        ledger_balance_after: Some(63.0),
+        ledger_error: Some("insufficient reserved balance for consume".to_string()),
+        buyer_ledger_status: Some("reserved".to_string()),
+        buyer_ledger_account_id: Some("buyer-recovery-account".to_string()),
+        buyer_ledger_entry_id: Some("buyer-original-reserve".to_string()),
+        buyer_ledger_balance_after: Some(250.0),
+        buyer_ledger_error: None,
+        buyer_consume_status: Some("refunded".to_string()),
+        buyer_consume_entry_id: Some("buyer-refund-entry".to_string()),
+        buyer_consume_balance_after: Some(250.0),
+        buyer_consume_error: None,
+        created_at_epoch: 1_777_948_001,
+    });
+    league.world.world_work_orders.push(WorldWorkOrder {
+        work_order_id: "work-rejection-recovery-route".to_string(),
+        purchase_id: "purchase-rejection-recovery-route".to_string(),
+        listing_id: "listing-rejection-recovery-route".to_string(),
+        buyer_matrix_user_id: "@route-recovery-buyer:local.dev".to_string(),
+        seller_matrix_user_id: "@route-recovery-seller:local.dev".to_string(),
+        company_id: "company-rejection-recovery-route".to_string(),
+        status: "rejected_chargeback_failed".to_string(),
+        brief: "Rejected work waiting for seller chargeback recovery".to_string(),
+        value_score: 70,
+        created_at_epoch: 1_777_948_002,
+    });
+    league.world.world_work_rejections.push(WorldWorkRejection {
+        rejection_id: "rejection-recovery-route".to_string(),
+        work_order_id: "work-rejection-recovery-route".to_string(),
+        matrix_user_id: "@route-recovery-buyer:local.dev".to_string(),
+        body: "Rejected because evidence was missing; seller chargeback failed and needs recovery."
+            .to_string(),
+        status: "rejected_chargeback_failed".to_string(),
+        refund_status: "refunded".to_string(),
+        created_at_epoch: 1_777_948_003,
+    });
+
+    let artifacts = build_world_route_artifacts(&league.world);
+    let rejection_task = artifacts.task_graph["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|task| task["task_id"] == "work-rejection-recovery-route")
+        .expect("rejection recovery task should be visible");
+    assert_eq!(
+        rejection_task["next_opportunity_kind"],
+        "rejection_chargeback_recovery"
+    );
+    assert_eq!(
+        rejection_task["next_opportunity_panel_id"],
+        "world-commerce-panel"
+    );
+    assert_eq!(
+        rejection_task["next_opportunity_input_id"],
+        "world-work-reject-id"
+    );
+    assert_eq!(
+        rejection_task["next_opportunity_textarea_id"],
+        "world-work-reject-body"
+    );
+    assert!(rejection_task["next_opportunity_command"]
+        .as_str()
+        .unwrap_or("")
+        .contains("/work reject latest"));
+    let rejection_body = rejection_task["next_opportunity_body"]
+        .as_str()
+        .unwrap_or("");
+    assert!(rejection_body.contains("不二次退款"));
+    assert!(rejection_body.contains("卖家扣回"));
+    assert_hidden_test_ready_prompt("rejection_recovery_route_target", rejection_body);
+
+    let mut cancellation_league = default_league_state();
+    cancellation_league
+        .world
+        .world_purchases
+        .push(WorldPurchase {
+            purchase_id: "purchase-cancel-recovery-route".to_string(),
+            listing_id: "listing-cancel-recovery-route".to_string(),
+            shop_id: "shop-cancel-recovery-route".to_string(),
+            company_id: "company-cancel-recovery-route".to_string(),
+            buyer_matrix_user_id: "@route-cancel-buyer:local.dev".to_string(),
+            seller_matrix_user_id: "@route-cancel-seller:local.dev".to_string(),
+            price_credits: 65,
+            status: "cancelled_chargeback_failed".to_string(),
+            ledger_status: Some("seller_chargeback_failed".to_string()),
+            ledger_account_id: Some("seller-cancel-account".to_string()),
+            ledger_entry_id: Some("seller-original-settlement".to_string()),
+            ledger_balance_after: Some(58.0),
+            ledger_error: Some("insufficient reserved balance for consume".to_string()),
+            buyer_ledger_status: Some("reserved".to_string()),
+            buyer_ledger_account_id: Some("buyer-cancel-account".to_string()),
+            buyer_ledger_entry_id: Some("buyer-original-reserve".to_string()),
+            buyer_ledger_balance_after: Some(250.0),
+            buyer_ledger_error: None,
+            buyer_consume_status: Some("refunded".to_string()),
+            buyer_consume_entry_id: Some("buyer-cancel-refund".to_string()),
+            buyer_consume_balance_after: Some(250.0),
+            buyer_consume_error: None,
+            created_at_epoch: 1_777_948_101,
+        });
+    cancellation_league
+        .world
+        .world_work_orders
+        .push(WorldWorkOrder {
+            work_order_id: "work-cancel-recovery-route".to_string(),
+            purchase_id: "purchase-cancel-recovery-route".to_string(),
+            listing_id: "listing-cancel-recovery-route".to_string(),
+            buyer_matrix_user_id: "@route-cancel-buyer:local.dev".to_string(),
+            seller_matrix_user_id: "@route-cancel-seller:local.dev".to_string(),
+            company_id: "company-cancel-recovery-route".to_string(),
+            status: "cancelled_chargeback_failed".to_string(),
+            brief: "Cancelled work waiting for seller chargeback recovery".to_string(),
+            value_score: 65,
+            created_at_epoch: 1_777_948_102,
+        });
+    cancellation_league
+        .world
+        .world_work_cancellations
+        .push(WorldWorkCancellation {
+            cancellation_id: "cancel-recovery-route".to_string(),
+            work_order_id: "work-cancel-recovery-route".to_string(),
+            matrix_user_id: "@route-cancel-buyer:local.dev".to_string(),
+            body: "Cancelled after scope mismatch; seller chargeback failed and needs recovery."
+                .to_string(),
+            status: "cancelled_chargeback_failed".to_string(),
+            refund_status: "refunded".to_string(),
+            created_at_epoch: 1_777_948_103,
+        });
+
+    let cancellation_artifacts = build_world_route_artifacts(&cancellation_league.world);
+    let cancellation_task = cancellation_artifacts.task_graph["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|task| task["task_id"] == "work-cancel-recovery-route")
+        .expect("cancellation recovery task should be visible");
+    assert_eq!(
+        cancellation_task["next_opportunity_kind"],
+        "cancellation_settlement_recovery"
+    );
+    assert_eq!(
+        cancellation_task["next_opportunity_input_id"],
+        "world-work-cancel-id"
+    );
+    assert_eq!(
+        cancellation_task["next_opportunity_textarea_id"],
+        "world-work-cancel-body"
+    );
+    assert!(cancellation_task["next_opportunity_command"]
+        .as_str()
+        .unwrap_or("")
+        .contains("/work cancel latest"));
+    let cancellation_body = cancellation_task["next_opportunity_body"]
+        .as_str()
+        .unwrap_or("");
+    assert!(cancellation_body.contains("不二次退款"));
+    assert!(cancellation_body.contains("卖家扣回"));
+    assert_hidden_test_ready_prompt("cancellation_recovery_route_target", cancellation_body);
 }
 
 #[test]
