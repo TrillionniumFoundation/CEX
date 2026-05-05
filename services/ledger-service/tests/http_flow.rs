@@ -1,13 +1,78 @@
+use async_trait::async_trait;
 use axum::{
     body::{to_bytes, Body},
     http::{Request, StatusCode},
     Router,
 };
 use ledger_service::{
-    build_router, repository::postgres::PostgresLedgerRepository, state::AppState,
+    build_router,
+    repository::{postgres::PostgresLedgerRepository, LedgerActionError, LedgerRepository},
+    state::{AccountRecord, AppState, LedgerEntryRecord},
 };
 use serde_json::{json, Value};
+use std::sync::Arc;
 use tower::util::ServiceExt;
+use uuid::Uuid;
+
+struct ActionOtherRepository;
+
+#[async_trait]
+impl LedgerRepository for ActionOtherRepository {
+    async fn create_account(&self, _account: &AccountRecord) -> Result<(), String> {
+        Ok(())
+    }
+
+    async fn get_account(&self, _account_id: Uuid) -> Result<Option<AccountRecord>, String> {
+        Ok(None)
+    }
+
+    async fn append_entry(&self, _entry: &LedgerEntryRecord) -> Result<(), String> {
+        Ok(())
+    }
+
+    async fn find_by_idempotency_key(
+        &self,
+        _idempotency_key: &str,
+    ) -> Result<Option<LedgerEntryRecord>, String> {
+        Ok(None)
+    }
+
+    async fn reserve_credits(
+        &self,
+        _entry: &LedgerEntryRecord,
+    ) -> Result<AccountRecord, LedgerActionError> {
+        Err(LedgerActionError::Other(
+            "forced repository transaction failure".to_string(),
+        ))
+    }
+
+    async fn consume_credits(
+        &self,
+        _entry: &LedgerEntryRecord,
+    ) -> Result<AccountRecord, LedgerActionError> {
+        Err(LedgerActionError::Other(
+            "forced repository transaction failure".to_string(),
+        ))
+    }
+
+    async fn refund_credits(
+        &self,
+        _entry: &LedgerEntryRecord,
+    ) -> Result<AccountRecord, LedgerActionError> {
+        Err(LedgerActionError::Other(
+            "forced repository transaction failure".to_string(),
+        ))
+    }
+
+    async fn grant_credits(
+        &self,
+        _entry: &LedgerEntryRecord,
+    ) -> Result<AccountRecord, LedgerActionError> {
+        Err(LedgerActionError::Other(
+            "forced repository transaction failure".to_string(),
+        ))
+    }
+}
 
 fn test_state() -> AppState {
     AppState::new_for_tests(
@@ -354,6 +419,45 @@ async fn duplicate_idempotency_key_returns_conflict_without_double_reserve() {
     assert_eq!(get_status, StatusCode::OK);
     assert_eq!(fetched["balance"], 100.0);
     assert_eq!(fetched["reserved"], 8.0);
+}
+
+#[tokio::test]
+async fn repository_transaction_errors_do_not_fallback_to_memory_success() {
+    let state = AppState::new_for_tests(
+        Arc::new(ActionOtherRepository),
+        false,
+        Some("local-dev-admin-token".to_string()),
+        vec!["ledger:manage".to_string(), "ledger:read".to_string()],
+        Vec::new(),
+    );
+    let app = build_router(state.clone());
+    let (account_id, _) = create_account(app.clone(), 100.0).await;
+
+    let (reserve_status, reserve_json) = send_json(
+        app.clone(),
+        "POST",
+        "/v1/ledger/reserve",
+        json!({
+            "account_id": account_id,
+            "amount": 8.0,
+            "reference_id": "repo-other-failure",
+            "idempotency_key": "repo-other-failure-key"
+        }),
+    )
+    .await;
+
+    assert_eq!(reserve_status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(reserve_json["error"]
+        .as_str()
+        .expect("repository error")
+        .contains("forced repository transaction failure"));
+
+    let (get_status, fetched) = get_json(app, &format!("/v1/accounts/{account_id}")).await;
+    assert_eq!(get_status, StatusCode::OK);
+    assert_eq!(fetched["balance"], 100.0);
+    assert_eq!(fetched["reserved"], 0.0);
+    assert!(state.entries.read().await.is_empty());
+    assert!(state.idempotency_keys.read().await.is_empty());
 }
 
 #[tokio::test]

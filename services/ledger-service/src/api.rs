@@ -332,10 +332,7 @@ fn should_fallback_to_memory(err: &LedgerActionError, fail_fast: bool) -> bool {
         return false;
     }
 
-    matches!(
-        err,
-        LedgerActionError::RepositoryUnavailable(_) | LedgerActionError::Other(_)
-    )
+    matches!(err, LedgerActionError::RepositoryUnavailable(_))
 }
 
 fn repository_error_response(err: LedgerActionError) -> (StatusCode, Json<ErrorResponse>) {
