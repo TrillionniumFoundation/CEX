@@ -2316,6 +2316,48 @@ fn world_route_command_target_maps_structured_web_targets() {
 }
 
 #[test]
+fn latest_contract_prefers_completable_contract_over_newer_terminal_contract() {
+    let matrix_user_id = "@world-latest-contract-actor:local.dev";
+    let mut league = default_league_state();
+    league.world.world_contracts.push(WorldContract {
+        contract_id: "world-contract-open-latest-guard".to_string(),
+        event_id: "world-event-open-latest-guard".to_string(),
+        actor_matrix_user_id: matrix_user_id.to_string(),
+        location_id: "starter-studio".to_string(),
+        task_id: "task-open-latest-guard".to_string(),
+        title: "Open latest guard contract".to_string(),
+        body: "Open contract should remain the default completion target.".to_string(),
+        status: "open".to_string(),
+        cex_status: Some("Running".to_string()),
+        value_score: 44,
+        created_at_epoch: 1_777_902_001,
+    });
+    league.world.world_contracts.push(WorldContract {
+        contract_id: "world-contract-completed-latest-guard".to_string(),
+        event_id: "world-event-completed-latest-guard".to_string(),
+        actor_matrix_user_id: matrix_user_id.to_string(),
+        location_id: "starter-studio".to_string(),
+        task_id: "task-completed-latest-guard".to_string(),
+        title: "Completed latest guard contract".to_string(),
+        body: "Newer terminal contract must not shadow the completable one.".to_string(),
+        status: "completed_settled".to_string(),
+        cex_status: Some("completed".to_string()),
+        value_score: 88,
+        created_at_epoch: 1_777_902_002,
+    });
+
+    let indexes = build_world_indexes(&league.world);
+    let latest_contract = indexes
+        .latest_contract_index_for_actor(matrix_user_id)
+        .and_then(|index| league.world.world_contracts.get(index))
+        .expect("latest contract");
+    assert_eq!(
+        latest_contract.contract_id, "world-contract-open-latest-guard",
+        "web/default latest completion should not be shadowed by a terminal contract"
+    );
+}
+
+#[test]
 fn world_route_recovery_opportunities_prioritize_settlement_retry_over_unavailable_next_steps() {
     let mut league = default_league_state();
     league.world.world_purchases.push(WorldPurchase {

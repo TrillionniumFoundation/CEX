@@ -31,6 +31,7 @@ pub(super) struct WorldIndexes {
     pub(super) asset_index_by_id: HashMap<String, usize>,
     pub(super) contract_index_by_id: HashMap<String, usize>,
     pub(super) latest_contract_index_by_actor: HashMap<String, usize>,
+    pub(super) latest_completable_contract_index_by_actor: HashMap<String, usize>,
     pub(super) contract_completion_index_by_id: HashMap<String, usize>,
     pub(super) latest_asset_index_by_owner: HashMap<String, usize>,
     pub(super) company_index_by_id: HashMap<String, usize>,
@@ -76,6 +77,16 @@ pub(super) struct WorldIndexes {
 
 pub(super) fn recent_tail_indices(len: usize, limit: usize) -> Vec<usize> {
     (0..len).rev().take(limit).collect()
+}
+
+fn world_contract_completable_for_latest(contract: &WorldContract) -> bool {
+    !matches!(
+        contract.status.as_str(),
+        "completed_settled" | "review_hold"
+    ) && !matches!(
+        contract.cex_status.as_deref(),
+        Some("completed" | "completed_no_reward" | "review_hold")
+    )
 }
 
 pub(super) fn sorted_indices_by<T, F>(items: &[T], mut compare: F) -> Vec<usize>
@@ -255,6 +266,11 @@ pub(super) fn build_world_indexes(world: &WorldState) -> WorldIndexes {
         indexes
             .latest_contract_index_by_actor
             .insert(contract.actor_matrix_user_id.clone(), index);
+        if world_contract_completable_for_latest(contract) {
+            indexes
+                .latest_completable_contract_index_by_actor
+                .insert(contract.actor_matrix_user_id.clone(), index);
+        }
     }
 
     for (index, completion) in world.world_contract_completions.iter().enumerate() {
@@ -550,8 +566,9 @@ impl WorldIndexes {
     }
 
     pub(super) fn latest_contract_index_for_actor(&self, matrix_user_id: &str) -> Option<usize> {
-        self.latest_contract_index_by_actor
+        self.latest_completable_contract_index_by_actor
             .get(matrix_user_id)
+            .or_else(|| self.latest_contract_index_by_actor.get(matrix_user_id))
             .copied()
     }
 
