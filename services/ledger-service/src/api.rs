@@ -395,7 +395,7 @@ async fn apply_action_in_memory(state: AppState, entry: LedgerEntryRecord) -> Re
                 .into_response();
         }
 
-        let mut keys = state.idempotency_keys.write().await;
+        let keys = state.idempotency_keys.read().await;
         if keys.contains(key) {
             return (
                 StatusCode::CONFLICT,
@@ -406,7 +406,6 @@ async fn apply_action_in_memory(state: AppState, entry: LedgerEntryRecord) -> Re
             )
                 .into_response();
         }
-        keys.insert(key.clone());
     }
 
     let updated_account = {
@@ -499,6 +498,9 @@ async fn apply_action_in_memory(state: AppState, entry: LedgerEntryRecord) -> Re
     }
 
     state.entries.write().await.push(entry.clone());
+    if let Some(key) = &entry.idempotency_key {
+        state.idempotency_keys.write().await.insert(key.clone());
+    }
     success_response(state.fail_fast, updated_account, entry).into_response()
 }
 

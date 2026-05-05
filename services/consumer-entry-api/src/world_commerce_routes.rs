@@ -1247,7 +1247,11 @@ pub(super) async fn chargeback_world_purchase_seller_with_ledger(
     purchase: &WorldPurchase,
     chargeback_scope: &str,
 ) -> LeagueLedgerSettlement {
-    if !world_purchase_seller_settlement_active(purchase) {
+    let retrying_failed_chargeback = matches!(
+        purchase.ledger_status.as_deref(),
+        Some("seller_chargeback_failed")
+    );
+    if !world_purchase_seller_settlement_active(purchase) && !retrying_failed_chargeback {
         return LeagueLedgerSettlement {
             status: "skipped_seller_not_settled".to_string(),
             account_id: purchase.ledger_account_id.clone(),
@@ -2402,7 +2406,11 @@ pub(super) async fn reject_world_work_order_inner(
         }
         if !matches!(
             league.world.world_work_orders[work_index].status.as_str(),
-            "delivered" | "delivery_review_hold"
+            "delivered"
+                | "delivery_review_hold"
+                | "rejected_refund_hold"
+                | "rejected_refund_failed"
+                | "rejected_chargeback_failed"
         ) {
             return (
                 StatusCode::CONFLICT,
@@ -2423,37 +2431,104 @@ pub(super) async fn reject_world_work_order_inner(
                 .into_response();
         };
         let purchase_seed = league.world.world_purchases[purchase_index].clone();
-        let rejection = WorldWorkRejection {
-            rejection_id: league_hash_id(
-                "world-rejection",
-                &format!(
-                    "{}:{}:{}",
-                    work_order_seed.work_order_id, matrix_user_id, now
-                ),
-            ),
-            work_order_id: work_order_seed.work_order_id.clone(),
-            matrix_user_id: matrix_user_id.clone(),
-            body,
-            status: "pending_refund".to_string(),
-            refund_status: "pending".to_string(),
-            created_at_epoch: now,
+        let retry_chargeback_only = work_order_seed.status == "rejected_chargeback_failed"
+            && matches!(
+                purchase_seed.buyer_consume_status.as_deref(),
+                Some("refunded")
+            );
+        let retry_status = if retry_chargeback_only {
+            "pending_chargeback"
+        } else {
+            "pending_refund"
         };
-        league.world.world_work_orders[work_index].status = "rejected_pending_refund".to_string();
-        league.world.world_work_rejections.push(rejection.clone());
+        let rejection = if matches!(
+            work_order_seed.status.as_str(),
+            "rejected_refund_hold" | "rejected_refund_failed" | "rejected_chargeback_failed"
+        ) {
+            match league
+                .world
+                .world_work_rejections
+                .iter()
+                .rev()
+                .find(|rejection| rejection.work_order_id == work_order_seed.work_order_id)
+                .cloned()
+            {
+                Some(mut rejection) => {
+                    rejection.body = body;
+                    rejection.status = retry_status.to_string();
+                    rejection
+                }
+                None => WorldWorkRejection {
+                    rejection_id: league_hash_id(
+                        "world-rejection",
+                        &format!(
+                            "{}:{}:{}",
+                            work_order_seed.work_order_id, matrix_user_id, now
+                        ),
+                    ),
+                    work_order_id: work_order_seed.work_order_id.clone(),
+                    matrix_user_id: matrix_user_id.clone(),
+                    body,
+                    status: retry_status.to_string(),
+                    refund_status: "pending".to_string(),
+                    created_at_epoch: now,
+                },
+            }
+        } else {
+            WorldWorkRejection {
+                rejection_id: league_hash_id(
+                    "world-rejection",
+                    &format!(
+                        "{}:{}:{}",
+                        work_order_seed.work_order_id, matrix_user_id, now
+                    ),
+                ),
+                work_order_id: work_order_seed.work_order_id.clone(),
+                matrix_user_id: matrix_user_id.clone(),
+                body,
+                status: retry_status.to_string(),
+                refund_status: "pending".to_string(),
+                created_at_epoch: now,
+            }
+        };
+        league.world.world_work_orders[work_index].status = if retry_chargeback_only {
+            "rejected_pending_chargeback".to_string()
+        } else {
+            "rejected_pending_refund".to_string()
+        };
+        if indexes
+            .rejection_index_by_id
+            .contains_key(&rejection.rejection_id)
+        {
+            indexes.replace_rejection_by_id(&mut league.world, &rejection);
+        } else {
+            league.world.world_work_rejections.push(rejection.clone());
+        }
         (
             league.clone(),
             league.world.world_work_orders[work_index].clone(),
             purchase_seed,
             rejection,
+            retry_chargeback_only,
         )
     };
-    let buyer_refund = refund_world_purchase_with_ledger(
-        &state,
-        payload.room_id.as_deref(),
-        &snapshot.2,
-        &snapshot.3.rejection_id,
-    )
-    .await;
+    let buyer_refund = if snapshot.4 {
+        LeagueLedgerSettlement {
+            status: "refunded".to_string(),
+            account_id: snapshot.2.buyer_ledger_account_id.clone(),
+            entry_id: snapshot.2.buyer_consume_entry_id.clone(),
+            balance_after: snapshot.2.buyer_consume_balance_after,
+            error: None,
+        }
+    } else {
+        refund_world_purchase_with_ledger(
+            &state,
+            payload.room_id.as_deref(),
+            &snapshot.2,
+            &snapshot.3.rejection_id,
+        )
+        .await
+    };
     let buyer_refunded = buyer_refund.status == "refunded" || buyer_refund.status == "duplicate";
     let seller_chargeback = if buyer_refunded {
         chargeback_world_purchase_seller_with_ledger(
@@ -3091,6 +3166,9 @@ pub(super) async fn cancel_world_work_order_inner(
                 | "reopen_reserve_failed"
                 | "reopen_seller_settlement_pending"
                 | "reopen_seller_settlement_failed"
+                | "cancelled_refund_hold"
+                | "cancelled_refund_failed"
+                | "cancelled_chargeback_failed"
         ) {
             let status = league.world.world_work_orders[work_index].status.clone();
             return (
@@ -3112,40 +3190,107 @@ pub(super) async fn cancel_world_work_order_inner(
                 .into_response();
         };
         let purchase_seed = league.world.world_purchases[purchase_index].clone();
-        let cancellation = WorldWorkCancellation {
-            cancellation_id: league_hash_id(
-                "world-cancel",
-                &format!(
-                    "{}:{}:{}:{}",
-                    work_order_seed.work_order_id, matrix_user_id, now, body
-                ),
-            ),
-            work_order_id: work_order_seed.work_order_id.clone(),
-            matrix_user_id: matrix_user_id.clone(),
-            body,
-            status: "pending_refund".to_string(),
-            refund_status: "pending".to_string(),
-            created_at_epoch: now,
+        let retry_chargeback_only = work_order_seed.status == "cancelled_chargeback_failed"
+            && matches!(
+                purchase_seed.buyer_consume_status.as_deref(),
+                Some("refunded")
+            );
+        let retry_status = if retry_chargeback_only {
+            "pending_chargeback"
+        } else {
+            "pending_refund"
         };
-        league.world.world_work_orders[work_index].status = "cancel_pending_refund".to_string();
-        league
-            .world
-            .world_work_cancellations
-            .push(cancellation.clone());
+        let cancellation = if matches!(
+            work_order_seed.status.as_str(),
+            "cancelled_refund_hold" | "cancelled_refund_failed" | "cancelled_chargeback_failed"
+        ) {
+            match league
+                .world
+                .world_work_cancellations
+                .iter()
+                .rev()
+                .find(|cancellation| cancellation.work_order_id == work_order_seed.work_order_id)
+                .cloned()
+            {
+                Some(mut cancellation) => {
+                    cancellation.body = body;
+                    cancellation.status = retry_status.to_string();
+                    cancellation
+                }
+                None => WorldWorkCancellation {
+                    cancellation_id: league_hash_id(
+                        "world-cancel",
+                        &format!(
+                            "{}:{}:{}:{}",
+                            work_order_seed.work_order_id, matrix_user_id, now, body
+                        ),
+                    ),
+                    work_order_id: work_order_seed.work_order_id.clone(),
+                    matrix_user_id: matrix_user_id.clone(),
+                    body,
+                    status: retry_status.to_string(),
+                    refund_status: "pending".to_string(),
+                    created_at_epoch: now,
+                },
+            }
+        } else {
+            WorldWorkCancellation {
+                cancellation_id: league_hash_id(
+                    "world-cancel",
+                    &format!(
+                        "{}:{}:{}:{}",
+                        work_order_seed.work_order_id, matrix_user_id, now, body
+                    ),
+                ),
+                work_order_id: work_order_seed.work_order_id.clone(),
+                matrix_user_id: matrix_user_id.clone(),
+                body,
+                status: retry_status.to_string(),
+                refund_status: "pending".to_string(),
+                created_at_epoch: now,
+            }
+        };
+        league.world.world_work_orders[work_index].status = if retry_chargeback_only {
+            "cancel_pending_chargeback".to_string()
+        } else {
+            "cancel_pending_refund".to_string()
+        };
+        if indexes
+            .cancellation_index_by_id
+            .contains_key(&cancellation.cancellation_id)
+        {
+            indexes.replace_cancellation_by_id(&mut league.world, &cancellation);
+        } else {
+            league
+                .world
+                .world_work_cancellations
+                .push(cancellation.clone());
+        }
         (
             league.clone(),
             league.world.world_work_orders[work_index].clone(),
             purchase_seed,
             cancellation,
+            retry_chargeback_only,
         )
     };
-    let buyer_cancel_refund = refund_world_purchase_with_ledger(
-        &state,
-        payload.room_id.as_deref(),
-        &snapshot.2,
-        &snapshot.3.cancellation_id,
-    )
-    .await;
+    let buyer_cancel_refund = if snapshot.4 {
+        LeagueLedgerSettlement {
+            status: "refunded".to_string(),
+            account_id: snapshot.2.buyer_ledger_account_id.clone(),
+            entry_id: snapshot.2.buyer_consume_entry_id.clone(),
+            balance_after: snapshot.2.buyer_consume_balance_after,
+            error: None,
+        }
+    } else {
+        refund_world_purchase_with_ledger(
+            &state,
+            payload.room_id.as_deref(),
+            &snapshot.2,
+            &snapshot.3.cancellation_id,
+        )
+        .await
+    };
     let buyer_refunded =
         buyer_cancel_refund.status == "refunded" || buyer_cancel_refund.status == "duplicate";
     let seller_chargeback = if buyer_refunded {

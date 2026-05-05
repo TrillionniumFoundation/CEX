@@ -338,7 +338,11 @@ pub(super) fn build_world_indexes(world: &WorldState) -> WorldIndexes {
         }
         if matches!(
             work_order.status.as_str(),
-            "delivered" | "delivery_review_hold"
+            "delivered"
+                | "delivery_review_hold"
+                | "rejected_refund_hold"
+                | "rejected_refund_failed"
+                | "rejected_chargeback_failed"
         ) {
             indexes
                 .latest_rejectable_work_order_by_buyer
@@ -362,6 +366,9 @@ pub(super) fn build_world_indexes(world: &WorldState) -> WorldIndexes {
                 | "reopen_reserve_failed"
                 | "reopen_seller_settlement_pending"
                 | "reopen_seller_settlement_failed"
+                | "cancelled_refund_hold"
+                | "cancelled_refund_failed"
+                | "cancelled_chargeback_failed"
         ) {
             indexes
                 .latest_cancellable_work_order_by_buyer

@@ -5208,6 +5208,80 @@ async fn world_reject_does_not_release_refund_progression_without_seller_chargeb
     )
     .await;
     assert_eq!(seller_account["balance"].as_f64().unwrap(), 0.0);
+
+    apply_real_ledger_action(
+        &http,
+        &ledger_base_url,
+        &ledger_admin_token,
+        "grant",
+        &seller_account_id,
+        67.0,
+        "seed-reject-chargeback-retry-seller-funds",
+    )
+    .await;
+    let (status, retry) = send_json_request(
+        &app,
+        "POST",
+        &format!("/v1/world/work-orders/{work_order_id}/reject"),
+        &[],
+        json!({
+            "matrix_user_id": buyer_matrix_user_id,
+            "room_id": room_id,
+            "body": "Retry the seller chargeback after recovery funds arrive; do not refund the buyer twice, just clear the clawback and release the rejected work state."
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "reject retry response: {retry}");
+    assert_eq!(retry["buyer_refund_status"], "refunded");
+    assert_eq!(
+        retry["seller_chargeback_status"],
+        "seller_chargeback_consumed"
+    );
+    assert_eq!(retry["purchase"]["status"], "rejected_refunded");
+    assert_eq!(retry["work_order"]["status"], "rejected_refunded");
+    assert_eq!(retry["rejection"]["status"], "rejected_refunded");
+    assert!(retry["economy_event"].is_object());
+    assert!(retry["standing"].is_object());
+
+    let league = state.inner.league_state.lock().await;
+    assert_eq!(
+        league
+            .world
+            .world_work_rejections
+            .iter()
+            .filter(|rejection| rejection.work_order_id == work_order_id)
+            .count(),
+        1,
+        "chargeback retry should update the existing rejection instead of creating a second rejection"
+    );
+    assert_eq!(
+        league
+            .world
+            .world_economy_events
+            .iter()
+            .filter(|event| event.subject_id == work_order_id && event.event_kind == "work_rejected")
+            .count(),
+        1
+    );
+    drop(league);
+    let buyer_account = get_real_ledger_account(
+        &http,
+        &ledger_base_url,
+        &ledger_admin_token,
+        &buyer_account_id,
+    )
+    .await;
+    assert_eq!(buyer_account["reserved"].as_f64().unwrap(), 0.0);
+    assert_eq!(buyer_account["balance"].as_f64().unwrap(), 250.0);
+    let seller_account = get_real_ledger_account(
+        &http,
+        &ledger_base_url,
+        &ledger_admin_token,
+        &seller_account_id,
+    )
+    .await;
+    assert_eq!(seller_account["reserved"].as_f64().unwrap(), 0.0);
+    assert_eq!(seller_account["balance"].as_f64().unwrap(), 0.0);
 }
 
 #[tokio::test]
@@ -5358,6 +5432,82 @@ async fn world_cancel_does_not_release_refund_progression_without_seller_chargeb
         &seller_account_id,
     )
     .await;
+    assert_eq!(seller_account["balance"].as_f64().unwrap(), 0.0);
+
+    apply_real_ledger_action(
+        &http,
+        &ledger_base_url,
+        &ledger_admin_token,
+        "grant",
+        &seller_account_id,
+        62.0,
+        "seed-cancel-chargeback-retry-seller-funds",
+    )
+    .await;
+    let (status, retry) = send_json_request(
+        &app,
+        "POST",
+        &format!("/v1/world/work-orders/{work_order_id}/cancel"),
+        &[],
+        json!({
+            "matrix_user_id": buyer_matrix_user_id,
+            "room_id": room_id,
+            "body": "Retry the seller chargeback after recovery funds arrive; do not refund the buyer twice, just clear the clawback and release the cancelled work state."
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "cancel retry response: {retry}");
+    assert_eq!(retry["buyer_cancel_refund_status"], "refunded");
+    assert_eq!(
+        retry["seller_chargeback_status"],
+        "seller_chargeback_consumed"
+    );
+    assert_eq!(retry["purchase"]["status"], "cancelled_refunded");
+    assert_eq!(retry["work_order"]["status"], "cancelled_refunded");
+    assert_eq!(retry["cancellation"]["status"], "cancelled_refunded");
+    assert!(retry["economy_event"].is_object());
+    assert!(retry["standing"].is_object());
+
+    let league = state.inner.league_state.lock().await;
+    assert_eq!(
+        league
+            .world
+            .world_work_cancellations
+            .iter()
+            .filter(|cancellation| cancellation.work_order_id == work_order_id)
+            .count(),
+        1,
+        "chargeback retry should update the existing cancellation instead of creating a second cancellation"
+    );
+    assert_eq!(
+        league
+            .world
+            .world_economy_events
+            .iter()
+            .filter(
+                |event| event.subject_id == work_order_id && event.event_kind == "work_cancelled"
+            )
+            .count(),
+        1
+    );
+    drop(league);
+    let buyer_account = get_real_ledger_account(
+        &http,
+        &ledger_base_url,
+        &ledger_admin_token,
+        &buyer_account_id,
+    )
+    .await;
+    assert_eq!(buyer_account["reserved"].as_f64().unwrap(), 0.0);
+    assert_eq!(buyer_account["balance"].as_f64().unwrap(), 250.0);
+    let seller_account = get_real_ledger_account(
+        &http,
+        &ledger_base_url,
+        &ledger_admin_token,
+        &seller_account_id,
+    )
+    .await;
+    assert_eq!(seller_account["reserved"].as_f64().unwrap(), 0.0);
     assert_eq!(seller_account["balance"].as_f64().unwrap(), 0.0);
 }
 

@@ -379,16 +379,48 @@ async fn insufficient_amount_paths_return_bad_request() {
         .expect("reserve error")
         .contains("insufficient available balance"));
 
+    let (grant_status, _) = send_json(
+        app.clone(),
+        "POST",
+        "/v1/ledger/grant",
+        json!({
+            "account_id": account_id,
+            "amount": 100.0,
+            "reference_id": "seed-retry-reserve-after-failure",
+            "idempotency_key": "seed-retry-reserve-after-failure"
+        }),
+    )
+    .await;
+    assert_eq!(grant_status, StatusCode::OK);
+
+    let (reserve_retry_status, reserve_retry_json) = send_json(
+        app.clone(),
+        "POST",
+        "/v1/ledger/reserve",
+        json!({
+            "account_id": account_id,
+            "amount": 150.0,
+            "reference_id": "too-much-reserve",
+            "idempotency_key": "reserve-too-much"
+        }),
+    )
+    .await;
+    assert_eq!(reserve_retry_status, StatusCode::OK);
+    assert_eq!(reserve_retry_json["account"]["balance"], 200.0);
+    assert_eq!(reserve_retry_json["account"]["reserved"], 150.0);
+
+    let (refund_account_id, _) = create_account(app.clone(), 100.0).await;
+    let refund_body = json!({
+        "account_id": refund_account_id,
+        "amount": 1.0,
+        "reference_id": "refund-without-reserve",
+        "idempotency_key": "refund-without-reserve"
+    });
     let (refund_status, refund_json) = send_json(
         app.clone(),
         "POST",
         "/v1/ledger/refund",
-        json!({
-            "account_id": account_id,
-            "amount": 1.0,
-            "reference_id": "refund-without-reserve",
-            "idempotency_key": "refund-without-reserve"
-        }),
+        refund_body.clone(),
     )
     .await;
     assert_eq!(refund_status, StatusCode::BAD_REQUEST);
@@ -396,4 +428,24 @@ async fn insufficient_amount_paths_return_bad_request() {
         .as_str()
         .expect("refund error")
         .contains("insufficient reserved balance"));
+
+    let (reserve_refund_retry_status, _) = send_json(
+        app.clone(),
+        "POST",
+        "/v1/ledger/reserve",
+        json!({
+            "account_id": refund_account_id,
+            "amount": 1.0,
+            "reference_id": "seed-retry-refund-after-failure",
+            "idempotency_key": "seed-retry-refund-after-failure"
+        }),
+    )
+    .await;
+    assert_eq!(reserve_refund_retry_status, StatusCode::OK);
+
+    let (refund_retry_status, refund_retry_json) =
+        send_json(app.clone(), "POST", "/v1/ledger/refund", refund_body).await;
+    assert_eq!(refund_retry_status, StatusCode::OK);
+    assert_eq!(refund_retry_json["account"]["balance"], 100.0);
+    assert_eq!(refund_retry_json["account"]["reserved"], 0.0);
 }
