@@ -573,6 +573,14 @@ pub(super) async fn get_client_app_web_shell(
         .and_then(|rail| rail.get("completion_target"))
         .and_then(Value::as_str)
         .unwrap_or("first_playable_loop_100");
+    let onboarding_quick_path_summary = onboarding
+        .and_then(|rail| rail.get("quick_path_summary"))
+        .and_then(Value::as_str)
+        .unwrap_or("Choose map focus → run one bounty → submit/review reward");
+    let onboarding_command_disclosure = onboarding
+        .and_then(|rail| rail.get("command_disclosure"))
+        .and_then(Value::as_str)
+        .unwrap_or("Use these when you are ready to submit real work with deliverable, evidence, risk controls, next action, and self-review anchors.");
     let onboarding_step_cards = onboarding
         .and_then(|rail| rail.get("steps"))
         .and_then(Value::as_array)
@@ -1012,7 +1020,7 @@ pub(super) async fn get_client_app_web_shell(
       </div>
       <div id="app-first-playable-quick-path" class="quest-quick-path" aria-label="Quick path" data-i18n-aria-label-en="Quick path" data-i18n-aria-label-zh="快速路径">
         <strong data-i18n-en="Quick Path" data-i18n-zh="快速路径">Quick Path</strong>
-        <span data-i18n-en="Choose map focus → run one bounty → submit/review reward" data-i18n-zh="选择地图焦点 → 跑一个悬赏 → 提交/查看奖励">Choose map focus → run one bounty → submit/review reward</span>
+        <span data-i18n-en="{}" data-i18n-zh="选择地图焦点 → 跑一个悬赏 → 提交/查看奖励">{}</span>
       </div>
       <ol class="app-player-loop-steps" aria-label="Starter quest steps" data-i18n-aria-label-en="Starter quest steps" data-i18n-aria-label-zh="新手任务三步">
         <li><b data-i18n-en="1 · Choose map focus" data-i18n-zh="1 · 选择地图焦点">1 · Choose map focus</b><span data-i18n-en="Tap a city place, region, or live event." data-i18n-zh="点选城市地点、区域或实时事件。">Tap a city place, region, or live event.</span></li>
@@ -1022,7 +1030,7 @@ pub(super) async fn get_client_app_web_shell(
       <section id="app-playability-coach" class="playability-coach-lanes" data-contract-version="{}" aria-label="P0 P1 P2 playability coach" data-i18n-aria-label-en="P0 P1 P2 playability coach" data-i18n-aria-label-zh="P0 P1 P2 可玩性教练">{}</section>
       <details id="app-economy-retention-ops" class="dev-details economy-retention-drawer"><summary><span data-i18n-en="Economy · return · telemetry" data-i18n-zh="经济 · 回访 · 遥测">Economy · return · telemetry</span> · {}%</summary><p class="subtitle">{}</p><div class="economy-retention-grid">{}</div><div class="map-stream-hud">{}</div></details>
       <details class="dev-details app-progress-drawer"><summary data-i18n-en="Progress checks" data-i18n-zh="进度检查">Progress checks</summary><div id="app-first-playable-checks" class="map-stream-hud">{}</div></details>
-      <details id="app-first-playable-full-commands" class="dev-details app-full-command-drawer"><summary data-i18n-en="Full Commands" data-i18n-zh="完整命令">Full Commands</summary><p class="subtitle" data-i18n-en="Open this when you are ready to submit real work with deliverable, evidence, risk controls, next action, and self-review anchors." data-i18n-zh="准备真实提交时再展开：每条命令都要带交付物、证据、风险控制、下一步和自检锚点。">Open this when you are ready to submit real work with deliverable, evidence, risk controls, next action, and self-review anchors.</p><section id="app-first-playable-steps" class="grid">{}</section></details>
+      <details id="app-first-playable-full-commands" class="dev-details app-full-command-drawer"><summary data-i18n-en="Full Commands" data-i18n-zh="完整命令">Full Commands</summary><p class="subtitle" data-i18n-en="{}" data-i18n-zh="准备真实提交时再展开：每条命令都要带交付物、证据、风险控制、下一步和自检锚点。">{}</p><section id="app-first-playable-steps" class="grid">{}</section></details>
     </section>
     <section id="app-tab-messages" class="app-tab-panel" data-app-panel="messages" role="tabpanel" aria-labelledby="app-tab-button-messages" aria-hidden="true" hidden>
       <div class="app-tab-header">
@@ -1790,6 +1798,8 @@ pub(super) async fn get_client_app_web_shell(
         escape_client_app_visible_text(onboarding_label),
         escape_client_app_visible_text(onboarding_goal),
         escape_client_app_visible_text(&client_app_readiness_label(onboarding_completion_target)),
+        escape_client_app_visible_text(onboarding_quick_path_summary),
+        escape_client_app_visible_text(onboarding_quick_path_summary),
         escape_html_text(playability_coach_version),
         playability_coach_lane_cards,
         funnel_percent,
@@ -1797,6 +1807,8 @@ pub(super) async fn get_client_app_web_shell(
         economy_tradeoff_cards,
         economy_ops_chips,
         onboarding_acceptance_chips,
+        escape_client_app_visible_text(onboarding_command_disclosure),
+        escape_client_app_visible_text(onboarding_command_disclosure),
         onboarding_step_cards,
         message_cards,
         escape_html_text(&client_app_map_label(map_density_summary)),

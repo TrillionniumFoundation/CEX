@@ -1390,6 +1390,8 @@ impl<'a> ClientAppProjectionContext<'a> {
             "rail_id": "first_playable_main_quest_rail",
             "rail_label": "Starter Quest / 新手主线：from map focus to bounty reward / 从地图到悬赏完成",
             "completion_target": "first_playable_loop_100",
+            "quick_path_summary": "Choose map focus → run one bounty → submit/review reward",
+            "command_disclosure": "Use these when you are ready to submit real work with deliverable, evidence, risk controls, next action, and self-review anchors.",
             "launch_market": "global_first_overseas_beta",
             "primary_goal": "Move one map focus through exploration, contract, commission, result submission, rating, and reward / 把一个地图焦点推进成探索、契约、委托、成果提交、评级和奖励领取。",
             "current_state": {

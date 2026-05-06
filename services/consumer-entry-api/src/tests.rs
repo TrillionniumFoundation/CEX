@@ -1592,6 +1592,14 @@ fn client_app_map_hub_projects_stream_counts() {
         assert!(mobile_shell_checks.iter().any(|value| value == check));
     }
     assert_eq!(app["feed"]["web_session_path"], "/app/web/feed");
+    assert_eq!(
+        app["onboarding"]["quick_path_summary"],
+        "Choose map focus → run one bounty → submit/review reward"
+    );
+    assert!(app["onboarding"]["command_disclosure"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("Use these when you are ready to submit real work"));
     let beta_checks = app["onboarding"]["beta_readiness_checks"]
         .as_array()
         .cloned()
@@ -1704,7 +1712,7 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(app_html.contains("Choose map focus → run one bounty → submit/review reward"));
     assert!(app_html.contains("app-first-playable-full-commands"));
     assert!(app_html.contains("Full Commands"));
-    assert!(app_html.contains("Open this when you are ready to submit real work"));
+    assert!(app_html.contains("Use these when you are ready to submit real work"));
     assert!(app_html.contains("app-playability-coach"));
     assert!(app_html.contains("新手主线"));
     assert!(app_html.contains("first_playable_loop_100"));
