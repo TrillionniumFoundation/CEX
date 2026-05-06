@@ -474,6 +474,98 @@ pub(super) fn real_world_node_marker_json(node: &WorldMapNode) -> Value {
     })
 }
 
+pub(super) fn trillionnium_world_map_gameplay_layer_contract_json() -> Value {
+    json!({
+        "contract_version": "trillionnium_world_map_gameplay_layer_v1",
+        "product_name": "Trillionnium World Map",
+        "base_map_role": "OpenStreetMap geospatial base layer / OpenStreetMap 真实地理底座",
+        "upgrade_model": "OpenStreetMap upgraded with Trillionnium avatars, route nodes, quest cards, live events, and task completion loops / 在 OpenStreetMap 上升级游戏人物、路线节点、任务牌、实时事件和完成任务闭环",
+        "primary_player_loop": "avatar runs on Trillionnium World Map → choose node → accept bounty/contract → submit evidence → rating/reward → next route",
+        "avatar_layer_id": "trillionnium_player_avatar_runner_layer",
+        "task_layer_id": "trillionnium_world_task_route_layer",
+        "supports": {
+            "player_avatars": true,
+            "avatar_movement_between_nodes": true,
+            "quest_route_edges": true,
+            "live_event_task_pulses": true,
+            "openstreetmap_base_tiles": true
+        }
+    })
+}
+
+pub(super) fn world_map_player_avatars_json(
+    world: &WorldState,
+    matrix_user_id: &str,
+    visible_markers: &[Value],
+) -> Vec<Value> {
+    let mut marker_by_node_id: HashMap<String, Value> = HashMap::new();
+    let mut marker_by_location_id: HashMap<String, Value> = HashMap::new();
+    for marker in visible_markers {
+        if let Some(node_id) = marker.get("node_id").and_then(Value::as_str) {
+            marker_by_node_id.insert(node_id.to_string(), marker.clone());
+        }
+        if let Some(location_id) = marker.get("location_id").and_then(Value::as_str) {
+            marker_by_location_id
+                .entry(location_id.to_string())
+                .or_insert_with(|| marker.clone());
+        }
+    }
+
+    let avatar_from_marker = |avatar_matrix_user_id: &str,
+                              position: &WorldPlayerPosition,
+                              marker: &Value| {
+        let is_current_player = avatar_matrix_user_id == matrix_user_id;
+        json!({
+            "avatar_id": format!("avatar:{}", avatar_matrix_user_id),
+            "matrix_user_id": avatar_matrix_user_id,
+            "display_name": if is_current_player { "You / 你" } else { "Player / 玩家" },
+            "avatar_kind": if is_current_player { "current_player" } else { "nearby_player" },
+            "icon": if is_current_player { "🧍" } else { "🏃" },
+            "node_id": &position.node_id,
+            "location_id": &position.location_id,
+            "node_name": marker.get("name").and_then(Value::as_str).unwrap_or("World node"),
+            "lat": marker.get("lat").and_then(Value::as_f64).unwrap_or(31.230416),
+            "lng": marker.get("lng").and_then(Value::as_f64).unwrap_or(121.473701),
+            "updated_at_epoch": position.updated_at_epoch,
+            "movement_status": "ready_to_run_task",
+            "task_loop": "move → inspect → accept bounty/contract → submit evidence → rating/reward",
+            "animation_hint": "run_between_route_nodes"
+        })
+    };
+
+    let mut avatars = Vec::new();
+    let mut positions: Vec<(&String, &WorldPlayerPosition)> =
+        world.world_player_positions.iter().collect();
+    positions.sort_by(|left, right| left.0.cmp(right.0));
+    for (avatar_matrix_user_id, position) in positions {
+        let marker = marker_by_node_id
+            .get(&position.node_id)
+            .or_else(|| marker_by_location_id.get(&position.location_id));
+        if let Some(marker) = marker {
+            avatars.push(avatar_from_marker(avatar_matrix_user_id, position, marker));
+        }
+    }
+
+    let current_player_visible = avatars
+        .iter()
+        .any(|avatar| avatar.get("matrix_user_id").and_then(Value::as_str) == Some(matrix_user_id));
+    if !current_player_visible {
+        if let Some(default_node) = world.world_map_nodes.get(default_world_node_id()) {
+            let marker = real_world_node_marker_json(default_node);
+            let position = WorldPlayerPosition {
+                matrix_user_id: matrix_user_id.to_string(),
+                node_id: default_node.node_id.clone(),
+                location_id: default_node.location_id.clone(),
+                updated_at_epoch: 0,
+            };
+            avatars.push(avatar_from_marker(matrix_user_id, &position, &marker));
+        }
+    }
+
+    avatars.truncate(16);
+    avatars
+}
+
 pub(super) fn real_world_map_region_shards_json() -> Vec<Value> {
     vec![
         json!({
@@ -1014,6 +1106,7 @@ pub(super) fn real_world_map_renderer_adapter_json() -> Value {
             "renderRegionAnchor",
             "renderTileFrame",
             "renderEventPulse",
+            "renderPlayerAvatar",
             "getCenter",
             "getZoom",
             "onViewportChange",
@@ -1024,6 +1117,7 @@ pub(super) fn real_world_map_renderer_adapter_json() -> Value {
         "adapter_contract": {
             "purpose": "keep web map surfaces renderer-neutral while Leaflet remains the active implementation",
             "supports_overlay_primitives": true,
+            "supports_player_avatar_layer": true,
             "supports_camera_reads": true,
             "supports_viewport_events": true,
             "supports_future_engine_swap": true
@@ -1173,6 +1267,7 @@ pub(super) fn world_map_viewport_json(
         world_map_visible_tile_shards_json(center_lat, center_lng, zoom, &visible_markers);
     let player_density =
         world_map_player_density_summary_json(world, &active_region, &visible_markers, zoom);
+    let player_avatars = world_map_player_avatars_json(world, matrix_user_id, &visible_markers);
     let prefetch_queue = world_map_prefetch_queue_json(&visible_tile_shards, &player_density, zoom);
     let live_event_stream = world_map_live_event_stream_json(
         world,
@@ -1187,6 +1282,7 @@ pub(super) fn world_map_viewport_json(
     let prefetch_count = prefetch_queue.len();
     let marker_count = visible_markers.len();
     let live_event_count = live_event_stream.len();
+    let player_avatar_count = player_avatars.len();
     let viewport_path = format!(
         "/v1/world/map/{}/viewport?lat={:.6}&lng={:.6}&zoom={}&radius_km={:.1}&limit={}",
         matrix_user_id, center_lat, center_lng, zoom, radius_km, marker_limit
@@ -1224,6 +1320,9 @@ pub(super) fn world_map_viewport_json(
         "marker_count": marker_count,
         "poi_hotspots": poi_hotspots,
         "player_density": player_density,
+        "player_avatars": player_avatars,
+        "player_avatar_count": player_avatar_count,
+        "gameplay_layer_contract": trillionnium_world_map_gameplay_layer_contract_json(),
         "live_event_stream": live_event_stream,
         "live_event_stream_index_layer": "WorldIndexes::event_indices_by_location_v1",
         "live_event_count": live_event_count,
@@ -1236,6 +1335,7 @@ pub(super) fn world_map_viewport_json(
             "supports_live_event_stream": true,
             "supports_prefetch_queue": true,
             "supports_player_density": true,
+            "supports_player_avatars": true,
         }
     })
 }
@@ -1300,18 +1400,20 @@ pub(super) fn real_world_map_engine_json(
     let tile_pyramid = world_map_tile_pyramid_json(center_lat, center_lng);
     json!({
         "engine_id": "leaflet_openstreetmap_v1",
+        "product_name": "Trillionnium World Map",
         "engine": "Leaflet",
         "tile_provider": "OpenStreetMap",
         "tile_url_template": "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
         "attribution": "© OpenStreetMap contributors",
         "projection": "EPSG:3857",
-        "overlay_kind": "trillionnium_world_nodes",
+        "overlay_kind": "trillionnium_world_gameplay_layers",
         "real_world_anchor": "Shanghai, China",
         "mirror_scope": "global_real_world_tiles",
-        "full_mirror_strategy": "openstreetmap_global_base_with_gather_hero_tale_lod_overlay",
+        "full_mirror_strategy": "openstreetmap_global_base_upgraded_with_trillionnium_avatar_task_layer",
         "simplification_style": "gather_hero_tale_lod",
         "scaling_goal": "many_players_via_lightweight_nodes_routes_and_region_shards",
-        "map_ui_mode": "map_first",
+        "map_ui_mode": "game_world_first",
+        "gameplay_layer_contract": trillionnium_world_map_gameplay_layer_contract_json(),
         "renderer_adapter": real_world_map_renderer_adapter_json(),
         "planned_upgrade_engine": real_world_map_planned_upgrade_engine_json(),
         "active_region_id": "cn-shanghai-core",

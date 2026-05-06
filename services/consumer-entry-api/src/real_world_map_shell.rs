@@ -326,6 +326,15 @@ pub(super) fn real_world_map_runtime_bootstrap_js() -> &'static str {
         renderEventPulse(layer, marker, options = {}) {
           return L.circleMarker([marker.lat, marker.lng], options).addTo(layer);
         },
+        renderPlayerAvatar(layer, avatar, popupHtml) {
+          const icon = L.divIcon({
+            className: 'trillionnium-player-avatar-marker',
+            html: `<div style="width:34px;height:34px;border-radius:999px;display:grid;place-items:center;background:linear-gradient(135deg,#64e3ff,#f8c35b);box-shadow:0 0 0 3px rgba(11,18,32,.82),0 10px 24px rgba(0,0,0,.42);font-size:20px;transform:translateY(-4px);">${escapeHtml(avatar.icon || '🧍')}</div>`,
+            iconSize: [34, 34],
+            iconAnchor: [17, 30],
+          });
+          return L.marker([avatar.lat, avatar.lng], { icon, title: avatar.display_name || avatar.matrix_user_id || 'Player avatar', zIndexOffset: 900 }).addTo(layer).bindPopup(popupHtml);
+        },
         getCenter(map) {
           return map.getCenter();
         },
@@ -423,9 +432,11 @@ pub(super) fn real_world_map_runtime_bootstrap_js() -> &'static str {
         tiles: mapAdapter.createOverlayLayer(mapRuntime),
         prefetch: mapAdapter.createOverlayLayer(mapRuntime),
         events: mapAdapter.createOverlayLayer(mapRuntime),
+        avatars: mapAdapter.createOverlayLayer(mapRuntime),
       };
-      const overlayState = { density: true, regions: true, tiles: true, prefetch: true, events: true };
-      const overlayLabels = { density: 'Density / 密度', regions: 'Regions / 区域', tiles: 'Map tiles / 地图块', prefetch: 'Prefetch rings / 预热圈', events: 'Live events / 实时事件' };"#
+      const overlayState = { density: true, regions: true, tiles: true, prefetch: true, events: true, avatars: true };
+      const overlayLabels = { density: 'Density / 密度', regions: 'Regions / 区域', tiles: 'Map tiles / 地图块', prefetch: 'Prefetch rings / 预热圈', events: 'Live events / 实时事件', avatars: 'Player avatars / 跑图角色' };
+"#
 }
 
 pub(super) fn real_world_map_runtime_primitives_js() -> &'static str {
@@ -918,9 +929,19 @@ pub(super) fn real_world_map_overlay_render_js() -> &'static str {
               setFocusSelection(eventFocus);
             });
         });
+        (viewport.player_avatars || []).forEach((avatar) => {
+          if (!Number.isFinite(Number(avatar.lat)) || !Number.isFinite(Number(avatar.lng))) return;
+          const marker = markerById.get(String(avatar.node_id || '')) || {};
+          const popupHtml = `<strong>${escapeHtml(mapText(avatar.display_name || avatar.matrix_user_id || 'Player avatar / 玩家角色'))}</strong><br/><span>${escapeHtml(mapText(avatar.node_name || marker.name || avatar.node_id || 'World node / 世界节点'))}</span><br/><small>${escapeHtml(mapText(avatar.task_loop || 'move → task → reward / 移动 → 任务 → 奖励'))}</small>`;
+          mapAdapter.renderPlayerAvatar(overlayLayers.avatars, avatar, popupHtml)
+            .on('click', () => {
+              focusMapSurface({ kind: 'node', nodeId: avatar.node_id, suppressAction: true });
+              setFocusSelection({ kind: 'node', nodeId: avatar.node_id, suppressAction: true });
+            });
+        });
         if (overlayLegend) {
           const regionName = mapText(((viewport.active_region || {}).name) || '区域');
-          overlayLegend.textContent = '图层说明：' + regionName + ' 锚点 · ' + (viewport.tile_shard_count || 0) + ' 个地图块 · ' + (viewport.prefetch_count || 0) + ' 个预热圈 · ' + (viewport.live_event_count || 0) + ' 个实时事件脉冲。';
+          overlayLegend.textContent = '图层说明：' + regionName + ' 锚点 · ' + (viewport.tile_shard_count || 0) + ' 个地图块 · ' + (viewport.prefetch_count || 0) + ' 个预热圈 · ' + (viewport.live_event_count || 0) + ' 个实时事件脉冲 · ' + (viewport.player_avatar_count || 0) + ' 个跑图角色。';
         }
         Object.keys(overlayLayers).forEach((name) => setOverlayLayerVisibility(name, overlayState[name] !== false));
       };

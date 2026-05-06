@@ -296,6 +296,15 @@ pub(super) async fn get_client_app_web_shell(
         .and_then(|engine| engine.get("engine"))
         .and_then(Value::as_str)
         .unwrap_or("Leaflet");
+    let map_product_name = map_engine
+        .and_then(|engine| engine.get("product_name"))
+        .and_then(Value::as_str)
+        .unwrap_or("Trillionnium World Map");
+    let map_upgrade_model = map_engine
+        .and_then(|engine| engine.get("gameplay_layer_contract"))
+        .and_then(|contract| contract.get("upgrade_model"))
+        .and_then(Value::as_str)
+        .unwrap_or("OpenStreetMap upgraded with Trillionnium avatars, route nodes, quest cards, live events, and task completion loops.");
     let tile_provider = map_engine
         .and_then(|engine| engine.get("tile_provider"))
         .and_then(Value::as_str)
@@ -554,6 +563,10 @@ pub(super) async fn get_client_app_web_shell(
         .unwrap_or(0);
     let map_live_event_count = map_hub
         .and_then(|hub| hub.get("live_event_count"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let map_player_avatar_count = map_hub
+        .and_then(|hub| hub.get("player_avatar_count"))
         .and_then(Value::as_u64)
         .unwrap_or(0);
     let map_player_density_mode = map_hub
@@ -1162,11 +1175,11 @@ pub(super) async fn get_client_app_web_shell(
         <h2 data-i18n-en="World" data-i18n-zh="世界">World</h2>
         <p class="subtitle" data-i18n-en="Main stage for exploration, routes, events, and actions." data-i18n-zh="探索、路线、事件和行动都从这里展开。">Main stage for exploration, routes, events, and actions.</p>
       </div>
-      <section class="map-shell" aria-label="Reality mirror map" data-i18n-aria-label-en="Reality mirror map" data-i18n-aria-label-zh="现实镜像地图">
+      <section class="map-shell" aria-label="Trillionnium World Map" data-i18n-aria-label-en="Trillionnium World Map" data-i18n-aria-label-zh="Trillionnium 世界地图">
       <div class="map-panel">
-        <span class="badge" data-i18n-en="Reality Mirror Map" data-i18n-zh="现实镜像地图">Reality Mirror Map</span>
-        <h2 data-i18n-en="Global Launch Zone" data-i18n-zh="海外首发探索路线">Global Launch Zone</h2>
-        <p data-i18n-en="Start from a real-world map for global/overseas players: nearby places, live events, quest cards, and collaborative Agents become adventure routes. Players only need to choose a focus, accept commissions, submit results, and get rated; engine details stay in debug drawers." data-i18n-zh="从面向全球/海外玩家的真实地图开始：附近地点、实时事件、任务牌和协作 Agent 会变成冒险路线。普通玩家只需要选焦点、接委托、提交成果、拿评级；底层地图引擎和接口细节已经收进调试信息。">Start from a real-world map for global/overseas players: nearby places, live events, quest cards, and collaborative Agents become adventure routes. Players only need to choose a focus, accept commissions, submit results, and get rated; engine details stay in debug drawers.</p>
+        <span class="badge" data-i18n-en="{}" data-i18n-zh="Trillionnium 世界地图">{}</span>
+        <h2 data-i18n-en="OpenStreetMap upgraded into a playable world" data-i18n-zh="把 OpenStreetMap 升级成可玩的世界地图">OpenStreetMap upgraded into a playable world</h2>
+        <p data-i18n-en="{}" data-i18n-zh="Trillionnium World Map 不是普通地图工具，而是在 OpenStreetMap 真实地理底座上叠加游戏人物、路线节点、任务牌、实时事件和交付闭环。角色会在地图上跑来跑去，接任务、提交证据、拿评级和奖励。">{}</p>
         <div class="app-map-product-strip">
           <div>
             <strong data-i18n-en="Current Status" data-i18n-zh="当前状态">Current Status</strong>
@@ -1175,7 +1188,7 @@ pub(super) async fn get_client_app_web_shell(
           </div>
           <a class="quest-cta" href='#app-map-action-rail' data-i18n-en="Choose Focus" data-i18n-zh="选择焦点">Choose Focus</a>
         </div>
-        <p><strong data-i18n-en="Map Main Entry" data-i18n-zh="地图主入口">Map Main Entry</strong>: <span data-i18n-en="start with nearby places, events, and bounties before entering other modules." data-i18n-zh="先看附近地点、事件和悬赏，再进入其他模块。">start with nearby places, events, and bounties before entering other modules.</span></p>
+        <p><strong data-i18n-en="Game Map Main Entry" data-i18n-zh="游戏地图主入口">Game Map Main Entry</strong>: <span data-i18n-en="move your avatar between nearby places, live events, and bounty nodes before entering other modules." data-i18n-zh="先让角色在附近地点、实时事件和悬赏节点之间跑图，再进入其他模块。">move your avatar between nearby places, live events, and bounty nodes before entering other modules.</span></p>
         <div id="app-map-camera-actions" class="overlay-toggle-bar">
 {shared_map_camera_actions_html}
         </div>
@@ -1190,12 +1203,13 @@ pub(super) async fn get_client_app_web_shell(
             <span class="hud-chip"><strong>{}</strong> <span data-i18n-en="visible places" data-i18n-zh="个可见地点">visible places</span></span>
             <span class="hud-chip"><strong>{}</strong> <span data-i18n-en="prefetch tiles" data-i18n-zh="个预热地图块">prefetch tiles</span></span>
             <span class="hud-chip"><strong>{}</strong> <span data-i18n-en="live events" data-i18n-zh="个实时事件">live events</span> · {}</span>
+            <span class="hud-chip"><strong>{}</strong> <span data-i18n-en="running avatars" data-i18n-zh="个跑图角色">running avatars</span></span>
           </div>
           <div id="app-map-overlay-controls" class="overlay-toggle-bar">
 {shared_map_overlay_controls_html}
           </div>
-          <p id="app-map-overlay-status" class="subtitle" data-i18n-en="Active layers: density, regions, tiles, prefetch rings, live events." data-i18n-zh="当前图层：密度、区域、地图块、预热圈、实时事件。">Active layers: density, regions, tiles, prefetch rings, live events.</p>
-          <p id="app-map-overlay-legend" class="subtitle" data-i18n-en="Layer legend: regional anchors · active tiles · prefetch rings · live-event pulses." data-i18n-zh="图层说明：区域锚点 · 活跃地图块 · 预热探索圈 · 实时事件脉冲。">Layer legend: regional anchors · active tiles · prefetch rings · live-event pulses.</p>
+          <p id="app-map-overlay-status" class="subtitle" data-i18n-en="Active layers: density, regions, tiles, prefetch rings, live events, player avatars." data-i18n-zh="当前图层：密度、区域、地图块、预热圈、实时事件、跑图角色。">Active layers: density, regions, tiles, prefetch rings, live events, player avatars.</p>
+          <p id="app-map-overlay-legend" class="subtitle" data-i18n-en="Layer legend: regional anchors · active tiles · prefetch rings · live-event pulses · running avatars." data-i18n-zh="图层说明：区域锚点 · 活跃地图块 · 预热探索圈 · 实时事件脉冲 · 跑图角色。">Layer legend: regional anchors · active tiles · prefetch rings · live-event pulses · running avatars.</p>
         </details>
       </div>
         <div id="app-map-action-panel" class="module" style="margin-top:14px; padding:16px 18px;">
@@ -1215,7 +1229,7 @@ pub(super) async fn get_client_app_web_shell(
           </div>
           <div id="app-map-route-actions" class="focus-stack"></div>
         </div>
-      <div id="real-world-map" data-engine="{}" data-provider="{}" aria-label="Reality mirror map" data-i18n-aria-label-en="Reality mirror map" data-i18n-aria-label-zh="现实镜像地图"></div>
+      <div id="real-world-map" data-engine="{}" data-provider="{}" aria-label="Trillionnium World Map" data-i18n-aria-label-en="Trillionnium World Map" data-i18n-aria-label-zh="Trillionnium 世界地图"></div>
     </section>
     <section>
       <h2 data-i18n-en="Map Tiles" data-i18n-zh="地图分片">Map Tiles</h2>
@@ -1930,6 +1944,10 @@ pub(super) async fn get_client_app_web_shell(
         onboarding_command_disclosure_copy_html,
         onboarding_step_cards,
         message_cards,
+        escape_html_text(map_product_name),
+        escape_html_text(map_product_name),
+        escape_html_text(map_upgrade_model),
+        escape_html_text(map_upgrade_model),
         escape_html_text(&client_app_map_label(map_density_summary)),
         escape_html_text(map_engine_name),
         escape_html_text(tile_provider),
@@ -1945,6 +1963,7 @@ pub(super) async fn get_client_app_web_shell(
         map_prefetch_count,
         map_live_event_count,
         escape_html_text(&client_app_map_label(map_player_density_mode)),
+        map_player_avatar_count,
         escape_html_text(map_engine_id),
         escape_html_text(tile_provider),
         map_tile_cards,

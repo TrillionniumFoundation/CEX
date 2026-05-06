@@ -1054,7 +1054,7 @@ fn world_map_viewport_includes_prefetch_density_and_live_events() {
         event_id: "world-event-test-1".to_string(),
         actor_matrix_user_id: "@alice:local.dev".to_string(),
         room_id: Some("!test:local.dev".to_string()),
-        location_id: starter_location_id,
+        location_id: starter_location_id.clone(),
         event_kind: "world_contract".to_string(),
         body: "Test viewport stream event".to_string(),
         result: "queued".to_string(),
@@ -1063,6 +1063,15 @@ fn world_map_viewport_includes_prefetch_density_and_live_events() {
         cex_status: Some("Queued".to_string()),
         created_at_epoch: 1_777_230_001,
     });
+    league.world.world_player_positions.insert(
+        "@alice:local.dev".to_string(),
+        WorldPlayerPosition {
+            matrix_user_id: "@alice:local.dev".to_string(),
+            node_id: "starter-studio".to_string(),
+            location_id: starter_location_id,
+            updated_at_epoch: 1_777_230_003,
+        },
+    );
 
     let viewport = world_map_viewport_json(
         &league.world,
@@ -1079,7 +1088,24 @@ fn world_map_viewport_includes_prefetch_density_and_live_events() {
     assert!(viewport["tile_shard_count"].as_u64().unwrap_or(0) >= 1);
     assert!(viewport["prefetch_count"].as_u64().unwrap_or(0) >= 1);
     assert!(viewport["live_event_count"].as_u64().unwrap_or(0) >= 1);
+    assert!(viewport["player_avatar_count"].as_u64().unwrap_or(0) >= 1);
     assert_eq!(viewport["player_density"]["mode"], "dense");
+    assert_eq!(
+        viewport["gameplay_layer_contract"]["product_name"],
+        "Trillionnium World Map"
+    );
+    assert_eq!(
+        viewport["gameplay_layer_contract"]["supports"]["openstreetmap_base_tiles"],
+        true
+    );
+    assert_eq!(
+        viewport["player_avatars"][0]["movement_status"],
+        "ready_to_run_task"
+    );
+    assert_eq!(
+        viewport["viewport_contract"]["supports_player_avatars"],
+        true
+    );
     assert_eq!(
         viewport["live_event_stream_index_layer"],
         "WorldIndexes::event_indices_by_location_v1"
@@ -1436,6 +1462,15 @@ fn real_world_map_engine_declares_shared_renderer_adapter() {
         engine["renderer_adapter"]["adapter_contract"]["supports_future_engine_swap"],
         true
     );
+    assert_eq!(engine["product_name"], "Trillionnium World Map");
+    assert_eq!(
+        engine["gameplay_layer_contract"]["supports"]["player_avatars"],
+        true
+    );
+    assert_eq!(
+        engine["renderer_adapter"]["adapter_contract"]["supports_player_avatar_layer"],
+        true
+    );
     let adapter_methods = engine["renderer_adapter"]["adapter_methods"]
         .as_array()
         .cloned()
@@ -1453,6 +1488,9 @@ fn real_world_map_engine_declares_shared_renderer_adapter() {
     assert!(adapter_methods
         .iter()
         .any(|method| method == "renderEventPulse"));
+    assert!(adapter_methods
+        .iter()
+        .any(|method| method == "renderPlayerAvatar"));
     assert!(adapter_methods.iter().any(|method| method == "getCenter"));
     assert!(adapter_methods.iter().any(|method| method == "getZoom"));
     assert!(adapter_methods
@@ -1552,7 +1590,13 @@ fn client_app_map_hub_projects_stream_counts() {
     let app = client_app_json(&league, "@alice:local.dev");
     assert!(app["map_hub"]["prefetch_count"].as_u64().unwrap_or(0) >= 1);
     assert!(app["map_hub"]["live_event_count"].as_u64().unwrap_or(0) >= 1);
+    assert!(app["map_hub"]["player_avatar_count"].as_u64().unwrap_or(0) >= 1);
     assert_eq!(app["map_hub"]["player_density_mode"], "dense");
+    assert_eq!(app["modules"][0]["name"], "Trillionnium World Map");
+    assert!(app["modules"][0]["summary"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("角色跑图"));
     assert_eq!(
         app["feed"]["active_region_id"],
         app["map_hub"]["active_region_id"]
@@ -1689,6 +1733,11 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(app_html.contains("renderRouteLine"));
     assert!(app_html.contains("renderTileFrame"));
     assert!(app_html.contains("renderEventPulse"));
+    assert!(app_html.contains("renderPlayerAvatar"));
+    assert!(app_html.contains("Trillionnium World Map"));
+    assert!(app_html.contains("OpenStreetMap upgraded into a playable world"));
+    assert!(app_html.contains("Player avatars / 跑图角色"));
+    assert!(app_html.contains("data-overlay-target=\"avatars\""));
     assert!(app_html.contains("handleOverlayToggleButton"));
     assert!(app_html.contains("mapMarkerActionButtonHtml"));
     assert!(app_html.contains("closestFromEvent"));
@@ -1820,6 +1869,11 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(world_html.contains("renderRouteLine"));
     assert!(world_html.contains("renderTileFrame"));
     assert!(world_html.contains("renderEventPulse"));
+    assert!(world_html.contains("renderPlayerAvatar"));
+    assert!(world_html.contains("Trillionnium World Map"));
+    assert!(world_html.contains("OpenStreetMap upgraded into a playable world"));
+    assert!(world_html.contains("Player avatars / 跑图角色"));
+    assert!(world_html.contains("data-overlay-target=\"avatars\""));
     assert!(world_html.contains("handleOverlayToggleButton"));
     assert!(world_html.contains("mapMarkerActionButtonHtml"));
     assert!(world_html.contains("closestFromEvent"));

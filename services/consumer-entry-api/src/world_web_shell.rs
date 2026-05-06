@@ -372,6 +372,17 @@ pub(super) async fn get_world_web_shell(
         .get("engine")
         .and_then(Value::as_str)
         .unwrap_or("Leaflet");
+    let map_product_name = real_world_map_engine
+        .get("product_name")
+        .and_then(Value::as_str)
+        .unwrap_or("Trillionnium World Map");
+    let map_product_name_html = escape_html_text(map_product_name);
+    let map_upgrade_model = real_world_map_engine
+        .get("gameplay_layer_contract")
+        .and_then(|contract| contract.get("upgrade_model"))
+        .and_then(Value::as_str)
+        .unwrap_or("OpenStreetMap upgraded with Trillionnium avatars, route nodes, quest cards, live events, and task completion loops.");
+    let map_upgrade_model_html = escape_html_text(map_upgrade_model);
     let tile_provider = real_world_map_engine
         .get("tile_provider")
         .and_then(Value::as_str)
@@ -383,7 +394,7 @@ pub(super) async fn get_world_web_shell(
     let full_mirror_strategy = real_world_map_engine
         .get("full_mirror_strategy")
         .and_then(Value::as_str)
-        .unwrap_or("openstreetmap_global_base_with_gather_hero_tale_lod_overlay");
+        .unwrap_or("openstreetmap_global_base_upgraded_with_trillionnium_avatar_task_layer");
     let simplification_style = real_world_map_engine
         .get("simplification_style")
         .and_then(Value::as_str)
@@ -640,6 +651,10 @@ pub(super) async fn get_world_web_shell(
         .unwrap_or(0);
     let map_live_event_count = world_viewport
         .get("live_event_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let map_player_avatar_count = world_viewport
+        .get("player_avatar_count")
         .and_then(Value::as_u64)
         .unwrap_or(0);
     let map_player_density_mode = world_map_status_label(
@@ -1434,9 +1449,9 @@ pub(super) async fn get_world_web_shell(
     <section id="world-map-shell-panel" class="panel">
       <div class="map-shell">
         <div class="map-copy">
-          <div class="pill" data-i18n-en="Reality Mirror Map" data-i18n-zh="现实镜像地图">Reality Mirror Map</div>
-          <h2 data-i18n-en="Global City Exploration" data-i18n-zh="海外首发城市探索">Global City Exploration</h2>
-          <p class="subtitle" data-i18n-en="Start from any map focus: regions, hotspots, live events, and route tasks become the next action. Players see story, places, commissions, and rewards; engine details stay in debug drawers." data-i18n-zh="从地图焦点进入冒险：区域、热点、实时事件和任务路线会自动串成下一步行动。玩家看到故事、地点、委托和奖励；引擎细节收进调试抽屉。">Start from any map focus: regions, hotspots, live events, and route tasks become the next action. Players see story, places, commissions, and rewards; engine details stay in debug drawers.</p>
+          <div class="pill" data-i18n-en="{map_product_name_html}" data-i18n-zh="Trillionnium 世界地图">{map_product_name_html}</div>
+          <h2 data-i18n-en="OpenStreetMap upgraded into a playable world" data-i18n-zh="把 OpenStreetMap 升级成可玩的世界地图">OpenStreetMap upgraded into a playable world</h2>
+          <p class="subtitle" data-i18n-en="{map_upgrade_model_html}" data-i18n-zh="Trillionnium World Map 不是普通地图工具，而是在 OpenStreetMap 真实地理底座上叠加游戏人物、路线节点、任务牌、实时事件和交付闭环。角色会在地图上跑来跑去，接任务、提交证据、拿评级和奖励。">{map_upgrade_model_html}</p>
           <div class="world-map-player-summary">
             <div>
               <strong data-i18n-en="Current Status" data-i18n-zh="当前状态">Current Status</strong>
@@ -1485,15 +1500,16 @@ pub(super) async fn get_world_web_shell(
               <span class="hud-chip"><strong>{map_visible_marker_count}</strong> <span data-i18n-en="visible places" data-i18n-zh="个可见地点">visible places</span></span>
               <span class="hud-chip"><strong>{map_prefetch_count}</strong> <span data-i18n-en="prefetch tiles" data-i18n-zh="个预热地图块">prefetch tiles</span></span>
               <span class="hud-chip"><strong>{map_live_event_count}</strong> <span data-i18n-en="live events" data-i18n-zh="个实时事件">live events</span> · {map_player_density_mode}</span>
+              <span class="hud-chip"><strong>{map_player_avatar_count}</strong> <span data-i18n-en="running avatars" data-i18n-zh="个跑图角色">running avatars</span></span>
             </div>
             <div id="world-map-overlay-controls" class="overlay-toggle-bar">
 {shared_map_overlay_controls_html}
             </div>
-            <p id="world-map-overlay-status" class="subtitle" data-i18n-en="Active layers: density, regions, tiles, prefetch rings, live events." data-i18n-zh="当前图层：密度、区域、地图块、预热圈、实时事件。">Active layers: density, regions, tiles, prefetch rings, live events.</p>
-            <p id="world-map-overlay-legend" class="subtitle" data-i18n-en="Layer legend: regional anchors, active tiles, prefetch rings, live-event pulses." data-i18n-zh="图层说明：区域锚点、活跃地图块、预热探索圈、实时事件脉冲。">Layer legend: regional anchors, active tiles, prefetch rings, live-event pulses.</p>
+            <p id="world-map-overlay-status" class="subtitle" data-i18n-en="Active layers: density, regions, tiles, prefetch rings, live events, player avatars." data-i18n-zh="当前图层：密度、区域、地图块、预热圈、实时事件、跑图角色。">Active layers: density, regions, tiles, prefetch rings, live events, player avatars.</p>
+            <p id="world-map-overlay-legend" class="subtitle" data-i18n-en="Layer legend: regional anchors, active tiles, prefetch rings, live-event pulses, and running avatars." data-i18n-zh="图层说明：区域锚点、活跃地图块、预热探索圈、实时事件脉冲和跑图角色。">Layer legend: regional anchors, active tiles, prefetch rings, live-event pulses, and running avatars.</p>
           </details>
         </div>
-        <div id="world-real-map" data-engine="{map_engine_id}" data-provider="{tile_provider}" aria-label="Reality mirror map" data-i18n-aria-label-en="Reality mirror map" data-i18n-aria-label-zh="现实镜像地图"></div>
+        <div id="world-real-map" data-engine="{map_engine_id}" data-provider="{tile_provider}" aria-label="Trillionnium World Map" data-i18n-aria-label-en="Trillionnium World Map" data-i18n-aria-label-zh="Trillionnium 世界地图"></div>
       </div>
     </section>
     <section>

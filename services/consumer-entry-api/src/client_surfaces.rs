@@ -75,6 +75,7 @@ impl ClientRouteWorldContext {
             "nearby_poi_count": metrics.nearby_poi_count,
             "prefetch_count": metrics.prefetch_count,
             "live_event_count": metrics.live_event_count,
+            "player_avatar_count": metrics.player_avatar_count,
             "player_density_mode": metrics.player_density_mode.clone(),
             "estimated_concurrent_players": metrics.estimated_concurrent_players,
             "viewport": self.viewport,
@@ -354,7 +355,8 @@ pub(super) fn map_overlay_control_buttons_html() -> &'static str {
           <button type="button" class="overlay-toggle trillionnium-overlay-toggle" data-overlay-target="regions" aria-pressed="true">Regions</button>
           <button type="button" class="overlay-toggle trillionnium-overlay-toggle" data-overlay-target="tiles" aria-pressed="true">Tiles</button>
           <button type="button" class="overlay-toggle trillionnium-overlay-toggle" data-overlay-target="prefetch" aria-pressed="true">Prefetch</button>
-          <button type="button" class="overlay-toggle trillionnium-overlay-toggle" data-overlay-target="events" aria-pressed="true">Live events</button>"#
+          <button type="button" class="overlay-toggle trillionnium-overlay-toggle" data-overlay-target="events" aria-pressed="true">Live events</button>
+          <button type="button" class="overlay-toggle trillionnium-overlay-toggle" data-overlay-target="avatars" aria-pressed="true">Avatars</button>"#
 }
 
 pub(super) fn map_camera_action_buttons_html() -> &'static str {
@@ -2219,6 +2221,7 @@ pub(super) struct ClientAppMapHubMetrics {
     nearby_poi_count: usize,
     prefetch_count: usize,
     live_event_count: usize,
+    player_avatar_count: usize,
     player_density_mode: String,
     estimated_concurrent_players: i64,
 }
@@ -2255,6 +2258,11 @@ impl ClientAppMapHubMetrics {
                 .get("live_event_stream")
                 .and_then(Value::as_array)
                 .map(|events| events.len())
+                .unwrap_or(0),
+            player_avatar_count: map_viewport
+                .get("player_avatars")
+                .and_then(Value::as_array)
+                .map(|avatars| avatars.len())
                 .unwrap_or(0),
             player_density_mode: map_viewport
                 .get("player_density")
@@ -2348,8 +2356,8 @@ impl<'a> ClientAppModulesProjection<'a> {
         vec![
             json!({
                 "module_id": "world_map",
-                "name": "现实地图",
-                "style": "Leaflet + OpenStreetMap + 英雄坛说/Gather 探索层",
+                "name": "Trillionnium World Map",
+                "style": "OpenStreetMap upgraded with game avatars, quest routes, and Hero Tale / Gather exploration layers",
                 "status": "可玩",
                 "entry_priority": 1,
                 "ui_role": "primary_super_entry",
@@ -2360,16 +2368,18 @@ impl<'a> ClientAppModulesProjection<'a> {
                 "nearby_poi_count": self.map_metrics.nearby_poi_count,
                 "prefetch_count": self.map_metrics.prefetch_count,
                 "live_event_count": self.map_metrics.live_event_count,
+                "player_avatar_count": self.map_metrics.player_avatar_count,
                 "player_density_mode": self.map_metrics.player_density_mode.clone(),
                 "primary_command": "/map",
                 "secondary_command": "/go west",
                 "summary": format!(
-                    "{} / {} · 区域 {} · {} 个附近热点 · {} 个实时事件 · {} 密度",
+                    "{} / {} · 区域 {} · {} 个附近热点 · {} 个实时事件 · {} 个角色跑图 · {} 密度",
                     self.current_node_name,
                     self.current_node_id,
                     self.active_region_id,
                     self.map_metrics.nearby_poi_count,
                     self.map_metrics.live_event_count,
+                    self.map_metrics.player_avatar_count,
                     self.map_metrics.player_density_mode,
                 ),
             }),
