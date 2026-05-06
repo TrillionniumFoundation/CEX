@@ -838,6 +838,11 @@ pub(super) async fn get_client_app_web_shell(
     .quest-status-card {{ border:1px solid rgba(100,227,255,.16); background:rgba(100,227,255,.05); border-radius:18px; padding:14px; }}
     .quest-status-card .subtitle {{ margin:0 0 8px; }}
     .quest-cta {{ display:inline-flex; align-items:center; justify-content:center; min-height:44px; border-radius:14px; border:1px solid rgba(248,195,91,.42); background:linear-gradient(135deg,rgba(248,195,91,.92),rgba(255,150,89,.9)); color:#071019; text-decoration:none; font-weight:950; padding:0 16px; box-shadow:0 12px 28px rgba(248,195,91,.16); }}
+    .quest-quick-path {{ margin:12px 0 0; border:1px solid rgba(248,195,91,.24); background:rgba(248,195,91,.08); border-radius:18px; padding:12px 14px; display:flex; align-items:center; gap:10px; flex-wrap:wrap; }}
+    .quest-quick-path strong {{ color:var(--gold); font-size:13px; text-transform:uppercase; letter-spacing:.05em; }}
+    .quest-quick-path span {{ color:var(--text); font-weight:850; }}
+    .app-full-command-drawer {{ border:1px solid rgba(255,255,255,.1); background:rgba(255,255,255,.035); border-radius:18px; padding:10px; }}
+    .app-full-command-drawer > p {{ margin:10px 0 0; }}
     .app-player-loop-steps {{ list-style:none; padding:0; margin:12px 0 0; display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }}
     .app-player-loop-steps li {{ display:grid; gap:4px; min-height:86px; border:1px solid rgba(248,195,91,.2); background:rgba(248,195,91,.07); border-radius:16px; padding:12px; }}
     .app-player-loop-steps b {{ color:var(--gold); }}
@@ -1005,6 +1010,10 @@ pub(super) async fn get_client_app_web_shell(
           <a class="quest-cta" href="/world" data-i18n-en="Start World Quest" data-i18n-zh="开始世界任务">Start World Quest</a>
         </div>
       </div>
+      <div id="app-first-playable-quick-path" class="quest-quick-path" aria-label="Quick path" data-i18n-aria-label-en="Quick path" data-i18n-aria-label-zh="快速路径">
+        <strong data-i18n-en="Quick Path" data-i18n-zh="快速路径">Quick Path</strong>
+        <span data-i18n-en="Choose map focus → run one bounty → submit/review reward" data-i18n-zh="选择地图焦点 → 跑一个悬赏 → 提交/查看奖励">Choose map focus → run one bounty → submit/review reward</span>
+      </div>
       <ol class="app-player-loop-steps" aria-label="Starter quest steps" data-i18n-aria-label-en="Starter quest steps" data-i18n-aria-label-zh="新手任务三步">
         <li><b data-i18n-en="1 · Choose map focus" data-i18n-zh="1 · 选择地图焦点">1 · Choose map focus</b><span data-i18n-en="Tap a city place, region, or live event." data-i18n-zh="点选城市地点、区域或实时事件。">Tap a city place, region, or live event.</span></li>
         <li><b data-i18n-en="2 · Accept bounty" data-i18n-zh="2 · 接取悬赏">2 · Accept bounty</b><span data-i18n-en="Turn the focus into a playable quest card." data-i18n-zh="把焦点变成可玩的任务牌。">Turn the focus into a playable quest card.</span></li>
@@ -1013,7 +1022,7 @@ pub(super) async fn get_client_app_web_shell(
       <section id="app-playability-coach" class="playability-coach-lanes" data-contract-version="{}" aria-label="P0 P1 P2 playability coach" data-i18n-aria-label-en="P0 P1 P2 playability coach" data-i18n-aria-label-zh="P0 P1 P2 可玩性教练">{}</section>
       <details id="app-economy-retention-ops" class="dev-details economy-retention-drawer"><summary><span data-i18n-en="Economy · return · telemetry" data-i18n-zh="经济 · 回访 · 遥测">Economy · return · telemetry</span> · {}%</summary><p class="subtitle">{}</p><div class="economy-retention-grid">{}</div><div class="map-stream-hud">{}</div></details>
       <details class="dev-details app-progress-drawer"><summary data-i18n-en="Progress checks" data-i18n-zh="进度检查">Progress checks</summary><div id="app-first-playable-checks" class="map-stream-hud">{}</div></details>
-      <section id="app-first-playable-steps" class="grid">{}</section>
+      <details id="app-first-playable-full-commands" class="dev-details app-full-command-drawer"><summary data-i18n-en="Full Commands" data-i18n-zh="完整命令">Full Commands</summary><p class="subtitle" data-i18n-en="Open this when you are ready to submit real work with deliverable, evidence, risk controls, next action, and self-review anchors." data-i18n-zh="准备真实提交时再展开：每条命令都要带交付物、证据、风险控制、下一步和自检锚点。">Open this when you are ready to submit real work with deliverable, evidence, risk controls, next action, and self-review anchors.</p><section id="app-first-playable-steps" class="grid">{}</section></details>
     </section>
     <section id="app-tab-messages" class="app-tab-panel" data-app-panel="messages" role="tabpanel" aria-labelledby="app-tab-button-messages" aria-hidden="true" hidden>
       <div class="app-tab-header">

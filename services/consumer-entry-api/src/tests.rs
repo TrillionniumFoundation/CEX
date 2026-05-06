@@ -1699,6 +1699,12 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(app_html.contains("动态"));
     assert!(app_html.contains("我"));
     assert!(app_html.contains("app-first-playable-onboarding"));
+    assert!(app_html.contains("app-first-playable-quick-path"));
+    assert!(app_html.contains("Quick Path"));
+    assert!(app_html.contains("Choose map focus → run one bounty → submit/review reward"));
+    assert!(app_html.contains("app-first-playable-full-commands"));
+    assert!(app_html.contains("Full Commands"));
+    assert!(app_html.contains("Open this when you are ready to submit real work"));
     assert!(app_html.contains("app-playability-coach"));
     assert!(app_html.contains("新手主线"));
     assert!(app_html.contains("first_playable_loop_100"));
