@@ -491,6 +491,7 @@ pub(super) fn trillionnium_world_map_gameplay_layer_contract_json() -> Value {
             "avatar_route_runners": true,
             "checkpoint_reward_history": true,
             "agent_party_state": true,
+            "agent_party_handoff_actions": true,
             "live_event_task_pulses": true,
             "openstreetmap_base_tiles": true
         }
@@ -509,29 +510,38 @@ fn world_map_agent_party_members_json(matrix_user_id: &str, task_id: &str) -> Ve
             "Oracle Scout / 预判侦察",
             "scout_route_and_evidence",
             "Reads the map route, spots evidence gaps, and chooses the safest task checkpoint.",
+            "Scout route / 侦察路线",
+            "Scout route for task {task_id}: map the deliverable, evidence gaps, risk controls, next action, and self-review before the party moves to the checkpoint.",
         ),
         (
             "forge_builder",
             "Forge Builder / 交付锻造",
             "build_deliverable",
             "Turns the route brief into a concrete deliverable package for the checkpoint.",
+            "Build deliverable / 构建交付",
+            "Build deliverable for task {task_id}: produce the customer-facing package, evidence bundle, risk controls, next action, and self-review for checkpoint completion.",
         ),
         (
             "mirror_auditor",
             "Mirror Auditor / 镜像审计",
             "audit_risk_controls",
             "Checks risk controls, acceptance criteria, and anti-cheese proof before reward settlement.",
+            "Audit risk / 审计风险",
+            "Audit risk for task {task_id}: verify evidence quality, acceptance criteria, anti-cheese controls, next action, and self-review before reward settlement.",
         ),
         (
             "courier_closer",
             "Courier Closer / 结算信使",
             "close_reward_loop",
             "Carries next action and self-review into the rating/reward handoff.",
+            "Close reward / 结算奖励",
+            "Close reward for task {task_id}: package final deliverable, evidence, risk controls, next action, and self-review into the rating/reward handoff.",
         ),
     ]
     .into_iter()
     .enumerate()
-    .map(|(index, (role, display_name, state, responsibility))| {
+    .map(|(index, (role, display_name, state, responsibility, action_label, action_body))| {
+        let action_body = action_body.replace("{task_id}", task_id);
         json!({
             "agent_id": format!("agent-party:{}:{}:{}", matrix_user_id, task_id, role),
             "role": role,
@@ -540,6 +550,16 @@ fn world_map_agent_party_members_json(matrix_user_id: &str, task_id: &str) -> Ve
             "state": state,
             "responsibility": responsibility,
             "handoff_anchor": "deliverable → evidence → risk controls → next action → self-review",
+            "action_label": action_label,
+            "action_body": action_body,
+            "handoff_action": {
+                "label": action_label,
+                "panel_id": "world-action-console",
+                "textarea_id": "world-action-body",
+                "task_id": task_id,
+                "body": action_body,
+                "status": state,
+            },
         })
     })
     .collect()
@@ -587,6 +607,7 @@ pub(super) fn world_map_player_avatars_json(
             "agent_party": agent_party,
             "agent_party_summary": "Agent party: scout route → build deliverable → audit risk → close reward",
             "agent_party_status": "party_ready_for_task_route",
+            "agent_party_action_summary": "Tap a party role to draft a world action with deliverable, evidence, risk controls, next action, and self-review.",
             "animation_hint": "run_between_route_nodes"
         })
     };
@@ -739,6 +760,7 @@ pub(super) fn world_map_avatar_task_routes_json(
             "agent_party": world_map_agent_party_members_json(matrix_user_id, task_id),
             "agent_party_summary": "Agent party: scout route → build deliverable → audit risk → close reward",
             "agent_party_handoff_hint": "Assign scout/build/audit/close roles before submitting deliverable, evidence, risk controls, next action, and self-review.",
+            "agent_party_action_summary": "Each party role can draft the next world action for this route checkpoint.",
             "movement_hint": "draw_avatar_task_route_from_current_node_to_target_node",
         }));
     }
@@ -866,6 +888,7 @@ pub(super) fn world_map_avatar_route_runners_json(
                 "agent_party": agent_party,
                 "agent_party_summary": route.get("agent_party_summary").cloned().unwrap_or_else(|| json!("Agent party: scout route → build deliverable → audit risk → close reward")),
                 "agent_party_handoff_hint": route.get("agent_party_handoff_hint").cloned().unwrap_or_else(|| json!("Assign scout/build/audit/close roles before submitting deliverable, evidence, risk controls, next action, and self-review.")),
+                "agent_party_action_summary": route.get("agent_party_action_summary").cloned().unwrap_or_else(|| json!("Each party role can draft the next world action for this route checkpoint.")),
                 "reward_checkpoint": {
                     "checkpoint_id": checkpoint_id,
                     "layer_id": "trillionnium_avatar_route_reward_checkpoint_layer",
@@ -1681,6 +1704,7 @@ pub(super) fn world_map_viewport_json(
             "supports_avatar_route_runners": true,
             "supports_checkpoint_reward_history": true,
             "supports_agent_party_state": true,
+            "supports_agent_party_handoff_actions": true,
         }
     })
 }

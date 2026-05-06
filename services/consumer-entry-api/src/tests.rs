@@ -1115,6 +1115,10 @@ fn world_map_viewport_includes_prefetch_density_and_live_events() {
         true
     );
     assert_eq!(
+        viewport["gameplay_layer_contract"]["supports"]["agent_party_handoff_actions"],
+        true
+    );
+    assert_eq!(
         viewport["player_avatars"][0]["movement_status"],
         "ready_to_run_task"
     );
@@ -1133,6 +1137,10 @@ fn world_map_viewport_includes_prefetch_density_and_live_events() {
         .as_str()
         .unwrap_or_default()
         .contains("audit risk"));
+    assert!(viewport["player_avatars"][0]["agent_party_action_summary"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("Tap a party role"));
     assert!(viewport["avatar_task_route_count"].as_u64().unwrap_or(0) >= 1);
     assert_eq!(
         viewport["avatar_task_routes"][0]["route_layer_id"],
@@ -1151,6 +1159,12 @@ fn world_map_viewport_includes_prefetch_density_and_live_events() {
             .as_str()
             .unwrap_or_default()
             .contains("self-review")
+    );
+    assert!(
+        viewport["avatar_task_routes"][0]["agent_party_action_summary"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("world action")
     );
     assert!(viewport["avatar_route_runner_count"].as_u64().unwrap_or(0) >= 1);
     assert_eq!(
@@ -1180,6 +1194,32 @@ fn world_map_viewport_includes_prefetch_density_and_live_events() {
         .as_str()
         .unwrap_or_default()
         .contains("close reward"));
+    assert!(
+        viewport["avatar_route_runners"][0]["agent_party_action_summary"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("world action")
+    );
+    assert_eq!(
+        viewport["avatar_route_runners"][0]["agent_party"][0]["action_label"],
+        "Scout route / 侦察路线"
+    );
+    assert!(
+        viewport["avatar_route_runners"][0]["agent_party"][0]["action_body"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("evidence gaps")
+    );
+    assert_eq!(
+        viewport["avatar_route_runners"][0]["agent_party"][0]["handoff_action"]["panel_id"],
+        "world-action-console"
+    );
+    assert!(
+        viewport["avatar_route_runners"][0]["agent_party"][0]["handoff_action"]["body"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("self-review")
+    );
     assert!(viewport["avatar_route_runners"][0]["current"]["lat"].is_number());
     assert!(
         viewport["avatar_route_runners"][0]["runner_trace_points"]
@@ -1279,6 +1319,10 @@ fn world_map_viewport_includes_prefetch_density_and_live_events() {
     );
     assert_eq!(
         viewport["viewport_contract"]["supports_agent_party_state"],
+        true
+    );
+    assert_eq!(
+        viewport["viewport_contract"]["supports_agent_party_handoff_actions"],
         true
     );
     assert_eq!(
@@ -1965,8 +2009,16 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(app_html.contains("agent_party"));
     assert!(app_html.contains("agent_party_summary"));
     assert!(app_html.contains("agentPartyChipsHtml"));
+    assert!(app_html.contains("buildAgentPartyAction"));
+    assert!(app_html.contains("agentPartyActionButtonsHtml"));
+    assert!(app_html.contains("trillionnium-agent-party-action"));
     assert!(app_html.contains("Agent party"));
+    assert!(app_html.contains("Agent handoff"));
     assert!(app_html.contains("Oracle Scout"));
+    assert!(app_html.contains("Scout route"));
+    assert!(app_html.contains("Build deliverable"));
+    assert!(app_html.contains("Audit risk"));
+    assert!(app_html.contains("Close reward"));
     assert!(app_html.contains("buildRouteRunnerCompletionAction"));
     assert!(app_html.contains("routeRunnerCompletionButtonHtml"));
     assert!(app_html.contains("Complete checkpoint"));
@@ -2141,8 +2193,16 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(world_html.contains("agent_party"));
     assert!(world_html.contains("agent_party_summary"));
     assert!(world_html.contains("agentPartyChipsHtml"));
+    assert!(world_html.contains("buildAgentPartyAction"));
+    assert!(world_html.contains("agentPartyActionButtonsHtml"));
+    assert!(world_html.contains("trillionnium-agent-party-action"));
     assert!(world_html.contains("Agent party"));
+    assert!(world_html.contains("Agent handoff"));
     assert!(world_html.contains("Oracle Scout"));
+    assert!(world_html.contains("Scout route"));
+    assert!(world_html.contains("Build deliverable"));
+    assert!(world_html.contains("Audit risk"));
+    assert!(world_html.contains("Close reward"));
     assert!(world_html.contains("buildRouteRunnerCompletionAction"));
     assert!(world_html.contains("routeRunnerCompletionButtonHtml"));
     assert!(world_html.contains("Complete checkpoint"));
