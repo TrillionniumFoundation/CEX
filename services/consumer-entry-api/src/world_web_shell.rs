@@ -661,6 +661,10 @@ pub(super) async fn get_world_web_shell(
         .get("avatar_task_route_count")
         .and_then(Value::as_u64)
         .unwrap_or(0);
+    let map_avatar_route_runner_count = world_viewport
+        .get("avatar_route_runner_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
     let map_player_density_mode = world_map_status_label(
         world_viewport
             .get("player_density")
@@ -1271,8 +1275,11 @@ pub(super) async fn get_world_web_shell(
     .overlay-toggle.is-off {{ opacity:.58; background:rgba(255,255,255,.04); border-color:rgba(255,255,255,.12); color:var(--muted); }}
     .trillionnium-avatar-task-route-path {{ animation: trillionnium-route-dash 1.5s linear infinite; filter: drop-shadow(0 0 8px rgba(167,139,250,.42)); }}
     .trillionnium-avatar-task-route-pulse {{ animation: trillionnium-route-pulse 1.8s ease-in-out infinite; }}
+    .trillionnium-avatar-route-runner-dot {{ width:38px; height:38px; border-radius:999px; display:grid; place-items:center; background:linear-gradient(135deg,#a78bfa,#64e3ff); box-shadow:0 0 0 3px rgba(11,18,32,.84),0 0 24px rgba(167,139,250,.55); animation: trillionnium-runner-bob 820ms ease-in-out infinite; }}
+    .trillionnium-avatar-route-runner-dot span {{ transform:translateY(-1px); }}
     @keyframes trillionnium-route-dash {{ from {{ stroke-dashoffset: 0; }} to {{ stroke-dashoffset: -24; }} }}
     @keyframes trillionnium-route-pulse {{ 0%,100% {{ opacity:.55; transform:scale(1); }} 50% {{ opacity:1; transform:scale(1.08); }} }}
+    @keyframes trillionnium-runner-bob {{ 0%,100% {{ transform:translateY(0) scale(1); }} 50% {{ transform:translateY(-5px) scale(1.06); }} }}
     .mini {{ display:grid; gap:7px; padding:14px; border-radius:16px; background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.08); }}
     #world-real-map {{ min-height:min(58vh,620px); border-radius:22px; overflow:hidden; border:1px solid rgba(100,227,255,.24); box-shadow:0 24px 90px rgba(0,0,0,.42); background:#0b1220; }}
     #world-real-map .leaflet-control-zoom a {{ width:40px; height:40px; line-height:40px; font-size:20px; }}
@@ -1501,6 +1508,8 @@ pub(super) async fn get_world_web_shell(
             <div id="world-live-events-live" class="mini-grid" style="margin-top:12px">{live_event_cards}</div>
             <h3 data-i18n-en="Avatar Task Routes" data-i18n-zh="角色任务路线">Avatar Task Routes</h3>
             <div id="world-avatar-task-routes-live" class="mini-grid" style="margin-top:12px"></div>
+            <h3 data-i18n-en="Avatar Movement" data-i18n-zh="角色跑图">Avatar Movement</h3>
+            <div id="world-avatar-route-runners-live" class="mini-grid" style="margin-top:12px"></div>
             <p style="margin-top:12px"><strong>Global Real-world Map Engine</strong>: <code>{map_engine_name}</code> + <code>{tile_provider}</code></p>
             <p><strong>Mirror</strong>: <code>{mirror_scope}</code> · <strong>Strategy</strong>: <code>{full_mirror_strategy}</code> · <strong>Style</strong>: <code>{simplification_style}</code> · <strong>Goal</strong>: <code>{scaling_goal}</code></p>
             <p><strong>Viewport API</strong>: <code>{viewport_path}</code></p>
@@ -1511,13 +1520,14 @@ pub(super) async fn get_world_web_shell(
               <span class="hud-chip"><strong>{map_prefetch_count}</strong> <span data-i18n-en="prefetch tiles" data-i18n-zh="个预热地图块">prefetch tiles</span></span>
               <span class="hud-chip"><strong>{map_live_event_count}</strong> <span data-i18n-en="live events" data-i18n-zh="个实时事件">live events</span> · {map_player_density_mode}</span>
               <span class="hud-chip"><strong>{map_avatar_task_route_count}</strong> <span data-i18n-en="task routes" data-i18n-zh="条任务路线">task routes</span></span>
+              <span class="hud-chip"><strong>{map_avatar_route_runner_count}</strong> <span data-i18n-en="moving avatars" data-i18n-zh="个动态角色">moving avatars</span></span>
               <span class="hud-chip"><strong>{map_player_avatar_count}</strong> <span data-i18n-en="running avatars" data-i18n-zh="个跑图角色">running avatars</span></span>
             </div>
             <div id="world-map-overlay-controls" class="overlay-toggle-bar">
 {shared_map_overlay_controls_html}
             </div>
-            <p id="world-map-overlay-status" class="subtitle" data-i18n-en="Active layers: density, regions, tiles, prefetch rings, live events, task routes, player avatars." data-i18n-zh="当前图层：密度、区域、地图块、预热圈、实时事件、任务路线、跑图角色。">Active layers: density, regions, tiles, prefetch rings, live events, task routes, player avatars.</p>
-            <p id="world-map-overlay-legend" class="subtitle" data-i18n-en="Layer legend: regional anchors, active tiles, prefetch rings, live-event pulses, avatar task routes, and running avatars." data-i18n-zh="图层说明：区域锚点、活跃地图块、预热探索圈、实时事件脉冲、角色任务路线和跑图角色。">Layer legend: regional anchors, active tiles, prefetch rings, live-event pulses, avatar task routes, and running avatars.</p>
+            <p id="world-map-overlay-status" class="subtitle" data-i18n-en="Active layers: density, regions, tiles, prefetch rings, live events, task routes, moving avatars, player avatars." data-i18n-zh="当前图层：密度、区域、地图块、预热圈、实时事件、任务路线、动态角色、跑图角色。">Active layers: density, regions, tiles, prefetch rings, live events, task routes, moving avatars, player avatars.</p>
+            <p id="world-map-overlay-legend" class="subtitle" data-i18n-en="Layer legend: regional anchors, active tiles, prefetch rings, live-event pulses, avatar task routes, animated runners, and running avatars." data-i18n-zh="图层说明：区域锚点、活跃地图块、预热探索圈、实时事件脉冲、角色任务路线、动态跑图和跑图角色。">Layer legend: regional anchors, active tiles, prefetch rings, live-event pulses, avatar task routes, animated runners, and running avatars.</p>
           </details>
         </div>
         <div id="world-real-map" data-engine="{map_engine_id}" data-provider="{tile_provider}" aria-label="Trillionnium World Map" data-i18n-aria-label-en="Trillionnium World Map" data-i18n-aria-label-zh="Trillionnium 世界地图"></div>
@@ -1717,6 +1727,7 @@ pub(super) async fn get_world_web_shell(
       const prefetchTarget = document.getElementById('world-prefetch-queue-live');
       const liveEventTarget = document.getElementById('world-live-events-live');
       const taskRouteTarget = document.getElementById('world-avatar-task-routes-live');
+      const routeRunnerTarget = document.getElementById('world-avatar-route-runners-live');
       const routeTaskGraphTarget = document.getElementById('world-route-task-graph-live');
       {shared_map_runtime_bootstrap_js}
 
@@ -2117,6 +2128,7 @@ pub(super) async fn get_world_web_shell(
           renderStreamHud(lastViewport, focus);
           renderCards(liveEventTarget, filterLiveEventStream(lastViewport.live_event_stream || [], focus), 'event');
           renderCards(taskRouteTarget, filterAvatarTaskRoutes(lastViewport.avatar_task_routes || [], focus), 'taskRoute');
+          renderCards(routeRunnerTarget, filterAvatarRouteRunners(lastViewport.avatar_route_runners || [], focus), 'routeRunner');
         }}
         renderFocusPanel();
         applyRouteFilters();

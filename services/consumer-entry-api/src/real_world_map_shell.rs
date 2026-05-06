@@ -303,6 +303,12 @@ pub(super) fn real_world_map_runtime_bootstrap_js() -> &'static str {
           return L.layerGroup().addTo(map);
         },
         clearOverlay(layer) {
+          if (layer && Array.isArray(layer._trillionniumAnimationCancels)) {
+            layer._trillionniumAnimationCancels.forEach((cancel) => {
+              try { cancel(); } catch (_) {}
+            });
+            layer._trillionniumAnimationCancels = [];
+          }
           if (layer && layer.clearLayers) layer.clearLayers();
         },
         latLngBounds(points) {
@@ -334,6 +340,47 @@ pub(super) fn real_world_map_runtime_bootstrap_js() -> &'static str {
             iconAnchor: [17, 30],
           });
           return L.marker([avatar.lat, avatar.lng], { icon, title: avatar.display_name || avatar.matrix_user_id || 'Player avatar', zIndexOffset: 900 }).addTo(layer).bindPopup(popupHtml);
+        },
+        renderMovingAvatar(layer, runner, popupHtml) {
+          const from = runner.from || {};
+          const to = runner.to || {};
+          const fromLat = Number(from.lat);
+          const fromLng = Number(from.lng);
+          const toLat = Number(to.lat);
+          const toLng = Number(to.lng);
+          if (!Number.isFinite(fromLat) || !Number.isFinite(fromLng) || !Number.isFinite(toLat) || !Number.isFinite(toLng)) return null;
+          const ratio = Math.max(0, Math.min(1, Number(runner.progress_ratio ?? 0.2)));
+          const startLat = fromLat + (toLat - fromLat) * ratio;
+          const startLng = fromLng + (toLng - fromLng) * ratio;
+          const icon = L.divIcon({
+            className: 'trillionnium-avatar-route-runner',
+            html: `<div class="trillionnium-avatar-route-runner-dot"><span>${escapeHtml(runner.runner_icon || '🏃')}</span></div>`,
+            iconSize: [38, 38],
+            iconAnchor: [19, 32],
+          });
+          const marker = L.marker([startLat, startLng], { icon, title: runner.movement_label || runner.task_id || 'Avatar runner', zIndexOffset: 1100 }).addTo(layer).bindPopup(popupHtml);
+          const sameNode = Math.abs(fromLat - toLat) < 0.000001 && Math.abs(fromLng - toLng) < 0.000001;
+          if (!sameNode && typeof requestAnimationFrame === 'function') {
+            let alive = true;
+            let frameId = 0;
+            const duration = Math.max(1800, Number(runner.animation_duration_ms || 4800));
+            const startedAt = performance.now() - duration * ratio;
+            const animate = (now) => {
+              if (!alive || !layer || !layer.hasLayer || !layer.hasLayer(marker)) return;
+              const phase = ((now - startedAt) % duration) / duration;
+              const eased = 0.5 - Math.cos(phase * Math.PI * 2) / 2;
+              marker.setLatLng([fromLat + (toLat - fromLat) * eased, fromLng + (toLng - fromLng) * eased]);
+              frameId = requestAnimationFrame(animate);
+            };
+            const cancel = () => {
+              alive = false;
+              if (frameId) cancelAnimationFrame(frameId);
+            };
+            layer._trillionniumAnimationCancels = layer._trillionniumAnimationCancels || [];
+            layer._trillionniumAnimationCancels.push(cancel);
+            frameId = requestAnimationFrame(animate);
+          }
+          return marker;
         },
         getCenter(map) {
           return map.getCenter();
@@ -388,7 +435,7 @@ pub(super) fn real_world_map_runtime_bootstrap_js() -> &'static str {
           ['镜像城市广场', 'Mirror City Square / 镜像城市广场'], ['公会团本厅', 'Guild Raid Hall / 公会团本厅'], ['悬赏任务牌', 'Bounty Board / 悬赏任务牌'], ['成果评定台', 'Result Rating Dock / 成果评定台'], ['争议柜台', 'Dispute Desk / 争议柜台'], ['League 竞技场', 'League Arena / League 竞技场'],
           ['starter-studio', 'starter-studio / 新手工坊'], ['forge-workbench', 'forge-workbench / 锻造工坊'], ['asset-yard', 'asset-yard / 道具庭院'], ['zbj-market-gate', 'bounty-market-gate / 悬赏集市门'], ['league-coliseum', 'league-coliseum / League 竞技场'], ['cn-shanghai-core', 'global-start-zone / 全球首发区'],
           ['prefetch', 'prefetch / 预热分片'], ['street_nodes', 'street nodes / 街区节点'], ['neighbor_tile_warmup', 'neighbor warmup / 邻近地图预热'], ['warm', 'warm / 预热'], ['active', 'active / 活跃'], ['planned', 'planned / 规划中'], ['pending', 'pending / 待推进'], ['completed', 'completed / 已完成'], ['accepted', 'accepted / 已评级'], ['world_event', 'world event / 世界事件'], ['no-task', 'no task / 未关联任务'], ['dense', 'dense / 高密度'], ['regional', 'regional / 区域密度'],
-          ['route_task', 'route task / 路线任务'], ['avatar_task_route', 'avatar task route / 角色任务路线'], ['Task routes', 'Task routes / 任务路线'], ['Avatar Task Routes', 'Avatar Task Routes / 角色任务路线'], ['Trace route / 追踪路线', 'Trace route / 追踪路线'], ['animated path / 动态路径', 'animated path / 动态路径'], ['contract_capture', 'contract capture / 契约登记'], ['work_order', 'quest commission / 冒险委托'], ['delivery', 'result submit / 成果提交'], ['acceptance', 'rating pass / 评级'], ['rejection', 'revision / 返工'], ['reopen', 'reopen / 重开'], ['cancellation', 'cancel / 放弃'], ['live_event', 'live event / 实时事件'],
+          ['route_task', 'route task / 路线任务'], ['avatar_task_route', 'avatar task route / 角色任务路线'], ['avatar_route_runner', 'avatar route runner / 跑图角色'], ['Task routes', 'Task routes / 任务路线'], ['Avatar Task Routes', 'Avatar Task Routes / 角色任务路线'], ['Avatar Movement', 'Avatar Movement / 角色跑图'], ['Moving avatars', 'Moving avatars / 动态角色'], ['Trace route / 追踪路线', 'Trace route / 追踪路线'], ['Follow runner / 跟随角色', 'Follow runner / 跟随角色'], ['animated path / 动态路径', 'animated path / 动态路径'], ['looping_avatar_task_run', 'looping avatar task run / 循环任务跑图'], ['en_route_to_task_reward', 'en route to task reward / 正在跑向任务奖励'], ['contract_capture', 'contract capture / 契约登记'], ['work_order', 'quest commission / 冒险委托'], ['delivery', 'result submit / 成果提交'], ['acceptance', 'rating pass / 评级'], ['rejection', 'revision / 返工'], ['reopen', 'reopen / 重开'], ['cancellation', 'cancel / 放弃'], ['live_event', 'live event / 实时事件'],
           ['poi', 'POI / 热点'], ['hub_square', 'hub square / 主城广场'], ['agent_home', 'Agent home / Agent 居所'], ['ledger_office', 'reward office / 奖励窗口'], ['workshop_room', 'workshop room / 工坊房间'], ['craft_station', 'craft station / 锻造台'], ['asset_yard', 'asset yard / 道具庭院'], ['market_gate', 'bounty gate / 悬赏入口'], ['client_board', 'quest board / 悬赏牌'], ['delivery_dock', 'rating dock / 成果评定台'], ['dispute_desk', 'dispute desk / 仲裁柜台'], ['arena_gate', 'arena gate / 竞技入口'], ['raid_hall', 'raid hall / 团本大厅'],
           ['customer-facing', 'player-facing / 玩家可用'], ['customer', 'client / 委托目标'], ['buyer', 'quest taker / 接取方'], ['seller', 'service party / 服务方'], ['commercial', 'market quest / 市场任务'], ['browser commerce E2E', 'browser adventure E2E / 浏览器冒险验收'], ['AI 设计公司', 'AI Design Studio / AI 设计工坊'], ['服务真实客户', 'serve real global clients / 完成海外真实委托'], ['真实客户', 'real global client / 海外真实委托'], ['委托方', 'client / 委托目标'],
           ['回访/升级悬赏', 'follow-up or upgrade bounty / 回访/升级悬赏'], ['升级悬赏', 'upgrade bounty / 升级悬赏'], ['回访', 'follow-up / 回访'], ['基于', 'based on / 基于'], ['提供', 'provide / 提供'], ['下一阶段', 'next-stage / 下一阶段'], ['赏金', 'bounty / 赏金'], ['推荐理由', 'recommendation rationale / 推荐理由'], ['评级后升级悬赏', 'post-rating bounty upgrade / 评级后升级悬赏'], ['评级通过', 'rating passed / 评级通过'], ['高阶范围', 'upgraded scope / 高阶范围'], ['赏金阶梯', 'bounty ladder / 赏金阶梯'], ['时间线', 'timeline / 时间线'], ['成果证据', 'result evidence / 成果证据'], ['委托方反馈', 'client feedback / 委托方反馈'], ['世界状态变化', 'world-state changes / 世界状态变化'], ['复盘', 'review / 复盘'], ['评级标准', 'rating criteria / 评级标准'], ['缺失证据', 'missing evidence / 缺失证据'], ['异议', 'objections / 异议'], ['委托目标', 'commission goal / 委托目标'], ['里程碑', 'milestone / 里程碑'], ['第一轮成果', 'first result / 第一轮成果'], ['事件', 'events / 事件'], ['委托', 'commissions / 委托'], ['契约', 'contracts / 契约'], ['战报', 'battle reports / 战报'], ['证据', 'evidence / 证据'], ['风险', 'risks / 风险'], ['目标', 'goals / 目标'], ['质量', 'quality / 质量'], ['成果', 'result / 成果'], ['声望奖励', 'reputation reward / 声望奖励'], ['记录', 'record / 记录'], ['确认', 'confirm / 确认'], ['输出', 'produce / 输出'], ['围绕', 'around / 围绕'],
@@ -433,10 +480,11 @@ pub(super) fn real_world_map_runtime_bootstrap_js() -> &'static str {
         prefetch: mapAdapter.createOverlayLayer(mapRuntime),
         events: mapAdapter.createOverlayLayer(mapRuntime),
         taskRoutes: mapAdapter.createOverlayLayer(mapRuntime),
+        routeRunners: mapAdapter.createOverlayLayer(mapRuntime),
         avatars: mapAdapter.createOverlayLayer(mapRuntime),
       };
-      const overlayState = { density: true, regions: true, tiles: true, prefetch: true, events: true, taskRoutes: true, avatars: true };
-      const overlayLabels = { density: 'Density / 密度', regions: 'Regions / 区域', tiles: 'Map tiles / 地图块', prefetch: 'Prefetch rings / 预热圈', events: 'Live events / 实时事件', taskRoutes: 'Task routes / 任务路线', avatars: 'Player avatars / 跑图角色' };
+      const overlayState = { density: true, regions: true, tiles: true, prefetch: true, events: true, taskRoutes: true, routeRunners: true, avatars: true };
+      const overlayLabels = { density: 'Density / 密度', regions: 'Regions / 区域', tiles: 'Map tiles / 地图块', prefetch: 'Prefetch rings / 预热圈', events: 'Live events / 实时事件', taskRoutes: 'Task routes / 任务路线', routeRunners: 'Moving avatars / 动态角色', avatars: 'Player avatars / 跑图角色' };
 "#
 }
 
@@ -463,6 +511,7 @@ pub(super) fn real_world_map_runtime_primitives_js() -> &'static str {
           `<span class="hud-chip"><strong>${escapeHtml(viewport.prefetch_count ?? 0)}</strong> ${escapeHtml(mapText('prefetch tiles / 个预热地图块'))}</span>`,
           `<span class="hud-chip"><strong>${escapeHtml(viewport.live_event_count ?? 0)}</strong> ${escapeHtml(mapText('live events / 个实时事件'))} · ${escapeHtml(density)}</span>`,
           `<span class="hud-chip"><strong>${escapeHtml(viewport.avatar_task_route_count ?? 0)}</strong> ${escapeHtml(mapText('task routes / 条任务路线'))}</span>`,
+          `<span class="hud-chip"><strong>${escapeHtml(viewport.avatar_route_runner_count ?? 0)}</strong> ${escapeHtml(mapText('moving avatars / 个动态角色'))}</span>`,
           `<span class="hud-chip"><strong>${escapeHtml(viewport.player_avatar_count ?? 0)}</strong> ${escapeHtml(mapText('running avatars / 个跑图角色'))}</span>`
         ];
         if (lens) {
@@ -590,6 +639,7 @@ pub(super) fn real_world_map_focus_core_js() -> &'static str {
         }
         return filtered.length ? filtered : source;
       };
+      const filterAvatarRouteRunners = (runners, focus = lastSelection) => filterAvatarTaskRoutes(runners, focus);
       const findRegionByFocus = (focus) => {
         const focusLat = Number((focus || {}).lat);
         const focusLng = Number((focus || {}).lng);
@@ -969,6 +1019,21 @@ pub(super) fn real_world_map_overlay_render_js() -> &'static str {
               setFocusSelection(routeFocus);
             });
         });
+        (viewport.avatar_route_runners || []).forEach((runner) => {
+          const from = runner.from || {};
+          const to = runner.to || {};
+          if (!Number.isFinite(Number(from.lat)) || !Number.isFinite(Number(from.lng)) || !Number.isFinite(Number(to.lat)) || !Number.isFinite(Number(to.lng))) return;
+          const runnerFocus = { kind: 'node', nodeId: runner.to_node_id, taskId: runner.task_id, locationId: runner.latest_location_id, suppressAction: true };
+          const popupHtml = `<strong>${escapeHtml(mapText(runner.movement_label || 'Avatar running to task / 角色正在跑向任务'))}</strong><br/><span>${escapeHtml(mapText(runner.from_node_name || runner.from_node_id || 'avatar'))} → ${escapeHtml(mapText(runner.to_node_name || runner.to_node_id || 'task'))}</span><br/><small>${escapeHtml(mapText(runner.reward_loop || 'move → task → reward / 移动 → 任务 → 奖励'))}</small>`;
+          const runnerLayer = mapAdapter.renderMovingAvatar(overlayLayers.routeRunners, runner, popupHtml);
+          if (runnerLayer) {
+            runnerLayer.bindTooltip(`${mapText(runner.movement_label || 'Avatar running to task')} · ${mapText(runner.next_action_label || runner.task_id || 'task')}`)
+              .on('click', () => {
+                focusMapSurface(runnerFocus);
+                setFocusSelection(runnerFocus);
+              });
+          }
+        });
         (viewport.player_avatars || []).forEach((avatar) => {
           if (!Number.isFinite(Number(avatar.lat)) || !Number.isFinite(Number(avatar.lng))) return;
           const marker = markerById.get(String(avatar.node_id || '')) || {};
@@ -981,7 +1046,7 @@ pub(super) fn real_world_map_overlay_render_js() -> &'static str {
         });
         if (overlayLegend) {
           const regionName = mapText(((viewport.active_region || {}).name) || '区域');
-          overlayLegend.textContent = '图层说明：' + regionName + ' 锚点 · ' + (viewport.tile_shard_count || 0) + ' 个地图块 · ' + (viewport.prefetch_count || 0) + ' 个预热圈 · ' + (viewport.live_event_count || 0) + ' 个实时事件脉冲 · ' + (viewport.avatar_task_route_count || 0) + ' 条任务路线 · ' + (viewport.player_avatar_count || 0) + ' 个跑图角色。';
+          overlayLegend.textContent = '图层说明：' + regionName + ' 锚点 · ' + (viewport.tile_shard_count || 0) + ' 个地图块 · ' + (viewport.prefetch_count || 0) + ' 个预热圈 · ' + (viewport.live_event_count || 0) + ' 个实时事件脉冲 · ' + (viewport.avatar_task_route_count || 0) + ' 条任务路线 · ' + (viewport.avatar_route_runner_count || 0) + ' 个动态角色 · ' + (viewport.player_avatar_count || 0) + ' 个跑图角色。';
         }
         Object.keys(overlayLayers).forEach((name) => setOverlayLayerVisibility(name, overlayState[name] !== false));
       };
@@ -1064,6 +1129,16 @@ pub(super) fn real_world_map_card_focus_helpers_js() -> &'static str {
             meta: `${mapText(source.from_node_name || source.from_node_id || 'avatar / 角色')} → ${mapText(source.to_node_name || source.to_node_id || 'task node / 任务节点')} · ${mapText(source.latest_status || 'pending / 待推进')}`,
             code: source.task_id || source.route_id || 'avatar_task_route',
             focusHtml: `${mapAvatarTaskRouteFocusButton(source, 'Trace route / 追踪路线')} <span class="hud-chip">${escapeHtml(mapText(source.reward_loop || 'move avatar → complete task → reward / 角色移动 → 完成任务 → 领奖励'))}</span>`,
+          };
+        }
+        if (kind === 'routeRunner') {
+          const progress = Math.round(Math.max(0, Math.min(1, Number(source.progress_ratio ?? 0))) * 100);
+          return {
+            className: worldStyle ? 'mini runner' : 'module app-avatar-route-runner-card',
+            title: mapText(source.movement_label || 'Avatar running to task / 角色正在跑向任务'),
+            meta: `${mapText(source.from_node_name || source.from_node_id || 'avatar / 角色')} → ${mapText(source.to_node_name || source.to_node_id || 'task node / 任务节点')} · ${progress}% · ${mapText(source.movement_state || 'en route / 跑图中')}`,
+            code: source.task_id || source.runner_id || 'avatar_route_runner',
+            focusHtml: `${mapAvatarTaskRouteFocusButton(source, 'Follow runner / 跟随角色')} <span class="hud-chip">${escapeHtml(mapText(source.animation_kind || 'looping_avatar_task_run'))}</span>`,
           };
         }
         return {
@@ -1792,6 +1867,7 @@ pub(super) fn real_world_map_viewport_hydration_js() -> &'static str {
         renderCards(prefetchTarget, viewport.prefetch_queue || [], 'prefetch');
         renderCards(liveEventTarget, filterLiveEventStream(viewport.live_event_stream || [], lastSelection), 'event');
         renderCards(taskRouteTarget, filterAvatarTaskRoutes(viewport.avatar_task_routes || [], lastSelection), 'taskRoute');
+        renderCards(routeRunnerTarget, filterAvatarRouteRunners(viewport.avatar_route_runners || [], lastSelection), 'routeRunner');
         renderViewportOverlays(viewport);
         refreshOverlayControls();
         renderOverlayStatus();

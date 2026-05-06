@@ -573,6 +573,10 @@ pub(super) async fn get_client_app_web_shell(
         .and_then(|hub| hub.get("avatar_task_route_count"))
         .and_then(Value::as_u64)
         .unwrap_or(0);
+    let map_avatar_route_runner_count = map_hub
+        .and_then(|hub| hub.get("avatar_route_runner_count"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
     let map_player_density_mode = map_hub
         .and_then(|hub| hub.get("player_density_mode"))
         .and_then(Value::as_str)
@@ -952,9 +956,13 @@ pub(super) async fn get_client_app_web_shell(
     .overlay-toggle.is-off {{ opacity:.58; background:rgba(255,255,255,.04); border-color:rgba(255,255,255,.12); color:var(--muted); }}
     .trillionnium-avatar-task-route-path {{ animation: trillionnium-route-dash 1.5s linear infinite; filter: drop-shadow(0 0 8px rgba(167,139,250,.42)); }}
     .trillionnium-avatar-task-route-pulse {{ animation: trillionnium-route-pulse 1.8s ease-in-out infinite; }}
+    .trillionnium-avatar-route-runner-dot {{ width:38px; height:38px; border-radius:999px; display:grid; place-items:center; background:linear-gradient(135deg,#a78bfa,#64e3ff); box-shadow:0 0 0 3px rgba(11,18,32,.84),0 0 24px rgba(167,139,250,.55); animation: trillionnium-runner-bob 820ms ease-in-out infinite; }}
+    .trillionnium-avatar-route-runner-dot span {{ transform:translateY(-1px); }}
     .app-avatar-task-route-card {{ border-color:rgba(167,139,250,.36); box-shadow:0 14px 36px rgba(50,34,120,.22); }}
+    .app-avatar-route-runner-card {{ border-color:rgba(100,227,255,.36); box-shadow:0 14px 36px rgba(34,90,120,.22); }}
     @keyframes trillionnium-route-dash {{ from {{ stroke-dashoffset: 0; }} to {{ stroke-dashoffset: -24; }} }}
     @keyframes trillionnium-route-pulse {{ 0%,100% {{ opacity:.55; transform:scale(1); }} 50% {{ opacity:1; transform:scale(1.08); }} }}
+    @keyframes trillionnium-runner-bob {{ 0%,100% {{ transform:translateY(0) scale(1); }} 50% {{ transform:translateY(-5px) scale(1.06); }} }}
     .module p,.subtitle {{ color:var(--muted); }}
     .map-panel p {{ color:var(--muted); line-height:1.55; }}
     code {{ color:var(--cyan); background:rgba(100,227,255,.08); padding:3px 7px; border-radius:8px; }}
@@ -1213,13 +1221,16 @@ pub(super) async fn get_client_app_web_shell(
             <span class="hud-chip"><strong>{}</strong> <span data-i18n-en="prefetch tiles" data-i18n-zh="个预热地图块">prefetch tiles</span></span>
             <span class="hud-chip"><strong>{}</strong> <span data-i18n-en="live events" data-i18n-zh="个实时事件">live events</span> · {}</span>
             <span class="hud-chip"><strong>{}</strong> <span data-i18n-en="task routes" data-i18n-zh="条任务路线">task routes</span></span>
+            <span class="hud-chip"><strong>{}</strong> <span data-i18n-en="moving avatars" data-i18n-zh="个动态角色">moving avatars</span></span>
             <span class="hud-chip"><strong>{}</strong> <span data-i18n-en="running avatars" data-i18n-zh="个跑图角色">running avatars</span></span>
           </div>
           <div id="app-map-overlay-controls" class="overlay-toggle-bar">
 {shared_map_overlay_controls_html}
           </div>
-          <p id="app-map-overlay-status" class="subtitle" data-i18n-en="Active layers: density, regions, tiles, prefetch rings, live events, task routes, player avatars." data-i18n-zh="当前图层：密度、区域、地图块、预热圈、实时事件、任务路线、跑图角色。">Active layers: density, regions, tiles, prefetch rings, live events, task routes, player avatars.</p>
-          <p id="app-map-overlay-legend" class="subtitle" data-i18n-en="Layer legend: regional anchors · active tiles · prefetch rings · live-event pulses · avatar task routes · running avatars." data-i18n-zh="图层说明：区域锚点 · 活跃地图块 · 预热探索圈 · 实时事件脉冲 · 角色任务路线 · 跑图角色。">Layer legend: regional anchors · active tiles · prefetch rings · live-event pulses · avatar task routes · running avatars.</p>
+          <p id="app-map-overlay-status" class="subtitle" data-i18n-en="Active layers: density, regions, tiles, prefetch rings, live events, task routes, moving avatars, player avatars." data-i18n-zh="当前图层：密度、区域、地图块、预热圈、实时事件、任务路线、动态角色、跑图角色。">Active layers: density, regions, tiles, prefetch rings, live events, task routes, moving avatars, player avatars.</p>
+          <p id="app-map-overlay-legend" class="subtitle" data-i18n-en="Layer legend: regional anchors · active tiles · prefetch rings · live-event pulses · avatar task routes · animated runners · running avatars." data-i18n-zh="图层说明：区域锚点 · 活跃地图块 · 预热探索圈 · 实时事件脉冲 · 角色任务路线 · 动态跑图 · 跑图角色。">Layer legend: regional anchors · active tiles · prefetch rings · live-event pulses · avatar task routes · animated runners · running avatars.</p>
+          <h3 data-i18n-en="Avatar Movement" data-i18n-zh="角色跑图">Avatar Movement</h3>
+          <section id="app-avatar-route-runners-live" class="grid"></section>
         </details>
       </div>
         <div id="app-map-action-panel" class="module" style="margin-top:14px; padding:16px 18px;">
@@ -1333,6 +1344,7 @@ pub(super) async fn get_client_app_web_shell(
       const prefetchTarget = document.getElementById('app-prefetch-queue-live');
       const liveEventTarget = document.getElementById('app-live-events-live');
       const taskRouteTarget = document.getElementById('app-avatar-task-routes-live');
+      const routeRunnerTarget = document.getElementById('app-avatar-route-runners-live');
       const feedApiStatus = document.getElementById('app-feed-api-status');
       const feedFilterTarget = document.getElementById('app-feed-filter-actions');
       const feedSummaryTarget = document.getElementById('app-feed-summary');
@@ -1633,6 +1645,7 @@ pub(super) async fn get_client_app_web_shell(
           renderStreamHud(lastViewport, focus);
           renderCards(liveEventTarget, filterLiveEventStream(lastViewport.live_event_stream || [], focus), 'event');
           renderCards(taskRouteTarget, filterAvatarTaskRoutes(lastViewport.avatar_task_routes || [], focus), 'taskRoute');
+          renderCards(routeRunnerTarget, filterAvatarRouteRunners(lastViewport.avatar_route_runners || [], focus), 'routeRunner');
         }}
         renderFeedSurface(lastFeed, focus);
         renderFocusPanel();
@@ -1980,6 +1993,7 @@ pub(super) async fn get_client_app_web_shell(
         map_live_event_count,
         escape_html_text(&client_app_map_label(map_player_density_mode)),
         map_avatar_task_route_count,
+        map_avatar_route_runner_count,
         map_player_avatar_count,
         escape_html_text(map_engine_id),
         escape_html_text(tile_provider),

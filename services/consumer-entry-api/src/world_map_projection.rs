@@ -488,6 +488,7 @@ pub(super) fn trillionnium_world_map_gameplay_layer_contract_json() -> Value {
             "avatar_movement_between_nodes": true,
             "quest_route_edges": true,
             "avatar_task_route_overlays": true,
+            "avatar_route_runners": true,
             "live_event_task_pulses": true,
             "openstreetmap_base_tiles": true
         }
@@ -683,6 +684,55 @@ pub(super) fn world_map_avatar_task_routes_json(
     }
 
     routes
+}
+
+pub(super) fn world_map_avatar_route_runners_json(
+    avatar_task_routes: &[Value],
+    limit: usize,
+) -> Vec<Value> {
+    avatar_task_routes
+        .iter()
+        .take(limit)
+        .enumerate()
+        .filter_map(|(index, route)| {
+            let from = route.get("from")?.clone();
+            let to = route.get("to")?.clone();
+            let task_id = route
+                .get("task_id")
+                .and_then(Value::as_str)
+                .unwrap_or("route-task");
+            let matrix_user_id = route
+                .get("matrix_user_id")
+                .and_then(Value::as_str)
+                .unwrap_or("@player:local.dev");
+            let progress_ratio = (0.18 + (index as f64 % 5.0) * 0.14).min(0.82);
+            Some(json!({
+                "runner_id": format!("avatar-route-runner:{}:{}", matrix_user_id, task_id),
+                "route_id": route.get("route_id").cloned().unwrap_or_else(|| json!("avatar-task-route")),
+                "route_layer_id": "trillionnium_avatar_route_runner_layer",
+                "route_kind": "avatar_route_runner",
+                "task_id": task_id,
+                "matrix_user_id": matrix_user_id,
+                "from_node_id": route.get("from_node_id").cloned().unwrap_or_else(|| json!("current-node")),
+                "from_node_name": route.get("from_node_name").cloned().unwrap_or_else(|| json!("Current node")),
+                "from": from,
+                "to_node_id": route.get("to_node_id").cloned().unwrap_or_else(|| json!("target-node")),
+                "to_node_name": route.get("to_node_name").cloned().unwrap_or_else(|| json!("Task node")),
+                "to": to,
+                "latest_location_id": route.get("latest_location_id").cloned().unwrap_or_else(|| json!("")),
+                "latest_status": route.get("latest_status").cloned().unwrap_or_else(|| json!("pending")),
+                "next_action_label": route.get("next_action_label").cloned().unwrap_or_else(|| json!("Run to task / 跑向任务")),
+                "reward_loop": route.get("reward_loop").cloned().unwrap_or_else(|| json!("move avatar → complete task → submit evidence → rating/reward → next route")),
+                "movement_state": "en_route_to_task_reward",
+                "movement_label": "Avatar running to task / 角色正在跑向任务",
+                "runner_icon": "🏃",
+                "progress_ratio": progress_ratio,
+                "animation_kind": "looping_avatar_task_run",
+                "animation_duration_ms": 4800 + (index as i64 * 360),
+                "animation_hint": "animate_avatar_marker_between_route_endpoints",
+            }))
+        })
+        .collect()
 }
 
 pub(super) fn real_world_map_region_shards_json() -> Vec<Value> {
@@ -1226,6 +1276,7 @@ pub(super) fn real_world_map_renderer_adapter_json() -> Value {
             "renderTileFrame",
             "renderEventPulse",
             "renderPlayerAvatar",
+            "renderMovingAvatar",
             "getCenter",
             "getZoom",
             "onViewportChange",
@@ -1237,6 +1288,7 @@ pub(super) fn real_world_map_renderer_adapter_json() -> Value {
             "purpose": "keep web map surfaces renderer-neutral while Leaflet remains the active implementation",
             "supports_overlay_primitives": true,
             "supports_player_avatar_layer": true,
+            "supports_avatar_route_runner_layer": true,
             "supports_camera_reads": true,
             "supports_viewport_events": true,
             "supports_future_engine_swap": true
@@ -1389,6 +1441,7 @@ pub(super) fn world_map_viewport_json(
     let player_avatars = world_map_player_avatars_json(world, matrix_user_id, &visible_markers);
     let avatar_task_routes =
         world_map_avatar_task_routes_json(world, &indexes, matrix_user_id, &route_artifacts, 6);
+    let avatar_route_runners = world_map_avatar_route_runners_json(&avatar_task_routes, 6);
     let prefetch_queue = world_map_prefetch_queue_json(&visible_tile_shards, &player_density, zoom);
     let live_event_stream = world_map_live_event_stream_json(
         world,
@@ -1405,6 +1458,7 @@ pub(super) fn world_map_viewport_json(
     let live_event_count = live_event_stream.len();
     let player_avatar_count = player_avatars.len();
     let avatar_task_route_count = avatar_task_routes.len();
+    let avatar_route_runner_count = avatar_route_runners.len();
     let viewport_path = format!(
         "/v1/world/map/{}/viewport?lat={:.6}&lng={:.6}&zoom={}&radius_km={:.1}&limit={}",
         matrix_user_id, center_lat, center_lng, zoom, radius_km, marker_limit
@@ -1446,6 +1500,8 @@ pub(super) fn world_map_viewport_json(
         "player_avatar_count": player_avatar_count,
         "avatar_task_routes": avatar_task_routes,
         "avatar_task_route_count": avatar_task_route_count,
+        "avatar_route_runners": avatar_route_runners,
+        "avatar_route_runner_count": avatar_route_runner_count,
         "gameplay_layer_contract": trillionnium_world_map_gameplay_layer_contract_json(),
         "live_event_stream": live_event_stream,
         "live_event_stream_index_layer": "WorldIndexes::event_indices_by_location_v1",
@@ -1461,6 +1517,7 @@ pub(super) fn world_map_viewport_json(
             "supports_player_density": true,
             "supports_player_avatars": true,
             "supports_avatar_task_routes": true,
+            "supports_avatar_route_runners": true,
         }
     })
 }

@@ -77,6 +77,7 @@ impl ClientRouteWorldContext {
             "live_event_count": metrics.live_event_count,
             "player_avatar_count": metrics.player_avatar_count,
             "avatar_task_route_count": metrics.avatar_task_route_count,
+            "avatar_route_runner_count": metrics.avatar_route_runner_count,
             "player_density_mode": metrics.player_density_mode.clone(),
             "estimated_concurrent_players": metrics.estimated_concurrent_players,
             "viewport": self.viewport,
@@ -358,6 +359,7 @@ pub(super) fn map_overlay_control_buttons_html() -> &'static str {
           <button type="button" class="overlay-toggle trillionnium-overlay-toggle" data-overlay-target="prefetch" aria-pressed="true">Prefetch</button>
           <button type="button" class="overlay-toggle trillionnium-overlay-toggle" data-overlay-target="events" aria-pressed="true">Live events</button>
           <button type="button" class="overlay-toggle trillionnium-overlay-toggle" data-overlay-target="taskRoutes" aria-pressed="true">Task routes</button>
+          <button type="button" class="overlay-toggle trillionnium-overlay-toggle" data-overlay-target="routeRunners" aria-pressed="true">Moving avatars</button>
           <button type="button" class="overlay-toggle trillionnium-overlay-toggle" data-overlay-target="avatars" aria-pressed="true">Avatars</button>"#
 }
 
@@ -2225,6 +2227,7 @@ pub(super) struct ClientAppMapHubMetrics {
     live_event_count: usize,
     player_avatar_count: usize,
     avatar_task_route_count: usize,
+    avatar_route_runner_count: usize,
     player_density_mode: String,
     estimated_concurrent_players: i64,
 }
@@ -2271,6 +2274,11 @@ impl ClientAppMapHubMetrics {
                 .get("avatar_task_routes")
                 .and_then(Value::as_array)
                 .map(|routes| routes.len())
+                .unwrap_or(0),
+            avatar_route_runner_count: map_viewport
+                .get("avatar_route_runners")
+                .and_then(Value::as_array)
+                .map(|runners| runners.len())
                 .unwrap_or(0),
             player_density_mode: map_viewport
                 .get("player_density")
@@ -2378,17 +2386,19 @@ impl<'a> ClientAppModulesProjection<'a> {
                 "live_event_count": self.map_metrics.live_event_count,
                 "player_avatar_count": self.map_metrics.player_avatar_count,
                 "avatar_task_route_count": self.map_metrics.avatar_task_route_count,
+                "avatar_route_runner_count": self.map_metrics.avatar_route_runner_count,
                 "player_density_mode": self.map_metrics.player_density_mode.clone(),
                 "primary_command": "/map",
                 "secondary_command": "/go west",
                 "summary": format!(
-                    "{} / {} · 区域 {} · {} 个附近热点 · {} 个实时事件 · {} 条任务路线 · {} 个角色跑图 · {} 密度",
+                    "{} / {} · 区域 {} · {} 个附近热点 · {} 个实时事件 · {} 条任务路线 · {} 个动态角色 · {} 个角色跑图 · {} 密度",
                     self.current_node_name,
                     self.current_node_id,
                     self.active_region_id,
                     self.map_metrics.nearby_poi_count,
                     self.map_metrics.live_event_count,
                     self.map_metrics.avatar_task_route_count,
+                    self.map_metrics.avatar_route_runner_count,
                     self.map_metrics.player_avatar_count,
                     self.map_metrics.player_density_mode,
                 ),
