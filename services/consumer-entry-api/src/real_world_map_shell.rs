@@ -1047,7 +1047,8 @@ pub(super) fn real_world_map_overlay_render_js() -> &'static str {
               focusMapSurface(runnerFocus);
               setFocusSelection(runnerFocus);
             });
-          const popupHtml = `<strong>${escapeHtml(mapText(runner.movement_label || 'Avatar running to task / 角色正在跑向任务'))}</strong><br/><span>${escapeHtml(mapText(runner.from_node_name || runner.from_node_id || 'avatar'))} → ${escapeHtml(mapText(runner.to_node_name || runner.to_node_id || 'task'))}</span><br/><span>${escapeHtml(mapText(runner.progress_label || 'route progress / 路线进度'))} · ${escapeHtml(mapText(runner.eta_label || 'ETA / 预计'))} · ${traceCount} ${escapeHtml(mapText('trace points / 个追踪点'))}</span><br/><span>${escapeHtml(checkpointLabel)} · ${escapeHtml(mapText(runner.completion_label || 'Complete checkpoint / 完成检查点'))}</span><br/><code>${escapeHtml(runner.completion_command || '')}</code><br/><small>${escapeHtml(mapText(runner.reward_loop || 'move → task → reward / 移动 → 任务 → 奖励'))}</small>`;
+          const completionButton = routeRunnerCompletionButtonHtml(runner, 'trillionnium-route-flow-action trillionnium-app-route-flow-action');
+          const popupHtml = `<strong>${escapeHtml(mapText(runner.movement_label || 'Avatar running to task / 角色正在跑向任务'))}</strong><br/><span>${escapeHtml(mapText(runner.from_node_name || runner.from_node_id || 'avatar'))} → ${escapeHtml(mapText(runner.to_node_name || runner.to_node_id || 'task'))}</span><br/><span>${escapeHtml(mapText(runner.progress_label || 'route progress / 路线进度'))} · ${escapeHtml(mapText(runner.eta_label || 'ETA / 预计'))} · ${traceCount} ${escapeHtml(mapText('trace points / 个追踪点'))}</span><br/><span>${escapeHtml(checkpointLabel)} · ${escapeHtml(mapText(runner.completion_label || 'Complete checkpoint / 完成检查点'))}</span><br/><code>${escapeHtml(runner.completion_command || '')}</code><br/><div class="focus-stack">${completionButton}</div><small>${escapeHtml(mapText(runner.reward_loop || 'move → task → reward / 移动 → 任务 → 奖励'))}</small>`;
           const runnerLayer = mapAdapter.renderMovingAvatar(overlayLayers.routeRunners, runner, popupHtml);
           if (runnerLayer) {
             runnerLayer.bindTooltip(`${mapText(runner.movement_label || 'Avatar running to task')} · ${mapText(runner.next_action_label || runner.task_id || 'task')}`)
@@ -1161,12 +1162,13 @@ pub(super) fn real_world_map_card_focus_helpers_js() -> &'static str {
           const traceCount = Array.isArray(source.runner_trace_points) ? source.runner_trace_points.length : 0;
           const checkpoint = source.reward_checkpoint || {};
           const checkpointLabel = mapText(checkpoint.label || source.completion_label || 'Reward checkpoint / 奖励检查点');
+          const completionButton = routeRunnerCompletionButtonHtml(source, worldStyle ? 'trillionnium-route-flow-action' : 'trillionnium-app-route-flow-action');
           return {
             className: worldStyle ? 'mini runner' : 'module app-avatar-route-runner-card',
             title: mapText(source.movement_label || 'Avatar running to task / 角色正在跑向任务'),
             meta: `${mapText(source.from_node_name || source.from_node_id || 'avatar / 角色')} → ${mapText(source.to_node_name || source.to_node_id || 'task node / 任务节点')} · ${progress}% · ${remainingMeters}m · ${etaLabel} · ${checkpointLabel}`,
             code: source.task_id || source.runner_id || 'avatar_route_runner',
-            focusHtml: `${mapAvatarTaskRouteFocusButton(source, 'Follow runner / 跟随角色')} <span class="hud-chip">${escapeHtml(mapText(source.progress_label || `${progress}% route progress / ${progress}% 路线进度`))}</span> <span class="hud-chip">${escapeHtml(etaLabel)}</span> <span class="hud-chip">${traceCount} ${escapeHtml(mapText('trace points / 个追踪点'))}</span> <span class="hud-chip">${escapeHtml(checkpointLabel)}</span> <span class="hud-chip">${escapeHtml(mapText(source.completion_label || 'Complete checkpoint / 完成检查点'))}</span>`,
+            focusHtml: `${mapAvatarTaskRouteFocusButton(source, 'Follow runner / 跟随角色')} ${completionButton} <span class="hud-chip">${escapeHtml(mapText(source.progress_label || `${progress}% route progress / ${progress}% 路线进度`))}</span> <span class="hud-chip">${escapeHtml(etaLabel)}</span> <span class="hud-chip">${traceCount} ${escapeHtml(mapText('trace points / 个追踪点'))}</span> <span class="hud-chip">${escapeHtml(checkpointLabel)}</span> <span class="hud-chip">${escapeHtml(mapText(source.completion_label || 'Complete checkpoint / 完成检查点'))}</span>`,
           };
         }
         return {
@@ -1472,6 +1474,23 @@ pub(super) fn real_world_map_route_flow_buttons_js() -> &'static str {
         const suggestedAction = buildTaskSuggestedAction(source);
         const opportunityAction = buildRouteOpportunityAction(source, source.latest_location_id || '');
         return routeFlowActionButtonHtml(opportunityAction, className) + routeFlowActionButtonHtml(suggestedAction, className);
+      };
+      const buildRouteRunnerCompletionAction = (runner) => {
+        const source = runner || {};
+        const checkpoint = source.reward_checkpoint || {};
+        return buildSimpleRouteTargetAction({
+          label: source.completion_label || checkpoint.label || 'Complete checkpoint / 完成检查点',
+          panelId: routeActionPanelId(),
+          textareaId: routeActionTextareaId(),
+          locationId: source.latest_location_id || '',
+          targetNodeId: source.to_node_id || (checkpoint.node_id || ''),
+          taskId: source.task_id || '',
+          status: source.completion_status || '',
+          body: source.completion_action_body || source.completion_command || source.completion_prompt || '',
+        });
+      };
+      const routeRunnerCompletionButtonHtml = (runner, className = 'trillionnium-route-flow-action') => {
+        return routeFlowActionButtonHtml(buildRouteRunnerCompletionAction(runner), className);
       };
       const indexedRouteActionButtonHtml = (action, index, className = 'trillionnium-app-route-action') => `<button type="button" class="focus-chip ${escapeHtml(className)}" data-route-action-index="${escapeHtml(index)}">${escapeHtml(mapText((action || {}).label || '路线行动'))}</button>`;
 "#

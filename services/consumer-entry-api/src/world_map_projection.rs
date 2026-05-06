@@ -735,6 +735,9 @@ pub(super) fn world_map_avatar_route_runners_json(
                     route_completion_command
                 )
             };
+            let completion_action_body = format!(
+                "Checkpoint completion for task {task_id}: prepare the deliverable, evidence package, risk controls, next action, and self-review before reward settlement."
+            );
             let checkpoint_id = format!("reward-checkpoint:{}:{}", matrix_user_id, task_id);
             Some(json!({
                 "runner_id": format!("avatar-route-runner:{}:{}", matrix_user_id, task_id),
@@ -767,6 +770,7 @@ pub(super) fn world_map_avatar_route_runners_json(
                 "completion_status": if completion_ready { "ready_to_complete" } else { "en_route" },
                 "completion_label": if completion_ready { "Complete checkpoint / 完成检查点" } else { "Approaching checkpoint / 接近检查点" },
                 "completion_command": completion_command,
+                "completion_action_body": completion_action_body,
                 "completion_prompt": "Complete the task at the checkpoint with deliverable, evidence, risk controls, next action, and self-review before reward settlement.",
                 "reward_checkpoint": {
                     "checkpoint_id": checkpoint_id,

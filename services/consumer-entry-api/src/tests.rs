@@ -1162,6 +1162,12 @@ fn world_map_viewport_includes_prefetch_density_and_live_events() {
         .as_str()
         .unwrap_or_default()
         .contains("evidence"));
+    assert!(
+        viewport["avatar_route_runners"][0]["completion_action_body"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("self-review")
+    );
     assert!(viewport["avatar_route_runners"][0]["completion_prompt"]
         .as_str()
         .unwrap_or_default()
@@ -1870,7 +1876,11 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(app_html.contains("eta_label"));
     assert!(app_html.contains("reward_checkpoint"));
     assert!(app_html.contains("completion_command"));
+    assert!(app_html.contains("completion_action_body"));
+    assert!(app_html.contains("buildRouteRunnerCompletionAction"));
+    assert!(app_html.contains("routeRunnerCompletionButtonHtml"));
     assert!(app_html.contains("Complete checkpoint"));
+    assert!(app_html.contains("trillionnium-app-route-flow-action"));
     assert!(app_html.contains("filterAvatarTaskRoutes"));
     assert!(app_html.contains("filterAvatarRouteRunners"));
     assert!(app_html.contains("trillionnium-avatar-task-route-path"));
@@ -2031,7 +2041,11 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(world_html.contains("eta_label"));
     assert!(world_html.contains("reward_checkpoint"));
     assert!(world_html.contains("completion_command"));
+    assert!(world_html.contains("completion_action_body"));
+    assert!(world_html.contains("buildRouteRunnerCompletionAction"));
+    assert!(world_html.contains("routeRunnerCompletionButtonHtml"));
     assert!(world_html.contains("Complete checkpoint"));
+    assert!(world_html.contains("trillionnium-route-flow-action"));
     assert!(world_html.contains("filterAvatarTaskRoutes"));
     assert!(world_html.contains("filterAvatarRouteRunners"));
     assert!(world_html.contains("trillionnium-avatar-task-route-path"));
