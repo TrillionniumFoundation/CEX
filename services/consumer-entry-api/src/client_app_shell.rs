@@ -960,6 +960,7 @@ pub(super) async fn get_client_app_web_shell(
     .trillionnium-avatar-route-runner-dot span {{ transform:translateY(-1px); }}
     .trillionnium-avatar-route-runner-progress {{ filter: drop-shadow(0 0 10px rgba(100,227,255,.48)); }}
     .trillionnium-avatar-route-runner-remaining {{ animation: trillionnium-route-dash 1.7s linear infinite; }}
+    .trillionnium-avatar-route-reward-checkpoint {{ animation: trillionnium-route-pulse 1.35s ease-in-out infinite; filter: drop-shadow(0 0 12px rgba(141,255,176,.48)); }}
     .app-avatar-task-route-card {{ border-color:rgba(167,139,250,.36); box-shadow:0 14px 36px rgba(50,34,120,.22); }}
     .app-avatar-route-runner-card {{ border-color:rgba(100,227,255,.36); box-shadow:0 14px 36px rgba(34,90,120,.22); }}
     @keyframes trillionnium-route-dash {{ from {{ stroke-dashoffset: 0; }} to {{ stroke-dashoffset: -24; }} }}

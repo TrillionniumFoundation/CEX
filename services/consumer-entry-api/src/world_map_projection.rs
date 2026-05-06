@@ -717,11 +717,31 @@ pub(super) fn world_map_avatar_route_runners_json(
             let eta_seconds = ((remaining_distance_meters / 18.0).round() as i64).clamp(45, 900);
             let eta_minutes = ((eta_seconds as f64) / 60.0).ceil() as i64;
             let progress_percent = (progress_ratio * 100.0).round() as i64;
+            let completion_ready = progress_percent >= 80;
+            let route_completion_command = route
+                .get("command")
+                .and_then(Value::as_str)
+                .filter(|command| !command.trim().is_empty())
+                .unwrap_or("/world action Complete checkpoint deliverable with evidence, risk controls, next action, and self-review for reward settlement.");
+            let completion_command = if route_completion_command.contains("evidence")
+                && route_completion_command.contains("risk")
+                && route_completion_command.contains("next")
+                && route_completion_command.contains("self-review")
+            {
+                route_completion_command.to_string()
+            } else {
+                format!(
+                    "{} Complete the checkpoint with deliverable, evidence, risk controls, next action, and self-review for reward settlement.",
+                    route_completion_command
+                )
+            };
+            let checkpoint_id = format!("reward-checkpoint:{}:{}", matrix_user_id, task_id);
             Some(json!({
                 "runner_id": format!("avatar-route-runner:{}:{}", matrix_user_id, task_id),
                 "route_id": route.get("route_id").cloned().unwrap_or_else(|| json!("avatar-task-route")),
                 "route_layer_id": "trillionnium_avatar_route_runner_layer",
                 "telemetry_layer_id": "trillionnium_avatar_route_runner_telemetry_layer",
+                "checkpoint_layer_id": "trillionnium_avatar_route_reward_checkpoint_layer",
                 "route_kind": "avatar_route_runner",
                 "task_id": task_id,
                 "matrix_user_id": matrix_user_id,
@@ -744,6 +764,23 @@ pub(super) fn world_map_avatar_route_runners_json(
                 "movement_state": "en_route_to_task_reward",
                 "movement_label": "Avatar running to task / 角色正在跑向任务",
                 "arrival_label": "Reward checkpoint / 奖励检查点",
+                "completion_status": if completion_ready { "ready_to_complete" } else { "en_route" },
+                "completion_label": if completion_ready { "Complete checkpoint / 完成检查点" } else { "Approaching checkpoint / 接近检查点" },
+                "completion_command": completion_command,
+                "completion_prompt": "Complete the task at the checkpoint with deliverable, evidence, risk controls, next action, and self-review before reward settlement.",
+                "reward_checkpoint": {
+                    "checkpoint_id": checkpoint_id,
+                    "layer_id": "trillionnium_avatar_route_reward_checkpoint_layer",
+                    "node_id": route.get("to_node_id").cloned().unwrap_or_else(|| json!("target-node")),
+                    "node_name": route.get("to_node_name").cloned().unwrap_or_else(|| json!("Task node")),
+                    "lat": to_lat,
+                    "lng": to_lng,
+                    "unlock_threshold_percent": 80,
+                    "current_progress_percent": progress_percent,
+                    "ready": completion_ready,
+                    "label": if completion_ready { "Ready to complete / 可完成" } else { "Reward checkpoint locked / 奖励检查点未解锁" },
+                    "reward_claim_label": "Submit evidence → rating/reward / 提交证据 → 评级奖励"
+                },
                 "runner_icon": "🏃",
                 "progress_ratio": progress_ratio,
                 "progress_percent": progress_percent,
