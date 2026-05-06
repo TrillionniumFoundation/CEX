@@ -490,10 +490,59 @@ pub(super) fn trillionnium_world_map_gameplay_layer_contract_json() -> Value {
             "avatar_task_route_overlays": true,
             "avatar_route_runners": true,
             "checkpoint_reward_history": true,
+            "agent_party_state": true,
             "live_event_task_pulses": true,
             "openstreetmap_base_tiles": true
         }
     })
+}
+
+fn world_map_agent_party_members_json(matrix_user_id: &str, task_id: &str) -> Vec<Value> {
+    let task_id = if task_id.trim().is_empty() {
+        "open-world-route"
+    } else {
+        task_id
+    };
+    [
+        (
+            "oracle_scout",
+            "Oracle Scout / 预判侦察",
+            "scout_route_and_evidence",
+            "Reads the map route, spots evidence gaps, and chooses the safest task checkpoint.",
+        ),
+        (
+            "forge_builder",
+            "Forge Builder / 交付锻造",
+            "build_deliverable",
+            "Turns the route brief into a concrete deliverable package for the checkpoint.",
+        ),
+        (
+            "mirror_auditor",
+            "Mirror Auditor / 镜像审计",
+            "audit_risk_controls",
+            "Checks risk controls, acceptance criteria, and anti-cheese proof before reward settlement.",
+        ),
+        (
+            "courier_closer",
+            "Courier Closer / 结算信使",
+            "close_reward_loop",
+            "Carries next action and self-review into the rating/reward handoff.",
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, (role, display_name, state, responsibility))| {
+        json!({
+            "agent_id": format!("agent-party:{}:{}:{}", matrix_user_id, task_id, role),
+            "role": role,
+            "display_name": display_name,
+            "party_slot": index + 1,
+            "state": state,
+            "responsibility": responsibility,
+            "handoff_anchor": "deliverable → evidence → risk controls → next action → self-review",
+        })
+    })
+    .collect()
 }
 
 pub(super) fn world_map_player_avatars_json(
@@ -518,6 +567,8 @@ pub(super) fn world_map_player_avatars_json(
                               position: &WorldPlayerPosition,
                               marker: &Value| {
         let is_current_player = avatar_matrix_user_id == matrix_user_id;
+        let agent_party =
+            world_map_agent_party_members_json(avatar_matrix_user_id, "open-world-route");
         json!({
             "avatar_id": format!("avatar:{}", avatar_matrix_user_id),
             "matrix_user_id": avatar_matrix_user_id,
@@ -532,6 +583,10 @@ pub(super) fn world_map_player_avatars_json(
             "updated_at_epoch": position.updated_at_epoch,
             "movement_status": "ready_to_run_task",
             "task_loop": "move → inspect → accept bounty/contract → submit evidence → rating/reward",
+            "agent_party_layer_id": "trillionnium_avatar_agent_party_state_layer",
+            "agent_party": agent_party,
+            "agent_party_summary": "Agent party: scout route → build deliverable → audit risk → close reward",
+            "agent_party_status": "party_ready_for_task_route",
             "animation_hint": "run_between_route_nodes"
         })
     };
@@ -663,6 +718,7 @@ pub(super) fn world_map_avatar_task_routes_json(
         routes.push(json!({
             "route_id": format!("avatar-task-route:{}:{}", matrix_user_id, task_id),
             "route_layer_id": "trillionnium_avatar_task_route_overlay",
+            "agent_party_layer_id": "trillionnium_avatar_agent_party_state_layer",
             "route_kind": "avatar_task_route",
             "task_id": task_id,
             "matrix_user_id": matrix_user_id,
@@ -680,6 +736,9 @@ pub(super) fn world_map_avatar_task_routes_json(
             "next_action_label": next_action_label,
             "command": command,
             "reward_loop": "move avatar → complete task → submit evidence → rating/reward → next route",
+            "agent_party": world_map_agent_party_members_json(matrix_user_id, task_id),
+            "agent_party_summary": "Agent party: scout route → build deliverable → audit risk → close reward",
+            "agent_party_handoff_hint": "Assign scout/build/audit/close roles before submitting deliverable, evidence, risk controls, next action, and self-review.",
             "movement_hint": "draw_avatar_task_route_from_current_node_to_target_node",
         }));
     }
@@ -763,12 +822,16 @@ pub(super) fn world_map_avatar_route_runners_json(
                 }),
             ];
             let checkpoint_id = format!("reward-checkpoint:{}:{}", matrix_user_id, task_id);
+            let agent_party = route.get("agent_party").cloned().unwrap_or_else(|| {
+                Value::Array(world_map_agent_party_members_json(matrix_user_id, task_id))
+            });
             Some(json!({
                 "runner_id": format!("avatar-route-runner:{}:{}", matrix_user_id, task_id),
                 "route_id": route.get("route_id").cloned().unwrap_or_else(|| json!("avatar-task-route")),
                 "route_layer_id": "trillionnium_avatar_route_runner_layer",
                 "telemetry_layer_id": "trillionnium_avatar_route_runner_telemetry_layer",
                 "checkpoint_layer_id": "trillionnium_avatar_route_reward_checkpoint_layer",
+                "agent_party_layer_id": "trillionnium_avatar_agent_party_state_layer",
                 "route_kind": "avatar_route_runner",
                 "task_id": task_id,
                 "matrix_user_id": matrix_user_id,
@@ -800,6 +863,9 @@ pub(super) fn world_map_avatar_route_runners_json(
                 "checkpoint_history": checkpoint_history,
                 "checkpoint_history_summary": "Route started → evidence checkpoint → rating/reward settlement → next route",
                 "reward_history_summary": if completion_ready { "Reward history: evidence ready, rating/reward claim is the next action." } else { "Reward history: route in progress, evidence checkpoint must unlock before rating/reward." },
+                "agent_party": agent_party,
+                "agent_party_summary": route.get("agent_party_summary").cloned().unwrap_or_else(|| json!("Agent party: scout route → build deliverable → audit risk → close reward")),
+                "agent_party_handoff_hint": route.get("agent_party_handoff_hint").cloned().unwrap_or_else(|| json!("Assign scout/build/audit/close roles before submitting deliverable, evidence, risk controls, next action, and self-review.")),
                 "reward_checkpoint": {
                     "checkpoint_id": checkpoint_id,
                     "layer_id": "trillionnium_avatar_route_reward_checkpoint_layer",
@@ -1614,6 +1680,7 @@ pub(super) fn world_map_viewport_json(
             "supports_avatar_task_routes": true,
             "supports_avatar_route_runners": true,
             "supports_checkpoint_reward_history": true,
+            "supports_agent_party_state": true,
         }
     })
 }
