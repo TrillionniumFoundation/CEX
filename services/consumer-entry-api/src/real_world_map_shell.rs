@@ -350,8 +350,11 @@ pub(super) fn real_world_map_runtime_bootstrap_js() -> &'static str {
           const toLng = Number(to.lng);
           if (!Number.isFinite(fromLat) || !Number.isFinite(fromLng) || !Number.isFinite(toLat) || !Number.isFinite(toLng)) return null;
           const ratio = Math.max(0, Math.min(1, Number(runner.progress_ratio ?? 0.2)));
-          const startLat = fromLat + (toLat - fromLat) * ratio;
-          const startLng = fromLng + (toLng - fromLng) * ratio;
+          const current = runner.current || {};
+          const currentLat = Number(current.lat);
+          const currentLng = Number(current.lng);
+          const startLat = Number.isFinite(currentLat) ? currentLat : fromLat + (toLat - fromLat) * ratio;
+          const startLng = Number.isFinite(currentLng) ? currentLng : fromLng + (toLng - fromLng) * ratio;
           const icon = L.divIcon({
             className: 'trillionnium-avatar-route-runner',
             html: `<div class="trillionnium-avatar-route-runner-dot"><span>${escapeHtml(runner.runner_icon || '🏃')}</span></div>`,
@@ -364,11 +367,11 @@ pub(super) fn real_world_map_runtime_bootstrap_js() -> &'static str {
             let alive = true;
             let frameId = 0;
             const duration = Math.max(1800, Number(runner.animation_duration_ms || 4800));
-            const startedAt = performance.now() - duration * ratio;
+            const startedAt = performance.now();
             const animate = (now) => {
               if (!alive || !layer || !layer.hasLayer || !layer.hasLayer(marker)) return;
-              const phase = ((now - startedAt) % duration) / duration;
-              const eased = 0.5 - Math.cos(phase * Math.PI * 2) / 2;
+              const phase = (ratio + ((now - startedAt) % duration) / duration) % 1;
+              const eased = phase;
               marker.setLatLng([fromLat + (toLat - fromLat) * eased, fromLng + (toLng - fromLng) * eased]);
               frameId = requestAnimationFrame(animate);
             };
@@ -1022,9 +1025,20 @@ pub(super) fn real_world_map_overlay_render_js() -> &'static str {
         (viewport.avatar_route_runners || []).forEach((runner) => {
           const from = runner.from || {};
           const to = runner.to || {};
+          const runnerTracePoints = Array.isArray(runner.runner_trace_points) ? runner.runner_trace_points : [];
+          const traceCount = runnerTracePoints.length;
           if (!Number.isFinite(Number(from.lat)) || !Number.isFinite(Number(from.lng)) || !Number.isFinite(Number(to.lat)) || !Number.isFinite(Number(to.lng))) return;
+          const current = runner.current || {};
+          const hasCurrent = Number.isFinite(Number(current.lat)) && Number.isFinite(Number(current.lng));
+          const sameNode = Math.abs(Number(from.lat) - Number(to.lat)) < 0.000001 && Math.abs(Number(from.lng) - Number(to.lng)) < 0.000001;
+          if (hasCurrent && !sameNode) {
+            mapAdapter.renderRouteLine(overlayLayers.routeRunners, from, current, { color: '#64e3ff', weight: 5, opacity: 0.9, className: 'trillionnium-avatar-route-runner-progress' })
+              .bindTooltip(`${mapText(runner.progress_label || 'route progress / 路线进度')} · ${mapText(runner.eta_label || 'ETA / 预计')}`);
+            mapAdapter.renderRouteLine(overlayLayers.routeRunners, current, to, { color: '#a78bfa', weight: 3, opacity: 0.56, dashArray: '3 9', className: 'trillionnium-avatar-route-runner-remaining' })
+              .bindTooltip(`${mapText(runner.arrival_label || 'Reward checkpoint / 奖励检查点')} · ${escapeHtml(Number(runner.remaining_distance_meters || 0))}m`);
+          }
           const runnerFocus = { kind: 'node', nodeId: runner.to_node_id, taskId: runner.task_id, locationId: runner.latest_location_id, suppressAction: true };
-          const popupHtml = `<strong>${escapeHtml(mapText(runner.movement_label || 'Avatar running to task / 角色正在跑向任务'))}</strong><br/><span>${escapeHtml(mapText(runner.from_node_name || runner.from_node_id || 'avatar'))} → ${escapeHtml(mapText(runner.to_node_name || runner.to_node_id || 'task'))}</span><br/><small>${escapeHtml(mapText(runner.reward_loop || 'move → task → reward / 移动 → 任务 → 奖励'))}</small>`;
+          const popupHtml = `<strong>${escapeHtml(mapText(runner.movement_label || 'Avatar running to task / 角色正在跑向任务'))}</strong><br/><span>${escapeHtml(mapText(runner.from_node_name || runner.from_node_id || 'avatar'))} → ${escapeHtml(mapText(runner.to_node_name || runner.to_node_id || 'task'))}</span><br/><span>${escapeHtml(mapText(runner.progress_label || 'route progress / 路线进度'))} · ${escapeHtml(mapText(runner.eta_label || 'ETA / 预计'))} · ${traceCount} ${escapeHtml(mapText('trace points / 个追踪点'))}</span><br/><small>${escapeHtml(mapText(runner.reward_loop || 'move → task → reward / 移动 → 任务 → 奖励'))}</small>`;
           const runnerLayer = mapAdapter.renderMovingAvatar(overlayLayers.routeRunners, runner, popupHtml);
           if (runnerLayer) {
             runnerLayer.bindTooltip(`${mapText(runner.movement_label || 'Avatar running to task')} · ${mapText(runner.next_action_label || runner.task_id || 'task')}`)
@@ -1133,12 +1147,15 @@ pub(super) fn real_world_map_card_focus_helpers_js() -> &'static str {
         }
         if (kind === 'routeRunner') {
           const progress = Math.round(Math.max(0, Math.min(1, Number(source.progress_ratio ?? 0))) * 100);
+          const remainingMeters = Math.max(0, Math.round(Number(source.remaining_distance_meters || 0)));
+          const etaLabel = mapText(source.eta_label || 'ETA pending / 预计时间待定');
+          const traceCount = Array.isArray(source.runner_trace_points) ? source.runner_trace_points.length : 0;
           return {
             className: worldStyle ? 'mini runner' : 'module app-avatar-route-runner-card',
             title: mapText(source.movement_label || 'Avatar running to task / 角色正在跑向任务'),
-            meta: `${mapText(source.from_node_name || source.from_node_id || 'avatar / 角色')} → ${mapText(source.to_node_name || source.to_node_id || 'task node / 任务节点')} · ${progress}% · ${mapText(source.movement_state || 'en route / 跑图中')}`,
+            meta: `${mapText(source.from_node_name || source.from_node_id || 'avatar / 角色')} → ${mapText(source.to_node_name || source.to_node_id || 'task node / 任务节点')} · ${progress}% · ${remainingMeters}m · ${etaLabel}`,
             code: source.task_id || source.runner_id || 'avatar_route_runner',
-            focusHtml: `${mapAvatarTaskRouteFocusButton(source, 'Follow runner / 跟随角色')} <span class="hud-chip">${escapeHtml(mapText(source.animation_kind || 'looping_avatar_task_run'))}</span>`,
+            focusHtml: `${mapAvatarTaskRouteFocusButton(source, 'Follow runner / 跟随角色')} <span class="hud-chip">${escapeHtml(mapText(source.progress_label || `${progress}% route progress / ${progress}% 路线进度`))}</span> <span class="hud-chip">${escapeHtml(etaLabel)}</span> <span class="hud-chip">${traceCount} ${escapeHtml(mapText('trace points / 个追踪点'))}</span> <span class="hud-chip">${escapeHtml(mapText(source.arrival_label || 'Reward checkpoint / 奖励检查点'))}</span>`,
           };
         }
         return {

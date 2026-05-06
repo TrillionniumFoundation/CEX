@@ -697,6 +697,10 @@ pub(super) fn world_map_avatar_route_runners_json(
         .filter_map(|(index, route)| {
             let from = route.get("from")?.clone();
             let to = route.get("to")?.clone();
+            let from_lat = from.get("lat").and_then(Value::as_f64)?;
+            let from_lng = from.get("lng").and_then(Value::as_f64)?;
+            let to_lat = to.get("lat").and_then(Value::as_f64)?;
+            let to_lng = to.get("lng").and_then(Value::as_f64)?;
             let task_id = route
                 .get("task_id")
                 .and_then(Value::as_str)
@@ -706,10 +710,18 @@ pub(super) fn world_map_avatar_route_runners_json(
                 .and_then(Value::as_str)
                 .unwrap_or("@player:local.dev");
             let progress_ratio = (0.18 + (index as f64 % 5.0) * 0.14).min(0.82);
+            let current_lat = from_lat + (to_lat - from_lat) * progress_ratio;
+            let current_lng = from_lng + (to_lng - from_lng) * progress_ratio;
+            let distance_meters = (geo_distance_km(from_lat, from_lng, to_lat, to_lng) * 1000.0).round();
+            let remaining_distance_meters = (distance_meters * (1.0 - progress_ratio)).round();
+            let eta_seconds = ((remaining_distance_meters / 18.0).round() as i64).clamp(45, 900);
+            let eta_minutes = ((eta_seconds as f64) / 60.0).ceil() as i64;
+            let progress_percent = (progress_ratio * 100.0).round() as i64;
             Some(json!({
                 "runner_id": format!("avatar-route-runner:{}:{}", matrix_user_id, task_id),
                 "route_id": route.get("route_id").cloned().unwrap_or_else(|| json!("avatar-task-route")),
                 "route_layer_id": "trillionnium_avatar_route_runner_layer",
+                "telemetry_layer_id": "trillionnium_avatar_route_runner_telemetry_layer",
                 "route_kind": "avatar_route_runner",
                 "task_id": task_id,
                 "matrix_user_id": matrix_user_id,
@@ -719,14 +731,28 @@ pub(super) fn world_map_avatar_route_runners_json(
                 "to_node_id": route.get("to_node_id").cloned().unwrap_or_else(|| json!("target-node")),
                 "to_node_name": route.get("to_node_name").cloned().unwrap_or_else(|| json!("Task node")),
                 "to": to,
+                "current": {"lat": current_lat, "lng": current_lng},
+                "runner_trace_points": [
+                    {"kind": "start", "lat": from_lat, "lng": from_lng},
+                    {"kind": "current", "lat": current_lat, "lng": current_lng},
+                    {"kind": "target", "lat": to_lat, "lng": to_lng}
+                ],
                 "latest_location_id": route.get("latest_location_id").cloned().unwrap_or_else(|| json!("")),
                 "latest_status": route.get("latest_status").cloned().unwrap_or_else(|| json!("pending")),
                 "next_action_label": route.get("next_action_label").cloned().unwrap_or_else(|| json!("Run to task / 跑向任务")),
                 "reward_loop": route.get("reward_loop").cloned().unwrap_or_else(|| json!("move avatar → complete task → submit evidence → rating/reward → next route")),
                 "movement_state": "en_route_to_task_reward",
                 "movement_label": "Avatar running to task / 角色正在跑向任务",
+                "arrival_label": "Reward checkpoint / 奖励检查点",
                 "runner_icon": "🏃",
                 "progress_ratio": progress_ratio,
+                "progress_percent": progress_percent,
+                "progress_label": format!("{}% route progress / {}% 路线进度", progress_percent, progress_percent),
+                "distance_meters": distance_meters as i64,
+                "remaining_distance_meters": remaining_distance_meters as i64,
+                "eta_seconds": eta_seconds,
+                "eta_label": format!("ETA {} min / 预计 {} 分钟", eta_minutes, eta_minutes),
+                "telemetry_summary": format!("{}% complete · {}m remaining · ETA {} min", progress_percent, remaining_distance_meters as i64, eta_minutes),
                 "animation_kind": "looping_avatar_task_run",
                 "animation_duration_ms": 4800 + (index as i64 * 360),
                 "animation_hint": "animate_avatar_marker_between_route_endpoints",

@@ -1125,6 +1125,36 @@ fn world_map_viewport_includes_prefetch_density_and_live_events() {
         "trillionnium_avatar_route_runner_layer"
     );
     assert_eq!(
+        viewport["avatar_route_runners"][0]["telemetry_layer_id"],
+        "trillionnium_avatar_route_runner_telemetry_layer"
+    );
+    assert!(viewport["avatar_route_runners"][0]["current"]["lat"].is_number());
+    assert!(
+        viewport["avatar_route_runners"][0]["runner_trace_points"]
+            .as_array()
+            .map(|points| points.len())
+            .unwrap_or(0)
+            >= 3
+    );
+    assert!(
+        viewport["avatar_route_runners"][0]["progress_percent"]
+            .as_i64()
+            .unwrap_or(0)
+            > 0
+    );
+    assert!(
+        viewport["avatar_route_runners"][0]["remaining_distance_meters"]
+            .as_i64()
+            .unwrap_or(0)
+            >= 0
+    );
+    assert!(
+        viewport["avatar_route_runners"][0]["eta_seconds"]
+            .as_i64()
+            .unwrap_or(0)
+            >= 45
+    );
+    assert_eq!(
         viewport["avatar_route_runners"][0]["animation_hint"],
         "animate_avatar_marker_between_route_endpoints"
     );
@@ -1813,10 +1843,15 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(app_html.contains("app-avatar-route-runners-live"));
     assert!(app_html.contains("avatar_task_routes"));
     assert!(app_html.contains("avatar_route_runners"));
+    assert!(app_html.contains("runner_trace_points"));
+    assert!(app_html.contains("remaining_distance_meters"));
+    assert!(app_html.contains("eta_label"));
     assert!(app_html.contains("filterAvatarTaskRoutes"));
     assert!(app_html.contains("filterAvatarRouteRunners"));
     assert!(app_html.contains("trillionnium-avatar-task-route-path"));
     assert!(app_html.contains("trillionnium-avatar-route-runner-dot"));
+    assert!(app_html.contains("trillionnium-avatar-route-runner-progress"));
+    assert!(app_html.contains("trillionnium-avatar-route-runner-remaining"));
     assert!(app_html.contains("trillionnium-route-dash"));
     assert!(app_html.contains("trillionnium-runner-bob"));
     assert!(app_html.contains("handleOverlayToggleButton"));
@@ -1965,10 +2000,15 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(world_html.contains("world-avatar-route-runners-live"));
     assert!(world_html.contains("avatar_task_routes"));
     assert!(world_html.contains("avatar_route_runners"));
+    assert!(world_html.contains("runner_trace_points"));
+    assert!(world_html.contains("remaining_distance_meters"));
+    assert!(world_html.contains("eta_label"));
     assert!(world_html.contains("filterAvatarTaskRoutes"));
     assert!(world_html.contains("filterAvatarRouteRunners"));
     assert!(world_html.contains("trillionnium-avatar-task-route-path"));
     assert!(world_html.contains("trillionnium-avatar-route-runner-dot"));
+    assert!(world_html.contains("trillionnium-avatar-route-runner-progress"));
+    assert!(world_html.contains("trillionnium-avatar-route-runner-remaining"));
     assert!(world_html.contains("trillionnium-route-dash"));
     assert!(world_html.contains("trillionnium-runner-bob"));
     assert!(world_html.contains("handleOverlayToggleButton"));

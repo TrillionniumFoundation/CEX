@@ -1277,6 +1277,8 @@ pub(super) async fn get_world_web_shell(
     .trillionnium-avatar-task-route-pulse {{ animation: trillionnium-route-pulse 1.8s ease-in-out infinite; }}
     .trillionnium-avatar-route-runner-dot {{ width:38px; height:38px; border-radius:999px; display:grid; place-items:center; background:linear-gradient(135deg,#a78bfa,#64e3ff); box-shadow:0 0 0 3px rgba(11,18,32,.84),0 0 24px rgba(167,139,250,.55); animation: trillionnium-runner-bob 820ms ease-in-out infinite; }}
     .trillionnium-avatar-route-runner-dot span {{ transform:translateY(-1px); }}
+    .trillionnium-avatar-route-runner-progress {{ filter: drop-shadow(0 0 10px rgba(100,227,255,.48)); }}
+    .trillionnium-avatar-route-runner-remaining {{ animation: trillionnium-route-dash 1.7s linear infinite; }}
     @keyframes trillionnium-route-dash {{ from {{ stroke-dashoffset: 0; }} to {{ stroke-dashoffset: -24; }} }}
     @keyframes trillionnium-route-pulse {{ 0%,100% {{ opacity:.55; transform:scale(1); }} 50% {{ opacity:1; transform:scale(1.08); }} }}
     @keyframes trillionnium-runner-bob {{ 0%,100% {{ transform:translateY(0) scale(1); }} 50% {{ transform:translateY(-5px) scale(1.06); }} }}
