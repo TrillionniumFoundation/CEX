@@ -1107,6 +1107,10 @@ fn world_map_viewport_includes_prefetch_density_and_live_events() {
         true
     );
     assert_eq!(
+        viewport["gameplay_layer_contract"]["supports"]["checkpoint_reward_history"],
+        true
+    );
+    assert_eq!(
         viewport["player_avatars"][0]["movement_status"],
         "ready_to_run_task"
     );
@@ -1173,6 +1177,29 @@ fn world_map_viewport_includes_prefetch_density_and_live_events() {
         .unwrap_or_default()
         .contains("risk controls"));
     assert_eq!(
+        viewport["avatar_route_runners"][0]["checkpoint_history_layer_id"],
+        "trillionnium_avatar_route_reward_history_layer"
+    );
+    assert!(
+        viewport["avatar_route_runners"][0]["checkpoint_history"]
+            .as_array()
+            .map(|items| items.len())
+            .unwrap_or(0)
+            >= 3
+    );
+    assert!(
+        viewport["avatar_route_runners"][0]["checkpoint_history_summary"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("rating/reward settlement")
+    );
+    assert!(
+        viewport["avatar_route_runners"][0]["reward_history_summary"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Reward history")
+    );
+    assert_eq!(
         viewport["avatar_route_runners"][0]["reward_checkpoint"]["layer_id"],
         "trillionnium_avatar_route_reward_checkpoint_layer"
     );
@@ -1200,6 +1227,10 @@ fn world_map_viewport_includes_prefetch_density_and_live_events() {
     );
     assert_eq!(
         viewport["viewport_contract"]["supports_avatar_route_runners"],
+        true
+    );
+    assert_eq!(
+        viewport["viewport_contract"]["supports_checkpoint_reward_history"],
         true
     );
     assert_eq!(
@@ -1877,6 +1908,12 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(app_html.contains("reward_checkpoint"));
     assert!(app_html.contains("completion_command"));
     assert!(app_html.contains("completion_action_body"));
+    assert!(app_html.contains("checkpoint_history"));
+    assert!(app_html.contains("checkpoint_history_summary"));
+    assert!(app_html.contains("reward_history_summary"));
+    assert!(app_html.contains("routeRunnerHistoryChipsHtml"));
+    assert!(app_html.contains("Checkpoint history"));
+    assert!(app_html.contains("Reward history"));
     assert!(app_html.contains("buildRouteRunnerCompletionAction"));
     assert!(app_html.contains("routeRunnerCompletionButtonHtml"));
     assert!(app_html.contains("Complete checkpoint"));
@@ -2042,6 +2079,12 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(world_html.contains("reward_checkpoint"));
     assert!(world_html.contains("completion_command"));
     assert!(world_html.contains("completion_action_body"));
+    assert!(world_html.contains("checkpoint_history"));
+    assert!(world_html.contains("checkpoint_history_summary"));
+    assert!(world_html.contains("reward_history_summary"));
+    assert!(world_html.contains("routeRunnerHistoryChipsHtml"));
+    assert!(world_html.contains("Checkpoint history"));
+    assert!(world_html.contains("Reward history"));
     assert!(world_html.contains("buildRouteRunnerCompletionAction"));
     assert!(world_html.contains("routeRunnerCompletionButtonHtml"));
     assert!(world_html.contains("Complete checkpoint"));
