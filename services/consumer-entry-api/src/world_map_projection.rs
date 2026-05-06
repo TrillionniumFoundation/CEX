@@ -490,6 +490,7 @@ pub(super) fn trillionnium_world_map_gameplay_layer_contract_json() -> Value {
             "avatar_task_route_overlays": true,
             "avatar_route_runners": true,
             "checkpoint_reward_history": true,
+            "route_runner_reward_claim_actions": true,
             "agent_party_state": true,
             "agent_party_handoff_actions": true,
             "live_event_task_pulses": true,
@@ -820,6 +821,25 @@ pub(super) fn world_map_avatar_route_runners_json(
             let completion_action_body = format!(
                 "Checkpoint completion for task {task_id}: prepare the deliverable, evidence package, risk controls, next action, and self-review before reward settlement."
             );
+            let reward_claim_label = if completion_ready {
+                "Claim rating/reward / 领取评级奖励"
+            } else {
+                "Prepare reward claim / 准备领奖"
+            };
+            let reward_claim_status = if completion_ready {
+                "claimable_after_evidence"
+            } else {
+                "locked_until_evidence_checkpoint"
+            };
+            let reward_claim_action_body = if completion_ready {
+                format!(
+                    "Claim rating/reward for task {task_id}: submit the deliverable, evidence package, risk controls, next action, and self-review for final reward settlement."
+                )
+            } else {
+                format!(
+                    "Prepare reward claim for task {task_id}: finish the deliverable, evidence package, risk controls, next action, and self-review before the rating/reward claim unlocks."
+                )
+            };
             let checkpoint_history = vec![
                 json!({
                     "history_id": format!("reward-history:{}:{}:route-started", matrix_user_id, task_id),
@@ -881,6 +901,10 @@ pub(super) fn world_map_avatar_route_runners_json(
                 "completion_command": completion_command,
                 "completion_action_body": completion_action_body,
                 "completion_prompt": "Complete the task at the checkpoint with deliverable, evidence, risk controls, next action, and self-review before reward settlement.",
+                "reward_claim_label": reward_claim_label,
+                "reward_claim_status": reward_claim_status,
+                "reward_claim_action_body": reward_claim_action_body.clone(),
+                "reward_claim_action_summary": "Reward claim action keeps deliverable, evidence, risk controls, next action, and self-review tied to rating/reward settlement.",
                 "checkpoint_history_layer_id": "trillionnium_avatar_route_reward_history_layer",
                 "checkpoint_history": checkpoint_history,
                 "checkpoint_history_summary": "Route started → evidence checkpoint → rating/reward settlement → next route",
@@ -900,7 +924,16 @@ pub(super) fn world_map_avatar_route_runners_json(
                     "current_progress_percent": progress_percent,
                     "ready": completion_ready,
                     "label": if completion_ready { "Ready to complete / 可完成" } else { "Reward checkpoint locked / 奖励检查点未解锁" },
-                    "reward_claim_label": "Submit evidence → rating/reward / 提交证据 → 评级奖励"
+                    "reward_claim_label": "Submit evidence → rating/reward / 提交证据 → 评级奖励",
+                    "reward_claim_action": {
+                        "label": reward_claim_label,
+                        "panel_id": "world-action-console",
+                        "textarea_id": "world-action-body",
+                        "node_id": route.get("to_node_id").cloned().unwrap_or_else(|| json!("target-node")),
+                        "task_id": task_id,
+                        "body": reward_claim_action_body,
+                        "status": reward_claim_status,
+                    }
                 },
                 "runner_icon": "🏃",
                 "progress_ratio": progress_ratio,
@@ -1703,6 +1736,7 @@ pub(super) fn world_map_viewport_json(
             "supports_avatar_task_routes": true,
             "supports_avatar_route_runners": true,
             "supports_checkpoint_reward_history": true,
+            "supports_route_runner_reward_claim_actions": true,
             "supports_agent_party_state": true,
             "supports_agent_party_handoff_actions": true,
         }
