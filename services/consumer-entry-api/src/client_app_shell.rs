@@ -569,6 +569,10 @@ pub(super) async fn get_client_app_web_shell(
         .and_then(|hub| hub.get("player_avatar_count"))
         .and_then(Value::as_u64)
         .unwrap_or(0);
+    let map_avatar_task_route_count = map_hub
+        .and_then(|hub| hub.get("avatar_task_route_count"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
     let map_player_density_mode = map_hub
         .and_then(|hub| hub.get("player_density_mode"))
         .and_then(Value::as_str)
@@ -946,6 +950,11 @@ pub(super) async fn get_client_app_web_shell(
     .overlay-toggle-bar {{ display:flex; flex-wrap:wrap; gap:8px; margin:10px 0; }}
     .overlay-toggle {{ border:1px solid rgba(248,195,91,.25); background:rgba(248,195,91,.08); color:var(--text); border-radius:999px; padding:8px 10px; font-weight:700; cursor:pointer; }}
     .overlay-toggle.is-off {{ opacity:.58; background:rgba(255,255,255,.04); border-color:rgba(255,255,255,.12); color:var(--muted); }}
+    .trillionnium-avatar-task-route-path {{ animation: trillionnium-route-dash 1.5s linear infinite; filter: drop-shadow(0 0 8px rgba(167,139,250,.42)); }}
+    .trillionnium-avatar-task-route-pulse {{ animation: trillionnium-route-pulse 1.8s ease-in-out infinite; }}
+    .app-avatar-task-route-card {{ border-color:rgba(167,139,250,.36); box-shadow:0 14px 36px rgba(50,34,120,.22); }}
+    @keyframes trillionnium-route-dash {{ from {{ stroke-dashoffset: 0; }} to {{ stroke-dashoffset: -24; }} }}
+    @keyframes trillionnium-route-pulse {{ 0%,100% {{ opacity:.55; transform:scale(1); }} 50% {{ opacity:1; transform:scale(1.08); }} }}
     .module p,.subtitle {{ color:var(--muted); }}
     .map-panel p {{ color:var(--muted); line-height:1.55; }}
     code {{ color:var(--cyan); background:rgba(100,227,255,.08); padding:3px 7px; border-radius:8px; }}
@@ -1203,13 +1212,14 @@ pub(super) async fn get_client_app_web_shell(
             <span class="hud-chip"><strong>{}</strong> <span data-i18n-en="visible places" data-i18n-zh="个可见地点">visible places</span></span>
             <span class="hud-chip"><strong>{}</strong> <span data-i18n-en="prefetch tiles" data-i18n-zh="个预热地图块">prefetch tiles</span></span>
             <span class="hud-chip"><strong>{}</strong> <span data-i18n-en="live events" data-i18n-zh="个实时事件">live events</span> · {}</span>
+            <span class="hud-chip"><strong>{}</strong> <span data-i18n-en="task routes" data-i18n-zh="条任务路线">task routes</span></span>
             <span class="hud-chip"><strong>{}</strong> <span data-i18n-en="running avatars" data-i18n-zh="个跑图角色">running avatars</span></span>
           </div>
           <div id="app-map-overlay-controls" class="overlay-toggle-bar">
 {shared_map_overlay_controls_html}
           </div>
-          <p id="app-map-overlay-status" class="subtitle" data-i18n-en="Active layers: density, regions, tiles, prefetch rings, live events, player avatars." data-i18n-zh="当前图层：密度、区域、地图块、预热圈、实时事件、跑图角色。">Active layers: density, regions, tiles, prefetch rings, live events, player avatars.</p>
-          <p id="app-map-overlay-legend" class="subtitle" data-i18n-en="Layer legend: regional anchors · active tiles · prefetch rings · live-event pulses · running avatars." data-i18n-zh="图层说明：区域锚点 · 活跃地图块 · 预热探索圈 · 实时事件脉冲 · 跑图角色。">Layer legend: regional anchors · active tiles · prefetch rings · live-event pulses · running avatars.</p>
+          <p id="app-map-overlay-status" class="subtitle" data-i18n-en="Active layers: density, regions, tiles, prefetch rings, live events, task routes, player avatars." data-i18n-zh="当前图层：密度、区域、地图块、预热圈、实时事件、任务路线、跑图角色。">Active layers: density, regions, tiles, prefetch rings, live events, task routes, player avatars.</p>
+          <p id="app-map-overlay-legend" class="subtitle" data-i18n-en="Layer legend: regional anchors · active tiles · prefetch rings · live-event pulses · avatar task routes · running avatars." data-i18n-zh="图层说明：区域锚点 · 活跃地图块 · 预热探索圈 · 实时事件脉冲 · 角色任务路线 · 跑图角色。">Layer legend: regional anchors · active tiles · prefetch rings · live-event pulses · avatar task routes · running avatars.</p>
         </details>
       </div>
         <div id="app-map-action-panel" class="module" style="margin-top:14px; padding:16px 18px;">
@@ -1250,6 +1260,10 @@ pub(super) async fn get_client_app_web_shell(
     <section>
       <h2 data-i18n-en="Live Events" data-i18n-zh="实时事件">Live Events</h2>
       <section id="app-live-events-live" class="grid">{}</section>
+    </section>
+    <section>
+      <h2 data-i18n-en="Avatar Task Routes" data-i18n-zh="角色任务路线">Avatar Task Routes</h2>
+      <section id="app-avatar-task-routes-live" class="grid"></section>
     </section>
     </section>
     <section id="app-tab-feed" class="app-tab-panel" data-app-panel="feed" role="tabpanel" aria-labelledby="app-tab-button-feed" aria-hidden="true" hidden>
@@ -1318,6 +1332,7 @@ pub(super) async fn get_client_app_web_shell(
       const poiTarget = document.getElementById('app-poi-hotspots-live');
       const prefetchTarget = document.getElementById('app-prefetch-queue-live');
       const liveEventTarget = document.getElementById('app-live-events-live');
+      const taskRouteTarget = document.getElementById('app-avatar-task-routes-live');
       const feedApiStatus = document.getElementById('app-feed-api-status');
       const feedFilterTarget = document.getElementById('app-feed-filter-actions');
       const feedSummaryTarget = document.getElementById('app-feed-summary');
@@ -1617,6 +1632,7 @@ pub(super) async fn get_client_app_web_shell(
         if (lastViewport) {{
           renderStreamHud(lastViewport, focus);
           renderCards(liveEventTarget, filterLiveEventStream(lastViewport.live_event_stream || [], focus), 'event');
+          renderCards(taskRouteTarget, filterAvatarTaskRoutes(lastViewport.avatar_task_routes || [], focus), 'taskRoute');
         }}
         renderFeedSurface(lastFeed, focus);
         renderFocusPanel();
@@ -1963,6 +1979,7 @@ pub(super) async fn get_client_app_web_shell(
         map_prefetch_count,
         map_live_event_count,
         escape_html_text(&client_app_map_label(map_player_density_mode)),
+        map_avatar_task_route_count,
         map_player_avatar_count,
         escape_html_text(map_engine_id),
         escape_html_text(tile_provider),

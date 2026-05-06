@@ -1099,11 +1099,28 @@ fn world_map_viewport_includes_prefetch_density_and_live_events() {
         true
     );
     assert_eq!(
+        viewport["gameplay_layer_contract"]["supports"]["avatar_task_route_overlays"],
+        true
+    );
+    assert_eq!(
         viewport["player_avatars"][0]["movement_status"],
         "ready_to_run_task"
     );
+    assert!(viewport["avatar_task_route_count"].as_u64().unwrap_or(0) >= 1);
+    assert_eq!(
+        viewport["avatar_task_routes"][0]["route_layer_id"],
+        "trillionnium_avatar_task_route_overlay"
+    );
+    assert_eq!(
+        viewport["avatar_task_routes"][0]["reward_loop"],
+        "move avatar → complete task → submit evidence → rating/reward → next route"
+    );
     assert_eq!(
         viewport["viewport_contract"]["supports_player_avatars"],
+        true
+    );
+    assert_eq!(
+        viewport["viewport_contract"]["supports_avatar_task_routes"],
         true
     );
     assert_eq!(
@@ -1591,12 +1608,22 @@ fn client_app_map_hub_projects_stream_counts() {
     assert!(app["map_hub"]["prefetch_count"].as_u64().unwrap_or(0) >= 1);
     assert!(app["map_hub"]["live_event_count"].as_u64().unwrap_or(0) >= 1);
     assert!(app["map_hub"]["player_avatar_count"].as_u64().unwrap_or(0) >= 1);
+    assert!(
+        app["map_hub"]["avatar_task_route_count"]
+            .as_u64()
+            .unwrap_or(0)
+            >= 1
+    );
     assert_eq!(app["map_hub"]["player_density_mode"], "dense");
     assert_eq!(app["modules"][0]["name"], "Trillionnium World Map");
     assert!(app["modules"][0]["summary"]
         .as_str()
         .unwrap_or_default()
         .contains("角色跑图"));
+    assert!(app["modules"][0]["summary"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("任务路线"));
     assert_eq!(
         app["feed"]["active_region_id"],
         app["map_hub"]["active_region_id"]
@@ -1737,7 +1764,15 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(app_html.contains("Trillionnium World Map"));
     assert!(app_html.contains("OpenStreetMap upgraded into a playable world"));
     assert!(app_html.contains("Player avatars / 跑图角色"));
+    assert!(app_html.contains("Task routes / 任务路线"));
+    assert!(app_html.contains("Avatar Task Routes"));
     assert!(app_html.contains("data-overlay-target=\"avatars\""));
+    assert!(app_html.contains("data-overlay-target=\"taskRoutes\""));
+    assert!(app_html.contains("app-avatar-task-routes-live"));
+    assert!(app_html.contains("avatar_task_routes"));
+    assert!(app_html.contains("filterAvatarTaskRoutes"));
+    assert!(app_html.contains("trillionnium-avatar-task-route-path"));
+    assert!(app_html.contains("trillionnium-route-dash"));
     assert!(app_html.contains("handleOverlayToggleButton"));
     assert!(app_html.contains("mapMarkerActionButtonHtml"));
     assert!(app_html.contains("closestFromEvent"));
@@ -1873,7 +1908,15 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(world_html.contains("Trillionnium World Map"));
     assert!(world_html.contains("OpenStreetMap upgraded into a playable world"));
     assert!(world_html.contains("Player avatars / 跑图角色"));
+    assert!(world_html.contains("Task routes / 任务路线"));
+    assert!(world_html.contains("Avatar Task Routes"));
     assert!(world_html.contains("data-overlay-target=\"avatars\""));
+    assert!(world_html.contains("data-overlay-target=\"taskRoutes\""));
+    assert!(world_html.contains("world-avatar-task-routes-live"));
+    assert!(world_html.contains("avatar_task_routes"));
+    assert!(world_html.contains("filterAvatarTaskRoutes"));
+    assert!(world_html.contains("trillionnium-avatar-task-route-path"));
+    assert!(world_html.contains("trillionnium-route-dash"));
     assert!(world_html.contains("handleOverlayToggleButton"));
     assert!(world_html.contains("mapMarkerActionButtonHtml"));
     assert!(world_html.contains("closestFromEvent"));

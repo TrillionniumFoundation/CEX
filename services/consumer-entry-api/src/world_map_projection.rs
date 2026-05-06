@@ -487,6 +487,7 @@ pub(super) fn trillionnium_world_map_gameplay_layer_contract_json() -> Value {
             "player_avatars": true,
             "avatar_movement_between_nodes": true,
             "quest_route_edges": true,
+            "avatar_task_route_overlays": true,
             "live_event_task_pulses": true,
             "openstreetmap_base_tiles": true
         }
@@ -564,6 +565,124 @@ pub(super) fn world_map_player_avatars_json(
 
     avatars.truncate(16);
     avatars
+}
+
+pub(super) fn world_map_avatar_task_routes_json(
+    world: &WorldState,
+    indexes: &WorldIndexes,
+    matrix_user_id: &str,
+    route_artifacts: &WorldRouteArtifacts,
+    limit: usize,
+) -> Vec<Value> {
+    let current_node = world
+        .world_player_positions
+        .get(matrix_user_id)
+        .and_then(|position| world.world_map_nodes.get(&position.node_id))
+        .or_else(|| world.world_map_nodes.get(default_world_node_id()))
+        .or_else(|| {
+            indexes
+                .sorted_map_node_ids
+                .first()
+                .and_then(|node_id| world.world_map_nodes.get(node_id))
+        });
+    let Some(current_node) = current_node else {
+        return Vec::new();
+    };
+    let (from_lat, from_lng) = real_world_node_coordinates(current_node);
+    let mut seen_task_ids = HashSet::new();
+    let mut routes = Vec::new();
+    let tasks = route_artifacts
+        .task_graph
+        .get("tasks")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    for task in tasks {
+        if routes.len() >= limit {
+            break;
+        }
+        let task_id = task
+            .get("task_id")
+            .and_then(Value::as_str)
+            .unwrap_or("route-task")
+            .trim();
+        if task_id.is_empty() || !seen_task_ids.insert(task_id.to_string()) {
+            continue;
+        }
+        let latest_location_id = task
+            .get("latest_location_id")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let target_node = task
+            .get("suggested_node_id")
+            .and_then(Value::as_str)
+            .filter(|node_id| !node_id.trim().is_empty())
+            .and_then(|node_id| world.world_map_nodes.get(node_id))
+            .or_else(|| {
+                task.get("next_opportunity_node_id")
+                    .and_then(Value::as_str)
+                    .filter(|node_id| !node_id.trim().is_empty())
+                    .and_then(|node_id| world.world_map_nodes.get(node_id))
+            })
+            .or_else(|| indexes.first_map_node_for_location(world, latest_location_id));
+        let Some(target_node) = target_node else {
+            continue;
+        };
+        let (to_lat, to_lng) = real_world_node_coordinates(target_node);
+        let latest_bucket = task
+            .get("latest_bucket")
+            .and_then(Value::as_str)
+            .unwrap_or("route_task");
+        let latest_status = task
+            .get("latest_status")
+            .and_then(Value::as_str)
+            .unwrap_or("pending");
+        let next_action_label = task
+            .get("suggested_action_label")
+            .and_then(Value::as_str)
+            .filter(|label| !label.trim().is_empty())
+            .or_else(|| {
+                task.get("next_opportunity_action_label")
+                    .and_then(Value::as_str)
+                    .filter(|label| !label.trim().is_empty())
+            })
+            .unwrap_or("Open task route / 打开任务路线");
+        let command = task
+            .get("suggested_matrix_command")
+            .and_then(Value::as_str)
+            .filter(|command| !command.trim().is_empty())
+            .or_else(|| {
+                task.get("next_opportunity_command")
+                    .and_then(Value::as_str)
+                    .filter(|command| !command.trim().is_empty())
+            })
+            .unwrap_or("/world action 跟进当前地图任务：补齐 deliverable、evidence、risk controls、next action 和 self-review。");
+        routes.push(json!({
+            "route_id": format!("avatar-task-route:{}:{}", matrix_user_id, task_id),
+            "route_layer_id": "trillionnium_avatar_task_route_overlay",
+            "route_kind": "avatar_task_route",
+            "task_id": task_id,
+            "matrix_user_id": matrix_user_id,
+            "from_node_id": &current_node.node_id,
+            "from_node_name": &current_node.name,
+            "from": {"lat": from_lat, "lng": from_lng},
+            "to_node_id": &target_node.node_id,
+            "to_node_name": &target_node.name,
+            "to": {"lat": to_lat, "lng": to_lng},
+            "latest_location_id": latest_location_id,
+            "latest_bucket": latest_bucket,
+            "latest_status": latest_status,
+            "route_stage_summary": task.get("route_stage_summary").and_then(Value::as_str).unwrap_or("task route ready"),
+            "outcome_summary": task.get("outcome_summary").and_then(Value::as_str).unwrap_or("route outcome pending"),
+            "next_action_label": next_action_label,
+            "command": command,
+            "reward_loop": "move avatar → complete task → submit evidence → rating/reward → next route",
+            "movement_hint": "draw_avatar_task_route_from_current_node_to_target_node",
+        }));
+    }
+
+    routes
 }
 
 pub(super) fn real_world_map_region_shards_json() -> Vec<Value> {
@@ -1268,6 +1387,8 @@ pub(super) fn world_map_viewport_json(
     let player_density =
         world_map_player_density_summary_json(world, &active_region, &visible_markers, zoom);
     let player_avatars = world_map_player_avatars_json(world, matrix_user_id, &visible_markers);
+    let avatar_task_routes =
+        world_map_avatar_task_routes_json(world, &indexes, matrix_user_id, &route_artifacts, 6);
     let prefetch_queue = world_map_prefetch_queue_json(&visible_tile_shards, &player_density, zoom);
     let live_event_stream = world_map_live_event_stream_json(
         world,
@@ -1283,6 +1404,7 @@ pub(super) fn world_map_viewport_json(
     let marker_count = visible_markers.len();
     let live_event_count = live_event_stream.len();
     let player_avatar_count = player_avatars.len();
+    let avatar_task_route_count = avatar_task_routes.len();
     let viewport_path = format!(
         "/v1/world/map/{}/viewport?lat={:.6}&lng={:.6}&zoom={}&radius_km={:.1}&limit={}",
         matrix_user_id, center_lat, center_lng, zoom, radius_km, marker_limit
@@ -1322,6 +1444,8 @@ pub(super) fn world_map_viewport_json(
         "player_density": player_density,
         "player_avatars": player_avatars,
         "player_avatar_count": player_avatar_count,
+        "avatar_task_routes": avatar_task_routes,
+        "avatar_task_route_count": avatar_task_route_count,
         "gameplay_layer_contract": trillionnium_world_map_gameplay_layer_contract_json(),
         "live_event_stream": live_event_stream,
         "live_event_stream_index_layer": "WorldIndexes::event_indices_by_location_v1",
@@ -1336,6 +1460,7 @@ pub(super) fn world_map_viewport_json(
             "supports_prefetch_queue": true,
             "supports_player_density": true,
             "supports_player_avatars": true,
+            "supports_avatar_task_routes": true,
         }
     })
 }
