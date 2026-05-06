@@ -491,6 +491,7 @@ pub(super) fn trillionnium_world_map_gameplay_layer_contract_json() -> Value {
             "avatar_route_runners": true,
             "checkpoint_reward_history": true,
             "route_runner_reward_claim_actions": true,
+            "route_runner_next_route_actions": true,
             "agent_party_state": true,
             "agent_party_handoff_actions": true,
             "live_event_task_pulses": true,
@@ -840,6 +841,25 @@ pub(super) fn world_map_avatar_route_runners_json(
                     "Prepare reward claim for task {task_id}: finish the deliverable, evidence package, risk controls, next action, and self-review before the rating/reward claim unlocks."
                 )
             };
+            let next_route_label = if completion_ready {
+                "Open next route / 开启下一条路线"
+            } else {
+                "Preview next route / 预览下一路线"
+            };
+            let next_route_status = if completion_ready {
+                "next_route_ready_after_reward_claim"
+            } else {
+                "next_route_preview_locked_until_reward_claim"
+            };
+            let next_route_action_body = if completion_ready {
+                format!(
+                    "Open next route after task {task_id}: choose the next Trillionnium World Map node and carry deliverable, evidence package, risk controls, next action, and self-review into the follow-up bounty."
+                )
+            } else {
+                format!(
+                    "Preview next route after task {task_id}: inspect candidate map nodes, evidence needs, risk controls, next action, and self-review before the reward claim unlocks."
+                )
+            };
             let checkpoint_history = vec![
                 json!({
                     "history_id": format!("reward-history:{}:{}:route-started", matrix_user_id, task_id),
@@ -861,6 +881,13 @@ pub(super) fn world_map_avatar_route_runners_json(
                     "status": if completion_ready { "claimable_next" } else { "locked_until_checkpoint" },
                     "label": if completion_ready { "Rating/reward claim next / 下一步评级领奖" } else { "Rating/reward locked / 评级奖励待解锁" },
                     "summary": "Submit evidence, receive rating, settle reward, then open the next route.",
+                }),
+                json!({
+                    "history_id": format!("reward-history:{}:{}:next-route", matrix_user_id, task_id),
+                    "stage": "next_route_handoff",
+                    "status": if completion_ready { "next_route_ready" } else { "waiting_for_reward_claim" },
+                    "label": if completion_ready { "Next route ready / 下一路线就绪" } else { "Next route preview / 下一路线预览" },
+                    "summary": "After rating/reward settlement, carry deliverable, evidence package, risk controls, next action, and self-review into the next map route.",
                 }),
             ];
             let checkpoint_id = format!("reward-checkpoint:{}:{}", matrix_user_id, task_id);
@@ -905,6 +932,11 @@ pub(super) fn world_map_avatar_route_runners_json(
                 "reward_claim_status": reward_claim_status,
                 "reward_claim_action_body": reward_claim_action_body.clone(),
                 "reward_claim_action_summary": "Reward claim action keeps deliverable, evidence, risk controls, next action, and self-review tied to rating/reward settlement.",
+                "next_route_label": next_route_label,
+                "next_route_status": next_route_status,
+                "next_route_action_body": next_route_action_body.clone(),
+                "next_route_action_summary": "Next-route action keeps the post-reward loop attached to map node, task id, deliverable, evidence, risk controls, next action, and self-review.",
+                "next_route_sequence_summary": "After reward claim, open the next Trillionnium World Map route with the same deliverable → evidence → risk controls → next action → self-review anchors.",
                 "checkpoint_history_layer_id": "trillionnium_avatar_route_reward_history_layer",
                 "checkpoint_history": checkpoint_history,
                 "checkpoint_history_summary": "Route started → evidence checkpoint → rating/reward settlement → next route",
@@ -933,6 +965,15 @@ pub(super) fn world_map_avatar_route_runners_json(
                         "task_id": task_id,
                         "body": reward_claim_action_body,
                         "status": reward_claim_status,
+                    },
+                    "next_route_action": {
+                        "label": next_route_label,
+                        "panel_id": "world-action-console",
+                        "textarea_id": "world-action-body",
+                        "node_id": route.get("to_node_id").cloned().unwrap_or_else(|| json!("target-node")),
+                        "task_id": task_id,
+                        "body": next_route_action_body,
+                        "status": next_route_status,
                     }
                 },
                 "runner_icon": "🏃",
@@ -1737,6 +1778,7 @@ pub(super) fn world_map_viewport_json(
             "supports_avatar_route_runners": true,
             "supports_checkpoint_reward_history": true,
             "supports_route_runner_reward_claim_actions": true,
+            "supports_route_runner_next_route_actions": true,
             "supports_agent_party_state": true,
             "supports_agent_party_handoff_actions": true,
         }

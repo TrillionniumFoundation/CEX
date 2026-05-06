@@ -1115,6 +1115,10 @@ fn world_map_viewport_includes_prefetch_density_and_live_events() {
         true
     );
     assert_eq!(
+        viewport["gameplay_layer_contract"]["supports"]["route_runner_next_route_actions"],
+        true
+    );
+    assert_eq!(
         viewport["gameplay_layer_contract"]["supports"]["agent_party_state"],
         true
     );
@@ -1282,6 +1286,30 @@ fn world_map_viewport_includes_prefetch_density_and_live_events() {
             .unwrap_or_default()
             .contains("rating/reward settlement")
     );
+    assert!(
+        viewport["avatar_route_runners"][0]["next_route_action_body"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("evidence")
+    );
+    assert!(
+        viewport["avatar_route_runners"][0]["next_route_action_body"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("self-review")
+    );
+    assert!(
+        viewport["avatar_route_runners"][0]["next_route_action_summary"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("post-reward loop")
+    );
+    assert!(
+        viewport["avatar_route_runners"][0]["next_route_sequence_summary"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Trillionnium World Map route")
+    );
     assert_eq!(
         viewport["avatar_route_runners"][0]["checkpoint_history_layer_id"],
         "trillionnium_avatar_route_reward_history_layer"
@@ -1331,6 +1359,21 @@ fn world_map_viewport_includes_prefetch_density_and_live_events() {
             .contains("risk controls")
     );
     assert_eq!(
+        viewport["avatar_route_runners"][0]["reward_checkpoint"]["next_route_action"]["panel_id"],
+        "world-action-console"
+    );
+    assert_eq!(
+        viewport["avatar_route_runners"][0]["reward_checkpoint"]["next_route_action"]
+            ["textarea_id"],
+        "world-action-body"
+    );
+    assert!(
+        viewport["avatar_route_runners"][0]["reward_checkpoint"]["next_route_action"]["body"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("risk controls")
+    );
+    assert_eq!(
         viewport["avatar_route_runners"][0]["animation_hint"],
         "animate_avatar_marker_between_route_endpoints"
     );
@@ -1356,6 +1399,10 @@ fn world_map_viewport_includes_prefetch_density_and_live_events() {
     );
     assert_eq!(
         viewport["viewport_contract"]["supports_route_runner_reward_claim_actions"],
+        true
+    );
+    assert_eq!(
+        viewport["viewport_contract"]["supports_route_runner_next_route_actions"],
         true
     );
     assert_eq!(
@@ -2040,6 +2087,8 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(app_html.contains("eta_label"));
     assert!(app_html.contains("reward_checkpoint"));
     assert!(app_html.contains("reward_claim_action_body"));
+    assert!(app_html.contains("next_route_action_body"));
+    assert!(app_html.contains("next_route_sequence_summary"));
     assert!(app_html.contains("completion_command"));
     assert!(app_html.contains("completion_action_body"));
     assert!(app_html.contains("checkpoint_history"));
@@ -2050,6 +2099,11 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(app_html.contains("routeRunnerRewardClaimButtonHtml"));
     assert!(app_html.contains("trillionnium-reward-claim-action"));
     assert!(app_html.contains("Prepare reward claim"));
+    assert!(app_html.contains("buildRouteRunnerNextRouteAction"));
+    assert!(app_html.contains("routeRunnerNextRouteButtonHtml"));
+    assert!(app_html.contains("trillionnium-next-route-action"));
+    assert!(app_html.contains("Open next route"));
+    assert!(app_html.contains("Preview next route"));
     assert!(app_html.contains("Checkpoint history"));
     assert!(app_html.contains("Reward history"));
     assert!(app_html.contains("agent_party"));
@@ -2229,6 +2283,8 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(world_html.contains("eta_label"));
     assert!(world_html.contains("reward_checkpoint"));
     assert!(world_html.contains("reward_claim_action_body"));
+    assert!(world_html.contains("next_route_action_body"));
+    assert!(world_html.contains("next_route_sequence_summary"));
     assert!(world_html.contains("completion_command"));
     assert!(world_html.contains("completion_action_body"));
     assert!(world_html.contains("checkpoint_history"));
@@ -2239,6 +2295,11 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(world_html.contains("routeRunnerRewardClaimButtonHtml"));
     assert!(world_html.contains("trillionnium-reward-claim-action"));
     assert!(world_html.contains("Prepare reward claim"));
+    assert!(world_html.contains("buildRouteRunnerNextRouteAction"));
+    assert!(world_html.contains("routeRunnerNextRouteButtonHtml"));
+    assert!(world_html.contains("trillionnium-next-route-action"));
+    assert!(world_html.contains("Open next route"));
+    assert!(world_html.contains("Preview next route"));
     assert!(world_html.contains("Checkpoint history"));
     assert!(world_html.contains("Reward history"));
     assert!(world_html.contains("agent_party"));
