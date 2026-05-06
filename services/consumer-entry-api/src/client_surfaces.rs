@@ -1390,8 +1390,34 @@ impl<'a> ClientAppProjectionContext<'a> {
             "rail_id": "first_playable_main_quest_rail",
             "rail_label": "Starter Quest / 新手主线：from map focus to bounty reward / 从地图到悬赏完成",
             "completion_target": "first_playable_loop_100",
+            "quick_path_label": "Quick Path",
+            "quick_path_label_zh": "快速路径",
             "quick_path_summary": "Choose map focus → run one bounty → submit/review reward",
+            "quick_path_summary_zh": "选择地图焦点 → 跑一个悬赏 → 提交/查看奖励",
+            "quick_path_steps": [
+                {
+                    "label": "1 · Choose map focus",
+                    "label_zh": "1 · 选择地图焦点",
+                    "description": "Tap a city place, region, or live event.",
+                    "description_zh": "点选城市地点、区域或实时事件。"
+                },
+                {
+                    "label": "2 · Run one bounty",
+                    "label_zh": "2 · 跑一个悬赏",
+                    "description": "Start the first world action and capture it as a rated commission.",
+                    "description_zh": "发起第一次世界行动，并登记为待评级委托。"
+                },
+                {
+                    "label": "3 · Submit / review reward",
+                    "label_zh": "3 · 提交 / 查看奖励",
+                    "description": "Deliver evidence, check rating, reward, and next route.",
+                    "description_zh": "提交证据，查看评级、奖励和下一步路线。"
+                }
+            ],
+            "command_disclosure_label": "Full Commands",
+            "command_disclosure_label_zh": "完整命令",
             "command_disclosure": "Use these when you are ready to submit real work with deliverable, evidence, risk controls, next action, and self-review anchors.",
+            "command_disclosure_zh": "准备真实提交时再展开：每条命令都要带交付物、证据、风险控制、下一步和自检锚点。",
             "launch_market": "global_first_overseas_beta",
             "primary_goal": "Move one map focus through exploration, contract, commission, result submission, rating, and reward / 把一个地图焦点推进成探索、契约、委托、成果提交、评级和奖励领取。",
             "current_state": {

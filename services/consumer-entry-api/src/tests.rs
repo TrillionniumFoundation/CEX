@@ -1592,14 +1592,39 @@ fn client_app_map_hub_projects_stream_counts() {
         assert!(mobile_shell_checks.iter().any(|value| value == check));
     }
     assert_eq!(app["feed"]["web_session_path"], "/app/web/feed");
+    assert_eq!(app["onboarding"]["quick_path_label"], "Quick Path");
+    assert_eq!(app["onboarding"]["quick_path_label_zh"], "快速路径");
     assert_eq!(
         app["onboarding"]["quick_path_summary"],
         "Choose map focus → run one bounty → submit/review reward"
     );
+    assert_eq!(
+        app["onboarding"]["quick_path_summary_zh"],
+        "选择地图焦点 → 跑一个悬赏 → 提交/查看奖励"
+    );
+    let quick_path_steps = app["onboarding"]["quick_path_steps"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(quick_path_steps.len(), 3);
+    assert_eq!(quick_path_steps[1]["label"], "2 · Run one bounty");
+    assert!(quick_path_steps[1]["description"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("rated commission"));
+    assert_eq!(
+        app["onboarding"]["command_disclosure_label"],
+        "Full Commands"
+    );
+    assert_eq!(app["onboarding"]["command_disclosure_label_zh"], "完整命令");
     assert!(app["onboarding"]["command_disclosure"]
         .as_str()
         .unwrap_or_default()
         .contains("Use these when you are ready to submit real work"));
+    assert!(app["onboarding"]["command_disclosure_zh"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("准备真实提交时再展开"));
     let beta_checks = app["onboarding"]["beta_readiness_checks"]
         .as_array()
         .cloned()
@@ -1710,6 +1735,8 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(app_html.contains("app-first-playable-quick-path"));
     assert!(app_html.contains("Quick Path"));
     assert!(app_html.contains("Choose map focus → run one bounty → submit/review reward"));
+    assert!(app_html.contains("2 · Run one bounty"));
+    assert!(app_html.contains("Start the first world action and capture it as a rated commission."));
     assert!(app_html.contains("app-first-playable-full-commands"));
     assert!(app_html.contains("Full Commands"));
     assert!(app_html.contains("Use these when you are ready to submit real work"));

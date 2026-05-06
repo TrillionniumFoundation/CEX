@@ -573,14 +573,134 @@ pub(super) async fn get_client_app_web_shell(
         .and_then(|rail| rail.get("completion_target"))
         .and_then(Value::as_str)
         .unwrap_or("first_playable_loop_100");
+    let onboarding_quick_path_label = onboarding
+        .and_then(|rail| rail.get("quick_path_label"))
+        .and_then(Value::as_str)
+        .unwrap_or("Quick Path");
+    let onboarding_quick_path_label_zh = onboarding
+        .and_then(|rail| rail.get("quick_path_label_zh"))
+        .and_then(Value::as_str)
+        .unwrap_or("快速路径");
     let onboarding_quick_path_summary = onboarding
         .and_then(|rail| rail.get("quick_path_summary"))
         .and_then(Value::as_str)
         .unwrap_or("Choose map focus → run one bounty → submit/review reward");
+    let onboarding_quick_path_summary_zh = onboarding
+        .and_then(|rail| rail.get("quick_path_summary_zh"))
+        .and_then(Value::as_str)
+        .unwrap_or("选择地图焦点 → 跑一个悬赏 → 提交/查看奖励");
+    let onboarding_command_disclosure_label = onboarding
+        .and_then(|rail| rail.get("command_disclosure_label"))
+        .and_then(Value::as_str)
+        .unwrap_or("Full Commands");
+    let onboarding_command_disclosure_label_zh = onboarding
+        .and_then(|rail| rail.get("command_disclosure_label_zh"))
+        .and_then(Value::as_str)
+        .unwrap_or("完整命令");
     let onboarding_command_disclosure = onboarding
         .and_then(|rail| rail.get("command_disclosure"))
         .and_then(Value::as_str)
         .unwrap_or("Use these when you are ready to submit real work with deliverable, evidence, risk controls, next action, and self-review anchors.");
+    let onboarding_command_disclosure_zh = onboarding
+        .and_then(|rail| rail.get("command_disclosure_zh"))
+        .and_then(Value::as_str)
+        .unwrap_or(
+            "准备真实提交时再展开：每条命令都要带交付物、证据、风险控制、下一步和自检锚点。",
+        );
+    let onboarding_quick_path_label_html = format!(
+        "<strong data-i18n-en=\"{}\" data-i18n-zh=\"{}\">{}</strong>",
+        escape_html_text(onboarding_quick_path_label),
+        escape_html_text(onboarding_quick_path_label_zh),
+        escape_html_text(onboarding_quick_path_label)
+    );
+    let onboarding_quick_path_summary_html = format!(
+        "<span data-i18n-en=\"{}\" data-i18n-zh=\"{}\">{}</span>",
+        escape_html_text(onboarding_quick_path_summary),
+        escape_html_text(onboarding_quick_path_summary_zh),
+        escape_html_text(onboarding_quick_path_summary)
+    );
+    let onboarding_quick_path_step_items = onboarding
+        .and_then(|rail| rail.get("quick_path_steps"))
+        .and_then(Value::as_array)
+        .map(|steps| {
+            steps
+                .iter()
+                .map(|step| {
+                    let label = step.get("label").and_then(Value::as_str).unwrap_or("Next step");
+                    let label_zh = step
+                        .get("label_zh")
+                        .and_then(Value::as_str)
+                        .unwrap_or(label);
+                    let description = step
+                        .get("description")
+                        .and_then(Value::as_str)
+                        .unwrap_or("Continue the first playable loop.");
+                    let description_zh = step
+                        .get("description_zh")
+                        .and_then(Value::as_str)
+                        .unwrap_or(description);
+                    format!(
+                        "<li><b data-i18n-en=\"{}\" data-i18n-zh=\"{}\">{}</b><span data-i18n-en=\"{}\" data-i18n-zh=\"{}\">{}</span></li>",
+                        escape_html_text(label),
+                        escape_html_text(label_zh),
+                        escape_html_text(label),
+                        escape_html_text(description),
+                        escape_html_text(description_zh),
+                        escape_html_text(description),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .filter(|items| !items.is_empty())
+        .unwrap_or_else(|| {
+            [
+                (
+                    "1 · Choose map focus",
+                    "1 · 选择地图焦点",
+                    "Tap a city place, region, or live event.",
+                    "点选城市地点、区域或实时事件。",
+                ),
+                (
+                    "2 · Run one bounty",
+                    "2 · 跑一个悬赏",
+                    "Start the first world action and capture it as a rated commission.",
+                    "发起第一次世界行动，并登记为待评级委托。",
+                ),
+                (
+                    "3 · Submit / review reward",
+                    "3 · 提交 / 查看奖励",
+                    "Deliver evidence, check rating, reward, and next route.",
+                    "提交证据，查看评级、奖励和下一步路线。",
+                ),
+            ]
+            .into_iter()
+            .map(|(label, label_zh, description, description_zh)| {
+                format!(
+                    "<li><b data-i18n-en=\"{}\" data-i18n-zh=\"{}\">{}</b><span data-i18n-en=\"{}\" data-i18n-zh=\"{}\">{}</span></li>",
+                    escape_html_text(label),
+                    escape_html_text(label_zh),
+                    escape_html_text(label),
+                    escape_html_text(description),
+                    escape_html_text(description_zh),
+                    escape_html_text(description),
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+        });
+    let onboarding_command_disclosure_summary_html = format!(
+        "<summary data-i18n-en=\"{}\" data-i18n-zh=\"{}\">{}</summary>",
+        escape_html_text(onboarding_command_disclosure_label),
+        escape_html_text(onboarding_command_disclosure_label_zh),
+        escape_html_text(onboarding_command_disclosure_label)
+    );
+    let onboarding_command_disclosure_copy_html = format!(
+        "<p class=\"subtitle\" data-i18n-en=\"{}\" data-i18n-zh=\"{}\">{}</p>",
+        escape_html_text(onboarding_command_disclosure),
+        escape_html_text(onboarding_command_disclosure_zh),
+        escape_html_text(onboarding_command_disclosure)
+    );
     let onboarding_step_cards = onboarding
         .and_then(|rail| rail.get("steps"))
         .and_then(Value::as_array)
@@ -1019,18 +1139,16 @@ pub(super) async fn get_client_app_web_shell(
         </div>
       </div>
       <div id="app-first-playable-quick-path" class="quest-quick-path" aria-label="Quick path" data-i18n-aria-label-en="Quick path" data-i18n-aria-label-zh="快速路径">
-        <strong data-i18n-en="Quick Path" data-i18n-zh="快速路径">Quick Path</strong>
-        <span data-i18n-en="{}" data-i18n-zh="选择地图焦点 → 跑一个悬赏 → 提交/查看奖励">{}</span>
+        {}
+        {}
       </div>
       <ol class="app-player-loop-steps" aria-label="Starter quest steps" data-i18n-aria-label-en="Starter quest steps" data-i18n-aria-label-zh="新手任务三步">
-        <li><b data-i18n-en="1 · Choose map focus" data-i18n-zh="1 · 选择地图焦点">1 · Choose map focus</b><span data-i18n-en="Tap a city place, region, or live event." data-i18n-zh="点选城市地点、区域或实时事件。">Tap a city place, region, or live event.</span></li>
-        <li><b data-i18n-en="2 · Accept bounty" data-i18n-zh="2 · 接取悬赏">2 · Accept bounty</b><span data-i18n-en="Turn the focus into a playable quest card." data-i18n-zh="把焦点变成可玩的任务牌。">Turn the focus into a playable quest card.</span></li>
-        <li><b data-i18n-en="3 · Submit & claim" data-i18n-zh="3 · 提交并领奖">3 · Submit & claim</b><span data-i18n-en="Submit results, pass rating, and claim reward." data-i18n-zh="提交成果，通过评级并领取奖励。">Submit results, pass rating, and claim reward.</span></li>
+        {}
       </ol>
       <section id="app-playability-coach" class="playability-coach-lanes" data-contract-version="{}" aria-label="P0 P1 P2 playability coach" data-i18n-aria-label-en="P0 P1 P2 playability coach" data-i18n-aria-label-zh="P0 P1 P2 可玩性教练">{}</section>
       <details id="app-economy-retention-ops" class="dev-details economy-retention-drawer"><summary><span data-i18n-en="Economy · return · telemetry" data-i18n-zh="经济 · 回访 · 遥测">Economy · return · telemetry</span> · {}%</summary><p class="subtitle">{}</p><div class="economy-retention-grid">{}</div><div class="map-stream-hud">{}</div></details>
       <details class="dev-details app-progress-drawer"><summary data-i18n-en="Progress checks" data-i18n-zh="进度检查">Progress checks</summary><div id="app-first-playable-checks" class="map-stream-hud">{}</div></details>
-      <details id="app-first-playable-full-commands" class="dev-details app-full-command-drawer"><summary data-i18n-en="Full Commands" data-i18n-zh="完整命令">Full Commands</summary><p class="subtitle" data-i18n-en="{}" data-i18n-zh="准备真实提交时再展开：每条命令都要带交付物、证据、风险控制、下一步和自检锚点。">{}</p><section id="app-first-playable-steps" class="grid">{}</section></details>
+      <details id="app-first-playable-full-commands" class="dev-details app-full-command-drawer">{}{}<section id="app-first-playable-steps" class="grid">{}</section></details>
     </section>
     <section id="app-tab-messages" class="app-tab-panel" data-app-panel="messages" role="tabpanel" aria-labelledby="app-tab-button-messages" aria-hidden="true" hidden>
       <div class="app-tab-header">
@@ -1798,8 +1916,9 @@ pub(super) async fn get_client_app_web_shell(
         escape_client_app_visible_text(onboarding_label),
         escape_client_app_visible_text(onboarding_goal),
         escape_client_app_visible_text(&client_app_readiness_label(onboarding_completion_target)),
-        escape_client_app_visible_text(onboarding_quick_path_summary),
-        escape_client_app_visible_text(onboarding_quick_path_summary),
+        onboarding_quick_path_label_html,
+        onboarding_quick_path_summary_html,
+        onboarding_quick_path_step_items,
         escape_html_text(playability_coach_version),
         playability_coach_lane_cards,
         funnel_percent,
@@ -1807,8 +1926,8 @@ pub(super) async fn get_client_app_web_shell(
         economy_tradeoff_cards,
         economy_ops_chips,
         onboarding_acceptance_chips,
-        escape_client_app_visible_text(onboarding_command_disclosure),
-        escape_client_app_visible_text(onboarding_command_disclosure),
+        onboarding_command_disclosure_summary_html,
+        onboarding_command_disclosure_copy_html,
         onboarding_step_cards,
         message_cards,
         escape_html_text(&client_app_map_label(map_density_summary)),
