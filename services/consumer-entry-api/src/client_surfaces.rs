@@ -105,6 +105,7 @@ impl ClientRouteWorldContext {
 
 pub(super) fn client_feed_group_for_kind(feed_kind: &str) -> &str {
     match feed_kind {
+        "route_runner_handoff" => "route_task",
         "commerce_purchase" | "work_order" | "delivery" => "commerce",
         "social_agent" => "social",
         _ => feed_kind,
@@ -158,6 +159,11 @@ pub(super) struct ClientFeedSurfaceView {
     purchase_count: u64,
     work_order_count: u64,
     nearby_agent_count: usize,
+    route_runner_count: u64,
+    route_runner_reward_claim_count: u64,
+    route_runner_next_route_count: u64,
+    route_runner_next_route_status: String,
+    route_runner_handoff_summary: String,
     items: Vec<Value>,
 }
 
@@ -213,6 +219,29 @@ impl ClientFeedSurfaceView {
             .and_then(Value::as_array)
             .map(|agents| agents.len())
             .unwrap_or(0);
+        let route_runner_handoff = feed.and_then(|feed| feed.get("route_runner_handoff"));
+        let route_runner_count = route_runner_handoff
+            .and_then(|handoff| handoff.get("runner_count"))
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let route_runner_reward_claim_count = route_runner_handoff
+            .and_then(|handoff| handoff.get("reward_claim_action_count"))
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let route_runner_next_route_count = route_runner_handoff
+            .and_then(|handoff| handoff.get("next_route_action_count"))
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let route_runner_next_route_status = route_runner_handoff
+            .and_then(|handoff| handoff.get("first_next_route_status"))
+            .and_then(Value::as_str)
+            .unwrap_or("next_route_preview_locked_until_reward_claim")
+            .to_string();
+        let route_runner_handoff_summary = route_runner_handoff
+            .and_then(|handoff| handoff.get("summary"))
+            .and_then(Value::as_str)
+            .unwrap_or("Route runner handoff: waiting for avatar task routes to unlock reward and next-route actions.")
+            .to_string();
         let items = feed
             .and_then(|feed| feed.get("items"))
             .and_then(Value::as_array)
@@ -229,6 +258,11 @@ impl ClientFeedSurfaceView {
             purchase_count,
             work_order_count,
             nearby_agent_count,
+            route_runner_count,
+            route_runner_reward_claim_count,
+            route_runner_next_route_count,
+            route_runner_next_route_status,
+            route_runner_handoff_summary,
             items,
         }
     }
@@ -283,6 +317,17 @@ impl ClientFeedSurfaceView {
                 "<span class=\"hud-chip\"><strong>{}</strong> 位附近角色 · {}</span>",
                 self.nearby_agent_count,
                 escape_html_text(&self.active_region_id),
+            ),
+            format!(
+                "<span id=\"app-feed-route-runner-handoff\" class=\"hud-chip\" data-next-route-status=\"{}\" data-runner-count=\"{}\" data-reward-claim-count=\"{}\" data-next-route-count=\"{}\"><strong>{}</strong> runner · <strong>{}</strong> reward · <strong>{}</strong> next route · {}</span>",
+                escape_html_text(&self.route_runner_next_route_status),
+                self.route_runner_count,
+                self.route_runner_reward_claim_count,
+                self.route_runner_next_route_count,
+                self.route_runner_count,
+                self.route_runner_reward_claim_count,
+                self.route_runner_next_route_count,
+                escape_html_text(&self.route_runner_handoff_summary),
             ),
         ]
         .join(" ")
@@ -1186,6 +1231,18 @@ impl<'a> ClientFeedProjectionContext<'a> {
         } = self.route_context;
         let indexes = build_world_indexes(self.world);
         let snapshots = build_client_feed_snapshots(self.world, &indexes, &viewport);
+        let avatar_task_route_count = viewport
+            .get("avatar_task_routes")
+            .and_then(Value::as_array)
+            .map(Vec::len)
+            .unwrap_or(0);
+        let avatar_route_runners: &[Value] = viewport
+            .get("avatar_route_runners")
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        let route_runner_handoff =
+            world_map_route_runner_handoff_json(avatar_task_route_count, avatar_route_runners);
         let mut items =
             build_client_feed_items(self.world, &indexes, &route_task_views, &snapshots);
         decorate_client_feed_items(&mut items);
@@ -1206,11 +1263,12 @@ impl<'a> ClientFeedProjectionContext<'a> {
             "web_session_path": "/app/web/feed",
             "active_region_id": active_region_id,
             "item_count": items.len(),
-            "source_count": 6,
+            "source_count": 7,
             "sources": [
                 "live_event_stream",
                 "route_preview",
                 "route_task_graph",
+                "route_runner_handoff",
                 "contract_snapshot",
                 "adventure_snapshot",
                 "social_snapshot"
@@ -1220,6 +1278,7 @@ impl<'a> ClientFeedProjectionContext<'a> {
             "route_preview": route_preview,
             "route_task_graph": route_task_graph,
             "route_story": route_story.to_value(),
+            "route_runner_handoff": route_runner_handoff,
             "route_contract": world_route_ui_contract_json(),
             "snapshots": {
                 "contracts": {

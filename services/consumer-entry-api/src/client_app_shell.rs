@@ -1750,6 +1750,7 @@ pub(super) async fn get_client_app_web_shell(
         const explicitGroup = String(feedItem.feed_group || '').trim();
         if (explicitGroup) return explicitGroup;
         const kind = String(feedItem.feed_kind || '').trim();
+        if (kind === 'route_runner_handoff') return 'route_task';
         if (['commerce_purchase', 'work_order', 'delivery'].includes(kind)) return 'commerce';
         if (kind === 'social_agent') return 'social';
         return kind || 'all';
@@ -1857,12 +1858,19 @@ pub(super) async fn get_client_app_web_shell(
         const purchaseCount = ((((payload.snapshots || {{}}).commerce || {{}}).purchase_count) ?? 0);
         const workOrderCount = ((((payload.snapshots || {{}}).commerce || {{}}).work_order_count) ?? 0);
         const nearbyAgents = (((((payload.snapshots || {{}}).social || {{}}).nearby_agents) || [])).length;
+        const runnerHandoff = (payload.route_runner_handoff || {{}});
+        const runnerCount = runnerHandoff.runner_count ?? 0;
+        const rewardClaimCount = runnerHandoff.reward_claim_action_count ?? 0;
+        const nextRouteCount = runnerHandoff.next_route_action_count ?? 0;
+        const nextRouteStatus = String(runnerHandoff.first_next_route_status || 'next_route_preview_locked_until_reward_claim');
+        const handoffSummary = String(runnerHandoff.summary || 'Route runner handoff: waiting for avatar task routes to unlock reward and next-route actions.');
         const chips = [
           `<span class="hud-chip"><strong>${{escapeHtml((visibleItems || []).length)}}</strong> 条可见动态</span>`,
           `<span class="hud-chip"><strong>${{escapeHtml(payload.item_count ?? 0)}}</strong> 条总动态</span>`,
           `<span class="hud-chip"><strong>${{escapeHtml(contracts)}}</strong> 个委托 · <strong>${{escapeHtml(completions)}}</strong> 份战报</span>`,
           `<span class="hud-chip"><strong>${{escapeHtml(purchaseCount)}}</strong> 次接取 · <strong>${{escapeHtml(workOrderCount)}}</strong> 个冒险委托</span>`,
-          `<span class="hud-chip"><strong>${{escapeHtml(nearbyAgents)}}</strong> 位附近角色 · ${{escapeHtml(payload.active_region_id || 'global')}}</span>`
+          `<span class="hud-chip"><strong>${{escapeHtml(nearbyAgents)}}</strong> 位附近角色 · ${{escapeHtml(payload.active_region_id || 'global')}}</span>`,
+          `<span id="app-feed-route-runner-handoff" class="hud-chip" data-next-route-status="${{escapeHtml(nextRouteStatus)}}" data-runner-count="${{escapeHtml(runnerCount)}}" data-reward-claim-count="${{escapeHtml(rewardClaimCount)}}" data-next-route-count="${{escapeHtml(nextRouteCount)}}"><strong>${{escapeHtml(runnerCount)}}</strong> runner · <strong>${{escapeHtml(rewardClaimCount)}}</strong> reward · <strong>${{escapeHtml(nextRouteCount)}}</strong> next route · ${{escapeHtml(handoffSummary)}}</span>`
         ];
         if (selection) {{
           chips.push(`<span class="hud-chip"><strong>focus</strong> ${{escapeHtml(selection.taskId ? ('task ' + selection.taskId) : (selection.title || selection.locationId || selection.kind || 'selection'))}}</span>`);

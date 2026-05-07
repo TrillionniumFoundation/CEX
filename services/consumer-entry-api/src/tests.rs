@@ -1880,6 +1880,14 @@ fn route_contract_is_shared_across_world_map_app_and_feed_surfaces() {
     assert_eq!(app["map_hub"]["route_contract"], expected);
     assert_eq!(feed["route_contract"], expected);
     assert_eq!(
+        feed["route_runner_handoff"]["contract_version"],
+        "trillionnium_route_runner_handoff_v1"
+    );
+    assert_eq!(
+        app["feed"]["route_runner_handoff"]["supports_route_runner_next_route_actions"],
+        true
+    );
+    assert_eq!(
         expected["fields"]["action_textarea"],
         WORLD_ROUTE_ACTION_TEXTAREA_ID
     );
@@ -1982,6 +1990,14 @@ fn client_app_map_hub_projects_stream_counts() {
     assert_eq!(
         app["feed"]["route_task_graph"]["task_count"],
         app["map_hub"]["route_task_graph"]["task_count"]
+    );
+    assert_eq!(
+        app["feed"]["route_runner_handoff"]["contract_version"],
+        "trillionnium_route_runner_handoff_v1"
+    );
+    assert_eq!(
+        app["feed"]["route_runner_handoff"]["next_route_action_count"],
+        app["map_hub"]["route_runner_handoff"]["next_route_action_count"]
     );
     assert_eq!(
         app["mobile_shell_contract"]["contract_version"],
@@ -2125,6 +2141,7 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(app_html.contains("app-avatar-task-routes-live"));
     assert!(app_html.contains("app-avatar-route-runners-live"));
     assert!(app_html.contains("app-route-runner-handoff-summary"));
+    assert!(app_html.contains("app-feed-route-runner-handoff"));
     assert!(app_html.contains("trillionnium_route_runner_handoff_v1"));
     assert!(app_html.contains("Route runner handoff:"));
     assert!(app_html.contains("data-next-route-status="));
@@ -2678,6 +2695,25 @@ fn client_feed_json_aggregates_mobile_shell_sources() {
         feed.pointer("/route_contract/fields/action_textarea")
             .and_then(Value::as_str),
         Some(WORLD_ROUTE_ACTION_TEXTAREA_ID)
+    );
+    assert_eq!(feed.get("source_count").and_then(Value::as_u64), Some(7));
+    assert!(feed
+        .get("sources")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .any(|source| source == "route_runner_handoff"));
+    assert_eq!(
+        feed.pointer("/route_runner_handoff/contract_version")
+            .and_then(Value::as_str),
+        Some("trillionnium_route_runner_handoff_v1")
+    );
+    assert!(
+        feed.pointer("/route_runner_handoff/next_route_action_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            >= 1
     );
     assert!(feed.get("item_count").and_then(Value::as_u64).unwrap_or(0) >= 3);
     let feed_items = feed

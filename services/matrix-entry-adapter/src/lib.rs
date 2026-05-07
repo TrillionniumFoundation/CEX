@@ -6703,15 +6703,18 @@ fn build_trillionnium_client_feed_matrix_reply(value: &Value, filter: Option<&st
         RouteStoryCardContext::from_value(value, fallback_node).specialize_opportunity("app");
     let route_text_block = route.text_block("Route Cockpit", true);
     let route_html_block = route.html_block("Route Cockpit", true);
+    let route_runner = RouteRunnerHandoffCardContext::from_map_hub(Some(value));
+    let route_runner_text_block = route_runner.text_block();
+    let route_runner_html_block = route_runner.html_block();
     let body = format!(
-        "📰 Trillionnium Feed\nView: {filter_label} · Visible {visible_item_count}/{item_count}\nSources: {source_count} · Region: {active_region_id}\n分组：事件 {live_event_count} · 任务 {route_task_count} · 委托 {contract_count} · 完成 {completion_count} · 成交 {commerce_count} · 社交 {social_count}\nTop Signal: {top_title}\nSignal: {top_feed_group} / {top_source} · {top_detail}\nSummary: {top_summary}\nAction: {top_action_label} @ {top_action_panel_id}\n{route_text_block}\n入口：/feed tasks /feed commerce /feed social /app"
+        "📰 Trillionnium Feed\nView: {filter_label} · Visible {visible_item_count}/{item_count}\nSources: {source_count} · Region: {active_region_id}\n分组：事件 {live_event_count} · 任务 {route_task_count} · 委托 {contract_count} · 完成 {completion_count} · 成交 {commerce_count} · 社交 {social_count}\nTop Signal: {top_title}\nSignal: {top_feed_group} / {top_source} · {top_detail}\nSummary: {top_summary}\nAction: {top_action_label} @ {top_action_panel_id}\n{route_text_block}\n{route_runner_text_block}\n入口：/feed tasks /feed commerce /feed social /app"
     );
     json!({
         "msgtype": "m.text",
         "body": body,
         "format": "org.matrix.custom.html",
         "formatted_body": format!(
-            "<blockquote><h3>📰 Trillionnium Feed</h3><p><strong>View</strong>: {} · <strong>Visible</strong>: {}/{} · <strong>Sources</strong>: {} · <strong>Region</strong>: <code>{}</code></p><p><strong>分组</strong>: 事件 {} · 任务 {} · 委托 {} · 完成 {} · 成交 {} · 社交 {}</p><p><strong>Top Signal</strong>: {}</p><p><strong>Signal</strong>: <code>{}</code> / <code>{}</code> · {}</p><p><strong>Summary</strong>: {}</p><p><strong>Action</strong>: {} @ <code>{}</code></p>{}<p><code>/feed tasks</code> <code>/feed commerce</code> <code>/feed social</code> <code>/app</code></p></blockquote>",
+            "<blockquote><h3>📰 Trillionnium Feed</h3><p><strong>View</strong>: {} · <strong>Visible</strong>: {}/{} · <strong>Sources</strong>: {} · <strong>Region</strong>: <code>{}</code></p><p><strong>分组</strong>: 事件 {} · 任务 {} · 委托 {} · 完成 {} · 成交 {} · 社交 {}</p><p><strong>Top Signal</strong>: {}</p><p><strong>Signal</strong>: <code>{}</code> / <code>{}</code> · {}</p><p><strong>Summary</strong>: {}</p><p><strong>Action</strong>: {} @ <code>{}</code></p>{}{}<p><code>/feed tasks</code> <code>/feed commerce</code> <code>/feed social</code> <code>/app</code></p></blockquote>",
             escape_html(filter_label),
             visible_item_count,
             item_count,
@@ -6731,8 +6734,9 @@ fn build_trillionnium_client_feed_matrix_reply(value: &Value, filter: Option<&st
             escape_html(top_action_label),
             escape_html(top_action_panel_id),
             route_html_block,
+            route_runner_html_block,
         ),
-        "cex_card": route_story_card_json(json!({
+        "cex_card": route_runner.card_json(route_story_card_json(json!({
             "type": "trillionnium_client_feed",
             "version": 1,
             "client": "trillionnium_mobile_shell",
@@ -6765,7 +6769,7 @@ fn build_trillionnium_client_feed_matrix_reply(value: &Value, filter: Option<&st
             "top_action_contract_id": top_action_contract_id,
             "top_action_listing_id": top_action_listing_id,
             "top_action_work_order_id": top_action_work_order_id
-        }), &route, true)
+        }), &route, true))
     })
 }
 
@@ -9483,8 +9487,35 @@ mod tests {
     fn client_feed_reply_exposes_top_signal_and_route_story() {
         let feed_value = json!({
             "item_count": 4,
-            "source_count": 6,
+            "source_count": 7,
             "active_region_id": "cn-shanghai-core",
+            "route_runner_handoff": {
+                "contract_version": "trillionnium_route_runner_handoff_v1",
+                "runner_count": 2,
+                "avatar_task_route_count": 2,
+                "reward_claim_action_count": 2,
+                "next_route_action_count": 2,
+                "reward_claim_ready_count": 1,
+                "next_route_ready_count": 1,
+                "supports_checkpoint_reward_history": true,
+                "supports_route_runner_reward_claim_actions": true,
+                "supports_route_runner_next_route_actions": true,
+                "first_runner_id": "runner-feed-001",
+                "first_task_id": "task-feed-001",
+                "first_to_node_id": "client-board",
+                "first_latest_location_id": "zbj-market-gate",
+                "first_progress_label": "100% route progress / 100% 路线进度",
+                "first_telemetry_summary": "100% complete · 0m remaining · ETA 0 min",
+                "first_reward_claim_label": "Claim route reward / 领取路线奖励",
+                "first_reward_claim_status": "claimable_after_evidence",
+                "first_reward_claim_action_body": "Claim with deliverable, evidence package, risk controls, next action, and self-review.",
+                "first_next_route_label": "Open next route / 打开下一路线",
+                "first_next_route_status": "next_route_ready_after_reward_claim",
+                "first_next_route_action_body": "Open next route with deliverable, evidence package, risk controls, next action, and self-review anchors.",
+                "first_next_route_sequence_summary": "Reward claim → next route handoff",
+                "summary": "Route runner handoff: 2 runners · 2 reward claims · 2 next-route actions · next Claim route reward / Open next route",
+                "handoff_prompt": "Claim rating/reward, then open the next route with deliverable → evidence → risk controls → next action → self-review anchors."
+            },
             "items": [
                 {
                     "feed_kind": "route_task",
@@ -9573,7 +9604,28 @@ mod tests {
             card.get("visible_item_count").and_then(Value::as_u64),
             Some(4)
         );
-        assert_eq!(card.get("source_count").and_then(Value::as_u64), Some(6));
+        assert_eq!(card.get("source_count").and_then(Value::as_u64), Some(7));
+        assert_eq!(
+            card.get("route_runner_next_route_status")
+                .and_then(Value::as_str),
+            Some("next_route_ready_after_reward_claim")
+        );
+        assert_eq!(
+            card.get("route_runner_next_route_action_count")
+                .and_then(Value::as_u64),
+            Some(2)
+        );
+        assert!(card
+            .get("route_runner_handoff")
+            .and_then(|handoff| handoff.get("summary"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("next-route actions"));
+        assert!(reply
+            .get("body")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("Runner Handoff"));
         assert_eq!(
             card.get("route_task_feed_count").and_then(Value::as_u64),
             Some(1)
