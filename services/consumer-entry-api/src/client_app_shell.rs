@@ -1040,6 +1040,10 @@ pub(super) async fn get_client_app_web_shell(
     .app-map-product-strip {{ display:grid; gap:10px; grid-template-columns:minmax(0,1fr) auto; align-items:center; border:1px solid rgba(100,227,255,.18); background:rgba(100,227,255,.055); border-radius:18px; padding:12px; margin:12px 0; }}
     .app-map-product-strip strong {{ display:block; color:var(--gold); margin-bottom:4px; }}
     .app-map-product-strip .quest-cta {{ min-width:154px; }}
+    .app-mobile-action-sheet {{ position:relative; isolation:isolate; }}
+    .app-mobile-action-sheet::before {{ content:""; display:none; position:absolute; top:6px; left:50%; width:42px; height:4px; transform:translateX(-50%); border-radius:999px; background:rgba(246,247,251,.32); }}
+    .app-mobile-primary-cta {{ white-space:nowrap; }}
+    .app-mobile-primary-cta::after {{ content:" →"; }}
     .map-technical-drawer,.app-progress-drawer {{ border:1px solid rgba(255,255,255,.1); background:rgba(255,255,255,.035); border-radius:18px; padding:10px; }}
     #app-tile-shards-live,
     #app-region-shards-live,
@@ -1120,7 +1124,8 @@ pub(super) async fn get_client_app_web_shell(
       .hud-chip,.focus-chip,.overlay-toggle {{ padding:7px 9px; font-size:12px; min-height:44px; }}
       .app-bottom-tab,.quest-cta,.app-search-clear,.language-switcher,.language-switcher select {{ min-height:44px; }}
       .quest-summary {{ grid-template-columns:1fr; }}
-      .app-map-product-strip {{ position:fixed; left:12px; right:12px; bottom:calc(76px + env(safe-area-inset-bottom, 0px)); z-index:28; grid-template-columns:minmax(0,1fr) auto; margin:0; padding:10px; border-radius:17px; background:rgba(9,13,27,.92); box-shadow:0 18px 50px rgba(0,0,0,.36); backdrop-filter:blur(16px); }}
+      .app-map-product-strip {{ position:fixed; left:12px; right:12px; bottom:calc(76px + env(safe-area-inset-bottom, 0px)); z-index:28; grid-template-columns:minmax(0,1fr) auto; margin:0; padding:16px 10px 10px; border-radius:22px 22px 17px 17px; background:rgba(9,13,27,.92); box-shadow:0 -10px 45px rgba(0,0,0,.42); backdrop-filter:blur(16px); }}
+      .app-mobile-action-sheet::before {{ display:block; }}
       .app-map-product-strip .subtitle {{ margin:0; font-size:12px; line-height:1.28; }}
       #app-map-camera-summary {{ display:none; }}
       .app-map-product-strip .quest-cta {{ min-width:118px; min-height:42px; padding:0 12px; }}
@@ -1217,14 +1222,14 @@ pub(super) async fn get_client_app_web_shell(
         <span class="badge" data-i18n-en="{}" data-i18n-zh="Trillionnium 世界地图">{}</span>
         <h2 data-i18n-en="OpenStreetMap upgraded into a playable world" data-i18n-zh="把 OpenStreetMap 升级成可玩的世界地图">OpenStreetMap upgraded into a playable world</h2>
         <p data-i18n-en="{}" data-i18n-zh="Trillionnium World Map 不是普通地图工具，而是在 OpenStreetMap 真实地理底座上叠加游戏人物、路线节点、任务牌、实时事件和交付闭环。角色会在地图上跑来跑去，接任务、提交证据、拿评级和奖励。">{}</p>
-        <div class="app-map-product-strip">
+        <div id="app-mobile-action-sheet" class="app-map-product-strip app-mobile-action-sheet" aria-label="Mobile route action sheet" data-i18n-aria-label-en="Mobile route action sheet" data-i18n-aria-label-zh="移动路线行动面板" data-contract-version="trillionnium_mobile_single_primary_cta_v1" data-bottom-sheet-mode="fixed_above_bottom_tabs_on_mobile" data-primary-cta-count="1" data-primary-cta-target="app-map-action-rail">
           <div>
             <strong data-i18n-en="Current Status" data-i18n-zh="当前状态">Current Status</strong>
             <p id="app-map-density-summary" class="subtitle">{}</p>
             <p id="app-route-runner-handoff-summary" class="subtitle" data-next-route-status="{}" data-runner-count="{}" data-reward-claim-count="{}" data-next-route-count="{}">{}</p>
             <p id="app-map-camera-summary" class="subtitle" data-i18n-en="Camera loading…" data-i18n-zh="镜头加载中…">Camera loading…</p>
           </div>
-          <a class="quest-cta" href='#app-map-action-rail' data-i18n-en="Choose Focus" data-i18n-zh="选择焦点">Choose Focus</a>
+          <a id="app-mobile-primary-cta" class="quest-cta app-mobile-primary-cta" href='#app-map-action-rail' data-primary-cta="world-route-focus" data-primary-cta-target="app-map-action-rail" data-i18n-en="Continue Route" data-i18n-zh="继续路线">Continue Route</a>
         </div>
         <p><strong data-i18n-en="Game Map Main Entry" data-i18n-zh="游戏地图主入口">Game Map Main Entry</strong>: <span data-i18n-en="move your avatar between nearby places, live events, and bounty nodes before entering other modules." data-i18n-zh="先让角色在附近地点、实时事件和悬赏节点之间跑图，再进入其他模块。">move your avatar between nearby places, live events, and bounty nodes before entering other modules.</span></p>
         <div id="app-map-camera-actions" class="overlay-toggle-bar">

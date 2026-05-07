@@ -378,9 +378,18 @@ async function main() {
   routeRunnerHandoffCoverage.app_feed_contract = assertRouteRunnerHandoffContract(appJson?.feed?.route_runner_handoff, '/app feed JSON');
   routeRunnerHandoffCoverage.app_map_hub_contract = assertRouteRunnerHandoffContract(appJson?.map_hub?.route_runner_handoff, '/app map_hub JSON');
   routeRunnerHandoffCoverage.app_route_summary_dom = await assertRouteRunnerHandoffDom(page, '#app-route-runner-handoff-summary', '/app route summary');
+  assert(await count(page, '#app-mobile-action-sheet[data-contract-version="trillionnium_mobile_single_primary_cta_v1"]') === 1, 'mobile bottom action sheet contract missing');
+  assert(await count(page, '#app-mobile-action-sheet [data-primary-cta]') === 1, 'mobile bottom action sheet must expose exactly one primary CTA');
+  assert(await page.locator('#app-mobile-primary-cta').first().getAttribute('data-primary-cta-target') === 'app-map-action-rail', 'mobile primary CTA target mismatch');
+  const mobileCtaText = await page.locator('#app-mobile-action-sheet').first().innerText({ timeout: 10_000 });
+  for (const needle of ['Continue Route', 'runner', 'reward', 'next-route']) {
+    assert(mobileCtaText.includes(needle), `mobile bottom action sheet copy missing: ${needle}`, mobileCtaText);
+  }
   const mobileShellChecks = appJson?.mobile_shell_contract?.readiness_checks || [];
   assert(appJson?.mobile_shell_contract?.contract_version === 'trillionnium_mobile_shell_ux_v1', 'mobile shell UX contract missing from client app json', appJson?.mobile_shell_contract);
-  for (const expectedCheck of ['mobile_tablist_a11y_visible', 'keyboard_tab_navigation_visible', 'search_empty_state_visible', 'search_clear_and_escape_visible', 'aria_live_ux_status_visible', 'offline_feed_fallback_status_visible', 'web_session_feed_hydration_visible']) {
+  assert(appJson?.mobile_shell_contract?.primary_cta?.contract_version === 'trillionnium_mobile_single_primary_cta_v1', 'mobile single primary CTA JSON contract missing', appJson?.mobile_shell_contract?.primary_cta);
+  assert(appJson?.mobile_shell_contract?.primary_cta?.single_primary_cta === true, 'mobile single primary CTA JSON single flag missing', appJson?.mobile_shell_contract?.primary_cta);
+  for (const expectedCheck of ['mobile_tablist_a11y_visible', 'keyboard_tab_navigation_visible', 'search_empty_state_visible', 'search_clear_and_escape_visible', 'aria_live_ux_status_visible', 'offline_feed_fallback_status_visible', 'web_session_feed_hydration_visible', 'mobile_bottom_sheet_single_primary_cta_visible']) {
     assert(mobileShellChecks.includes(expectedCheck), `mobile shell UX readiness check missing: ${expectedCheck}`, mobileShellChecks);
   }
   assert(appJson?.feed?.web_session_path === '/app/web/feed', 'web session feed hydration path missing', appJson?.feed);

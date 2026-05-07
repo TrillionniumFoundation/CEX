@@ -1635,6 +1635,14 @@ impl<'a> ClientAppProjectionContext<'a> {
                 "aria_live": "polite",
                 "states": ["ready", "loading", "fallback", "offline"],
             },
+            "primary_cta": {
+                "contract_version": "trillionnium_mobile_single_primary_cta_v1",
+                "bottom_sheet_id": "app-mobile-action-sheet",
+                "primary_cta_id": "app-mobile-primary-cta",
+                "target_id": "app-map-action-rail",
+                "mode": "fixed_above_bottom_tabs_on_mobile",
+                "single_primary_cta": true,
+            },
             "resilience": {
                 "feed_api_hydration": "loadFeedSurface",
                 "web_session_feed_path": "/app/web/feed",
@@ -1652,6 +1660,7 @@ impl<'a> ClientAppProjectionContext<'a> {
                 "offline_feed_fallback_status_visible",
                 "web_session_feed_hydration_visible",
                 "feed_api_hydration_visible",
+                "mobile_bottom_sheet_single_primary_cta_visible",
                 "next_action_rail_visible",
                 "playability_coach_visible",
                 "p0_next_best_action_visible",

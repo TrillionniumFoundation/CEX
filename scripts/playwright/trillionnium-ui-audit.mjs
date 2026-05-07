@@ -53,6 +53,7 @@ const selectorSets = {
     header: 'header',
     tabs: '.app-bottom-tabs',
     stickyStatus: '.app-map-product-strip',
+    mobileSheet: '#app-mobile-action-sheet',
     map: '#real-world-map',
     route: '#app-map-route-panel',
     routeHandoff: '#app-route-runner-handoff-summary',
@@ -132,6 +133,25 @@ function checkRouteRunnerHandoff(result) {
 function checkMobile(result, limits) {
   assertMetric(result.scrollH <= limits.maxScrollH, `${result.profile}/${result.name} scroll height regressed`, { scrollH: result.scrollH, limit: limits.maxScrollH });
   if (result.name === 'app') {
+    const cta = result.mobilePrimaryCta || {};
+    assertMetric(cta.sheetPresent === true, `${result.profile}/app mobile bottom action sheet missing`, cta);
+    assertMetric(cta.contractVersion === 'trillionnium_mobile_single_primary_cta_v1', `${result.profile}/app mobile primary CTA contract missing`, cta);
+    assertMetric(cta.bottomSheetMode === 'fixed_above_bottom_tabs_on_mobile', `${result.profile}/app mobile bottom sheet mode missing`, cta);
+    assertMetric(Number(cta.primaryCtaCount || 0) === 1, `${result.profile}/app must expose exactly one mobile primary CTA`, cta);
+    assertMetric(cta.primaryCtaTarget === 'app-map-action-rail', `${result.profile}/app mobile primary CTA must target the next action rail`, cta);
+    assertMetric(cta.primaryCtaVisible === true, `${result.profile}/app mobile primary CTA must be visible`, cta);
+    if (result.profile === 'mobile') {
+      assertMetric(cta.sheetBottom <= result.viewport.vh + 2, `${result.profile}/app mobile bottom sheet must stay in viewport`, cta);
+      assertMetric(cta.sheetY >= Math.floor(result.viewport.vh * 0.58), `${result.profile}/app mobile bottom sheet must stay docked near bottom`, cta);
+    }
+    assertMetric((cta.text || '').includes('Continue Route'), `${result.profile}/app mobile primary CTA copy missing`, cta);
+    assertMetric((cta.text || '').includes('runner'), `${result.profile}/app mobile bottom sheet must keep runner context`, cta);
+    assertMetric((cta.text || '').includes('next-route'), `${result.profile}/app mobile bottom sheet must keep next-route context`, cta);
+    assertMetric((cta.text || '').includes('reward'), `${result.profile}/app mobile bottom sheet must keep reward context`, cta);
+    if (result.profile === 'mobile') {
+      const sheet = yOf(result, 'mobileSheet');
+      assertMetric(sheet >= Math.floor(result.viewport.vh * 0.58), `${result.profile}/app mobile bottom sheet key selector is not docked`, { sheet, viewport: result.viewport });
+    }
     const map = yOf(result, 'map');
     const route = yOf(result, 'route');
     const action = yOf(result, 'action');
@@ -291,6 +311,22 @@ async function auditPage(page, profile, target) {
     const worldRouteHandoff = document.getElementById('world-route-runner-handoff-summary');
     const handoffElements = [appRouteHandoff, appFeedHandoff, worldRouteHandoff].filter(Boolean);
     const handoffText = handoffElements.map((el) => text(el)).join(' · ');
+    const mobileSheet = document.getElementById('app-mobile-action-sheet');
+    const mobilePrimaryCtas = Array.from(document.querySelectorAll('#app-mobile-action-sheet [data-primary-cta]')).filter(visible);
+    const primaryCta = mobilePrimaryCtas[0] || null;
+    const sheetRect = mobileSheet?.getBoundingClientRect();
+    const mobilePrimaryCta = {
+      sheetPresent: Boolean(mobileSheet),
+      contractVersion: mobileSheet?.dataset.contractVersion || null,
+      bottomSheetMode: mobileSheet?.dataset.bottomSheetMode || null,
+      declaredPrimaryCtaCount: mobileSheet?.dataset.primaryCtaCount || null,
+      primaryCtaCount: mobilePrimaryCtas.length,
+      primaryCtaVisible: Boolean(primaryCta),
+      primaryCtaTarget: primaryCta?.dataset.primaryCtaTarget || mobileSheet?.dataset.primaryCtaTarget || null,
+      sheetY: sheetRect ? Math.round(sheetRect.top) : null,
+      sheetBottom: sheetRect ? Math.round(sheetRect.bottom) : null,
+      text: text(mobileSheet).slice(0, 360),
+    };
     const routeRunnerHandoff = {
       appRouteSummaryPresent: Boolean(appRouteHandoff),
       appFeedSummaryPresent: Boolean(appFeedHandoff),
@@ -317,6 +353,7 @@ async function auditPage(page, profile, target) {
       smallTouchTargets,
       key,
       routeRunnerHandoff,
+      mobilePrimaryCta,
       firstViewportButtons,
       firstViewportText: text(document.body).slice(0, 1400),
     };

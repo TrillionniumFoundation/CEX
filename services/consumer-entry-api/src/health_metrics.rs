@@ -118,37 +118,60 @@ fn all_maturity_axes_converged(maturity: &Value, axis_ids: &[&str]) -> bool {
 }
 
 fn mobile_shell_ux_contract_green(app: &Value) -> bool {
-    let readiness_checks = app
-        .get("mobile_shell_contract")
+    let mobile_shell_contract = app.get("mobile_shell_contract");
+    let primary_cta = mobile_shell_contract.and_then(|contract| contract.get("primary_cta"));
+    let readiness_checks = mobile_shell_contract
         .and_then(|contract| contract.get("readiness_checks"))
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    [
-        "four_tab_mobile_shell_visible",
-        "mobile_tablist_a11y_visible",
-        "keyboard_tab_navigation_visible",
-        "global_search_filters_active_tab",
-        "search_empty_state_visible",
-        "search_clear_and_escape_visible",
-        "aria_live_ux_status_visible",
-        "offline_feed_fallback_status_visible",
-        "web_session_feed_hydration_visible",
-        "feed_api_hydration_visible",
-        "next_action_rail_visible",
-        "playability_coach_visible",
-        "p0_next_best_action_visible",
-        "p1_strategy_choices_visible",
-        "p2_retention_telemetry_visible",
-        "failure_recovery_lane_visible",
-        "economy_tradeoff_cards_visible",
-        "retention_calendar_visible",
-        "playability_funnel_visible",
-        "anti_cheese_policy_visible",
-        "ops_refresh_hooks_visible",
-    ]
-    .iter()
-    .all(|expected| readiness_checks.iter().any(|check| check == expected))
+    let primary_cta_green = primary_cta
+        .and_then(|cta| cta.get("contract_version"))
+        .and_then(Value::as_str)
+        == Some("trillionnium_mobile_single_primary_cta_v1")
+        && primary_cta
+            .and_then(|cta| cta.get("single_primary_cta"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && primary_cta
+            .and_then(|cta| cta.get("bottom_sheet_id"))
+            .and_then(Value::as_str)
+            == Some("app-mobile-action-sheet")
+        && primary_cta
+            .and_then(|cta| cta.get("primary_cta_id"))
+            .and_then(Value::as_str)
+            == Some("app-mobile-primary-cta")
+        && primary_cta
+            .and_then(|cta| cta.get("target_id"))
+            .and_then(Value::as_str)
+            == Some("app-map-action-rail");
+    primary_cta_green
+        && [
+            "four_tab_mobile_shell_visible",
+            "mobile_tablist_a11y_visible",
+            "keyboard_tab_navigation_visible",
+            "global_search_filters_active_tab",
+            "search_empty_state_visible",
+            "search_clear_and_escape_visible",
+            "aria_live_ux_status_visible",
+            "offline_feed_fallback_status_visible",
+            "web_session_feed_hydration_visible",
+            "feed_api_hydration_visible",
+            "mobile_bottom_sheet_single_primary_cta_visible",
+            "next_action_rail_visible",
+            "playability_coach_visible",
+            "p0_next_best_action_visible",
+            "p1_strategy_choices_visible",
+            "p2_retention_telemetry_visible",
+            "failure_recovery_lane_visible",
+            "economy_tradeoff_cards_visible",
+            "retention_calendar_visible",
+            "playability_funnel_visible",
+            "anti_cheese_policy_visible",
+            "ops_refresh_hooks_visible",
+        ]
+        .iter()
+        .all(|expected| readiness_checks.iter().any(|check| check == expected))
 }
 
 fn route_runner_handoff_contract_ready(handoff: Option<&Value>) -> bool {

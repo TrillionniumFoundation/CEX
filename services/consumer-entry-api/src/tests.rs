@@ -2054,6 +2054,26 @@ fn client_app_map_hub_projects_stream_counts() {
         app["mobile_shell_contract"]["contract_version"],
         "trillionnium_mobile_shell_ux_v1"
     );
+    assert_eq!(
+        app["mobile_shell_contract"]["primary_cta"]["contract_version"],
+        "trillionnium_mobile_single_primary_cta_v1"
+    );
+    assert_eq!(
+        app["mobile_shell_contract"]["primary_cta"]["bottom_sheet_id"],
+        "app-mobile-action-sheet"
+    );
+    assert_eq!(
+        app["mobile_shell_contract"]["primary_cta"]["primary_cta_id"],
+        "app-mobile-primary-cta"
+    );
+    assert_eq!(
+        app["mobile_shell_contract"]["primary_cta"]["target_id"],
+        "app-map-action-rail"
+    );
+    assert_eq!(
+        app["mobile_shell_contract"]["primary_cta"]["single_primary_cta"],
+        true
+    );
     let mobile_shell_checks = app["mobile_shell_contract"]["readiness_checks"]
         .as_array()
         .cloned()
@@ -2064,6 +2084,7 @@ fn client_app_map_hub_projects_stream_counts() {
         "search_empty_state_visible",
         "search_clear_and_escape_visible",
         "aria_live_ux_status_visible",
+        "mobile_bottom_sheet_single_primary_cta_visible",
         "offline_feed_fallback_status_visible",
         "web_session_feed_hydration_visible",
         "next_action_rail_visible",
@@ -2272,6 +2293,13 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(app_html.contains("app-search-empty-state"));
     assert!(app_html.contains("app-ux-live-status"));
     assert!(app_html.contains("trillionnium_mobile_shell_ux_v1"));
+    assert!(app_html.contains("trillionnium_mobile_single_primary_cta_v1"));
+    assert!(app_html.contains("app-mobile-action-sheet"));
+    assert!(app_html.contains("app-mobile-primary-cta"));
+    assert!(app_html.contains("data-primary-cta-count=\"1\""));
+    assert!(app_html.contains("data-primary-cta-target=\"app-map-action-rail\""));
+    assert!(app_html.contains("Continue Route"));
+    assert!(app_html.contains("mobile_bottom_sheet_single_primary_cta_visible"));
     assert!(app_html.contains("keyboard_tab_navigation_visible"));
     assert!(app_html.contains("offline_feed_fallback_status_visible"));
     assert!(app_html.contains("web_session_feed_hydration_visible"));
