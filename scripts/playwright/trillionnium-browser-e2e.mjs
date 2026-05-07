@@ -24,6 +24,8 @@ const leafletStub = String.raw`
   const layerApi = () => ({
     addTo(target){ if (target && target.__layers) target.__layers.add(this); return this; },
     bindPopup(){ return this; },
+    openPopup(){ return this; },
+    closePopup(){ return this; },
     on(){ return this; },
     setStyle(){ return this; },
     setLatLng(){ return this; },
@@ -80,6 +82,49 @@ async function text(page, selector) {
 
 async function count(page, selector) {
   return await page.locator(selector).count();
+}
+
+function assertRouteRunnerHandoffContract(handoff, label) {
+  assert(handoff?.contract_version === 'trillionnium_route_runner_handoff_v1', `${label} route-runner handoff contract missing`, handoff);
+  assert(handoff?.supports_route_runner_reward_claim_actions === true, `${label} reward-claim handoff support missing`, handoff);
+  assert(handoff?.supports_route_runner_next_route_actions === true, `${label} next-route handoff support missing`, handoff);
+  assert(handoff?.supports_checkpoint_reward_history === true, `${label} checkpoint reward history support missing`, handoff);
+  assert(Number(handoff?.runner_count || 0) >= 1, `${label} runner count missing`, handoff);
+  assert(Number(handoff?.reward_claim_action_count || 0) >= 1, `${label} reward-claim action count missing`, handoff);
+  assert(Number(handoff?.next_route_action_count || 0) >= 1, `${label} next-route action count missing`, handoff);
+  assert(Boolean(handoff?.first_task_id), `${label} first route-runner task missing`, handoff);
+  assert(Boolean(handoff?.first_progress_label), `${label} first route-runner progress label missing`, handoff);
+  assert(Boolean(handoff?.first_reward_claim_status), `${label} reward-claim status missing`, handoff);
+  assert(handoff?.first_next_route_status === 'next_route_preview_locked_until_reward_claim', `${label} next-route status missing`, handoff);
+  assert(Boolean(handoff?.first_next_route_action_body), `${label} next-route action body missing`, handoff);
+  assert(Boolean(handoff?.first_next_route_sequence_summary), `${label} next-route sequence summary missing`, handoff);
+  assert(Boolean(handoff?.handoff_prompt), `${label} handoff prompt missing`, handoff);
+  return {
+    contract_version: handoff.contract_version,
+    runner_count: handoff.runner_count,
+    reward_claim_action_count: handoff.reward_claim_action_count,
+    next_route_action_count: handoff.next_route_action_count,
+    first_next_route_status: handoff.first_next_route_status,
+    first_next_route_sequence_summary: handoff.first_next_route_sequence_summary,
+  };
+}
+
+async function assertRouteRunnerHandoffDom(page, selector, label) {
+  assert(await count(page, selector) >= 1, `${label} route-runner handoff DOM missing`);
+  const dom = await page.locator(selector).first().evaluate((node) => ({
+    id: node.id || null,
+    nextRouteStatus: node.dataset.nextRouteStatus || null,
+    runnerCount: Number.parseInt(node.dataset.runnerCount || '0', 10) || 0,
+    rewardClaimCount: Number.parseInt(node.dataset.rewardClaimCount || '0', 10) || 0,
+    nextRouteCount: Number.parseInt(node.dataset.nextRouteCount || '0', 10) || 0,
+    text: String(node.innerText || node.textContent || '').replace(/\s+/g, ' ').trim(),
+  }));
+  assert(dom.nextRouteStatus === 'next_route_preview_locked_until_reward_claim', `${label} DOM next-route status missing`, dom);
+  assert(dom.runnerCount >= 1, `${label} DOM runner count missing`, dom);
+  assert(dom.rewardClaimCount >= 1, `${label} DOM reward-claim count missing`, dom);
+  assert(dom.nextRouteCount >= 1, `${label} DOM next-route count missing`, dom);
+  assert(/reward/i.test(dom.text) && /next[- ]route/i.test(dom.text), `${label} DOM handoff copy missing`, dom);
+  return dom;
 }
 
 async function clickAndWaitForNavigationOrSettle(page, locator) {
@@ -241,6 +286,7 @@ async function main() {
   const pageErrors = [];
   const requestFailures = [];
   const steps = [];
+  const routeRunnerHandoffCoverage = {};
 
   const browser = await chromium.launch({
     executablePath,
@@ -320,13 +366,16 @@ async function main() {
 
   const appJsonText = await page.locator('#trillionnium-app-data').first().textContent({ timeout: 10_000 });
   const appJson = JSON.parse(appJsonText || '{}');
+  routeRunnerHandoffCoverage.app_feed_contract = assertRouteRunnerHandoffContract(appJson?.feed?.route_runner_handoff, '/app feed JSON');
+  routeRunnerHandoffCoverage.app_map_hub_contract = assertRouteRunnerHandoffContract(appJson?.map_hub?.route_runner_handoff, '/app map_hub JSON');
+  routeRunnerHandoffCoverage.app_route_summary_dom = await assertRouteRunnerHandoffDom(page, '#app-route-runner-handoff-summary', '/app route summary');
   const mobileShellChecks = appJson?.mobile_shell_contract?.readiness_checks || [];
   assert(appJson?.mobile_shell_contract?.contract_version === 'trillionnium_mobile_shell_ux_v1', 'mobile shell UX contract missing from client app json', appJson?.mobile_shell_contract);
   for (const expectedCheck of ['mobile_tablist_a11y_visible', 'keyboard_tab_navigation_visible', 'search_empty_state_visible', 'search_clear_and_escape_visible', 'aria_live_ux_status_visible', 'offline_feed_fallback_status_visible', 'web_session_feed_hydration_visible']) {
     assert(mobileShellChecks.includes(expectedCheck), `mobile shell UX readiness check missing: ${expectedCheck}`, mobileShellChecks);
   }
   assert(appJson?.feed?.web_session_path === '/app/web/feed', 'web session feed hydration path missing', appJson?.feed);
-  steps.push({ name: 'app_mobile_shell_ux_contract_json', ok: true });
+  steps.push({ name: 'app_mobile_shell_ux_and_handoff_contract_json', ok: true });
 
   for (const tab of ['messages', 'feed', 'me', 'map']) {
     await activateTab(page, tab);
@@ -340,6 +389,7 @@ async function main() {
     return /动态已同步|动态备用快照|内置动态快照|Feed synced|Fallback feed snapshot|Feed API (synced|fallback)|Embedded feed snapshot/.test(status + ' ' + ux);
   }, { timeout: 15_000 });
   assert(await count(page, '#app-feed-items-live .app-feed-item, #app-feed-items-live article') >= 1, 'feed cards missing after API hydration');
+  routeRunnerHandoffCoverage.app_feed_chip_dom = await assertRouteRunnerHandoffDom(page, '#app-feed-route-runner-handoff', '/app feed chip');
   assert(appJson?.feed?.web_session_path === '/app/web/feed', 'feed hydration did not expose web-session feed path');
   const filterCount = await count(page, '.trillionnium-app-feed-filter');
   if (filterCount > 0) {
@@ -391,6 +441,7 @@ async function main() {
     assert(worldBodyText.includes(needle), `world English/global-first copy missing: ${needle}`);
   }
   assert(await count(page, '#world-mobile-first-screen') === 1, 'world mobile-first hero missing');
+  routeRunnerHandoffCoverage.world_route_summary_dom = await assertRouteRunnerHandoffDom(page, '#world-route-runner-handoff-summary', '/world route summary');
   assert(await count(page, '#world-language-switcher [data-trillionnium-language-select]') === 1, 'world visible language switcher missing');
   assert(await count(page, '#world-hero-mobile-actions .cta') >= 2, 'world mobile hero quick actions missing');
   assert(await count(page, '#world-pulse-strip .pulse-card') === 5, 'world pulse strip should keep only compact primary counters visible');
@@ -491,6 +542,8 @@ async function main() {
       mobile_ux_live_status: true,
       real_world_map: true,
       feed_api_hydration: true,
+      route_runner_handoff_contract: true,
+      route_runner_handoff_dom: true,
       world_map_move: true,
       world_buy: true,
       world_work_deliver: true,
@@ -505,6 +558,7 @@ async function main() {
       expires_at_epoch: webSession.expires_at_epoch,
     },
     steps,
+    route_runner_handoff: routeRunnerHandoffCoverage,
     console_messages: consoleMessages.slice(0, 20),
     page_errors: pageErrors,
     request_failures: requestFailures.slice(0, 20),
