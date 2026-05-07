@@ -13,6 +13,7 @@ CEX_SIGNOFF_MAX_EVIDENCE_AGE_SECONDS="${CEX_SIGNOFF_MAX_EVIDENCE_AGE_SECONDS:-86
 CEX_SIGNOFF_REQUIRE_GIT_CLEAN="${CEX_SIGNOFF_REQUIRE_GIT_CLEAN:-1}"
 CEX_SIGNOFF_OUT_DIR="${CEX_SIGNOFF_OUT_DIR:-$CEX_PROJECT_ROOT/run/signoff}"
 CEX_PROVIDER_PROBE_MODEL="${CEX_PROVIDER_PROBE_MODEL:-google/gemini-2.5-flash}"
+CONSUMER_ENTRY_BASE_URL="${CONSUMER_ENTRY_BASE_URL:-http://127.0.0.1:8090}"
 
 usage() {
   cat <<'EOF'
@@ -50,6 +51,7 @@ mkdir -p "$CEX_SIGNOFF_OUT_DIR"
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 SUMMARY_PATH="$CEX_SIGNOFF_OUT_DIR/production-signoff-$RUN_ID.summary.json"
 READINESS_LOG="$CEX_SIGNOFF_OUT_DIR/production-signoff-$RUN_ID.readiness.log"
+ROUTE_RUNNER_HANDOFF_EVIDENCE_PATH="$CEX_SIGNOFF_OUT_DIR/production-signoff-$RUN_ID.route-runner-handoff.json"
 
 failures=0
 failure_messages=()
@@ -130,14 +132,88 @@ PY
   fi
 fi
 
+route_runner_handoff_evidence_ok=false
+route_runner_handoff_status=0
+route_runner_handoff_health_file="$(mktemp)"
+if curl -fsS "$CONSUMER_ENTRY_BASE_URL/health" >"$route_runner_handoff_health_file" && \
+  python3 - "$route_runner_handoff_health_file" "$ROUTE_RUNNER_HANDOFF_EVIDENCE_PATH" <<'PY'
+from pathlib import Path
+import json
+import sys
+
+health_path = Path(sys.argv[1])
+out_path = Path(sys.argv[2])
+health = json.loads(health_path.read_text())
+
+def gate_ok(gate):
+    if not isinstance(gate, dict):
+        return False
+    return (
+        gate.get('contract_version') == 'trillionnium_playability_route_runner_handoff_gate_v1'
+        and gate.get('feed_contract_visible') is True
+        and gate.get('map_hub_contract_visible') is True
+        and int(gate.get('source_count') or 0) >= 7
+        and gate.get('sources_include_route_runner_handoff') is True
+        and gate.get('feed_handoff_contract_version') == 'trillionnium_route_runner_handoff_v1'
+        and gate.get('map_hub_handoff_contract_version') == 'trillionnium_route_runner_handoff_v1'
+        and int(gate.get('runner_count') or 0) >= 1
+        and int(gate.get('reward_claim_action_count') or 0) >= 1
+        and int(gate.get('next_route_action_count') or 0) >= 1
+        and bool(gate.get('first_next_route_status'))
+        and bool(gate.get('first_next_route_sequence_summary'))
+        and bool(gate.get('handoff_prompt'))
+    )
+
+gate_sources = {
+    'playability': (health.get('trillionnium_world_playability_scorecard') or {}).get('route_runner_handoff_gate') or {},
+    'closed_beta': (health.get('trillionnium_world_closed_beta_prototype') or {}).get('route_runner_handoff_gate') or {},
+    'real_user_beta': (health.get('trillionnium_world_real_user_beta') or {}).get('route_runner_handoff_gate') or {},
+    'public_commercial': (health.get('trillionnium_world_public_commercial_product') or {}).get('route_runner_handoff_gate') or {},
+}
+gate_results = {name: gate_ok(gate) for name, gate in gate_sources.items()}
+primary_gate = gate_sources['playability']
+evidence = {
+    'ok': all(gate_results.values()),
+    'contract_version': 'trillionnium_signoff_route_runner_handoff_evidence_v1',
+    'source': f"{health.get('service') or 'consumer-entry-api'}/health",
+    'health_status': health.get('status'),
+    'gate_results': gate_results,
+    'gate_names': list(gate_sources.keys()),
+    'source_count': primary_gate.get('source_count'),
+    'runner_count': primary_gate.get('runner_count'),
+    'reward_claim_action_count': primary_gate.get('reward_claim_action_count'),
+    'next_route_action_count': primary_gate.get('next_route_action_count'),
+    'first_next_route_status': primary_gate.get('first_next_route_status'),
+    'first_next_route_sequence_summary': primary_gate.get('first_next_route_sequence_summary'),
+    'handoff_prompt': primary_gate.get('handoff_prompt'),
+    'gates': gate_sources,
+}
+out_path.write_text(json.dumps(evidence, indent=2, sort_keys=True) + '\n')
+if not evidence['ok']:
+    missing = [name for name, ok in gate_results.items() if not ok]
+    raise SystemExit(f'route-runner handoff signoff evidence not green: {missing}')
+PY
+then
+  route_runner_handoff_evidence_ok=true
+  pass "route-runner handoff signoff evidence green ($ROUTE_RUNNER_HANDOFF_EVIDENCE_PATH)"
+else
+  route_runner_handoff_status=$?
+  record_failure "route-runner handoff signoff evidence failed (status=$route_runner_handoff_status path=$ROUTE_RUNNER_HANDOFF_EVIDENCE_PATH)"
+fi
+rm -f "$route_runner_handoff_health_file"
+
 head_commit="$(git -C "$CEX_PROJECT_ROOT" rev-parse --short HEAD)"
 ended_at_epoch="$(date +%s)"
 
-python3 - "$SUMMARY_PATH" "$RUN_ID" "$CEX_SIGNOFF_SCOPE" "$head_commit" "$failures" "$readiness_status" "$READINESS_LOG" "$soak_summary_path" "$soak_ok" "$soak_age" "$CEX_PROVIDER_PROBE_MODEL" "$ended_at_epoch" <<'PY'
+python3 - "$SUMMARY_PATH" "$RUN_ID" "$CEX_SIGNOFF_SCOPE" "$head_commit" "$failures" "$readiness_status" "$READINESS_LOG" "$soak_summary_path" "$soak_ok" "$soak_age" "$CEX_PROVIDER_PROBE_MODEL" "$ended_at_epoch" "$ROUTE_RUNNER_HANDOFF_EVIDENCE_PATH" "$route_runner_handoff_evidence_ok" "$route_runner_handoff_status" <<'PY'
 from pathlib import Path
 import json, sys
 summary_path = Path(sys.argv[1])
 failures = int(sys.argv[5])
+route_runner_handoff_evidence_path = Path(sys.argv[13])
+route_runner_handoff_evidence = None
+if route_runner_handoff_evidence_path.exists():
+    route_runner_handoff_evidence = json.loads(route_runner_handoff_evidence_path.read_text())
 summary = {
     'ok': failures == 0,
     'kind': 'production_signoff',
@@ -157,6 +233,12 @@ summary = {
     },
     'provider_probe_model': sys.argv[11],
     'ended_at_epoch': int(sys.argv[12]),
+    'route_runner_handoff_evidence': {
+        'summary_path': sys.argv[13],
+        'ok': sys.argv[14] == 'true',
+        'exit_code': int(sys.argv[15]),
+        'evidence': route_runner_handoff_evidence,
+    },
 }
 summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + '\n')
 PY
