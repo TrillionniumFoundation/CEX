@@ -331,11 +331,51 @@ dashboard_required_metrics = [
     'cex_consumer_entry_trillionnium_route_runner_handoff_reward_claim_action_count',
     'cex_consumer_entry_trillionnium_route_runner_handoff_next_route_action_count',
 ]
+expected_dashboard = {
+    'uid': 'cex-trillionnium-route-runner-handoff',
+    'title': 'CEX / Trillionnium Route-Runner Handoff',
+    'tags': {'cex', 'trillionnium', 'route-runner', 'handoff'},
+    'panels': {
+        'All handoff gates': {
+            'type': 'stat',
+            'metrics': ['cex_consumer_entry_trillionnium_route_runner_handoff_all_gates_green'],
+            'threshold_values': [1],
+        },
+        'Gate family': {
+            'type': 'stat',
+            'metrics': [
+                'cex_consumer_entry_trillionnium_route_runner_handoff_playability_gate_green',
+                'cex_consumer_entry_trillionnium_route_runner_handoff_closed_beta_gate_green',
+                'cex_consumer_entry_trillionnium_route_runner_handoff_real_user_beta_gate_green',
+                'cex_consumer_entry_trillionnium_route_runner_handoff_public_commercial_gate_green',
+            ],
+            'threshold_values': [1],
+        },
+        'Feed source count (expected >= 7)': {
+            'type': 'timeseries',
+            'metrics': ['cex_consumer_entry_trillionnium_route_runner_handoff_feed_source_count'],
+            'threshold_values': [1, 7],
+        },
+        'Runner / reward / next-route action counts': {
+            'type': 'timeseries',
+            'metrics': [
+                'cex_consumer_entry_trillionnium_route_runner_handoff_runner_count',
+                'cex_consumer_entry_trillionnium_route_runner_handoff_reward_claim_action_count',
+                'cex_consumer_entry_trillionnium_route_runner_handoff_next_route_action_count',
+            ],
+            'threshold_values': [1],
+        },
+    },
+}
 dashboard_result = {
     'checked': check_dashboard,
     'path': str(dashboard_path) if dashboard_path else None,
     'present': bool(dashboard_path and dashboard_path.exists()),
     'missing_metrics': [],
+    'uid_ok': True,
+    'title_ok': True,
+    'tags_ok': True,
+    'panel_results': {},
     'ok': True,
 }
 if check_dashboard:
@@ -345,16 +385,57 @@ if check_dashboard:
     else:
         dashboard = json.loads(dashboard_path.read_text())
         exprs = []
+        panels_by_title = {}
         for panel in dashboard.get('panels') or []:
+            title = panel.get('title')
+            if title:
+                panels_by_title[str(title)] = panel
             for target in panel.get('targets') or []:
                 expr = target.get('expr')
                 if expr:
                     exprs.append(str(expr))
         missing_metrics = [metric for metric in dashboard_required_metrics if metric not in exprs]
+        dashboard_result['uid_ok'] = dashboard.get('uid') == expected_dashboard['uid']
+        dashboard_result['title_ok'] = dashboard.get('title') == expected_dashboard['title']
+        dashboard_result['tags_ok'] = expected_dashboard['tags'].issubset(set(dashboard.get('tags') or []))
         dashboard_result['missing_metrics'] = missing_metrics
-        dashboard_result['ok'] = not missing_metrics
+        if not dashboard_result['uid_ok']:
+            failures.append('dashboard uid drifted')
+        if not dashboard_result['title_ok']:
+            failures.append('dashboard title drifted')
+        if not dashboard_result['tags_ok']:
+            failures.append('dashboard tags missing handoff taxonomy')
         if missing_metrics:
             failures.append('dashboard missing handoff metrics: ' + ','.join(missing_metrics))
+        for title, expected_panel in expected_dashboard['panels'].items():
+            panel = panels_by_title.get(title)
+            panel_exprs = [str(target.get('expr')) for target in ((panel or {}).get('targets') or []) if target.get('expr')]
+            thresholds = (((panel or {}).get('fieldConfig') or {}).get('defaults') or {}).get('thresholds') or {}
+            threshold_values = [step.get('value') for step in thresholds.get('steps') or [] if step.get('value') is not None]
+            panel_result = {
+                'present': panel is not None,
+                'type': (panel or {}).get('type'),
+                'type_ok': (panel or {}).get('type') == expected_panel['type'],
+                'metrics_ok': all(metric in panel_exprs for metric in expected_panel['metrics']),
+                'threshold_values': threshold_values,
+                'thresholds_ok': all(value in threshold_values for value in expected_panel['threshold_values']),
+            }
+            panel_result['ok'] = bool(
+                panel_result['present']
+                and panel_result['type_ok']
+                and panel_result['metrics_ok']
+                and panel_result['thresholds_ok']
+            )
+            dashboard_result['panel_results'][title] = panel_result
+            if not panel_result['ok']:
+                failures.append(f'dashboard panel contract invalid: {title}')
+        dashboard_result['ok'] = (
+            dashboard_result['uid_ok']
+            and dashboard_result['title_ok']
+            and dashboard_result['tags_ok']
+            and not missing_metrics
+            and all(result.get('ok') for result in dashboard_result['panel_results'].values())
+        )
 
 summary = {
     'ok': not failures,

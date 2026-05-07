@@ -182,6 +182,23 @@ Path(sys.argv[2]).write_text(json.dumps(data, indent=2, sort_keys=True) + '\n')
 PY
 assert_fail_contains bad_dashboard_metric 'dashboard missing handoff metrics' --dashboard "$DASHBOARD_BAD_METRIC"
 
+DASHBOARD_BAD_THRESHOLD="$TMP_DIR/dashboard-bad-threshold.json"
+python3 - "$DASHBOARD_GOOD" "$DASHBOARD_BAD_THRESHOLD" <<'PY'
+from pathlib import Path
+import json
+import sys
+
+data = json.loads(Path(sys.argv[1]).read_text())
+for panel in data.get('panels') or []:
+    if panel.get('title') == 'Feed source count (expected >= 7)':
+        steps = panel['fieldConfig']['defaults']['thresholds']['steps']
+        for step in steps:
+            if step.get('value') == 7:
+                step['value'] = 6
+Path(sys.argv[2]).write_text(json.dumps(data, indent=2, sort_keys=True) + '\n')
+PY
+assert_fail_contains bad_dashboard_threshold 'dashboard panel contract invalid: Feed source count' --dashboard "$DASHBOARD_BAD_THRESHOLD"
+
 if "$SCRIPT_DIR/check-trillionnium-route-runner-handoff-monitoring.sh" \
   --metadata "$METADATA_STALE" \
   --prometheus-bundle "$PROMETHEUS_GOOD" \
