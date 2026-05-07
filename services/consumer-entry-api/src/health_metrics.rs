@@ -151,6 +151,167 @@ fn mobile_shell_ux_contract_green(app: &Value) -> bool {
     .all(|expected| readiness_checks.iter().any(|check| check == expected))
 }
 
+fn route_runner_handoff_contract_ready(handoff: Option<&Value>) -> bool {
+    handoff.is_some_and(|handoff| {
+        handoff.get("contract_version").and_then(Value::as_str)
+            == Some("trillionnium_route_runner_handoff_v1")
+            && handoff
+                .get("supports_route_runner_reward_claim_actions")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            && handoff
+                .get("supports_route_runner_next_route_actions")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            && handoff
+                .get("supports_checkpoint_reward_history")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            && handoff
+                .get("runner_count")
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
+                > 0
+            && handoff
+                .get("reward_claim_action_count")
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
+                > 0
+            && handoff
+                .get("next_route_action_count")
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
+                > 0
+            && handoff
+                .get("first_task_id")
+                .and_then(Value::as_str)
+                .is_some_and(|task_id| !task_id.trim().is_empty())
+            && handoff
+                .get("first_progress_label")
+                .and_then(Value::as_str)
+                .is_some_and(|label| !label.trim().is_empty())
+            && handoff
+                .get("first_reward_claim_status")
+                .and_then(Value::as_str)
+                .is_some_and(|status| !status.trim().is_empty())
+            && handoff
+                .get("first_next_route_status")
+                .and_then(Value::as_str)
+                .is_some_and(|status| !status.trim().is_empty())
+            && handoff
+                .get("first_next_route_action_body")
+                .and_then(Value::as_str)
+                .is_some_and(|body| !body.trim().is_empty())
+            && handoff
+                .get("first_next_route_sequence_summary")
+                .and_then(Value::as_str)
+                .is_some_and(|summary| !summary.trim().is_empty())
+            && handoff
+                .get("handoff_prompt")
+                .and_then(Value::as_str)
+                .is_some_and(|prompt| !prompt.trim().is_empty())
+    })
+}
+
+fn app_route_runner_handoff_gate_json(app: &Value) -> Value {
+    let feed = app.get("feed");
+    let feed_source_count = feed
+        .and_then(|feed| feed.get("source_count"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let feed_sources_include_route_runner_handoff = feed
+        .and_then(|feed| feed.get("sources"))
+        .and_then(Value::as_array)
+        .is_some_and(|sources| {
+            sources
+                .iter()
+                .any(|source| source == "route_runner_handoff")
+        });
+    let feed_route_runner_handoff = feed.and_then(|feed| feed.get("route_runner_handoff"));
+    let map_hub_route_runner_handoff = app
+        .get("map_hub")
+        .and_then(|map_hub| map_hub.get("route_runner_handoff"));
+    let feed_route_runner_handoff_green = feed_source_count >= 7
+        && feed_sources_include_route_runner_handoff
+        && route_runner_handoff_contract_ready(feed_route_runner_handoff);
+    let map_hub_route_runner_handoff_green =
+        route_runner_handoff_contract_ready(map_hub_route_runner_handoff);
+
+    json!({
+        "contract_version": "trillionnium_playability_route_runner_handoff_gate_v1",
+        "feed_contract_visible": feed_route_runner_handoff_green,
+        "map_hub_contract_visible": map_hub_route_runner_handoff_green,
+        "source_count": feed_source_count,
+        "sources_include_route_runner_handoff": feed_sources_include_route_runner_handoff,
+        "feed_handoff_contract_version": feed_route_runner_handoff.and_then(|handoff| handoff.get("contract_version")).and_then(Value::as_str),
+        "map_hub_handoff_contract_version": map_hub_route_runner_handoff.and_then(|handoff| handoff.get("contract_version")).and_then(Value::as_str),
+        "runner_count": feed_route_runner_handoff.and_then(|handoff| handoff.get("runner_count")).and_then(Value::as_u64).unwrap_or(0),
+        "reward_claim_action_count": feed_route_runner_handoff.and_then(|handoff| handoff.get("reward_claim_action_count")).and_then(Value::as_u64).unwrap_or(0),
+        "next_route_action_count": feed_route_runner_handoff.and_then(|handoff| handoff.get("next_route_action_count")).and_then(Value::as_u64).unwrap_or(0),
+        "first_reward_claim_status": feed_route_runner_handoff.and_then(|handoff| handoff.get("first_reward_claim_status")).and_then(Value::as_str),
+        "first_next_route_status": feed_route_runner_handoff.and_then(|handoff| handoff.get("first_next_route_status")).and_then(Value::as_str),
+        "first_next_route_sequence_summary": feed_route_runner_handoff.and_then(|handoff| handoff.get("first_next_route_sequence_summary")).and_then(Value::as_str),
+        "handoff_prompt": feed_route_runner_handoff.and_then(|handoff| handoff.get("handoff_prompt")).and_then(Value::as_str),
+    })
+}
+
+fn route_runner_handoff_gate_green(gate: &Value) -> bool {
+    gate.get("contract_version").and_then(Value::as_str)
+        == Some("trillionnium_playability_route_runner_handoff_gate_v1")
+        && gate
+            .get("feed_contract_visible")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && gate
+            .get("map_hub_contract_visible")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && gate
+            .get("source_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            >= 7
+        && gate
+            .get("sources_include_route_runner_handoff")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && gate
+            .get("feed_handoff_contract_version")
+            .and_then(Value::as_str)
+            == Some("trillionnium_route_runner_handoff_v1")
+        && gate
+            .get("map_hub_handoff_contract_version")
+            .and_then(Value::as_str)
+            == Some("trillionnium_route_runner_handoff_v1")
+        && gate
+            .get("runner_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            > 0
+        && gate
+            .get("reward_claim_action_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            > 0
+        && gate
+            .get("next_route_action_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            > 0
+        && gate
+            .get("first_next_route_status")
+            .and_then(Value::as_str)
+            .is_some_and(|status| !status.trim().is_empty())
+        && gate
+            .get("first_next_route_sequence_summary")
+            .and_then(Value::as_str)
+            .is_some_and(|summary| !summary.trim().is_empty())
+        && gate
+            .get("handoff_prompt")
+            .and_then(Value::as_str)
+            .is_some_and(|prompt| !prompt.trim().is_empty())
+}
+
 fn first_maturity_matrix_user_id(league: &LeagueState) -> String {
     league
         .players_by_matrix_user
@@ -1672,6 +1833,9 @@ fn trillionnium_world_real_user_beta_json(
         .and_then(Value::as_array)
         .map(Vec::len)
         .unwrap_or(0);
+    let route_runner_handoff_gate = app_route_runner_handoff_gate_json(&app);
+    let route_runner_handoff_gate_ready =
+        route_runner_handoff_gate_green(&route_runner_handoff_gate);
     let progression_level = app
         .get("progression")
         .and_then(|progression| progression.get("level"))
@@ -1806,6 +1970,10 @@ fn trillionnium_world_real_user_beta_json(
             ("route_preview_dense", route_preview_count >= 20),
             ("route_task_graph_dense", route_task_graph_count >= 10),
             ("feed_surface_has_live_items", feed_item_count >= 5),
+            (
+                "route_runner_handoff_gate_visible",
+                route_runner_handoff_gate_ready,
+            ),
             ("social_contacts_ready", social_contact_count >= 3),
             ("progression_level_100", progression_level >= 100),
         ],
@@ -1930,7 +2098,7 @@ fn trillionnium_world_real_user_beta_json(
             ),
             (
                 "route_graph_has_actionable_tasks",
-                route_task_graph_count >= 10,
+                route_task_graph_count >= 10 && route_runner_handoff_gate_ready,
             ),
         ],
     );
@@ -2021,6 +2189,7 @@ fn trillionnium_world_real_user_beta_json(
         "overall_status": if overall_percent == 100 { "converged" } else { "in_progress" },
         "matrix_user_id": matrix_user_id,
         "axis_order": axis_order,
+        "route_runner_handoff_gate": route_runner_handoff_gate,
         "requires_live_gates": [
             "scripts/check-trillionnium-world-real-user-beta.sh",
             "scripts/check-trillionnium-world-closed-beta-prototype.sh",
@@ -2073,6 +2242,9 @@ fn trillionnium_world_public_commercial_product_json(
         .and_then(Value::as_array)
         .map(Vec::len)
         .unwrap_or(0);
+    let route_runner_handoff_gate = app_route_runner_handoff_gate_json(&app);
+    let route_runner_handoff_gate_ready =
+        route_runner_handoff_gate_green(&route_runner_handoff_gate);
     let social_contact_count = app
         .get("social")
         .map(|social| {
@@ -2232,9 +2404,16 @@ fn trillionnium_world_public_commercial_product_json(
             ("mobile_shell_ux_contract_green", mobile_shell_ux_green),
             ("onboarding_has_5_steps", onboarding_step_count >= 5),
             ("feed_surface_has_live_items", feed_item_count >= 5),
+            (
+                "route_runner_handoff_gate_visible",
+                route_runner_handoff_gate_ready,
+            ),
             ("social_contacts_ready", social_contact_count >= 3),
             ("route_preview_dense", route_preview_count >= 20),
-            ("route_task_graph_dense", route_task_graph_count >= 10),
+            (
+                "route_task_graph_dense",
+                route_task_graph_count >= 10 && route_runner_handoff_gate_ready,
+            ),
             ("world_map_dense", world.world_map_nodes.len() >= 12),
             ("web_session_required", web_session_required_and_configured),
         ],
@@ -2378,7 +2557,7 @@ fn trillionnium_world_public_commercial_product_json(
             ("world_events_ready", world.world_events.len() >= 3),
             (
                 "route_graph_has_actionable_tasks",
-                route_task_graph_count >= 10,
+                route_task_graph_count >= 10 && route_runner_handoff_gate_ready,
             ),
         ],
     );
@@ -2411,7 +2590,10 @@ fn trillionnium_world_public_commercial_product_json(
                 !world.world_player_positions.is_empty(),
             ),
             ("route_preview_dense", route_preview_count >= 20),
-            ("route_task_graph_dense", route_task_graph_count >= 10),
+            (
+                "route_task_graph_dense",
+                route_task_graph_count >= 10 && route_runner_handoff_gate_ready,
+            ),
         ],
     );
 
@@ -2444,6 +2626,7 @@ fn trillionnium_world_public_commercial_product_json(
         "overall_status": if overall_percent == 100 { "converged" } else { "in_progress" },
         "matrix_user_id": matrix_user_id,
         "axis_order": axis_order,
+        "route_runner_handoff_gate": route_runner_handoff_gate,
         "requires_live_gates": [
             "scripts/check-trillionnium-world-public-commercial-product.sh",
             "scripts/check-trillionnium-world-real-user-beta.sh",

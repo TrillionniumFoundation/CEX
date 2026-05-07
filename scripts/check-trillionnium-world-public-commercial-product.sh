@@ -82,6 +82,8 @@ maturity = consumer.get("trillionnium_world_maturity") or {}
 repo = consumer.get("league_repository_runtime") or {}
 playability = consumer.get("trillionnium_world_playability_scorecard") or {}
 playability_axes = playability.get("user_metric_axes") or {}
+public_route_runner_handoff_gate = public_product.get("route_runner_handoff_gate") or {}
+playability_route_runner_handoff_gate = playability.get("route_runner_handoff_gate") or {}
 playability_axis_ids = [
     "technical_reliability",
     "first_playable_completeness",
@@ -89,6 +91,23 @@ playability_axis_ids = [
     "long_term_replayability",
     "economy_social_strategy_depth",
 ]
+
+def route_runner_handoff_gate_ok(gate):
+    return (
+        gate.get("contract_version") == "trillionnium_playability_route_runner_handoff_gate_v1"
+        and gate.get("feed_contract_visible") is True
+        and gate.get("map_hub_contract_visible") is True
+        and int(gate.get("source_count") or 0) >= 7
+        and gate.get("sources_include_route_runner_handoff") is True
+        and gate.get("feed_handoff_contract_version") == "trillionnium_route_runner_handoff_v1"
+        and gate.get("map_hub_handoff_contract_version") == "trillionnium_route_runner_handoff_v1"
+        and int(gate.get("runner_count") or 0) >= 1
+        and int(gate.get("reward_claim_action_count") or 0) >= 1
+        and int(gate.get("next_route_action_count") or 0) >= 1
+        and bool(gate.get("first_next_route_status"))
+        and bool(gate.get("first_next_route_sequence_summary"))
+        and bool(gate.get("handoff_prompt"))
+    )
 
 require("public_commercial_contract_version", public_product.get("contract_version") == "trillionnium_world_public_commercial_product_v1", public_product.get("contract_version"))
 require("public_commercial_target", public_product.get("target") == "public_commercial_product_100_percent", public_product.get("target"))
@@ -108,6 +127,8 @@ require("playability_target", playability.get("target") == "all_5_user_playabili
 require("playability_overall_score_10", playability.get("user_metric_overall_score") == 10.0, playability.get("user_metric_overall_score"))
 require("playability_overall_percent_100", playability.get("user_metric_overall_percent") == 100, playability.get("user_metric_overall_percent"))
 require("playability_converged", playability.get("user_metric_overall_status") == "converged", playability.get("user_metric_overall_status"))
+require("public_route_runner_handoff_gate", route_runner_handoff_gate_ok(public_route_runner_handoff_gate), public_route_runner_handoff_gate)
+require("playability_route_runner_handoff_gate", route_runner_handoff_gate_ok(playability_route_runner_handoff_gate), playability_route_runner_handoff_gate)
 for axis_id in playability_axis_ids:
     axis = playability_axes.get(axis_id) or {}
     require(f"playability_axis_{axis_id}_score_10", axis.get("score") == 10.0, axis)
@@ -162,6 +183,8 @@ summary = {
     "playability_overall_score": playability.get("user_metric_overall_score"),
     "playability_overall_percent": playability.get("user_metric_overall_percent"),
     "playability_axis_scores": {axis_id: (playability_axes.get(axis_id) or {}).get("score") for axis_id in playability_axis_ids},
+    "route_runner_handoff_gate": public_route_runner_handoff_gate,
+    "playability_route_runner_handoff_gate": playability_route_runner_handoff_gate,
     "repository_effective": repo.get("effective_repository"),
     "repository_cutover_status": repo.get("repository_cutover_status"),
     "matrix_ingress_protected": matrix.get("ingress_protected"),

@@ -10503,6 +10503,17 @@ async fn health_endpoint_exposes_identity_governance_overview() {
             .any(|check| check["check_id"] == "web_session_required_and_configured")
     );
     assert_eq!(
+        body["trillionnium_world_real_user_beta"]["route_runner_handoff_gate"]["contract_version"],
+        "trillionnium_playability_route_runner_handoff_gate_v1"
+    );
+    assert!(
+        body["trillionnium_world_real_user_beta"]["axes"]["product_retention"]["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|check| check["check_id"] == "route_runner_handoff_gate_visible")
+    );
+    assert_eq!(
         body["trillionnium_world_public_commercial_product"]["contract_version"],
         "trillionnium_world_public_commercial_product_v1"
     );
@@ -10516,6 +10527,19 @@ async fn health_endpoint_exposes_identity_governance_overview() {
             .unwrap()
             .iter()
             .any(|check| check["check_id"] == "active_listing_ready")
+    );
+    assert_eq!(
+        body["trillionnium_world_public_commercial_product"]["route_runner_handoff_gate"]
+            ["contract_version"],
+        "trillionnium_playability_route_runner_handoff_gate_v1"
+    );
+    assert!(
+        body["trillionnium_world_public_commercial_product"]["axes"]["public_launch_surface"]
+            ["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|check| check["check_id"] == "route_runner_handoff_gate_visible")
     );
     assert_eq!(
         body["trillionnium_world_playability_scorecard"]["contract_version"],
