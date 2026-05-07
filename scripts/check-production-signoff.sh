@@ -186,6 +186,70 @@ def gate_ok(gate):
         and bool(gate.get('handoff_prompt'))
     )
 
+def map_readability_lod_ok(gate):
+    if not isinstance(gate, dict):
+        return False
+    visible_markers = gate.get('visible_markers')
+    max_visible_markers = gate.get('max_visible_markers')
+    avatar_runners = gate.get('avatar_route_runners')
+    max_avatar_runners = gate.get('max_avatar_route_runners')
+    return (
+        gate.get('contract_version') == 'trillionnium_world_map_readability_lod_gate_v1'
+        and gate.get('viewport_contract_version') == 'trillionnium_world_map_readability_lod_v1'
+        and gate.get('shell_contract_version') == 'trillionnium_world_map_readability_lod_v1'
+        and gate.get('visible_contract_id') == 'app-map-readability-lod'
+        and gate.get('first_screen_mode') == 'route_first_street_detail'
+        and gate.get('details_default_state') == 'collapsed'
+        and isinstance(visible_markers, (int, float))
+        and isinstance(max_visible_markers, (int, float))
+        and visible_markers <= max_visible_markers <= 18
+        and isinstance(avatar_runners, (int, float))
+        and isinstance(max_avatar_runners, (int, float))
+        and avatar_runners <= max_avatar_runners <= 6
+        and gate.get('max_primary_cta_count') == 1
+        and int(gate.get('max_summary_chars') or 0) <= 150
+        and gate.get('within_budget') is True
+    )
+
+def route_runner_funnel_telemetry_ok(gate):
+    if not isinstance(gate, dict):
+        return False
+    required_number_fields = [
+        'route_started_count',
+        'evidence_submitted_count',
+        'reward_claimed_count',
+        'next_route_opened_count',
+        'abandoned_or_recovery_count',
+        'daily_return_resume_count',
+        'time_to_reward_seconds',
+    ]
+    return (
+        gate.get('contract_version') == 'trillionnium_route_runner_funnel_telemetry_gate_v1'
+        and gate.get('telemetry_contract_version') == 'trillionnium_route_runner_funnel_telemetry_v1'
+        and bool(gate.get('telemetry_stream'))
+        and all(isinstance(gate.get(field), (int, float)) for field in required_number_fields)
+        and gate.get('time_to_reward_target_seconds') == 1800
+    )
+
+def future_engine_readiness_ok(gate):
+    if not isinstance(gate, dict):
+        return False
+    return (
+        gate.get('contract_version') == 'trillionnium_world_future_engine_readiness_gate_v1'
+        and gate.get('readiness_contract_version') == 'trillionnium_world_future_engine_readiness_v1'
+        and gate.get('planned_upgrade_readiness_contract_version') == 'trillionnium_world_future_engine_readiness_v1'
+        and gate.get('active_engine_id') == 'leaflet_openstreetmap_v1'
+        and gate.get('adapter_id') == 'leaflet_renderer_adapter_v1'
+        and gate.get('runtime_handle_name') == 'mapRuntime'
+        and gate.get('candidate_engine_id') == 'maplibre_gl_v1'
+        and gate.get('planned_upgrade_status') == 'planned_not_active'
+        and gate.get('rollback_plan_visible') is True
+        and gate.get('lod_precondition_visible') is True
+        and gate.get('telemetry_precondition_visible') is True
+        and isinstance(gate.get('promotion_blocker_count'), (int, float))
+        and gate.get('promotion_blocker_count') >= 1
+    )
+
 gate_sources = {
     'playability': (health.get('trillionnium_world_playability_scorecard') or {}).get('route_runner_handoff_gate') or {},
     'closed_beta': (health.get('trillionnium_world_closed_beta_prototype') or {}).get('route_runner_handoff_gate') or {},
@@ -194,6 +258,17 @@ gate_sources = {
 }
 gate_results = {name: gate_ok(gate) for name, gate in gate_sources.items()}
 primary_gate = gate_sources['playability']
+playability_scorecard = health.get('trillionnium_world_playability_scorecard') or {}
+product_gate_sources = {
+    'map_readability_lod': playability_scorecard.get('map_readability_lod_gate') or {},
+    'route_runner_funnel_telemetry': playability_scorecard.get('route_runner_funnel_telemetry_gate') or {},
+    'future_engine_readiness': playability_scorecard.get('future_engine_readiness_gate') or {},
+}
+product_gate_results = {
+    'map_readability_lod': map_readability_lod_ok(product_gate_sources['map_readability_lod']),
+    'route_runner_funnel_telemetry': route_runner_funnel_telemetry_ok(product_gate_sources['route_runner_funnel_telemetry']),
+    'future_engine_readiness': future_engine_readiness_ok(product_gate_sources['future_engine_readiness']),
+}
 metric_thresholds = {
     'cex_consumer_entry_trillionnium_route_runner_handoff_all_gates_green': 1,
     'cex_consumer_entry_trillionnium_route_runner_handoff_feed_source_count': 7,
@@ -205,6 +280,20 @@ metric_thresholds = {
     'cex_consumer_entry_trillionnium_route_runner_handoff_first_route_mastery_xp': 1,
     'cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_tier_visible': 1,
     'cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_next_goal_evidence_visible': 1,
+    'cex_consumer_entry_trillionnium_world_map_readability_lod_gate_green': 1,
+    'cex_consumer_entry_trillionnium_world_map_readability_lod_visible_marker_budget': 1,
+    'cex_consumer_entry_trillionnium_world_map_readability_lod_visible_markers': 0,
+    'cex_consumer_entry_trillionnium_world_map_readability_lod_avatar_runner_budget': 1,
+    'cex_consumer_entry_trillionnium_world_map_readability_lod_avatar_runners': 0,
+    'cex_consumer_entry_trillionnium_route_runner_funnel_telemetry_contract_visible': 1,
+    'cex_consumer_entry_trillionnium_route_runner_funnel_route_started_count': 0,
+    'cex_consumer_entry_trillionnium_route_runner_funnel_evidence_submitted_count': 0,
+    'cex_consumer_entry_trillionnium_route_runner_funnel_reward_claimed_count': 0,
+    'cex_consumer_entry_trillionnium_route_runner_funnel_next_route_opened_count': 0,
+    'cex_consumer_entry_trillionnium_route_runner_funnel_abandoned_or_recovery_count': 0,
+    'cex_consumer_entry_trillionnium_route_runner_funnel_time_to_reward_seconds': 0,
+    'cex_consumer_entry_trillionnium_route_runner_funnel_daily_return_resume_count': 0,
+    'cex_consumer_entry_trillionnium_world_future_engine_readiness_gate_green': 1,
 }
 metric_values = {name: metric_value(name) for name in metric_thresholds}
 metric_results = {
@@ -212,13 +301,15 @@ metric_results = {
     for name, threshold in metric_thresholds.items()
 }
 evidence = {
-    'ok': all(gate_results.values()) and all(metric_results.values()),
+    'ok': all(gate_results.values()) and all(product_gate_results.values()) and all(metric_results.values()),
     'contract_version': 'trillionnium_signoff_route_runner_handoff_evidence_v1',
     'source': f"{health.get('service') or 'consumer-entry-api'}/health",
     'metrics_source': f"{health.get('service') or 'consumer-entry-api'}/metrics",
     'health_status': health.get('status'),
     'gate_results': gate_results,
+    'product_gate_results': product_gate_results,
     'gate_names': list(gate_sources.keys()),
+    'product_gate_names': list(product_gate_sources.keys()),
     'metric_results': metric_results,
     'metric_thresholds': metric_thresholds,
     'metric_values': metric_values,
@@ -235,12 +326,14 @@ evidence = {
     'first_next_route_sequence_summary': primary_gate.get('first_next_route_sequence_summary'),
     'handoff_prompt': primary_gate.get('handoff_prompt'),
     'gates': gate_sources,
+    'product_gates': product_gate_sources,
 }
 out_path.write_text(json.dumps(evidence, indent=2, sort_keys=True) + '\n')
 if not evidence['ok']:
     missing_gates = [name for name, ok in gate_results.items() if not ok]
+    missing_product_gates = [name for name, ok in product_gate_results.items() if not ok]
     missing_metrics = [name for name, ok in metric_results.items() if not ok]
-    raise SystemExit(f'route-runner handoff signoff evidence not green: gates={missing_gates} metrics={missing_metrics}')
+    raise SystemExit(f'route-runner handoff signoff evidence not green: gates={missing_gates} product_gates={missing_product_gates} metrics={missing_metrics}')
 PY
 then
   route_runner_handoff_evidence_ok=true

@@ -348,6 +348,77 @@ groups:
         '
       runbook: docs/operator-runbook-v1.md
       first_action: curl -s http://127.0.0.1:8090/metrics | grep 'cex_consumer_entry_trillionnium_route_runner_handoff_.*mastery'
+  - alert: CexTrillionniumWorldMapReadabilityLodNotGreen
+    expr: cex_consumer_entry_trillionnium_world_map_readability_lod_gate_green ==
+      0
+    for: 5m
+    labels:
+      severity: critical
+      service: consumer-entry-api
+      family: product-edge
+      component: trillionnium-route-runner-handoff
+      owner: product-ops
+      route_hint: page
+    annotations:
+      summary: Trillionnium World Map readability/LOD gate is not green
+      description: 'The mobile first-screen map readability budget is no longer green.
+        Players may see too
+
+        many visible markers/runners, missing LOD contract data, or an over-dense
+        route-first
+
+        screen before they can understand the next action.
+
+        '
+      runbook: docs/operator-runbook-v1.md
+      first_action: curl -s http://127.0.0.1:8090/health | jq '.trillionnium_world_playability_scorecard.map_readability_lod_gate'
+  - alert: CexTrillionniumRouteRunnerFunnelTelemetryMissing
+    expr: cex_consumer_entry_trillionnium_route_runner_funnel_telemetry_contract_visible
+      == 0
+    for: 10m
+    labels:
+      severity: warning
+      service: consumer-entry-api
+      family: product-edge
+      component: trillionnium-route-runner-handoff
+      owner: product-ops
+      route_hint: chat
+    annotations:
+      summary: Trillionnium route-runner funnel telemetry contract is missing
+      description: 'The route-runner funnel telemetry contract disappeared from health/metrics.
+        Product ops
+
+        may lose route_started, evidence_submitted, reward_claimed, next_route_opened,
+
+        recovery, daily-return, or time-to-reward observability.
+
+        '
+      runbook: docs/operator-runbook-v1.md
+      first_action: curl -s http://127.0.0.1:8090/metrics | grep cex_consumer_entry_trillionnium_route_runner_funnel
+  - alert: CexTrillionniumWorldFutureEngineReadinessNotGreen
+    expr: cex_consumer_entry_trillionnium_world_future_engine_readiness_gate_green
+      == 0
+    for: 10m
+    labels:
+      severity: warning
+      service: consumer-entry-api
+      family: product-edge
+      component: trillionnium-route-runner-handoff
+      owner: product-ops
+      route_hint: chat
+    annotations:
+      summary: Trillionnium future map-engine readiness gate is not green
+      description: 'The renderer-adapter future-engine readiness contract is not green.
+        Leaflet should remain
+
+        live, MapLibre should stay shadow/planned, and promotion should stay blocked
+        until LOD,
+
+        telemetry, rollback, and adapter preconditions are visible.
+
+        '
+      runbook: docs/operator-runbook-v1.md
+      first_action: curl -s http://127.0.0.1:8090/health | jq '.trillionnium_world_playability_scorecard.future_engine_readiness_gate'
 - name: cex-core-runtime-operator-signals-from-wrapper
   rules:
   - alert: CexGatewayInfoEndpointUnreachable

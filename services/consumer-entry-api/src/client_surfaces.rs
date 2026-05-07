@@ -3,6 +3,8 @@ use super::*;
 const TRILLIONNIUM_PLAYABILITY_COACH_CONTRACT_VERSION: &str = "trillionnium_playability_coach_v1";
 const TRILLIONNIUM_ECONOMY_RETENTION_OPS_CONTRACT_VERSION: &str =
     "trillionnium_economy_retention_ops_v1";
+const TRILLIONNIUM_ROUTE_RUNNER_FUNNEL_TELEMETRY_CONTRACT_VERSION: &str =
+    "trillionnium_route_runner_funnel_telemetry_v1";
 
 #[derive(Debug, Clone)]
 pub(super) struct ClientRouteWorldContext {
@@ -1650,6 +1652,17 @@ impl<'a> ClientAppProjectionContext<'a> {
                 "mode": "short_summary_plus_collapsed_details",
                 "default_state": "collapsed",
             },
+            "map_readability_lod": {
+                "contract_version": "trillionnium_world_map_readability_lod_v1",
+                "visible_contract_id": "app-map-readability-lod",
+                "mode": "single_route_first_plus_collapsed_dense_layers",
+                "first_screen_mode": "route_first_street_detail",
+                "max_primary_cta_count": 1,
+                "max_summary_chars": 150,
+                "max_visible_markers": 18,
+                "max_avatar_route_runners": 6,
+                "details_default_state": "collapsed",
+            },
             "resilience": {
                 "feed_api_hydration": "loadFeedSurface",
                 "web_session_feed_path": "/app/web/feed",
@@ -1669,6 +1682,7 @@ impl<'a> ClientAppProjectionContext<'a> {
                 "feed_api_hydration_visible",
                 "mobile_bottom_sheet_single_primary_cta_visible",
                 "mobile_copy_layering_visible",
+                "map_readability_lod_visible",
                 "next_action_rail_visible",
                 "playability_coach_visible",
                 "p0_next_best_action_visible",
@@ -1831,6 +1845,92 @@ impl<'a> ClientAppProjectionContext<'a> {
             .filter(|event| event.dimension == "encounter_state")
             .count() as i64;
         let route_backlog_count = self.route_artifacts.task_views.len() as i64;
+        let route_started_count = (map_metrics.avatar_route_runner_count as i64)
+            .max(world_action_count)
+            .max(work_order_count);
+        let evidence_submitted_count = delivery_count + completion_count + submission_count;
+        let reward_claimed_count = reward_count;
+        let next_route_opened_count =
+            route_backlog_count.max(map_metrics.avatar_task_route_count as i64);
+        let abandoned_or_recovery_count = review_hold_count + recovery_count as i64;
+        let mut route_start_epochs: Vec<i64> = self
+            .world
+            .world_events
+            .iter()
+            .filter(|event| event.actor_matrix_user_id == matrix_user_id)
+            .map(|event| event.created_at_epoch)
+            .collect();
+        route_start_epochs.extend(
+            self.world
+                .world_work_orders
+                .iter()
+                .filter(|work_order| {
+                    work_order.buyer_matrix_user_id == matrix_user_id
+                        || work_order.seller_matrix_user_id == matrix_user_id
+                })
+                .map(|work_order| work_order.created_at_epoch),
+        );
+        let first_route_start_epoch = route_start_epochs.iter().min().copied();
+        let first_evidence_epoch = self
+            .world
+            .world_work_deliveries
+            .iter()
+            .filter(|delivery| delivery.matrix_user_id == matrix_user_id)
+            .map(|delivery| delivery.created_at_epoch)
+            .chain(
+                self.world
+                    .world_contract_completions
+                    .iter()
+                    .filter(|completion| completion.matrix_user_id == matrix_user_id)
+                    .map(|completion| completion.created_at_epoch),
+            )
+            .chain(
+                self.league
+                    .submissions
+                    .values()
+                    .filter(|submission| submission.matrix_user_id == matrix_user_id)
+                    .map(|submission| submission.created_at_epoch),
+            )
+            .min();
+        let first_reward_epoch = self
+            .league
+            .rewards
+            .iter()
+            .filter(|reward| reward.matrix_user_id == matrix_user_id)
+            .map(|reward| reward.created_at_epoch)
+            .chain(
+                self.world
+                    .world_contract_completions
+                    .iter()
+                    .filter(|completion| completion.matrix_user_id == matrix_user_id)
+                    .map(|completion| completion.created_at_epoch),
+            )
+            .chain(
+                self.world
+                    .world_work_acceptances
+                    .iter()
+                    .filter(|acceptance| acceptance.matrix_user_id == matrix_user_id)
+                    .map(|acceptance| acceptance.created_at_epoch),
+            )
+            .min();
+        let route_start_to_evidence_seconds = first_route_start_epoch
+            .zip(first_evidence_epoch)
+            .map(|(start, evidence)| (evidence - start).max(0))
+            .unwrap_or(0);
+        let evidence_to_reward_seconds = first_evidence_epoch
+            .zip(first_reward_epoch)
+            .map(|(evidence, reward)| (reward - evidence).max(0))
+            .unwrap_or(0);
+        let time_to_reward_seconds = first_route_start_epoch
+            .zip(first_reward_epoch)
+            .map(|(start, reward)| (reward - start).max(0))
+            .unwrap_or(0);
+        let time_to_reward_sample_count =
+            if first_route_start_epoch.is_some() && first_reward_epoch.is_some() {
+                1
+            } else {
+                0
+            };
         let mut active_days = HashSet::new();
         for epoch in self
             .world
@@ -1865,6 +1965,8 @@ impl<'a> ClientAppProjectionContext<'a> {
         {
             active_days.insert(epoch / 86_400);
         }
+        let daily_return_resume_count =
+            (active_days.len() as i64).max(if route_backlog_count > 0 { 1 } else { 0 });
         let funnel_steps = vec![
             json!({"step_id": "first_focus_selected", "label": "Map focus selected / 选择地图焦点", "count": if self.world.world_player_positions.contains_key(matrix_user_id) { 1 } else { 0 }, "completed": self.world.world_player_positions.contains_key(matrix_user_id)}),
             json!({"step_id": "world_action_started", "label": "World action started / 开始世界行动", "count": world_action_count, "completed": world_action_count > 0}),
@@ -1884,6 +1986,57 @@ impl<'a> ClientAppProjectionContext<'a> {
             .count();
         let funnel_completion_percent =
             ((completed_funnel_steps as f64 / funnel_steps.len() as f64) * 100.0).round() as i64;
+        let route_runner_funnel_telemetry = json!({
+            "contract_version": TRILLIONNIUM_ROUTE_RUNNER_FUNNEL_TELEMETRY_CONTRACT_VERSION,
+            "status": "runtime_counts_visible",
+            "source_mode": "runtime_projection_counts_plus_epoch_deltas",
+            "telemetry_stream": "world_economy_events:playability_telemetry",
+            "matrix_user_id": matrix_user_id,
+            "funnel_id": "route_runner_first_session_to_daily_return_v1",
+            "event_counts": {
+                "route_started": route_started_count,
+                "evidence_submitted": evidence_submitted_count,
+                "reward_claimed": reward_claimed_count,
+                "next_route_opened": next_route_opened_count,
+                "abandoned_or_recovery": abandoned_or_recovery_count,
+                "daily_return_resume": daily_return_resume_count,
+            },
+            "time_to_reward": {
+                "sample_count": time_to_reward_sample_count,
+                "first_route_start_epoch": first_route_start_epoch,
+                "first_evidence_epoch": first_evidence_epoch,
+                "first_reward_epoch": first_reward_epoch,
+                "route_start_to_evidence_seconds": route_start_to_evidence_seconds,
+                "evidence_to_reward_seconds": evidence_to_reward_seconds,
+                "p50_seconds": time_to_reward_seconds,
+                "target_seconds": 1800,
+                "within_target": time_to_reward_sample_count > 0 && time_to_reward_seconds <= 1800,
+            },
+            "resume_hooks": [
+                {"hook_id": "daily_resume_next_route", "event": "daily_return_resume", "source": "route_backlog_count", "count": daily_return_resume_count},
+                {"hook_id": "reward_claim_reminder", "event": "reward_claimed", "source": "league_rewards_plus_world_acceptance", "count": reward_claimed_count},
+                {"hook_id": "evidence_nudge", "event": "evidence_submitted", "source": "deliveries_plus_completions_plus_submissions", "count": evidence_submitted_count}
+            ],
+            "metric_names": [
+                "cex_consumer_entry_trillionnium_route_runner_funnel_telemetry_contract_visible",
+                "cex_consumer_entry_trillionnium_route_runner_funnel_route_started_count",
+                "cex_consumer_entry_trillionnium_route_runner_funnel_evidence_submitted_count",
+                "cex_consumer_entry_trillionnium_route_runner_funnel_reward_claimed_count",
+                "cex_consumer_entry_trillionnium_route_runner_funnel_next_route_opened_count",
+                "cex_consumer_entry_trillionnium_route_runner_funnel_abandoned_or_recovery_count",
+                "cex_consumer_entry_trillionnium_route_runner_funnel_time_to_reward_seconds",
+                "cex_consumer_entry_trillionnium_route_runner_funnel_daily_return_resume_count"
+            ],
+            "readiness_checks": [
+                "route_started_event_count_visible",
+                "evidence_submitted_count_visible",
+                "reward_claimed_count_visible",
+                "next_route_opened_count_visible",
+                "abandoned_or_recovery_count_visible",
+                "time_to_reward_target_visible",
+                "daily_return_resume_visible"
+            ]
+        });
         json!({
             "contract_version": TRILLIONNIUM_ECONOMY_RETENTION_OPS_CONTRACT_VERSION,
             "status": "instrumented",
@@ -1929,6 +2082,7 @@ impl<'a> ClientAppProjectionContext<'a> {
                 "completion_percent": funnel_completion_percent,
                 "steps": funnel_steps,
             },
+            "route_runner_funnel_telemetry": route_runner_funnel_telemetry,
             "anti_cheese_policy": {
                 "policy_id": "trillionnium_playability_anti_cheese_v1",
                 "cooldown_seconds": 300,
@@ -1944,6 +2098,7 @@ impl<'a> ClientAppProjectionContext<'a> {
                 "market_simulator": "trillionnium_market_simulator_v1",
                 "league_encounter_state": "trillionnium_league_encounter_state_v1",
                 "telemetry_stream": "world_economy_events:playability_telemetry",
+                "route_runner_funnel_telemetry": TRILLIONNIUM_ROUTE_RUNNER_FUNNEL_TELEMETRY_CONTRACT_VERSION,
                 "balance_config": "trillionnium_playability_balance_config_v1"
             },
             "playability_balance_config": {
@@ -1977,6 +2132,9 @@ impl<'a> ClientAppProjectionContext<'a> {
                 "market_simulator_visible",
                 "league_encounter_state_visible",
                 "persistent_telemetry_stream_visible",
+                "route_runner_funnel_telemetry_visible",
+                "time_to_reward_visible",
+                "daily_return_resume_visible",
                 "balance_config_visible"
             ]
         })
@@ -2193,6 +2351,7 @@ impl<'a> ClientAppProjectionContext<'a> {
                     "reward_read",
                     "next_route_queued"
                 ],
+                "funnel_telemetry_contract_version": TRILLIONNIUM_ROUTE_RUNNER_FUNNEL_TELEMETRY_CONTRACT_VERSION,
                 "funnel_target": "first_session_focus_to_reward_then_next_route"
             },
             "economy_retention_ops": economy_retention_ops,
@@ -2264,6 +2423,10 @@ impl<'a> ClientAppProjectionContext<'a> {
             .get("economy_retention_ops")
             .cloned()
             .unwrap_or_else(|| json!({}));
+        let route_runner_funnel_telemetry = economy_retention_ops
+            .get("route_runner_funnel_telemetry")
+            .cloned()
+            .unwrap_or_else(|| json!({}));
         let map_hub = app_context.into_client_app_map_hub_json(&map_metrics);
         json!({
             "kind": "trillionnium_client_app",
@@ -2281,6 +2444,7 @@ impl<'a> ClientAppProjectionContext<'a> {
             "playability_coach": playability_coach,
             "next_best_actions": next_best_actions,
             "economy_retention_ops": economy_retention_ops,
+            "route_runner_funnel_telemetry": route_runner_funnel_telemetry,
             "map": map,
             "feed": feed,
             "map_hub": map_hub,

@@ -3,6 +3,10 @@ use super::*;
 const TRILLIONNIUM_ROUTE_RUNNER_LIFECYCLE_CONTRACT_VERSION: &str =
     "trillionnium_route_runner_lifecycle_v1";
 const TRILLIONNIUM_ROUTE_MASTERY_CONTRACT_VERSION: &str = "trillionnium_route_mastery_v1";
+const TRILLIONNIUM_WORLD_MAP_READABILITY_LOD_CONTRACT_VERSION: &str =
+    "trillionnium_world_map_readability_lod_v1";
+const TRILLIONNIUM_WORLD_FUTURE_ENGINE_READINESS_CONTRACT_VERSION: &str =
+    "trillionnium_world_future_engine_readiness_v1";
 
 fn route_runner_now_epoch() -> i64 {
     Utc::now().timestamp()
@@ -668,11 +672,107 @@ pub(super) fn trillionnium_world_map_gameplay_layer_contract_json() -> Value {
             "route_mastery_contract_version": TRILLIONNIUM_ROUTE_MASTERY_CONTRACT_VERSION,
             "route_runner_reward_claim_actions": true,
             "route_runner_next_route_actions": true,
+            "map_readability_lod": true,
+            "map_readability_lod_contract_version": TRILLIONNIUM_WORLD_MAP_READABILITY_LOD_CONTRACT_VERSION,
             "agent_party_state": true,
             "agent_party_handoff_actions": true,
             "live_event_task_pulses": true,
             "openstreetmap_base_tiles": true
         }
+    })
+}
+
+pub(super) fn world_map_readability_lod_contract_json(
+    zoom: i64,
+    marker_limit: usize,
+    marker_count: usize,
+    poi_hotspot_count: usize,
+    live_event_count: usize,
+    avatar_task_route_count: usize,
+    avatar_route_runner_count: usize,
+    player_density: &Value,
+) -> Value {
+    let lod_mode = world_map_lod_mode(zoom);
+    let first_screen_mode = match zoom {
+        i if i >= 14 => "route_first_street_detail",
+        i if i >= 10 => "region_route_cluster",
+        _ => "overview_cluster",
+    };
+    let max_visible_markers = marker_limit.min(18);
+    let max_poi_hotspots = 6usize;
+    let max_live_event_pulses = 6usize;
+    let max_avatar_task_routes = 6usize;
+    let max_avatar_route_runners = 6usize;
+    let player_density_mode = player_density
+        .get("mode")
+        .and_then(Value::as_str)
+        .unwrap_or("dense");
+    let shard_pressure = player_density
+        .get("shard_pressure")
+        .and_then(Value::as_str)
+        .unwrap_or("low");
+    let clutter_budget_ok = marker_count <= max_visible_markers
+        && poi_hotspot_count <= max_poi_hotspots
+        && live_event_count <= max_live_event_pulses
+        && avatar_task_route_count <= max_avatar_task_routes
+        && avatar_route_runner_count <= max_avatar_route_runners;
+
+    json!({
+        "contract_version": TRILLIONNIUM_WORLD_MAP_READABILITY_LOD_CONTRACT_VERSION,
+        "status": if clutter_budget_ok { "within_budget" } else { "over_budget" },
+        "first_screen_mode": first_screen_mode,
+        "lod_mode": lod_mode,
+        "zoom": zoom,
+        "player_density_mode": player_density_mode,
+        "shard_pressure": shard_pressure,
+        "primary_cta_budget": {
+            "max_primary_cta_count": 1,
+            "primary_cta_id": "app-mobile-primary-cta",
+            "target_id": "app-map-action-rail",
+            "reason": "mobile first screen must present one route continuation action before dense map detail",
+        },
+        "copy_budget": {
+            "summary_id": "app-map-copy-summary",
+            "details_id": "app-map-copy-layer-details",
+            "max_summary_chars": 150,
+            "details_default_state": "collapsed",
+        },
+        "object_budget": {
+            "max_visible_markers": max_visible_markers,
+            "max_poi_hotspots": max_poi_hotspots,
+            "max_live_event_pulses": max_live_event_pulses,
+            "max_avatar_task_routes": max_avatar_task_routes,
+            "max_avatar_route_runners": max_avatar_route_runners,
+            "visible_markers": marker_count,
+            "poi_hotspots": poi_hotspot_count,
+            "live_event_pulses": live_event_count,
+            "avatar_task_routes": avatar_task_route_count,
+            "avatar_route_runners": avatar_route_runner_count,
+            "within_budget": clutter_budget_ok,
+        },
+        "layer_priority": [
+            "primary_route_runner_handoff",
+            "reward_claim_or_next_route_cta",
+            "current_focus_node",
+            "nearby_route_task_cards",
+            "live_event_pulses",
+            "secondary_poi_details"
+        ],
+        "zoom_rules": [
+            {"zoom_min": 3, "zoom_max": 9, "mode": "overview_cluster", "visible_layers": ["region_shards", "route_clusters"]},
+            {"zoom_min": 10, "zoom_max": 13, "mode": "region_route_cluster", "visible_layers": ["region_shards", "poi_hotspots", "task_routes"]},
+            {"zoom_min": 14, "zoom_max": 19, "mode": "route_first_street_detail", "visible_layers": ["poi_hotspots", "avatar_route_runners", "reward_checkpoints", "live_event_pulses"]}
+        ],
+        "player_copy": "One route first: pick the visible runner, claim reward when evidence is ready, then open the next route; dense map layers stay collapsed until needed.",
+        "readiness_checks": [
+            "single_primary_cta_budget_visible",
+            "copy_summary_under_150_chars",
+            "details_default_collapsed",
+            "visible_marker_budget_enforced",
+            "avatar_runner_budget_enforced",
+            "lod_zoom_rules_visible",
+            "layer_priority_visible"
+        ]
     })
 }
 
@@ -1967,7 +2067,51 @@ pub(super) fn real_world_map_renderer_adapter_json() -> Value {
             "supports_viewport_events": true,
             "supports_future_engine_swap": true
         },
-        "future_engine_candidate": "maplibre_gl_v1"
+        "future_engine_candidate": "maplibre_gl_v1",
+        "future_engine_readiness": real_world_map_future_engine_readiness_json()
+    })
+}
+
+pub(super) fn real_world_map_future_engine_readiness_json() -> Value {
+    json!({
+        "contract_version": TRILLIONNIUM_WORLD_FUTURE_ENGINE_READINESS_CONTRACT_VERSION,
+        "status": "adapter_ready_not_migrating",
+        "active_engine_id": "leaflet_openstreetmap_v1",
+        "candidate_engine_id": "maplibre_gl_v1",
+        "migration_policy": "do_not_switch_until_lod_budget_and_telemetry_pressure_require_vector_webgl",
+        "renderer_neutral_runtime_handle": "mapRuntime",
+        "required_preconditions": [
+            "renderer_adapter_contract_green",
+            "map_readability_lod_contract_green",
+            "route_runner_funnel_telemetry_green",
+            "web_matrix_browser_e2e_green",
+            "rollback_to_leaflet_documented"
+        ],
+        "promotion_blockers": [
+            "no_current_vector_webgl_pressure",
+            "keep_leaflet_openstreetmap_v1_live_for_public_beta",
+            "avoid_platform_migration_before_product_readability"
+        ],
+        "scale_probe_targets": {
+            "max_visible_markers": 18,
+            "max_avatar_route_runners": 6,
+            "target_viewport_p95_ms": 250,
+            "target_tile_error_rate_percent": 1
+        },
+        "rollback_plan": {
+            "active_engine_remains": "leaflet_openstreetmap_v1",
+            "candidate_is_shadow_only": true,
+            "rollback_flag": "TRILLIONNIUM_MAP_ENGINE=leaflet_openstreetmap_v1"
+        },
+        "readiness_checks": [
+            "future_engine_candidate_declared",
+            "active_engine_stays_leaflet",
+            "renderer_neutral_handle_declared",
+            "lod_budget_precondition_visible",
+            "telemetry_precondition_visible",
+            "rollback_plan_visible",
+            "promotion_blockers_visible"
+        ]
     })
 }
 
@@ -1976,7 +2120,8 @@ pub(super) fn real_world_map_planned_upgrade_engine_json() -> Value {
         "engine_id": "maplibre_gl_v1",
         "promotion_trigger": "vector_webgl_pressure_after_adapter_seam",
         "status": "planned_not_active",
-        "gating_contract": "renderer_adapter.adapter_contract_version >= 1"
+        "gating_contract": "renderer_adapter.adapter_contract_version >= 1",
+        "readiness_contract_version": TRILLIONNIUM_WORLD_FUTURE_ENGINE_READINESS_CONTRACT_VERSION
     })
 }
 
@@ -2135,6 +2280,16 @@ pub(super) fn world_map_viewport_json(
     let avatar_route_runner_count = avatar_route_runners.len();
     let route_runner_handoff =
         world_map_route_runner_handoff_json(avatar_task_route_count, &avatar_route_runners);
+    let map_readability_lod = world_map_readability_lod_contract_json(
+        zoom,
+        marker_limit,
+        marker_count,
+        poi_hotspots.len(),
+        live_event_count,
+        avatar_task_route_count,
+        avatar_route_runner_count,
+        &player_density,
+    );
     let viewport_path = format!(
         "/v1/world/map/{}/viewport?lat={:.6}&lng={:.6}&zoom={}&radius_km={:.1}&limit={}",
         matrix_user_id, center_lat, center_lng, zoom, radius_km, marker_limit
@@ -2179,6 +2334,7 @@ pub(super) fn world_map_viewport_json(
         "avatar_route_runners": avatar_route_runners,
         "avatar_route_runner_count": avatar_route_runner_count,
         "route_runner_handoff": route_runner_handoff,
+        "map_readability_lod": map_readability_lod,
         "gameplay_layer_contract": trillionnium_world_map_gameplay_layer_contract_json(),
         "live_event_stream": live_event_stream,
         "live_event_stream_index_layer": "WorldIndexes::event_indices_by_location_v1",
@@ -2202,6 +2358,8 @@ pub(super) fn world_map_viewport_json(
             "route_mastery_contract_version": TRILLIONNIUM_ROUTE_MASTERY_CONTRACT_VERSION,
             "supports_route_runner_reward_claim_actions": true,
             "supports_route_runner_next_route_actions": true,
+            "supports_map_readability_lod": true,
+            "map_readability_lod_contract_version": TRILLIONNIUM_WORLD_MAP_READABILITY_LOD_CONTRACT_VERSION,
             "supports_agent_party_state": true,
             "supports_agent_party_handoff_actions": true,
         }

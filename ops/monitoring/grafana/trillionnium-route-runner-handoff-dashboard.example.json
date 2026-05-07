@@ -428,6 +428,154 @@
       ],
       "title": "Route mastery progression",
       "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 19
+      },
+      "id": 6,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_map_readability_lod_gate_green",
+          "legendFormat": "map readability gate",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_map_readability_lod_visible_marker_budget",
+          "legendFormat": "marker budget",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_map_readability_lod_visible_markers",
+          "legendFormat": "visible markers",
+          "range": true,
+          "refId": "C"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_map_readability_lod_avatar_runner_budget",
+          "legendFormat": "runner budget",
+          "range": true,
+          "refId": "D"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_map_readability_lod_avatar_runners",
+          "legendFormat": "avatar runners",
+          "range": true,
+          "refId": "E"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_route_runner_funnel_telemetry_contract_visible",
+          "legendFormat": "funnel contract visible",
+          "range": true,
+          "refId": "F"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_route_runner_funnel_route_started_count",
+          "legendFormat": "route started",
+          "range": true,
+          "refId": "G"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_route_runner_funnel_evidence_submitted_count",
+          "legendFormat": "evidence submitted",
+          "range": true,
+          "refId": "H"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_route_runner_funnel_reward_claimed_count",
+          "legendFormat": "reward claimed",
+          "range": true,
+          "refId": "I"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_route_runner_funnel_next_route_opened_count",
+          "legendFormat": "next route opened",
+          "range": true,
+          "refId": "J"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_route_runner_funnel_abandoned_or_recovery_count",
+          "legendFormat": "abandoned/recovery",
+          "range": true,
+          "refId": "K"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_route_runner_funnel_time_to_reward_seconds",
+          "legendFormat": "time to reward seconds",
+          "range": true,
+          "refId": "L"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_route_runner_funnel_daily_return_resume_count",
+          "legendFormat": "daily return resume",
+          "range": true,
+          "refId": "M"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_future_engine_readiness_gate_green",
+          "legendFormat": "future engine gate",
+          "range": true,
+          "refId": "N"
+        }
+      ],
+      "title": "Mobile map readability / funnel / future engine",
+      "type": "timeseries"
     }
   ],
   "refresh": "30s",

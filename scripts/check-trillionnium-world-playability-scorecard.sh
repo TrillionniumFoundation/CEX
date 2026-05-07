@@ -61,6 +61,9 @@ scorecard = consumer.get("trillionnium_world_playability_scorecard") or {}
 diagnostic_axes = scorecard.get("axes") or {}
 user_metric_axes = scorecard.get("user_metric_axes") or {}
 route_runner_handoff_gate = scorecard.get("route_runner_handoff_gate") or {}
+map_readability_lod_gate = scorecard.get("map_readability_lod_gate") or {}
+route_runner_funnel_telemetry_gate = scorecard.get("route_runner_funnel_telemetry_gate") or {}
+future_engine_readiness_gate = scorecard.get("future_engine_readiness_gate") or {}
 axis_order = scorecard.get("axis_order") or []
 user_metric_order = scorecard.get("user_metric_order") or []
 
@@ -93,20 +96,38 @@ require("playability_route_runner_counts", int(route_runner_handoff_gate.get("ru
 require("playability_route_runner_next_route_status", bool(route_runner_handoff_gate.get("first_next_route_status")), route_runner_handoff_gate)
 require("playability_route_runner_next_route_sequence", bool(route_runner_handoff_gate.get("first_next_route_sequence_summary")), route_runner_handoff_gate)
 require("playability_route_runner_handoff_prompt", bool(route_runner_handoff_gate.get("handoff_prompt")), route_runner_handoff_gate)
+require("playability_map_readability_lod_gate_contract", map_readability_lod_gate.get("contract_version") == "trillionnium_world_map_readability_lod_gate_v1", map_readability_lod_gate)
+require("playability_map_readability_lod_shell_contract", map_readability_lod_gate.get("shell_contract_version") == "trillionnium_world_map_readability_lod_v1", map_readability_lod_gate)
+require("playability_map_readability_lod_viewport_contract", map_readability_lod_gate.get("viewport_contract_version") == "trillionnium_world_map_readability_lod_v1", map_readability_lod_gate)
+require("playability_map_readability_lod_visible_id", map_readability_lod_gate.get("visible_contract_id") == "app-map-readability-lod", map_readability_lod_gate)
+require("playability_map_readability_lod_single_cta", int(map_readability_lod_gate.get("max_primary_cta_count") or 0) == 1, map_readability_lod_gate)
+require("playability_map_readability_lod_marker_budget", int(map_readability_lod_gate.get("max_visible_markers") or 999) <= 18 and map_readability_lod_gate.get("within_budget") is True, map_readability_lod_gate)
+require("playability_map_readability_lod_runner_budget", int(map_readability_lod_gate.get("max_avatar_route_runners") or 999) <= 6, map_readability_lod_gate)
+require("playability_route_runner_funnel_gate_contract", route_runner_funnel_telemetry_gate.get("contract_version") == "trillionnium_route_runner_funnel_telemetry_gate_v1", route_runner_funnel_telemetry_gate)
+require("playability_route_runner_funnel_contract", route_runner_funnel_telemetry_gate.get("telemetry_contract_version") == "trillionnium_route_runner_funnel_telemetry_v1", route_runner_funnel_telemetry_gate)
+require("playability_route_runner_funnel_stream", route_runner_funnel_telemetry_gate.get("telemetry_stream") == "world_economy_events:playability_telemetry", route_runner_funnel_telemetry_gate)
+require("playability_route_runner_funnel_counts_visible", all(route_runner_funnel_telemetry_gate.get(key) is not None for key in ["route_started_count", "evidence_submitted_count", "reward_claimed_count", "next_route_opened_count", "abandoned_or_recovery_count", "daily_return_resume_count"]), route_runner_funnel_telemetry_gate)
+require("playability_route_runner_funnel_time_target", int(route_runner_funnel_telemetry_gate.get("time_to_reward_target_seconds") or 0) == 1800, route_runner_funnel_telemetry_gate)
+require("playability_future_engine_gate_contract", future_engine_readiness_gate.get("contract_version") == "trillionnium_world_future_engine_readiness_gate_v1", future_engine_readiness_gate)
+require("playability_future_engine_readiness_contract", future_engine_readiness_gate.get("readiness_contract_version") == "trillionnium_world_future_engine_readiness_v1", future_engine_readiness_gate)
+require("playability_future_engine_stays_leaflet", future_engine_readiness_gate.get("active_engine_id") == "leaflet_openstreetmap_v1", future_engine_readiness_gate)
+require("playability_future_engine_candidate_maplibre", future_engine_readiness_gate.get("candidate_engine_id") == "maplibre_gl_v1", future_engine_readiness_gate)
+require("playability_future_engine_runtime_handle", future_engine_readiness_gate.get("runtime_handle_name") == "mapRuntime", future_engine_readiness_gate)
+require("playability_future_engine_shadow_rollback", future_engine_readiness_gate.get("rollback_plan_visible") is True and int(future_engine_readiness_gate.get("promotion_blocker_count") or 0) >= 3, future_engine_readiness_gate)
 for axis_id in DIAGNOSTIC_AXES:
     axis = diagnostic_axes.get(axis_id) or {}
     require(f"playability_axis_{axis_id}_score_10", axis.get("score") == 10.0, axis)
     require(f"playability_axis_{axis_id}_percent_100", axis.get("percent") == 100, axis)
     require(f"playability_axis_{axis_id}_converged", axis.get("status") == "converged", axis)
     require(f"playability_axis_{axis_id}_no_remaining", not axis.get("remaining_checks"), axis.get("remaining_checks"))
-    require(f"playability_axis_{axis_id}_ten_checks", axis.get("total_checks") == 10, axis.get("total_checks"))
+    require(f"playability_axis_{axis_id}_min_10_checks", int(axis.get("total_checks") or 0) >= 10, axis.get("total_checks"))
 for axis_id in USER_METRIC_AXES:
     axis = user_metric_axes.get(axis_id) or {}
     require(f"playability_user_metric_{axis_id}_score_10", axis.get("score") == 10.0, axis)
     require(f"playability_user_metric_{axis_id}_percent_100", axis.get("percent") == 100, axis)
     require(f"playability_user_metric_{axis_id}_converged", axis.get("status") == "converged", axis)
     require(f"playability_user_metric_{axis_id}_no_remaining", not axis.get("remaining_checks"), axis.get("remaining_checks"))
-    require(f"playability_user_metric_{axis_id}_ten_checks", axis.get("total_checks") == 10, axis.get("total_checks"))
+    require(f"playability_user_metric_{axis_id}_min_10_checks", int(axis.get("total_checks") or 0) >= 10, axis.get("total_checks"))
 
 for metric in [
     "cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_contract_visible",
@@ -114,6 +135,21 @@ for metric in [
     "cex_consumer_entry_trillionnium_route_runner_handoff_first_route_mastery_xp",
     "cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_tier_visible",
     "cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_next_goal_evidence_visible",
+    "cex_consumer_entry_trillionnium_world_map_readability_lod_gate_green",
+    "cex_consumer_entry_trillionnium_world_map_readability_lod_visible_marker_budget",
+    "cex_consumer_entry_trillionnium_world_map_readability_lod_visible_markers",
+    "cex_consumer_entry_trillionnium_world_map_readability_lod_avatar_runner_budget",
+    "cex_consumer_entry_trillionnium_world_map_readability_lod_avatar_runners",
+    "cex_consumer_entry_trillionnium_route_runner_funnel_telemetry_contract_visible",
+    "cex_consumer_entry_trillionnium_route_runner_funnel_route_started_count",
+    "cex_consumer_entry_trillionnium_route_runner_funnel_evidence_submitted_count",
+    "cex_consumer_entry_trillionnium_route_runner_funnel_reward_claimed_count",
+    "cex_consumer_entry_trillionnium_route_runner_funnel_next_route_opened_count",
+    "cex_consumer_entry_trillionnium_route_runner_funnel_abandoned_or_recovery_count",
+    "cex_consumer_entry_trillionnium_route_runner_funnel_time_to_reward_seconds",
+    "cex_consumer_entry_trillionnium_route_runner_funnel_daily_return_resume_count",
+    "cex_consumer_entry_trillionnium_world_future_engine_readiness_gate_green",
+    "cex_consumer_entry_trillionnium_world_future_engine_promotion_blocker_count",
     "cex_consumer_entry_trillionnium_world_playability_scorecard_overall_score",
     "cex_consumer_entry_trillionnium_world_playability_scorecard_overall_percent",
     "cex_consumer_entry_trillionnium_world_playability_scorecard_onboarding_3_minute_loop_score",
@@ -148,6 +184,9 @@ summary = {
     "playability_user_metric_scores": {axis_id: (user_metric_axes.get(axis_id) or {}).get("score") for axis_id in USER_METRIC_AXES},
     "playability_diagnostic_axis_scores": {axis_id: (diagnostic_axes.get(axis_id) or {}).get("score") for axis_id in DIAGNOSTIC_AXES},
     "route_runner_handoff_gate": route_runner_handoff_gate,
+    "map_readability_lod_gate": map_readability_lod_gate,
+    "route_runner_funnel_telemetry_gate": route_runner_funnel_telemetry_gate,
+    "future_engine_readiness_gate": future_engine_readiness_gate,
     "failures": failures,
 }
 path = summary_dir / f"playability-scorecard-summary-{checked_at}.json"

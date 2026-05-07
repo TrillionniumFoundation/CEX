@@ -427,6 +427,9 @@ curl -s -X POST -H 'x-admin-token: <admin-token>' -H 'content-type: application/
 - `CexTrillionniumRouteRunnerHandoffRunnerCountZero`
 - `CexTrillionniumRouteRunnerHandoffActionsMissing`
 - `CexTrillionniumRouteRunnerHandoffRouteMasteryMissing`
+- `CexTrillionniumWorldMapReadabilityLodNotGreen`
+- `CexTrillionniumRouteRunnerFunnelTelemetryMissing`
+- `CexTrillionniumWorldFutureEngineReadinessNotGreen`
 
 这些 alerts 带统一标签：`service=consumer-entry-api`、`family=product-edge`、`component=trillionnium-route-runner-handoff`、`owner=product-ops`。Alertmanager 示例配置会先匹配这个 component，再回退到普通 `product-edge` route。
 
@@ -444,6 +447,9 @@ curl -s -X POST -H 'x-admin-token: <admin-token>' -H 'content-type: application/
 - `/health.trillionnium_world_closed_beta_prototype.route_runner_handoff_gate`
 - `/health.trillionnium_world_real_user_beta.route_runner_handoff_gate`
 - `/health.trillionnium_world_public_commercial_product.route_runner_handoff_gate`
+- `/health.trillionnium_world_playability_scorecard.map_readability_lod_gate`
+- `/health.trillionnium_world_playability_scorecard.route_runner_funnel_telemetry_gate`
+- `/health.trillionnium_world_playability_scorecard.future_engine_readiness_gate`
 - `/metrics` 下的：
   - `cex_consumer_entry_trillionnium_route_runner_handoff_all_gates_green`
   - `cex_consumer_entry_trillionnium_route_runner_handoff_feed_source_count`
@@ -455,6 +461,20 @@ curl -s -X POST -H 'x-admin-token: <admin-token>' -H 'content-type: application/
   - `cex_consumer_entry_trillionnium_route_runner_handoff_first_route_mastery_xp`
   - `cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_tier_visible`
   - `cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_next_goal_evidence_visible`
+  - `cex_consumer_entry_trillionnium_world_map_readability_lod_gate_green`
+  - `cex_consumer_entry_trillionnium_world_map_readability_lod_visible_marker_budget`
+  - `cex_consumer_entry_trillionnium_world_map_readability_lod_visible_markers`
+  - `cex_consumer_entry_trillionnium_world_map_readability_lod_avatar_runner_budget`
+  - `cex_consumer_entry_trillionnium_world_map_readability_lod_avatar_runners`
+  - `cex_consumer_entry_trillionnium_route_runner_funnel_telemetry_contract_visible`
+  - `cex_consumer_entry_trillionnium_route_runner_funnel_route_started_count`
+  - `cex_consumer_entry_trillionnium_route_runner_funnel_evidence_submitted_count`
+  - `cex_consumer_entry_trillionnium_route_runner_funnel_reward_claimed_count`
+  - `cex_consumer_entry_trillionnium_route_runner_funnel_next_route_opened_count`
+  - `cex_consumer_entry_trillionnium_route_runner_funnel_abandoned_or_recovery_count`
+  - `cex_consumer_entry_trillionnium_route_runner_funnel_time_to_reward_seconds`
+  - `cex_consumer_entry_trillionnium_route_runner_funnel_daily_return_resume_count`
+  - `cex_consumer_entry_trillionnium_world_future_engine_readiness_gate_green`
 
 判断：
 
@@ -463,6 +483,9 @@ curl -s -X POST -H 'x-admin-token: <admin-token>' -H 'content-type: application/
 - `runner_count=0`：说明 handoff gate 本身还能算出结果，但没有 active route runners；优先查 world route projection、seeded first-session routes、map hub payload
 - `reward_claim_action_count=0` 或 `next_route_action_count=0`：玩家可能看得到 runner，但没有清晰的 claim reward / next route 操作路径；优先查 route-runner action hydration、button dataset、Matrix/web card projection
 - `route_mastery_contract_visible=0`、`route_mastery_runner_count=0`、`first_route_mastery_xp=0`、`route_mastery_tier_visible=0` 或 `route_mastery_next_goal_evidence_visible=0`：route runners 还在，但 XP/tier/streak/next-goal progression 没有完整进入 gate；优先查 `trillionnium_route_mastery_v1` projection、feed handoff aggregation、Matrix/Web card field passthrough，尤其确认 next-goal 是否仍绑定 evidence / reward claim / next route
+- `world_map_readability_lod_gate_green=0`：移动首屏地图可读性 / LOD 预算破了；优先查 `app-map-readability-lod` DOM、viewport `map_readability_lod`、visible marker / avatar runner budget、one-primary-CTA 与 collapsed dense-copy 约束
+- `route_runner_funnel_telemetry_contract_visible=0`：route-runner funnel telemetry contract 丢了；优先查 `route_started`、`evidence_submitted`、`reward_claimed`、`next_route_opened`、`abandoned_or_recovery`、`daily_return_resume`、`time_to_reward_seconds` 是否仍在 health 与 metrics 里可见（默认稀疏 fixture 允许计数为 0，但字段必须存在且 typed）
+- `world_future_engine_readiness_gate_green=0`：future-engine readiness contract 破了；保持 `leaflet_openstreetmap_v1` live，不要把 MapLibre 提成 active，先查 adapter id、`mapRuntime` handle、MapLibre shadow-only candidate、rollback plan、LOD/telemetry preconditions
 - `first_next_route_status` 不是 `next_route_preview_locked_until_reward_claim` 或 `next_route_ready_after_reward_claim`：先确认 reward-before-next-route 的产品约束是否被破坏，不要只按普通 copy 回归处理
 
 建议动作：
@@ -470,15 +493,15 @@ curl -s -X POST -H 'x-admin-token: <admin-token>' -H 'content-type: application/
 1. 先抓当前 health 与 metrics，不要先重启：
 
    ```bash
-   curl -s http://127.0.0.1:8090/health | jq '{playability: .trillionnium_world_playability_scorecard.route_runner_handoff_gate, closed_beta: .trillionnium_world_closed_beta_prototype.route_runner_handoff_gate, real_user_beta: .trillionnium_world_real_user_beta.route_runner_handoff_gate, public_commercial: .trillionnium_world_public_commercial_product.route_runner_handoff_gate}'
-   curl -s http://127.0.0.1:8090/metrics | grep cex_consumer_entry_trillionnium_route_runner_handoff
+   curl -s http://127.0.0.1:8090/health | jq '{playability: .trillionnium_world_playability_scorecard.route_runner_handoff_gate, closed_beta: .trillionnium_world_closed_beta_prototype.route_runner_handoff_gate, real_user_beta: .trillionnium_world_real_user_beta.route_runner_handoff_gate, public_commercial: .trillionnium_world_public_commercial_product.route_runner_handoff_gate, map_lod: .trillionnium_world_playability_scorecard.map_readability_lod_gate, funnel: .trillionnium_world_playability_scorecard.route_runner_funnel_telemetry_gate, future_engine: .trillionnium_world_playability_scorecard.future_engine_readiness_gate}'
+   curl -s http://127.0.0.1:8090/metrics | grep -E 'cex_consumer_entry_trillionnium_route_runner_handoff|cex_consumer_entry_trillionnium_world_map_readability_lod|cex_consumer_entry_trillionnium_route_runner_funnel|cex_consumer_entry_trillionnium_world_future_engine_readiness'
    ```
 
 2. 如果 health/metrics 已恢复，但 Prometheus 仍报警，先检查 live bundle 与 deploy metadata：
 
    ```bash
    scripts/check-trillionnium-route-runner-handoff-monitoring.sh --summary-file run/route-runner-handoff-monitoring-check.json
-   grep -R "CexTrillionniumRouteRunnerHandoff" -n run/monitoring-live-target/prometheus/rules.d/cex-monitoring-bundle.rules.yml
+   grep -R "CexTrillionnium\(RouteRunnerHandoff\|WorldMapReadability\|RouteRunnerFunnel\|WorldFutureEngine\)" -n run/monitoring-live-target/prometheus/rules.d/cex-monitoring-bundle.rules.yml
    sed -n '1,160p' run/monitoring-live-target/metadata/monitoring-deploy-metadata.yml
    ```
 

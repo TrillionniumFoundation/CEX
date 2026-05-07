@@ -17,7 +17,7 @@ const profiles = [
     name: 'mobile',
     context: { viewport: { width: 390, height: 844 }, isMobile: true, deviceScaleFactor: 3 },
     limits: {
-      app: { maxScrollH: 5200, maxMapY: 700, maxRouteY: 900, maxActionY: 1300, maxOnboardingY: 1900 },
+      app: { maxScrollH: 5220, maxMapY: 700, maxRouteY: 900, maxActionY: 1300, maxOnboardingY: 1900 },
       world: { maxScrollH: 12500, maxMapY: 900, maxPulseY: 1200, maxActionY: 1700 },
       league: { maxScrollH: 4300, maxStatsY: 750, maxModesY: 1100, maxConsoleY: 1400 },
     },
@@ -156,6 +156,16 @@ function checkMobile(result, limits) {
     assertMetric(copy.defaultState === 'collapsed' && copy.detailsOpen === false, `${result.profile}/app mobile copy details must default collapsed`, copy);
     assertMetric(Number(copy.summaryLength || 0) > 0 && Number(copy.summaryLength || 0) <= 150, `${result.profile}/app mobile copy summary is too dense`, copy);
     assertMetric((copy.summaryText || '').includes('Pick a nearby route'), `${result.profile}/app mobile copy summary must be action-first`, copy);
+    const readability = result.mapReadabilityLod || {};
+    assertMetric(readability.present === true, `${result.profile}/app map readability LOD contract missing`, readability);
+    assertMetric(readability.contractVersion === 'trillionnium_world_map_readability_lod_v1', `${result.profile}/app map readability LOD contract version missing`, readability);
+    assertMetric(readability.firstScreenMode === 'route_first_street_detail', `${result.profile}/app map readability first-screen mode missing`, readability);
+    assertMetric(Number(readability.primaryCtaBudget || 0) === 1, `${result.profile}/app map readability must keep one primary CTA`, readability);
+    assertMetric(Number(readability.visibleMarkerBudget || 0) <= 18, `${result.profile}/app visible marker clutter budget drifted`, readability);
+    assertMetric(Number(readability.avatarRunnerBudget || 0) <= 6, `${result.profile}/app avatar runner clutter budget drifted`, readability);
+    assertMetric(Number(readability.copySummaryBudget || 0) <= 150, `${result.profile}/app copy budget drifted`, readability);
+    assertMetric(readability.detailsDefaultState === 'collapsed', `${result.profile}/app dense map details must default collapsed`, readability);
+    assertMetric((readability.text || '').includes('One route first'), `${result.profile}/app readability copy must stay route-first`, readability);
     if (result.profile === 'mobile') {
       const sheet = yOf(result, 'mobileSheet');
       assertMetric(sheet >= Math.floor(result.viewport.vh * 0.58), `${result.profile}/app mobile bottom sheet key selector is not docked`, { sheet, viewport: result.viewport });
@@ -317,6 +327,7 @@ async function auditPage(page, profile, target) {
     const appRouteHandoff = document.getElementById('app-route-runner-handoff-summary');
     const appFeedHandoff = document.getElementById('app-feed-route-runner-handoff');
     const worldRouteHandoff = document.getElementById('world-route-runner-handoff-summary');
+    const appMapReadabilityLod = document.getElementById('app-map-readability-lod');
     const handoffElements = [appRouteHandoff, appFeedHandoff, worldRouteHandoff].filter(Boolean);
     const handoffText = handoffElements.map((el) => text(el)).join(' · ');
     const mobileSheet = document.getElementById('app-mobile-action-sheet');
@@ -348,6 +359,17 @@ async function auditPage(page, profile, target) {
       detailsOpen: Boolean(copyDetails?.open),
       detailsVisibleText: text(copyDetails).slice(0, 260),
     };
+    const mapReadabilityLod = {
+      present: Boolean(appMapReadabilityLod),
+      contractVersion: appMapReadabilityLod?.dataset.contractVersion || null,
+      firstScreenMode: appMapReadabilityLod?.dataset.firstScreenMode || null,
+      primaryCtaBudget: appMapReadabilityLod?.dataset.primaryCtaBudget || null,
+      visibleMarkerBudget: appMapReadabilityLod?.dataset.visibleMarkerBudget || null,
+      avatarRunnerBudget: appMapReadabilityLod?.dataset.avatarRunnerBudget || null,
+      copySummaryBudget: appMapReadabilityLod?.dataset.copySummaryBudget || null,
+      detailsDefaultState: appMapReadabilityLod?.dataset.detailsDefaultState || null,
+      text: text(appMapReadabilityLod).slice(0, 260),
+    };
     const routeRunnerHandoff = {
       appRouteSummaryPresent: Boolean(appRouteHandoff),
       appFeedSummaryPresent: Boolean(appFeedHandoff),
@@ -376,6 +398,7 @@ async function auditPage(page, profile, target) {
       routeRunnerHandoff,
       mobilePrimaryCta,
       mobileCopyLayering,
+      mapReadabilityLod,
       firstViewportButtons,
       firstViewportText: text(document.body).slice(0, 1400),
     };

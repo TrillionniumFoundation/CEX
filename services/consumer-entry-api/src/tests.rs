@@ -1127,6 +1127,35 @@ fn world_map_viewport_includes_prefetch_density_and_live_events() {
         "trillionnium_route_mastery_v1"
     );
     assert_eq!(
+        viewport["gameplay_layer_contract"]["supports"]["map_readability_lod"],
+        true
+    );
+    assert_eq!(
+        viewport["gameplay_layer_contract"]["supports"]["map_readability_lod_contract_version"],
+        "trillionnium_world_map_readability_lod_v1"
+    );
+    assert_eq!(
+        viewport["map_readability_lod"]["contract_version"],
+        "trillionnium_world_map_readability_lod_v1"
+    );
+    assert_eq!(
+        viewport["map_readability_lod"]["primary_cta_budget"]["max_primary_cta_count"],
+        1
+    );
+    assert_eq!(
+        viewport["map_readability_lod"]["copy_budget"]["details_default_state"],
+        "collapsed"
+    );
+    assert_eq!(
+        viewport["map_readability_lod"]["object_budget"]["within_budget"],
+        true
+    );
+    assert!(viewport["map_readability_lod"]["readiness_checks"]
+        .as_array()
+        .is_some_and(|checks| checks
+            .iter()
+            .any(|check| check == "visible_marker_budget_enforced")));
+    assert_eq!(
         viewport["gameplay_layer_contract"]["supports"]["agent_party_state"],
         true
     );
@@ -1840,6 +1869,27 @@ fn real_world_map_engine_declares_shared_renderer_adapter() {
         "renderer_adapter.adapter_contract_version >= 1"
     );
     assert_eq!(
+        engine["planned_upgrade_engine"]["readiness_contract_version"],
+        "trillionnium_world_future_engine_readiness_v1"
+    );
+    assert_eq!(
+        engine["renderer_adapter"]["future_engine_readiness"]["contract_version"],
+        "trillionnium_world_future_engine_readiness_v1"
+    );
+    assert_eq!(
+        engine["renderer_adapter"]["future_engine_readiness"]["active_engine_id"],
+        "leaflet_openstreetmap_v1"
+    );
+    assert_eq!(
+        engine["renderer_adapter"]["future_engine_readiness"]["candidate_engine_id"],
+        "maplibre_gl_v1"
+    );
+    assert_eq!(
+        engine["renderer_adapter"]["future_engine_readiness"]["rollback_plan"]
+            ["candidate_is_shadow_only"],
+        true
+    );
+    assert_eq!(
         engine["renderer_adapter"]["adapter_contract"]["supports_future_engine_swap"],
         true
     );
@@ -1914,6 +1964,14 @@ fn world_home_json_exposes_shared_renderer_adapter_for_matrix_cards() {
     assert_eq!(
         engine["planned_upgrade_engine"]["gating_contract"],
         "renderer_adapter.adapter_contract_version >= 1"
+    );
+    assert_eq!(
+        engine["planned_upgrade_engine"]["readiness_contract_version"],
+        "trillionnium_world_future_engine_readiness_v1"
+    );
+    assert_eq!(
+        engine["renderer_adapter"]["future_engine_readiness"]["contract_version"],
+        "trillionnium_world_future_engine_readiness_v1"
     );
     assert_eq!(
         home["route_runner_handoff"]["contract_version"],
@@ -2169,6 +2227,69 @@ fn client_app_map_hub_projects_stream_counts() {
         app["mobile_shell_contract"]["copy_layering"]["default_state"],
         "collapsed"
     );
+    assert_eq!(
+        app["mobile_shell_contract"]["map_readability_lod"]["contract_version"],
+        "trillionnium_world_map_readability_lod_v1"
+    );
+    assert_eq!(
+        app["mobile_shell_contract"]["map_readability_lod"]["visible_contract_id"],
+        "app-map-readability-lod"
+    );
+    assert_eq!(
+        app["mobile_shell_contract"]["map_readability_lod"]["max_primary_cta_count"],
+        1
+    );
+    assert!(
+        app["mobile_shell_contract"]["map_readability_lod"]["max_summary_chars"]
+            .as_u64()
+            .unwrap_or(999)
+            <= 150
+    );
+    assert!(
+        app["mobile_shell_contract"]["map_readability_lod"]["max_visible_markers"]
+            .as_u64()
+            .unwrap_or(999)
+            <= 18
+    );
+    assert_eq!(
+        app["economy_retention_ops"]["route_runner_funnel_telemetry"]["contract_version"],
+        "trillionnium_route_runner_funnel_telemetry_v1"
+    );
+    assert_eq!(
+        app["route_runner_funnel_telemetry"]["contract_version"],
+        "trillionnium_route_runner_funnel_telemetry_v1"
+    );
+    assert!(
+        app["route_runner_funnel_telemetry"]["event_counts"]["route_started"]
+            .as_i64()
+            .unwrap_or(0)
+            > 0
+    );
+    assert!(
+        app["route_runner_funnel_telemetry"]["event_counts"]["evidence_submitted"]
+            .as_i64()
+            .is_some()
+    );
+    assert!(
+        app["route_runner_funnel_telemetry"]["event_counts"]["reward_claimed"]
+            .as_i64()
+            .is_some()
+    );
+    assert!(
+        app["route_runner_funnel_telemetry"]["event_counts"]["daily_return_resume"]
+            .as_i64()
+            .unwrap_or(0)
+            > 0
+    );
+    assert_eq!(
+        app["route_runner_funnel_telemetry"]["time_to_reward"]["target_seconds"],
+        1800
+    );
+    assert!(app["route_runner_funnel_telemetry"]["readiness_checks"]
+        .as_array()
+        .is_some_and(|checks| checks
+            .iter()
+            .any(|check| check == "time_to_reward_target_visible")));
     let mobile_shell_checks = app["mobile_shell_contract"]["readiness_checks"]
         .as_array()
         .cloned()
@@ -2181,6 +2302,7 @@ fn client_app_map_hub_projects_stream_counts() {
         "aria_live_ux_status_visible",
         "mobile_bottom_sheet_single_primary_cta_visible",
         "mobile_copy_layering_visible",
+        "map_readability_lod_visible",
         "offline_feed_fallback_status_visible",
         "web_session_feed_hydration_visible",
         "next_action_rail_visible",
@@ -2408,6 +2530,16 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(app_html.contains("Pick a nearby route"));
     assert!(app_html.contains("Why this map matters"));
     assert!(app_html.contains("mobile_copy_layering_visible"));
+    assert!(app_html.contains("trillionnium_world_map_readability_lod_v1"));
+    assert!(app_html.contains("app-map-readability-lod"));
+    assert!(app_html.contains("data-first-screen-mode=\"route_first_street_detail\""));
+    assert!(app_html.contains("data-primary-cta-budget=\"1\""));
+    assert!(app_html.contains("data-visible-marker-budget=\"18\""));
+    assert!(app_html.contains("One route first"));
+    assert!(app_html.contains("map_readability_lod_visible"));
+    assert!(app_html.contains("app-route-runner-funnel-telemetry"));
+    assert!(app_html.contains("trillionnium_route_runner_funnel_telemetry_v1"));
+    assert!(app_html.contains("data-time-to-reward-target-seconds=\"1800\""));
     assert!(app_html.contains("keyboard_tab_navigation_visible"));
     assert!(app_html.contains("offline_feed_fallback_status_visible"));
     assert!(app_html.contains("web_session_feed_hydration_visible"));
@@ -10856,6 +10988,77 @@ async fn health_endpoint_exposes_identity_governance_overview() {
             .as_u64()
             .is_some()
     );
+    assert_eq!(
+        body["trillionnium_world_playability_scorecard"]["map_readability_lod_gate"]
+            ["contract_version"],
+        "trillionnium_world_map_readability_lod_gate_v1"
+    );
+    assert_eq!(
+        body["trillionnium_world_playability_scorecard"]["map_readability_lod_gate"]
+            ["shell_contract_version"],
+        "trillionnium_world_map_readability_lod_v1"
+    );
+    assert_eq!(
+        body["trillionnium_world_playability_scorecard"]["map_readability_lod_gate"]
+            ["within_budget"],
+        true
+    );
+    assert_eq!(
+        body["trillionnium_world_playability_scorecard"]["route_runner_funnel_telemetry_gate"]
+            ["contract_version"],
+        "trillionnium_route_runner_funnel_telemetry_gate_v1"
+    );
+    assert_eq!(
+        body["trillionnium_world_playability_scorecard"]["route_runner_funnel_telemetry_gate"]
+            ["telemetry_contract_version"],
+        "trillionnium_route_runner_funnel_telemetry_v1"
+    );
+    assert!(
+        body["trillionnium_world_playability_scorecard"]["route_runner_funnel_telemetry_gate"]
+            ["route_started_count"]
+            .as_i64()
+            .is_some()
+    );
+    assert!(
+        body["trillionnium_world_playability_scorecard"]["route_runner_funnel_telemetry_gate"]
+            ["reward_claimed_count"]
+            .as_i64()
+            .is_some()
+    );
+    assert_eq!(
+        body["trillionnium_world_playability_scorecard"]["route_runner_funnel_telemetry_gate"]
+            ["time_to_reward_target_seconds"],
+        1800
+    );
+    assert_eq!(
+        body["trillionnium_world_playability_scorecard"]["future_engine_readiness_gate"]
+            ["contract_version"],
+        "trillionnium_world_future_engine_readiness_gate_v1"
+    );
+    assert_eq!(
+        body["trillionnium_world_playability_scorecard"]["future_engine_readiness_gate"]
+            ["active_engine_id"],
+        "leaflet_openstreetmap_v1"
+    );
+    assert_eq!(
+        body["trillionnium_world_playability_scorecard"]["future_engine_readiness_gate"]
+            ["candidate_engine_id"],
+        "maplibre_gl_v1"
+    );
+    assert!(
+        body["trillionnium_world_playability_scorecard"]["axes"]["surface_feedback"]["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|check| check["check_id"] == "map_readability_lod_contract_green")
+    );
+    assert!(
+        body["trillionnium_world_playability_scorecard"]["axes"]["observability_gates"]["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|check| check["check_id"] == "future_engine_readiness_contract_visible")
+    );
     assert!(
         body["trillionnium_world_playability_scorecard"]["user_metric_axes"]
             ["long_term_replayability"]["checks"]
@@ -10993,6 +11196,31 @@ async fn metrics_endpoint_exposes_identity_governance_gauges() {
     assert!(body.contains(
         "cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_next_goal_evidence_visible"
     ));
+    assert!(body.contains("cex_consumer_entry_trillionnium_world_map_readability_lod_gate_green"));
+    assert!(body.contains(
+        "cex_consumer_entry_trillionnium_world_map_readability_lod_visible_marker_budget"
+    ));
+    assert!(body.contains(
+        "cex_consumer_entry_trillionnium_world_map_readability_lod_avatar_runner_budget"
+    ));
+    assert!(body.contains(
+        "cex_consumer_entry_trillionnium_route_runner_funnel_telemetry_contract_visible"
+    ));
+    assert!(
+        body.contains("cex_consumer_entry_trillionnium_route_runner_funnel_route_started_count")
+    );
+    assert!(body
+        .contains("cex_consumer_entry_trillionnium_route_runner_funnel_evidence_submitted_count"));
+    assert!(
+        body.contains("cex_consumer_entry_trillionnium_route_runner_funnel_time_to_reward_seconds")
+    );
+    assert!(body
+        .contains("cex_consumer_entry_trillionnium_route_runner_funnel_daily_return_resume_count"));
+    assert!(
+        body.contains("cex_consumer_entry_trillionnium_world_future_engine_readiness_gate_green")
+    );
+    assert!(body
+        .contains("cex_consumer_entry_trillionnium_world_future_engine_promotion_blocker_count"));
     assert!(
         body.contains("cex_consumer_entry_trillionnium_world_playability_scorecard_overall_score")
     );

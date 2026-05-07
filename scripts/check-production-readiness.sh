@@ -204,12 +204,59 @@ else
         and (($gate.first_next_route_status // "") != "")
         and (($gate.first_next_route_sequence_summary // "") != "")
         and (($gate.handoff_prompt // "") != "");
+      def map_readability_lod_gate_green($gate):
+        $gate.contract_version == "trillionnium_world_map_readability_lod_gate_v1"
+        and $gate.viewport_contract_version == "trillionnium_world_map_readability_lod_v1"
+        and $gate.shell_contract_version == "trillionnium_world_map_readability_lod_v1"
+        and $gate.visible_contract_id == "app-map-readability-lod"
+        and $gate.first_screen_mode == "route_first_street_detail"
+        and $gate.details_default_state == "collapsed"
+        and ($gate.visible_markers | type) == "number"
+        and ($gate.max_visible_markers | type) == "number"
+        and $gate.visible_markers <= $gate.max_visible_markers
+        and $gate.max_visible_markers <= 18
+        and ($gate.avatar_route_runners | type) == "number"
+        and ($gate.max_avatar_route_runners | type) == "number"
+        and $gate.avatar_route_runners <= $gate.max_avatar_route_runners
+        and $gate.max_avatar_route_runners <= 6
+        and $gate.max_primary_cta_count == 1
+        and $gate.max_summary_chars <= 150
+        and $gate.within_budget == true;
+      def route_runner_funnel_telemetry_gate_green($gate):
+        $gate.contract_version == "trillionnium_route_runner_funnel_telemetry_gate_v1"
+        and $gate.telemetry_contract_version == "trillionnium_route_runner_funnel_telemetry_v1"
+        and (($gate.telemetry_stream // "") != "")
+        and ($gate.route_started_count | type) == "number"
+        and ($gate.evidence_submitted_count | type) == "number"
+        and ($gate.reward_claimed_count | type) == "number"
+        and ($gate.next_route_opened_count | type) == "number"
+        and ($gate.abandoned_or_recovery_count | type) == "number"
+        and ($gate.daily_return_resume_count | type) == "number"
+        and ($gate.time_to_reward_seconds | type) == "number"
+        and $gate.time_to_reward_target_seconds == 1800;
+      def future_engine_readiness_gate_green($gate):
+        $gate.contract_version == "trillionnium_world_future_engine_readiness_gate_v1"
+        and $gate.readiness_contract_version == "trillionnium_world_future_engine_readiness_v1"
+        and $gate.planned_upgrade_readiness_contract_version == "trillionnium_world_future_engine_readiness_v1"
+        and $gate.active_engine_id == "leaflet_openstreetmap_v1"
+        and $gate.adapter_id == "leaflet_renderer_adapter_v1"
+        and $gate.runtime_handle_name == "mapRuntime"
+        and $gate.candidate_engine_id == "maplibre_gl_v1"
+        and $gate.planned_upgrade_status == "planned_not_active"
+        and $gate.rollback_plan_visible == true
+        and $gate.lod_precondition_visible == true
+        and $gate.telemetry_precondition_visible == true
+        and ($gate.promotion_blocker_count | type) == "number"
+        and $gate.promotion_blocker_count >= 1;
       route_runner_handoff_gate_green(.trillionnium_world_playability_scorecard.route_runner_handoff_gate)
       and route_runner_handoff_gate_green(.trillionnium_world_closed_beta_prototype.route_runner_handoff_gate)
       and route_runner_handoff_gate_green(.trillionnium_world_real_user_beta.route_runner_handoff_gate)
       and route_runner_handoff_gate_green(.trillionnium_world_public_commercial_product.route_runner_handoff_gate)
+      and map_readability_lod_gate_green(.trillionnium_world_playability_scorecard.map_readability_lod_gate)
+      and route_runner_funnel_telemetry_gate_green(.trillionnium_world_playability_scorecard.route_runner_funnel_telemetry_gate)
+      and future_engine_readiness_gate_green(.trillionnium_world_playability_scorecard.future_engine_readiness_gate)
     ' "$consumer_health_file" >/dev/null; then
-      fail 'production runtime requires route-runner handoff + mastery gates in playability, closed beta, real-user beta, and public commercial scorecards'
+      fail 'production runtime requires route-runner handoff/mastery plus map readability LOD, funnel telemetry, and future-engine readiness gates'
     fi
   fi
 
