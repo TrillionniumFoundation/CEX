@@ -1,0 +1,389 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "target": {
+          "limit": 100,
+          "matchAny": false,
+          "tags": [],
+          "type": "dashboard"
+        },
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "Repo-local example dashboard for Trillionnium route-runner reward/next-route handoff readiness. It consumes consumer-entry-api /metrics gauges and pairs with the CexTrillionniumRouteRunnerHandoff* Prometheus alerts.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [
+    {
+      "asDropdown": false,
+      "icon": "doc",
+      "includeVars": false,
+      "keepTime": false,
+      "tags": [],
+      "targetBlank": false,
+      "title": "Operator runbook",
+      "tooltip": "docs/operator-runbook-v1.md#39-symptom-trillionnium-route-runner-handoff-alert-firing",
+      "type": "link",
+      "url": "docs/operator-runbook-v1.md"
+    }
+  ],
+  "panels": [
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "options": {
+                "0": {
+                  "color": "red",
+                  "index": 0,
+                  "text": "NOT GREEN"
+                },
+                "1": {
+                  "color": "green",
+                  "index": 1,
+                  "text": "GREEN"
+                }
+              },
+              "type": "value"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.4.0",
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_route_runner_handoff_all_gates_green",
+          "legendFormat": "all gates",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "All handoff gates",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "options": {
+                "0": {
+                  "color": "red",
+                  "index": 0,
+                  "text": "BAD"
+                },
+                "1": {
+                  "color": "green",
+                  "index": 1,
+                  "text": "OK"
+                }
+              },
+              "type": "value"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 18,
+        "x": 6,
+        "y": 0
+      },
+      "id": 2,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "value_and_name"
+      },
+      "pluginVersion": "10.4.0",
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_route_runner_handoff_playability_gate_green",
+          "legendFormat": "playability",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_route_runner_handoff_closed_beta_gate_green",
+          "legendFormat": "closed beta",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_route_runner_handoff_real_user_beta_gate_green",
+          "legendFormat": "real-user beta",
+          "range": true,
+          "refId": "C"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_route_runner_handoff_public_commercial_gate_green",
+          "legendFormat": "public commercial",
+          "range": true,
+          "refId": "D"
+        }
+      ],
+      "title": "Gate family",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              },
+              {
+                "color": "green",
+                "value": 7
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 5
+      },
+      "id": 3,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_route_runner_handoff_feed_source_count",
+          "legendFormat": "feed sources",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Feed source count (expected >= 7)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 5
+      },
+      "id": 4,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_route_runner_handoff_runner_count",
+          "legendFormat": "runners",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_route_runner_handoff_reward_claim_action_count",
+          "legendFormat": "reward claim actions",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_route_runner_handoff_next_route_action_count",
+          "legendFormat": "next route actions",
+          "range": true,
+          "refId": "C"
+        }
+      ],
+      "title": "Runner / reward / next-route action counts",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": [
+    "cex",
+    "trillionnium",
+    "route-runner",
+    "handoff"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "selected": false,
+          "text": "Prometheus",
+          "value": "Prometheus"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Prometheus datasource",
+        "multi": false,
+        "name": "DS_PROMETHEUS",
+        "options": [],
+        "query": "prometheus",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "type": "datasource"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "CEX / Trillionnium Route-Runner Handoff",
+  "uid": "cex-trillionnium-route-runner-handoff",
+  "version": 1,
+  "weekStart": ""
+}

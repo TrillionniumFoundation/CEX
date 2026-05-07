@@ -4,6 +4,7 @@ This folder now contains three layers of repo-local monitoring examples:
 
 1. **Focused direct metrics rules**
    - `prometheus/consumer-entry-identity-governance-alerts.example.yml`
+   - `prometheus/consumer-entry-trillionnium-route-runner-handoff-alerts.example.yml`
    - `alertmanager/consumer-entry-identity-governance-routing.example.yml`
 2. **Focused wrapper-derived rules**
    - `prometheus/core-runtime-operator-signals-from-wrapper.example.yml`
@@ -16,10 +17,13 @@ This folder now contains three layers of repo-local monitoring examples:
    - `prometheus/minimal-wrapper-monitoring-bundle.example.yml`
    - `alertmanager/minimal-wrapper-monitoring-bundle.example.yml`
    - `monitoring-bundle-manifest.example.yml`
+4. **Dashboard examples**
+   - `grafana/trillionnium-route-runner-handoff-dashboard.example.json`
 
 ## How to read this layout
 
 - **consumer-entry identity governance** uses direct service metrics from `consumer-entry-api /metrics`
+- **Trillionnium route-runner handoff** uses direct service metrics from `consumer-entry-api /metrics`
 - **core runtime** and **product-edge** currently rely on the wrapper bridge:
   - `scripts/check-operator-signals.sh`
   - `scripts/render-operator-signals-prometheus.sh`
@@ -34,6 +38,18 @@ If you just want one Prometheus file and one Alertmanager file to start from, us
 If you want the machine-readable inventory of which focused files feed that bundle, use:
 
 - `monitoring-bundle-manifest.example.yml`
+
+If you want a starter Grafana view for the route-runner reward/next-route handoff posture, import:
+
+- `grafana/trillionnium-route-runner-handoff-dashboard.example.json`
+
+It tracks the same direct gauges used by the `CexTrillionniumRouteRunnerHandoff*` Prometheus alerts:
+
+- all-gates-green
+- playability / closed-beta / real-user beta / public-commercial gates
+- feed source count
+- runner count
+- reward-claim and next-route action counts
 
 If you want to regenerate the combined bundles from the manifest, use:
 
@@ -87,3 +103,4 @@ They do not yet provide:
 - full matrix/product policy coverage
 - silence policy / ownership / escalation tree
 - a single blessed production deployment layout
+- a complete dashboard pack beyond the focused route-runner handoff starter
