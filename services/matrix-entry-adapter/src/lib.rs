@@ -5123,6 +5123,10 @@ struct RouteRunnerHandoffCardContext {
     first_task_id: String,
     first_to_node_id: String,
     first_latest_location_id: String,
+    lifecycle_contract_version: String,
+    first_lifecycle_source: String,
+    first_lifecycle_stage: String,
+    first_lifecycle_status: String,
     first_progress_label: String,
     first_telemetry_summary: String,
     first_reward_claim_label: String,
@@ -5258,6 +5262,27 @@ impl RouteRunnerHandoffCardContext {
                 "latest_location_id",
                 "",
             ),
+            lifecycle_contract_version: handoff
+                .and_then(|handoff| handoff.get("lifecycle_contract_version"))
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or("trillionnium_route_runner_lifecycle_v1")
+                .to_string(),
+            first_lifecycle_source: handoff_or_runner_str(
+                "first_lifecycle_source",
+                "lifecycle_source",
+                "projection_preview_fallback",
+            ),
+            first_lifecycle_stage: handoff_or_runner_str(
+                "first_lifecycle_stage",
+                "lifecycle_stage",
+                "preview_seeded_route",
+            ),
+            first_lifecycle_status: handoff_or_runner_str(
+                "first_lifecycle_status",
+                "lifecycle_status",
+                "active_preview",
+            ),
             first_progress_label: handoff_or_runner_str(
                 "first_progress_label",
                 "progress_label",
@@ -5315,12 +5340,17 @@ impl RouteRunnerHandoffCardContext {
             "reward_claim_ready_count": self.reward_claim_ready_count,
             "next_route_ready_count": self.next_route_ready_count,
             "supports_checkpoint_reward_history": true,
+            "supports_route_runner_lifecycle": true,
             "supports_route_runner_reward_claim_actions": true,
             "supports_route_runner_next_route_actions": true,
+            "lifecycle_contract_version": &self.lifecycle_contract_version,
             "first_runner_id": &self.first_runner_id,
             "first_task_id": &self.first_task_id,
             "first_to_node_id": &self.first_to_node_id,
             "first_latest_location_id": &self.first_latest_location_id,
+            "first_lifecycle_source": &self.first_lifecycle_source,
+            "first_lifecycle_stage": &self.first_lifecycle_stage,
+            "first_lifecycle_status": &self.first_lifecycle_status,
             "first_progress_label": &self.first_progress_label,
             "first_telemetry_summary": &self.first_telemetry_summary,
             "first_reward_claim_label": &self.first_reward_claim_label,
@@ -5337,11 +5367,13 @@ impl RouteRunnerHandoffCardContext {
 
     fn text_block(&self) -> String {
         format!(
-            "Runner Handoff: {}\nRunner: {} · {} · {}\nReward: {} [{}]\nNext Route: {} [{}]\nNext Body: {}",
+            "Runner Handoff: {}\nRunner: {} · {} · {}\nLifecycle: {} [{}]\nReward: {} [{}]\nNext Route: {} [{}]\nNext Body: {}",
             self.summary,
             self.first_task_id,
             self.first_progress_label,
             self.first_telemetry_summary,
+            self.first_lifecycle_stage,
+            self.first_lifecycle_status,
             self.first_reward_claim_label,
             self.first_reward_claim_status,
             self.first_next_route_label,
@@ -5352,11 +5384,13 @@ impl RouteRunnerHandoffCardContext {
 
     fn html_block(&self) -> String {
         format!(
-            "<p><strong>Runner Handoff</strong>: {}</p><p><strong>Runner</strong>: <code>{}</code> · {} · {}</p><p><strong>Reward</strong>: {} · <code>{}</code></p><p><strong>Next Route</strong>: {} · <code>{}</code></p><p><strong>Next Body</strong>: {}</p>",
+            "<p><strong>Runner Handoff</strong>: {}</p><p><strong>Runner</strong>: <code>{}</code> · {} · {}</p><p><strong>Lifecycle</strong>: {} · <code>{}</code></p><p><strong>Reward</strong>: {} · <code>{}</code></p><p><strong>Next Route</strong>: {} · <code>{}</code></p><p><strong>Next Body</strong>: {}</p>",
             escape_html(&self.summary),
             escape_html(&self.first_task_id),
             escape_html(&self.first_progress_label),
             escape_html(&self.first_telemetry_summary),
+            escape_html(&self.first_lifecycle_stage),
+            escape_html(&self.first_lifecycle_status),
             escape_html(&self.first_reward_claim_label),
             escape_html(&self.first_reward_claim_status),
             escape_html(&self.first_next_route_label),
@@ -5391,6 +5425,22 @@ impl RouteRunnerHandoffCardContext {
             card_object.insert(
                 "route_runner_first_task_id".to_string(),
                 json!(&self.first_task_id),
+            );
+            card_object.insert(
+                "route_runner_lifecycle_contract_version".to_string(),
+                json!(&self.lifecycle_contract_version),
+            );
+            card_object.insert(
+                "route_runner_first_lifecycle_source".to_string(),
+                json!(&self.first_lifecycle_source),
+            );
+            card_object.insert(
+                "route_runner_first_lifecycle_stage".to_string(),
+                json!(&self.first_lifecycle_stage),
+            );
+            card_object.insert(
+                "route_runner_first_lifecycle_status".to_string(),
+                json!(&self.first_lifecycle_status),
             );
             card_object.insert(
                 "route_runner_first_progress_label".to_string(),

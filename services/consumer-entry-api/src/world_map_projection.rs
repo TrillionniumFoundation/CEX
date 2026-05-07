@@ -1,5 +1,117 @@
 use super::*;
 
+const TRILLIONNIUM_ROUTE_RUNNER_LIFECYCLE_CONTRACT_VERSION: &str =
+    "trillionnium_route_runner_lifecycle_v1";
+
+fn route_runner_now_epoch() -> i64 {
+    Utc::now().timestamp()
+}
+
+fn route_runner_terminal_bucket_status(latest_bucket: &str, latest_status: &str) -> bool {
+    matches!(
+        (latest_bucket, latest_status),
+        ("completion", "settled")
+            | ("acceptance", "accepted_settled")
+            | ("acceptance", "accepted")
+            | ("delivery", "delivered")
+    )
+}
+
+fn route_runner_lifecycle_progress_ratio(
+    latest_created_at_epoch: i64,
+    latest_bucket: &str,
+    latest_status: &str,
+    distance_meters: f64,
+    now_epoch: i64,
+    fallback_index: usize,
+) -> (f64, i64, i64, String, String, String) {
+    let route_duration_seconds = ((distance_meters / 14.0).round() as i64).clamp(300, 1800);
+    if route_runner_terminal_bucket_status(latest_bucket, latest_status) {
+        return (
+            0.96,
+            latest_created_at_epoch.max(0),
+            route_duration_seconds,
+            "reward_claimable".to_string(),
+            "evidence_checkpoint_ready".to_string(),
+            "terminal_world_task_status".to_string(),
+        );
+    }
+
+    if latest_created_at_epoch > 0 {
+        let elapsed_seconds = now_epoch.saturating_sub(latest_created_at_epoch).max(0);
+        let mut progress_ratio = elapsed_seconds as f64 / route_duration_seconds as f64;
+        progress_ratio = progress_ratio.clamp(0.08, 0.96);
+        let lifecycle_status = if progress_ratio >= 0.80 {
+            "reward_claimable"
+        } else {
+            "active"
+        };
+        let lifecycle_stage = if progress_ratio >= 0.80 {
+            "evidence_checkpoint_ready"
+        } else {
+            "en_route_to_evidence_checkpoint"
+        };
+        return (
+            progress_ratio,
+            latest_created_at_epoch,
+            route_duration_seconds,
+            lifecycle_status.to_string(),
+            lifecycle_stage.to_string(),
+            "persisted_task_epoch".to_string(),
+        );
+    }
+
+    let fallback_ratio = (0.18 + (fallback_index as f64 % 5.0) * 0.14).min(0.82);
+    (
+        fallback_ratio,
+        0,
+        route_duration_seconds,
+        "active_preview".to_string(),
+        "preview_seeded_route".to_string(),
+        "projection_preview_fallback".to_string(),
+    )
+}
+
+fn route_runner_lifecycle_snapshot_json(
+    task_id: &str,
+    latest_bucket: &str,
+    latest_status: &str,
+    lifecycle_started_at_epoch: i64,
+    route_duration_seconds: i64,
+    now_epoch: i64,
+    progress_percent: i64,
+    lifecycle_status: &str,
+    lifecycle_stage: &str,
+    lifecycle_source: &str,
+    completion_ready: bool,
+) -> Value {
+    let elapsed_seconds = if lifecycle_started_at_epoch > 0 {
+        now_epoch.saturating_sub(lifecycle_started_at_epoch).max(0)
+    } else {
+        0
+    };
+    json!({
+        "contract_version": TRILLIONNIUM_ROUTE_RUNNER_LIFECYCLE_CONTRACT_VERSION,
+        "task_id": task_id,
+        "source": lifecycle_source,
+        "stage": lifecycle_stage,
+        "status": lifecycle_status,
+        "latest_bucket": latest_bucket,
+        "latest_status": latest_status,
+        "started_at_epoch": lifecycle_started_at_epoch,
+        "updated_at_epoch": now_epoch,
+        "elapsed_seconds": elapsed_seconds,
+        "route_duration_seconds": route_duration_seconds,
+        "progress_percent": progress_percent,
+        "can_complete_checkpoint": completion_ready,
+        "can_claim_reward": completion_ready,
+        "can_open_next_route_after_reward_claim": completion_ready,
+        "reward_claim_gate": "deliverable_evidence_risk_next_self_review",
+        "next_route_gate": "reward_claim_settlement",
+        "persistence_note": "Lifecycle is derived from persisted World task timestamps/statuses; projection fallback is used only for legacy tasks without epoch metadata.",
+    })
+}
+
 pub(super) struct WorldHomeProjectionContext<'a> {
     world: &'a WorldState,
     indexes: WorldIndexes,
@@ -508,6 +620,8 @@ pub(super) fn trillionnium_world_map_gameplay_layer_contract_json() -> Value {
             "avatar_task_route_overlays": true,
             "avatar_route_runners": true,
             "checkpoint_reward_history": true,
+            "route_runner_lifecycle": true,
+            "route_runner_lifecycle_contract_version": TRILLIONNIUM_ROUTE_RUNNER_LIFECYCLE_CONTRACT_VERSION,
             "route_runner_reward_claim_actions": true,
             "route_runner_next_route_actions": true,
             "agent_party_state": true,
@@ -736,6 +850,10 @@ pub(super) fn world_map_avatar_task_routes_json(
             .get("latest_status")
             .and_then(Value::as_str)
             .unwrap_or("pending");
+        let latest_created_at_epoch = task
+            .get("latest_created_at_epoch")
+            .and_then(Value::as_i64)
+            .unwrap_or(0);
         let next_action_label = task
             .get("suggested_action_label")
             .and_then(Value::as_str)
@@ -772,6 +890,7 @@ pub(super) fn world_map_avatar_task_routes_json(
             "latest_location_id": latest_location_id,
             "latest_bucket": latest_bucket,
             "latest_status": latest_status,
+            "latest_created_at_epoch": latest_created_at_epoch,
             "route_stage_summary": task.get("route_stage_summary").and_then(Value::as_str).unwrap_or("task route ready"),
             "outcome_summary": task.get("outcome_summary").and_then(Value::as_str).unwrap_or("route outcome pending"),
             "next_action_label": next_action_label,
@@ -811,15 +930,56 @@ pub(super) fn world_map_avatar_route_runners_json(
                 .get("matrix_user_id")
                 .and_then(Value::as_str)
                 .unwrap_or("@player:local.dev");
-            let progress_ratio = (0.18 + (index as f64 % 5.0) * 0.14).min(0.82);
+            let latest_bucket = route
+                .get("latest_bucket")
+                .and_then(Value::as_str)
+                .unwrap_or("route_task");
+            let latest_status = route
+                .get("latest_status")
+                .and_then(Value::as_str)
+                .unwrap_or("pending");
+            let latest_created_at_epoch = route
+                .get("latest_created_at_epoch")
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
+            let distance_meters =
+                (geo_distance_km(from_lat, from_lng, to_lat, to_lng) * 1000.0).round();
+            let now_epoch = route_runner_now_epoch();
+            let (
+                progress_ratio,
+                lifecycle_started_at_epoch,
+                route_duration_seconds,
+                lifecycle_status,
+                lifecycle_stage,
+                lifecycle_source,
+            ) = route_runner_lifecycle_progress_ratio(
+                latest_created_at_epoch,
+                latest_bucket,
+                latest_status,
+                distance_meters,
+                now_epoch,
+                index,
+            );
             let current_lat = from_lat + (to_lat - from_lat) * progress_ratio;
             let current_lng = from_lng + (to_lng - from_lng) * progress_ratio;
-            let distance_meters = (geo_distance_km(from_lat, from_lng, to_lat, to_lng) * 1000.0).round();
             let remaining_distance_meters = (distance_meters * (1.0 - progress_ratio)).round();
-            let eta_seconds = ((remaining_distance_meters / 18.0).round() as i64).clamp(45, 900);
+            let eta_seconds = ((remaining_distance_meters / 18.0).round() as i64).clamp(0, 900);
             let eta_minutes = ((eta_seconds as f64) / 60.0).ceil() as i64;
             let progress_percent = (progress_ratio * 100.0).round() as i64;
-            let completion_ready = progress_percent >= 80;
+            let completion_ready = progress_percent >= 80 || lifecycle_status == "reward_claimable";
+            let lifecycle = route_runner_lifecycle_snapshot_json(
+                task_id,
+                latest_bucket,
+                latest_status,
+                lifecycle_started_at_epoch,
+                route_duration_seconds,
+                now_epoch,
+                progress_percent,
+                &lifecycle_status,
+                &lifecycle_stage,
+                &lifecycle_source,
+                completion_ready,
+            );
             let route_completion_command = route
                 .get("command")
                 .and_then(Value::as_str)
@@ -935,7 +1095,18 @@ pub(super) fn world_map_avatar_route_runners_json(
                     {"kind": "target", "lat": to_lat, "lng": to_lng}
                 ],
                 "latest_location_id": route.get("latest_location_id").cloned().unwrap_or_else(|| json!("")),
-                "latest_status": route.get("latest_status").cloned().unwrap_or_else(|| json!("pending")),
+                "latest_bucket": latest_bucket,
+                "latest_status": latest_status,
+                "latest_created_at_epoch": latest_created_at_epoch,
+                "lifecycle_contract_version": TRILLIONNIUM_ROUTE_RUNNER_LIFECYCLE_CONTRACT_VERSION,
+                "lifecycle_source": lifecycle_source,
+                "lifecycle_stage": lifecycle_stage,
+                "lifecycle_status": lifecycle_status,
+                "lifecycle_started_at_epoch": lifecycle_started_at_epoch,
+                "lifecycle_updated_at_epoch": now_epoch,
+                "route_duration_seconds": route_duration_seconds,
+                "route_elapsed_seconds": if lifecycle_started_at_epoch > 0 { now_epoch.saturating_sub(lifecycle_started_at_epoch).max(0) } else { 0 },
+                "lifecycle": lifecycle,
                 "next_action_label": route.get("next_action_label").cloned().unwrap_or_else(|| json!("Run to task / 跑向任务")),
                 "reward_loop": route.get("reward_loop").cloned().unwrap_or_else(|| json!("move avatar → complete task → submit evidence → rating/reward → next route")),
                 "movement_state": "en_route_to_task_reward",
@@ -1082,12 +1253,17 @@ pub(super) fn world_map_route_runner_handoff_json(
         "reward_claim_ready_count": reward_claim_ready_count,
         "next_route_ready_count": next_route_ready_count,
         "supports_checkpoint_reward_history": true,
+        "supports_route_runner_lifecycle": true,
         "supports_route_runner_reward_claim_actions": true,
         "supports_route_runner_next_route_actions": true,
+        "lifecycle_contract_version": TRILLIONNIUM_ROUTE_RUNNER_LIFECYCLE_CONTRACT_VERSION,
         "first_runner_id": first_str("runner_id", "none"),
         "first_task_id": first_str("task_id", "none"),
         "first_to_node_id": first_str("to_node_id", "target-node"),
         "first_latest_location_id": first_str("latest_location_id", ""),
+        "first_lifecycle_source": first_str("lifecycle_source", "projection_preview_fallback"),
+        "first_lifecycle_stage": first_str("lifecycle_stage", "preview_seeded_route"),
+        "first_lifecycle_status": first_str("lifecycle_status", "active_preview"),
         "first_progress_label": first_str("progress_label", "0% route progress / 0% 路线进度"),
         "first_telemetry_summary": first_str("telemetry_summary", "route runner telemetry pending"),
         "first_reward_claim_label": first_str("reward_claim_label", "Prepare reward claim / 准备领奖"),
@@ -1889,6 +2065,8 @@ pub(super) fn world_map_viewport_json(
             "supports_avatar_task_routes": true,
             "supports_avatar_route_runners": true,
             "supports_checkpoint_reward_history": true,
+            "supports_route_runner_lifecycle": true,
+            "route_runner_lifecycle_contract_version": TRILLIONNIUM_ROUTE_RUNNER_LIFECYCLE_CONTRACT_VERSION,
             "supports_route_runner_reward_claim_actions": true,
             "supports_route_runner_next_route_actions": true,
             "supports_agent_party_state": true,

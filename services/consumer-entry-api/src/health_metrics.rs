@@ -168,6 +168,14 @@ fn route_runner_handoff_contract_ready(handoff: Option<&Value>) -> bool {
                 .and_then(Value::as_bool)
                 .unwrap_or(false)
             && handoff
+                .get("supports_route_runner_lifecycle")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            && handoff
+                .get("lifecycle_contract_version")
+                .and_then(Value::as_str)
+                == Some("trillionnium_route_runner_lifecycle_v1")
+            && handoff
                 .get("runner_count")
                 .and_then(Value::as_u64)
                 .unwrap_or(0)
@@ -192,6 +200,18 @@ fn route_runner_handoff_contract_ready(handoff: Option<&Value>) -> bool {
                 .is_some_and(|label| !label.trim().is_empty())
             && handoff
                 .get("first_reward_claim_status")
+                .and_then(Value::as_str)
+                .is_some_and(|status| !status.trim().is_empty())
+            && handoff
+                .get("first_lifecycle_source")
+                .and_then(Value::as_str)
+                .is_some_and(|source| !source.trim().is_empty())
+            && handoff
+                .get("first_lifecycle_stage")
+                .and_then(Value::as_str)
+                .is_some_and(|stage| !stage.trim().is_empty())
+            && handoff
+                .get("first_lifecycle_status")
                 .and_then(Value::as_str)
                 .is_some_and(|status| !status.trim().is_empty())
             && handoff
@@ -245,6 +265,10 @@ fn app_route_runner_handoff_gate_json(app: &Value) -> Value {
         "sources_include_route_runner_handoff": feed_sources_include_route_runner_handoff,
         "feed_handoff_contract_version": feed_route_runner_handoff.and_then(|handoff| handoff.get("contract_version")).and_then(Value::as_str),
         "map_hub_handoff_contract_version": map_hub_route_runner_handoff.and_then(|handoff| handoff.get("contract_version")).and_then(Value::as_str),
+        "lifecycle_contract_version": feed_route_runner_handoff.and_then(|handoff| handoff.get("lifecycle_contract_version")).and_then(Value::as_str),
+        "first_lifecycle_source": feed_route_runner_handoff.and_then(|handoff| handoff.get("first_lifecycle_source")).and_then(Value::as_str),
+        "first_lifecycle_stage": feed_route_runner_handoff.and_then(|handoff| handoff.get("first_lifecycle_stage")).and_then(Value::as_str),
+        "first_lifecycle_status": feed_route_runner_handoff.and_then(|handoff| handoff.get("first_lifecycle_status")).and_then(Value::as_str),
         "runner_count": feed_route_runner_handoff.and_then(|handoff| handoff.get("runner_count")).and_then(Value::as_u64).unwrap_or(0),
         "reward_claim_action_count": feed_route_runner_handoff.and_then(|handoff| handoff.get("reward_claim_action_count")).and_then(Value::as_u64).unwrap_or(0),
         "next_route_action_count": feed_route_runner_handoff.and_then(|handoff| handoff.get("next_route_action_count")).and_then(Value::as_u64).unwrap_or(0),
@@ -284,6 +308,10 @@ fn is_route_runner_handoff_gate_green(gate: &Value) -> bool {
             .and_then(Value::as_str)
             == Some("trillionnium_route_runner_handoff_v1")
         && gate
+            .get("lifecycle_contract_version")
+            .and_then(Value::as_str)
+            == Some("trillionnium_route_runner_lifecycle_v1")
+        && gate
             .get("runner_count")
             .and_then(Value::as_u64)
             .unwrap_or(0)
@@ -300,6 +328,18 @@ fn is_route_runner_handoff_gate_green(gate: &Value) -> bool {
             > 0
         && gate
             .get("first_next_route_status")
+            .and_then(Value::as_str)
+            .is_some_and(|status| !status.trim().is_empty())
+        && gate
+            .get("first_lifecycle_source")
+            .and_then(Value::as_str)
+            .is_some_and(|source| !source.trim().is_empty())
+        && gate
+            .get("first_lifecycle_stage")
+            .and_then(Value::as_str)
+            .is_some_and(|stage| !stage.trim().is_empty())
+        && gate
+            .get("first_lifecycle_status")
             .and_then(Value::as_str)
             .is_some_and(|status| !status.trim().is_empty())
         && gate

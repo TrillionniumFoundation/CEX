@@ -257,6 +257,8 @@ def route_runner_handoff_ok(card):
         and handoff.get('supports_route_runner_reward_claim_actions') is True
         and handoff.get('supports_route_runner_next_route_actions') is True
         and handoff.get('supports_checkpoint_reward_history') is True
+        and handoff.get('supports_route_runner_lifecycle') is True
+        and handoff.get('lifecycle_contract_version') == 'trillionnium_route_runner_lifecycle_v1'
         and runner_count >= 1
         and reward_claim_count >= 1
         and next_route_count >= 1
@@ -267,10 +269,15 @@ def route_runner_handoff_ok(card):
         and bool(handoff.get('first_progress_label'))
         and bool(handoff.get('first_reward_claim_status'))
         and bool(handoff.get('first_next_route_status'))
+        and bool(handoff.get('first_lifecycle_source'))
+        and bool(handoff.get('first_lifecycle_stage'))
+        and bool(handoff.get('first_lifecycle_status'))
         and bool(handoff.get('first_next_route_action_body'))
         and bool(handoff.get('first_next_route_sequence_summary'))
         and bool(handoff.get('handoff_prompt'))
         and card.get('route_runner_first_task_id') == handoff.get('first_task_id')
+        and card.get('route_runner_lifecycle_contract_version') == handoff.get('lifecycle_contract_version')
+        and card.get('route_runner_first_lifecycle_status') == handoff.get('first_lifecycle_status')
         and card.get('route_runner_next_route_status') == handoff.get('first_next_route_status')
         and card.get('route_runner_next_route_action_body') == handoff.get('first_next_route_action_body')
         and card.get('route_runner_next_route_sequence_summary') == handoff.get('first_next_route_sequence_summary')
@@ -289,6 +296,10 @@ def route_runner_handoff_summary(prefix, card):
         f'{prefix}_route_runner_next_route_ready_count': card.get('route_runner_next_route_ready_count'),
         f'{prefix}_route_runner_first_task_id': card.get('route_runner_first_task_id'),
         f'{prefix}_route_runner_first_progress_label': card.get('route_runner_first_progress_label'),
+        f'{prefix}_route_runner_lifecycle_contract_version': card.get('route_runner_lifecycle_contract_version'),
+        f'{prefix}_route_runner_first_lifecycle_source': card.get('route_runner_first_lifecycle_source'),
+        f'{prefix}_route_runner_first_lifecycle_stage': card.get('route_runner_first_lifecycle_stage'),
+        f'{prefix}_route_runner_first_lifecycle_status': card.get('route_runner_first_lifecycle_status'),
         f'{prefix}_route_runner_reward_claim_status': card.get('route_runner_reward_claim_status'),
         f'{prefix}_route_runner_next_route_status': card.get('route_runner_next_route_status'),
         f'{prefix}_route_runner_next_route_action_body': card.get('route_runner_next_route_action_body'),

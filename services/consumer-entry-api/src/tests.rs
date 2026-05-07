@@ -1251,8 +1251,31 @@ fn world_map_viewport_includes_prefetch_density_and_live_events() {
     assert!(
         viewport["avatar_route_runners"][0]["eta_seconds"]
             .as_i64()
+            .unwrap_or(-1)
+            >= 0
+    );
+    assert_eq!(
+        viewport["avatar_route_runners"][0]["lifecycle_contract_version"],
+        "trillionnium_route_runner_lifecycle_v1"
+    );
+    assert_eq!(
+        viewport["avatar_route_runners"][0]["lifecycle"]["contract_version"],
+        "trillionnium_route_runner_lifecycle_v1"
+    );
+    assert!(viewport["avatar_route_runners"][0]["lifecycle_source"]
+        .as_str()
+        .is_some_and(|source| !source.is_empty()));
+    assert!(viewport["avatar_route_runners"][0]["lifecycle_stage"]
+        .as_str()
+        .is_some_and(|stage| !stage.is_empty()));
+    assert!(viewport["avatar_route_runners"][0]["lifecycle_status"]
+        .as_str()
+        .is_some_and(|status| !status.is_empty()));
+    assert!(
+        viewport["avatar_route_runners"][0]["lifecycle"]["route_duration_seconds"]
+            .as_i64()
             .unwrap_or(0)
-            >= 45
+            >= 300
     );
     assert!(viewport["avatar_route_runners"][0]["completion_command"]
         .as_str()
@@ -1396,6 +1419,14 @@ fn world_map_viewport_includes_prefetch_density_and_live_events() {
     assert_eq!(
         viewport["viewport_contract"]["supports_checkpoint_reward_history"],
         true
+    );
+    assert_eq!(
+        viewport["viewport_contract"]["supports_route_runner_lifecycle"],
+        true
+    );
+    assert_eq!(
+        viewport["viewport_contract"]["route_runner_lifecycle_contract_version"],
+        "trillionnium_route_runner_lifecycle_v1"
     );
     assert_eq!(
         viewport["viewport_contract"]["supports_route_runner_reward_claim_actions"],
@@ -1849,6 +1880,14 @@ fn world_home_json_exposes_shared_renderer_adapter_for_matrix_cards() {
         home["route_runner_handoff"]["supports_route_runner_next_route_actions"],
         true
     );
+    assert_eq!(
+        home["route_runner_handoff"]["supports_route_runner_lifecycle"],
+        true
+    );
+    assert_eq!(
+        home["route_runner_handoff"]["lifecycle_contract_version"],
+        "trillionnium_route_runner_lifecycle_v1"
+    );
     assert!(home["route_runner_handoff"]["handoff_prompt"]
         .as_str()
         .unwrap_or_default()
@@ -1882,6 +1921,10 @@ fn route_contract_is_shared_across_world_map_app_and_feed_surfaces() {
     assert_eq!(
         feed["route_runner_handoff"]["contract_version"],
         "trillionnium_route_runner_handoff_v1"
+    );
+    assert_eq!(
+        feed["route_runner_handoff"]["lifecycle_contract_version"],
+        "trillionnium_route_runner_lifecycle_v1"
     );
     assert_eq!(
         app["feed"]["route_runner_handoff"]["supports_route_runner_next_route_actions"],
@@ -1968,6 +2011,14 @@ fn client_app_map_hub_projects_stream_counts() {
     assert_eq!(
         app["map_hub"]["route_runner_handoff"]["supports_route_runner_next_route_actions"],
         true
+    );
+    assert_eq!(
+        app["map_hub"]["route_runner_handoff"]["supports_route_runner_lifecycle"],
+        true
+    );
+    assert_eq!(
+        app["map_hub"]["route_runner_handoff"]["lifecycle_contract_version"],
+        "trillionnium_route_runner_lifecycle_v1"
     );
     assert_eq!(app["map_hub"]["player_density_mode"], "dense");
     assert_eq!(app["modules"][0]["name"], "Trillionnium World Map");

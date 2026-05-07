@@ -108,6 +108,10 @@ function checkCommon(result) {
   assertMetric(result.smallTouchTargets.length === 0, `${result.profile}/${result.name} has small first-viewport touch targets`, result.smallTouchTargets.slice(0, 10));
 }
 
+function isAllowedRouteRunnerNextRouteStatus(status) {
+  return status === 'next_route_preview_locked_until_reward_claim' || status === 'next_route_ready_after_reward_claim';
+}
+
 function checkRouteRunnerHandoff(result) {
   if (!['app', 'world'].includes(result.name)) return;
   const handoff = result.routeRunnerHandoff || {};
@@ -118,7 +122,7 @@ function checkRouteRunnerHandoff(result) {
   assertMetric(summaryRequired, `${result.profile}/${result.name} route-runner handoff summaries missing`, handoff);
   assertMetric(handoff.contractVersionPresent === true, `${result.profile}/${result.name} route-runner handoff contract missing`, handoff);
   assertMetric(handoff.sourcePresent === true, `${result.profile}/${result.name} route-runner handoff feed source missing`, handoff);
-  assertMetric(handoff.nextRouteStatus === 'next_route_preview_locked_until_reward_claim', `${result.profile}/${result.name} route-runner next-route status missing`, handoff);
+  assertMetric(isAllowedRouteRunnerNextRouteStatus(handoff.nextRouteStatus), `${result.profile}/${result.name} route-runner next-route status missing`, handoff);
   assertMetric(Number(handoff.runnerCount || 0) >= 1, `${result.profile}/${result.name} route-runner count missing`, handoff);
   assertMetric(Number(handoff.rewardClaimCount || 0) >= 1, `${result.profile}/${result.name} route-runner reward-claim count missing`, handoff);
   assertMetric(Number(handoff.nextRouteCount || 0) >= 1, `${result.profile}/${result.name} route-runner next-route count missing`, handoff);

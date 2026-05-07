@@ -99,6 +99,10 @@ def signed_session_headers(matrix_user_id, room_id, session_id):
     }
 
 
+def route_runner_next_route_status_ok(status):
+    return status in ('next_route_preview_locked_until_reward_claim', 'next_route_ready_after_reward_claim')
+
+
 def feed_route_runner_handoff_ok(feed):
     handoff = feed.get('route_runner_handoff') or {}
     runner_count = int(handoff.get('runner_count') or 0)
@@ -111,13 +115,18 @@ def feed_route_runner_handoff_ok(feed):
         and handoff.get('supports_route_runner_reward_claim_actions') is True
         and handoff.get('supports_route_runner_next_route_actions') is True
         and handoff.get('supports_checkpoint_reward_history') is True
+        and handoff.get('supports_route_runner_lifecycle') is True
+        and handoff.get('lifecycle_contract_version') == 'trillionnium_route_runner_lifecycle_v1'
         and runner_count >= 1
         and reward_claim_count >= 1
         and next_route_count >= 1
         and bool(handoff.get('first_task_id'))
         and bool(handoff.get('first_progress_label'))
         and bool(handoff.get('first_reward_claim_status'))
-        and bool(handoff.get('first_next_route_status'))
+        and route_runner_next_route_status_ok(handoff.get('first_next_route_status'))
+        and bool(handoff.get('first_lifecycle_source'))
+        and bool(handoff.get('first_lifecycle_stage'))
+        and bool(handoff.get('first_lifecycle_status'))
         and bool(handoff.get('first_next_route_action_body'))
         and bool(handoff.get('first_next_route_sequence_summary'))
         and bool(handoff.get('handoff_prompt'))
@@ -157,7 +166,7 @@ feed_status, feed_body = get('/app/web/feed', headers=cookie_header)
 assert feed_status == 200, feed_status
 feed_json = json.loads(feed_body)
 assert feed_route_runner_handoff_ok(feed_json), feed_json.get('route_runner_handoff')
-for needle in ['real-world-map', 'leaflet_openstreetmap_v1', 'createRealWorldMapAdapter', 'leaflet_renderer_adapter_v1', 'maplibre_gl_v1', 'const mapRuntime', 'supports_future_engine_swap', 'gating_contract', 'renderRouteLine', 'renderTileFrame', 'renderEventPulse', 'onViewportChange', 'getCenter', 'getZoom', 'OpenStreetMap', 'Leaflet', 'tile.openstreetmap.org', 'global_real_world_tiles', 'gather_hero_tale_lod', 'cn-shanghai-core', 'primary_actions', 'trillionnium-map-action', 'Move Here', '移动到这里', '/v1/world/map/{matrix_user_id}/viewport', '/world/web/map-viewport', '/app/web/feed', 'TrillionniumLanguage', 'trillionnium.ui.language', 'data-trillionnium-language-select', 'trillionnium-app-language-select', 'trillionnium-system-language-settings', 'System Settings', '系统设置', 'English', '中文', 'app-global-search', 'app-search-clear', 'app-search-empty-state', 'app-ux-live-status', 'role="tablist"', 'role="tab"', 'role="tabpanel"', 'aria-selected="true"', 'handleAppTabKeydown', 'announceUxStatus', 'trillionnium_mobile_shell_ux_v1', 'keyboard_tab_navigation_visible', 'offline_feed_fallback_status_visible', 'web_session_feed_hydration_visible', '/app/web/feed', 'app-bottom-tabs', 'app-tab-messages', 'app-tab-map', 'app-tab-feed', 'app-tab-me', 'Messages', '消息', 'World', '世界', 'Feed', '动态', 'Me', '我', 'app-first-playable-onboarding', 'app-first-playable-checks', 'app-first-playable-steps', 'Starter Quest', '新手主线', 'global_first_overseas_beta', 'trillionnium_first_playable_onboarding_v1', 'first_playable_loop_100', 'data-onboarding-step="quest_delivery"', 'route_task_graph_next_action_visible', 'app-map-camera-summary', 'app-map-route-status', 'Recommended next step', '推荐下一步', 'Event brief', '事件简报：', 'Linked task route', '关联任务路线', '起草任务后续', '推进下一条支线', '下一条支线', '按焦点筛选路线', '显示完整路线', 'app-route-preview-live', 'Adventure Route Preview', '冒险路线预览', 'app-route-task-graph-live', 'Quest Route Graph', '任务路线图', '打开关联契约', 'app-feed-api-status', 'app-feed-filter-actions', 'app-feed-summary', 'app-feed-items-live', 'app-feed-route-runner-handoff', 'World Activity Timeline', '世界动态时间线', 'trillionnium-app-feed-filter', 'trillionnium-app-feed-action', 'loadFeedSurface', 'route_runner_handoff', 'trillionnium_route_runner_handoff_v1', 'data-next-route-status', 'next_route_preview_locked_until_reward_claim', 'Route runner handoff', 'route-runner-handoff', 'app-tile-shards-live', 'Map Tiles', '地图分片', 'Regional Hubs', '区域据点', 'Nearby Hotspots', 'Character Modules', '角色成长', '/progression', '/skills /tools /skins', 'findLiveEventByFocus', 'buildEventFocus', 'filterLiveEventStream', '条事件镜头', 'web_event_id', 'data-focus-kind="event"', 'data-event-id=', 'data-task-id=']:
+for needle in ['real-world-map', 'leaflet_openstreetmap_v1', 'createRealWorldMapAdapter', 'leaflet_renderer_adapter_v1', 'maplibre_gl_v1', 'const mapRuntime', 'supports_future_engine_swap', 'gating_contract', 'renderRouteLine', 'renderTileFrame', 'renderEventPulse', 'onViewportChange', 'getCenter', 'getZoom', 'OpenStreetMap', 'Leaflet', 'tile.openstreetmap.org', 'global_real_world_tiles', 'gather_hero_tale_lod', 'cn-shanghai-core', 'primary_actions', 'trillionnium-map-action', 'Move Here', '移动到这里', '/v1/world/map/{matrix_user_id}/viewport', '/world/web/map-viewport', '/app/web/feed', 'TrillionniumLanguage', 'trillionnium.ui.language', 'data-trillionnium-language-select', 'trillionnium-app-language-select', 'trillionnium-system-language-settings', 'System Settings', '系统设置', 'English', '中文', 'app-global-search', 'app-search-clear', 'app-search-empty-state', 'app-ux-live-status', 'role="tablist"', 'role="tab"', 'role="tabpanel"', 'aria-selected="true"', 'handleAppTabKeydown', 'announceUxStatus', 'trillionnium_mobile_shell_ux_v1', 'keyboard_tab_navigation_visible', 'offline_feed_fallback_status_visible', 'web_session_feed_hydration_visible', '/app/web/feed', 'app-bottom-tabs', 'app-tab-messages', 'app-tab-map', 'app-tab-feed', 'app-tab-me', 'Messages', '消息', 'World', '世界', 'Feed', '动态', 'Me', '我', 'app-first-playable-onboarding', 'app-first-playable-checks', 'app-first-playable-steps', 'Starter Quest', '新手主线', 'global_first_overseas_beta', 'trillionnium_first_playable_onboarding_v1', 'first_playable_loop_100', 'data-onboarding-step="quest_delivery"', 'route_task_graph_next_action_visible', 'app-map-camera-summary', 'app-map-route-status', 'Recommended next step', '推荐下一步', 'Event brief', '事件简报：', 'Linked task route', '关联任务路线', '起草任务后续', '推进下一条支线', '下一条支线', '按焦点筛选路线', '显示完整路线', 'app-route-preview-live', 'Adventure Route Preview', '冒险路线预览', 'app-route-task-graph-live', 'Quest Route Graph', '任务路线图', '打开关联契约', 'app-feed-api-status', 'app-feed-filter-actions', 'app-feed-summary', 'app-feed-items-live', 'app-feed-route-runner-handoff', 'World Activity Timeline', '世界动态时间线', 'trillionnium-app-feed-filter', 'trillionnium-app-feed-action', 'loadFeedSurface', 'route_runner_handoff', 'trillionnium_route_runner_handoff_v1', 'trillionnium_route_runner_lifecycle_v1', 'data-next-route-status', 'Route runner handoff', 'route-runner-handoff', 'app-tile-shards-live', 'Map Tiles', '地图分片', 'Regional Hubs', '区域据点', 'Nearby Hotspots', 'Character Modules', '角色成长', '/progression', '/skills /tools /skins', 'findLiveEventByFocus', 'buildEventFocus', 'filterLiveEventStream', '条事件镜头', 'web_event_id', 'data-focus-kind="event"', 'data-event-id=', 'data-task-id=']:
     assert needle in app_html, ('client_app_real_world_map_engine', needle)
 # The normal unauthenticated local-dev shell remains available; the signed session path is checked below.
 code, url, body = post_action(**{
@@ -381,12 +390,12 @@ summary = {
     'has_client_app_language_settings': all(token in app_html for token in ['TrillionniumLanguage', 'trillionnium.ui.language', 'data-trillionnium-language-select', 'trillionnium-app-language-select', 'trillionnium-system-language-settings', 'System Settings', '系统设置', 'English', '中文']),
     'has_client_app_mobile_a11y_ux': all(token in app_html for token in ['app-ux-live-status', 'app-search-empty-state', 'role="tablist"', 'role="tab"', 'role="tabpanel"', 'aria-selected="true"', 'handleAppTabKeydown', 'announceUxStatus', 'trillionnium_mobile_shell_ux_v1', 'keyboard_tab_navigation_visible', 'offline_feed_fallback_status_visible', 'web_session_feed_hydration_visible', '/app/web/feed']),
     'has_client_app_first_playable_onboarding': 'app-first-playable-onboarding' in app_html and '新手主线' in app_html and 'first_playable_loop_100' in app_html and 'trillionnium_first_playable_onboarding_v1' in app_html and 'data-onboarding-step="quest_delivery"' in app_html and 'route_task_graph_next_action_visible' in app_html,
-    'has_client_app_world_map': '现实地图' in app_html,
+    'has_client_app_world_map': 'real-world-map' in app_html and 'leaflet_openstreetmap_v1' in app_html and 'OpenStreetMap' in app_html,
     'has_client_app_feed_api': '/app/web/feed' in app_html and 'Feed API' in app_html,
     'has_client_app_feed_surface': 'app-feed-api-status' in app_html and 'app-feed-summary' in app_html and 'app-feed-items-live' in app_html and '世界动态时间线' in app_html,
     'has_client_app_feed_filters': 'app-feed-filter-actions' in app_html and 'trillionnium-app-feed-filter' in app_html and '推荐' in app_html and '委托' in app_html and '冒险' in app_html,
     'has_client_app_feed_api_hydration': 'loadFeedSurface' in app_html and '动态已同步' in app_html and 'trillionnium-app-feed-action' in app_html,
-    'has_client_app_feed_route_runner_handoff_static': 'app-feed-route-runner-handoff' in app_html and 'route_runner_handoff' in app_html and 'trillionnium_route_runner_handoff_v1' in app_html and 'data-next-route-status' in app_html and 'next_route_preview_locked_until_reward_claim' in app_html,
+    'has_client_app_feed_route_runner_handoff_static': 'app-feed-route-runner-handoff' in app_html and 'route_runner_handoff' in app_html and 'trillionnium_route_runner_handoff_v1' in app_html and 'trillionnium_route_runner_lifecycle_v1' in app_html and 'data-next-route-status' in app_html,
     'has_client_app_feed_route_runner_handoff_api': feed_route_runner_handoff_ok(feed_json),
     'client_app_feed_source_count': feed_json.get('source_count'),
     'client_app_feed_sources': feed_json.get('sources'),

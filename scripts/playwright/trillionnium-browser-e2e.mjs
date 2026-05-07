@@ -84,18 +84,27 @@ async function count(page, selector) {
   return await page.locator(selector).count();
 }
 
+function isAllowedRouteRunnerNextRouteStatus(status) {
+  return status === 'next_route_preview_locked_until_reward_claim' || status === 'next_route_ready_after_reward_claim';
+}
+
 function assertRouteRunnerHandoffContract(handoff, label) {
   assert(handoff?.contract_version === 'trillionnium_route_runner_handoff_v1', `${label} route-runner handoff contract missing`, handoff);
   assert(handoff?.supports_route_runner_reward_claim_actions === true, `${label} reward-claim handoff support missing`, handoff);
   assert(handoff?.supports_route_runner_next_route_actions === true, `${label} next-route handoff support missing`, handoff);
   assert(handoff?.supports_checkpoint_reward_history === true, `${label} checkpoint reward history support missing`, handoff);
+  assert(handoff?.supports_route_runner_lifecycle === true, `${label} lifecycle support missing`, handoff);
+  assert(handoff?.lifecycle_contract_version === 'trillionnium_route_runner_lifecycle_v1', `${label} lifecycle contract missing`, handoff);
   assert(Number(handoff?.runner_count || 0) >= 1, `${label} runner count missing`, handoff);
   assert(Number(handoff?.reward_claim_action_count || 0) >= 1, `${label} reward-claim action count missing`, handoff);
   assert(Number(handoff?.next_route_action_count || 0) >= 1, `${label} next-route action count missing`, handoff);
   assert(Boolean(handoff?.first_task_id), `${label} first route-runner task missing`, handoff);
   assert(Boolean(handoff?.first_progress_label), `${label} first route-runner progress label missing`, handoff);
   assert(Boolean(handoff?.first_reward_claim_status), `${label} reward-claim status missing`, handoff);
-  assert(handoff?.first_next_route_status === 'next_route_preview_locked_until_reward_claim', `${label} next-route status missing`, handoff);
+  assert(isAllowedRouteRunnerNextRouteStatus(handoff?.first_next_route_status), `${label} next-route status missing`, handoff);
+  assert(Boolean(handoff?.first_lifecycle_source), `${label} lifecycle source missing`, handoff);
+  assert(Boolean(handoff?.first_lifecycle_stage), `${label} lifecycle stage missing`, handoff);
+  assert(Boolean(handoff?.first_lifecycle_status), `${label} lifecycle status missing`, handoff);
   assert(Boolean(handoff?.first_next_route_action_body), `${label} next-route action body missing`, handoff);
   assert(Boolean(handoff?.first_next_route_sequence_summary), `${label} next-route sequence summary missing`, handoff);
   assert(Boolean(handoff?.handoff_prompt), `${label} handoff prompt missing`, handoff);
@@ -119,7 +128,7 @@ async function assertRouteRunnerHandoffDom(page, selector, label) {
     nextRouteCount: Number.parseInt(node.dataset.nextRouteCount || '0', 10) || 0,
     text: String(node.innerText || node.textContent || '').replace(/\s+/g, ' ').trim(),
   }));
-  assert(dom.nextRouteStatus === 'next_route_preview_locked_until_reward_claim', `${label} DOM next-route status missing`, dom);
+  assert(isAllowedRouteRunnerNextRouteStatus(dom.nextRouteStatus), `${label} DOM next-route status missing`, dom);
   assert(dom.runnerCount >= 1, `${label} DOM runner count missing`, dom);
   assert(dom.rewardClaimCount >= 1, `${label} DOM reward-claim count missing`, dom);
   assert(dom.nextRouteCount >= 1, `${label} DOM next-route count missing`, dom);
