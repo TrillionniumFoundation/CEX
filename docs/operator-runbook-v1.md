@@ -427,6 +427,8 @@ curl -s -X POST -H 'x-admin-token: <admin-token>' -H 'content-type: application/
 - `CexTrillionniumRouteRunnerHandoffRunnerCountZero`
 - `CexTrillionniumRouteRunnerHandoffActionsMissing`
 
+这些 alerts 带统一标签：`service=consumer-entry-api`、`family=product-edge`、`component=trillionnium-route-runner-handoff`、`owner=product-ops`。Alertmanager 示例配置会先匹配这个 component，再回退到普通 `product-edge` route。
+
 先看：
 
 - `GET http://127.0.0.1:8090/health`

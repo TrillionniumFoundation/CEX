@@ -24,6 +24,13 @@ route:
       continue: false
 
     - matchers:
+        - service="consumer-entry-api"
+        - family="product-edge"
+        - component="trillionnium-route-runner-handoff"
+      receiver: cex-operator-chat
+      continue: false
+
+    - matchers:
         - family="product-edge"
       receiver: cex-operator-chat
       continue: false

@@ -51,6 +51,8 @@ It tracks the same direct gauges used by the `CexTrillionniumRouteRunnerHandoff*
 - runner count
 - reward-claim and next-route action counts
 
+Those alerts also carry `component=trillionnium-route-runner-handoff` and `owner=product-ops`, and the example Alertmanager product-edge routing file matches that component before the generic product-edge route.
+
 If you want to regenerate the combined bundles from the manifest, use:
 
 - `scripts/assemble-monitoring-bundles.sh`
@@ -101,6 +103,6 @@ They do not yet provide:
 
 - full native `/metrics` coverage for gateway/execution
 - full matrix/product policy coverage
-- silence policy / ownership / escalation tree
+- silence policy / ownership / escalation tree beyond the focused route-runner component labels/routing example
 - a single blessed production deployment layout
 - a complete dashboard pack beyond the focused route-runner handoff starter

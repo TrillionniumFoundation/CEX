@@ -12,6 +12,8 @@ groups:
           severity: critical
           service: consumer-entry-api
           family: product-edge
+          component: trillionnium-route-runner-handoff
+          owner: product-ops
           route_hint: page
         annotations:
           summary: Trillionnium route-runner handoff gates are not all green
@@ -29,6 +31,8 @@ groups:
           severity: critical
           service: consumer-entry-api
           family: product-edge
+          component: trillionnium-route-runner-handoff
+          owner: product-ops
           route_hint: page
         annotations:
           summary: Trillionnium route-runner handoff feed source is missing or incomplete
@@ -45,6 +49,8 @@ groups:
           severity: warning
           service: consumer-entry-api
           family: product-edge
+          component: trillionnium-route-runner-handoff
+          owner: product-ops
           route_hint: chat
         annotations:
           summary: Trillionnium route-runner handoff has no active runners
@@ -61,6 +67,8 @@ groups:
           severity: warning
           service: consumer-entry-api
           family: product-edge
+          component: trillionnium-route-runner-handoff
+          owner: product-ops
           route_hint: chat
         annotations:
           summary: Trillionnium route-runner handoff actions are missing
