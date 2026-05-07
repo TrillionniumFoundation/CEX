@@ -10979,6 +10979,14 @@ async fn metrics_endpoint_exposes_identity_governance_gauges() {
     ));
     assert!(body
         .contains("cex_consumer_entry_trillionnium_route_runner_handoff_next_route_action_count"));
+    assert!(body.contains(
+        "cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_contract_visible"
+    ));
+    assert!(body.contains(
+        "cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_runner_count"
+    ));
+    assert!(body
+        .contains("cex_consumer_entry_trillionnium_route_runner_handoff_first_route_mastery_xp"));
     assert!(
         body.contains("cex_consumer_entry_trillionnium_world_playability_scorecard_overall_score")
     );

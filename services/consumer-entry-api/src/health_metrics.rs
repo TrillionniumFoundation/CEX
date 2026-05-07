@@ -3143,6 +3143,10 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
         && closed_beta_route_runner_handoff_gate_green
         && real_user_beta_route_runner_handoff_gate_green
         && public_commercial_route_runner_handoff_gate_green;
+    let route_runner_handoff_mastery_contract_visible = playability_route_runner_handoff_gate
+        .get("route_mastery_contract_version")
+        .and_then(Value::as_str)
+        == Some("trillionnium_route_mastery_v1");
     let body = format!(
         concat!(
             "# TYPE cex_consumer_entry_task_create_requests_total counter\n",
@@ -3321,6 +3325,12 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
             "cex_consumer_entry_trillionnium_route_runner_handoff_reward_claim_action_count {}\n",
             "# TYPE cex_consumer_entry_trillionnium_route_runner_handoff_next_route_action_count gauge\n",
             "cex_consumer_entry_trillionnium_route_runner_handoff_next_route_action_count {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_contract_visible gauge\n",
+            "cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_contract_visible {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_runner_count gauge\n",
+            "cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_runner_count {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_route_runner_handoff_first_route_mastery_xp gauge\n",
+            "cex_consumer_entry_trillionnium_route_runner_handoff_first_route_mastery_xp {}\n",
             "# TYPE cex_consumer_entry_trillionnium_world_playability_scorecard_overall_score gauge\n",
             "cex_consumer_entry_trillionnium_world_playability_scorecard_overall_score {}\n",
             "# TYPE cex_consumer_entry_trillionnium_world_playability_scorecard_overall_percent gauge\n",
@@ -3699,6 +3709,15 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
         route_runner_handoff_gate_u64(
             playability_route_runner_handoff_gate,
             "next_route_action_count",
+        ),
+        gauge_bool(route_runner_handoff_mastery_contract_visible),
+        route_runner_handoff_gate_u64(
+            playability_route_runner_handoff_gate,
+            "route_mastery_runner_count",
+        ),
+        route_runner_handoff_gate_u64(
+            playability_route_runner_handoff_gate,
+            "first_route_mastery_xp",
         ),
         trillionnium_world_playability_scorecard
             .get("overall_score")

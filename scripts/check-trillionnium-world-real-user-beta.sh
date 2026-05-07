@@ -155,6 +155,9 @@ require("matrix_recent_event_store_enabled", matrix.get("recent_event_store_enab
 require("matrix_rate_limit_store_enabled", matrix.get("rate_limit_store_enabled") is True, matrix.get("rate_limit_store_enabled"))
 require("production_readiness_ok", production_readiness_ok, production_readiness_log)
 for metric in [
+    "cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_contract_visible",
+    "cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_runner_count",
+    "cex_consumer_entry_trillionnium_route_runner_handoff_first_route_mastery_xp",
     "cex_consumer_entry_trillionnium_world_real_user_beta_overall_percent",
     "cex_consumer_entry_trillionnium_world_real_user_beta_product_retention_percent",
     "cex_consumer_entry_trillionnium_world_real_user_beta_access_safety_percent",
