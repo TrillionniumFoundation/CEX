@@ -219,17 +219,35 @@ impl<'a> WorldHomeProjectionContext<'a> {
     }
 
     fn route_runtime_fields(&self) -> Map<String, Value> {
-        let WorldRouteArtifacts {
-            preview: route_preview,
-            task_graph: route_task_graph,
-            story: route_story,
-            ..
-        } = self.route_artifacts();
+        let route_artifacts = self.route_artifacts();
+        let avatar_task_routes = world_map_avatar_task_routes_json(
+            self.world,
+            &self.indexes,
+            "@alice:local.dev",
+            &route_artifacts,
+            6,
+        );
+        let avatar_route_runners = world_map_avatar_route_runners_json(&avatar_task_routes, 6);
         let mut fields = Map::new();
         fields.insert("route_contract".to_string(), world_route_ui_contract_json());
-        fields.insert("route_preview".to_string(), route_preview);
-        fields.insert("route_task_graph".to_string(), route_task_graph);
-        fields.insert("route_story".to_string(), route_story.to_value());
+        fields.insert("route_preview".to_string(), route_artifacts.preview.clone());
+        fields.insert(
+            "route_task_graph".to_string(),
+            route_artifacts.task_graph.clone(),
+        );
+        fields.insert("route_story".to_string(), route_artifacts.story.to_value());
+        fields.insert(
+            "avatar_task_route_count".to_string(),
+            json!(avatar_task_routes.len()),
+        );
+        fields.insert(
+            "avatar_route_runner_count".to_string(),
+            json!(avatar_route_runners.len()),
+        );
+        fields.insert(
+            "route_runner_handoff".to_string(),
+            world_map_route_runner_handoff_json(avatar_task_routes.len(), &avatar_route_runners),
+        );
         fields
     }
 
@@ -993,6 +1011,97 @@ pub(super) fn world_map_avatar_route_runners_json(
         .collect()
 }
 
+pub(super) fn world_map_route_runner_handoff_json(
+    avatar_task_route_count: usize,
+    avatar_route_runners: &[Value],
+) -> Value {
+    let first_runner = avatar_route_runners.first();
+    let first_str = |field: &str, fallback: &str| {
+        first_runner
+            .and_then(|runner| runner.get(field))
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or(fallback)
+            .to_string()
+    };
+    let next_route_action_count = avatar_route_runners
+        .iter()
+        .filter(|runner| {
+            runner
+                .get("reward_checkpoint")
+                .and_then(|checkpoint| checkpoint.get("next_route_action"))
+                .is_some()
+                || runner.get("next_route_action_body").is_some()
+        })
+        .count();
+    let reward_claim_action_count = avatar_route_runners
+        .iter()
+        .filter(|runner| {
+            runner
+                .get("reward_checkpoint")
+                .and_then(|checkpoint| checkpoint.get("reward_claim_action"))
+                .is_some()
+                || runner.get("reward_claim_action_body").is_some()
+        })
+        .count();
+    let next_route_ready_count = avatar_route_runners
+        .iter()
+        .filter(|runner| {
+            runner.get("next_route_status").and_then(Value::as_str)
+                == Some("next_route_ready_after_reward_claim")
+        })
+        .count();
+    let reward_claim_ready_count = avatar_route_runners
+        .iter()
+        .filter(|runner| {
+            runner.get("reward_claim_status").and_then(Value::as_str)
+                == Some("claimable_after_evidence")
+        })
+        .count();
+    let runner_count = avatar_route_runners.len();
+    let summary = if runner_count > 0 {
+        format!(
+            "Route runner handoff: {} runners · {} reward claims · {} next-route actions · next {} / {}",
+            runner_count,
+            reward_claim_action_count,
+            next_route_action_count,
+            first_str("reward_claim_label", "Prepare reward claim / 准备领奖"),
+            first_str("next_route_label", "Preview next route / 预览下一路线"),
+        )
+    } else {
+        "Route runner handoff: waiting for avatar task routes to unlock reward and next-route actions."
+            .to_string()
+    };
+
+    json!({
+        "contract_version": "trillionnium_route_runner_handoff_v1",
+        "runner_count": runner_count,
+        "avatar_task_route_count": avatar_task_route_count,
+        "reward_claim_action_count": reward_claim_action_count,
+        "next_route_action_count": next_route_action_count,
+        "reward_claim_ready_count": reward_claim_ready_count,
+        "next_route_ready_count": next_route_ready_count,
+        "supports_checkpoint_reward_history": true,
+        "supports_route_runner_reward_claim_actions": true,
+        "supports_route_runner_next_route_actions": true,
+        "first_runner_id": first_str("runner_id", "none"),
+        "first_task_id": first_str("task_id", "none"),
+        "first_to_node_id": first_str("to_node_id", "target-node"),
+        "first_latest_location_id": first_str("latest_location_id", ""),
+        "first_progress_label": first_str("progress_label", "0% route progress / 0% 路线进度"),
+        "first_telemetry_summary": first_str("telemetry_summary", "route runner telemetry pending"),
+        "first_reward_claim_label": first_str("reward_claim_label", "Prepare reward claim / 准备领奖"),
+        "first_reward_claim_status": first_str("reward_claim_status", "locked_until_evidence_checkpoint"),
+        "first_reward_claim_action_body": first_str("reward_claim_action_body", "Prepare deliverable, evidence package, risk controls, next action, and self-review before claiming rating/reward."),
+        "first_next_route_label": first_str("next_route_label", "Preview next route / 预览下一路线"),
+        "first_next_route_status": first_str("next_route_status", "next_route_preview_locked_until_reward_claim"),
+        "first_next_route_action_body": first_str("next_route_action_body", "Preview the next route with deliverable, evidence package, risk controls, next action, and self-review anchors."),
+        "first_next_route_sequence_summary": first_str("next_route_sequence_summary", "After reward claim, open the next Trillionnium World Map route with the same deliverable → evidence → risk controls → next action → self-review anchors."),
+        "summary": summary,
+        "handoff_prompt": "Claim rating/reward, then open the next route with deliverable → evidence → risk controls → next action → self-review anchors.",
+    })
+}
+
 pub(super) fn real_world_map_region_shards_json() -> Vec<Value> {
     vec![
         json!({
@@ -1717,6 +1826,8 @@ pub(super) fn world_map_viewport_json(
     let player_avatar_count = player_avatars.len();
     let avatar_task_route_count = avatar_task_routes.len();
     let avatar_route_runner_count = avatar_route_runners.len();
+    let route_runner_handoff =
+        world_map_route_runner_handoff_json(avatar_task_route_count, &avatar_route_runners);
     let viewport_path = format!(
         "/v1/world/map/{}/viewport?lat={:.6}&lng={:.6}&zoom={}&radius_km={:.1}&limit={}",
         matrix_user_id, center_lat, center_lng, zoom, radius_km, marker_limit
@@ -1760,6 +1871,7 @@ pub(super) fn world_map_viewport_json(
         "avatar_task_route_count": avatar_task_route_count,
         "avatar_route_runners": avatar_route_runners,
         "avatar_route_runner_count": avatar_route_runner_count,
+        "route_runner_handoff": route_runner_handoff,
         "gameplay_layer_contract": trillionnium_world_map_gameplay_layer_contract_json(),
         "live_event_stream": live_event_stream,
         "live_event_stream_index_layer": "WorldIndexes::event_indices_by_location_v1",
@@ -1954,6 +2066,16 @@ impl<'a> WorldMapProjectionContext<'a> {
             .map(|node| node.exits.clone())
             .unwrap_or_default();
         let real_world_map_engine = real_world_map_engine_json(&nodes, current_node.as_ref());
+        let avatar_task_routes = world_map_avatar_task_routes_json(
+            self.world,
+            &self.indexes,
+            self.matrix_user_id,
+            self.route_artifacts,
+            6,
+        );
+        let avatar_route_runners = world_map_avatar_route_runners_json(&avatar_task_routes, 6);
+        let route_runner_handoff =
+            world_map_route_runner_handoff_json(avatar_task_routes.len(), &avatar_route_runners);
         json!({
             "kind": "trillionnium_world_map",
             "projection_layer": "world_map_projection_v1",
@@ -1968,6 +2090,9 @@ impl<'a> WorldMapProjectionContext<'a> {
             "route_task_graph": self.route_artifacts.task_graph.clone(),
             "route_story": self.route_artifacts.story.to_value(),
             "route_contract": world_route_ui_contract_json(),
+            "avatar_task_route_count": avatar_task_routes.len(),
+            "avatar_route_runner_count": avatar_route_runners.len(),
+            "route_runner_handoff": route_runner_handoff,
             "map_nodes": nodes,
             "current_node": current_node,
             "current_node_id": current_node_id,

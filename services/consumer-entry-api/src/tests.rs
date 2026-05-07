@@ -1841,6 +1841,18 @@ fn world_home_json_exposes_shared_renderer_adapter_for_matrix_cards() {
         engine["planned_upgrade_engine"]["gating_contract"],
         "renderer_adapter.adapter_contract_version >= 1"
     );
+    assert_eq!(
+        home["route_runner_handoff"]["contract_version"],
+        "trillionnium_route_runner_handoff_v1"
+    );
+    assert_eq!(
+        home["route_runner_handoff"]["supports_route_runner_next_route_actions"],
+        true
+    );
+    assert!(home["route_runner_handoff"]["handoff_prompt"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("deliverable → evidence → risk controls → next action → self-review"));
 }
 
 #[test]
@@ -1854,6 +1866,14 @@ fn route_contract_is_shared_across_world_map_app_and_feed_surfaces() {
 
     assert_eq!(home["route_contract"], expected);
     assert_eq!(map["route_contract"], expected);
+    assert_eq!(
+        map["route_runner_handoff"]["contract_version"],
+        "trillionnium_route_runner_handoff_v1"
+    );
+    assert!(map["route_runner_handoff"]["first_next_route_action_body"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("risk controls, next action, and self-review"));
     assert_eq!(app["route_contract"], expected);
     assert_eq!(app["map"]["route_contract"], expected);
     assert_eq!(app["feed"]["route_contract"], expected);

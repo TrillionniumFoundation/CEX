@@ -5139,7 +5139,7 @@ struct RouteRunnerHandoffCardContext {
 impl RouteRunnerHandoffCardContext {
     fn from_map_hub(map_hub: Option<&Value>) -> Self {
         let handoff = map_hub.and_then(|hub| hub.get("route_runner_handoff"));
-        let viewport = map_hub.and_then(|hub| hub.get("viewport"));
+        let viewport = map_hub.and_then(|hub| hub.get("viewport")).or(map_hub);
         let runner_items: &[Value] = viewport
             .and_then(|viewport| viewport.get("avatar_route_runners"))
             .and_then(Value::as_array)
@@ -6199,23 +6199,27 @@ fn build_trillionnium_world_matrix_reply(value: &Value) -> Value {
         .specialize_opportunity("world");
     let route_text_block = route.text_block("Route Graph", true);
     let route_html_block = route.html_block("Route Graph", true);
+    let route_runner = RouteRunnerHandoffCardContext::from_map_hub(Some(value));
+    let route_runner_text_block = route_runner.text_block();
+    let route_runner_html_block = route_runner.html_block();
     let body = format!(
-        "🌍 Trillionnium World\n开放世界总层：现实镜像城市 + Craft 工坊 + Market + League。\nZones: {zone_count} · Locations: {location_count} · Assets: {asset_count} · Companies: {company_count} · Shops: {shop_count} · Listings: {listing_count} · Purchases: {purchase_count} · Work: {work_order_count} · Factions: {faction_count} · Events: {event_count}\nRenderer Adapter: {adapter_id} v{adapter_version} · handle {runtime_handle} · future {future_engine}\n{route_text_block}\n自由行动：/world action 我要开一家 AI 设计公司",
+        "🌍 Trillionnium World\n开放世界总层：现实镜像城市 + Craft 工坊 + Market + League。\nZones: {zone_count} · Locations: {location_count} · Assets: {asset_count} · Companies: {company_count} · Shops: {shop_count} · Listings: {listing_count} · Purchases: {purchase_count} · Work: {work_order_count} · Factions: {faction_count} · Events: {event_count}\nRenderer Adapter: {adapter_id} v{adapter_version} · handle {runtime_handle} · future {future_engine}\n{route_text_block}\n{route_runner_text_block}\n自由行动：/world action 我要开一家 AI 设计公司",
         adapter_id = &renderer_adapter.adapter_id,
         adapter_version = renderer_adapter.adapter_contract_version,
         runtime_handle = &renderer_adapter.runtime_handle_name,
         future_engine = &renderer_adapter.future_engine_candidate,
         route_text_block = route_text_block,
+        route_runner_text_block = route_runner_text_block,
     );
     json!({
         "msgtype": "m.text",
         "body": body,
         "format": "org.matrix.custom.html",
         "formatted_body": format!(
-            "<blockquote><h3>🌍 Trillionnium World</h3><p>现实镜像城市 + Craft 工坊 + Market + League。</p><p><strong>Zones</strong>: {} · <strong>Locations</strong>: {} · <strong>Assets</strong>: {} · <strong>Companies</strong>: {} · <strong>Shops</strong>: {} · <strong>Listings</strong>: {} · <strong>Purchases</strong>: {} · <strong>Work</strong>: {} · <strong>Factions</strong>: {} · <strong>Events</strong>: {}</p><p><strong>Renderer Adapter</strong>: <code>{}</code> v{} · <code>{}</code> · future <code>{}</code></p>{}<p><code>/world action 我要开一家 AI 设计公司</code></p></blockquote>",
-            zone_count, location_count, asset_count, company_count, shop_count, listing_count, purchase_count, work_order_count, faction_count, event_count, escape_html(&renderer_adapter.adapter_id), renderer_adapter.adapter_contract_version, escape_html(&renderer_adapter.runtime_handle_name), escape_html(&renderer_adapter.future_engine_candidate), route_html_block,
+            "<blockquote><h3>🌍 Trillionnium World</h3><p>现实镜像城市 + Craft 工坊 + Market + League。</p><p><strong>Zones</strong>: {} · <strong>Locations</strong>: {} · <strong>Assets</strong>: {} · <strong>Companies</strong>: {} · <strong>Shops</strong>: {} · <strong>Listings</strong>: {} · <strong>Purchases</strong>: {} · <strong>Work</strong>: {} · <strong>Factions</strong>: {} · <strong>Events</strong>: {}</p><p><strong>Renderer Adapter</strong>: <code>{}</code> v{} · <code>{}</code> · future <code>{}</code></p>{}{}<p><code>/world action 我要开一家 AI 设计公司</code></p></blockquote>",
+            zone_count, location_count, asset_count, company_count, shop_count, listing_count, purchase_count, work_order_count, faction_count, event_count, escape_html(&renderer_adapter.adapter_id), renderer_adapter.adapter_contract_version, escape_html(&renderer_adapter.runtime_handle_name), escape_html(&renderer_adapter.future_engine_candidate), route_html_block, route_runner_html_block,
         ),
-        "cex_card": route_story_card_json(json!({"type": "trillionnium_world", "version": 1, "world": "trillionnium_world", "zone_count": zone_count, "location_count": location_count, "asset_count": asset_count, "company_count": company_count, "shop_count": shop_count, "listing_count": listing_count, "purchase_count": purchase_count, "work_order_count": work_order_count, "faction_count": faction_count, "event_count": event_count, "map_renderer_adapter_id": renderer_adapter.adapter_id, "map_renderer_adapter_version": renderer_adapter.adapter_contract_version, "map_runtime_handle_name": renderer_adapter.runtime_handle_name, "map_renderer_future_engine_candidate": renderer_adapter.future_engine_candidate, "map_renderer_supports_future_engine_swap": renderer_adapter.supports_future_engine_swap, "map_planned_upgrade_engine_id": renderer_adapter.planned_upgrade_engine_id, "map_planned_upgrade_gating_contract": renderer_adapter.planned_upgrade_gating_contract}), &route, true)
+        "cex_card": route_runner.card_json(route_story_card_json(json!({"type": "trillionnium_world", "version": 1, "world": "trillionnium_world", "zone_count": zone_count, "location_count": location_count, "asset_count": asset_count, "company_count": company_count, "shop_count": shop_count, "listing_count": listing_count, "purchase_count": purchase_count, "work_order_count": work_order_count, "faction_count": faction_count, "event_count": event_count, "map_renderer_adapter_id": renderer_adapter.adapter_id, "map_renderer_adapter_version": renderer_adapter.adapter_contract_version, "map_runtime_handle_name": renderer_adapter.runtime_handle_name, "map_renderer_future_engine_candidate": renderer_adapter.future_engine_candidate, "map_renderer_supports_future_engine_swap": renderer_adapter.supports_future_engine_swap, "map_planned_upgrade_engine_id": renderer_adapter.planned_upgrade_engine_id, "map_planned_upgrade_gating_contract": renderer_adapter.planned_upgrade_gating_contract}), &route, true))
     })
 }
 
@@ -6260,6 +6264,9 @@ fn build_trillionnium_world_map_matrix_reply(value: &Value) -> Value {
         RouteStoryCardContext::from_value(value, current_node_id).specialize_opportunity("map");
     let route_text_block = route.text_block("Route Graph", false);
     let route_html_block = route.html_block("Route Graph", false);
+    let route_runner = RouteRunnerHandoffCardContext::from_map_hub(Some(value));
+    let route_runner_text_block = route_runner.text_block();
+    let route_runner_html_block = route_runner.html_block();
     let exits = value
         .get("exits")
         .and_then(Value::as_object)
@@ -6276,22 +6283,23 @@ fn build_trillionnium_world_map_matrix_reply(value: &Value) -> Value {
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "none".to_string());
     let body = format!(
-        "🗺️ Trillionnium World Map\n当前位置：{current_name} ({current_node_id})\n坐标：{x},{y}\n节点：{node_count}\nMap Engine: {map_engine_id} ({tile_provider})\nMirror: {mirror_scope} · Region: {active_region_id}\nRenderer Adapter: {adapter_id} v{adapter_version} · handle {runtime_handle} · future {future_engine}\n{route_text_block}\n出口：{exits}\n{description}\n移动：/go <direction|node-id>",
+        "🗺️ Trillionnium World Map\n当前位置：{current_name} ({current_node_id})\n坐标：{x},{y}\n节点：{node_count}\nMap Engine: {map_engine_id} ({tile_provider})\nMirror: {mirror_scope} · Region: {active_region_id}\nRenderer Adapter: {adapter_id} v{adapter_version} · handle {runtime_handle} · future {future_engine}\n{route_text_block}\n{route_runner_text_block}\n出口：{exits}\n{description}\n移动：/go <direction|node-id>",
         adapter_id = &renderer_adapter.adapter_id,
         adapter_version = renderer_adapter.adapter_contract_version,
         runtime_handle = &renderer_adapter.runtime_handle_name,
         future_engine = &renderer_adapter.future_engine_candidate,
         route_text_block = route_text_block,
+        route_runner_text_block = route_runner_text_block,
     );
     json!({
         "msgtype": "m.text",
         "body": body,
         "format": "org.matrix.custom.html",
         "formatted_body": format!(
-            "<blockquote><h3>🗺️ Trillionnium World Map</h3><p><strong>当前位置</strong>: {} (<code>{}</code>)</p><p><strong>坐标</strong>: {},{} · <strong>节点</strong>: {}</p><p><strong>Map Engine</strong>: <code>{}</code> · {} · <code>{}</code></p><p><strong>Renderer Adapter</strong>: <code>{}</code> v{} · <code>{}</code> · future <code>{}</code></p>{}<p><strong>出口</strong>: {}</p><p>{}</p><p><code>/go &lt;direction|node-id&gt;</code></p></blockquote>",
-            escape_html(current_name), escape_html(current_node_id), x, y, node_count, escape_html(map_engine_id), escape_html(tile_provider), escape_html(active_region_id), escape_html(&renderer_adapter.adapter_id), renderer_adapter.adapter_contract_version, escape_html(&renderer_adapter.runtime_handle_name), escape_html(&renderer_adapter.future_engine_candidate), route_html_block, escape_html(&exits), escape_html(description),
+            "<blockquote><h3>🗺️ Trillionnium World Map</h3><p><strong>当前位置</strong>: {} (<code>{}</code>)</p><p><strong>坐标</strong>: {},{} · <strong>节点</strong>: {}</p><p><strong>Map Engine</strong>: <code>{}</code> · {} · <code>{}</code></p><p><strong>Renderer Adapter</strong>: <code>{}</code> v{} · <code>{}</code> · future <code>{}</code></p>{}{}<p><strong>出口</strong>: {}</p><p>{}</p><p><code>/go &lt;direction|node-id&gt;</code></p></blockquote>",
+            escape_html(current_name), escape_html(current_node_id), x, y, node_count, escape_html(map_engine_id), escape_html(tile_provider), escape_html(active_region_id), escape_html(&renderer_adapter.adapter_id), renderer_adapter.adapter_contract_version, escape_html(&renderer_adapter.runtime_handle_name), escape_html(&renderer_adapter.future_engine_candidate), route_html_block, route_runner_html_block, escape_html(&exits), escape_html(description),
         ),
-        "cex_card": route_story_card_json(json!({"type": "trillionnium_world_map", "version": 1, "world": "trillionnium_world", "current_node_id": current_node_id, "current_name": current_name, "node_count": node_count, "x": x, "y": y, "exits": exits, "has_real_world_map_engine": true, "map_engine_id": map_engine_id, "tile_provider": tile_provider, "mirror_scope": mirror_scope, "active_region_id": active_region_id, "map_renderer_adapter_id": renderer_adapter.adapter_id, "map_renderer_adapter_version": renderer_adapter.adapter_contract_version, "map_runtime_handle_name": renderer_adapter.runtime_handle_name, "map_renderer_future_engine_candidate": renderer_adapter.future_engine_candidate, "map_renderer_supports_future_engine_swap": renderer_adapter.supports_future_engine_swap, "map_planned_upgrade_engine_id": renderer_adapter.planned_upgrade_engine_id, "map_planned_upgrade_gating_contract": renderer_adapter.planned_upgrade_gating_contract}), &route, false)
+        "cex_card": route_runner.card_json(route_story_card_json(json!({"type": "trillionnium_world_map", "version": 1, "world": "trillionnium_world", "current_node_id": current_node_id, "current_name": current_name, "node_count": node_count, "x": x, "y": y, "exits": exits, "has_real_world_map_engine": true, "map_engine_id": map_engine_id, "tile_provider": tile_provider, "mirror_scope": mirror_scope, "active_region_id": active_region_id, "map_renderer_adapter_id": renderer_adapter.adapter_id, "map_renderer_adapter_version": renderer_adapter.adapter_contract_version, "map_runtime_handle_name": renderer_adapter.runtime_handle_name, "map_renderer_future_engine_candidate": renderer_adapter.future_engine_candidate, "map_renderer_supports_future_engine_swap": renderer_adapter.supports_future_engine_swap, "map_planned_upgrade_engine_id": renderer_adapter.planned_upgrade_engine_id, "map_planned_upgrade_gating_contract": renderer_adapter.planned_upgrade_gating_contract}), &route, false))
     })
 }
 
@@ -9364,11 +9372,36 @@ mod tests {
             "next_opportunity_playbook": "Archive proof, extract testimonial hooks, and line up the next proposal.",
             "next_opportunity_command": "/sell latest 复购方案：围绕本次交付补齐升级包、推荐语和下一步。"
         }]});
+        let route_runner_handoff = json!({
+            "contract_version": "trillionnium_route_runner_handoff_v1",
+            "runner_count": 2,
+            "avatar_task_route_count": 2,
+            "reward_claim_action_count": 2,
+            "next_route_action_count": 2,
+            "reward_claim_ready_count": 1,
+            "next_route_ready_count": 1,
+            "first_runner_id": "avatar-route-runner:@alice:local.dev:task-route-focus-002",
+            "first_task_id": "task-route-focus-002",
+            "first_to_node_id": "delivery-dock",
+            "first_latest_location_id": "zbj-market-gate",
+            "first_progress_label": "82% route progress / 82% 路线进度",
+            "first_telemetry_summary": "82% complete · 120m remaining · ETA 7 min",
+            "first_reward_claim_label": "Claim rating/reward / 领取评级奖励",
+            "first_reward_claim_status": "claimable_after_evidence",
+            "first_reward_claim_action_body": "Claim rating/reward for task task-route-focus-002: submit deliverable, evidence package, risk controls, next action, and self-review.",
+            "first_next_route_label": "Open next route / 开启下一条路线",
+            "first_next_route_status": "next_route_ready_after_reward_claim",
+            "first_next_route_action_body": "Open next route after task task-route-focus-002: carry deliverable, evidence package, risk controls, next action, and self-review into the follow-up bounty.",
+            "first_next_route_sequence_summary": "After reward claim, open the next Trillionnium World Map route with the same deliverable → evidence → risk controls → next action → self-review anchors.",
+            "summary": "Route runner handoff: 2 runners · 2 reward claims · 2 next-route actions · next Claim rating/reward / Open next route",
+            "handoff_prompt": "Claim rating/reward, then open the next route with deliverable → evidence → risk controls → next action → self-review anchors."
+        });
         let world_reply = super::build_trillionnium_world_matrix_reply(&json!({
             "counts": {"zones": 4, "locations": 4, "assets": 1, "companies": 1, "shops": 1, "listings": 1, "purchases": 1, "work_orders": 1, "factions": 4, "events": 1},
             "current_node_id": "mirror-city-square",
             "route_preview": {"item_count": 1, "task_linked_count": 1},
-            "route_task_graph": route_task_graph.clone()
+            "route_task_graph": route_task_graph.clone(),
+            "route_runner_handoff": route_runner_handoff.clone()
         }));
         let map_reply = super::build_trillionnium_world_map_matrix_reply(&json!({
             "counts": {"map_nodes": 8},
@@ -9391,10 +9424,14 @@ mod tests {
                 }
             },
             "route_preview": {"item_count": 1, "task_linked_count": 1},
-            "route_task_graph": route_task_graph
+            "route_task_graph": route_task_graph,
+            "route_runner_handoff": route_runner_handoff
         }));
 
         for reply in [&world_reply, &map_reply] {
+            let body = reply.get("body").and_then(Value::as_str).unwrap_or("");
+            assert!(body.contains("Runner Handoff:"));
+            assert!(body.contains("Next Route: Open next route"));
             let card = reply.get("cex_card").unwrap();
             assert_eq!(
                 card.get("route_next_opportunity_action_label")
@@ -9424,6 +9461,16 @@ mod tests {
                 card.get("map_runtime_handle_name").and_then(Value::as_str),
                 Some("mapRuntime")
             );
+            assert_eq!(
+                card.get("route_runner_next_route_status")
+                    .and_then(Value::as_str),
+                Some("next_route_ready_after_reward_claim")
+            );
+            assert!(card
+                .get("route_runner_next_route_action_body")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("risk controls, next action, and self-review"));
             assert!(card
                 .get("route_next_opportunity_body")
                 .and_then(Value::as_str)
