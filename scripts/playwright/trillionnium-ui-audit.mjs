@@ -55,6 +55,8 @@ const selectorSets = {
     stickyStatus: '.app-map-product-strip',
     map: '#real-world-map',
     route: '#app-map-route-panel',
+    routeHandoff: '#app-route-runner-handoff-summary',
+    feedHandoff: '#app-feed-route-runner-handoff',
     action: '#app-map-action-panel',
     onboarding: '#app-first-playable-onboarding',
     denseCopy: '#app-tab-map .map-panel',
@@ -63,6 +65,7 @@ const selectorSets = {
   world: {
     header: 'header',
     map: '#world-real-map',
+    routeHandoff: '#world-route-runner-handoff-summary',
     pulse: '#world-pulse-strip',
     action: '#world-action-console',
     contracts: '#world-contracts-panel',
@@ -103,6 +106,23 @@ function checkCommon(result) {
   assertMetric(result.actionableOverflow.length === 0, `${result.profile}/${result.name} has actionable horizontal overflow`, result.actionableOverflow.slice(0, 10));
   assertMetric(result.coveredActionables.length === 0, `${result.profile}/${result.name} has covered first-viewport actionables`, result.coveredActionables.slice(0, 10));
   assertMetric(result.smallTouchTargets.length === 0, `${result.profile}/${result.name} has small first-viewport touch targets`, result.smallTouchTargets.slice(0, 10));
+}
+
+function checkRouteRunnerHandoff(result) {
+  if (!['app', 'world'].includes(result.name)) return;
+  const handoff = result.routeRunnerHandoff || {};
+  const summaryRequired =
+    result.name === 'app'
+      ? handoff.appRouteSummaryPresent && handoff.appFeedSummaryPresent
+      : handoff.worldSummaryPresent;
+  assertMetric(summaryRequired, `${result.profile}/${result.name} route-runner handoff summaries missing`, handoff);
+  assertMetric(handoff.contractVersionPresent === true, `${result.profile}/${result.name} route-runner handoff contract missing`, handoff);
+  assertMetric(handoff.sourcePresent === true, `${result.profile}/${result.name} route-runner handoff feed source missing`, handoff);
+  assertMetric(handoff.nextRouteStatus === 'next_route_preview_locked_until_reward_claim', `${result.profile}/${result.name} route-runner next-route status missing`, handoff);
+  assertMetric(Number(handoff.runnerCount || 0) >= 1, `${result.profile}/${result.name} route-runner count missing`, handoff);
+  assertMetric(Number(handoff.rewardClaimCount || 0) >= 1, `${result.profile}/${result.name} route-runner reward-claim count missing`, handoff);
+  assertMetric(Number(handoff.nextRouteCount || 0) >= 1, `${result.profile}/${result.name} route-runner next-route count missing`, handoff);
+  assertMetric(handoff.hasRewardCopy === true && handoff.hasNextRouteCopy === true, `${result.profile}/${result.name} route-runner handoff copy missing`, handoff);
 }
 
 function checkMobile(result, limits) {
@@ -260,6 +280,27 @@ async function auditPage(page, profile, target) {
     const firstViewportButtons = firstViewportActionables
       .map(actionableInfo)
       .slice(0, 40);
+    const html = document.documentElement.innerHTML;
+    const pickMaxCount = (elements, datasetKey) => Math.max(0, ...elements.map((el) => Number.parseInt(el?.dataset?.[datasetKey] || '0', 10) || 0));
+    const appRouteHandoff = document.getElementById('app-route-runner-handoff-summary');
+    const appFeedHandoff = document.getElementById('app-feed-route-runner-handoff');
+    const worldRouteHandoff = document.getElementById('world-route-runner-handoff-summary');
+    const handoffElements = [appRouteHandoff, appFeedHandoff, worldRouteHandoff].filter(Boolean);
+    const handoffText = handoffElements.map((el) => text(el)).join(' · ');
+    const routeRunnerHandoff = {
+      appRouteSummaryPresent: Boolean(appRouteHandoff),
+      appFeedSummaryPresent: Boolean(appFeedHandoff),
+      worldSummaryPresent: Boolean(worldRouteHandoff),
+      contractVersionPresent: html.includes('trillionnium_route_runner_handoff_v1'),
+      sourcePresent: html.includes('route_runner_handoff'),
+      nextRouteStatus: handoffElements.map((el) => el.dataset.nextRouteStatus).find(Boolean) || null,
+      runnerCount: pickMaxCount(handoffElements, 'runnerCount'),
+      rewardClaimCount: pickMaxCount(handoffElements, 'rewardClaimCount'),
+      nextRouteCount: pickMaxCount(handoffElements, 'nextRouteCount'),
+      hasRewardCopy: /reward/i.test(handoffText),
+      hasNextRouteCopy: /next[- ]route/i.test(handoffText),
+      text: handoffText.slice(0, 320),
+    };
     return {
       profile: profileName,
       name: targetName,
@@ -271,6 +312,7 @@ async function auditPage(page, profile, target) {
       coveredActionables,
       smallTouchTargets,
       key,
+      routeRunnerHandoff,
       firstViewportButtons,
       firstViewportText: text(document.body).slice(0, 1400),
     };
@@ -291,6 +333,7 @@ try {
       try {
         result = await auditPage(page, profile, target);
         checkCommon(result);
+        checkRouteRunnerHandoff(result);
         if (profile.name === 'desktop') checkDesktop(result, profile.limits[target.name]);
         else checkMobile(result, profile.limits[target.name]);
         result.ok = true;
