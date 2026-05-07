@@ -418,6 +418,79 @@ curl -s -X POST -H 'x-admin-token: <admin-token>' -H 'content-type: application/
    - `./read-session-auth-runtime-activation-status.sh --compact`
    - `./read-session-auth-runtime-activation-status.sh --require-converged`
 
+### 3.9 Symptom: Trillionnium route-runner handoff alert firing
+
+相关 Prometheus alerts：
+
+- `CexTrillionniumRouteRunnerHandoffAllGatesNotGreen`
+- `CexTrillionniumRouteRunnerHandoffFeedSourceMissing`
+- `CexTrillionniumRouteRunnerHandoffRunnerCountZero`
+- `CexTrillionniumRouteRunnerHandoffActionsMissing`
+
+先看：
+
+- `GET http://127.0.0.1:8090/health`
+- `GET http://127.0.0.1:8090/metrics`
+- 最新 production signoff summary：`run/signoff/production-signoff-*.summary.json`
+- 最新 handoff evidence：`run/signoff/production-signoff-*.route-runner-handoff.json`
+- live monitoring deploy metadata：`run/monitoring-live-target/metadata/monitoring-deploy-metadata.yml`
+
+重点字段：
+
+- `/health.trillionnium_world_playability_scorecard.route_runner_handoff_gate`
+- `/health.trillionnium_world_closed_beta_prototype.route_runner_handoff_gate`
+- `/health.trillionnium_world_real_user_beta.route_runner_handoff_gate`
+- `/health.trillionnium_world_public_commercial_product.route_runner_handoff_gate`
+- `/metrics` 下的：
+  - `cex_consumer_entry_trillionnium_route_runner_handoff_all_gates_green`
+  - `cex_consumer_entry_trillionnium_route_runner_handoff_feed_source_count`
+  - `cex_consumer_entry_trillionnium_route_runner_handoff_runner_count`
+  - `cex_consumer_entry_trillionnium_route_runner_handoff_reward_claim_action_count`
+  - `cex_consumer_entry_trillionnium_route_runner_handoff_next_route_action_count`
+
+判断：
+
+- `all_gates_green=0`：至少 playability / closed-beta / real-user beta / public-commercial 其中一个 gate 不绿；这不是单纯 UI warning，而是 production signoff 质量的 handoff posture 破了
+- `feed_source_count<7`：通常说明 `/feed` 或 `/app` feed hydration 里的 `route_runner_handoff` source 丢了，先查 feed aggregation / client feed JSON，而不是先查地图渲染
+- `runner_count=0`：说明 handoff gate 本身还能算出结果，但没有 active route runners；优先查 world route projection、seeded first-session routes、map hub payload
+- `reward_claim_action_count=0` 或 `next_route_action_count=0`：玩家可能看得到 runner，但没有清晰的 claim reward / next route 操作路径；优先查 route-runner action hydration、button dataset、Matrix/web card projection
+- `first_next_route_status` 不是 `next_route_preview_locked_until_reward_claim`：先确认 reward-before-next-route 的产品约束是否被破坏，不要只按普通 copy 回归处理
+
+建议动作：
+
+1. 先抓当前 health 与 metrics，不要先重启：
+
+   ```bash
+   curl -s http://127.0.0.1:8090/health | jq '{playability: .trillionnium_world_playability_scorecard.route_runner_handoff_gate, closed_beta: .trillionnium_world_closed_beta_prototype.route_runner_handoff_gate, real_user_beta: .trillionnium_world_real_user_beta.route_runner_handoff_gate, public_commercial: .trillionnium_world_public_commercial_product.route_runner_handoff_gate}'
+   curl -s http://127.0.0.1:8090/metrics | grep cex_consumer_entry_trillionnium_route_runner_handoff
+   ```
+
+2. 如果 health/metrics 已恢复，但 Prometheus 仍报警，先检查 live bundle 与 deploy metadata：
+
+   ```bash
+   grep -R "CexTrillionniumRouteRunnerHandoff" -n run/monitoring-live-target/prometheus/rules.d/cex-monitoring-bundle.rules.yml
+   sed -n '1,160p' run/monitoring-live-target/metadata/monitoring-deploy-metadata.yml
+   ```
+
+3. 代码修复后，至少跑相应 gate；如果改了 product surface，优先跑完整链：
+
+   ```bash
+   cargo fmt --all -- --check
+   cargo test -p consumer-entry-api -- --nocapture
+   CEX_ENV_FILE=run/local-production/.env scripts/check-production-signoff.sh
+   ```
+
+4. 如果只改 monitoring rules，重新 assembly + deploy 全 bundle，并要求 verify 成功：
+
+   ```bash
+   scripts/assemble-monitoring-bundles.sh --check --bundle prometheus
+   scripts/deploy-monitoring-bundles.sh --bundle all --mode copy --force --verify --verify-mode command \
+     --verify-prometheus-command 'test -f run/monitoring-live-target/prometheus/rules.d/cex-monitoring-bundle.rules.yml && grep -q CexTrillionniumRouteRunnerHandoffAllGatesNotGreen run/monitoring-live-target/prometheus/rules.d/cex-monitoring-bundle.rules.yml' \
+     --verify-alertmanager-command 'test -f run/monitoring-live-target/alertmanager/conf.d/cex-monitoring-bundle.yml'
+   ```
+
+5. 不要把这些 alerts 只当“监控噪声”静音。它们对应的是 first-session route-runner reward → next-route handoff 是否还能闭环，直接影响 playability、closed-beta、real-user beta、public-commercial 与 final signoff。
+
 ---
 
 ## 4. Restart guidance
@@ -518,6 +591,8 @@ curl -s http://127.0.0.1:7001/metrics | grep cex_identity_service_up
 curl -s http://127.0.0.1:7005/metrics | grep cex_capability_service_up
 curl -s http://127.0.0.1:8090/health
 curl -s http://127.0.0.1:8090/health | jq '.identity_governance_overview'
+curl -s http://127.0.0.1:8090/health | jq '{playability: .trillionnium_world_playability_scorecard.route_runner_handoff_gate, closed_beta: .trillionnium_world_closed_beta_prototype.route_runner_handoff_gate, real_user_beta: .trillionnium_world_real_user_beta.route_runner_handoff_gate, public_commercial: .trillionnium_world_public_commercial_product.route_runner_handoff_gate}'
+curl -s http://127.0.0.1:8090/metrics | grep cex_consumer_entry_trillionnium_route_runner_handoff
 curl -s -H 'x-entry-token: <token>' http://127.0.0.1:8090/v1/admin/identity-governance/status?limit=20 | jq
 curl -s -H 'x-entry-token: <token>' http://127.0.0.1:8090/v1/admin/identity-approval/source?limit=20 | jq
 curl -s -H 'x-entry-token: <token>' http://127.0.0.1:8090/v1/admin/identity-actors/status | jq
@@ -569,7 +644,7 @@ powershell -ExecutionPolicy Bypass -File scripts/start-local-runtime-detached.ps
 这份 runbook 还是最小版，当前明确还没覆盖：
 
 - Prometheus / OTel exporter
-- 自动告警规则
+- 自动告警规则仍只覆盖当前最小运行面；Trillionnium route-runner handoff 已有 Prometheus rules，但 dashboard/incident lifecycle 还没完整产品化
 - dashboard
 - 真正的 on-call / incident lifecycle
 - rollback / DR drill
