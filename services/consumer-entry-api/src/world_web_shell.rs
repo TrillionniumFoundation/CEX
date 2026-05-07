@@ -682,6 +682,10 @@ pub(super) async fn get_world_web_shell(
         .and_then(|handoff| handoff.get("next_route_action_count"))
         .and_then(Value::as_u64)
         .unwrap_or(0);
+    let map_route_runner_referee_status = route_runner_handoff
+        .and_then(|handoff| handoff.get("first_referee_workflow_status"))
+        .and_then(Value::as_str)
+        .unwrap_or("collecting_evidence_checkpoint");
     let map_player_density_mode = world_map_status_label(
         world_viewport
             .get("player_density")
@@ -1491,7 +1495,7 @@ pub(super) async fn get_world_web_shell(
             <div>
               <strong data-i18n-en="Current Status" data-i18n-zh="当前状态">Current Status</strong>
               <p id="world-map-density-summary" class="subtitle">{map_density_summary}</p>
-              <p id="world-route-runner-handoff-summary" class="subtitle" data-next-route-status="{map_route_runner_next_route_status}" data-runner-count="{map_avatar_route_runner_count}" data-reward-claim-count="{map_route_runner_reward_claim_count}" data-next-route-count="{map_route_runner_next_route_count}">{map_route_runner_handoff_summary}</p>
+              <p id="world-route-runner-handoff-summary" class="subtitle" data-next-route-status="{map_route_runner_next_route_status}" data-referee-workflow-status="{map_route_runner_referee_status}" data-runner-count="{map_avatar_route_runner_count}" data-reward-claim-count="{map_route_runner_reward_claim_count}" data-next-route-count="{map_route_runner_next_route_count}">{map_route_runner_handoff_summary}</p>
               <p id="world-map-camera-summary" class="subtitle" data-i18n-en="Camera loading…" data-i18n-zh="镜头加载中…">Camera loading…</p>
             </div>
             <a class="cta" href='#world-action-console' data-i18n-en="Start Next Action" data-i18n-zh="发起下一步行动">Start Next Action</a>
@@ -1769,6 +1773,7 @@ pub(super) async fn get_world_web_shell(
         const handoff = ((viewport || {{}}).route_runner_handoff) || {{}};
         routeRunnerHandoffSummary.textContent = String(handoff.summary || 'Route runner handoff: waiting for avatar task routes to unlock reward and next-route actions.');
         routeRunnerHandoffSummary.dataset.nextRouteStatus = String(handoff.first_next_route_status || 'next_route_preview_locked_until_reward_claim');
+        routeRunnerHandoffSummary.dataset.refereeWorkflowStatus = String(handoff.first_referee_workflow_status || 'collecting_evidence_checkpoint');
         routeRunnerHandoffSummary.dataset.runnerCount = String(handoff.runner_count ?? ((viewport || {{}}).avatar_route_runner_count ?? 0));
         routeRunnerHandoffSummary.dataset.rewardClaimCount = String(handoff.reward_claim_action_count ?? 0);
         routeRunnerHandoffSummary.dataset.nextRouteCount = String(handoff.next_route_action_count ?? 0);
@@ -2284,6 +2289,7 @@ pub(super) async fn get_world_web_shell(
         map_density_summary = escape_html_text(&map_density_summary),
         map_route_runner_handoff_summary = escape_html_text(map_route_runner_handoff_summary),
         map_route_runner_next_route_status = escape_html_text(map_route_runner_next_route_status),
+        map_route_runner_referee_status = escape_html_text(map_route_runner_referee_status),
         map_route_runner_reward_claim_count = map_route_runner_reward_claim_count,
         map_route_runner_next_route_count = map_route_runner_next_route_count,
         map_engine_id = escape_html_text(map_engine_id),

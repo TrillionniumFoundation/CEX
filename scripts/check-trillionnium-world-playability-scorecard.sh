@@ -84,8 +84,10 @@ require("playability_route_runner_feed_source_present", route_runner_handoff_gat
 require("playability_route_runner_feed_contract_version", route_runner_handoff_gate.get("feed_handoff_contract_version") == "trillionnium_route_runner_handoff_v1", route_runner_handoff_gate)
 require("playability_route_runner_map_hub_contract_version", route_runner_handoff_gate.get("map_hub_handoff_contract_version") == "trillionnium_route_runner_handoff_v1", route_runner_handoff_gate)
 require("playability_route_runner_counts", int(route_runner_handoff_gate.get("runner_count") or 0) >= 1 and int(route_runner_handoff_gate.get("reward_claim_action_count") or 0) >= 1 and int(route_runner_handoff_gate.get("next_route_action_count") or 0) >= 1, route_runner_handoff_gate)
+require("playability_route_runner_referee_workflow", route_runner_handoff_gate.get("supports_referee_workflow") is True and route_runner_handoff_gate.get("referee_workflow_contract_version") == "trillionnium_referee_workflow_v1" and int(route_runner_handoff_gate.get("referee_workflow_count") or 0) >= 1, route_runner_handoff_gate)
 require("playability_route_runner_next_route_status", bool(route_runner_handoff_gate.get("first_next_route_status")), route_runner_handoff_gate)
 require("playability_route_runner_next_route_sequence", bool(route_runner_handoff_gate.get("first_next_route_sequence_summary")), route_runner_handoff_gate)
+require("playability_route_runner_referee_workflow_status", bool(route_runner_handoff_gate.get("first_referee_workflow_status")) and bool(route_runner_handoff_gate.get("first_referee_workflow_action_body")) and bool(route_runner_handoff_gate.get("referee_workflow_prompt")), route_runner_handoff_gate)
 require("playability_route_runner_handoff_prompt", bool(route_runner_handoff_gate.get("handoff_prompt")), route_runner_handoff_gate)
 for axis_id in DIAGNOSTIC_AXES:
     axis = diagnostic_axes.get(axis_id) or {}

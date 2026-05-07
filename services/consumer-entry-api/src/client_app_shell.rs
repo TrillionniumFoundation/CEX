@@ -598,6 +598,10 @@ pub(super) async fn get_client_app_web_shell(
         .and_then(|handoff| handoff.get("next_route_action_count"))
         .and_then(Value::as_u64)
         .unwrap_or(0);
+    let map_route_runner_referee_status = route_runner_handoff
+        .and_then(|handoff| handoff.get("first_referee_workflow_status"))
+        .and_then(Value::as_str)
+        .unwrap_or("collecting_evidence_checkpoint");
     let onboarding = app.get("onboarding");
     let onboarding_label = onboarding
         .and_then(|rail| rail.get("rail_label"))
@@ -1221,7 +1225,7 @@ pub(super) async fn get_client_app_web_shell(
           <div>
             <strong data-i18n-en="Current Status" data-i18n-zh="当前状态">Current Status</strong>
             <p id="app-map-density-summary" class="subtitle">{}</p>
-            <p id="app-route-runner-handoff-summary" class="subtitle" data-next-route-status="{}" data-runner-count="{}" data-reward-claim-count="{}" data-next-route-count="{}">{}</p>
+            <p id="app-route-runner-handoff-summary" class="subtitle" data-next-route-status="{}" data-referee-workflow-status="{}" data-runner-count="{}" data-reward-claim-count="{}" data-next-route-count="{}">{}</p>
             <p id="app-map-camera-summary" class="subtitle" data-i18n-en="Camera loading…" data-i18n-zh="镜头加载中…">Camera loading…</p>
           </div>
           <a class="quest-cta" href='#app-map-action-rail' data-i18n-en="Choose Focus" data-i18n-zh="选择焦点">Choose Focus</a>
@@ -1531,6 +1535,7 @@ pub(super) async fn get_client_app_web_shell(
         const handoff = ((viewport || {{}}).route_runner_handoff) || {{}};
         routeRunnerHandoffSummary.textContent = String(handoff.summary || 'Route runner handoff: waiting for avatar task routes to unlock reward and next-route actions.');
         routeRunnerHandoffSummary.dataset.nextRouteStatus = String(handoff.first_next_route_status || 'next_route_preview_locked_until_reward_claim');
+        routeRunnerHandoffSummary.dataset.refereeWorkflowStatus = String(handoff.first_referee_workflow_status || 'collecting_evidence_checkpoint');
         routeRunnerHandoffSummary.dataset.runnerCount = String(handoff.runner_count ?? ((viewport || {{}}).avatar_route_runner_count ?? 0));
         routeRunnerHandoffSummary.dataset.rewardClaimCount = String(handoff.reward_claim_action_count ?? 0);
         routeRunnerHandoffSummary.dataset.nextRouteCount = String(handoff.next_route_action_count ?? 0);
@@ -1863,6 +1868,7 @@ pub(super) async fn get_client_app_web_shell(
         const rewardClaimCount = runnerHandoff.reward_claim_action_count ?? 0;
         const nextRouteCount = runnerHandoff.next_route_action_count ?? 0;
         const nextRouteStatus = String(runnerHandoff.first_next_route_status || 'next_route_preview_locked_until_reward_claim');
+        const refereeWorkflowStatus = String(runnerHandoff.first_referee_workflow_status || 'collecting_evidence_checkpoint');
         const handoffSummary = String(runnerHandoff.summary || 'Route runner handoff: waiting for avatar task routes to unlock reward and next-route actions.');
         const chips = [
           `<span class="hud-chip"><strong>${{escapeHtml((visibleItems || []).length)}}</strong> 条可见动态</span>`,
@@ -1870,7 +1876,7 @@ pub(super) async fn get_client_app_web_shell(
           `<span class="hud-chip"><strong>${{escapeHtml(contracts)}}</strong> 个委托 · <strong>${{escapeHtml(completions)}}</strong> 份战报</span>`,
           `<span class="hud-chip"><strong>${{escapeHtml(purchaseCount)}}</strong> 次接取 · <strong>${{escapeHtml(workOrderCount)}}</strong> 个冒险委托</span>`,
           `<span class="hud-chip"><strong>${{escapeHtml(nearbyAgents)}}</strong> 位附近角色 · ${{escapeHtml(payload.active_region_id || 'global')}}</span>`,
-          `<span id="app-feed-route-runner-handoff" class="hud-chip" data-next-route-status="${{escapeHtml(nextRouteStatus)}}" data-runner-count="${{escapeHtml(runnerCount)}}" data-reward-claim-count="${{escapeHtml(rewardClaimCount)}}" data-next-route-count="${{escapeHtml(nextRouteCount)}}"><strong>${{escapeHtml(runnerCount)}}</strong> runner · <strong>${{escapeHtml(rewardClaimCount)}}</strong> reward · <strong>${{escapeHtml(nextRouteCount)}}</strong> next route · ${{escapeHtml(handoffSummary)}}</span>`
+          `<span id="app-feed-route-runner-handoff" class="hud-chip" data-next-route-status="${{escapeHtml(nextRouteStatus)}}" data-referee-workflow-status="${{escapeHtml(refereeWorkflowStatus)}}" data-runner-count="${{escapeHtml(runnerCount)}}" data-reward-claim-count="${{escapeHtml(rewardClaimCount)}}" data-next-route-count="${{escapeHtml(nextRouteCount)}}"><strong>${{escapeHtml(runnerCount)}}</strong> runner · <strong>${{escapeHtml(rewardClaimCount)}}</strong> reward · <strong>${{escapeHtml(nextRouteCount)}}</strong> next route · referee ${{escapeHtml(refereeWorkflowStatus)}} · ${{escapeHtml(handoffSummary)}}</span>`
         ];
         if (selection) {{
           chips.push(`<span class="hud-chip"><strong>focus</strong> ${{escapeHtml(selection.taskId ? ('task ' + selection.taskId) : (selection.title || selection.locationId || selection.kind || 'selection'))}}</span>`);
@@ -2019,6 +2025,7 @@ pub(super) async fn get_client_app_web_shell(
         escape_html_text(map_upgrade_model),
         escape_html_text(&client_app_map_label(map_density_summary)),
         escape_html_text(map_route_runner_next_route_status),
+        escape_html_text(map_route_runner_referee_status),
         map_avatar_route_runner_count,
         map_route_runner_reward_claim_count,
         map_route_runner_next_route_count,

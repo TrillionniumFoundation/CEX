@@ -164,9 +164,17 @@ fn route_runner_handoff_contract_ready(handoff: Option<&Value>) -> bool {
                 .and_then(Value::as_bool)
                 .unwrap_or(false)
             && handoff
+                .get("supports_referee_workflow")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            && handoff
                 .get("supports_checkpoint_reward_history")
                 .and_then(Value::as_bool)
                 .unwrap_or(false)
+            && handoff
+                .get("referee_workflow_contract_version")
+                .and_then(Value::as_str)
+                == Some("trillionnium_referee_workflow_v1")
             && handoff
                 .get("runner_count")
                 .and_then(Value::as_u64)
@@ -179,6 +187,11 @@ fn route_runner_handoff_contract_ready(handoff: Option<&Value>) -> bool {
                 > 0
             && handoff
                 .get("next_route_action_count")
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
+                > 0
+            && handoff
+                .get("referee_workflow_count")
                 .and_then(Value::as_u64)
                 .unwrap_or(0)
                 > 0
@@ -207,7 +220,23 @@ fn route_runner_handoff_contract_ready(handoff: Option<&Value>) -> bool {
                 .and_then(Value::as_str)
                 .is_some_and(|summary| !summary.trim().is_empty())
             && handoff
+                .get("first_referee_workflow_status")
+                .and_then(Value::as_str)
+                .is_some_and(|status| !status.trim().is_empty())
+            && handoff
+                .get("first_referee_workflow_summary")
+                .and_then(Value::as_str)
+                .is_some_and(|summary| !summary.trim().is_empty())
+            && handoff
+                .get("first_referee_workflow_action_body")
+                .and_then(Value::as_str)
+                .is_some_and(|body| !body.trim().is_empty())
+            && handoff
                 .get("handoff_prompt")
+                .and_then(Value::as_str)
+                .is_some_and(|prompt| !prompt.trim().is_empty())
+            && handoff
+                .get("referee_workflow_prompt")
                 .and_then(Value::as_str)
                 .is_some_and(|prompt| !prompt.trim().is_empty())
     })
@@ -248,10 +277,17 @@ fn app_route_runner_handoff_gate_json(app: &Value) -> Value {
         "runner_count": feed_route_runner_handoff.and_then(|handoff| handoff.get("runner_count")).and_then(Value::as_u64).unwrap_or(0),
         "reward_claim_action_count": feed_route_runner_handoff.and_then(|handoff| handoff.get("reward_claim_action_count")).and_then(Value::as_u64).unwrap_or(0),
         "next_route_action_count": feed_route_runner_handoff.and_then(|handoff| handoff.get("next_route_action_count")).and_then(Value::as_u64).unwrap_or(0),
+        "referee_workflow_contract_version": feed_route_runner_handoff.and_then(|handoff| handoff.get("referee_workflow_contract_version")).and_then(Value::as_str),
+        "supports_referee_workflow": feed_route_runner_handoff.and_then(|handoff| handoff.get("supports_referee_workflow")).and_then(Value::as_bool).unwrap_or(false),
+        "referee_workflow_count": feed_route_runner_handoff.and_then(|handoff| handoff.get("referee_workflow_count")).and_then(Value::as_u64).unwrap_or(0),
         "first_reward_claim_status": feed_route_runner_handoff.and_then(|handoff| handoff.get("first_reward_claim_status")).and_then(Value::as_str),
         "first_next_route_status": feed_route_runner_handoff.and_then(|handoff| handoff.get("first_next_route_status")).and_then(Value::as_str),
         "first_next_route_sequence_summary": feed_route_runner_handoff.and_then(|handoff| handoff.get("first_next_route_sequence_summary")).and_then(Value::as_str),
+        "first_referee_workflow_status": feed_route_runner_handoff.and_then(|handoff| handoff.get("first_referee_workflow_status")).and_then(Value::as_str),
+        "first_referee_workflow_summary": feed_route_runner_handoff.and_then(|handoff| handoff.get("first_referee_workflow_summary")).and_then(Value::as_str),
+        "first_referee_workflow_action_body": feed_route_runner_handoff.and_then(|handoff| handoff.get("first_referee_workflow_action_body")).and_then(Value::as_str),
         "handoff_prompt": feed_route_runner_handoff.and_then(|handoff| handoff.get("handoff_prompt")).and_then(Value::as_str),
+        "referee_workflow_prompt": feed_route_runner_handoff.and_then(|handoff| handoff.get("referee_workflow_prompt")).and_then(Value::as_str),
     })
 }
 
@@ -299,6 +335,19 @@ fn is_route_runner_handoff_gate_green(gate: &Value) -> bool {
             .unwrap_or(0)
             > 0
         && gate
+            .get("supports_referee_workflow")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && gate
+            .get("referee_workflow_contract_version")
+            .and_then(Value::as_str)
+            == Some("trillionnium_referee_workflow_v1")
+        && gate
+            .get("referee_workflow_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            > 0
+        && gate
             .get("first_next_route_status")
             .and_then(Value::as_str)
             .is_some_and(|status| !status.trim().is_empty())
@@ -307,7 +356,23 @@ fn is_route_runner_handoff_gate_green(gate: &Value) -> bool {
             .and_then(Value::as_str)
             .is_some_and(|summary| !summary.trim().is_empty())
         && gate
+            .get("first_referee_workflow_status")
+            .and_then(Value::as_str)
+            .is_some_and(|status| !status.trim().is_empty())
+        && gate
+            .get("first_referee_workflow_summary")
+            .and_then(Value::as_str)
+            .is_some_and(|summary| !summary.trim().is_empty())
+        && gate
+            .get("first_referee_workflow_action_body")
+            .and_then(Value::as_str)
+            .is_some_and(|body| !body.trim().is_empty())
+        && gate
             .get("handoff_prompt")
+            .and_then(Value::as_str)
+            .is_some_and(|prompt| !prompt.trim().is_empty())
+        && gate
+            .get("referee_workflow_prompt")
             .and_then(Value::as_str)
             .is_some_and(|prompt| !prompt.trim().is_empty())
 }
@@ -3181,6 +3246,8 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
             "cex_consumer_entry_trillionnium_route_runner_handoff_reward_claim_action_count {}\n",
             "# TYPE cex_consumer_entry_trillionnium_route_runner_handoff_next_route_action_count gauge\n",
             "cex_consumer_entry_trillionnium_route_runner_handoff_next_route_action_count {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_route_runner_handoff_referee_workflow_count gauge\n",
+            "cex_consumer_entry_trillionnium_route_runner_handoff_referee_workflow_count {}\n",
             "# TYPE cex_consumer_entry_trillionnium_world_playability_scorecard_overall_score gauge\n",
             "cex_consumer_entry_trillionnium_world_playability_scorecard_overall_score {}\n",
             "# TYPE cex_consumer_entry_trillionnium_world_playability_scorecard_overall_percent gauge\n",
@@ -3559,6 +3626,10 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
         route_runner_handoff_gate_u64(
             playability_route_runner_handoff_gate,
             "next_route_action_count",
+        ),
+        route_runner_handoff_gate_u64(
+            playability_route_runner_handoff_gate,
+            "referee_workflow_count",
         ),
         trillionnium_world_playability_scorecard
             .get("overall_score")

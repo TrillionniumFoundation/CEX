@@ -194,8 +194,14 @@ else
       and .trillionnium_world_playability_scorecard.route_runner_handoff_gate.runner_count >= 1
       and .trillionnium_world_playability_scorecard.route_runner_handoff_gate.reward_claim_action_count >= 1
       and .trillionnium_world_playability_scorecard.route_runner_handoff_gate.next_route_action_count >= 1
+      and .trillionnium_world_playability_scorecard.route_runner_handoff_gate.supports_referee_workflow == true
+      and .trillionnium_world_playability_scorecard.route_runner_handoff_gate.referee_workflow_contract_version == "trillionnium_referee_workflow_v1"
+      and .trillionnium_world_playability_scorecard.route_runner_handoff_gate.referee_workflow_count >= 1
       and (.trillionnium_world_playability_scorecard.route_runner_handoff_gate.first_next_route_status // "") != ""
       and (.trillionnium_world_playability_scorecard.route_runner_handoff_gate.first_next_route_sequence_summary // "") != ""
+      and (.trillionnium_world_playability_scorecard.route_runner_handoff_gate.first_referee_workflow_status // "") != ""
+      and (.trillionnium_world_playability_scorecard.route_runner_handoff_gate.first_referee_workflow_action_body // "") != ""
+      and (.trillionnium_world_playability_scorecard.route_runner_handoff_gate.referee_workflow_prompt // "") != ""
       and (.trillionnium_world_playability_scorecard.route_runner_handoff_gate.handoff_prompt // "") != ""
     ' "$consumer_health_file" >/dev/null; then
       fail 'production runtime requires route-runner handoff gate in Trillionnium playability scorecard'
@@ -208,6 +214,12 @@ else
       and .trillionnium_world_closed_beta_prototype.route_runner_handoff_gate.runner_count >= 1
       and .trillionnium_world_closed_beta_prototype.route_runner_handoff_gate.reward_claim_action_count >= 1
       and .trillionnium_world_closed_beta_prototype.route_runner_handoff_gate.next_route_action_count >= 1
+      and .trillionnium_world_closed_beta_prototype.route_runner_handoff_gate.supports_referee_workflow == true
+      and .trillionnium_world_closed_beta_prototype.route_runner_handoff_gate.referee_workflow_contract_version == "trillionnium_referee_workflow_v1"
+      and .trillionnium_world_closed_beta_prototype.route_runner_handoff_gate.referee_workflow_count >= 1
+      and (.trillionnium_world_closed_beta_prototype.route_runner_handoff_gate.first_referee_workflow_status // "") != ""
+      and (.trillionnium_world_closed_beta_prototype.route_runner_handoff_gate.first_referee_workflow_action_body // "") != ""
+      and (.trillionnium_world_closed_beta_prototype.route_runner_handoff_gate.referee_workflow_prompt // "") != ""
     ' "$consumer_health_file" >/dev/null; then
       fail 'production runtime requires route-runner handoff gate in Trillionnium closed beta prototype'
     fi

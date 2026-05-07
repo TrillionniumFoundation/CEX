@@ -510,6 +510,7 @@ pub(super) fn trillionnium_world_map_gameplay_layer_contract_json() -> Value {
             "checkpoint_reward_history": true,
             "route_runner_reward_claim_actions": true,
             "route_runner_next_route_actions": true,
+            "referee_workflow": true,
             "agent_party_state": true,
             "agent_party_handoff_actions": true,
             "live_event_task_pulses": true,
@@ -908,6 +909,52 @@ pub(super) fn world_map_avatar_route_runners_json(
                     "summary": "After rating/reward settlement, carry deliverable, evidence package, risk controls, next action, and self-review into the next map route.",
                 }),
             ];
+            let referee_workflow_status = if completion_ready {
+                "ready_for_referee_review"
+            } else {
+                "collecting_evidence_checkpoint"
+            };
+            let referee_workflow_summary = if completion_ready {
+                "Referee workflow ready: evidence intake → risk check → rating/reward settlement → next-route release."
+            } else {
+                "Referee workflow queued: collect deliverable and evidence before risk check, rating, reward, and next-route release."
+            };
+            let referee_workflow_action_body = if completion_ready {
+                format!(
+                    "Run referee workflow for task {task_id}: review deliverable fit, evidence grounding, risk controls, actionability, self-review, then settle rating/reward and release the next route."
+                )
+            } else {
+                format!(
+                    "Prepare referee workflow for task {task_id}: collect the deliverable, evidence package, risk controls, next action, and self-review before referee review unlocks reward and next route."
+                )
+            };
+            let referee_workflow = json!({
+                "contract_version": "trillionnium_referee_workflow_v1",
+                "workflow_id": format!("referee-workflow:{}:{}", matrix_user_id, task_id),
+                "mode": "referee_gated_reward_then_next_route",
+                "status": referee_workflow_status,
+                "stage_count": 5,
+                "stages": [
+                    {"stage_id": "submission_intake", "label": "Submission intake / 成果接收", "required": true},
+                    {"stage_id": "evidence_review", "label": "Evidence review / 证据审核", "required": true},
+                    {"stage_id": "risk_control_check", "label": "Risk control check / 风险控制检查", "required": true},
+                    {"stage_id": "rating_reward_settlement", "label": "Rating & reward settlement / 评级与奖励结算", "required": true},
+                    {"stage_id": "next_route_release", "label": "Next-route release / 下一路线放行", "required": true}
+                ],
+                "required_score_dimensions": [
+                    "delivery_fit",
+                    "evidence_grounding",
+                    "risk_control",
+                    "actionability",
+                    "self_review"
+                ],
+                "summary": referee_workflow_summary,
+                "action_body": referee_workflow_action_body.clone(),
+                "supports_evidence_review": true,
+                "supports_risk_control_check": true,
+                "supports_rating_reward_settlement": true,
+                "supports_next_route_release": true,
+            });
             let checkpoint_id = format!("reward-checkpoint:{}:{}", matrix_user_id, task_id);
             let agent_party = route.get("agent_party").cloned().unwrap_or_else(|| {
                 Value::Array(world_map_agent_party_members_json(matrix_user_id, task_id))
@@ -955,6 +1002,11 @@ pub(super) fn world_map_avatar_route_runners_json(
                 "next_route_action_body": next_route_action_body.clone(),
                 "next_route_action_summary": "Next-route action keeps the post-reward loop attached to map node, task id, deliverable, evidence, risk controls, next action, and self-review.",
                 "next_route_sequence_summary": "After reward claim, open the next Trillionnium World Map route with the same deliverable → evidence → risk controls → next action → self-review anchors.",
+                "referee_workflow_contract_version": "trillionnium_referee_workflow_v1",
+                "referee_workflow_status": referee_workflow_status,
+                "referee_workflow_summary": referee_workflow_summary,
+                "referee_workflow_action_body": referee_workflow_action_body.clone(),
+                "referee_workflow": referee_workflow,
                 "checkpoint_history_layer_id": "trillionnium_avatar_route_reward_history_layer",
                 "checkpoint_history": checkpoint_history,
                 "checkpoint_history_summary": "Route started → evidence checkpoint → rating/reward settlement → next route",
@@ -992,6 +1044,15 @@ pub(super) fn world_map_avatar_route_runners_json(
                         "task_id": task_id,
                         "body": next_route_action_body,
                         "status": next_route_status,
+                    },
+                    "referee_workflow_action": {
+                        "label": "Run referee review / 启动裁判审核",
+                        "panel_id": "world-action-console",
+                        "textarea_id": "world-action-body",
+                        "node_id": route.get("to_node_id").cloned().unwrap_or_else(|| json!("target-node")),
+                        "task_id": task_id,
+                        "body": referee_workflow_action_body,
+                        "status": referee_workflow_status,
                     }
                 },
                 "runner_icon": "🏃",
@@ -1058,6 +1119,20 @@ pub(super) fn world_map_route_runner_handoff_json(
                 == Some("claimable_after_evidence")
         })
         .count();
+    let referee_workflow_count = avatar_route_runners
+        .iter()
+        .filter(|runner| {
+            runner
+                .get("referee_workflow_contract_version")
+                .and_then(Value::as_str)
+                == Some("trillionnium_referee_workflow_v1")
+                || runner
+                    .get("referee_workflow")
+                    .and_then(|workflow| workflow.get("contract_version"))
+                    .and_then(Value::as_str)
+                    == Some("trillionnium_referee_workflow_v1")
+        })
+        .count();
     let runner_count = avatar_route_runners.len();
     let summary = if runner_count > 0 {
         format!(
@@ -1084,6 +1159,9 @@ pub(super) fn world_map_route_runner_handoff_json(
         "supports_checkpoint_reward_history": true,
         "supports_route_runner_reward_claim_actions": true,
         "supports_route_runner_next_route_actions": true,
+        "supports_referee_workflow": true,
+        "referee_workflow_contract_version": "trillionnium_referee_workflow_v1",
+        "referee_workflow_count": referee_workflow_count,
         "first_runner_id": first_str("runner_id", "none"),
         "first_task_id": first_str("task_id", "none"),
         "first_to_node_id": first_str("to_node_id", "target-node"),
@@ -1097,8 +1175,12 @@ pub(super) fn world_map_route_runner_handoff_json(
         "first_next_route_status": first_str("next_route_status", "next_route_preview_locked_until_reward_claim"),
         "first_next_route_action_body": first_str("next_route_action_body", "Preview the next route with deliverable, evidence package, risk controls, next action, and self-review anchors."),
         "first_next_route_sequence_summary": first_str("next_route_sequence_summary", "After reward claim, open the next Trillionnium World Map route with the same deliverable → evidence → risk controls → next action → self-review anchors."),
+        "first_referee_workflow_status": first_str("referee_workflow_status", "collecting_evidence_checkpoint"),
+        "first_referee_workflow_summary": first_str("referee_workflow_summary", "Referee workflow queued: collect deliverable and evidence before risk check, rating, reward, and next-route release."),
+        "first_referee_workflow_action_body": first_str("referee_workflow_action_body", "Prepare referee workflow with deliverable, evidence package, risk controls, next action, and self-review before reward and next route release."),
         "summary": summary,
         "handoff_prompt": "Claim rating/reward, then open the next route with deliverable → evidence → risk controls → next action → self-review anchors.",
+        "referee_workflow_prompt": "Run reward and next-route through referee: evidence intake → risk check → rating/reward settlement → next-route release.",
     })
 }
 

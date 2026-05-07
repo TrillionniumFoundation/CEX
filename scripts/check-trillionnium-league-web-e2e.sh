@@ -104,6 +104,7 @@ def feed_route_runner_handoff_ok(feed):
     runner_count = int(handoff.get('runner_count') or 0)
     reward_claim_count = int(handoff.get('reward_claim_action_count') or 0)
     next_route_count = int(handoff.get('next_route_action_count') or 0)
+    referee_workflow_count = int(handoff.get('referee_workflow_count') or 0)
     return (
         int(feed.get('source_count') or 0) >= 7
         and 'route_runner_handoff' in (feed.get('sources') or [])
@@ -111,16 +112,22 @@ def feed_route_runner_handoff_ok(feed):
         and handoff.get('supports_route_runner_reward_claim_actions') is True
         and handoff.get('supports_route_runner_next_route_actions') is True
         and handoff.get('supports_checkpoint_reward_history') is True
+        and handoff.get('supports_referee_workflow') is True
+        and handoff.get('referee_workflow_contract_version') == 'trillionnium_referee_workflow_v1'
         and runner_count >= 1
         and reward_claim_count >= 1
         and next_route_count >= 1
+        and referee_workflow_count >= 1
         and bool(handoff.get('first_task_id'))
         and bool(handoff.get('first_progress_label'))
         and bool(handoff.get('first_reward_claim_status'))
         and bool(handoff.get('first_next_route_status'))
         and bool(handoff.get('first_next_route_action_body'))
         and bool(handoff.get('first_next_route_sequence_summary'))
+        and bool(handoff.get('first_referee_workflow_status'))
+        and bool(handoff.get('first_referee_workflow_action_body'))
         and bool(handoff.get('handoff_prompt'))
+        and bool(handoff.get('referee_workflow_prompt'))
     )
 
 status, html = get('/league')
@@ -386,7 +393,7 @@ summary = {
     'has_client_app_feed_surface': 'app-feed-api-status' in app_html and 'app-feed-summary' in app_html and 'app-feed-items-live' in app_html and '世界动态时间线' in app_html,
     'has_client_app_feed_filters': 'app-feed-filter-actions' in app_html and 'trillionnium-app-feed-filter' in app_html and '推荐' in app_html and '委托' in app_html and '冒险' in app_html,
     'has_client_app_feed_api_hydration': 'loadFeedSurface' in app_html and '动态已同步' in app_html and 'trillionnium-app-feed-action' in app_html,
-    'has_client_app_feed_route_runner_handoff_static': 'app-feed-route-runner-handoff' in app_html and 'route_runner_handoff' in app_html and 'trillionnium_route_runner_handoff_v1' in app_html and 'data-next-route-status' in app_html and 'next_route_preview_locked_until_reward_claim' in app_html,
+    'has_client_app_feed_route_runner_handoff_static': 'app-feed-route-runner-handoff' in app_html and 'route_runner_handoff' in app_html and 'trillionnium_route_runner_handoff_v1' in app_html and 'data-next-route-status' in app_html and 'data-referee-workflow-status' in app_html and 'trillionnium_referee_workflow_v1' in app_html and 'next_route_preview_locked_until_reward_claim' in app_html,
     'has_client_app_feed_route_runner_handoff_api': feed_route_runner_handoff_ok(feed_json),
     'client_app_feed_source_count': feed_json.get('source_count'),
     'client_app_feed_sources': feed_json.get('sources'),
@@ -396,6 +403,8 @@ summary = {
     'client_app_feed_route_runner_next_route_action_count': (feed_json.get('route_runner_handoff') or {}).get('next_route_action_count'),
     'client_app_feed_route_runner_next_route_status': (feed_json.get('route_runner_handoff') or {}).get('first_next_route_status'),
     'client_app_feed_route_runner_next_route_sequence_summary': (feed_json.get('route_runner_handoff') or {}).get('first_next_route_sequence_summary'),
+    'client_app_feed_route_runner_referee_workflow_status': (feed_json.get('route_runner_handoff') or {}).get('first_referee_workflow_status'),
+    'client_app_feed_route_runner_referee_workflow_count': (feed_json.get('route_runner_handoff') or {}).get('referee_workflow_count'),
     'has_client_app_real_world_map_engine': 'real-world-map' in app_html and 'leaflet_openstreetmap_v1' in app_html and 'OpenStreetMap' in app_html,
     'has_client_app_map_renderer_adapter': 'createRealWorldMapAdapter' in app_html and 'leaflet_renderer_adapter_v1' in app_html and 'maplibre_gl_v1' in app_html and 'const mapRuntime' in app_html and 'supports_future_engine_swap' in app_html and 'gating_contract' in app_html and 'leafletMap' not in app_html and 'renderRouteLine' in app_html and 'renderTileFrame' in app_html and 'renderEventPulse' in app_html and 'onViewportChange' in app_html and 'getCenter' in app_html and 'getZoom' in app_html,
     'has_client_app_live_viewport_hydration': '/world/web/map-viewport' in app_html and 'app-map-camera-summary' in app_html,

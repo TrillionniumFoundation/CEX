@@ -1311,6 +1311,27 @@ fn world_map_viewport_includes_prefetch_density_and_live_events() {
             .contains("Trillionnium World Map route")
     );
     assert_eq!(
+        viewport["avatar_route_runners"][0]["referee_workflow_contract_version"],
+        "trillionnium_referee_workflow_v1"
+    );
+    assert!(
+        viewport["avatar_route_runners"][0]["referee_workflow_action_body"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("referee workflow")
+    );
+    assert_eq!(
+        viewport["avatar_route_runners"][0]["referee_workflow"]["contract_version"],
+        "trillionnium_referee_workflow_v1"
+    );
+    assert!(
+        viewport["avatar_route_runners"][0]["referee_workflow"]["stages"]
+            .as_array()
+            .map(|stages| stages.len())
+            .unwrap_or(0)
+            >= 5
+    );
+    assert_eq!(
         viewport["avatar_route_runners"][0]["checkpoint_history_layer_id"],
         "trillionnium_avatar_route_reward_history_layer"
     );
@@ -1372,6 +1393,17 @@ fn world_map_viewport_includes_prefetch_density_and_live_events() {
             .as_str()
             .unwrap_or_default()
             .contains("risk controls")
+    );
+    assert_eq!(
+        viewport["avatar_route_runners"][0]["reward_checkpoint"]["referee_workflow_action"]
+            ["textarea_id"],
+        "world-action-body"
+    );
+    assert!(
+        viewport["avatar_route_runners"][0]["reward_checkpoint"]["referee_workflow_action"]["body"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("reward and next route")
     );
     assert_eq!(
         viewport["avatar_route_runners"][0]["animation_hint"],
@@ -1849,6 +1881,14 @@ fn world_home_json_exposes_shared_renderer_adapter_for_matrix_cards() {
         home["route_runner_handoff"]["supports_route_runner_next_route_actions"],
         true
     );
+    assert_eq!(
+        home["route_runner_handoff"]["referee_workflow_contract_version"],
+        "trillionnium_referee_workflow_v1"
+    );
+    assert_eq!(
+        home["route_runner_handoff"]["supports_referee_workflow"],
+        true
+    );
     assert!(home["route_runner_handoff"]["handoff_prompt"]
         .as_str()
         .unwrap_or_default()
@@ -1882,6 +1922,10 @@ fn route_contract_is_shared_across_world_map_app_and_feed_surfaces() {
     assert_eq!(
         feed["route_runner_handoff"]["contract_version"],
         "trillionnium_route_runner_handoff_v1"
+    );
+    assert_eq!(
+        feed["route_runner_handoff"]["referee_workflow_contract_version"],
+        "trillionnium_referee_workflow_v1"
     );
     assert_eq!(
         app["feed"]["route_runner_handoff"]["supports_route_runner_next_route_actions"],
@@ -1969,6 +2013,16 @@ fn client_app_map_hub_projects_stream_counts() {
         app["map_hub"]["route_runner_handoff"]["supports_route_runner_next_route_actions"],
         true
     );
+    assert_eq!(
+        app["map_hub"]["route_runner_handoff"]["supports_referee_workflow"],
+        true
+    );
+    assert!(
+        app["map_hub"]["route_runner_handoff"]["first_referee_workflow_action_body"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("referee workflow")
+    );
     assert_eq!(app["map_hub"]["player_density_mode"], "dense");
     assert_eq!(app["modules"][0]["name"], "Trillionnium World Map");
     assert!(app["modules"][0]["summary"]
@@ -1998,6 +2052,10 @@ fn client_app_map_hub_projects_stream_counts() {
     assert_eq!(
         app["feed"]["route_runner_handoff"]["next_route_action_count"],
         app["map_hub"]["route_runner_handoff"]["next_route_action_count"]
+    );
+    assert_eq!(
+        app["feed"]["route_runner_handoff"]["referee_workflow_count"],
+        app["map_hub"]["route_runner_handoff"]["referee_workflow_count"]
     );
     assert_eq!(
         app["mobile_shell_contract"]["contract_version"],
@@ -10647,6 +10705,29 @@ async fn health_endpoint_exposes_identity_governance_overview() {
             .as_u64()
             .is_some()
     );
+    assert_eq!(
+        body["trillionnium_world_playability_scorecard"]["route_runner_handoff_gate"]
+            ["referee_workflow_contract_version"],
+        "trillionnium_referee_workflow_v1"
+    );
+    assert_eq!(
+        body["trillionnium_world_playability_scorecard"]["route_runner_handoff_gate"]
+            ["supports_referee_workflow"],
+        true
+    );
+    assert!(
+        body["trillionnium_world_playability_scorecard"]["route_runner_handoff_gate"]
+            ["referee_workflow_count"]
+            .as_u64()
+            .is_some()
+    );
+    assert!(
+        body["trillionnium_world_playability_scorecard"]["route_runner_handoff_gate"]
+            ["first_referee_workflow_action_body"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("referee workflow")
+    );
     assert!(
         body["trillionnium_world_playability_scorecard"]["user_metric_axes"]
             ["long_term_replayability"]["checks"]
@@ -10770,6 +10851,8 @@ async fn metrics_endpoint_exposes_identity_governance_gauges() {
     ));
     assert!(body
         .contains("cex_consumer_entry_trillionnium_route_runner_handoff_next_route_action_count"));
+    assert!(body
+        .contains("cex_consumer_entry_trillionnium_route_runner_handoff_referee_workflow_count"));
     assert!(
         body.contains("cex_consumer_entry_trillionnium_world_playability_scorecard_overall_score")
     );
