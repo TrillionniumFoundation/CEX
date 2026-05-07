@@ -2,6 +2,7 @@ use super::*;
 
 const TRILLIONNIUM_ROUTE_RUNNER_LIFECYCLE_CONTRACT_VERSION: &str =
     "trillionnium_route_runner_lifecycle_v1";
+const TRILLIONNIUM_ROUTE_MASTERY_CONTRACT_VERSION: &str = "trillionnium_route_mastery_v1";
 
 fn route_runner_now_epoch() -> i64 {
     Utc::now().timestamp()
@@ -109,6 +110,47 @@ fn route_runner_lifecycle_snapshot_json(
         "reward_claim_gate": "deliverable_evidence_risk_next_self_review",
         "next_route_gate": "reward_claim_settlement",
         "persistence_note": "Lifecycle is derived from persisted World task timestamps/statuses; projection fallback is used only for legacy tasks without epoch metadata.",
+    })
+}
+
+fn route_runner_mastery_tier(route_mastery_xp: i64) -> (&'static str, &'static str, i64) {
+    if route_mastery_xp >= 900 {
+        ("world_pathfinder", "World Pathfinder / 世界寻路者", 1200)
+    } else if route_mastery_xp >= 500 {
+        ("checkpoint_adept", "Checkpoint Adept / 检查点熟手", 900)
+    } else if route_mastery_xp >= 250 {
+        ("route_apprentice", "Route Apprentice / 路线学徒", 500)
+    } else {
+        ("route_novice", "Route Novice / 路线新手", 250)
+    }
+}
+
+fn route_runner_mastery_snapshot_json(
+    task_id: &str,
+    progress_percent: i64,
+    completion_ready: bool,
+    fallback_index: usize,
+) -> Value {
+    let route_mastery_xp = (progress_percent * 8)
+        + if completion_ready { 220 } else { 60 }
+        + ((fallback_index as i64 + 1) * 18);
+    let (tier, tier_label, next_threshold) = route_runner_mastery_tier(route_mastery_xp);
+    let next_goal = if completion_ready {
+        "Claim the rating/reward, then chain the next route with the same evidence and self-review anchors."
+    } else {
+        "Reach the evidence checkpoint, submit proof, and unlock the rating/reward claim."
+    };
+    json!({
+        "contract_version": TRILLIONNIUM_ROUTE_MASTERY_CONTRACT_VERSION,
+        "task_id": task_id,
+        "xp": route_mastery_xp,
+        "tier": tier,
+        "tier_label": tier_label,
+        "streak": (fallback_index as i64 % 3) + 1,
+        "next_threshold_xp": next_threshold,
+        "next_goal": next_goal,
+        "mastery_path": ["route_started", "evidence_checkpoint", "reward_settlement", "next_route_handoff"],
+        "summary": format!("Route mastery: {tier_label} · {route_mastery_xp} XP · next goal: {next_goal}"),
     })
 }
 
@@ -622,6 +664,8 @@ pub(super) fn trillionnium_world_map_gameplay_layer_contract_json() -> Value {
             "checkpoint_reward_history": true,
             "route_runner_lifecycle": true,
             "route_runner_lifecycle_contract_version": TRILLIONNIUM_ROUTE_RUNNER_LIFECYCLE_CONTRACT_VERSION,
+            "route_mastery_progression": true,
+            "route_mastery_contract_version": TRILLIONNIUM_ROUTE_MASTERY_CONTRACT_VERSION,
             "route_runner_reward_claim_actions": true,
             "route_runner_next_route_actions": true,
             "agent_party_state": true,
@@ -980,6 +1024,12 @@ pub(super) fn world_map_avatar_route_runners_json(
                 &lifecycle_source,
                 completion_ready,
             );
+            let route_mastery = route_runner_mastery_snapshot_json(
+                task_id,
+                progress_percent,
+                completion_ready,
+                index,
+            );
             let route_completion_command = route
                 .get("command")
                 .and_then(Value::as_str)
@@ -1072,7 +1122,7 @@ pub(super) fn world_map_avatar_route_runners_json(
             let agent_party = route.get("agent_party").cloned().unwrap_or_else(|| {
                 Value::Array(world_map_agent_party_members_json(matrix_user_id, task_id))
             });
-            Some(json!({
+            let mut runner = json!({
                 "runner_id": format!("avatar-route-runner:{}:{}", matrix_user_id, task_id),
                 "route_id": route.get("route_id").cloned().unwrap_or_else(|| json!("avatar-task-route")),
                 "route_layer_id": "trillionnium_avatar_route_runner_layer",
@@ -1177,7 +1227,50 @@ pub(super) fn world_map_avatar_route_runners_json(
                 "animation_kind": "looping_avatar_task_run",
                 "animation_duration_ms": 4800 + (index as i64 * 360),
                 "animation_hint": "animate_avatar_marker_between_route_endpoints",
-            }))
+            });
+            if let Some(object) = runner.as_object_mut() {
+                object.insert(
+                    "route_mastery_contract_version".to_string(),
+                    json!(TRILLIONNIUM_ROUTE_MASTERY_CONTRACT_VERSION),
+                );
+                object.insert(
+                    "route_mastery_xp".to_string(),
+                    route_mastery.get("xp").cloned().unwrap_or_else(|| json!(0)),
+                );
+                object.insert(
+                    "route_mastery_tier".to_string(),
+                    route_mastery
+                        .get("tier")
+                        .cloned()
+                        .unwrap_or_else(|| json!("route_novice")),
+                );
+                object.insert(
+                    "route_mastery_tier_label".to_string(),
+                    route_mastery
+                        .get("tier_label")
+                        .cloned()
+                        .unwrap_or_else(|| json!("Route Novice / 路线新手")),
+                );
+                object.insert(
+                    "route_mastery_streak".to_string(),
+                    route_mastery.get("streak").cloned().unwrap_or_else(|| json!(1)),
+                );
+                object.insert(
+                    "route_mastery_next_goal".to_string(),
+                    route_mastery.get("next_goal").cloned().unwrap_or_else(|| {
+                        json!("Reach the evidence checkpoint, submit proof, and unlock the rating/reward claim.")
+                    }),
+                );
+                object.insert(
+                    "route_mastery_summary".to_string(),
+                    route_mastery
+                        .get("summary")
+                        .cloned()
+                        .unwrap_or_else(|| json!("Route mastery: Route Novice / 路线新手")),
+                );
+                object.insert("route_mastery".to_string(), route_mastery);
+            }
+            Some(runner)
         })
         .collect()
 }
@@ -1194,6 +1287,16 @@ pub(super) fn world_map_route_runner_handoff_json(
             .filter(|value| !value.trim().is_empty())
             .unwrap_or(fallback)
             .to_string()
+    };
+    let first_i64 = |field: &str, fallback: i64| {
+        first_runner
+            .and_then(|runner| runner.get(field))
+            .and_then(|value| {
+                value
+                    .as_i64()
+                    .or_else(|| value.as_u64().map(|value| value as i64))
+            })
+            .unwrap_or(fallback)
     };
     let next_route_action_count = avatar_route_runners
         .iter()
@@ -1229,13 +1332,32 @@ pub(super) fn world_map_route_runner_handoff_json(
                 == Some("claimable_after_evidence")
         })
         .count();
+    let route_mastery_runner_count = avatar_route_runners
+        .iter()
+        .filter(|runner| {
+            runner
+                .get("route_mastery_contract_version")
+                .and_then(Value::as_str)
+                == Some(TRILLIONNIUM_ROUTE_MASTERY_CONTRACT_VERSION)
+                || runner
+                    .get("route_mastery")
+                    .and_then(|mastery| mastery.get("contract_version"))
+                    .and_then(Value::as_str)
+                    == Some(TRILLIONNIUM_ROUTE_MASTERY_CONTRACT_VERSION)
+        })
+        .count();
     let runner_count = avatar_route_runners.len();
+    let first_route_mastery_tier_label =
+        first_str("route_mastery_tier_label", "Route Novice / 路线新手");
+    let first_route_mastery_xp = first_i64("route_mastery_xp", 0);
     let summary = if runner_count > 0 {
         format!(
-            "Route runner handoff: {} runners · {} reward claims · {} next-route actions · next {} / {}",
+            "Route runner handoff: {} runners · {} reward claims · {} next-route actions · mastery {} ({} XP) · next {} / {}",
             runner_count,
             reward_claim_action_count,
             next_route_action_count,
+            first_route_mastery_tier_label,
+            first_route_mastery_xp,
             first_str("reward_claim_label", "Prepare reward claim / 准备领奖"),
             first_str("next_route_label", "Preview next route / 预览下一路线"),
         )
@@ -1257,6 +1379,9 @@ pub(super) fn world_map_route_runner_handoff_json(
         "supports_route_runner_reward_claim_actions": true,
         "supports_route_runner_next_route_actions": true,
         "lifecycle_contract_version": TRILLIONNIUM_ROUTE_RUNNER_LIFECYCLE_CONTRACT_VERSION,
+        "supports_route_mastery_progression": true,
+        "route_mastery_contract_version": TRILLIONNIUM_ROUTE_MASTERY_CONTRACT_VERSION,
+        "route_mastery_runner_count": route_mastery_runner_count,
         "first_runner_id": first_str("runner_id", "none"),
         "first_task_id": first_str("task_id", "none"),
         "first_to_node_id": first_str("to_node_id", "target-node"),
@@ -1266,6 +1391,12 @@ pub(super) fn world_map_route_runner_handoff_json(
         "first_lifecycle_status": first_str("lifecycle_status", "active_preview"),
         "first_progress_label": first_str("progress_label", "0% route progress / 0% 路线进度"),
         "first_telemetry_summary": first_str("telemetry_summary", "route runner telemetry pending"),
+        "first_route_mastery_xp": first_route_mastery_xp,
+        "first_route_mastery_tier": first_str("route_mastery_tier", "route_novice"),
+        "first_route_mastery_tier_label": first_route_mastery_tier_label,
+        "first_route_mastery_streak": first_i64("route_mastery_streak", 1),
+        "first_route_mastery_next_goal": first_str("route_mastery_next_goal", "Reach the evidence checkpoint, submit proof, and unlock the rating/reward claim."),
+        "first_route_mastery_summary": first_str("route_mastery_summary", "Route mastery: Route Novice / 路线新手"),
         "first_reward_claim_label": first_str("reward_claim_label", "Prepare reward claim / 准备领奖"),
         "first_reward_claim_status": first_str("reward_claim_status", "locked_until_evidence_checkpoint"),
         "first_reward_claim_action_body": first_str("reward_claim_action_body", "Prepare deliverable, evidence package, risk controls, next action, and self-review before claiming rating/reward."),
@@ -2067,6 +2198,8 @@ pub(super) fn world_map_viewport_json(
             "supports_checkpoint_reward_history": true,
             "supports_route_runner_lifecycle": true,
             "route_runner_lifecycle_contract_version": TRILLIONNIUM_ROUTE_RUNNER_LIFECYCLE_CONTRACT_VERSION,
+            "supports_route_mastery_progression": true,
+            "route_mastery_contract_version": TRILLIONNIUM_ROUTE_MASTERY_CONTRACT_VERSION,
             "supports_route_runner_reward_claim_actions": true,
             "supports_route_runner_next_route_actions": true,
             "supports_agent_party_state": true,

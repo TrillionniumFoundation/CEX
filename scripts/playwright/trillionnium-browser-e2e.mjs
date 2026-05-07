@@ -95,11 +95,17 @@ function assertRouteRunnerHandoffContract(handoff, label) {
   assert(handoff?.supports_checkpoint_reward_history === true, `${label} checkpoint reward history support missing`, handoff);
   assert(handoff?.supports_route_runner_lifecycle === true, `${label} lifecycle support missing`, handoff);
   assert(handoff?.lifecycle_contract_version === 'trillionnium_route_runner_lifecycle_v1', `${label} lifecycle contract missing`, handoff);
+  assert(handoff?.supports_route_mastery_progression === true, `${label} route mastery support missing`, handoff);
+  assert(handoff?.route_mastery_contract_version === 'trillionnium_route_mastery_v1', `${label} route mastery contract missing`, handoff);
+  assert(Number(handoff?.route_mastery_runner_count || 0) >= 1, `${label} route mastery runner count missing`, handoff);
   assert(Number(handoff?.runner_count || 0) >= 1, `${label} runner count missing`, handoff);
   assert(Number(handoff?.reward_claim_action_count || 0) >= 1, `${label} reward-claim action count missing`, handoff);
   assert(Number(handoff?.next_route_action_count || 0) >= 1, `${label} next-route action count missing`, handoff);
   assert(Boolean(handoff?.first_task_id), `${label} first route-runner task missing`, handoff);
   assert(Boolean(handoff?.first_progress_label), `${label} first route-runner progress label missing`, handoff);
+  assert(Number(handoff?.first_route_mastery_xp || 0) >= 1, `${label} first route mastery XP missing`, handoff);
+  assert(Boolean(handoff?.first_route_mastery_tier), `${label} first route mastery tier missing`, handoff);
+  assert(Boolean(handoff?.first_route_mastery_next_goal), `${label} first route mastery next goal missing`, handoff);
   assert(Boolean(handoff?.first_reward_claim_status), `${label} reward-claim status missing`, handoff);
   assert(isAllowedRouteRunnerNextRouteStatus(handoff?.first_next_route_status), `${label} next-route status missing`, handoff);
   assert(Boolean(handoff?.first_lifecycle_source), `${label} lifecycle source missing`, handoff);
@@ -113,6 +119,9 @@ function assertRouteRunnerHandoffContract(handoff, label) {
     runner_count: handoff.runner_count,
     reward_claim_action_count: handoff.reward_claim_action_count,
     next_route_action_count: handoff.next_route_action_count,
+    route_mastery_contract_version: handoff.route_mastery_contract_version,
+    first_route_mastery_xp: handoff.first_route_mastery_xp,
+    first_route_mastery_tier: handoff.first_route_mastery_tier,
     first_next_route_status: handoff.first_next_route_status,
     first_next_route_sequence_summary: handoff.first_next_route_sequence_summary,
   };
@@ -126,12 +135,18 @@ async function assertRouteRunnerHandoffDom(page, selector, label) {
     runnerCount: Number.parseInt(node.dataset.runnerCount || '0', 10) || 0,
     rewardClaimCount: Number.parseInt(node.dataset.rewardClaimCount || '0', 10) || 0,
     nextRouteCount: Number.parseInt(node.dataset.nextRouteCount || '0', 10) || 0,
+    routeMasteryContract: node.dataset.routeMasteryContract || null,
+    routeMasteryTier: node.dataset.routeMasteryTier || null,
+    routeMasteryXp: Number.parseInt(node.dataset.routeMasteryXp || '0', 10) || 0,
     text: String(node.innerText || node.textContent || '').replace(/\s+/g, ' ').trim(),
   }));
   assert(isAllowedRouteRunnerNextRouteStatus(dom.nextRouteStatus), `${label} DOM next-route status missing`, dom);
   assert(dom.runnerCount >= 1, `${label} DOM runner count missing`, dom);
   assert(dom.rewardClaimCount >= 1, `${label} DOM reward-claim count missing`, dom);
   assert(dom.nextRouteCount >= 1, `${label} DOM next-route count missing`, dom);
+  assert(dom.routeMasteryContract === 'trillionnium_route_mastery_v1', `${label} DOM route mastery contract missing`, dom);
+  assert(dom.routeMasteryXp >= 1, `${label} DOM route mastery XP missing`, dom);
+  assert(Boolean(dom.routeMasteryTier), `${label} DOM route mastery tier missing`, dom);
   assert(/reward/i.test(dom.text) && /next[- ]route/i.test(dom.text), `${label} DOM handoff copy missing`, dom);
   return dom;
 }

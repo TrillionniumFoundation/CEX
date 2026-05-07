@@ -682,6 +682,18 @@ pub(super) async fn get_world_web_shell(
         .and_then(|handoff| handoff.get("next_route_action_count"))
         .and_then(Value::as_u64)
         .unwrap_or(0);
+    let map_route_runner_mastery_contract = route_runner_handoff
+        .and_then(|handoff| handoff.get("route_mastery_contract_version"))
+        .and_then(Value::as_str)
+        .unwrap_or("trillionnium_route_mastery_v1");
+    let map_route_runner_mastery_tier = route_runner_handoff
+        .and_then(|handoff| handoff.get("first_route_mastery_tier"))
+        .and_then(Value::as_str)
+        .unwrap_or("route_novice");
+    let map_route_runner_mastery_xp = route_runner_handoff
+        .and_then(|handoff| handoff.get("first_route_mastery_xp"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
     let map_player_density_mode = world_map_status_label(
         world_viewport
             .get("player_density")
@@ -1491,7 +1503,7 @@ pub(super) async fn get_world_web_shell(
             <div>
               <strong data-i18n-en="Current Status" data-i18n-zh="当前状态">Current Status</strong>
               <p id="world-map-density-summary" class="subtitle">{map_density_summary}</p>
-              <p id="world-route-runner-handoff-summary" class="subtitle" data-next-route-status="{map_route_runner_next_route_status}" data-runner-count="{map_avatar_route_runner_count}" data-reward-claim-count="{map_route_runner_reward_claim_count}" data-next-route-count="{map_route_runner_next_route_count}">{map_route_runner_handoff_summary}</p>
+              <p id="world-route-runner-handoff-summary" class="subtitle" data-next-route-status="{map_route_runner_next_route_status}" data-runner-count="{map_avatar_route_runner_count}" data-reward-claim-count="{map_route_runner_reward_claim_count}" data-next-route-count="{map_route_runner_next_route_count}" data-route-mastery-contract="{map_route_runner_mastery_contract}" data-route-mastery-tier="{map_route_runner_mastery_tier}" data-route-mastery-xp="{map_route_runner_mastery_xp}">{map_route_runner_handoff_summary}</p>
               <p id="world-map-camera-summary" class="subtitle" data-i18n-en="Camera loading…" data-i18n-zh="镜头加载中…">Camera loading…</p>
             </div>
             <a class="cta" href='#world-action-console' data-i18n-en="Start Next Action" data-i18n-zh="发起下一步行动">Start Next Action</a>
@@ -1772,6 +1784,9 @@ pub(super) async fn get_world_web_shell(
         routeRunnerHandoffSummary.dataset.runnerCount = String(handoff.runner_count ?? ((viewport || {{}}).avatar_route_runner_count ?? 0));
         routeRunnerHandoffSummary.dataset.rewardClaimCount = String(handoff.reward_claim_action_count ?? 0);
         routeRunnerHandoffSummary.dataset.nextRouteCount = String(handoff.next_route_action_count ?? 0);
+        routeRunnerHandoffSummary.dataset.routeMasteryContract = String(handoff.route_mastery_contract_version || 'trillionnium_route_mastery_v1');
+        routeRunnerHandoffSummary.dataset.routeMasteryTier = String(handoff.first_route_mastery_tier || 'route_novice');
+        routeRunnerHandoffSummary.dataset.routeMasteryXp = String(handoff.first_route_mastery_xp ?? 0);
       }};
       const actionLocationSelect = document.getElementById(routeActionLocationId());
       const actionBodyField = document.getElementById(routeActionTextareaId());
@@ -2286,6 +2301,9 @@ pub(super) async fn get_world_web_shell(
         map_route_runner_next_route_status = escape_html_text(map_route_runner_next_route_status),
         map_route_runner_reward_claim_count = map_route_runner_reward_claim_count,
         map_route_runner_next_route_count = map_route_runner_next_route_count,
+        map_route_runner_mastery_contract = escape_html_text(map_route_runner_mastery_contract),
+        map_route_runner_mastery_tier = escape_html_text(map_route_runner_mastery_tier),
+        map_route_runner_mastery_xp = map_route_runner_mastery_xp,
         map_engine_id = escape_html_text(map_engine_id),
         zone_cards = zone_cards,
         map_cards = map_cards,

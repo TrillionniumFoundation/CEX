@@ -5124,6 +5124,14 @@ struct RouteRunnerHandoffCardContext {
     first_to_node_id: String,
     first_latest_location_id: String,
     lifecycle_contract_version: String,
+    route_mastery_contract_version: String,
+    route_mastery_runner_count: u64,
+    first_route_mastery_xp: u64,
+    first_route_mastery_tier: String,
+    first_route_mastery_tier_label: String,
+    first_route_mastery_streak: u64,
+    first_route_mastery_next_goal: String,
+    first_route_mastery_summary: String,
     first_lifecycle_source: String,
     first_lifecycle_stage: String,
     first_lifecycle_status: String,
@@ -5175,6 +5183,17 @@ impl RouteRunnerHandoffCardContext {
                 .unwrap_or(fallback)
                 .to_string()
         };
+        let handoff_or_runner_u64 = |handoff_field: &str, runner_field: &str, fallback: u64| {
+            handoff
+                .and_then(|handoff| handoff.get(handoff_field))
+                .and_then(Value::as_u64)
+                .or_else(|| {
+                    first_runner
+                        .and_then(|runner| runner.get(runner_field))
+                        .and_then(Value::as_u64)
+                })
+                .unwrap_or(fallback)
+        };
         let runner_count = handoff_u64(
             "runner_count",
             map_hub_u64("avatar_route_runner_count", runner_items.len() as u64),
@@ -5215,6 +5234,20 @@ impl RouteRunnerHandoffCardContext {
             .filter(|runner| {
                 runner.get("next_route_status").and_then(Value::as_str)
                     == Some("next_route_ready_after_reward_claim")
+            })
+            .count() as u64;
+        let route_mastery_runner_fallback = runner_items
+            .iter()
+            .filter(|runner| {
+                runner
+                    .get("route_mastery_contract_version")
+                    .and_then(Value::as_str)
+                    == Some("trillionnium_route_mastery_v1")
+                    || runner
+                        .get("route_mastery")
+                        .and_then(|mastery| mastery.get("contract_version"))
+                        .and_then(Value::as_str)
+                        == Some("trillionnium_route_mastery_v1")
             })
             .count() as u64;
         let first_reward_claim_label = handoff_or_runner_str(
@@ -5268,6 +5301,42 @@ impl RouteRunnerHandoffCardContext {
                 .filter(|value| !value.trim().is_empty())
                 .unwrap_or("trillionnium_route_runner_lifecycle_v1")
                 .to_string(),
+            route_mastery_contract_version: handoff
+                .and_then(|handoff| handoff.get("route_mastery_contract_version"))
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or("trillionnium_route_mastery_v1")
+                .to_string(),
+            route_mastery_runner_count: handoff_u64(
+                "route_mastery_runner_count",
+                route_mastery_runner_fallback,
+            ),
+            first_route_mastery_xp: handoff_or_runner_u64("first_route_mastery_xp", "route_mastery_xp", 0),
+            first_route_mastery_tier: handoff_or_runner_str(
+                "first_route_mastery_tier",
+                "route_mastery_tier",
+                "route_novice",
+            ),
+            first_route_mastery_tier_label: handoff_or_runner_str(
+                "first_route_mastery_tier_label",
+                "route_mastery_tier_label",
+                "Route Novice / 路线新手",
+            ),
+            first_route_mastery_streak: handoff_or_runner_u64(
+                "first_route_mastery_streak",
+                "route_mastery_streak",
+                1,
+            ),
+            first_route_mastery_next_goal: handoff_or_runner_str(
+                "first_route_mastery_next_goal",
+                "route_mastery_next_goal",
+                "Reach the evidence checkpoint, submit proof, and unlock the rating/reward claim.",
+            ),
+            first_route_mastery_summary: handoff_or_runner_str(
+                "first_route_mastery_summary",
+                "route_mastery_summary",
+                "Route mastery: Route Novice / 路线新手",
+            ),
             first_lifecycle_source: handoff_or_runner_str(
                 "first_lifecycle_source",
                 "lifecycle_source",
@@ -5344,10 +5413,19 @@ impl RouteRunnerHandoffCardContext {
             "supports_route_runner_reward_claim_actions": true,
             "supports_route_runner_next_route_actions": true,
             "lifecycle_contract_version": &self.lifecycle_contract_version,
+            "supports_route_mastery_progression": true,
+            "route_mastery_contract_version": &self.route_mastery_contract_version,
+            "route_mastery_runner_count": self.route_mastery_runner_count,
             "first_runner_id": &self.first_runner_id,
             "first_task_id": &self.first_task_id,
             "first_to_node_id": &self.first_to_node_id,
             "first_latest_location_id": &self.first_latest_location_id,
+            "first_route_mastery_xp": self.first_route_mastery_xp,
+            "first_route_mastery_tier": &self.first_route_mastery_tier,
+            "first_route_mastery_tier_label": &self.first_route_mastery_tier_label,
+            "first_route_mastery_streak": self.first_route_mastery_streak,
+            "first_route_mastery_next_goal": &self.first_route_mastery_next_goal,
+            "first_route_mastery_summary": &self.first_route_mastery_summary,
             "first_lifecycle_source": &self.first_lifecycle_source,
             "first_lifecycle_stage": &self.first_lifecycle_stage,
             "first_lifecycle_status": &self.first_lifecycle_status,
@@ -5367,11 +5445,14 @@ impl RouteRunnerHandoffCardContext {
 
     fn text_block(&self) -> String {
         format!(
-            "Runner Handoff: {}\nRunner: {} · {} · {}\nLifecycle: {} [{}]\nReward: {} [{}]\nNext Route: {} [{}]\nNext Body: {}",
+            "Runner Handoff: {}\nRunner: {} · {} · {}\nMastery: {} · {} XP · streak {}\nLifecycle: {} [{}]\nReward: {} [{}]\nNext Route: {} [{}]\nNext Body: {}",
             self.summary,
             self.first_task_id,
             self.first_progress_label,
             self.first_telemetry_summary,
+            self.first_route_mastery_tier_label,
+            self.first_route_mastery_xp,
+            self.first_route_mastery_streak,
             self.first_lifecycle_stage,
             self.first_lifecycle_status,
             self.first_reward_claim_label,
@@ -5384,11 +5465,14 @@ impl RouteRunnerHandoffCardContext {
 
     fn html_block(&self) -> String {
         format!(
-            "<p><strong>Runner Handoff</strong>: {}</p><p><strong>Runner</strong>: <code>{}</code> · {} · {}</p><p><strong>Lifecycle</strong>: {} · <code>{}</code></p><p><strong>Reward</strong>: {} · <code>{}</code></p><p><strong>Next Route</strong>: {} · <code>{}</code></p><p><strong>Next Body</strong>: {}</p>",
+            "<p><strong>Runner Handoff</strong>: {}</p><p><strong>Runner</strong>: <code>{}</code> · {} · {}</p><p><strong>Mastery</strong>: {} · {} XP · streak {}</p><p><strong>Lifecycle</strong>: {} · <code>{}</code></p><p><strong>Reward</strong>: {} · <code>{}</code></p><p><strong>Next Route</strong>: {} · <code>{}</code></p><p><strong>Next Body</strong>: {}</p>",
             escape_html(&self.summary),
             escape_html(&self.first_task_id),
             escape_html(&self.first_progress_label),
             escape_html(&self.first_telemetry_summary),
+            escape_html(&self.first_route_mastery_tier_label),
+            self.first_route_mastery_xp,
+            self.first_route_mastery_streak,
             escape_html(&self.first_lifecycle_stage),
             escape_html(&self.first_lifecycle_status),
             escape_html(&self.first_reward_claim_label),
@@ -5429,6 +5513,26 @@ impl RouteRunnerHandoffCardContext {
             card_object.insert(
                 "route_runner_lifecycle_contract_version".to_string(),
                 json!(&self.lifecycle_contract_version),
+            );
+            card_object.insert(
+                "route_runner_mastery_contract_version".to_string(),
+                json!(&self.route_mastery_contract_version),
+            );
+            card_object.insert(
+                "route_runner_mastery_runner_count".to_string(),
+                json!(self.route_mastery_runner_count),
+            );
+            card_object.insert(
+                "route_runner_first_mastery_xp".to_string(),
+                json!(self.first_route_mastery_xp),
+            );
+            card_object.insert(
+                "route_runner_first_mastery_tier".to_string(),
+                json!(&self.first_route_mastery_tier),
+            );
+            card_object.insert(
+                "route_runner_first_mastery_next_goal".to_string(),
+                json!(&self.first_route_mastery_next_goal),
             );
             card_object.insert(
                 "route_runner_first_lifecycle_source".to_string(),
@@ -9227,6 +9331,20 @@ mod tests {
                     "next_route_action_count": 2,
                     "reward_claim_ready_count": 1,
                     "next_route_ready_count": 1,
+                    "supports_checkpoint_reward_history": true,
+                    "supports_route_runner_lifecycle": true,
+                    "supports_route_runner_reward_claim_actions": true,
+                    "supports_route_runner_next_route_actions": true,
+                    "lifecycle_contract_version": "trillionnium_route_runner_lifecycle_v1",
+                    "supports_route_mastery_progression": true,
+                    "route_mastery_contract_version": "trillionnium_route_mastery_v1",
+                    "route_mastery_runner_count": 2,
+                    "first_route_mastery_xp": 694,
+                    "first_route_mastery_tier": "checkpoint_adept",
+                    "first_route_mastery_tier_label": "Checkpoint Adept / 检查点熟手",
+                    "first_route_mastery_streak": 2,
+                    "first_route_mastery_next_goal": "Claim the rating/reward, then chain the next route with the same evidence and self-review anchors.",
+                    "first_route_mastery_summary": "Route mastery: Checkpoint Adept / 检查点熟手 · 694 XP",
                     "first_runner_id": "avatar-route-runner:@alice:local.dev:task-route-focus-story",
                     "first_task_id": "task-route-focus-story",
                     "first_to_node_id": "delivery-dock-story",
@@ -9386,6 +9504,21 @@ mod tests {
                 .and_then(Value::as_str),
             Some("next_route_ready_after_reward_claim")
         );
+        assert_eq!(
+            card.get("route_runner_mastery_contract_version")
+                .and_then(Value::as_str),
+            Some("trillionnium_route_mastery_v1")
+        );
+        assert_eq!(
+            card.get("route_runner_first_mastery_tier")
+                .and_then(Value::as_str),
+            Some("checkpoint_adept")
+        );
+        assert!(card
+            .get("route_runner_first_mastery_next_goal")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("evidence"));
         assert!(card
             .get("route_runner_next_route_action_body")
             .and_then(Value::as_str)
@@ -9434,6 +9567,20 @@ mod tests {
             "next_route_action_count": 2,
             "reward_claim_ready_count": 1,
             "next_route_ready_count": 1,
+            "supports_checkpoint_reward_history": true,
+            "supports_route_runner_lifecycle": true,
+            "supports_route_runner_reward_claim_actions": true,
+            "supports_route_runner_next_route_actions": true,
+            "lifecycle_contract_version": "trillionnium_route_runner_lifecycle_v1",
+            "supports_route_mastery_progression": true,
+            "route_mastery_contract_version": "trillionnium_route_mastery_v1",
+            "route_mastery_runner_count": 2,
+            "first_route_mastery_xp": 694,
+            "first_route_mastery_tier": "checkpoint_adept",
+            "first_route_mastery_tier_label": "Checkpoint Adept / 检查点熟手",
+            "first_route_mastery_streak": 2,
+            "first_route_mastery_next_goal": "Claim the rating/reward, then chain the next route with the same evidence and self-review anchors.",
+            "first_route_mastery_summary": "Route mastery: Checkpoint Adept / 检查点熟手 · 694 XP",
             "first_runner_id": "avatar-route-runner:@alice:local.dev:task-route-focus-002",
             "first_task_id": "task-route-focus-002",
             "first_to_node_id": "delivery-dock",
@@ -9520,6 +9667,16 @@ mod tests {
                     .and_then(Value::as_str),
                 Some("next_route_ready_after_reward_claim")
             );
+            assert_eq!(
+                card.get("route_runner_mastery_contract_version")
+                    .and_then(Value::as_str),
+                Some("trillionnium_route_mastery_v1")
+            );
+            assert_eq!(
+                card.get("route_runner_first_mastery_tier")
+                    .and_then(Value::as_str),
+                Some("checkpoint_adept")
+            );
             assert!(card
                 .get("route_runner_next_route_action_body")
                 .and_then(Value::as_str)
@@ -9548,8 +9705,19 @@ mod tests {
                 "reward_claim_ready_count": 1,
                 "next_route_ready_count": 1,
                 "supports_checkpoint_reward_history": true,
+                "supports_route_runner_lifecycle": true,
                 "supports_route_runner_reward_claim_actions": true,
                 "supports_route_runner_next_route_actions": true,
+                "lifecycle_contract_version": "trillionnium_route_runner_lifecycle_v1",
+                "supports_route_mastery_progression": true,
+                "route_mastery_contract_version": "trillionnium_route_mastery_v1",
+                "route_mastery_runner_count": 2,
+                "first_route_mastery_xp": 1020,
+                "first_route_mastery_tier": "world_pathfinder",
+                "first_route_mastery_tier_label": "World Pathfinder / 世界寻路者",
+                "first_route_mastery_streak": 3,
+                "first_route_mastery_next_goal": "Claim the rating/reward, then chain the next route with the same evidence and self-review anchors.",
+                "first_route_mastery_summary": "Route mastery: World Pathfinder / 世界寻路者 · 1020 XP",
                 "first_runner_id": "runner-feed-001",
                 "first_task_id": "task-feed-001",
                 "first_to_node_id": "client-board",

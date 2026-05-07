@@ -1119,6 +1119,14 @@ fn world_map_viewport_includes_prefetch_density_and_live_events() {
         true
     );
     assert_eq!(
+        viewport["gameplay_layer_contract"]["supports"]["route_mastery_progression"],
+        true
+    );
+    assert_eq!(
+        viewport["gameplay_layer_contract"]["supports"]["route_mastery_contract_version"],
+        "trillionnium_route_mastery_v1"
+    );
+    assert_eq!(
         viewport["gameplay_layer_contract"]["supports"]["agent_party_state"],
         true
     );
@@ -1277,6 +1285,33 @@ fn world_map_viewport_includes_prefetch_density_and_live_events() {
             .unwrap_or(0)
             >= 300
     );
+    assert_eq!(
+        viewport["avatar_route_runners"][0]["route_mastery_contract_version"],
+        "trillionnium_route_mastery_v1"
+    );
+    assert_eq!(
+        viewport["avatar_route_runners"][0]["route_mastery"]["contract_version"],
+        "trillionnium_route_mastery_v1"
+    );
+    assert!(
+        viewport["avatar_route_runners"][0]["route_mastery_xp"]
+            .as_i64()
+            .unwrap_or(0)
+            > 0
+    );
+    assert!(viewport["avatar_route_runners"][0]["route_mastery_tier"]
+        .as_str()
+        .is_some_and(|tier| !tier.is_empty()));
+    assert!(viewport["avatar_route_runners"][0]["route_mastery_summary"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("Route mastery"));
+    assert!(
+        viewport["avatar_route_runners"][0]["route_mastery_next_goal"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("evidence")
+    );
     assert!(viewport["avatar_route_runners"][0]["completion_command"]
         .as_str()
         .unwrap_or_default()
@@ -1427,6 +1462,14 @@ fn world_map_viewport_includes_prefetch_density_and_live_events() {
     assert_eq!(
         viewport["viewport_contract"]["route_runner_lifecycle_contract_version"],
         "trillionnium_route_runner_lifecycle_v1"
+    );
+    assert_eq!(
+        viewport["viewport_contract"]["supports_route_mastery_progression"],
+        true
+    );
+    assert_eq!(
+        viewport["viewport_contract"]["route_mastery_contract_version"],
+        "trillionnium_route_mastery_v1"
     );
     assert_eq!(
         viewport["viewport_contract"]["supports_route_runner_reward_claim_actions"],
@@ -1888,6 +1931,20 @@ fn world_home_json_exposes_shared_renderer_adapter_for_matrix_cards() {
         home["route_runner_handoff"]["lifecycle_contract_version"],
         "trillionnium_route_runner_lifecycle_v1"
     );
+    assert_eq!(
+        home["route_runner_handoff"]["supports_route_mastery_progression"],
+        true
+    );
+    assert_eq!(
+        home["route_runner_handoff"]["route_mastery_contract_version"],
+        "trillionnium_route_mastery_v1"
+    );
+    assert!(home["route_runner_handoff"]["route_mastery_runner_count"]
+        .as_u64()
+        .is_some());
+    assert!(home["route_runner_handoff"]["first_route_mastery_xp"]
+        .as_u64()
+        .is_some());
     assert!(home["route_runner_handoff"]["handoff_prompt"]
         .as_str()
         .unwrap_or_default()
@@ -1925,6 +1982,14 @@ fn route_contract_is_shared_across_world_map_app_and_feed_surfaces() {
     assert_eq!(
         feed["route_runner_handoff"]["lifecycle_contract_version"],
         "trillionnium_route_runner_lifecycle_v1"
+    );
+    assert_eq!(
+        feed["route_runner_handoff"]["route_mastery_contract_version"],
+        "trillionnium_route_mastery_v1"
+    );
+    assert_eq!(
+        app["feed"]["route_runner_handoff"]["supports_route_mastery_progression"],
+        true
     );
     assert_eq!(
         app["feed"]["route_runner_handoff"]["supports_route_runner_next_route_actions"],
@@ -2019,6 +2084,20 @@ fn client_app_map_hub_projects_stream_counts() {
     assert_eq!(
         app["map_hub"]["route_runner_handoff"]["lifecycle_contract_version"],
         "trillionnium_route_runner_lifecycle_v1"
+    );
+    assert_eq!(
+        app["map_hub"]["route_runner_handoff"]["supports_route_mastery_progression"],
+        true
+    );
+    assert_eq!(
+        app["map_hub"]["route_runner_handoff"]["route_mastery_contract_version"],
+        "trillionnium_route_mastery_v1"
+    );
+    assert!(
+        app["map_hub"]["route_runner_handoff"]["first_route_mastery_summary"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Route mastery")
     );
     assert_eq!(app["map_hub"]["player_density_mode"], "dense");
     assert_eq!(app["modules"][0]["name"], "Trillionnium World Map");
@@ -2250,6 +2329,11 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(app_html.contains("checkpoint_history"));
     assert!(app_html.contains("checkpoint_history_summary"));
     assert!(app_html.contains("reward_history_summary"));
+    assert!(app_html.contains("trillionnium_route_mastery_v1"));
+    assert!(app_html.contains("route_mastery_xp"));
+    assert!(app_html.contains("routeRunnerMasteryChipsHtml"));
+    assert!(app_html.contains("data-route-mastery-tier"));
+    assert!(app_html.contains("dataset.routeMasteryContract"));
     assert!(app_html.contains("routeRunnerHistoryChipsHtml"));
     assert!(app_html.contains("buildRouteRunnerRewardClaimAction"));
     assert!(app_html.contains("routeRunnerRewardClaimButtonHtml"));
@@ -2465,6 +2549,11 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(world_html.contains("checkpoint_history"));
     assert!(world_html.contains("checkpoint_history_summary"));
     assert!(world_html.contains("reward_history_summary"));
+    assert!(world_html.contains("trillionnium_route_mastery_v1"));
+    assert!(world_html.contains("route_mastery_xp"));
+    assert!(world_html.contains("routeRunnerMasteryChipsHtml"));
+    assert!(world_html.contains("data-route-mastery-tier"));
+    assert!(world_html.contains("dataset.routeMasteryContract"));
     assert!(world_html.contains("routeRunnerHistoryChipsHtml"));
     assert!(world_html.contains("buildRouteRunnerRewardClaimAction"));
     assert!(world_html.contains("routeRunnerRewardClaimButtonHtml"));
@@ -10743,6 +10832,23 @@ async fn health_endpoint_exposes_identity_governance_overview() {
         body["trillionnium_world_playability_scorecard"]["route_runner_handoff_gate"]
             ["map_hub_handoff_contract_version"],
         "trillionnium_route_runner_handoff_v1"
+    );
+    assert_eq!(
+        body["trillionnium_world_playability_scorecard"]["route_runner_handoff_gate"]
+            ["route_mastery_contract_version"],
+        "trillionnium_route_mastery_v1"
+    );
+    assert!(
+        body["trillionnium_world_playability_scorecard"]["route_runner_handoff_gate"]
+            ["route_mastery_runner_count"]
+            .as_u64()
+            .is_some()
+    );
+    assert!(
+        body["trillionnium_world_playability_scorecard"]["route_runner_handoff_gate"]
+            ["first_route_mastery_xp"]
+            .as_u64()
+            .is_some()
     );
     assert!(
         body["trillionnium_world_playability_scorecard"]["route_runner_handoff_gate"]

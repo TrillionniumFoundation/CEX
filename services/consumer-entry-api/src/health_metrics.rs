@@ -218,7 +218,20 @@ fn route_runner_handoff_contract_ready(handoff: Option<&Value>) -> bool {
                 .and_then(Value::as_str)
                 == Some("trillionnium_route_runner_lifecycle_v1")
             && handoff
+                .get("supports_route_mastery_progression")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            && handoff
+                .get("route_mastery_contract_version")
+                .and_then(Value::as_str)
+                == Some("trillionnium_route_mastery_v1")
+            && handoff
                 .get("runner_count")
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
+                > 0
+            && handoff
+                .get("route_mastery_runner_count")
                 .and_then(Value::as_u64)
                 .unwrap_or(0)
                 > 0
@@ -240,6 +253,19 @@ fn route_runner_handoff_contract_ready(handoff: Option<&Value>) -> bool {
                 .get("first_progress_label")
                 .and_then(Value::as_str)
                 .is_some_and(|label| !label.trim().is_empty())
+            && handoff
+                .get("first_route_mastery_xp")
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
+                > 0
+            && handoff
+                .get("first_route_mastery_tier")
+                .and_then(Value::as_str)
+                .is_some_and(|tier| !tier.trim().is_empty())
+            && handoff
+                .get("first_route_mastery_next_goal")
+                .and_then(Value::as_str)
+                .is_some_and(|goal| !goal.trim().is_empty())
             && handoff
                 .get("first_reward_claim_status")
                 .and_then(Value::as_str)
@@ -308,6 +334,12 @@ fn app_route_runner_handoff_gate_json(app: &Value) -> Value {
         "feed_handoff_contract_version": feed_route_runner_handoff.and_then(|handoff| handoff.get("contract_version")).and_then(Value::as_str),
         "map_hub_handoff_contract_version": map_hub_route_runner_handoff.and_then(|handoff| handoff.get("contract_version")).and_then(Value::as_str),
         "lifecycle_contract_version": feed_route_runner_handoff.and_then(|handoff| handoff.get("lifecycle_contract_version")).and_then(Value::as_str),
+        "route_mastery_contract_version": feed_route_runner_handoff.and_then(|handoff| handoff.get("route_mastery_contract_version")).and_then(Value::as_str),
+        "supports_route_mastery_progression": feed_route_runner_handoff.and_then(|handoff| handoff.get("supports_route_mastery_progression")).and_then(Value::as_bool).unwrap_or(false),
+        "route_mastery_runner_count": feed_route_runner_handoff.and_then(|handoff| handoff.get("route_mastery_runner_count")).and_then(Value::as_u64).unwrap_or(0),
+        "first_route_mastery_xp": feed_route_runner_handoff.and_then(|handoff| handoff.get("first_route_mastery_xp")).and_then(Value::as_u64).unwrap_or(0),
+        "first_route_mastery_tier": feed_route_runner_handoff.and_then(|handoff| handoff.get("first_route_mastery_tier")).and_then(Value::as_str),
+        "first_route_mastery_next_goal": feed_route_runner_handoff.and_then(|handoff| handoff.get("first_route_mastery_next_goal")).and_then(Value::as_str),
         "first_lifecycle_source": feed_route_runner_handoff.and_then(|handoff| handoff.get("first_lifecycle_source")).and_then(Value::as_str),
         "first_lifecycle_stage": feed_route_runner_handoff.and_then(|handoff| handoff.get("first_lifecycle_stage")).and_then(Value::as_str),
         "first_lifecycle_status": feed_route_runner_handoff.and_then(|handoff| handoff.get("first_lifecycle_status")).and_then(Value::as_str),
@@ -354,10 +386,36 @@ fn is_route_runner_handoff_gate_green(gate: &Value) -> bool {
             .and_then(Value::as_str)
             == Some("trillionnium_route_runner_lifecycle_v1")
         && gate
+            .get("supports_route_mastery_progression")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && gate
+            .get("route_mastery_contract_version")
+            .and_then(Value::as_str)
+            == Some("trillionnium_route_mastery_v1")
+        && gate
             .get("runner_count")
             .and_then(Value::as_u64)
             .unwrap_or(0)
             > 0
+        && gate
+            .get("route_mastery_runner_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            > 0
+        && gate
+            .get("first_route_mastery_xp")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            > 0
+        && gate
+            .get("first_route_mastery_tier")
+            .and_then(Value::as_str)
+            .is_some_and(|tier| !tier.trim().is_empty())
+        && gate
+            .get("first_route_mastery_next_goal")
+            .and_then(Value::as_str)
+            .is_some_and(|goal| !goal.trim().is_empty())
         && gate
             .get("reward_claim_action_count")
             .and_then(Value::as_u64)

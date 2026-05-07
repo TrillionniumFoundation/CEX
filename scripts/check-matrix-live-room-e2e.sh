@@ -259,14 +259,22 @@ def route_runner_handoff_ok(card):
         and handoff.get('supports_checkpoint_reward_history') is True
         and handoff.get('supports_route_runner_lifecycle') is True
         and handoff.get('lifecycle_contract_version') == 'trillionnium_route_runner_lifecycle_v1'
+        and handoff.get('supports_route_mastery_progression') is True
+        and handoff.get('route_mastery_contract_version') == 'trillionnium_route_mastery_v1'
+        and int(handoff.get('route_mastery_runner_count') or 0) >= 1
         and runner_count >= 1
         and reward_claim_count >= 1
         and next_route_count >= 1
         and int(card.get('avatar_route_runner_count') or 0) == runner_count
         and int(card.get('route_runner_reward_claim_action_count') or 0) == reward_claim_count
         and int(card.get('route_runner_next_route_action_count') or 0) == next_route_count
+        and card.get('route_runner_mastery_contract_version') == handoff.get('route_mastery_contract_version')
+        and int(card.get('route_runner_mastery_runner_count') or 0) == int(handoff.get('route_mastery_runner_count') or 0)
         and bool(handoff.get('first_task_id'))
         and bool(handoff.get('first_progress_label'))
+        and int(handoff.get('first_route_mastery_xp') or 0) >= 1
+        and bool(handoff.get('first_route_mastery_tier'))
+        and bool(handoff.get('first_route_mastery_next_goal'))
         and bool(handoff.get('first_reward_claim_status'))
         and bool(handoff.get('first_next_route_status'))
         and bool(handoff.get('first_lifecycle_source'))
@@ -277,6 +285,9 @@ def route_runner_handoff_ok(card):
         and bool(handoff.get('handoff_prompt'))
         and card.get('route_runner_first_task_id') == handoff.get('first_task_id')
         and card.get('route_runner_lifecycle_contract_version') == handoff.get('lifecycle_contract_version')
+        and card.get('route_runner_first_mastery_tier') == handoff.get('first_route_mastery_tier')
+        and int(card.get('route_runner_first_mastery_xp') or 0) == int(handoff.get('first_route_mastery_xp') or 0)
+        and card.get('route_runner_first_mastery_next_goal') == handoff.get('first_route_mastery_next_goal')
         and card.get('route_runner_first_lifecycle_status') == handoff.get('first_lifecycle_status')
         and card.get('route_runner_next_route_status') == handoff.get('first_next_route_status')
         and card.get('route_runner_next_route_action_body') == handoff.get('first_next_route_action_body')
@@ -297,6 +308,11 @@ def route_runner_handoff_summary(prefix, card):
         f'{prefix}_route_runner_first_task_id': card.get('route_runner_first_task_id'),
         f'{prefix}_route_runner_first_progress_label': card.get('route_runner_first_progress_label'),
         f'{prefix}_route_runner_lifecycle_contract_version': card.get('route_runner_lifecycle_contract_version'),
+        f'{prefix}_route_runner_mastery_contract_version': card.get('route_runner_mastery_contract_version'),
+        f'{prefix}_route_runner_mastery_runner_count': card.get('route_runner_mastery_runner_count'),
+        f'{prefix}_route_runner_first_mastery_xp': card.get('route_runner_first_mastery_xp'),
+        f'{prefix}_route_runner_first_mastery_tier': card.get('route_runner_first_mastery_tier'),
+        f'{prefix}_route_runner_first_mastery_next_goal': card.get('route_runner_first_mastery_next_goal'),
         f'{prefix}_route_runner_first_lifecycle_source': card.get('route_runner_first_lifecycle_source'),
         f'{prefix}_route_runner_first_lifecycle_stage': card.get('route_runner_first_lifecycle_stage'),
         f'{prefix}_route_runner_first_lifecycle_status': card.get('route_runner_first_lifecycle_status'),

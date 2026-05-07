@@ -1051,8 +1051,9 @@ pub(super) fn real_world_map_overlay_render_js() -> &'static str {
           const rewardClaimButton = routeRunnerRewardClaimButtonHtml(runner, 'trillionnium-route-flow-action trillionnium-app-route-flow-action trillionnium-reward-claim-action');
           const nextRouteButton = routeRunnerNextRouteButtonHtml(runner, 'trillionnium-route-flow-action trillionnium-app-route-flow-action trillionnium-next-route-action');
           const historyChips = routeRunnerHistoryChipsHtml(runner);
+          const masteryChips = routeRunnerMasteryChipsHtml(runner);
           const partyChips = agentPartyChipsHtml(runner, 'trillionnium-route-flow-action trillionnium-app-route-flow-action trillionnium-agent-party-action');
-          const popupHtml = `<strong>${escapeHtml(mapText(runner.movement_label || 'Avatar running to task / 角色正在跑向任务'))}</strong><br/><span>${escapeHtml(mapText(runner.from_node_name || runner.from_node_id || 'avatar'))} → ${escapeHtml(mapText(runner.to_node_name || runner.to_node_id || 'task'))}</span><br/><span>${escapeHtml(mapText(runner.progress_label || 'route progress / 路线进度'))} · ${escapeHtml(mapText(runner.eta_label || 'ETA / 预计'))} · ${traceCount} ${escapeHtml(mapText('trace points / 个追踪点'))}</span><br/><span>${escapeHtml(checkpointLabel)} · ${escapeHtml(mapText(runner.completion_label || 'Complete checkpoint / 完成检查点'))}</span><br/><code>${escapeHtml(runner.completion_command || '')}</code><br/><div class="focus-stack">${completionButton} ${rewardClaimButton} ${nextRouteButton} ${historyChips} ${partyChips}</div><small>${escapeHtml(mapText(runner.next_route_sequence_summary || runner.checkpoint_history_summary || runner.reward_loop || 'move → task → reward / 移动 → 任务 → 奖励'))}</small>`;
+          const popupHtml = `<strong>${escapeHtml(mapText(runner.movement_label || 'Avatar running to task / 角色正在跑向任务'))}</strong><br/><span>${escapeHtml(mapText(runner.from_node_name || runner.from_node_id || 'avatar'))} → ${escapeHtml(mapText(runner.to_node_name || runner.to_node_id || 'task'))}</span><br/><span>${escapeHtml(mapText(runner.progress_label || 'route progress / 路线进度'))} · ${escapeHtml(mapText(runner.eta_label || 'ETA / 预计'))} · ${traceCount} ${escapeHtml(mapText('trace points / 个追踪点'))}</span><br/><span>${escapeHtml(checkpointLabel)} · ${escapeHtml(mapText(runner.completion_label || 'Complete checkpoint / 完成检查点'))}</span><br/><code>${escapeHtml(runner.completion_command || '')}</code><br/><div class="focus-stack">${completionButton} ${rewardClaimButton} ${nextRouteButton} ${masteryChips} ${historyChips} ${partyChips}</div><small>${escapeHtml(mapText(runner.next_route_sequence_summary || runner.checkpoint_history_summary || runner.reward_loop || 'move → task → reward / 移动 → 任务 → 奖励'))}</small>`;
           const runnerLayer = mapAdapter.renderMovingAvatar(overlayLayers.routeRunners, runner, popupHtml);
           if (runnerLayer) {
             runnerLayer.bindTooltip(`${mapText(runner.movement_label || 'Avatar running to task')} · ${mapText(runner.next_action_label || runner.task_id || 'task')}`)
@@ -1171,13 +1172,14 @@ pub(super) fn real_world_map_card_focus_helpers_js() -> &'static str {
           const rewardClaimButton = routeRunnerRewardClaimButtonHtml(source, worldStyle ? 'trillionnium-route-flow-action trillionnium-reward-claim-action' : 'trillionnium-app-route-flow-action trillionnium-reward-claim-action');
           const nextRouteButton = routeRunnerNextRouteButtonHtml(source, worldStyle ? 'trillionnium-route-flow-action trillionnium-next-route-action' : 'trillionnium-app-route-flow-action trillionnium-next-route-action');
           const historyChips = routeRunnerHistoryChipsHtml(source);
+          const masteryChips = routeRunnerMasteryChipsHtml(source);
           const partyChips = agentPartyChipsHtml(source, worldStyle ? 'trillionnium-route-flow-action trillionnium-agent-party-action' : 'trillionnium-app-route-flow-action trillionnium-agent-party-action');
           return {
             className: worldStyle ? 'mini runner' : 'module app-avatar-route-runner-card',
             title: mapText(source.movement_label || 'Avatar running to task / 角色正在跑向任务'),
             meta: `${mapText(source.from_node_name || source.from_node_id || 'avatar / 角色')} → ${mapText(source.to_node_name || source.to_node_id || 'task node / 任务节点')} · ${progress}% · ${remainingMeters}m · ${etaLabel} · ${checkpointLabel}`,
             code: source.task_id || source.runner_id || 'avatar_route_runner',
-            focusHtml: `${mapAvatarTaskRouteFocusButton(source, 'Follow runner / 跟随角色')} ${completionButton} ${rewardClaimButton} ${nextRouteButton} <span class="hud-chip">${escapeHtml(mapText(source.progress_label || `${progress}% route progress / ${progress}% 路线进度`))}</span> <span class="hud-chip">${escapeHtml(etaLabel)}</span> <span class="hud-chip">${traceCount} ${escapeHtml(mapText('trace points / 个追踪点'))}</span> <span class="hud-chip">${escapeHtml(checkpointLabel)}</span> <span class="hud-chip">${escapeHtml(mapText(source.completion_label || 'Complete checkpoint / 完成检查点'))}</span> ${historyChips} ${partyChips}`,
+            focusHtml: `${mapAvatarTaskRouteFocusButton(source, 'Follow runner / 跟随角色')} ${completionButton} ${rewardClaimButton} ${nextRouteButton} <span class="hud-chip">${escapeHtml(mapText(source.progress_label || `${progress}% route progress / ${progress}% 路线进度`))}</span> <span class="hud-chip">${escapeHtml(etaLabel)}</span> <span class="hud-chip">${traceCount} ${escapeHtml(mapText('trace points / 个追踪点'))}</span> <span class="hud-chip">${escapeHtml(checkpointLabel)}</span> <span class="hud-chip">${escapeHtml(mapText(source.completion_label || 'Complete checkpoint / 完成检查点'))}</span> ${masteryChips} ${historyChips} ${partyChips}`,
           };
         }
         return {
@@ -1546,6 +1548,21 @@ pub(super) fn real_world_map_route_flow_buttons_js() -> &'static str {
         chips.push(`<span class="hud-chip">${escapeHtml(mapText('Checkpoint history / 检查点历史'))}: ${history.length} ${escapeHtml(mapText('history steps / 个历史节点'))}</span>`);
         if (latestLabel) chips.push(`<span class="hud-chip">${escapeHtml(mapText(latestLabel))}</span>`);
         if (source.reward_history_summary) chips.push(`<span class="hud-chip">${escapeHtml(mapText(source.reward_history_summary))}</span>`);
+        return chips.join(' ');
+      };
+      const routeRunnerMasteryChipsHtml = (runner) => {
+        const source = runner || {};
+        const mastery = source.route_mastery || {};
+        const tierLabel = mastery.tier_label || source.route_mastery_tier_label || 'Route Novice / 路线新手';
+        const tier = mastery.tier || source.route_mastery_tier || 'route_novice';
+        const xp = Number(mastery.xp ?? source.route_mastery_xp ?? 0);
+        const streak = Number(mastery.streak ?? source.route_mastery_streak ?? 1);
+        const nextGoal = mastery.next_goal || source.route_mastery_next_goal || 'Reach the evidence checkpoint, submit proof, and unlock the rating/reward claim.';
+        const chips = [];
+        chips.push(`<span class="hud-chip" data-route-mastery-tier="${escapeHtml(tier)}">${escapeHtml(mapText('Route mastery / 路线熟练度'))}: ${escapeHtml(mapText(tierLabel))}</span>`);
+        chips.push(`<span class="hud-chip" data-route-mastery-xp="${escapeHtml(xp)}">${escapeHtml(xp)} XP</span>`);
+        chips.push(`<span class="hud-chip" data-route-mastery-streak="${escapeHtml(streak)}">${escapeHtml(mapText('streak / 连续'))} ${escapeHtml(streak)}</span>`);
+        if (nextGoal) chips.push(`<span class="hud-chip">${escapeHtml(mapText(nextGoal))}</span>`);
         return chips.join(' ');
       };
       const buildAgentPartyAction = (member, source) => {

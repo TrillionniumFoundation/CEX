@@ -1553,6 +1553,9 @@ pub(super) async fn get_client_app_web_shell(
         routeRunnerHandoffSummary.dataset.runnerCount = String(handoff.runner_count ?? ((viewport || {{}}).avatar_route_runner_count ?? 0));
         routeRunnerHandoffSummary.dataset.rewardClaimCount = String(handoff.reward_claim_action_count ?? 0);
         routeRunnerHandoffSummary.dataset.nextRouteCount = String(handoff.next_route_action_count ?? 0);
+        routeRunnerHandoffSummary.dataset.routeMasteryContract = String(handoff.route_mastery_contract_version || 'trillionnium_route_mastery_v1');
+        routeRunnerHandoffSummary.dataset.routeMasteryTier = String(handoff.first_route_mastery_tier || 'route_novice');
+        routeRunnerHandoffSummary.dataset.routeMasteryXp = String(handoff.first_route_mastery_xp ?? 0);
       }};
 
       const inferAppRouteNextStep = (selection, context) => inferConfiguredRouteNextStep(selection, context, {{
@@ -1882,6 +1885,9 @@ pub(super) async fn get_client_app_web_shell(
         const rewardClaimCount = runnerHandoff.reward_claim_action_count ?? 0;
         const nextRouteCount = runnerHandoff.next_route_action_count ?? 0;
         const nextRouteStatus = String(runnerHandoff.first_next_route_status || 'next_route_preview_locked_until_reward_claim');
+        const routeMasteryContract = String(runnerHandoff.route_mastery_contract_version || 'trillionnium_route_mastery_v1');
+        const routeMasteryTier = String(runnerHandoff.first_route_mastery_tier || 'route_novice');
+        const routeMasteryXp = String(runnerHandoff.first_route_mastery_xp ?? 0);
         const handoffSummary = String(runnerHandoff.summary || 'Route runner handoff: waiting for avatar task routes to unlock reward and next-route actions.');
         const chips = [
           `<span class="hud-chip"><strong>${{escapeHtml((visibleItems || []).length)}}</strong> 条可见动态</span>`,
@@ -1889,7 +1895,7 @@ pub(super) async fn get_client_app_web_shell(
           `<span class="hud-chip"><strong>${{escapeHtml(contracts)}}</strong> 个委托 · <strong>${{escapeHtml(completions)}}</strong> 份战报</span>`,
           `<span class="hud-chip"><strong>${{escapeHtml(purchaseCount)}}</strong> 次接取 · <strong>${{escapeHtml(workOrderCount)}}</strong> 个冒险委托</span>`,
           `<span class="hud-chip"><strong>${{escapeHtml(nearbyAgents)}}</strong> 位附近角色 · ${{escapeHtml(payload.active_region_id || 'global')}}</span>`,
-          `<span id="app-feed-route-runner-handoff" class="hud-chip" data-next-route-status="${{escapeHtml(nextRouteStatus)}}" data-runner-count="${{escapeHtml(runnerCount)}}" data-reward-claim-count="${{escapeHtml(rewardClaimCount)}}" data-next-route-count="${{escapeHtml(nextRouteCount)}}"><strong>${{escapeHtml(runnerCount)}}</strong> runner · <strong>${{escapeHtml(rewardClaimCount)}}</strong> reward · <strong>${{escapeHtml(nextRouteCount)}}</strong> next route · ${{escapeHtml(handoffSummary)}}</span>`
+          `<span id="app-feed-route-runner-handoff" class="hud-chip" data-next-route-status="${{escapeHtml(nextRouteStatus)}}" data-runner-count="${{escapeHtml(runnerCount)}}" data-reward-claim-count="${{escapeHtml(rewardClaimCount)}}" data-next-route-count="${{escapeHtml(nextRouteCount)}}" data-route-mastery-contract="${{escapeHtml(routeMasteryContract)}}" data-route-mastery-tier="${{escapeHtml(routeMasteryTier)}}" data-route-mastery-xp="${{escapeHtml(routeMasteryXp)}}"><strong>${{escapeHtml(runnerCount)}}</strong> runner · <strong>${{escapeHtml(rewardClaimCount)}}</strong> reward · <strong>${{escapeHtml(nextRouteCount)}}</strong> next route · ${{escapeHtml(handoffSummary)}}</span>`
         ];
         if (selection) {{
           chips.push(`<span class="hud-chip"><strong>focus</strong> ${{escapeHtml(selection.taskId ? ('task ' + selection.taskId) : (selection.title || selection.locationId || selection.kind || 'selection'))}}</span>`);
