@@ -196,20 +196,32 @@ if alertmanager_path and alertmanager_path.exists():
 expected_alerts = {
     'CexTrillionniumRouteRunnerHandoffAllGatesNotGreen': {
         'metric': 'cex_consumer_entry_trillionnium_route_runner_handoff_all_gates_green',
+        'expr_fragments': ['== 0'],
+        'for': '5m',
         'severity': 'critical',
+        'route_hint': 'page',
     },
     'CexTrillionniumRouteRunnerHandoffFeedSourceMissing': {
         'metric': 'cex_consumer_entry_trillionnium_route_runner_handoff_feed_source_count',
+        'expr_fragments': ['< 7'],
+        'for': '5m',
         'severity': 'critical',
+        'route_hint': 'page',
     },
     'CexTrillionniumRouteRunnerHandoffRunnerCountZero': {
         'metric': 'cex_consumer_entry_trillionnium_route_runner_handoff_runner_count',
+        'expr_fragments': ['== 0'],
+        'for': '10m',
         'severity': 'warning',
+        'route_hint': 'chat',
     },
     'CexTrillionniumRouteRunnerHandoffActionsMissing': {
         'metric': 'cex_consumer_entry_trillionnium_route_runner_handoff_reward_claim_action_count',
         'extra_metric': 'cex_consumer_entry_trillionnium_route_runner_handoff_next_route_action_count',
+        'expr_fragments': ['== 0', ' or '],
+        'for': '10m',
         'severity': 'warning',
+        'route_hint': 'chat',
     },
 }
 
@@ -228,25 +240,46 @@ for name, expected in expected_alerts.items():
     metric_visible = expected['metric'] in expr
     extra_metric = expected.get('extra_metric')
     extra_metric_visible = True if not extra_metric else extra_metric in expr
+    expr_fragments = expected.get('expr_fragments') or []
+    expr_semantics_ok = all(fragment in expr for fragment in expr_fragments)
+    duration_ok = str((rule or {}).get('for') or '') == expected['for']
     labels_ok = (
         labels.get('severity') == expected['severity']
         and labels.get('service') == 'consumer-entry-api'
         and labels.get('family') == 'product-edge'
         and labels.get('component') == 'trillionnium-route-runner-handoff'
         and labels.get('owner') == 'product-ops'
+        and labels.get('route_hint') == expected['route_hint']
     )
+    annotations = (rule or {}).get('annotations') or {}
+    annotations_ok = annotations.get('runbook') == 'docs/operator-runbook-v1.md' and bool(annotations.get('first_action'))
     result = {
         'present': rule is not None,
         'metric_visible': metric_visible,
         'extra_metric_visible': extra_metric_visible,
+        'expr': expr,
+        'expr_fragments': expr_fragments,
+        'expr_semantics_ok': expr_semantics_ok,
+        'for': (rule or {}).get('for'),
+        'duration_ok': duration_ok,
         'severity': labels.get('severity'),
         'service': labels.get('service'),
         'family': labels.get('family'),
         'component': labels.get('component'),
         'owner': labels.get('owner'),
+        'route_hint': labels.get('route_hint'),
         'labels_ok': labels_ok,
+        'annotations_ok': annotations_ok,
     }
-    result['ok'] = bool(result['present'] and metric_visible and extra_metric_visible and labels_ok)
+    result['ok'] = bool(
+        result['present']
+        and metric_visible
+        and extra_metric_visible
+        and expr_semantics_ok
+        and duration_ok
+        and labels_ok
+        and annotations_ok
+    )
     alert_results[name] = result
     if not result['ok']:
         failures.append(f'prometheus alert contract invalid: {name}')

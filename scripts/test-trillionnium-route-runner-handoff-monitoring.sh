@@ -127,6 +127,21 @@ Path(sys.argv[2]).write_text(yaml.safe_dump(data, sort_keys=False))
 PY
 assert_fail_contains bad_owner 'CexTrillionniumRouteRunnerHandoffAllGatesNotGreen' --prometheus-bundle "$PROMETHEUS_BAD_OWNER"
 
+PROMETHEUS_BAD_EXPR="$TMP_DIR/prometheus-bad-expr.yml"
+python3 - "$PROMETHEUS_GOOD" "$PROMETHEUS_BAD_EXPR" <<'PY'
+from pathlib import Path
+import sys
+import yaml
+
+data = yaml.safe_load(Path(sys.argv[1]).read_text())
+for group in data.get('groups') or []:
+    for rule in group.get('rules') or []:
+        if rule.get('alert') == 'CexTrillionniumRouteRunnerHandoffFeedSourceMissing':
+            rule['expr'] = 'cex_consumer_entry_trillionnium_route_runner_handoff_feed_source_count > 7'
+Path(sys.argv[2]).write_text(yaml.safe_dump(data, sort_keys=False))
+PY
+assert_fail_contains bad_expr 'CexTrillionniumRouteRunnerHandoffFeedSourceMissing' --prometheus-bundle "$PROMETHEUS_BAD_EXPR"
+
 ALERTMANAGER_BAD_ORDER="$TMP_DIR/alertmanager-bad-order.yml"
 python3 - "$ALERTMANAGER_GOOD" "$ALERTMANAGER_BAD_ORDER" <<'PY'
 from pathlib import Path
