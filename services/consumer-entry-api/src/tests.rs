@@ -10583,6 +10583,27 @@ async fn health_endpoint_exposes_identity_governance_overview() {
             .iter()
             .any(|check| check["check_id"] == "scorecard_has_runtime_funnel_data")
     );
+    assert_eq!(
+        body["trillionnium_world_playability_scorecard"]["route_runner_handoff_gate"]
+            ["contract_version"],
+        "trillionnium_playability_route_runner_handoff_gate_v1"
+    );
+    assert_eq!(
+        body["trillionnium_world_playability_scorecard"]["route_runner_handoff_gate"]
+            ["feed_handoff_contract_version"],
+        "trillionnium_route_runner_handoff_v1"
+    );
+    assert_eq!(
+        body["trillionnium_world_playability_scorecard"]["route_runner_handoff_gate"]
+            ["map_hub_handoff_contract_version"],
+        "trillionnium_route_runner_handoff_v1"
+    );
+    assert!(
+        body["trillionnium_world_playability_scorecard"]["route_runner_handoff_gate"]
+            ["next_route_action_count"]
+            .as_u64()
+            .is_some()
+    );
     assert!(
         body["trillionnium_world_playability_scorecard"]["user_metric_axes"]
             ["long_term_replayability"]["checks"]

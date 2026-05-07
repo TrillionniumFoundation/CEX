@@ -60,6 +60,7 @@ def require(check_id, passed, detail=None):
 scorecard = consumer.get("trillionnium_world_playability_scorecard") or {}
 diagnostic_axes = scorecard.get("axes") or {}
 user_metric_axes = scorecard.get("user_metric_axes") or {}
+route_runner_handoff_gate = scorecard.get("route_runner_handoff_gate") or {}
 axis_order = scorecard.get("axis_order") or []
 user_metric_order = scorecard.get("user_metric_order") or []
 
@@ -75,6 +76,17 @@ require("playability_diagnostic_converged", scorecard.get("overall_status") == "
 require("playability_user_metric_overall_score_10", scorecard.get("user_metric_overall_score") == 10.0, scorecard.get("user_metric_overall_score"))
 require("playability_user_metric_overall_percent_100", scorecard.get("user_metric_overall_percent") == 100, scorecard.get("user_metric_overall_percent"))
 require("playability_user_metric_converged", scorecard.get("user_metric_overall_status") == "converged", scorecard.get("user_metric_overall_status"))
+require("playability_route_runner_handoff_gate_contract", route_runner_handoff_gate.get("contract_version") == "trillionnium_playability_route_runner_handoff_gate_v1", route_runner_handoff_gate)
+require("playability_route_runner_feed_contract_visible", route_runner_handoff_gate.get("feed_contract_visible") is True, route_runner_handoff_gate)
+require("playability_route_runner_map_hub_contract_visible", route_runner_handoff_gate.get("map_hub_contract_visible") is True, route_runner_handoff_gate)
+require("playability_route_runner_feed_source_count_7", int(route_runner_handoff_gate.get("source_count") or 0) >= 7, route_runner_handoff_gate)
+require("playability_route_runner_feed_source_present", route_runner_handoff_gate.get("sources_include_route_runner_handoff") is True, route_runner_handoff_gate)
+require("playability_route_runner_feed_contract_version", route_runner_handoff_gate.get("feed_handoff_contract_version") == "trillionnium_route_runner_handoff_v1", route_runner_handoff_gate)
+require("playability_route_runner_map_hub_contract_version", route_runner_handoff_gate.get("map_hub_handoff_contract_version") == "trillionnium_route_runner_handoff_v1", route_runner_handoff_gate)
+require("playability_route_runner_counts", int(route_runner_handoff_gate.get("runner_count") or 0) >= 1 and int(route_runner_handoff_gate.get("reward_claim_action_count") or 0) >= 1 and int(route_runner_handoff_gate.get("next_route_action_count") or 0) >= 1, route_runner_handoff_gate)
+require("playability_route_runner_next_route_status", bool(route_runner_handoff_gate.get("first_next_route_status")), route_runner_handoff_gate)
+require("playability_route_runner_next_route_sequence", bool(route_runner_handoff_gate.get("first_next_route_sequence_summary")), route_runner_handoff_gate)
+require("playability_route_runner_handoff_prompt", bool(route_runner_handoff_gate.get("handoff_prompt")), route_runner_handoff_gate)
 for axis_id in DIAGNOSTIC_AXES:
     axis = diagnostic_axes.get(axis_id) or {}
     require(f"playability_axis_{axis_id}_score_10", axis.get("score") == 10.0, axis)
@@ -124,6 +136,7 @@ summary = {
     "playability_user_metric_overall_percent": scorecard.get("user_metric_overall_percent"),
     "playability_user_metric_scores": {axis_id: (user_metric_axes.get(axis_id) or {}).get("score") for axis_id in USER_METRIC_AXES},
     "playability_diagnostic_axis_scores": {axis_id: (diagnostic_axes.get(axis_id) or {}).get("score") for axis_id in DIAGNOSTIC_AXES},
+    "route_runner_handoff_gate": route_runner_handoff_gate,
     "failures": failures,
 }
 path = summary_dir / f"playability-scorecard-summary-{checked_at}.json"
