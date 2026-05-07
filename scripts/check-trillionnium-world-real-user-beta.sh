@@ -158,6 +158,8 @@ for metric in [
     "cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_contract_visible",
     "cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_runner_count",
     "cex_consumer_entry_trillionnium_route_runner_handoff_first_route_mastery_xp",
+    "cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_tier_visible",
+    "cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_next_goal_evidence_visible",
     "cex_consumer_entry_trillionnium_world_real_user_beta_overall_percent",
     "cex_consumer_entry_trillionnium_world_real_user_beta_product_retention_percent",
     "cex_consumer_entry_trillionnium_world_real_user_beta_access_safety_percent",

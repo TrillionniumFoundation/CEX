@@ -228,6 +228,8 @@ expected_alerts = {
         'extra_metrics': [
             'cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_runner_count',
             'cex_consumer_entry_trillionnium_route_runner_handoff_first_route_mastery_xp',
+            'cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_tier_visible',
+            'cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_next_goal_evidence_visible',
         ],
         'expr_fragments': ['== 0', ' or '],
         'for': '10m',
@@ -345,6 +347,8 @@ dashboard_required_metrics = [
     'cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_contract_visible',
     'cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_runner_count',
     'cex_consumer_entry_trillionnium_route_runner_handoff_first_route_mastery_xp',
+    'cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_tier_visible',
+    'cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_next_goal_evidence_visible',
 ]
 expected_dashboard = {
     'uid': 'cex-trillionnium-route-runner-handoff',
@@ -386,6 +390,8 @@ expected_dashboard = {
                 'cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_contract_visible',
                 'cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_runner_count',
                 'cex_consumer_entry_trillionnium_route_runner_handoff_first_route_mastery_xp',
+                'cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_tier_visible',
+                'cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_next_goal_evidence_visible',
             ],
             'threshold_values': [1],
         },

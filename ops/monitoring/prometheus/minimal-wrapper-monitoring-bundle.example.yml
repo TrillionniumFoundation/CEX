@@ -321,6 +321,8 @@ groups:
     expr: cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_contract_visible
       == 0 or cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_runner_count
       == 0 or cex_consumer_entry_trillionnium_route_runner_handoff_first_route_mastery_xp
+      == 0 or cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_tier_visible
+      == 0 or cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_next_goal_evidence_visible
       == 0
     for: 10m
     labels:
@@ -335,10 +337,13 @@ groups:
       description: 'Route-runner handoff is expected to expose the trillionnium_route_mastery_v1
         contract,
 
-        at least one mastery runner, and non-zero first-runner XP. If this fires,
-        players may
+        at least one mastery runner, non-zero first-runner XP, a visible tier, and
+        an
 
-        still see route runners but lose visible XP/tier/next-goal progression.
+        evidence-anchored next goal. If this fires, players may still see route runners
+        but lose
+
+        visible XP/tier/next-goal progression.
 
         '
       runbook: docs/operator-runbook-v1.md

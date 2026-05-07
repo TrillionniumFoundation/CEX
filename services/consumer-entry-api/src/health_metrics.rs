@@ -3147,6 +3147,17 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
         .get("route_mastery_contract_version")
         .and_then(Value::as_str)
         == Some("trillionnium_route_mastery_v1");
+    let route_runner_handoff_mastery_tier_visible = playability_route_runner_handoff_gate
+        .get("first_route_mastery_tier")
+        .and_then(Value::as_str)
+        .map(|tier| !tier.trim().is_empty())
+        .unwrap_or(false);
+    let route_runner_handoff_mastery_next_goal_evidence_visible =
+        playability_route_runner_handoff_gate
+            .get("first_route_mastery_next_goal")
+            .and_then(Value::as_str)
+            .map(|goal| goal.to_ascii_lowercase().contains("evidence"))
+            .unwrap_or(false);
     let body = format!(
         concat!(
             "# TYPE cex_consumer_entry_task_create_requests_total counter\n",
@@ -3331,6 +3342,10 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
             "cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_runner_count {}\n",
             "# TYPE cex_consumer_entry_trillionnium_route_runner_handoff_first_route_mastery_xp gauge\n",
             "cex_consumer_entry_trillionnium_route_runner_handoff_first_route_mastery_xp {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_tier_visible gauge\n",
+            "cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_tier_visible {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_next_goal_evidence_visible gauge\n",
+            "cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_next_goal_evidence_visible {}\n",
             "# TYPE cex_consumer_entry_trillionnium_world_playability_scorecard_overall_score gauge\n",
             "cex_consumer_entry_trillionnium_world_playability_scorecard_overall_score {}\n",
             "# TYPE cex_consumer_entry_trillionnium_world_playability_scorecard_overall_percent gauge\n",
@@ -3719,6 +3734,8 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
             playability_route_runner_handoff_gate,
             "first_route_mastery_xp",
         ),
+        gauge_bool(route_runner_handoff_mastery_tier_visible),
+        gauge_bool(route_runner_handoff_mastery_next_goal_evidence_visible),
         trillionnium_world_playability_scorecard
             .get("overall_score")
             .and_then(Value::as_f64)

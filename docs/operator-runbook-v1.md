@@ -453,6 +453,8 @@ curl -s -X POST -H 'x-admin-token: <admin-token>' -H 'content-type: application/
   - `cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_contract_visible`
   - `cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_runner_count`
   - `cex_consumer_entry_trillionnium_route_runner_handoff_first_route_mastery_xp`
+  - `cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_tier_visible`
+  - `cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_next_goal_evidence_visible`
 
 判断：
 
@@ -460,7 +462,7 @@ curl -s -X POST -H 'x-admin-token: <admin-token>' -H 'content-type: application/
 - `feed_source_count<7`：通常说明 `/feed` 或 `/app` feed hydration 里的 `route_runner_handoff` source 丢了，先查 feed aggregation / client feed JSON，而不是先查地图渲染
 - `runner_count=0`：说明 handoff gate 本身还能算出结果，但没有 active route runners；优先查 world route projection、seeded first-session routes、map hub payload
 - `reward_claim_action_count=0` 或 `next_route_action_count=0`：玩家可能看得到 runner，但没有清晰的 claim reward / next route 操作路径；优先查 route-runner action hydration、button dataset、Matrix/web card projection
-- `route_mastery_contract_visible=0`、`route_mastery_runner_count=0` 或 `first_route_mastery_xp=0`：route runners 还在，但 XP/tier/streak/next-goal progression 没有进入 gate；优先查 `trillionnium_route_mastery_v1` projection、feed handoff aggregation、Matrix/Web card field passthrough
+- `route_mastery_contract_visible=0`、`route_mastery_runner_count=0`、`first_route_mastery_xp=0`、`route_mastery_tier_visible=0` 或 `route_mastery_next_goal_evidence_visible=0`：route runners 还在，但 XP/tier/streak/next-goal progression 没有完整进入 gate；优先查 `trillionnium_route_mastery_v1` projection、feed handoff aggregation、Matrix/Web card field passthrough，尤其确认 next-goal 是否仍绑定 evidence / reward claim / next route
 - `first_next_route_status` 不是 `next_route_preview_locked_until_reward_claim` 或 `next_route_ready_after_reward_claim`：先确认 reward-before-next-route 的产品约束是否被破坏，不要只按普通 copy 回归处理
 
 建议动作：

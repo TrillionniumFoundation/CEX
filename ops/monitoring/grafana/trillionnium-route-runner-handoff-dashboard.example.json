@@ -410,6 +410,20 @@
           "legendFormat": "first runner XP",
           "range": true,
           "refId": "C"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_tier_visible",
+          "legendFormat": "mastery tier visible",
+          "range": true,
+          "refId": "D"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_next_goal_evidence_visible",
+          "legendFormat": "next goal evidence visible",
+          "range": true,
+          "refId": "E"
         }
       ],
       "title": "Route mastery progression",

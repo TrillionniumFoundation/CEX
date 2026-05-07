@@ -112,6 +112,8 @@ for metric in [
     "cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_contract_visible",
     "cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_runner_count",
     "cex_consumer_entry_trillionnium_route_runner_handoff_first_route_mastery_xp",
+    "cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_tier_visible",
+    "cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_next_goal_evidence_visible",
     "cex_consumer_entry_trillionnium_world_playability_scorecard_overall_score",
     "cex_consumer_entry_trillionnium_world_playability_scorecard_overall_percent",
     "cex_consumer_entry_trillionnium_world_playability_scorecard_onboarding_3_minute_loop_score",

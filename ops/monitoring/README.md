@@ -50,7 +50,7 @@ It tracks the same direct gauges used by the `CexTrillionniumRouteRunnerHandoff*
 - feed source count
 - runner count
 - reward-claim and next-route action counts
-- route mastery contract visibility, mastery runner count, and first-runner XP
+- route mastery contract visibility, mastery runner count, first-runner XP, tier visibility, and evidence-anchored next-goal visibility
 
 Those alerts also carry `component=trillionnium-route-runner-handoff` and `owner=product-ops`, and the example Alertmanager product-edge routing file matches that component before the generic product-edge route.
 
