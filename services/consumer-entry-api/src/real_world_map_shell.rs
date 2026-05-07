@@ -1995,6 +1995,9 @@ pub(super) fn real_world_map_viewport_hydration_js() -> &'static str {
         if (cameraSummary) {
           cameraSummary.textContent = routePhrase('Camera ' + mapCenter.lat.toFixed(4) + ', ' + mapCenter.lng.toFixed(4) + ' · zoom ' + zoom + ' · ' + mapText(viewport.lod_mode || 'street_nodes') + ' · ' + (viewport.marker_count || 0) + ' visible places · ' + mapText(((viewport.player_density || {}).mode) || 'dense') + ' density · ' + (viewport.live_event_count || 0) + ' live events', '镜头 ' + mapCenter.lat.toFixed(4) + ', ' + mapCenter.lng.toFixed(4) + ' · 缩放 ' + zoom + ' · ' + mapText(viewport.lod_mode || 'street_nodes') + ' · ' + (viewport.marker_count || 0) + ' 个可见地点 · ' + mapText(((viewport.player_density || {}).mode) || 'dense') + ' 密度 · ' + (viewport.live_event_count || 0) + ' 个实时事件');
         }
+        if (typeof renderRouteRunnerHandoffSummary === 'function') {
+          renderRouteRunnerHandoffSummary(viewport);
+        }
         renderStreamHud(viewport, lastSelection);
         renderCards(tileTarget, viewport.visible_tile_shards || [], 'tile');
         renderCards(regionTarget, viewport.stream_region_shards || [viewport.active_region || {}], 'region');

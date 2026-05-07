@@ -2128,6 +2128,8 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(app_html.contains("trillionnium_route_runner_handoff_v1"));
     assert!(app_html.contains("Route runner handoff:"));
     assert!(app_html.contains("data-next-route-status="));
+    assert!(app_html.contains("renderRouteRunnerHandoffSummary"));
+    assert!(app_html.contains("data-runner-count="));
     assert!(app_html.contains("avatar_task_routes"));
     assert!(app_html.contains("avatar_route_runners"));
     assert!(app_html.contains("runner_trace_points"));
@@ -2324,6 +2326,11 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(world_html.contains("data-overlay-target=\"routeRunners\""));
     assert!(world_html.contains("world-avatar-task-routes-live"));
     assert!(world_html.contains("world-avatar-route-runners-live"));
+    assert!(world_html.contains("world-route-runner-handoff-summary"));
+    assert!(world_html.contains("Route runner handoff:"));
+    assert!(world_html.contains("data-next-route-status="));
+    assert!(world_html.contains("data-reward-claim-count="));
+    assert!(world_html.contains("renderRouteRunnerHandoffSummary"));
     assert!(world_html.contains("avatar_task_routes"));
     assert!(world_html.contains("avatar_route_runners"));
     assert!(world_html.contains("runner_trace_points"));
