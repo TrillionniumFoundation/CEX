@@ -435,7 +435,7 @@ curl -s -X POST -H 'x-admin-token: <admin-token>' -H 'content-type: application/
 - `GET http://127.0.0.1:8090/health`
 - `GET http://127.0.0.1:8090/metrics`
 - 最新 production signoff summary：`run/signoff/production-signoff-*.summary.json`
-- 最新 handoff evidence：`run/signoff/production-signoff-*.route-runner-handoff.json`
+- 最新 handoff evidence：`run/signoff/production-signoff-*.route-runner-handoff.json`（同时记录 `/health` gate 与 `/metrics` live gauge values / thresholds）
 - live monitoring deploy metadata：`run/monitoring-live-target/metadata/monitoring-deploy-metadata.yml`
 
 重点字段：

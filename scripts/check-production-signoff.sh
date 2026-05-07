@@ -137,15 +137,29 @@ fi
 route_runner_handoff_evidence_ok=false
 route_runner_handoff_status=0
 route_runner_handoff_health_file="$(mktemp)"
+route_runner_handoff_metrics_file="$(mktemp)"
 if curl -fsS "$CONSUMER_ENTRY_BASE_URL/health" >"$route_runner_handoff_health_file" && \
-  python3 - "$route_runner_handoff_health_file" "$ROUTE_RUNNER_HANDOFF_EVIDENCE_PATH" <<'PY'
+  curl -fsS "$CONSUMER_ENTRY_BASE_URL/metrics" >"$route_runner_handoff_metrics_file" && \
+  python3 - "$route_runner_handoff_health_file" "$route_runner_handoff_metrics_file" "$ROUTE_RUNNER_HANDOFF_EVIDENCE_PATH" <<'PY'
 from pathlib import Path
 import json
 import sys
 
 health_path = Path(sys.argv[1])
-out_path = Path(sys.argv[2])
+metrics_path = Path(sys.argv[2])
+out_path = Path(sys.argv[3])
 health = json.loads(health_path.read_text())
+metrics_text = metrics_path.read_text()
+
+def metric_value(name):
+    prefix = f'{name} '
+    for line in metrics_text.splitlines():
+        if line.startswith(prefix):
+            try:
+                return float(line.split()[1])
+            except (IndexError, ValueError):
+                return None
+    return None
 
 def gate_ok(gate):
     if not isinstance(gate, dict):
@@ -180,13 +194,34 @@ gate_sources = {
 }
 gate_results = {name: gate_ok(gate) for name, gate in gate_sources.items()}
 primary_gate = gate_sources['playability']
+metric_thresholds = {
+    'cex_consumer_entry_trillionnium_route_runner_handoff_all_gates_green': 1,
+    'cex_consumer_entry_trillionnium_route_runner_handoff_feed_source_count': 7,
+    'cex_consumer_entry_trillionnium_route_runner_handoff_runner_count': 1,
+    'cex_consumer_entry_trillionnium_route_runner_handoff_reward_claim_action_count': 1,
+    'cex_consumer_entry_trillionnium_route_runner_handoff_next_route_action_count': 1,
+    'cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_contract_visible': 1,
+    'cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_runner_count': 1,
+    'cex_consumer_entry_trillionnium_route_runner_handoff_first_route_mastery_xp': 1,
+    'cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_tier_visible': 1,
+    'cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_next_goal_evidence_visible': 1,
+}
+metric_values = {name: metric_value(name) for name in metric_thresholds}
+metric_results = {
+    name: (metric_values[name] is not None and metric_values[name] >= threshold)
+    for name, threshold in metric_thresholds.items()
+}
 evidence = {
-    'ok': all(gate_results.values()),
+    'ok': all(gate_results.values()) and all(metric_results.values()),
     'contract_version': 'trillionnium_signoff_route_runner_handoff_evidence_v1',
     'source': f"{health.get('service') or 'consumer-entry-api'}/health",
+    'metrics_source': f"{health.get('service') or 'consumer-entry-api'}/metrics",
     'health_status': health.get('status'),
     'gate_results': gate_results,
     'gate_names': list(gate_sources.keys()),
+    'metric_results': metric_results,
+    'metric_thresholds': metric_thresholds,
+    'metric_values': metric_values,
     'source_count': primary_gate.get('source_count'),
     'runner_count': primary_gate.get('runner_count'),
     'reward_claim_action_count': primary_gate.get('reward_claim_action_count'),
@@ -203,8 +238,9 @@ evidence = {
 }
 out_path.write_text(json.dumps(evidence, indent=2, sort_keys=True) + '\n')
 if not evidence['ok']:
-    missing = [name for name, ok in gate_results.items() if not ok]
-    raise SystemExit(f'route-runner handoff signoff evidence not green: {missing}')
+    missing_gates = [name for name, ok in gate_results.items() if not ok]
+    missing_metrics = [name for name, ok in metric_results.items() if not ok]
+    raise SystemExit(f'route-runner handoff signoff evidence not green: gates={missing_gates} metrics={missing_metrics}')
 PY
 then
   route_runner_handoff_evidence_ok=true
@@ -214,6 +250,7 @@ else
   record_failure "route-runner handoff signoff evidence failed (status=$route_runner_handoff_status path=$ROUTE_RUNNER_HANDOFF_EVIDENCE_PATH)"
 fi
 rm -f "$route_runner_handoff_health_file"
+rm -f "$route_runner_handoff_metrics_file"
 
 route_runner_handoff_monitoring_evidence_ok=false
 route_runner_handoff_monitoring_status=0
