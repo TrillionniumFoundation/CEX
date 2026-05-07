@@ -53,6 +53,13 @@ It tracks the same direct gauges used by the `CexTrillionniumRouteRunnerHandoff*
 
 Those alerts also carry `component=trillionnium-route-runner-handoff` and `owner=product-ops`, and the example Alertmanager product-edge routing file matches that component before the generic product-edge route.
 
+If you want to validate just this focused handoff monitoring contract without running full production readiness/signoff, use:
+
+- `scripts/check-trillionnium-route-runner-handoff-monitoring.sh`
+- `scripts/check-trillionnium-route-runner-handoff-monitoring.sh --summary-file run/monitoring-route-runner-handoff-summary.json`
+
+The check validates live-target metadata freshness, Prometheus alert metric/label coverage, Alertmanager route order, and the dashboard metric set. Production readiness and production signoff also call this script so the standalone contract cannot drift from launch gates.
+
 If you want to regenerate the combined bundles from the manifest, use:
 
 - `scripts/assemble-monitoring-bundles.sh`

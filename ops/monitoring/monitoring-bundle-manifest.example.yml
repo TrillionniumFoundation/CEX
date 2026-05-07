@@ -54,6 +54,7 @@ managementScripts:
 - scripts/deploy-monitoring-bundles.sh
 - scripts/reload-monitoring-targets.sh
 - scripts/verify-monitoring-targets.sh
+- scripts/check-trillionnium-route-runner-handoff-monitoring.sh
 - scripts/read-monitoring-deploy-status.sh
 - scripts/read-operator-signal-cron-catalog.sh
 - scripts/render-operator-signal-policy-bundle.sh

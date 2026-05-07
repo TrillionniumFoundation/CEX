@@ -470,6 +470,7 @@ curl -s -X POST -H 'x-admin-token: <admin-token>' -H 'content-type: application/
 2. 如果 health/metrics 已恢复，但 Prometheus 仍报警，先检查 live bundle 与 deploy metadata：
 
    ```bash
+   scripts/check-trillionnium-route-runner-handoff-monitoring.sh --summary-file run/route-runner-handoff-monitoring-check.json
    grep -R "CexTrillionniumRouteRunnerHandoff" -n run/monitoring-live-target/prometheus/rules.d/cex-monitoring-bundle.rules.yml
    sed -n '1,160p' run/monitoring-live-target/metadata/monitoring-deploy-metadata.yml
    ```
@@ -489,6 +490,7 @@ curl -s -X POST -H 'x-admin-token: <admin-token>' -H 'content-type: application/
    scripts/deploy-monitoring-bundles.sh --bundle all --mode copy --force --verify --verify-mode command \
      --verify-prometheus-command 'test -f run/monitoring-live-target/prometheus/rules.d/cex-monitoring-bundle.rules.yml && grep -q CexTrillionniumRouteRunnerHandoffAllGatesNotGreen run/monitoring-live-target/prometheus/rules.d/cex-monitoring-bundle.rules.yml' \
      --verify-alertmanager-command 'test -f run/monitoring-live-target/alertmanager/conf.d/cex-monitoring-bundle.yml'
+   scripts/check-trillionnium-route-runner-handoff-monitoring.sh --summary-file run/route-runner-handoff-monitoring-check.json
    ```
 
 5. 不要把这些 alerts 只当“监控噪声”静音。它们对应的是 first-session route-runner reward → next-route handoff 是否还能闭环，直接影响 playability、closed-beta、real-user beta、public-commercial 与 final signoff。
@@ -600,6 +602,7 @@ curl -s -H 'x-entry-token: <token>' http://127.0.0.1:8090/v1/admin/identity-appr
 curl -s -H 'x-entry-token: <token>' http://127.0.0.1:8090/v1/admin/identity-actors/status | jq
 ./scripts/check-operator-signals.sh
 ./scripts/run-operator-signal-check.sh
+./scripts/check-trillionnium-route-runner-handoff-monitoring.sh --summary-file run/route-runner-handoff-monitoring-check.json
 ```
 
 其中 `./scripts/check-operator-signals.sh` 会直接输出 machine-readable JSON，并返回：`0=ok`、`1=warn`、`2=critical`。当前它除 `gateway /v1/info`、`execution /v1/info` 外，也会把 `consumer-entry-api /health` 与 `matrix-entry-adapter /health` 的 supporting surface 一并纳入结果；若这两条入口侧 `/health` 不可达，会以 `warn` 形式反映在 alerts 里。

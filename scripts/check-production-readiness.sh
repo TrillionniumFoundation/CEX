@@ -389,132 +389,22 @@ section 'monitoring deploy verification evidence'
 if [[ "$CEX_MONITORING_DEPLOY_VERIFY_REQUIRED" == "0" ]]; then
   pass 'monitoring deploy verification evidence not required by environment'
 else
-  if [[ ! -f "$CEX_MONITORING_DEPLOY_METADATA_PATH" ]]; then
-    fail "monitoring deploy metadata is missing ($CEX_MONITORING_DEPLOY_METADATA_PATH)"
-  elif python3 - "$CEX_MONITORING_DEPLOY_METADATA_PATH" "$CEX_MONITORING_DEPLOY_MAX_AGE_SECONDS" <<'PY'
-from datetime import datetime, timezone
-from pathlib import Path
-import sys, yaml
-path = Path(sys.argv[1])
-max_age = int(sys.argv[2])
-data = yaml.safe_load(path.read_text()) or {}
-overall = (((data.get('postDeployActions') or {}).get('overall')) or {})
-if overall.get('successful') is not True or overall.get('requiresAttention') is True:
-    raise SystemExit('monitoring deploy post action is not successful')
-deployed = data.get('deployed') or {}
-missing = []
-deployed_paths = {}
-for section in ('prometheus', 'alertmanager'):
-    deployed_path = ((deployed.get(section) or {}).get('deployedPath'))
-    if deployed_path:
-        deployed_path = Path(deployed_path)
-        if not deployed_path.is_absolute():
-            deployed_path = path.parent / deployed_path
-    if not deployed_path or not deployed_path.exists():
-        missing.append(section)
-    else:
-        deployed_paths[section] = deployed_path
-if missing:
-    raise SystemExit('missing deployed monitoring artifacts: ' + ','.join(missing))
-
-prometheus_path = deployed_paths['prometheus']
-alertmanager_path = deployed_paths['alertmanager']
-prometheus_data = yaml.safe_load(prometheus_path.read_text()) or {}
-alertmanager_data = yaml.safe_load(alertmanager_path.read_text()) or {}
-
-expected_alerts = {
-    'CexTrillionniumRouteRunnerHandoffAllGatesNotGreen': 'cex_consumer_entry_trillionnium_route_runner_handoff_all_gates_green',
-    'CexTrillionniumRouteRunnerHandoffFeedSourceMissing': 'cex_consumer_entry_trillionnium_route_runner_handoff_feed_source_count',
-    'CexTrillionniumRouteRunnerHandoffRunnerCountZero': 'cex_consumer_entry_trillionnium_route_runner_handoff_runner_count',
-    'CexTrillionniumRouteRunnerHandoffActionsMissing': 'cex_consumer_entry_trillionnium_route_runner_handoff_reward_claim_action_count',
-}
-rules_by_alert = {}
-for group in prometheus_data.get('groups') or []:
-    for rule in group.get('rules') or []:
-        alert_name = rule.get('alert')
-        if alert_name:
-            rules_by_alert[alert_name] = rule
-missing_alerts = []
-bad_alerts = []
-for alert_name, metric_fragment in expected_alerts.items():
-    rule = rules_by_alert.get(alert_name)
-    if not rule:
-        missing_alerts.append(alert_name)
-        continue
-    labels = rule.get('labels') or {}
-    expr = str(rule.get('expr') or '')
-    if (
-        labels.get('service') != 'consumer-entry-api'
-        or labels.get('family') != 'product-edge'
-        or labels.get('component') != 'trillionnium-route-runner-handoff'
-        or labels.get('owner') != 'product-ops'
-        or metric_fragment not in expr
-    ):
-        bad_alerts.append(alert_name)
-if missing_alerts or bad_alerts:
-    details = []
-    if missing_alerts:
-        details.append('missing=' + ','.join(missing_alerts))
-    if bad_alerts:
-        details.append('bad=' + ','.join(bad_alerts))
-    raise SystemExit('route-runner handoff prometheus alert contract invalid: ' + ';'.join(details))
-actions_rule = rules_by_alert.get('CexTrillionniumRouteRunnerHandoffActionsMissing') or {}
-if 'cex_consumer_entry_trillionnium_route_runner_handoff_next_route_action_count' not in str(actions_rule.get('expr') or ''):
-    raise SystemExit('route-runner handoff actions alert missing next-route action metric')
-
-routes = ((alertmanager_data.get('route') or {}).get('routes')) or []
-def matcher_set(route):
-    return set(str(matcher) for matcher in (route.get('matchers') or []))
-
-handoff_matchers = {
-    'service="consumer-entry-api"',
-    'family="product-edge"',
-    'component="trillionnium-route-runner-handoff"',
-}
-handoff_route_index = None
-generic_product_edge_index = None
-generic_severity_index = None
-for idx, route in enumerate(routes):
-    matchers = matcher_set(route)
-    if handoff_matchers.issubset(matchers) and handoff_route_index is None:
-        handoff_route_index = idx
-    if matchers == {'family="product-edge"'} and generic_product_edge_index is None:
-        generic_product_edge_index = idx
-    if matchers in ({'severity="critical"'}, {'severity="warning"'}) and generic_severity_index is None:
-        generic_severity_index = idx
-if handoff_route_index is None:
-    raise SystemExit('route-runner handoff alertmanager component route missing')
-if generic_product_edge_index is None or handoff_route_index > generic_product_edge_index:
-    raise SystemExit('route-runner handoff alertmanager route must precede generic product-edge route')
-if generic_severity_index is not None and handoff_route_index > generic_severity_index:
-    raise SystemExit('route-runner handoff alertmanager route must precede generic severity fallback routes')
-
-deployed_at = data.get('deployedAt')
-if not deployed_at:
-    raise SystemExit('missing deployedAt')
-parsed = datetime.fromisoformat(str(deployed_at).replace('Z', '+00:00'))
-if parsed.tzinfo is None:
-    parsed = parsed.replace(tzinfo=timezone.utc)
-age = int((datetime.now(timezone.utc) - parsed.astimezone(timezone.utc)).total_seconds())
-if age < 0 or age > max_age:
-    raise SystemExit(f'monitoring deploy metadata is stale age={age}s max={max_age}s')
-PY
-  then
-    monitoring_age="$(python3 - "$CEX_MONITORING_DEPLOY_METADATA_PATH" <<'PY'
-from datetime import datetime, timezone
-from pathlib import Path
-import sys, yaml
-data = yaml.safe_load(Path(sys.argv[1]).read_text()) or {}
-parsed = datetime.fromisoformat(str(data.get('deployedAt')).replace('Z', '+00:00'))
-if parsed.tzinfo is None:
-    parsed = parsed.replace(tzinfo=timezone.utc)
-print(int((datetime.now(timezone.utc) - parsed.astimezone(timezone.utc)).total_seconds()))
-PY
-)"
-    pass "monitoring deploy verification evidence fresh (${monitoring_age}s old, $CEX_MONITORING_DEPLOY_METADATA_PATH)"
+  monitoring_contract_summary="$(mktemp)"
+  if bash "$SCRIPT_DIR/check-trillionnium-route-runner-handoff-monitoring.sh" \
+    --metadata "$CEX_MONITORING_DEPLOY_METADATA_PATH" \
+    --max-age-seconds "$CEX_MONITORING_DEPLOY_MAX_AGE_SECONDS" \
+    --summary-file "$monitoring_contract_summary" \
+    --quiet; then
+    monitoring_age="$(jq -r '.deployed_age_seconds // "unknown"' "$monitoring_contract_summary")"
+    handoff_route_index="$(jq -r '.handoff_route_index // "unknown"' "$monitoring_contract_summary")"
+    generic_product_edge_route_index="$(jq -r '.generic_product_edge_route_index // "unknown"' "$monitoring_contract_summary")"
+    generic_severity_route_index="$(jq -r '.generic_severity_route_index // "unknown"' "$monitoring_contract_summary")"
+    pass "monitoring deploy verification evidence fresh (${monitoring_age}s old, $CEX_MONITORING_DEPLOY_METADATA_PATH; route-runner handoff route order ${handoff_route_index}/${generic_product_edge_route_index}/${generic_severity_route_index})"
   else
-    fail "monitoring deploy verification metadata is not successful or fresh ($CEX_MONITORING_DEPLOY_METADATA_PATH)"
+    fail "monitoring deploy verification metadata or route-runner handoff monitoring contract is not successful/fresh ($CEX_MONITORING_DEPLOY_METADATA_PATH)"
+    jq -r '.failures[]? | "  - " + .' "$monitoring_contract_summary" >&2 || true
   fi
+  rm -f "$monitoring_contract_summary"
 fi
 
 section 'production readiness verdict'
