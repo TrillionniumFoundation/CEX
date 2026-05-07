@@ -252,18 +252,14 @@ def route_runner_handoff_ok(card):
     runner_count = int(handoff.get('runner_count') or 0)
     reward_claim_count = int(handoff.get('reward_claim_action_count') or 0)
     next_route_count = int(handoff.get('next_route_action_count') or 0)
-    referee_workflow_count = int(handoff.get('referee_workflow_count') or 0)
     return (
         handoff.get('contract_version') == 'trillionnium_route_runner_handoff_v1'
         and handoff.get('supports_route_runner_reward_claim_actions') is True
         and handoff.get('supports_route_runner_next_route_actions') is True
         and handoff.get('supports_checkpoint_reward_history') is True
-        and handoff.get('supports_referee_workflow') is True
-        and handoff.get('referee_workflow_contract_version') == 'trillionnium_referee_workflow_v1'
         and runner_count >= 1
         and reward_claim_count >= 1
         and next_route_count >= 1
-        and referee_workflow_count >= 1
         and int(card.get('avatar_route_runner_count') or 0) == runner_count
         and int(card.get('route_runner_reward_claim_action_count') or 0) == reward_claim_count
         and int(card.get('route_runner_next_route_action_count') or 0) == next_route_count
@@ -273,16 +269,12 @@ def route_runner_handoff_ok(card):
         and bool(handoff.get('first_next_route_status'))
         and bool(handoff.get('first_next_route_action_body'))
         and bool(handoff.get('first_next_route_sequence_summary'))
-        and bool(handoff.get('first_referee_workflow_status'))
-        and bool(handoff.get('first_referee_workflow_action_body'))
         and bool(handoff.get('handoff_prompt'))
-        and bool(handoff.get('referee_workflow_prompt'))
         and card.get('route_runner_first_task_id') == handoff.get('first_task_id')
         and card.get('route_runner_next_route_status') == handoff.get('first_next_route_status')
         and card.get('route_runner_next_route_action_body') == handoff.get('first_next_route_action_body')
         and card.get('route_runner_next_route_sequence_summary') == handoff.get('first_next_route_sequence_summary')
         and card.get('route_runner_reward_claim_status') == handoff.get('first_reward_claim_status')
-        and card.get('route_runner_referee_workflow_status') == handoff.get('first_referee_workflow_status')
     )
 
 
@@ -303,8 +295,6 @@ def route_runner_handoff_summary(prefix, card):
         f'{prefix}_route_runner_next_route_sequence_summary': card.get('route_runner_next_route_sequence_summary'),
         f'{prefix}_route_runner_handoff_summary': handoff.get('summary'),
         f'{prefix}_route_runner_handoff_prompt': handoff.get('handoff_prompt'),
-        f'{prefix}_route_runner_referee_workflow_status': card.get('route_runner_referee_workflow_status'),
-        f'{prefix}_route_runner_referee_workflow_count': card.get('route_runner_referee_workflow_count'),
     }
 
 marker = f'真房间闭环 E2E {int(time.time())}'

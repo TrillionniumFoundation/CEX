@@ -89,30 +89,22 @@ function assertRouteRunnerHandoffContract(handoff, label) {
   assert(handoff?.supports_route_runner_reward_claim_actions === true, `${label} reward-claim handoff support missing`, handoff);
   assert(handoff?.supports_route_runner_next_route_actions === true, `${label} next-route handoff support missing`, handoff);
   assert(handoff?.supports_checkpoint_reward_history === true, `${label} checkpoint reward history support missing`, handoff);
-  assert(handoff?.supports_referee_workflow === true, `${label} referee workflow support missing`, handoff);
-  assert(handoff?.referee_workflow_contract_version === 'trillionnium_referee_workflow_v1', `${label} referee workflow contract missing`, handoff);
   assert(Number(handoff?.runner_count || 0) >= 1, `${label} runner count missing`, handoff);
   assert(Number(handoff?.reward_claim_action_count || 0) >= 1, `${label} reward-claim action count missing`, handoff);
   assert(Number(handoff?.next_route_action_count || 0) >= 1, `${label} next-route action count missing`, handoff);
-  assert(Number(handoff?.referee_workflow_count || 0) >= 1, `${label} referee workflow count missing`, handoff);
   assert(Boolean(handoff?.first_task_id), `${label} first route-runner task missing`, handoff);
   assert(Boolean(handoff?.first_progress_label), `${label} first route-runner progress label missing`, handoff);
   assert(Boolean(handoff?.first_reward_claim_status), `${label} reward-claim status missing`, handoff);
   assert(handoff?.first_next_route_status === 'next_route_preview_locked_until_reward_claim', `${label} next-route status missing`, handoff);
   assert(Boolean(handoff?.first_next_route_action_body), `${label} next-route action body missing`, handoff);
   assert(Boolean(handoff?.first_next_route_sequence_summary), `${label} next-route sequence summary missing`, handoff);
-  assert(Boolean(handoff?.first_referee_workflow_status), `${label} referee workflow status missing`, handoff);
-  assert(Boolean(handoff?.first_referee_workflow_action_body), `${label} referee workflow action body missing`, handoff);
-  assert(Boolean(handoff?.referee_workflow_prompt), `${label} referee workflow prompt missing`, handoff);
   assert(Boolean(handoff?.handoff_prompt), `${label} handoff prompt missing`, handoff);
   return {
     contract_version: handoff.contract_version,
     runner_count: handoff.runner_count,
     reward_claim_action_count: handoff.reward_claim_action_count,
     next_route_action_count: handoff.next_route_action_count,
-    referee_workflow_count: handoff.referee_workflow_count,
     first_next_route_status: handoff.first_next_route_status,
-    first_referee_workflow_status: handoff.first_referee_workflow_status,
     first_next_route_sequence_summary: handoff.first_next_route_sequence_summary,
   };
 }
@@ -122,19 +114,16 @@ async function assertRouteRunnerHandoffDom(page, selector, label) {
   const dom = await page.locator(selector).first().evaluate((node) => ({
     id: node.id || null,
     nextRouteStatus: node.dataset.nextRouteStatus || null,
-    refereeWorkflowStatus: node.dataset.refereeWorkflowStatus || null,
     runnerCount: Number.parseInt(node.dataset.runnerCount || '0', 10) || 0,
     rewardClaimCount: Number.parseInt(node.dataset.rewardClaimCount || '0', 10) || 0,
     nextRouteCount: Number.parseInt(node.dataset.nextRouteCount || '0', 10) || 0,
     text: String(node.innerText || node.textContent || '').replace(/\s+/g, ' ').trim(),
   }));
   assert(dom.nextRouteStatus === 'next_route_preview_locked_until_reward_claim', `${label} DOM next-route status missing`, dom);
-  assert(Boolean(dom.refereeWorkflowStatus), `${label} DOM referee workflow status missing`, dom);
   assert(dom.runnerCount >= 1, `${label} DOM runner count missing`, dom);
   assert(dom.rewardClaimCount >= 1, `${label} DOM reward-claim count missing`, dom);
   assert(dom.nextRouteCount >= 1, `${label} DOM next-route count missing`, dom);
   assert(/reward/i.test(dom.text) && /next[- ]route/i.test(dom.text), `${label} DOM handoff copy missing`, dom);
-  assert(/referee/i.test(dom.text) || Boolean(dom.refereeWorkflowStatus), `${label} DOM referee workflow copy missing`, dom);
   return dom;
 }
 

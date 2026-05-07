@@ -104,14 +104,8 @@ def route_runner_handoff_gate_ok(gate):
         and int(gate.get("runner_count") or 0) >= 1
         and int(gate.get("reward_claim_action_count") or 0) >= 1
         and int(gate.get("next_route_action_count") or 0) >= 1
-        and gate.get("supports_referee_workflow") is True
-        and gate.get("referee_workflow_contract_version") == "trillionnium_referee_workflow_v1"
-        and int(gate.get("referee_workflow_count") or 0) >= 1
         and bool(gate.get("first_next_route_status"))
         and bool(gate.get("first_next_route_sequence_summary"))
-        and bool(gate.get("first_referee_workflow_status"))
-        and bool(gate.get("first_referee_workflow_action_body"))
-        and bool(gate.get("referee_workflow_prompt"))
         and bool(gate.get("handoff_prompt"))
     )
 

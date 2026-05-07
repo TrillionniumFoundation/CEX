@@ -5132,13 +5132,8 @@ struct RouteRunnerHandoffCardContext {
     first_next_route_status: String,
     first_next_route_action_body: String,
     first_next_route_sequence_summary: String,
-    first_referee_workflow_status: String,
-    first_referee_workflow_summary: String,
-    first_referee_workflow_action_body: String,
-    referee_workflow_count: u64,
     summary: String,
     handoff_prompt: String,
-    referee_workflow_prompt: String,
 }
 
 impl RouteRunnerHandoffCardContext {
@@ -5255,7 +5250,6 @@ impl RouteRunnerHandoffCardContext {
                 reward_claim_ready_fallback,
             ),
             next_route_ready_count: handoff_u64("next_route_ready_count", next_route_ready_fallback),
-            referee_workflow_count: handoff_u64("referee_workflow_count", runner_count),
             first_runner_id: handoff_or_runner_str("first_runner_id", "runner_id", "none"),
             first_task_id: handoff_or_runner_str("first_task_id", "task_id", "none"),
             first_to_node_id: handoff_or_runner_str("first_to_node_id", "to_node_id", "target-node"),
@@ -5301,33 +5295,12 @@ impl RouteRunnerHandoffCardContext {
                 "next_route_sequence_summary",
                 "After reward claim, open the next Trillionnium World Map route with the same deliverable → evidence → risk controls → next action → self-review anchors.",
             ),
-            first_referee_workflow_status: handoff_or_runner_str(
-                "first_referee_workflow_status",
-                "referee_workflow_status",
-                "collecting_evidence_checkpoint",
-            ),
-            first_referee_workflow_summary: handoff_or_runner_str(
-                "first_referee_workflow_summary",
-                "referee_workflow_summary",
-                "Referee workflow queued: collect deliverable and evidence before risk check, rating, reward, and next-route release.",
-            ),
-            first_referee_workflow_action_body: handoff_or_runner_str(
-                "first_referee_workflow_action_body",
-                "referee_workflow_action_body",
-                "Prepare referee workflow with deliverable, evidence package, risk controls, next action, and self-review before reward and next route release.",
-            ),
             summary,
             handoff_prompt: handoff
                 .and_then(|handoff| handoff.get("handoff_prompt"))
                 .and_then(Value::as_str)
                 .filter(|value| !value.trim().is_empty())
                 .unwrap_or("Claim rating/reward, then open the next route with deliverable → evidence → risk controls → next action → self-review anchors.")
-                .to_string(),
-            referee_workflow_prompt: handoff
-                .and_then(|handoff| handoff.get("referee_workflow_prompt"))
-                .and_then(Value::as_str)
-                .filter(|value| !value.trim().is_empty())
-                .unwrap_or("Run reward and next-route through referee: evidence intake → risk check → rating/reward settlement → next-route release.")
                 .to_string(),
         }
     }
@@ -5344,9 +5317,6 @@ impl RouteRunnerHandoffCardContext {
             "supports_checkpoint_reward_history": true,
             "supports_route_runner_reward_claim_actions": true,
             "supports_route_runner_next_route_actions": true,
-            "supports_referee_workflow": true,
-            "referee_workflow_contract_version": "trillionnium_referee_workflow_v1",
-            "referee_workflow_count": self.referee_workflow_count,
             "first_runner_id": &self.first_runner_id,
             "first_task_id": &self.first_task_id,
             "first_to_node_id": &self.first_to_node_id,
@@ -5360,18 +5330,14 @@ impl RouteRunnerHandoffCardContext {
             "first_next_route_status": &self.first_next_route_status,
             "first_next_route_action_body": &self.first_next_route_action_body,
             "first_next_route_sequence_summary": &self.first_next_route_sequence_summary,
-            "first_referee_workflow_status": &self.first_referee_workflow_status,
-            "first_referee_workflow_summary": &self.first_referee_workflow_summary,
-            "first_referee_workflow_action_body": &self.first_referee_workflow_action_body,
             "summary": &self.summary,
             "handoff_prompt": &self.handoff_prompt,
-            "referee_workflow_prompt": &self.referee_workflow_prompt,
         })
     }
 
     fn text_block(&self) -> String {
         format!(
-            "Runner Handoff: {}\nRunner: {} · {} · {}\nReward: {} [{}]\nNext Route: {} [{}]\nReferee: {}\nNext Body: {}",
+            "Runner Handoff: {}\nRunner: {} · {} · {}\nReward: {} [{}]\nNext Route: {} [{}]\nNext Body: {}",
             self.summary,
             self.first_task_id,
             self.first_progress_label,
@@ -5380,14 +5346,13 @@ impl RouteRunnerHandoffCardContext {
             self.first_reward_claim_status,
             self.first_next_route_label,
             self.first_next_route_status,
-            self.first_referee_workflow_status,
             self.first_next_route_action_body,
         )
     }
 
     fn html_block(&self) -> String {
         format!(
-            "<p><strong>Runner Handoff</strong>: {}</p><p><strong>Runner</strong>: <code>{}</code> · {} · {}</p><p><strong>Reward</strong>: {} · <code>{}</code></p><p><strong>Next Route</strong>: {} · <code>{}</code></p><p><strong>Referee</strong>: <code>{}</code></p><p><strong>Next Body</strong>: {}</p>",
+            "<p><strong>Runner Handoff</strong>: {}</p><p><strong>Runner</strong>: <code>{}</code> · {} · {}</p><p><strong>Reward</strong>: {} · <code>{}</code></p><p><strong>Next Route</strong>: {} · <code>{}</code></p><p><strong>Next Body</strong>: {}</p>",
             escape_html(&self.summary),
             escape_html(&self.first_task_id),
             escape_html(&self.first_progress_label),
@@ -5396,7 +5361,6 @@ impl RouteRunnerHandoffCardContext {
             escape_html(&self.first_reward_claim_status),
             escape_html(&self.first_next_route_label),
             escape_html(&self.first_next_route_status),
-            escape_html(&self.first_referee_workflow_status),
             escape_html(&self.first_next_route_action_body),
         )
     }
@@ -5447,18 +5411,6 @@ impl RouteRunnerHandoffCardContext {
             card_object.insert(
                 "route_runner_next_route_sequence_summary".to_string(),
                 json!(&self.first_next_route_sequence_summary),
-            );
-            card_object.insert(
-                "route_runner_referee_workflow_status".to_string(),
-                json!(&self.first_referee_workflow_status),
-            );
-            card_object.insert(
-                "route_runner_referee_workflow_action_body".to_string(),
-                json!(&self.first_referee_workflow_action_body),
-            );
-            card_object.insert(
-                "route_runner_referee_workflow_count".to_string(),
-                json!(self.referee_workflow_count),
             );
         }
         card
@@ -9238,13 +9190,6 @@ mod tests {
                     "first_next_route_status": "next_route_ready_after_reward_claim",
                     "first_next_route_action_body": "Open next route after task task-route-focus-story: choose the next Trillionnium World Map node and carry deliverable, evidence package, risk controls, next action, and self-review into the follow-up bounty.",
                     "first_next_route_sequence_summary": "After reward claim, open the next Trillionnium World Map route with the same deliverable → evidence → risk controls → next action → self-review anchors.",
-                    "supports_referee_workflow": true,
-                    "referee_workflow_contract_version": "trillionnium_referee_workflow_v1",
-                    "referee_workflow_count": 2,
-                    "first_referee_workflow_status": "ready_for_referee_review",
-                    "first_referee_workflow_summary": "Referee workflow ready: evidence intake → risk check → rating/reward settlement → next-route release.",
-                    "first_referee_workflow_action_body": "Run referee workflow for task task-route-focus-story: review deliverable fit, evidence grounding, risk controls, actionability, self-review, then settle rating/reward and release the next route.",
-                    "referee_workflow_prompt": "Run reward and next-route through referee: evidence intake → risk check → rating/reward settlement → next-route release.",
                     "summary": "Route runner handoff: 2 runners · 2 reward claims · 2 next-route actions · next Claim rating/reward / Open next route",
                     "handoff_prompt": "Claim rating/reward, then open the next route with deliverable → evidence → risk controls → next action → self-review anchors."
                 }
@@ -9391,21 +9336,6 @@ mod tests {
                 .and_then(Value::as_str),
             Some("next_route_ready_after_reward_claim")
         );
-        assert_eq!(
-            card.get("route_runner_referee_workflow_status")
-                .and_then(Value::as_str),
-            Some("ready_for_referee_review")
-        );
-        assert_eq!(
-            card.get("route_runner_referee_workflow_count")
-                .and_then(Value::as_u64),
-            Some(2)
-        );
-        assert!(card
-            .get("route_runner_referee_workflow_action_body")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .contains("Run referee workflow for task task-route-focus-story"));
         assert!(card
             .get("route_runner_next_route_action_body")
             .and_then(Value::as_str)
@@ -9419,13 +9349,6 @@ mod tests {
                 .and_then(Value::as_str),
             Some("task-route-focus-story")
         );
-        assert_eq!(
-            card.get("route_runner_handoff")
-                .and_then(|handoff| handoff.get("referee_workflow_contract_version"))
-                .and_then(Value::as_str),
-            Some("trillionnium_referee_workflow_v1")
-        );
-        assert!(body.contains("Referee: ready_for_referee_review"));
         assert_eq!(
             card.get("map_renderer_supports_future_engine_swap")
                 .and_then(Value::as_bool),

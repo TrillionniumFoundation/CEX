@@ -119,12 +119,10 @@ function checkRouteRunnerHandoff(result) {
   assertMetric(handoff.contractVersionPresent === true, `${result.profile}/${result.name} route-runner handoff contract missing`, handoff);
   assertMetric(handoff.sourcePresent === true, `${result.profile}/${result.name} route-runner handoff feed source missing`, handoff);
   assertMetric(handoff.nextRouteStatus === 'next_route_preview_locked_until_reward_claim', `${result.profile}/${result.name} route-runner next-route status missing`, handoff);
-  assertMetric(Boolean(handoff.refereeWorkflowStatus), `${result.profile}/${result.name} route-runner referee workflow status missing`, handoff);
-  assertMetric(handoff.refereeWorkflowContractPresent === true, `${result.profile}/${result.name} route-runner referee workflow contract missing`, handoff);
   assertMetric(Number(handoff.runnerCount || 0) >= 1, `${result.profile}/${result.name} route-runner count missing`, handoff);
   assertMetric(Number(handoff.rewardClaimCount || 0) >= 1, `${result.profile}/${result.name} route-runner reward-claim count missing`, handoff);
   assertMetric(Number(handoff.nextRouteCount || 0) >= 1, `${result.profile}/${result.name} route-runner next-route count missing`, handoff);
-  assertMetric(handoff.hasRewardCopy === true && handoff.hasNextRouteCopy === true && handoff.hasRefereeCopy === true, `${result.profile}/${result.name} route-runner handoff copy missing`, handoff);
+  assertMetric(handoff.hasRewardCopy === true && handoff.hasNextRouteCopy === true, `${result.profile}/${result.name} route-runner handoff copy missing`, handoff);
 }
 
 function checkMobile(result, limits) {
@@ -296,14 +294,11 @@ async function auditPage(page, profile, target) {
       contractVersionPresent: html.includes('trillionnium_route_runner_handoff_v1'),
       sourcePresent: html.includes('route_runner_handoff'),
       nextRouteStatus: handoffElements.map((el) => el.dataset.nextRouteStatus).find(Boolean) || null,
-      refereeWorkflowStatus: handoffElements.map((el) => el.dataset.refereeWorkflowStatus).find(Boolean) || null,
-      refereeWorkflowContractPresent: html.includes('trillionnium_referee_workflow_v1'),
       runnerCount: pickMaxCount(handoffElements, 'runnerCount'),
       rewardClaimCount: pickMaxCount(handoffElements, 'rewardClaimCount'),
       nextRouteCount: pickMaxCount(handoffElements, 'nextRouteCount'),
       hasRewardCopy: /reward/i.test(handoffText),
       hasNextRouteCopy: /next[- ]route/i.test(handoffText),
-      hasRefereeCopy: /referee/i.test(handoffText) || html.includes('data-referee-workflow-status'),
       text: handoffText.slice(0, 320),
     };
     return {
