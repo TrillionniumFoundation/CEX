@@ -183,6 +183,34 @@ else
         fail "production runtime requires Trillionnium playability axis $playability_axis at 10/10"
       fi
     done
+    if ! jq -e '
+      .trillionnium_world_playability_scorecard.route_runner_handoff_gate.contract_version == "trillionnium_playability_route_runner_handoff_gate_v1"
+      and .trillionnium_world_playability_scorecard.route_runner_handoff_gate.feed_contract_visible == true
+      and .trillionnium_world_playability_scorecard.route_runner_handoff_gate.map_hub_contract_visible == true
+      and .trillionnium_world_playability_scorecard.route_runner_handoff_gate.source_count >= 7
+      and .trillionnium_world_playability_scorecard.route_runner_handoff_gate.sources_include_route_runner_handoff == true
+      and .trillionnium_world_playability_scorecard.route_runner_handoff_gate.feed_handoff_contract_version == "trillionnium_route_runner_handoff_v1"
+      and .trillionnium_world_playability_scorecard.route_runner_handoff_gate.map_hub_handoff_contract_version == "trillionnium_route_runner_handoff_v1"
+      and .trillionnium_world_playability_scorecard.route_runner_handoff_gate.runner_count >= 1
+      and .trillionnium_world_playability_scorecard.route_runner_handoff_gate.reward_claim_action_count >= 1
+      and .trillionnium_world_playability_scorecard.route_runner_handoff_gate.next_route_action_count >= 1
+      and (.trillionnium_world_playability_scorecard.route_runner_handoff_gate.first_next_route_status // "") != ""
+      and (.trillionnium_world_playability_scorecard.route_runner_handoff_gate.first_next_route_sequence_summary // "") != ""
+      and (.trillionnium_world_playability_scorecard.route_runner_handoff_gate.handoff_prompt // "") != ""
+    ' "$consumer_health_file" >/dev/null; then
+      fail 'production runtime requires route-runner handoff gate in Trillionnium playability scorecard'
+    fi
+    if ! jq -e '
+      .trillionnium_world_closed_beta_prototype.route_runner_handoff_gate.contract_version == "trillionnium_playability_route_runner_handoff_gate_v1"
+      and .trillionnium_world_closed_beta_prototype.route_runner_handoff_gate.feed_contract_visible == true
+      and .trillionnium_world_closed_beta_prototype.route_runner_handoff_gate.map_hub_contract_visible == true
+      and .trillionnium_world_closed_beta_prototype.route_runner_handoff_gate.source_count >= 7
+      and .trillionnium_world_closed_beta_prototype.route_runner_handoff_gate.runner_count >= 1
+      and .trillionnium_world_closed_beta_prototype.route_runner_handoff_gate.reward_claim_action_count >= 1
+      and .trillionnium_world_closed_beta_prototype.route_runner_handoff_gate.next_route_action_count >= 1
+    ' "$consumer_health_file" >/dev/null; then
+      fail 'production runtime requires route-runner handoff gate in Trillionnium closed beta prototype'
+    fi
   fi
 
   if [[ "$matrix_health_ok" -ne 0 ]]; then

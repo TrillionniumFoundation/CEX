@@ -1414,6 +1414,9 @@ fn trillionnium_world_closed_beta_prototype_json(
         .and_then(Value::as_array)
         .map(Vec::len)
         .unwrap_or(0);
+    let route_runner_handoff_gate = app_route_runner_handoff_gate_json(&app);
+    let route_runner_handoff_gate_ready =
+        is_route_runner_handoff_gate_green(&route_runner_handoff_gate);
     let progression_level = app
         .get("progression")
         .and_then(|progression| progression.get("level"))
@@ -1542,8 +1545,18 @@ fn trillionnium_world_closed_beta_prototype_json(
                 onboarding_step_count >= 5,
             ),
             ("route_preview_dense", route_preview_count >= 20),
-            ("route_task_graph_dense", route_task_graph_count >= 10),
-            ("feed_surface_active", feed_item_count >= 5),
+            (
+                "route_task_graph_dense",
+                route_task_graph_count >= 10 && route_runner_handoff_gate_ready,
+            ),
+            (
+                "feed_surface_active",
+                feed_item_count >= 5 && route_runner_handoff_gate_ready,
+            ),
+            (
+                "route_runner_handoff_gate_visible",
+                route_runner_handoff_gate_ready,
+            ),
             ("progression_level_100", progression_level >= 100),
             ("social_contacts_ready", social_contact_count >= 3),
         ],
@@ -1633,6 +1646,10 @@ fn trillionnium_world_closed_beta_prototype_json(
                 "relationship_graph_ready",
                 !world.world_relationships.is_empty(),
             ),
+            (
+                "route_runner_handoff_world_loop_ready",
+                route_runner_handoff_gate_ready,
+            ),
         ],
     );
 
@@ -1701,6 +1718,7 @@ fn trillionnium_world_closed_beta_prototype_json(
         "overall_status": if overall_percent == 100 { "converged" } else { "in_progress" },
         "matrix_user_id": matrix_user_id,
         "axis_order": axis_order,
+        "route_runner_handoff_gate": route_runner_handoff_gate,
         "requires_live_gates": [
             "scripts/check-trillionnium-world-closed-beta-prototype.sh",
             "scripts/check-trillionnium-league-web-e2e.sh",

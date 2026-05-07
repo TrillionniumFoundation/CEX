@@ -38,9 +38,27 @@ def require(name, condition, detail=None):
 
 closed_beta = consumer.get("trillionnium_world_closed_beta_prototype") or {}
 closed_beta_axes = closed_beta.get("axes") or {}
+closed_beta_route_runner_handoff_gate = closed_beta.get("route_runner_handoff_gate") or {}
 maturity = consumer.get("trillionnium_world_maturity") or {}
 repo = consumer.get("league_repository_runtime") or {}
 profile_checks = (consumer.get("profile_validation") or {}).get("checks") or {}
+
+def route_runner_handoff_gate_ok(gate):
+    return (
+        gate.get("contract_version") == "trillionnium_playability_route_runner_handoff_gate_v1"
+        and gate.get("feed_contract_visible") is True
+        and gate.get("map_hub_contract_visible") is True
+        and int(gate.get("source_count") or 0) >= 7
+        and gate.get("sources_include_route_runner_handoff") is True
+        and gate.get("feed_handoff_contract_version") == "trillionnium_route_runner_handoff_v1"
+        and gate.get("map_hub_handoff_contract_version") == "trillionnium_route_runner_handoff_v1"
+        and int(gate.get("runner_count") or 0) >= 1
+        and int(gate.get("reward_claim_action_count") or 0) >= 1
+        and int(gate.get("next_route_action_count") or 0) >= 1
+        and bool(gate.get("first_next_route_status"))
+        and bool(gate.get("first_next_route_sequence_summary"))
+        and bool(gate.get("handoff_prompt"))
+    )
 
 require("consumer_health_ok", consumer.get("status") == "ok", consumer.get("status"))
 require(
@@ -51,6 +69,7 @@ require(
 require("closed_beta_target", closed_beta.get("target") == "closed_beta_prototype_100_percent", closed_beta.get("target"))
 require("closed_beta_overall_100", closed_beta.get("overall_percent") == 100, closed_beta.get("overall_percent"))
 require("closed_beta_converged", closed_beta.get("overall_status") == "converged", closed_beta.get("overall_status"))
+require("closed_beta_route_runner_handoff_gate", route_runner_handoff_gate_ok(closed_beta_route_runner_handoff_gate), closed_beta_route_runner_handoff_gate)
 for axis_id in ["product_loop", "access_governance", "persistence_runtime", "world_depth", "commerce_recovery"]:
     axis = closed_beta_axes.get(axis_id) or {}
     require(f"closed_beta_axis_{axis_id}_100", axis.get("percent") == 100, axis)
@@ -88,6 +107,7 @@ summary = {
     "consumer_entry_base_url": consumer.get("service"),
     "closed_beta_overall_percent": closed_beta.get("overall_percent"),
     "closed_beta_axes": {axis_id: (closed_beta_axes.get(axis_id) or {}).get("percent") for axis_id in ["product_loop", "access_governance", "persistence_runtime", "world_depth", "commerce_recovery"]},
+    "route_runner_handoff_gate": closed_beta_route_runner_handoff_gate,
     "world_maturity_overall_percent": maturity.get("overall_percent"),
     "repository_effective": repo.get("effective_repository"),
     "repository_cutover_status": repo.get("repository_cutover_status"),

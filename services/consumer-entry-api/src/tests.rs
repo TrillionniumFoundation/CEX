@@ -10488,6 +10488,25 @@ async fn health_endpoint_exposes_identity_governance_overview() {
             .any(|check| check["check_id"] == "identity_governance_valid")
     );
     assert_eq!(
+        body["trillionnium_world_closed_beta_prototype"]["route_runner_handoff_gate"]
+            ["contract_version"],
+        "trillionnium_playability_route_runner_handoff_gate_v1"
+    );
+    assert!(
+        body["trillionnium_world_closed_beta_prototype"]["axes"]["product_loop"]["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|check| check["check_id"] == "route_runner_handoff_gate_visible")
+    );
+    assert!(
+        body["trillionnium_world_closed_beta_prototype"]["axes"]["world_depth"]["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|check| check["check_id"] == "route_runner_handoff_world_loop_ready")
+    );
+    assert_eq!(
         body["trillionnium_world_real_user_beta"]["contract_version"],
         "trillionnium_world_real_user_beta_v1"
     );
