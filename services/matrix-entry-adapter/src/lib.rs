@@ -5112,6 +5112,311 @@ fn route_focus_panel_default_node_id(route_next_panel_id: &str) -> &'static str 
     }
 }
 
+struct RouteRunnerHandoffCardContext {
+    avatar_task_route_count: u64,
+    runner_count: u64,
+    reward_claim_action_count: u64,
+    next_route_action_count: u64,
+    reward_claim_ready_count: u64,
+    next_route_ready_count: u64,
+    first_runner_id: String,
+    first_task_id: String,
+    first_to_node_id: String,
+    first_latest_location_id: String,
+    first_progress_label: String,
+    first_telemetry_summary: String,
+    first_reward_claim_label: String,
+    first_reward_claim_status: String,
+    first_reward_claim_action_body: String,
+    first_next_route_label: String,
+    first_next_route_status: String,
+    first_next_route_action_body: String,
+    first_next_route_sequence_summary: String,
+    summary: String,
+    handoff_prompt: String,
+}
+
+impl RouteRunnerHandoffCardContext {
+    fn from_map_hub(map_hub: Option<&Value>) -> Self {
+        let handoff = map_hub.and_then(|hub| hub.get("route_runner_handoff"));
+        let viewport = map_hub.and_then(|hub| hub.get("viewport"));
+        let runner_items: &[Value] = viewport
+            .and_then(|viewport| viewport.get("avatar_route_runners"))
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        let first_runner = runner_items.first();
+        let handoff_u64 = |field: &str, fallback: u64| {
+            handoff
+                .and_then(|handoff| handoff.get(field))
+                .and_then(Value::as_u64)
+                .unwrap_or(fallback)
+        };
+        let map_hub_u64 = |field: &str, fallback: u64| {
+            map_hub
+                .and_then(|hub| hub.get(field))
+                .and_then(Value::as_u64)
+                .unwrap_or(fallback)
+        };
+        let handoff_or_runner_str = |handoff_field: &str, runner_field: &str, fallback: &str| {
+            handoff
+                .and_then(|handoff| handoff.get(handoff_field))
+                .and_then(Value::as_str)
+                .or_else(|| {
+                    first_runner
+                        .and_then(|runner| runner.get(runner_field))
+                        .and_then(Value::as_str)
+                })
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or(fallback)
+                .to_string()
+        };
+        let runner_count = handoff_u64(
+            "runner_count",
+            map_hub_u64("avatar_route_runner_count", runner_items.len() as u64),
+        );
+        let avatar_task_route_count = handoff_u64(
+            "avatar_task_route_count",
+            map_hub_u64("avatar_task_route_count", 0),
+        );
+        let reward_claim_action_fallback = runner_items
+            .iter()
+            .filter(|runner| {
+                runner
+                    .get("reward_checkpoint")
+                    .and_then(|checkpoint| checkpoint.get("reward_claim_action"))
+                    .is_some()
+                    || runner.get("reward_claim_action_body").is_some()
+            })
+            .count() as u64;
+        let next_route_action_fallback = runner_items
+            .iter()
+            .filter(|runner| {
+                runner
+                    .get("reward_checkpoint")
+                    .and_then(|checkpoint| checkpoint.get("next_route_action"))
+                    .is_some()
+                    || runner.get("next_route_action_body").is_some()
+            })
+            .count() as u64;
+        let reward_claim_ready_fallback = runner_items
+            .iter()
+            .filter(|runner| {
+                runner.get("reward_claim_status").and_then(Value::as_str)
+                    == Some("claimable_after_evidence")
+            })
+            .count() as u64;
+        let next_route_ready_fallback = runner_items
+            .iter()
+            .filter(|runner| {
+                runner.get("next_route_status").and_then(Value::as_str)
+                    == Some("next_route_ready_after_reward_claim")
+            })
+            .count() as u64;
+        let first_reward_claim_label = handoff_or_runner_str(
+            "first_reward_claim_label",
+            "reward_claim_label",
+            "Prepare reward claim / 准备领奖",
+        );
+        let first_next_route_label = handoff_or_runner_str(
+            "first_next_route_label",
+            "next_route_label",
+            "Preview next route / 预览下一路线",
+        );
+        let summary = handoff
+            .and_then(|handoff| handoff.get("summary"))
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .map(ToString::to_string)
+            .unwrap_or_else(|| {
+                if runner_count > 0 {
+                    format!(
+                        "Route runner handoff: {runner_count} runners · {reward_claim_action_fallback} reward claims · {next_route_action_fallback} next-route actions · next {first_reward_claim_label} / {first_next_route_label}"
+                    )
+                } else {
+                    "Route runner handoff: waiting for avatar task routes to unlock reward and next-route actions.".to_string()
+                }
+            });
+        Self {
+            avatar_task_route_count,
+            runner_count,
+            reward_claim_action_count: handoff_u64(
+                "reward_claim_action_count",
+                reward_claim_action_fallback,
+            ),
+            next_route_action_count: handoff_u64("next_route_action_count", next_route_action_fallback),
+            reward_claim_ready_count: handoff_u64(
+                "reward_claim_ready_count",
+                reward_claim_ready_fallback,
+            ),
+            next_route_ready_count: handoff_u64("next_route_ready_count", next_route_ready_fallback),
+            first_runner_id: handoff_or_runner_str("first_runner_id", "runner_id", "none"),
+            first_task_id: handoff_or_runner_str("first_task_id", "task_id", "none"),
+            first_to_node_id: handoff_or_runner_str("first_to_node_id", "to_node_id", "target-node"),
+            first_latest_location_id: handoff_or_runner_str(
+                "first_latest_location_id",
+                "latest_location_id",
+                "",
+            ),
+            first_progress_label: handoff_or_runner_str(
+                "first_progress_label",
+                "progress_label",
+                "0% route progress / 0% 路线进度",
+            ),
+            first_telemetry_summary: handoff_or_runner_str(
+                "first_telemetry_summary",
+                "telemetry_summary",
+                "route runner telemetry pending",
+            ),
+            first_reward_claim_label,
+            first_reward_claim_status: handoff_or_runner_str(
+                "first_reward_claim_status",
+                "reward_claim_status",
+                "locked_until_evidence_checkpoint",
+            ),
+            first_reward_claim_action_body: handoff_or_runner_str(
+                "first_reward_claim_action_body",
+                "reward_claim_action_body",
+                "Prepare deliverable, evidence package, risk controls, next action, and self-review before claiming rating/reward.",
+            ),
+            first_next_route_label,
+            first_next_route_status: handoff_or_runner_str(
+                "first_next_route_status",
+                "next_route_status",
+                "next_route_preview_locked_until_reward_claim",
+            ),
+            first_next_route_action_body: handoff_or_runner_str(
+                "first_next_route_action_body",
+                "next_route_action_body",
+                "Preview the next route with deliverable, evidence package, risk controls, next action, and self-review anchors.",
+            ),
+            first_next_route_sequence_summary: handoff_or_runner_str(
+                "first_next_route_sequence_summary",
+                "next_route_sequence_summary",
+                "After reward claim, open the next Trillionnium World Map route with the same deliverable → evidence → risk controls → next action → self-review anchors.",
+            ),
+            summary,
+            handoff_prompt: handoff
+                .and_then(|handoff| handoff.get("handoff_prompt"))
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or("Claim rating/reward, then open the next route with deliverable → evidence → risk controls → next action → self-review anchors.")
+                .to_string(),
+        }
+    }
+
+    fn to_value(&self) -> Value {
+        json!({
+            "contract_version": "trillionnium_route_runner_handoff_v1",
+            "runner_count": self.runner_count,
+            "avatar_task_route_count": self.avatar_task_route_count,
+            "reward_claim_action_count": self.reward_claim_action_count,
+            "next_route_action_count": self.next_route_action_count,
+            "reward_claim_ready_count": self.reward_claim_ready_count,
+            "next_route_ready_count": self.next_route_ready_count,
+            "supports_checkpoint_reward_history": true,
+            "supports_route_runner_reward_claim_actions": true,
+            "supports_route_runner_next_route_actions": true,
+            "first_runner_id": &self.first_runner_id,
+            "first_task_id": &self.first_task_id,
+            "first_to_node_id": &self.first_to_node_id,
+            "first_latest_location_id": &self.first_latest_location_id,
+            "first_progress_label": &self.first_progress_label,
+            "first_telemetry_summary": &self.first_telemetry_summary,
+            "first_reward_claim_label": &self.first_reward_claim_label,
+            "first_reward_claim_status": &self.first_reward_claim_status,
+            "first_reward_claim_action_body": &self.first_reward_claim_action_body,
+            "first_next_route_label": &self.first_next_route_label,
+            "first_next_route_status": &self.first_next_route_status,
+            "first_next_route_action_body": &self.first_next_route_action_body,
+            "first_next_route_sequence_summary": &self.first_next_route_sequence_summary,
+            "summary": &self.summary,
+            "handoff_prompt": &self.handoff_prompt,
+        })
+    }
+
+    fn text_block(&self) -> String {
+        format!(
+            "Runner Handoff: {}\nRunner: {} · {} · {}\nReward: {} [{}]\nNext Route: {} [{}]\nNext Body: {}",
+            self.summary,
+            self.first_task_id,
+            self.first_progress_label,
+            self.first_telemetry_summary,
+            self.first_reward_claim_label,
+            self.first_reward_claim_status,
+            self.first_next_route_label,
+            self.first_next_route_status,
+            self.first_next_route_action_body,
+        )
+    }
+
+    fn html_block(&self) -> String {
+        format!(
+            "<p><strong>Runner Handoff</strong>: {}</p><p><strong>Runner</strong>: <code>{}</code> · {} · {}</p><p><strong>Reward</strong>: {} · <code>{}</code></p><p><strong>Next Route</strong>: {} · <code>{}</code></p><p><strong>Next Body</strong>: {}</p>",
+            escape_html(&self.summary),
+            escape_html(&self.first_task_id),
+            escape_html(&self.first_progress_label),
+            escape_html(&self.first_telemetry_summary),
+            escape_html(&self.first_reward_claim_label),
+            escape_html(&self.first_reward_claim_status),
+            escape_html(&self.first_next_route_label),
+            escape_html(&self.first_next_route_status),
+            escape_html(&self.first_next_route_action_body),
+        )
+    }
+
+    fn card_json(&self, mut card: Value) -> Value {
+        if let Some(card_object) = card.as_object_mut() {
+            card_object.insert("route_runner_handoff".to_string(), self.to_value());
+            card_object.insert(
+                "avatar_task_route_count".to_string(),
+                json!(self.avatar_task_route_count),
+            );
+            card_object.insert(
+                "avatar_route_runner_count".to_string(),
+                json!(self.runner_count),
+            );
+            card_object.insert(
+                "route_runner_reward_claim_action_count".to_string(),
+                json!(self.reward_claim_action_count),
+            );
+            card_object.insert(
+                "route_runner_next_route_action_count".to_string(),
+                json!(self.next_route_action_count),
+            );
+            card_object.insert(
+                "route_runner_next_route_ready_count".to_string(),
+                json!(self.next_route_ready_count),
+            );
+            card_object.insert(
+                "route_runner_first_task_id".to_string(),
+                json!(&self.first_task_id),
+            );
+            card_object.insert(
+                "route_runner_first_progress_label".to_string(),
+                json!(&self.first_progress_label),
+            );
+            card_object.insert(
+                "route_runner_reward_claim_status".to_string(),
+                json!(&self.first_reward_claim_status),
+            );
+            card_object.insert(
+                "route_runner_next_route_status".to_string(),
+                json!(&self.first_next_route_status),
+            );
+            card_object.insert(
+                "route_runner_next_route_action_body".to_string(),
+                json!(&self.first_next_route_action_body),
+            );
+            card_object.insert(
+                "route_runner_next_route_sequence_summary".to_string(),
+                json!(&self.first_next_route_sequence_summary),
+            );
+        }
+        card
+    }
+}
+
 struct RouteStoryCardContext {
     route_preview_item_count: u64,
     route_task_linked_count: u64,
@@ -6094,6 +6399,9 @@ fn build_trillionnium_client_app_matrix_reply(value: &Value) -> Value {
         .unwrap_or("dense");
     let map_hub = value.get("map_hub").cloned().unwrap_or(Value::Null);
     let route = RouteStoryCardContext::from_value(&map_hub, map_node).specialize_opportunity("app");
+    let route_runner = RouteRunnerHandoffCardContext::from_map_hub(Some(&map_hub));
+    let route_runner_text_block = route_runner.text_block();
+    let route_runner_html_block = route_runner.html_block();
     let primary_entry_module_id = value
         .get("primary_entry_module_id")
         .and_then(Value::as_str)
@@ -6169,22 +6477,23 @@ fn build_trillionnium_client_app_matrix_reply(value: &Value) -> Value {
         .and_then(Value::as_str)
         .unwrap_or("Use these when you are ready to submit real work with deliverable, evidence, risk controls, next action, and self-review anchors.");
     let body = format!(
-        "📱 Trillionnium Client App\n{quick_path_label}: {quick_path_summary}\nStart Here: {onboarding_label} · {onboarding_step_count} steps · target {onboarding_completion_target}\nStart Command: {onboarding_start_command}\nNow: {next_action} @ {next_location}\nWhy: {next_outcome}\n{command_disclosure_label}: {command_disclosure}\nNext Command: {next_command}\nOpportunity Command: {opportunity_command}\nWorld: {map_node} · {nearby_poi_count} POIs · {live_event_count} live events · {tile_shard_count} tiles\nProgression: Lv.{progression_level} {progression_rank} · {successful_task_count} successes · skills/tools/skins {unlocked_skill_count}/{unlocked_tool_count}/{unlocked_skin_count}\n入口：/map /duel nearby /social /wallet /progression",
+        "📱 Trillionnium Client App\n{quick_path_label}: {quick_path_summary}\nStart Here: {onboarding_label} · {onboarding_step_count} steps · target {onboarding_completion_target}\nStart Command: {onboarding_start_command}\nNow: {next_action} @ {next_location}\nWhy: {next_outcome}\n{command_disclosure_label}: {command_disclosure}\nNext Command: {next_command}\nOpportunity Command: {opportunity_command}\n{runner_text_block}\nWorld: {map_node} · {nearby_poi_count} POIs · {live_event_count} live events · {tile_shard_count} tiles\nProgression: Lv.{progression_level} {progression_rank} · {successful_task_count} successes · skills/tools/skins {unlocked_skill_count}/{unlocked_tool_count}/{unlocked_skin_count}\n入口：/map /duel nearby /social /wallet /progression",
         next_action = &route.route_next_action_label,
         next_location = &route.route_next_location_id,
         next_outcome = &route.route_next_outcome_summary,
         next_command = &route.route_next_command_hint,
         opportunity_command = &route.route_next_opportunity_command,
+        runner_text_block = &route_runner_text_block,
     );
     json!({
         "msgtype": "m.text",
         "body": body,
         "format": "org.matrix.custom.html",
         "formatted_body": format!(
-            "<blockquote><h3>📱 Trillionnium Client App</h3><p><strong>{}</strong>: {}</p><p><strong>Start Here</strong>: {} · {} steps · target <code>{}</code></p><p><strong>Start Command</strong>: <code>{}</code></p><p><strong>Now</strong>: {} @ <code>{}</code></p><p><strong>Why</strong>: {}</p><p><strong>{}</strong>: {}</p><p><strong>Next Command</strong>: <code>{}</code></p><p><strong>Opportunity Command</strong>: <code>{}</code></p><p><strong>World</strong>: <code>{}</code> · {} POIs · {} live events · {} tiles</p><p><strong>Progression</strong>: Lv.{} {} · {} successes · skills/tools/skins {}/{}/{}</p><p><code>/map</code> <code>/duel nearby</code> <code>/social</code> <code>/wallet</code> <code>/progression</code></p></blockquote>",
-            escape_html(quick_path_label), escape_html(quick_path_summary), escape_html(onboarding_label), onboarding_step_count, escape_html(onboarding_completion_target), escape_html(onboarding_start_command), escape_html(&route.route_next_action_label), escape_html(&route.route_next_location_id), escape_html(&route.route_next_outcome_summary), escape_html(command_disclosure_label), escape_html(command_disclosure), escape_html(&route.route_next_command_hint), escape_html(&route.route_next_opportunity_command), escape_html(map_node), nearby_poi_count, live_event_count, tile_shard_count, progression_level, escape_html(progression_rank), successful_task_count, unlocked_skill_count, unlocked_tool_count, unlocked_skin_count,
+            "<blockquote><h3>📱 Trillionnium Client App</h3><p><strong>{}</strong>: {}</p><p><strong>Start Here</strong>: {} · {} steps · target <code>{}</code></p><p><strong>Start Command</strong>: <code>{}</code></p><p><strong>Now</strong>: {} @ <code>{}</code></p><p><strong>Why</strong>: {}</p><p><strong>{}</strong>: {}</p><p><strong>Next Command</strong>: <code>{}</code></p><p><strong>Opportunity Command</strong>: <code>{}</code></p>{}<p><strong>World</strong>: <code>{}</code> · {} POIs · {} live events · {} tiles</p><p><strong>Progression</strong>: Lv.{} {} · {} successes · skills/tools/skins {}/{}/{}</p><p><code>/map</code> <code>/duel nearby</code> <code>/social</code> <code>/wallet</code> <code>/progression</code></p></blockquote>",
+            escape_html(quick_path_label), escape_html(quick_path_summary), escape_html(onboarding_label), onboarding_step_count, escape_html(onboarding_completion_target), escape_html(onboarding_start_command), escape_html(&route.route_next_action_label), escape_html(&route.route_next_location_id), escape_html(&route.route_next_outcome_summary), escape_html(command_disclosure_label), escape_html(command_disclosure), escape_html(&route.route_next_command_hint), escape_html(&route.route_next_opportunity_command), route_runner_html_block, escape_html(map_node), nearby_poi_count, live_event_count, tile_shard_count, progression_level, escape_html(progression_rank), successful_task_count, unlocked_skill_count, unlocked_tool_count, unlocked_skin_count,
         ),
-        "cex_card": route_story_card_json(json!({
+        "cex_card": route_runner.card_json(route_story_card_json(json!({
             "type": "trillionnium_client_app",
             "version": 1,
             "client": "trillionnium_mobile_shell",
@@ -6228,7 +6537,7 @@ fn build_trillionnium_client_app_matrix_reply(value: &Value) -> Value {
             "unlocked_skill_count": unlocked_skill_count,
             "unlocked_tool_count": unlocked_tool_count,
             "unlocked_skin_count": unlocked_skin_count
-        }), &route, true)
+        }), &route, true))
     })
 }
 
@@ -8847,7 +9156,31 @@ mod tests {
                     "next_opportunity_hint": "Raw opportunity hint.",
                     "next_opportunity_playbook": "Raw opportunity playbook.",
                     "next_opportunity_command": "/sell latest 原始复购方案"
-                }]}
+                }]},
+                "route_runner_handoff": {
+                    "contract_version": "trillionnium_route_runner_handoff_v1",
+                    "runner_count": 2,
+                    "avatar_task_route_count": 3,
+                    "reward_claim_action_count": 2,
+                    "next_route_action_count": 2,
+                    "reward_claim_ready_count": 1,
+                    "next_route_ready_count": 1,
+                    "first_runner_id": "avatar-route-runner:@alice:local.dev:task-route-focus-story",
+                    "first_task_id": "task-route-focus-story",
+                    "first_to_node_id": "delivery-dock-story",
+                    "first_latest_location_id": "zbj-market-gate-story",
+                    "first_progress_label": "82% route progress / 82% 路线进度",
+                    "first_telemetry_summary": "82% complete · 120m remaining · ETA 7 min",
+                    "first_reward_claim_label": "Claim rating/reward / 领取评级奖励",
+                    "first_reward_claim_status": "claimable_after_evidence",
+                    "first_reward_claim_action_body": "Claim rating/reward for task task-route-focus-story: submit the deliverable, evidence package, risk controls, next action, and self-review for final reward settlement.",
+                    "first_next_route_label": "Open next route / 开启下一条路线",
+                    "first_next_route_status": "next_route_ready_after_reward_claim",
+                    "first_next_route_action_body": "Open next route after task task-route-focus-story: choose the next Trillionnium World Map node and carry deliverable, evidence package, risk controls, next action, and self-review into the follow-up bounty.",
+                    "first_next_route_sequence_summary": "After reward claim, open the next Trillionnium World Map route with the same deliverable → evidence → risk controls → next action → self-review anchors.",
+                    "summary": "Route runner handoff: 2 runners · 2 reward claims · 2 next-route actions · next Claim rating/reward / Open next route",
+                    "handoff_prompt": "Claim rating/reward, then open the next route with deliverable → evidence → risk controls → next action → self-review anchors."
+                }
             }
         }));
 
@@ -8941,6 +9274,8 @@ mod tests {
         assert!(body.contains("Full Commands:"));
         assert!(body.contains("Next Command:"));
         assert!(body.contains("Opportunity Command:"));
+        assert!(body.contains("Runner Handoff:"));
+        assert!(body.contains("Next Route: Open next route"));
         assert!(!body.contains("Renderer Adapter:"));
         assert!(!body.contains("future maplibre_gl_v1"));
         assert!(!body.contains("Primary Entry:"));
@@ -8973,6 +9308,34 @@ mod tests {
         assert_eq!(
             card.get("map_runtime_handle_name").and_then(Value::as_str),
             Some("mapRuntime")
+        );
+        assert_eq!(
+            card.get("avatar_route_runner_count")
+                .and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            card.get("route_runner_next_route_action_count")
+                .and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            card.get("route_runner_next_route_status")
+                .and_then(Value::as_str),
+            Some("next_route_ready_after_reward_claim")
+        );
+        assert!(card
+            .get("route_runner_next_route_action_body")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains(
+                "deliverable, evidence package, risk controls, next action, and self-review"
+            ));
+        assert_eq!(
+            card.get("route_runner_handoff")
+                .and_then(|handoff| handoff.get("first_task_id"))
+                .and_then(Value::as_str),
+            Some("task-route-focus-story")
         );
         assert_eq!(
             card.get("map_renderer_supports_future_engine_swap")

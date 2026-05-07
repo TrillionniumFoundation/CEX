@@ -581,6 +581,15 @@ pub(super) async fn get_client_app_web_shell(
         .and_then(|hub| hub.get("player_density_mode"))
         .and_then(Value::as_str)
         .unwrap_or("dense");
+    let route_runner_handoff = map_hub.and_then(|hub| hub.get("route_runner_handoff"));
+    let map_route_runner_handoff_summary = route_runner_handoff
+        .and_then(|handoff| handoff.get("summary"))
+        .and_then(Value::as_str)
+        .unwrap_or("Route runner handoff: waiting for avatar task routes to unlock reward and next-route actions.");
+    let map_route_runner_next_route_status = route_runner_handoff
+        .and_then(|handoff| handoff.get("first_next_route_status"))
+        .and_then(Value::as_str)
+        .unwrap_or("next_route_preview_locked_until_reward_claim");
     let onboarding = app.get("onboarding");
     let onboarding_label = onboarding
         .and_then(|rail| rail.get("rail_label"))
@@ -1204,6 +1213,7 @@ pub(super) async fn get_client_app_web_shell(
           <div>
             <strong data-i18n-en="Current Status" data-i18n-zh="当前状态">Current Status</strong>
             <p id="app-map-density-summary" class="subtitle">{}</p>
+            <p id="app-route-runner-handoff-summary" class="subtitle" data-next-route-status="{}">{}</p>
             <p id="app-map-camera-summary" class="subtitle" data-i18n-en="Camera loading…" data-i18n-zh="镜头加载中…">Camera loading…</p>
           </div>
           <a class="quest-cta" href='#app-map-action-rail' data-i18n-en="Choose Focus" data-i18n-zh="选择焦点">Choose Focus</a>
@@ -1981,6 +1991,8 @@ pub(super) async fn get_client_app_web_shell(
         escape_html_text(map_upgrade_model),
         escape_html_text(map_upgrade_model),
         escape_html_text(&client_app_map_label(map_density_summary)),
+        escape_html_text(map_route_runner_next_route_status),
+        escape_html_text(map_route_runner_handoff_summary),
         escape_html_text(map_engine_name),
         escape_html_text(tile_provider),
         escape_html_text(mirror_scope),

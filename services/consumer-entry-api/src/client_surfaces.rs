@@ -14,6 +14,106 @@ pub(super) struct ClientRouteWorldContext {
     route_story: WorldRouteStoryView,
 }
 
+fn client_app_route_runner_handoff_json(
+    viewport: &Value,
+    metrics: &ClientAppMapHubMetrics,
+) -> Value {
+    let runner_items: &[Value] = viewport
+        .get("avatar_route_runners")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    let first_runner = runner_items.first();
+    let first_str = |field: &str, fallback: &str| {
+        first_runner
+            .and_then(|runner| runner.get(field))
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or(fallback)
+            .to_string()
+    };
+    let next_route_action_count = runner_items
+        .iter()
+        .filter(|runner| {
+            runner
+                .get("reward_checkpoint")
+                .and_then(|checkpoint| checkpoint.get("next_route_action"))
+                .is_some()
+                || runner.get("next_route_action_body").is_some()
+        })
+        .count();
+    let reward_claim_action_count = runner_items
+        .iter()
+        .filter(|runner| {
+            runner
+                .get("reward_checkpoint")
+                .and_then(|checkpoint| checkpoint.get("reward_claim_action"))
+                .is_some()
+                || runner.get("reward_claim_action_body").is_some()
+        })
+        .count();
+    let next_route_ready_count = runner_items
+        .iter()
+        .filter(|runner| {
+            runner.get("next_route_status").and_then(Value::as_str)
+                == Some("next_route_ready_after_reward_claim")
+        })
+        .count();
+    let reward_claim_ready_count = runner_items
+        .iter()
+        .filter(|runner| {
+            runner.get("reward_claim_status").and_then(Value::as_str)
+                == Some("claimable_after_evidence")
+        })
+        .count();
+    let next_route_status = first_str(
+        "next_route_status",
+        "next_route_preview_locked_until_reward_claim",
+    );
+    let reward_claim_status = first_str("reward_claim_status", "locked_until_evidence_checkpoint");
+    let summary = if metrics.avatar_route_runner_count > 0 {
+        format!(
+            "Route runner handoff: {} runners · {} reward claims · {} next-route actions · next {} / {}",
+            metrics.avatar_route_runner_count,
+            reward_claim_action_count,
+            next_route_action_count,
+            first_str("reward_claim_label", "Prepare reward claim / 准备领奖"),
+            first_str("next_route_label", "Preview next route / 预览下一路线"),
+        )
+    } else {
+        "Route runner handoff: waiting for avatar task routes to unlock reward and next-route actions."
+            .to_string()
+    };
+
+    json!({
+        "contract_version": "trillionnium_route_runner_handoff_v1",
+        "runner_count": metrics.avatar_route_runner_count,
+        "avatar_task_route_count": metrics.avatar_task_route_count,
+        "reward_claim_action_count": reward_claim_action_count,
+        "next_route_action_count": next_route_action_count,
+        "reward_claim_ready_count": reward_claim_ready_count,
+        "next_route_ready_count": next_route_ready_count,
+        "supports_checkpoint_reward_history": true,
+        "supports_route_runner_reward_claim_actions": true,
+        "supports_route_runner_next_route_actions": true,
+        "first_runner_id": first_str("runner_id", "none"),
+        "first_task_id": first_str("task_id", "none"),
+        "first_to_node_id": first_str("to_node_id", "target-node"),
+        "first_latest_location_id": first_str("latest_location_id", ""),
+        "first_progress_label": first_str("progress_label", "0% route progress / 0% 路线进度"),
+        "first_telemetry_summary": first_str("telemetry_summary", "route runner telemetry pending"),
+        "first_reward_claim_label": first_str("reward_claim_label", "Prepare reward claim / 准备领奖"),
+        "first_reward_claim_status": reward_claim_status,
+        "first_reward_claim_action_body": first_str("reward_claim_action_body", "Prepare deliverable, evidence package, risk controls, next action, and self-review before claiming rating/reward."),
+        "first_next_route_label": first_str("next_route_label", "Preview next route / 预览下一路线"),
+        "first_next_route_status": next_route_status,
+        "first_next_route_action_body": first_str("next_route_action_body", "Preview the next route with deliverable, evidence package, risk controls, next action, and self-review anchors."),
+        "first_next_route_sequence_summary": first_str("next_route_sequence_summary", "After reward claim, open the next Trillionnium World Map route with the same deliverable → evidence → risk controls → next action → self-review anchors."),
+        "summary": summary,
+        "handoff_prompt": "Claim rating/reward, then open the next route with deliverable → evidence → risk controls → next action → self-review anchors.",
+    })
+}
+
 impl ClientRouteWorldContext {
     fn active_region_id_from_viewport(
         viewport: &Value,
@@ -65,6 +165,7 @@ impl ClientRouteWorldContext {
     }
 
     fn into_client_app_map_hub_json(self, metrics: &ClientAppMapHubMetrics) -> Value {
+        let route_runner_handoff = client_app_route_runner_handoff_json(&self.viewport, metrics);
         json!({
             "ui_role": "primary_super_entry",
             "entry_priority": 1,
@@ -84,6 +185,7 @@ impl ClientRouteWorldContext {
             "route_preview": self.route_preview,
             "route_task_graph": self.route_task_graph,
             "route_story": self.route_story.to_value(),
+            "route_runner_handoff": route_runner_handoff,
             "route_contract": world_route_ui_contract_json(),
         })
     }

@@ -1917,6 +1917,30 @@ fn client_app_map_hub_projects_stream_counts() {
             .unwrap_or(0)
             >= 1
     );
+    assert_eq!(
+        app["map_hub"]["route_runner_handoff"]["contract_version"],
+        "trillionnium_route_runner_handoff_v1"
+    );
+    assert!(
+        app["map_hub"]["route_runner_handoff"]["next_route_action_count"]
+            .as_u64()
+            .unwrap_or(0)
+            >= 1
+    );
+    assert!(app["map_hub"]["route_runner_handoff"]["summary"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("next-route actions"));
+    assert!(
+        app["map_hub"]["route_runner_handoff"]["first_next_route_action_body"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("risk controls, next action, and self-review")
+    );
+    assert_eq!(
+        app["map_hub"]["route_runner_handoff"]["supports_route_runner_next_route_actions"],
+        true
+    );
     assert_eq!(app["map_hub"]["player_density_mode"], "dense");
     assert_eq!(app["modules"][0]["name"], "Trillionnium World Map");
     assert!(app["modules"][0]["summary"]
@@ -2080,6 +2104,10 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(app_html.contains("data-overlay-target=\"routeRunners\""));
     assert!(app_html.contains("app-avatar-task-routes-live"));
     assert!(app_html.contains("app-avatar-route-runners-live"));
+    assert!(app_html.contains("app-route-runner-handoff-summary"));
+    assert!(app_html.contains("trillionnium_route_runner_handoff_v1"));
+    assert!(app_html.contains("Route runner handoff:"));
+    assert!(app_html.contains("data-next-route-status="));
     assert!(app_html.contains("avatar_task_routes"));
     assert!(app_html.contains("avatar_route_runners"));
     assert!(app_html.contains("runner_trace_points"));
