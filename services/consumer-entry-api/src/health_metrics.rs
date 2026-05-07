@@ -312,6 +312,18 @@ fn is_route_runner_handoff_gate_green(gate: &Value) -> bool {
             .is_some_and(|prompt| !prompt.trim().is_empty())
 }
 
+fn route_runner_handoff_gate_u64(gate: &Value, key: &str) -> u64 {
+    gate.get(key).and_then(Value::as_u64).unwrap_or(0)
+}
+
+fn gauge_bool(value: bool) -> u64 {
+    if value {
+        1
+    } else {
+        0
+    }
+}
+
 fn first_maturity_matrix_user_id(league: &LeagueState) -> String {
     league
         .players_by_matrix_user
@@ -2966,6 +2978,31 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
             playability_scorecard,
         )
     };
+    let empty_route_runner_handoff_gate = json!({});
+    let playability_route_runner_handoff_gate = trillionnium_world_playability_scorecard
+        .get("route_runner_handoff_gate")
+        .unwrap_or(&empty_route_runner_handoff_gate);
+    let closed_beta_route_runner_handoff_gate = trillionnium_world_closed_beta_prototype
+        .get("route_runner_handoff_gate")
+        .unwrap_or(&empty_route_runner_handoff_gate);
+    let real_user_beta_route_runner_handoff_gate = trillionnium_world_real_user_beta
+        .get("route_runner_handoff_gate")
+        .unwrap_or(&empty_route_runner_handoff_gate);
+    let public_commercial_route_runner_handoff_gate = trillionnium_world_public_commercial_product
+        .get("route_runner_handoff_gate")
+        .unwrap_or(&empty_route_runner_handoff_gate);
+    let playability_route_runner_handoff_gate_green =
+        is_route_runner_handoff_gate_green(playability_route_runner_handoff_gate);
+    let closed_beta_route_runner_handoff_gate_green =
+        is_route_runner_handoff_gate_green(closed_beta_route_runner_handoff_gate);
+    let real_user_beta_route_runner_handoff_gate_green =
+        is_route_runner_handoff_gate_green(real_user_beta_route_runner_handoff_gate);
+    let public_commercial_route_runner_handoff_gate_green =
+        is_route_runner_handoff_gate_green(public_commercial_route_runner_handoff_gate);
+    let all_route_runner_handoff_gates_green = playability_route_runner_handoff_gate_green
+        && closed_beta_route_runner_handoff_gate_green
+        && real_user_beta_route_runner_handoff_gate_green
+        && public_commercial_route_runner_handoff_gate_green;
     let body = format!(
         concat!(
             "# TYPE cex_consumer_entry_task_create_requests_total counter\n",
@@ -3126,6 +3163,24 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
             "cex_consumer_entry_trillionnium_world_public_commercial_product_growth_network_percent {}\n",
             "# TYPE cex_consumer_entry_trillionnium_world_public_commercial_product_public_world_depth_percent gauge\n",
             "cex_consumer_entry_trillionnium_world_public_commercial_product_public_world_depth_percent {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_route_runner_handoff_playability_gate_green gauge\n",
+            "cex_consumer_entry_trillionnium_route_runner_handoff_playability_gate_green {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_route_runner_handoff_closed_beta_gate_green gauge\n",
+            "cex_consumer_entry_trillionnium_route_runner_handoff_closed_beta_gate_green {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_route_runner_handoff_real_user_beta_gate_green gauge\n",
+            "cex_consumer_entry_trillionnium_route_runner_handoff_real_user_beta_gate_green {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_route_runner_handoff_public_commercial_gate_green gauge\n",
+            "cex_consumer_entry_trillionnium_route_runner_handoff_public_commercial_gate_green {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_route_runner_handoff_all_gates_green gauge\n",
+            "cex_consumer_entry_trillionnium_route_runner_handoff_all_gates_green {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_route_runner_handoff_feed_source_count gauge\n",
+            "cex_consumer_entry_trillionnium_route_runner_handoff_feed_source_count {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_route_runner_handoff_runner_count gauge\n",
+            "cex_consumer_entry_trillionnium_route_runner_handoff_runner_count {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_route_runner_handoff_reward_claim_action_count gauge\n",
+            "cex_consumer_entry_trillionnium_route_runner_handoff_reward_claim_action_count {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_route_runner_handoff_next_route_action_count gauge\n",
+            "cex_consumer_entry_trillionnium_route_runner_handoff_next_route_action_count {}\n",
             "# TYPE cex_consumer_entry_trillionnium_world_playability_scorecard_overall_score gauge\n",
             "cex_consumer_entry_trillionnium_world_playability_scorecard_overall_score {}\n",
             "# TYPE cex_consumer_entry_trillionnium_world_playability_scorecard_overall_percent gauge\n",
@@ -3489,6 +3544,21 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
         maturity_axis_percent(
             &trillionnium_world_public_commercial_product,
             "public_world_depth",
+        ),
+        gauge_bool(playability_route_runner_handoff_gate_green),
+        gauge_bool(closed_beta_route_runner_handoff_gate_green),
+        gauge_bool(real_user_beta_route_runner_handoff_gate_green),
+        gauge_bool(public_commercial_route_runner_handoff_gate_green),
+        gauge_bool(all_route_runner_handoff_gates_green),
+        route_runner_handoff_gate_u64(playability_route_runner_handoff_gate, "source_count"),
+        route_runner_handoff_gate_u64(playability_route_runner_handoff_gate, "runner_count"),
+        route_runner_handoff_gate_u64(
+            playability_route_runner_handoff_gate,
+            "reward_claim_action_count",
+        ),
+        route_runner_handoff_gate_u64(
+            playability_route_runner_handoff_gate,
+            "next_route_action_count",
         ),
         trillionnium_world_playability_scorecard
             .get("overall_score")
