@@ -159,6 +159,7 @@ function checkMobile(result, limits) {
     const readability = result.mapReadabilityLod || {};
     assertMetric(readability.present === true, `${result.profile}/app map readability LOD contract missing`, readability);
     assertMetric(readability.contractVersion === 'trillionnium_world_map_readability_lod_v1', `${result.profile}/app map readability LOD contract version missing`, readability);
+    assertMetric(readability.semanticLayerContract === 'trillionnium_world_map_game_layer_semantics_v1', `${result.profile}/app map semantic layer contract missing`, readability);
     assertMetric(readability.firstScreenMode === 'route_first_street_detail', `${result.profile}/app map readability first-screen mode missing`, readability);
     assertMetric(Number(readability.primaryCtaBudget || 0) === 1, `${result.profile}/app map readability must keep one primary CTA`, readability);
     assertMetric(Number(readability.visibleMarkerBudget || 0) <= 18, `${result.profile}/app visible marker clutter budget drifted`, readability);
@@ -178,6 +179,17 @@ function checkMobile(result, limits) {
     assertMetric(map < route && route < action && action < onboarding && onboarding < denseCopy, `${result.profile}/app must keep map → route → action → onboarding → dense copy order`, { map, route, action, onboarding, denseCopy });
     assertMetric(map <= limits.maxMapY && route <= limits.maxRouteY && action <= limits.maxActionY && onboarding <= limits.maxOnboardingY, `${result.profile}/app key modules are too deep`, { map, route, action, onboarding, limits });
   } else if (result.name === 'world') {
+    const cta = result.worldMobilePrimaryCta || {};
+    assertMetric(cta.sheetPresent === true, `${result.profile}/world mobile route-first sheet missing`, cta);
+    assertMetric(cta.contractVersion === 'trillionnium_mobile_single_primary_cta_v1', `${result.profile}/world mobile primary CTA contract missing`, cta);
+    assertMetric(cta.paritySource === 'app-mobile-primary-cta', `${result.profile}/world mobile CTA must declare /app parity`, cta);
+    assertMetric(Number(cta.primaryCtaCount || 0) === 1, `${result.profile}/world must expose exactly one route-first primary CTA`, cta);
+    assertMetric(cta.primaryCtaVisible === true, `${result.profile}/world mobile primary CTA must be visible`, cta);
+    assertMetric(cta.firstScreenLoop === 'pick_route_submit_proof_claim_reward', `${result.profile}/world route-first loop contract missing`, cta);
+    for (const token of ['Current route', 'Next action', 'Reward', 'Continue route', 'Pick route', 'Submit proof', 'Claim reward']) {
+      assertMetric((cta.text || '').includes(token), `${result.profile}/world route-first mobile copy missing ${token}`, cta);
+    }
+    assertMetric(Number(cta.routeMasteryXp || 0) > 0 && Boolean(cta.routeMasteryTier), `${result.profile}/world route-first mobile reward/XP data missing`, cta);
     const map = yOf(result, 'map');
     const pulse = yOf(result, 'pulse');
     const action = yOf(result, 'action');
@@ -331,6 +343,8 @@ async function auditPage(page, profile, target) {
     const handoffElements = [appRouteHandoff, appFeedHandoff, worldRouteHandoff].filter(Boolean);
     const handoffText = handoffElements.map((el) => text(el)).join(' · ');
     const mobileSheet = document.getElementById('app-mobile-action-sheet');
+    const worldMobileSheet = document.getElementById('world-hero-mobile-actions');
+    const worldRewardXp = document.getElementById('world-mobile-reward-xp');
     const copySummary = document.getElementById('app-map-copy-summary');
     const copyDetails = document.getElementById('app-map-copy-layer-details');
     const mobilePrimaryCtas = Array.from(document.querySelectorAll('#app-mobile-action-sheet [data-primary-cta]')).filter(visible);
@@ -348,6 +362,20 @@ async function auditPage(page, profile, target) {
       sheetBottom: sheetRect ? Math.round(sheetRect.bottom) : null,
       text: text(mobileSheet).slice(0, 360),
     };
+    const worldMobilePrimaryCtas = Array.from(document.querySelectorAll('#world-hero-mobile-actions #world-mobile-primary-cta')).filter(visible);
+    const worldPrimaryCta = worldMobilePrimaryCtas[0] || null;
+    const worldMobilePrimaryCta = {
+      sheetPresent: Boolean(worldMobileSheet),
+      contractVersion: worldMobileSheet?.dataset.contractVersion || null,
+      paritySource: worldMobileSheet?.dataset.paritySource || null,
+      declaredPrimaryCtaCount: worldMobileSheet?.dataset.primaryCtaCount || null,
+      firstScreenLoop: worldMobileSheet?.dataset.firstScreenLoop || null,
+      primaryCtaCount: worldMobilePrimaryCtas.length,
+      primaryCtaVisible: Boolean(worldPrimaryCta),
+      routeMasteryXp: worldRewardXp?.dataset.routeMasteryXp || null,
+      routeMasteryTier: worldRewardXp?.dataset.routeMasteryTier || null,
+      text: text(worldMobileSheet).slice(0, 520),
+    };
     const mobileCopyLayering = {
       summaryPresent: Boolean(copySummary),
       summaryContractVersion: copySummary?.dataset.contractVersion || null,
@@ -362,6 +390,7 @@ async function auditPage(page, profile, target) {
     const mapReadabilityLod = {
       present: Boolean(appMapReadabilityLod),
       contractVersion: appMapReadabilityLod?.dataset.contractVersion || null,
+      semanticLayerContract: appMapReadabilityLod?.dataset.semanticLayerContract || null,
       firstScreenMode: appMapReadabilityLod?.dataset.firstScreenMode || null,
       primaryCtaBudget: appMapReadabilityLod?.dataset.primaryCtaBudget || null,
       visibleMarkerBudget: appMapReadabilityLod?.dataset.visibleMarkerBudget || null,
@@ -397,6 +426,7 @@ async function auditPage(page, profile, target) {
       key,
       routeRunnerHandoff,
       mobilePrimaryCta,
+      worldMobilePrimaryCta,
       mobileCopyLayering,
       mapReadabilityLod,
       firstViewportButtons,

@@ -492,10 +492,18 @@ fn app_map_readability_lod_gate_json(app: &Value) -> Value {
         .get("map_hub")
         .and_then(|hub| hub.get("viewport"))
         .and_then(|viewport| viewport.get("map_readability_lod"));
+    let game_layer_semantics = viewport_lod.and_then(|lod| lod.get("game_layer_semantics"));
+    let semantic_roles = shell_lod
+        .and_then(|lod| lod.get("semantic_roles"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
     json!({
         "contract_version": "trillionnium_world_map_readability_lod_gate_v1",
         "shell_contract_version": shell_lod.and_then(|lod| lod.get("contract_version")).and_then(Value::as_str),
         "viewport_contract_version": viewport_lod.and_then(|lod| lod.get("contract_version")).and_then(Value::as_str),
+        "semantic_layer_contract_version": shell_lod.and_then(|lod| lod.get("semantic_layer_contract_version")).and_then(Value::as_str),
+        "viewport_semantic_contract_version": game_layer_semantics.and_then(|semantics| semantics.get("contract_version")).and_then(Value::as_str),
         "visible_contract_id": shell_lod.and_then(|lod| lod.get("visible_contract_id")).and_then(Value::as_str),
         "first_screen_mode": shell_lod.and_then(|lod| lod.get("first_screen_mode")).and_then(Value::as_str),
         "max_primary_cta_count": shell_lod.and_then(|lod| lod.get("max_primary_cta_count")).and_then(Value::as_u64).unwrap_or(0),
@@ -506,6 +514,9 @@ fn app_map_readability_lod_gate_json(app: &Value) -> Value {
         "avatar_route_runners": viewport_lod.and_then(|lod| lod.get("object_budget")).and_then(|budget| budget.get("avatar_route_runners")).and_then(Value::as_u64).unwrap_or(0),
         "within_budget": viewport_lod.and_then(|lod| lod.get("object_budget")).and_then(|budget| budget.get("within_budget")).and_then(Value::as_bool).unwrap_or(false),
         "details_default_state": shell_lod.and_then(|lod| lod.get("details_default_state")).and_then(Value::as_str),
+        "semantic_role_count": semantic_roles.len(),
+        "muted_osm_context_visible": game_layer_semantics.and_then(|semantics| semantics.get("base_map_treatment")).and_then(|base| base.get("openstreetmap_role")).and_then(Value::as_str) == Some("muted_context_layer"),
+        "active_route_contrast_visible": game_layer_semantics.and_then(|semantics| semantics.get("active_route_style")).and_then(|style| style.get("class_name")).and_then(Value::as_str) == Some("trillionnium-active-route-line"),
     })
 }
 
@@ -538,6 +549,27 @@ fn is_map_readability_lod_gate_green(gate: &Value) -> bool {
             .and_then(Value::as_bool)
             .unwrap_or(false)
         && gate.get("details_default_state").and_then(Value::as_str) == Some("collapsed")
+        && gate
+            .get("semantic_layer_contract_version")
+            .and_then(Value::as_str)
+            == Some("trillionnium_world_map_game_layer_semantics_v1")
+        && gate
+            .get("viewport_semantic_contract_version")
+            .and_then(Value::as_str)
+            == Some("trillionnium_world_map_game_layer_semantics_v1")
+        && gate
+            .get("semantic_role_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            >= 4
+        && gate
+            .get("muted_osm_context_visible")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && gate
+            .get("active_route_contrast_visible")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
 }
 
 fn app_route_runner_funnel_telemetry_gate_json(app: &Value) -> Value {
@@ -547,9 +579,11 @@ fn app_route_runner_funnel_telemetry_gate_json(app: &Value) -> Value {
     });
     let event_counts = telemetry.and_then(|telemetry| telemetry.get("event_counts"));
     let time_to_reward = telemetry.and_then(|telemetry| telemetry.get("time_to_reward"));
+    let cohort_quality = telemetry.and_then(|telemetry| telemetry.get("cohort_quality"));
     json!({
         "contract_version": "trillionnium_route_runner_funnel_telemetry_gate_v1",
         "telemetry_contract_version": telemetry.and_then(|telemetry| telemetry.get("contract_version")).and_then(Value::as_str),
+        "cohort_quality_contract_version": cohort_quality.and_then(|cohort| cohort.get("contract_version")).and_then(Value::as_str),
         "telemetry_stream": telemetry.and_then(|telemetry| telemetry.get("telemetry_stream")).and_then(Value::as_str),
         "route_started_count": event_counts.and_then(|counts| counts.get("route_started")).and_then(Value::as_i64).unwrap_or(0),
         "evidence_submitted_count": event_counts.and_then(|counts| counts.get("evidence_submitted")).and_then(Value::as_i64).unwrap_or(0),
@@ -557,6 +591,12 @@ fn app_route_runner_funnel_telemetry_gate_json(app: &Value) -> Value {
         "next_route_opened_count": event_counts.and_then(|counts| counts.get("next_route_opened")).and_then(Value::as_i64).unwrap_or(0),
         "abandoned_or_recovery_count": event_counts.and_then(|counts| counts.get("abandoned_or_recovery")).and_then(Value::as_i64).unwrap_or(0),
         "daily_return_resume_count": event_counts.and_then(|counts| counts.get("daily_return_resume")).and_then(Value::as_i64).unwrap_or(0),
+        "reward_to_next_route_conversion_percent": cohort_quality.and_then(|cohort| cohort.get("reward_to_next_route_conversion_percent")).and_then(Value::as_i64).unwrap_or(0),
+        "d1_resume_rate_percent": cohort_quality.and_then(|cohort| cohort.get("d1_resume_rate_percent")).and_then(Value::as_i64).unwrap_or(0),
+        "route_abandon_or_recovery_rate_percent": cohort_quality.and_then(|cohort| cohort.get("route_abandon_or_recovery_rate_percent")).and_then(Value::as_i64).unwrap_or(0),
+        "time_to_first_proof_seconds": cohort_quality.and_then(|cohort| cohort.get("time_to_first_proof_seconds")).and_then(Value::as_i64).unwrap_or(0),
+        "time_to_next_route_seconds": cohort_quality.and_then(|cohort| cohort.get("time_to_next_route_seconds")).and_then(Value::as_i64).unwrap_or(0),
+        "abandon_reason_breakdown_visible": cohort_quality.and_then(|cohort| cohort.get("abandon_reason_breakdown")).and_then(Value::as_object).is_some(),
         "time_to_reward_seconds": time_to_reward.and_then(|time| time.get("p50_seconds")).and_then(Value::as_i64).unwrap_or(0),
         "time_to_reward_target_seconds": time_to_reward.and_then(|time| time.get("target_seconds")).and_then(Value::as_i64).unwrap_or(0),
         "time_to_reward_within_target": time_to_reward.and_then(|time| time.get("within_target")).and_then(Value::as_bool).unwrap_or(false),
@@ -571,6 +611,10 @@ fn is_route_runner_funnel_telemetry_gate_green(gate: &Value) -> bool {
             .get("telemetry_contract_version")
             .and_then(Value::as_str)
             == Some("trillionnium_route_runner_funnel_telemetry_v1")
+        && gate
+            .get("cohort_quality_contract_version")
+            .and_then(Value::as_str)
+            == Some("trillionnium_route_runner_funnel_cohort_quality_v1")
         && gate.get("telemetry_stream").and_then(Value::as_str)
             == Some("world_economy_events:playability_telemetry")
         && gate
@@ -605,6 +649,75 @@ fn is_route_runner_funnel_telemetry_gate_green(gate: &Value) -> bool {
             .get("time_to_reward_target_seconds")
             .and_then(Value::as_i64)
             == Some(1800)
+        && gate
+            .get("reward_to_next_route_conversion_percent")
+            .and_then(Value::as_i64)
+            .is_some()
+        && gate
+            .get("d1_resume_rate_percent")
+            .and_then(Value::as_i64)
+            .is_some()
+        && gate
+            .get("route_abandon_or_recovery_rate_percent")
+            .and_then(Value::as_i64)
+            .is_some()
+        && gate
+            .get("time_to_first_proof_seconds")
+            .and_then(Value::as_i64)
+            .is_some()
+        && gate
+            .get("time_to_next_route_seconds")
+            .and_then(Value::as_i64)
+            .is_some()
+        && gate
+            .get("abandon_reason_breakdown_visible")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+}
+
+fn app_commercial_operating_dashboard_gate_json(app: &Value) -> Value {
+    let dashboard = app.get("commercial_operating_dashboard").or_else(|| {
+        app.get("economy_retention_ops")
+            .and_then(|ops| ops.get("commercial_operating_dashboard"))
+    });
+    json!({
+        "contract_version": "trillionnium_world_commercial_operating_dashboard_gate_v1",
+        "dashboard_contract_version": dashboard.and_then(|dashboard| dashboard.get("contract_version")).and_then(Value::as_str),
+        "route_start_to_paid_task_conversion_percent": dashboard.and_then(|dashboard| dashboard.get("route_start_to_paid_task_conversion_percent")).and_then(Value::as_i64).unwrap_or(0),
+        "reward_claim_to_next_commission_percent": dashboard.and_then(|dashboard| dashboard.get("reward_claim_to_next_commission_percent")).and_then(Value::as_i64).unwrap_or(0),
+        "seller_completion_quality_percent": dashboard.and_then(|dashboard| dashboard.get("seller_completion_quality_percent")).and_then(Value::as_i64).unwrap_or(0),
+        "buyer_repeat_order_count": dashboard.and_then(|dashboard| dashboard.get("buyer_repeat_order_count")).and_then(Value::as_i64).unwrap_or(0),
+        "dispute_refund_reopen_count": dashboard.and_then(|dashboard| dashboard.get("dispute_refund_reopen_count")).and_then(Value::as_i64).unwrap_or(0),
+    })
+}
+
+fn is_commercial_operating_dashboard_gate_green(gate: &Value) -> bool {
+    gate.get("contract_version").and_then(Value::as_str)
+        == Some("trillionnium_world_commercial_operating_dashboard_gate_v1")
+        && gate
+            .get("dashboard_contract_version")
+            .and_then(Value::as_str)
+            == Some("trillionnium_world_commercial_operating_dashboard_v1")
+        && gate
+            .get("route_start_to_paid_task_conversion_percent")
+            .and_then(Value::as_i64)
+            .is_some()
+        && gate
+            .get("reward_claim_to_next_commission_percent")
+            .and_then(Value::as_i64)
+            .is_some()
+        && gate
+            .get("seller_completion_quality_percent")
+            .and_then(Value::as_i64)
+            .is_some()
+        && gate
+            .get("buyer_repeat_order_count")
+            .and_then(Value::as_i64)
+            .is_some()
+        && gate
+            .get("dispute_refund_reopen_count")
+            .and_then(Value::as_i64)
+            .is_some()
 }
 
 fn app_future_engine_readiness_gate_json(app: &Value) -> Value {
@@ -633,6 +746,9 @@ fn app_future_engine_readiness_gate_json(app: &Value) -> Value {
         "planned_upgrade_readiness_contract_version": planned_upgrade_engine.and_then(|engine| engine.get("readiness_contract_version")).and_then(Value::as_str),
         "lod_precondition_visible": has_precondition("map_readability_lod_contract_green"),
         "telemetry_precondition_visible": has_precondition("route_runner_funnel_telemetry_green"),
+        "cohort_quality_precondition_visible": has_precondition("route_runner_cohort_quality_green"),
+        "world_mobile_entry_parity_precondition_visible": has_precondition("world_mobile_entry_parity_green"),
+        "semantic_map_layers_precondition_visible": has_precondition("semantic_map_layers_green"),
         "rollback_plan_visible": future_engine_readiness.and_then(|readiness| readiness.get("rollback_plan")).and_then(|plan| plan.get("candidate_is_shadow_only")).and_then(Value::as_bool).unwrap_or(false),
         "promotion_blocker_count": future_engine_readiness.and_then(|readiness| readiness.get("promotion_blockers")).and_then(Value::as_array).map(Vec::len).unwrap_or(0),
     })
@@ -660,6 +776,18 @@ fn is_future_engine_readiness_gate_green(gate: &Value) -> bool {
             .unwrap_or(false)
         && gate
             .get("telemetry_precondition_visible")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && gate
+            .get("cohort_quality_precondition_visible")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && gate
+            .get("world_mobile_entry_parity_precondition_visible")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && gate
+            .get("semantic_map_layers_precondition_visible")
             .and_then(Value::as_bool)
             .unwrap_or(false)
         && gate
@@ -1168,6 +1296,9 @@ fn trillionnium_world_playability_scorecard_json(
     let route_runner_funnel_telemetry_gate = app_route_runner_funnel_telemetry_gate_json(&app);
     let route_runner_funnel_telemetry_gate_green =
         is_route_runner_funnel_telemetry_gate_green(&route_runner_funnel_telemetry_gate);
+    let commercial_operating_dashboard_gate = app_commercial_operating_dashboard_gate_json(&app);
+    let commercial_operating_dashboard_gate_green =
+        is_commercial_operating_dashboard_gate_green(&commercial_operating_dashboard_gate);
     let future_engine_readiness_gate = app_future_engine_readiness_gate_json(&app);
     let future_engine_readiness_gate_green =
         is_future_engine_readiness_gate_green(&future_engine_readiness_gate);
@@ -1181,7 +1312,8 @@ fn trillionnium_world_playability_scorecard_json(
             .and_then(|contracts| contracts.get("telemetry_stream"))
             .and_then(Value::as_str)
             == Some("world_economy_events:playability_telemetry")
-        && route_runner_funnel_telemetry_gate_green;
+        && route_runner_funnel_telemetry_gate_green
+        && commercial_operating_dashboard_gate_green;
     let app_module_count = app.get("module_count").and_then(Value::as_u64).unwrap_or(0);
     let mobile_shell_ux_green = mobile_shell_ux_contract_green(&app);
     let feed_item_count = app
@@ -1553,7 +1685,7 @@ fn trillionnium_world_playability_scorecard_json(
             ("tools_unlocked", unlocked_tool_count >= 4),
             ("skins_unlocked", unlocked_skin_count >= 3),
             ("feed_history_dense", feed_item_count >= 20),
-            ("route_backlog_and_daily_return_hook_visible", route_task_graph_count >= 10 && coach_check("p2_daily_return_hook_visible") && playability_coach.get("retention_ops").and_then(|ops| ops.get("daily_return_hooks")).and_then(Value::as_array).is_some_and(|hooks| hooks.len() >= 4) && ops_retention_calendar_green && ops_persistent_telemetry_green && route_runner_funnel_telemetry_gate_green),
+            ("route_backlog_and_daily_return_hook_visible", route_task_graph_count >= 10 && coach_check("p2_daily_return_hook_visible") && playability_coach.get("retention_ops").and_then(|ops| ops.get("daily_return_hooks")).and_then(Value::as_array).is_some_and(|hooks| hooks.len() >= 4) && ops_retention_calendar_green && ops_persistent_telemetry_green && route_runner_funnel_telemetry_gate_green && commercial_operating_dashboard_gate_green),
             ("multiple_match_modes", league.matches.len() >= 4),
             ("world_assets_persist", !world.world_assets.is_empty()),
         ],
@@ -1589,9 +1721,9 @@ fn trillionnium_world_playability_scorecard_json(
             ("real_user_beta_overall_100", trillionnium_world_real_user_beta.get("overall_percent").and_then(Value::as_u64) == Some(100)),
             ("public_commercial_overall_100", trillionnium_world_public_commercial_product.get("overall_percent").and_then(Value::as_u64) == Some(100)),
             ("feed_api_path_configured", feed_api_path_configured && feed_route_runner_handoff_green),
-            ("playability_runtime_contracts_exposed", route_contract_version_present && route_runner_handoff_gate_green && coach_p0_p1_p2_green && world_home_playability_runtime_green && ops_contract_v1 && ops_engine_contracts_green && ops_balance_config_green && map_readability_lod_gate_green && route_runner_funnel_telemetry_gate_green && future_engine_readiness_gate_green),
+            ("playability_runtime_contracts_exposed", route_contract_version_present && route_runner_handoff_gate_green && coach_p0_p1_p2_green && world_home_playability_runtime_green && ops_contract_v1 && ops_engine_contracts_green && ops_balance_config_green && map_readability_lod_gate_green && route_runner_funnel_telemetry_gate_green && commercial_operating_dashboard_gate_green && future_engine_readiness_gate_green),
             ("mobile_contract_readiness_dense", mobile_readiness_checks.len() >= 10),
-            ("scorecard_has_runtime_funnel_data", feed_item_count >= 20 && route_task_graph_count >= 10 && route_runner_handoff_gate_green && ops_funnel_green && ops_persistent_telemetry_green && route_runner_funnel_telemetry_gate_green),
+            ("scorecard_has_runtime_funnel_data", feed_item_count >= 20 && route_task_graph_count >= 10 && route_runner_handoff_gate_green && ops_funnel_green && ops_persistent_telemetry_green && route_runner_funnel_telemetry_gate_green && commercial_operating_dashboard_gate_green),
             ("future_engine_readiness_contract_visible", future_engine_readiness_gate_green),
             ("repository_backed_world_state_dense", world.world_economy_events.len() >= 20 && !world.world_contract_completions.is_empty()),
         ],
@@ -1609,7 +1741,7 @@ fn trillionnium_world_playability_scorecard_json(
             ("public_commercial_gate_100", trillionnium_world_public_commercial_product.get("overall_percent").and_then(Value::as_u64) == Some(100)),
             ("mobile_shell_contract_green", mobile_shell_ux_green),
             ("feed_api_path_configured", feed_api_path_configured && feed_route_runner_handoff_green),
-            ("playability_runtime_contracts_present", route_contract_version_present && route_runner_handoff_gate_green && coach_p0_p1_p2_green && world_home_playability_runtime_green && ops_contract_v1 && ops_engine_contracts_green && ops_balance_config_green && map_readability_lod_gate_green && route_runner_funnel_telemetry_gate_green && future_engine_readiness_gate_green),
+            ("playability_runtime_contracts_present", route_contract_version_present && route_runner_handoff_gate_green && coach_p0_p1_p2_green && world_home_playability_runtime_green && ops_contract_v1 && ops_engine_contracts_green && ops_balance_config_green && map_readability_lod_gate_green && route_runner_funnel_telemetry_gate_green && commercial_operating_dashboard_gate_green && future_engine_readiness_gate_green),
             ("score_events_runtime_present", score_event_count >= 6),
             ("world_state_dense_enough_for_smoke", feed_item_count >= 20 && route_runner_handoff_gate_green && world.world_economy_events.len() >= 20),
         ],
@@ -1661,7 +1793,7 @@ fn trillionnium_world_playability_scorecard_json(
             ("experience_data_points_dense", experience_data_points >= 50),
             ("skills_tools_skins_unlocked", unlocked_skill_count >= 5 && unlocked_tool_count >= 4 && unlocked_skin_count >= 3),
             ("feed_history_dense", feed_item_count >= 20),
-            ("coach_retention_ops_visible", route_task_graph_count >= 10 && coach_lane("p2_retention_ops") && coach_check("p2_telemetry_contract_visible") && ops_retention_calendar_green && ops_anti_cheese_green && route_runner_funnel_telemetry_gate_green),
+            ("coach_retention_ops_visible", route_task_graph_count >= 10 && coach_lane("p2_retention_ops") && coach_check("p2_telemetry_contract_visible") && ops_retention_calendar_green && ops_anti_cheese_green && route_runner_funnel_telemetry_gate_green && commercial_operating_dashboard_gate_green),
             ("multiple_match_modes", league.matches.len() >= 4),
             ("world_events_dense", world.world_events.len() >= 3 && world.world_economy_events.len() >= 20),
             ("replayable_market_and_work_loops", world.world_listings.len() >= 3 && world.world_work_orders.len() >= 3),
@@ -1774,6 +1906,7 @@ fn trillionnium_world_playability_scorecard_json(
         "route_runner_handoff_gate": route_runner_handoff_gate,
         "map_readability_lod_gate": map_readability_lod_gate,
         "route_runner_funnel_telemetry_gate": route_runner_funnel_telemetry_gate,
+        "commercial_operating_dashboard_gate": commercial_operating_dashboard_gate,
         "future_engine_readiness_gate": future_engine_readiness_gate,
         "axes": axes,
         "user_metric_axes": user_metric_axes,
@@ -2565,6 +2698,9 @@ fn trillionnium_world_public_commercial_product_json(
     let route_runner_handoff_gate = app_route_runner_handoff_gate_json(&app);
     let route_runner_handoff_gate_ready =
         is_route_runner_handoff_gate_green(&route_runner_handoff_gate);
+    let commercial_operating_dashboard_gate = app_commercial_operating_dashboard_gate_json(&app);
+    let commercial_operating_dashboard_gate_green =
+        is_commercial_operating_dashboard_gate_green(&commercial_operating_dashboard_gate);
     let social_contact_count = app
         .get("social")
         .map(|social| {
@@ -2769,6 +2905,24 @@ fn trillionnium_world_public_commercial_product_json(
                 economy_event_credit_volume > 0,
             ),
             (
+                "commercial_operating_dashboard_visible",
+                commercial_operating_dashboard_gate_green,
+            ),
+            (
+                "route_start_to_paid_task_conversion_visible",
+                commercial_operating_dashboard_gate
+                    .get("route_start_to_paid_task_conversion_percent")
+                    .and_then(Value::as_i64)
+                    .is_some(),
+            ),
+            (
+                "reward_claim_to_next_commission_visible",
+                commercial_operating_dashboard_gate
+                    .get("reward_claim_to_next_commission_percent")
+                    .and_then(Value::as_i64)
+                    .is_some(),
+            ),
+            (
                 "company_revenue_score_positive",
                 total_company_revenue_score > 0,
             ),
@@ -2947,6 +3101,7 @@ fn trillionnium_world_public_commercial_product_json(
         "matrix_user_id": matrix_user_id,
         "axis_order": axis_order,
         "route_runner_handoff_gate": route_runner_handoff_gate,
+        "commercial_operating_dashboard_gate": commercial_operating_dashboard_gate,
         "requires_live_gates": [
             "scripts/check-trillionnium-world-public-commercial-product.sh",
             "scripts/check-trillionnium-world-real-user-beta.sh",
@@ -3408,6 +3563,9 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
     let route_runner_funnel_telemetry_gate = trillionnium_world_playability_scorecard
         .get("route_runner_funnel_telemetry_gate")
         .unwrap_or(&empty_scorecard_gate);
+    let commercial_operating_dashboard_gate = trillionnium_world_playability_scorecard
+        .get("commercial_operating_dashboard_gate")
+        .unwrap_or(&empty_scorecard_gate);
     let future_engine_readiness_gate = trillionnium_world_playability_scorecard
         .get("future_engine_readiness_gate")
         .unwrap_or(&empty_scorecard_gate);
@@ -3415,6 +3573,8 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
         is_map_readability_lod_gate_green(map_readability_lod_gate);
     let route_runner_funnel_telemetry_gate_green =
         is_route_runner_funnel_telemetry_gate_green(route_runner_funnel_telemetry_gate);
+    let commercial_operating_dashboard_gate_green =
+        is_commercial_operating_dashboard_gate_green(commercial_operating_dashboard_gate);
     let future_engine_readiness_gate_green =
         is_future_engine_readiness_gate_green(future_engine_readiness_gate);
     let body = format!(
@@ -3631,6 +3791,28 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
             "cex_consumer_entry_trillionnium_route_runner_funnel_time_to_reward_seconds {}\n",
             "# TYPE cex_consumer_entry_trillionnium_route_runner_funnel_daily_return_resume_count gauge\n",
             "cex_consumer_entry_trillionnium_route_runner_funnel_daily_return_resume_count {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_route_runner_funnel_reward_to_next_route_percent gauge\n",
+            "cex_consumer_entry_trillionnium_route_runner_funnel_reward_to_next_route_percent {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_route_runner_funnel_d1_resume_percent gauge\n",
+            "cex_consumer_entry_trillionnium_route_runner_funnel_d1_resume_percent {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_route_runner_funnel_route_abandon_or_recovery_percent gauge\n",
+            "cex_consumer_entry_trillionnium_route_runner_funnel_route_abandon_or_recovery_percent {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_route_runner_funnel_time_to_first_proof_seconds gauge\n",
+            "cex_consumer_entry_trillionnium_route_runner_funnel_time_to_first_proof_seconds {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_route_runner_funnel_time_to_next_route_seconds gauge\n",
+            "cex_consumer_entry_trillionnium_route_runner_funnel_time_to_next_route_seconds {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_commercial_operating_dashboard_gate_green gauge\n",
+            "cex_consumer_entry_trillionnium_world_commercial_operating_dashboard_gate_green {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_commercial_route_start_to_paid_task_percent gauge\n",
+            "cex_consumer_entry_trillionnium_world_commercial_route_start_to_paid_task_percent {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_commercial_reward_claim_to_next_commission_percent gauge\n",
+            "cex_consumer_entry_trillionnium_world_commercial_reward_claim_to_next_commission_percent {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_commercial_seller_completion_quality_percent gauge\n",
+            "cex_consumer_entry_trillionnium_world_commercial_seller_completion_quality_percent {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_commercial_buyer_repeat_order_count gauge\n",
+            "cex_consumer_entry_trillionnium_world_commercial_buyer_repeat_order_count {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_commercial_dispute_refund_reopen_count gauge\n",
+            "cex_consumer_entry_trillionnium_world_commercial_dispute_refund_reopen_count {}\n",
             "# TYPE cex_consumer_entry_trillionnium_world_future_engine_readiness_gate_green gauge\n",
             "cex_consumer_entry_trillionnium_world_future_engine_readiness_gate_green {}\n",
             "# TYPE cex_consumer_entry_trillionnium_world_future_engine_promotion_blocker_count gauge\n",
@@ -4038,6 +4220,32 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
         gate_i64(route_runner_funnel_telemetry_gate, "abandoned_or_recovery_count"),
         gate_i64(route_runner_funnel_telemetry_gate, "time_to_reward_seconds"),
         gate_i64(route_runner_funnel_telemetry_gate, "daily_return_resume_count"),
+        gate_i64(
+            route_runner_funnel_telemetry_gate,
+            "reward_to_next_route_conversion_percent",
+        ),
+        gate_i64(route_runner_funnel_telemetry_gate, "d1_resume_rate_percent"),
+        gate_i64(
+            route_runner_funnel_telemetry_gate,
+            "route_abandon_or_recovery_rate_percent",
+        ),
+        gate_i64(route_runner_funnel_telemetry_gate, "time_to_first_proof_seconds"),
+        gate_i64(route_runner_funnel_telemetry_gate, "time_to_next_route_seconds"),
+        gauge_bool(commercial_operating_dashboard_gate_green),
+        gate_i64(
+            commercial_operating_dashboard_gate,
+            "route_start_to_paid_task_conversion_percent",
+        ),
+        gate_i64(
+            commercial_operating_dashboard_gate,
+            "reward_claim_to_next_commission_percent",
+        ),
+        gate_i64(
+            commercial_operating_dashboard_gate,
+            "seller_completion_quality_percent",
+        ),
+        gate_i64(commercial_operating_dashboard_gate, "buyer_repeat_order_count"),
+        gate_i64(commercial_operating_dashboard_gate, "dispute_refund_reopen_count"),
         gauge_bool(future_engine_readiness_gate_green),
         route_runner_handoff_gate_u64(future_engine_readiness_gate, "promotion_blocker_count"),
         trillionnium_world_playability_scorecard

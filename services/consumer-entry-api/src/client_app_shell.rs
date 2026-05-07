@@ -898,6 +898,28 @@ pub(super) async fn get_client_app_web_shell(
         .and_then(|counts| counts.get("daily_return_resume"))
         .and_then(Value::as_i64)
         .unwrap_or(0);
+    let cohort_quality =
+        route_runner_funnel_telemetry.and_then(|telemetry| telemetry.get("cohort_quality"));
+    let reward_to_next_route_percent = cohort_quality
+        .and_then(|cohort| cohort.get("reward_to_next_route_conversion_percent"))
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let d1_resume_percent = cohort_quality
+        .and_then(|cohort| cohort.get("d1_resume_rate_percent"))
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let abandon_or_recovery_percent = cohort_quality
+        .and_then(|cohort| cohort.get("route_abandon_or_recovery_rate_percent"))
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let time_to_first_proof_seconds = cohort_quality
+        .and_then(|cohort| cohort.get("time_to_first_proof_seconds"))
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let time_to_next_route_seconds = cohort_quality
+        .and_then(|cohort| cohort.get("time_to_next_route_seconds"))
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
     let route_runner_funnel_chips = route_runner_funnel_telemetry
         .and_then(|telemetry| telemetry.get("event_counts"))
         .and_then(Value::as_object)
@@ -924,6 +946,75 @@ pub(super) async fn get_client_app_web_shell(
             .join("\n")
         })
         .unwrap_or_default();
+    let commercial_operating_dashboard =
+        economy_retention_ops.and_then(|ops| ops.get("commercial_operating_dashboard"));
+    let commercial_dashboard_chips = commercial_operating_dashboard
+        .map(|dashboard| {
+            [
+                (
+                    "route_start_to_paid_task_conversion_percent",
+                    "route → paid task",
+                    "%",
+                ),
+                (
+                    "reward_claim_to_next_commission_percent",
+                    "reward → next commission",
+                    "%",
+                ),
+                ("seller_completion_quality_percent", "seller quality", "%"),
+                ("buyer_repeat_order_count", "buyer repeats", ""),
+                ("dispute_refund_reopen_count", "disputes/reopens", ""),
+            ]
+            .iter()
+            .map(|(key, label, suffix)| {
+                let value = dashboard.get(*key).and_then(Value::as_i64).unwrap_or(0);
+                format!(
+                    "<span data-commercial-metric=\"{}\">{} · {}{}</span>",
+                    escape_html_text(key),
+                    escape_html_text(label),
+                    value,
+                    suffix,
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+        })
+        .unwrap_or_default();
+    let route_archetype_cards = economy_retention_ops
+        .and_then(|ops| ops.get("route_archetypes"))
+        .and_then(|catalog| catalog.get("archetypes"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .take(5)
+        .map(|archetype| {
+            let archetype_id = archetype
+                .get("archetype_id")
+                .and_then(Value::as_str)
+                .unwrap_or("route");
+            let label = archetype
+                .get("label")
+                .and_then(Value::as_str)
+                .unwrap_or("Route archetype");
+            let promise = archetype
+                .get("player_promise")
+                .and_then(Value::as_str)
+                .unwrap_or("different route meaning");
+            let cta = archetype
+                .get("primary_cta_copy")
+                .and_then(Value::as_str)
+                .unwrap_or("Run route");
+            format!(
+                "<article class=\"economy-card\" data-route-archetype=\"{}\"><strong>{}</strong><span>{}</span><small>{}</small></article>",
+                escape_html_text(archetype_id),
+                escape_client_app_visible_text(label),
+                escape_html_text(promise),
+                escape_html_text(cta),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
     let funnel_percent = economy_retention_ops
         .and_then(|ops| ops.get("playability_funnel"))
         .and_then(|funnel| funnel.get("completion_percent"))
@@ -1000,6 +1091,8 @@ pub(super) async fn get_client_app_web_shell(
     #app-map-action-panel {{ order:3; }}
     .map-panel {{ order:4; border:1px solid rgba(255,255,255,.12); border-radius:26px; background:rgba(255,255,255,.07); padding:22px; box-shadow:0 20px 70px rgba(0,0,0,.35); }}
     #real-world-map {{ min-height:430px; border-radius:26px; overflow:hidden; border:1px solid rgba(100,227,255,.28); box-shadow:0 24px 90px rgba(0,0,0,.45); background:#0b1220; }}
+    #real-world-map .leaflet-tile-pane {{ filter:saturate(.72) contrast(.88) brightness(.82); }}
+    #real-world-map .trillionnium-active-route-line {{ filter:drop-shadow(0 0 8px rgba(100,227,255,.58)); }}
     #real-world-map .leaflet-control-zoom a {{ width:40px; height:40px; line-height:40px; font-size:20px; }}
     .badge {{ display:inline-flex; width:max-content; color:#071019; background:var(--gold); border-radius:999px; padding:5px 10px; font-weight:800; }}
     .module {{ display:grid; gap:10px; border:1px solid rgba(255,255,255,.12); background:linear-gradient(145deg,rgba(255,255,255,.09),rgba(255,255,255,.035)); border-radius:22px; padding:22px; box-shadow:0 20px 70px rgba(0,0,0,.35); }}
@@ -1259,7 +1352,7 @@ pub(super) async fn get_client_app_web_shell(
         {}
       </ol>
       <section id="app-playability-coach" class="playability-coach-lanes" data-contract-version="{}" aria-label="P0 P1 P2 playability coach" data-i18n-aria-label-en="P0 P1 P2 playability coach" data-i18n-aria-label-zh="P0 P1 P2 可玩性教练">{}</section>
-      <details id="app-economy-retention-ops" class="dev-details economy-retention-drawer"><summary><span data-i18n-en="Economy · return · telemetry" data-i18n-zh="经济 · 回访 · 遥测">Economy · return · telemetry</span> · {}%</summary><p class="subtitle">{}</p><div id="app-route-runner-funnel-telemetry" class="map-stream-hud" data-contract-version="{}" data-time-to-reward-seconds="{}" data-time-to-reward-target-seconds="1800" data-daily-return-resume-count="{}">{}</div><div class="economy-retention-grid">{}</div><div class="map-stream-hud">{}</div></details>
+      <details id="app-economy-retention-ops" class="dev-details economy-retention-drawer"><summary><span data-i18n-en="Economy · return · telemetry" data-i18n-zh="经济 · 回访 · 遥测">Economy · return · telemetry</span> · {}%</summary><p class="subtitle">{}</p><div id="app-route-runner-funnel-telemetry" class="map-stream-hud" data-contract-version="{}" data-time-to-reward-seconds="{}" data-time-to-reward-target-seconds="1800" data-daily-return-resume-count="{}" data-reward-to-next-route-percent="{}" data-d1-resume-percent="{}" data-route-abandon-or-recovery-percent="{}" data-time-to-first-proof-seconds="{}" data-time-to-next-route-seconds="{}">{}</div><div id="app-route-archetype-catalog" class="economy-retention-grid">{}</div><div id="app-commercial-operating-dashboard" class="map-stream-hud" data-contract-version="trillionnium_world_commercial_operating_dashboard_v1">{}</div><div class="economy-retention-grid">{}</div><div class="map-stream-hud">{}</div></details>
       <details class="dev-details app-progress-drawer"><summary data-i18n-en="Progress checks" data-i18n-zh="进度检查">Progress checks</summary><div id="app-first-playable-checks" class="map-stream-hud">{}</div></details>
       <details id="app-first-playable-full-commands" class="dev-details app-full-command-drawer">{}{}<section id="app-first-playable-steps" class="grid">{}</section></details>
     </section>
@@ -1279,8 +1372,8 @@ pub(super) async fn get_client_app_web_shell(
       <div class="map-panel">
         <span class="badge" data-i18n-en="{}" data-i18n-zh="Trillionnium 世界地图">{}</span>
         <h2 data-i18n-en="OpenStreetMap upgraded into a playable world" data-i18n-zh="把 OpenStreetMap 升级成可玩的世界地图">OpenStreetMap upgraded into a playable world</h2>
-        <p id="app-map-copy-summary" class="app-copy-layer-summary" data-contract-version="trillionnium_mobile_copy_layering_v1" data-i18n-en="Pick a nearby route, watch your runner move, then claim the reward or open the next route." data-i18n-zh="选择附近路线，看角色跑图，然后领奖或开启下一条路线。">Pick a nearby route, watch your runner move, then claim the reward or open the next route.</p>
-        <p id="app-map-readability-lod" class="subtitle" data-contract-version="trillionnium_world_map_readability_lod_v1" data-first-screen-mode="route_first_street_detail" data-primary-cta-budget="1" data-visible-marker-budget="18" data-avatar-runner-budget="6" data-copy-summary-budget="150" data-details-default-state="collapsed" data-i18n-en="One route first: one CTA; layers collapsed; runners/rewards visible." data-i18n-zh="先看一条路线：一个主行动，图层收起，角色和奖励可见。">One route first: one CTA; layers collapsed; runners/rewards visible.</p>
+        <p id="app-map-copy-summary" class="app-copy-layer-summary" data-contract-version="trillionnium_mobile_copy_layering_v1" data-i18n-en="Pick a nearby route → submit proof → claim reward; the runner shows the next step." data-i18n-zh="选择附近路线 → 提交证据 → 领取奖励；角色显示下一步。">Pick a nearby route → submit proof → claim reward; the runner shows the next step.</p>
+        <p id="app-map-readability-lod" class="subtitle" data-contract-version="trillionnium_world_map_readability_lod_v1" data-semantic-layer-contract="trillionnium_world_map_game_layer_semantics_v1" data-first-screen-mode="route_first_street_detail" data-primary-cta-budget="1" data-visible-marker-budget="18" data-avatar-runner-budget="6" data-copy-summary-budget="150" data-details-default-state="collapsed" data-i18n-en="One route first: one CTA, muted OSM context, high-contrast route, start/objective/reward/locked pins." data-i18n-zh="先看一条路线：一个主行动、弱化底图、高对比路线、起点/目标/奖励/锁定图钉。">One route first: one CTA, muted OSM context, high-contrast route, start/objective/reward/locked pins.</p>
         <details id="app-map-copy-layer-details" class="app-copy-layer-details" data-contract-version="trillionnium_mobile_copy_layering_v1" data-default-state="collapsed"><summary data-i18n-en="Why this map matters" data-i18n-zh="为什么这张地图重要">Why this map matters</summary><p data-i18n-en="{}" data-i18n-zh="Trillionnium World Map 不是普通地图工具，而是在 OpenStreetMap 真实地理底座上叠加游戏人物、路线节点、任务牌、实时事件和交付闭环。角色会在地图上跑来跑去，接任务、提交证据、拿评级和奖励。">{}</p><p><strong data-i18n-en="Game Map Main Entry" data-i18n-zh="游戏地图主入口">Game Map Main Entry</strong>: <span data-i18n-en="move your avatar between nearby places, live events, and bounty nodes before entering other modules." data-i18n-zh="先让角色在附近地点、实时事件和悬赏节点之间跑图，再进入其他模块。">move your avatar between nearby places, live events, and bounty nodes before entering other modules.</span></p></details>
         <div id="app-mobile-action-sheet" class="app-map-product-strip app-mobile-action-sheet" aria-label="Mobile route action sheet" data-i18n-aria-label-en="Mobile route action sheet" data-i18n-aria-label-zh="移动路线行动面板" data-contract-version="trillionnium_mobile_single_primary_cta_v1" data-bottom-sheet-mode="fixed_above_bottom_tabs_on_mobile" data-primary-cta-count="1" data-primary-cta-target="app-map-action-rail">
           <div>
@@ -2079,7 +2172,14 @@ pub(super) async fn get_client_app_web_shell(
         escape_html_text(route_runner_funnel_contract),
         route_runner_funnel_time_to_reward,
         route_runner_funnel_daily_resume_count,
+        reward_to_next_route_percent,
+        d1_resume_percent,
+        abandon_or_recovery_percent,
+        time_to_first_proof_seconds,
+        time_to_next_route_seconds,
         route_runner_funnel_chips,
+        route_archetype_cards,
+        commercial_dashboard_chips,
         economy_tradeoff_cards,
         economy_ops_chips,
         onboarding_acceptance_chips,

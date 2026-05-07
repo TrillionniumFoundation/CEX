@@ -50,7 +50,7 @@ const leafletStub = String.raw`
   window.L = {
     map: makeMap,
     tileLayer: () => layerApi(),
-    layerGroup: () => ({...layerApi(), __layers: new Set(), clearLayers(){ this.__layers.clear(); return this; }, addLayer(layer){ this.__layers.add(layer); return this; }}),
+    layerGroup: () => ({...layerApi(), __layers: new Set(), clearLayers(){ this.__layers.clear(); return this; }, addLayer(layer){ this.__layers.add(layer); return this; }, hasLayer(layer){ return this.__layers.has(layer); }}),
     latLngBounds: () => ({
       isValid: () => true,
       pad(){ return this; },
@@ -59,6 +59,7 @@ const leafletStub = String.raw`
     }),
     polyline: () => layerApi(),
     marker: () => layerApi(),
+    divIcon: (options = {}) => ({ options }),
     circle: () => layerApi(),
     circleMarker: () => layerApi(),
     rectangle: () => layerApi(),
@@ -483,7 +484,9 @@ async function main() {
   assert(await count(page, '#world-mobile-first-screen') === 1, 'world mobile-first hero missing');
   routeRunnerHandoffCoverage.world_route_summary_dom = await assertRouteRunnerHandoffDom(page, '#world-route-runner-handoff-summary', '/world route summary');
   assert(await count(page, '#world-language-switcher [data-trillionnium-language-select]') === 1, 'world visible language switcher missing');
-  assert(await count(page, '#world-hero-mobile-actions .cta') >= 2, 'world mobile hero quick actions missing');
+  assert(await count(page, '#world-hero-mobile-actions[data-contract-version="trillionnium_mobile_single_primary_cta_v1"][data-primary-cta-count="1"]') === 1, 'world mobile single-primary CTA contract missing');
+  assert(await count(page, '#world-mobile-primary-cta.cta') === 1, 'world mobile primary CTA missing');
+  assert(await count(page, '#world-mobile-route-first-sheet .world-route-stepper span') === 3, 'world mobile route-first stepper missing');
   assert(await count(page, '#world-pulse-strip .pulse-card') === 5, 'world pulse strip should keep only compact primary counters visible');
   assert(await count(page, '#world-stats-compact-more .stat') >= 12, 'world compact stats drawer missing secondary counters');
   const pulseBox = await page.locator('#world-pulse-strip').boundingBox({ timeout: 10_000 });

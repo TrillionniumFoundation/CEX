@@ -2252,6 +2252,15 @@ fn client_app_map_hub_projects_stream_counts() {
             <= 18
     );
     assert_eq!(
+        app["mobile_shell_contract"]["map_readability_lod"]["semantic_layer_contract_version"],
+        "trillionnium_world_map_game_layer_semantics_v1"
+    );
+    assert!(
+        app["mobile_shell_contract"]["map_readability_lod"]["semantic_roles"]
+            .as_array()
+            .is_some_and(|roles| roles.len() >= 4)
+    );
+    assert_eq!(
         app["economy_retention_ops"]["route_runner_funnel_telemetry"]["contract_version"],
         "trillionnium_route_runner_funnel_telemetry_v1"
     );
@@ -2285,6 +2294,40 @@ fn client_app_map_hub_projects_stream_counts() {
         app["route_runner_funnel_telemetry"]["time_to_reward"]["target_seconds"],
         1800
     );
+    assert_eq!(
+        app["route_runner_funnel_telemetry"]["cohort_quality"]["contract_version"],
+        "trillionnium_route_runner_funnel_cohort_quality_v1"
+    );
+    assert!(app["route_runner_funnel_telemetry"]["cohort_quality"]
+        ["reward_to_next_route_conversion_percent"]
+        .as_i64()
+        .is_some());
+    assert!(
+        app["route_runner_funnel_telemetry"]["cohort_quality"]["d1_resume_rate_percent"]
+            .as_i64()
+            .is_some()
+    );
+    assert!(
+        app["route_runner_funnel_telemetry"]["cohort_quality"]["abandon_reason_breakdown"]
+            .as_object()
+            .is_some()
+    );
+    assert_eq!(
+        app["route_archetypes"]["contract_version"],
+        "trillionnium_world_route_archetypes_v1"
+    );
+    assert!(app["route_archetypes"]["archetypes"]
+        .as_array()
+        .is_some_and(|archetypes| archetypes.len() >= 5));
+    assert_eq!(
+        app["commercial_operating_dashboard"]["contract_version"],
+        "trillionnium_world_commercial_operating_dashboard_v1"
+    );
+    assert!(
+        app["commercial_operating_dashboard"]["route_start_to_paid_task_conversion_percent"]
+            .as_i64()
+            .is_some()
+    );
     assert!(app["route_runner_funnel_telemetry"]["readiness_checks"]
         .as_array()
         .is_some_and(|checks| checks
@@ -2303,6 +2346,7 @@ fn client_app_map_hub_projects_stream_counts() {
         "mobile_bottom_sheet_single_primary_cta_visible",
         "mobile_copy_layering_visible",
         "map_readability_lod_visible",
+        "map_game_layer_semantics_visible",
         "offline_feed_fallback_status_visible",
         "web_session_feed_hydration_visible",
         "next_action_rail_visible",
@@ -2536,10 +2580,15 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(app_html.contains("data-primary-cta-budget=\"1\""));
     assert!(app_html.contains("data-visible-marker-budget=\"18\""));
     assert!(app_html.contains("One route first"));
+    assert!(app_html.contains("trillionnium_world_map_game_layer_semantics_v1"));
     assert!(app_html.contains("map_readability_lod_visible"));
+    assert!(app_html.contains("map_game_layer_semantics_visible"));
     assert!(app_html.contains("app-route-runner-funnel-telemetry"));
     assert!(app_html.contains("trillionnium_route_runner_funnel_telemetry_v1"));
     assert!(app_html.contains("data-time-to-reward-target-seconds=\"1800\""));
+    assert!(app_html.contains("data-reward-to-next-route-percent="));
+    assert!(app_html.contains("app-route-archetype-catalog"));
+    assert!(app_html.contains("app-commercial-operating-dashboard"));
     assert!(app_html.contains("keyboard_tab_navigation_visible"));
     assert!(app_html.contains("offline_feed_fallback_status_visible"));
     assert!(app_html.contains("web_session_feed_hydration_visible"));
@@ -2627,6 +2676,16 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(world_html.contains("mapEventFocusButton"));
     assert!(world_html.contains("mapViewportCardModel"));
     assert!(world_html.contains("mapViewportCardHtml"));
+    assert!(world_html.contains("world-mobile-primary-cta"));
+    assert!(world_html.contains("data-primary-cta-count=\"1\""));
+    assert!(world_html.contains("Pick route"));
+    assert!(world_html.contains("Submit proof"));
+    assert!(world_html.contains("Claim reward"));
+    assert!(world_html.contains("world-route-archetype-catalog"));
+    assert!(world_html.contains("trillionnium_world_route_archetypes_v1"));
+    assert!(world_html.contains("bounty_delivery"));
+    assert!(world_html.contains("trillionnium-active-route-line"));
+    assert!(world_html.contains("trillionnium-map-pin"));
     let mut recovery_query = HashMap::new();
     recovery_query.insert("recovery".to_string(), "action-input".to_string());
     let world_recovery_html = get_world_web_shell(
@@ -11013,6 +11072,11 @@ async fn health_endpoint_exposes_identity_governance_overview() {
             ["telemetry_contract_version"],
         "trillionnium_route_runner_funnel_telemetry_v1"
     );
+    assert_eq!(
+        body["trillionnium_world_playability_scorecard"]["route_runner_funnel_telemetry_gate"]
+            ["cohort_quality_contract_version"],
+        "trillionnium_route_runner_funnel_cohort_quality_v1"
+    );
     assert!(
         body["trillionnium_world_playability_scorecard"]["route_runner_funnel_telemetry_gate"]
             ["route_started_count"]
@@ -11030,6 +11094,21 @@ async fn health_endpoint_exposes_identity_governance_overview() {
             ["time_to_reward_target_seconds"],
         1800
     );
+    assert!(
+        body["trillionnium_world_playability_scorecard"]["route_runner_funnel_telemetry_gate"]
+            ["reward_to_next_route_conversion_percent"]
+            .as_i64()
+            .is_some()
+    );
+    assert_eq!(
+        body["trillionnium_world_playability_scorecard"]["commercial_operating_dashboard_gate"]
+            ["dashboard_contract_version"],
+        "trillionnium_world_commercial_operating_dashboard_v1"
+    );
+    assert!(body["trillionnium_world_playability_scorecard"]
+        ["commercial_operating_dashboard_gate"]["reward_claim_to_next_commission_percent"]
+        .as_i64()
+        .is_some());
     assert_eq!(
         body["trillionnium_world_playability_scorecard"]["future_engine_readiness_gate"]
             ["contract_version"],
@@ -11216,6 +11295,16 @@ async fn metrics_endpoint_exposes_identity_governance_gauges() {
     );
     assert!(body
         .contains("cex_consumer_entry_trillionnium_route_runner_funnel_daily_return_resume_count"));
+    assert!(body.contains(
+        "cex_consumer_entry_trillionnium_route_runner_funnel_reward_to_next_route_percent"
+    ));
+    assert!(body.contains("cex_consumer_entry_trillionnium_route_runner_funnel_d1_resume_percent"));
+    assert!(body.contains(
+        "cex_consumer_entry_trillionnium_world_commercial_operating_dashboard_gate_green"
+    ));
+    assert!(body.contains(
+        "cex_consumer_entry_trillionnium_world_commercial_reward_claim_to_next_commission_percent"
+    ));
     assert!(
         body.contains("cex_consumer_entry_trillionnium_world_future_engine_readiness_gate_green")
     );

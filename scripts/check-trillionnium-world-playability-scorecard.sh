@@ -103,11 +103,19 @@ require("playability_map_readability_lod_visible_id", map_readability_lod_gate.g
 require("playability_map_readability_lod_single_cta", int(map_readability_lod_gate.get("max_primary_cta_count") or 0) == 1, map_readability_lod_gate)
 require("playability_map_readability_lod_marker_budget", int(map_readability_lod_gate.get("max_visible_markers") or 999) <= 18 and map_readability_lod_gate.get("within_budget") is True, map_readability_lod_gate)
 require("playability_map_readability_lod_runner_budget", int(map_readability_lod_gate.get("max_avatar_route_runners") or 999) <= 6, map_readability_lod_gate)
+require("playability_map_semantic_layer_contract", map_readability_lod_gate.get("semantic_layer_contract_version") == "trillionnium_world_map_game_layer_semantics_v1" and map_readability_lod_gate.get("viewport_semantic_contract_version") == "trillionnium_world_map_game_layer_semantics_v1", map_readability_lod_gate)
+require("playability_map_semantic_layers_visible", map_readability_lod_gate.get("muted_osm_context_visible") is True and map_readability_lod_gate.get("active_route_contrast_visible") is True and int(map_readability_lod_gate.get("semantic_role_count") or 0) >= 4, map_readability_lod_gate)
 require("playability_route_runner_funnel_gate_contract", route_runner_funnel_telemetry_gate.get("contract_version") == "trillionnium_route_runner_funnel_telemetry_gate_v1", route_runner_funnel_telemetry_gate)
 require("playability_route_runner_funnel_contract", route_runner_funnel_telemetry_gate.get("telemetry_contract_version") == "trillionnium_route_runner_funnel_telemetry_v1", route_runner_funnel_telemetry_gate)
+require("playability_route_runner_cohort_contract", route_runner_funnel_telemetry_gate.get("cohort_quality_contract_version") == "trillionnium_route_runner_funnel_cohort_quality_v1", route_runner_funnel_telemetry_gate)
 require("playability_route_runner_funnel_stream", route_runner_funnel_telemetry_gate.get("telemetry_stream") == "world_economy_events:playability_telemetry", route_runner_funnel_telemetry_gate)
 require("playability_route_runner_funnel_counts_visible", all(route_runner_funnel_telemetry_gate.get(key) is not None for key in ["route_started_count", "evidence_submitted_count", "reward_claimed_count", "next_route_opened_count", "abandoned_or_recovery_count", "daily_return_resume_count"]), route_runner_funnel_telemetry_gate)
 require("playability_route_runner_funnel_time_target", int(route_runner_funnel_telemetry_gate.get("time_to_reward_target_seconds") or 0) == 1800, route_runner_funnel_telemetry_gate)
+require("playability_route_runner_cohort_metrics_visible", all(route_runner_funnel_telemetry_gate.get(key) is not None for key in ["reward_to_next_route_conversion_percent", "d1_resume_rate_percent", "route_abandon_or_recovery_rate_percent", "time_to_first_proof_seconds", "time_to_next_route_seconds"]) and route_runner_funnel_telemetry_gate.get("abandon_reason_breakdown_visible") is True, route_runner_funnel_telemetry_gate)
+commercial_operating_dashboard_gate = scorecard.get("commercial_operating_dashboard_gate") or {}
+require("playability_commercial_dashboard_gate_contract", commercial_operating_dashboard_gate.get("contract_version") == "trillionnium_world_commercial_operating_dashboard_gate_v1", commercial_operating_dashboard_gate)
+require("playability_commercial_dashboard_contract", commercial_operating_dashboard_gate.get("dashboard_contract_version") == "trillionnium_world_commercial_operating_dashboard_v1", commercial_operating_dashboard_gate)
+require("playability_commercial_operating_metrics_visible", all(commercial_operating_dashboard_gate.get(key) is not None for key in ["route_start_to_paid_task_conversion_percent", "reward_claim_to_next_commission_percent", "seller_completion_quality_percent", "buyer_repeat_order_count", "dispute_refund_reopen_count"]), commercial_operating_dashboard_gate)
 require("playability_future_engine_gate_contract", future_engine_readiness_gate.get("contract_version") == "trillionnium_world_future_engine_readiness_gate_v1", future_engine_readiness_gate)
 require("playability_future_engine_readiness_contract", future_engine_readiness_gate.get("readiness_contract_version") == "trillionnium_world_future_engine_readiness_v1", future_engine_readiness_gate)
 require("playability_future_engine_stays_leaflet", future_engine_readiness_gate.get("active_engine_id") == "leaflet_openstreetmap_v1", future_engine_readiness_gate)
@@ -148,6 +156,14 @@ for metric in [
     "cex_consumer_entry_trillionnium_route_runner_funnel_abandoned_or_recovery_count",
     "cex_consumer_entry_trillionnium_route_runner_funnel_time_to_reward_seconds",
     "cex_consumer_entry_trillionnium_route_runner_funnel_daily_return_resume_count",
+    "cex_consumer_entry_trillionnium_route_runner_funnel_reward_to_next_route_percent",
+    "cex_consumer_entry_trillionnium_route_runner_funnel_d1_resume_percent",
+    "cex_consumer_entry_trillionnium_route_runner_funnel_route_abandon_or_recovery_percent",
+    "cex_consumer_entry_trillionnium_route_runner_funnel_time_to_first_proof_seconds",
+    "cex_consumer_entry_trillionnium_route_runner_funnel_time_to_next_route_seconds",
+    "cex_consumer_entry_trillionnium_world_commercial_operating_dashboard_gate_green",
+    "cex_consumer_entry_trillionnium_world_commercial_route_start_to_paid_task_percent",
+    "cex_consumer_entry_trillionnium_world_commercial_reward_claim_to_next_commission_percent",
     "cex_consumer_entry_trillionnium_world_future_engine_readiness_gate_green",
     "cex_consumer_entry_trillionnium_world_future_engine_promotion_blocker_count",
     "cex_consumer_entry_trillionnium_world_playability_scorecard_overall_score",

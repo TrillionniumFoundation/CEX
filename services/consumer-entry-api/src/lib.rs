@@ -44,6 +44,8 @@ mod world_indexes;
 use world_indexes::{build_world_indexes, indexed_recent, indexed_sorted, WorldIndexes};
 mod world_route_projection;
 use world_route_projection::*;
+mod world_map_optimization;
+use world_map_optimization::*;
 mod real_world_map_shell;
 use real_world_map_shell::*;
 mod world_map_projection;

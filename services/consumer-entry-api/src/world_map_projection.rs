@@ -631,6 +631,21 @@ pub(super) fn world_map_node_primary_actions_json(node: &WorldMapNode) -> Vec<Va
 
 pub(super) fn real_world_node_marker_json(node: &WorldMapNode) -> Value {
     let (lat, lng) = real_world_node_coordinates(node);
+    let has_tag = |tag: &str| node.interaction_tags.iter().any(|value| value == tag);
+    let (pin_semantic_role, pin_icon) =
+        if has_tag("wallet") || has_tag("reward") || has_tag("accept") || has_tag("contract") {
+            ("reward", "🏆")
+        } else if has_tag("deliver") || has_tag("work") || has_tag("task") {
+            ("objective", "🎯")
+        } else if has_tag("market") || has_tag("buy") || has_tag("sell") || has_tag("listing") {
+            ("market", "🧾")
+        } else if has_tag("arena") || has_tag("raid") || has_tag("guild") || has_tag("team") {
+            ("guild", "🛡")
+        } else if has_tag("locked") || has_tag("review") {
+            ("locked", "🔒")
+        } else {
+            ("start", "🧭")
+        };
     json!({
         "node_id": &node.node_id,
         "location_id": &node.location_id,
@@ -646,6 +661,9 @@ pub(super) fn real_world_node_marker_json(node: &WorldMapNode) -> Value {
         "y": node.y,
         "interaction_tags": &node.interaction_tags,
         "freedom_hooks": &node.freedom_hooks,
+        "pin_semantic_role": pin_semantic_role,
+        "pin_icon": pin_icon,
+        "pin_semantic_contract": TRILLIONNIUM_WORLD_MAP_GAME_LAYER_SEMANTICS_CONTRACT_VERSION,
         "primary_actions": world_map_node_primary_actions_json(node),
     })
 }
@@ -674,6 +692,8 @@ pub(super) fn trillionnium_world_map_gameplay_layer_contract_json() -> Value {
             "route_runner_next_route_actions": true,
             "map_readability_lod": true,
             "map_readability_lod_contract_version": TRILLIONNIUM_WORLD_MAP_READABILITY_LOD_CONTRACT_VERSION,
+            "game_layer_semantics": true,
+            "game_layer_semantics_contract_version": TRILLIONNIUM_WORLD_MAP_GAME_LAYER_SEMANTICS_CONTRACT_VERSION,
             "agent_party_state": true,
             "agent_party_handoff_actions": true,
             "live_event_task_pulses": true,
@@ -758,6 +778,7 @@ pub(super) fn world_map_readability_lod_contract_json(
             "live_event_pulses",
             "secondary_poi_details"
         ],
+        "game_layer_semantics": trillionnium_world_map_game_layer_semantics_json(),
         "zoom_rules": [
             {"zoom_min": 3, "zoom_max": 9, "mode": "overview_cluster", "visible_layers": ["region_shards", "route_clusters"]},
             {"zoom_min": 10, "zoom_max": 13, "mode": "region_route_cluster", "visible_layers": ["region_shards", "poi_hotspots", "task_routes"]},
@@ -771,7 +792,8 @@ pub(super) fn world_map_readability_lod_contract_json(
             "visible_marker_budget_enforced",
             "avatar_runner_budget_enforced",
             "lod_zoom_rules_visible",
-            "layer_priority_visible"
+            "layer_priority_visible",
+            "game_layer_semantics_visible"
         ]
     })
 }
@@ -2084,13 +2106,17 @@ pub(super) fn real_world_map_future_engine_readiness_json() -> Value {
             "renderer_adapter_contract_green",
             "map_readability_lod_contract_green",
             "route_runner_funnel_telemetry_green",
+            "route_runner_cohort_quality_green",
+            "world_mobile_entry_parity_green",
+            "semantic_map_layers_green",
             "web_matrix_browser_e2e_green",
             "rollback_to_leaflet_documented"
         ],
         "promotion_blockers": [
             "no_current_vector_webgl_pressure",
             "keep_leaflet_openstreetmap_v1_live_for_public_beta",
-            "avoid_platform_migration_before_product_readability"
+            "avoid_platform_migration_before_product_readability",
+            "prove_reward_to_next_route_retention_before_engine_migration"
         ],
         "scale_probe_targets": {
             "max_visible_markers": 18,
@@ -2110,7 +2136,8 @@ pub(super) fn real_world_map_future_engine_readiness_json() -> Value {
             "lod_budget_precondition_visible",
             "telemetry_precondition_visible",
             "rollback_plan_visible",
-            "promotion_blockers_visible"
+            "promotion_blockers_visible",
+            "product_loop_proof_before_migration_visible"
         ]
     })
 }

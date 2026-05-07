@@ -395,6 +395,56 @@ groups:
         '
       runbook: docs/operator-runbook-v1.md
       first_action: curl -s http://127.0.0.1:8090/metrics | grep cex_consumer_entry_trillionnium_route_runner_funnel
+  - alert: CexTrillionniumRouteRunnerRewardToNextRouteWeak
+    expr: cex_consumer_entry_trillionnium_route_runner_funnel_reward_to_next_route_percent
+      < 5
+    for: 30m
+    labels:
+      severity: warning
+      service: consumer-entry-api
+      family: product-edge
+      component: trillionnium-route-runner-handoff
+      owner: product-ops
+      route_hint: product
+    annotations:
+      summary: Trillionnium reward-to-next-route conversion is weak
+      description: 'Players are claiming rewards but not opening the next route at
+        a healthy rate. Keep
+
+        optimizing the one-route-first CTA, reward/XP copy, and next-route unlock
+        motivation
+
+        before adding map density or promoting a new renderer.
+
+        '
+      runbook: docs/operator-runbook-v1.md
+      first_action: curl -s http://127.0.0.1:8090/health | jq '.trillionnium_world_playability_scorecard.route_runner_funnel_telemetry_gate
+        | {reward_to_next_route_conversion_percent,d1_resume_rate_percent,time_to_next_route_seconds}'
+  - alert: CexTrillionniumWorldCommercialDashboardNotGreen
+    expr: cex_consumer_entry_trillionnium_world_commercial_operating_dashboard_gate_green
+      == 0
+    for: 10m
+    labels:
+      severity: warning
+      service: consumer-entry-api
+      family: product-edge
+      component: trillionnium-route-runner-handoff
+      owner: product-ops
+      route_hint: product
+    annotations:
+      summary: Trillionnium commercial operating dashboard is not green
+      description: 'Public-commercial posture should expose operating metrics, not
+        only a 100% gate: route
+
+        start → paid task, reward claim → next commission, seller quality, buyer repeat,
+        and
+
+        dispute/refund/reopen counts.
+
+        '
+      runbook: docs/operator-runbook-v1.md
+      first_action: curl -s http://127.0.0.1:8090/health | jq '.trillionnium_world_playability_scorecard.commercial_operating_dashboard_gate,
+        .trillionnium_world_public_commercial_product.commercial_operating_dashboard_gate'
   - alert: CexTrillionniumWorldFutureEngineReadinessNotGreen
     expr: cex_consumer_entry_trillionnium_world_future_engine_readiness_gate_green
       == 0

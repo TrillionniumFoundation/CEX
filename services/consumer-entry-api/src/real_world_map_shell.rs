@@ -315,10 +315,19 @@ pub(super) fn real_world_map_runtime_bootstrap_js() -> &'static str {
           return L.latLngBounds(points);
         },
         renderRouteLine(map, fromPoint, toPoint, options = {}) {
-          return L.polyline([[fromPoint.lat, fromPoint.lng], [toPoint.lat, toPoint.lng]], options).addTo(map);
+          const routeOptions = { className: 'trillionnium-active-route-line', weight: 4, opacity: 0.82, ...options };
+          return L.polyline([[fromPoint.lat, fromPoint.lng], [toPoint.lat, toPoint.lng]], routeOptions).addTo(map);
         },
         renderPoiMarker(map, marker, popupHtml) {
-          return L.marker([marker.lat, marker.lng], { title: marker.name || marker.node_id }).addTo(map).bindPopup(popupHtml);
+          const role = String(marker.pin_semantic_role || 'objective').replace(/[^a-z0-9_-]/gi, '').toLowerCase() || 'objective';
+          const iconText = marker.pin_icon || ({ start: '🧭', objective: '🎯', reward: '🏆', locked: '🔒', guild: '🛡', market: '🧾' }[role]) || '📍';
+          const icon = L.divIcon({
+            className: `trillionnium-map-pin trillionnium-map-pin-${role}`,
+            html: `<div class="trillionnium-map-pin-dot" data-pin-role="${escapeHtml(role)}" style="width:34px;height:34px;border-radius:999px;display:grid;place-items:center;background:rgba(7,8,20,.92);border:2px solid ${role === 'reward' ? '#7dff9b' : role === 'locked' ? '#9aa3b2' : role === 'market' ? '#f8c35b' : '#64e3ff'};box-shadow:0 0 0 3px rgba(7,8,20,.65),0 0 22px rgba(100,227,255,.34);font-size:18px;">${escapeHtml(iconText)}</div>`,
+            iconSize: [34, 34],
+            iconAnchor: [17, 30],
+          });
+          return L.marker([marker.lat, marker.lng], { icon, title: marker.name || marker.node_id, zIndexOffset: role === 'reward' ? 820 : role === 'locked' ? 500 : 700 }).addTo(map).bindPopup(popupHtml);
         },
         renderDensityCircle(layer, centerPoint, radiusMeters, options = {}) {
           return L.circle([centerPoint.lat, centerPoint.lng], { radius: radiusMeters, ...options }).addTo(layer);
@@ -904,7 +913,7 @@ pub(super) fn real_world_map_static_marker_layers_js() -> &'static str {
     r#"      const mapMarkerActionButtonHtml = (marker, action) => `<button type="button" class="trillionnium-map-action" data-node-id="${escapeHtml(marker.node_id)}" data-action-id="${escapeHtml(action.action_id || 'move_here')}">${escapeHtml(mapText(action.label || action.command || 'Action / 行动'))}</button>`;
       (engine.route_edges || []).forEach((edge) => {
         if (!edge.from || !edge.to) return;
-        mapAdapter.renderRouteLine(mapRuntime, edge.from, edge.to, { color: '#64e3ff', weight: 2, opacity: 0.62 });
+        mapAdapter.renderRouteLine(mapRuntime, edge.from, edge.to, { color: '#64e3ff', weight: 4, opacity: 0.82, className: 'trillionnium-active-route-line' });
       });
       (engine.markers || []).forEach((marker) => {
         const actionButtons = (marker.primary_actions || []).map((action) => mapMarkerActionButtonHtml(marker, action)).join(' ');

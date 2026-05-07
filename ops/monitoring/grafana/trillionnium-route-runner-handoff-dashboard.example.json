@@ -576,6 +576,95 @@
       ],
       "title": "Mobile map readability / funnel / future engine",
       "type": "timeseries"
+    },
+    {
+      "id": 7,
+      "title": "Retention cohort / commercial operating dashboard",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "expr": "cex_consumer_entry_trillionnium_route_runner_funnel_reward_to_next_route_percent",
+          "legendFormat": "route_runner_funnel_reward_to_next_route_percent",
+          "refId": "A"
+        },
+        {
+          "expr": "cex_consumer_entry_trillionnium_route_runner_funnel_d1_resume_percent",
+          "legendFormat": "route_runner_funnel_d1_resume_percent",
+          "refId": "B"
+        },
+        {
+          "expr": "cex_consumer_entry_trillionnium_route_runner_funnel_route_abandon_or_recovery_percent",
+          "legendFormat": "route_runner_funnel_route_abandon_or_recovery_percent",
+          "refId": "C"
+        },
+        {
+          "expr": "cex_consumer_entry_trillionnium_route_runner_funnel_time_to_first_proof_seconds",
+          "legendFormat": "route_runner_funnel_time_to_first_proof_seconds",
+          "refId": "D"
+        },
+        {
+          "expr": "cex_consumer_entry_trillionnium_route_runner_funnel_time_to_next_route_seconds",
+          "legendFormat": "route_runner_funnel_time_to_next_route_seconds",
+          "refId": "E"
+        },
+        {
+          "expr": "cex_consumer_entry_trillionnium_world_commercial_operating_dashboard_gate_green",
+          "legendFormat": "world_commercial_operating_dashboard_gate_green",
+          "refId": "F"
+        },
+        {
+          "expr": "cex_consumer_entry_trillionnium_world_commercial_route_start_to_paid_task_percent",
+          "legendFormat": "world_commercial_route_start_to_paid_task_percent",
+          "refId": "G"
+        },
+        {
+          "expr": "cex_consumer_entry_trillionnium_world_commercial_reward_claim_to_next_commission_percent",
+          "legendFormat": "world_commercial_reward_claim_to_next_commission_percent",
+          "refId": "H"
+        },
+        {
+          "expr": "cex_consumer_entry_trillionnium_world_commercial_seller_completion_quality_percent",
+          "legendFormat": "world_commercial_seller_completion_quality_percent",
+          "refId": "I"
+        },
+        {
+          "expr": "cex_consumer_entry_trillionnium_world_commercial_buyer_repeat_order_count",
+          "legendFormat": "world_commercial_buyer_repeat_order_count",
+          "refId": "J"
+        },
+        {
+          "expr": "cex_consumer_entry_trillionnium_world_commercial_dispute_refund_reopen_count",
+          "legendFormat": "world_commercial_dispute_refund_reopen_count",
+          "refId": "K"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          }
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 32
+      }
     }
   ],
   "refresh": "30s",

@@ -1662,6 +1662,8 @@ impl<'a> ClientAppProjectionContext<'a> {
                 "max_visible_markers": 18,
                 "max_avatar_route_runners": 6,
                 "details_default_state": "collapsed",
+                "semantic_layer_contract_version": TRILLIONNIUM_WORLD_MAP_GAME_LAYER_SEMANTICS_CONTRACT_VERSION,
+                "semantic_roles": ["start", "objective", "reward", "locked", "guild", "market"],
             },
             "resilience": {
                 "feed_api_hydration": "loadFeedSurface",
@@ -1683,6 +1685,7 @@ impl<'a> ClientAppProjectionContext<'a> {
                 "mobile_bottom_sheet_single_primary_cta_visible",
                 "mobile_copy_layering_visible",
                 "map_readability_lod_visible",
+                "map_game_layer_semantics_visible",
                 "next_action_rail_visible",
                 "playability_coach_visible",
                 "p0_next_best_action_visible",
@@ -1763,25 +1766,26 @@ impl<'a> ClientAppProjectionContext<'a> {
             .iter()
             .filter(|acceptance| acceptance.matrix_user_id == matrix_user_id)
             .count() as i64;
-        let recovery_count = self
+        let rejection_count = self
             .world
             .world_work_rejections
             .iter()
             .filter(|rejection| rejection.matrix_user_id == matrix_user_id)
-            .count()
-            + self
-                .world
-                .world_work_reopens
-                .iter()
-                .filter(|reopen| reopen.matrix_user_id == matrix_user_id)
-                .count()
-            + self
-                .world
-                .world_work_cancellations
-                .iter()
-                .filter(|cancellation| cancellation.matrix_user_id == matrix_user_id)
-                .count();
-        let rating_or_recovery_count = acceptance_count + recovery_count as i64;
+            .count() as i64;
+        let reopen_count = self
+            .world
+            .world_work_reopens
+            .iter()
+            .filter(|reopen| reopen.matrix_user_id == matrix_user_id)
+            .count() as i64;
+        let cancellation_count = self
+            .world
+            .world_work_cancellations
+            .iter()
+            .filter(|cancellation| cancellation.matrix_user_id == matrix_user_id)
+            .count() as i64;
+        let recovery_count = rejection_count + reopen_count + cancellation_count;
+        let rating_or_recovery_count = acceptance_count + recovery_count;
         let reward_count = self
             .league
             .rewards
@@ -1852,7 +1856,7 @@ impl<'a> ClientAppProjectionContext<'a> {
         let reward_claimed_count = reward_count;
         let next_route_opened_count =
             route_backlog_count.max(map_metrics.avatar_task_route_count as i64);
-        let abandoned_or_recovery_count = review_hold_count + recovery_count as i64;
+        let abandoned_or_recovery_count = review_hold_count + recovery_count;
         let mut route_start_epochs: Vec<i64> = self
             .world
             .world_events
@@ -1931,6 +1935,17 @@ impl<'a> ClientAppProjectionContext<'a> {
             } else {
                 0
             };
+        let first_next_route_epoch = first_reward_epoch.and_then(|reward_epoch| {
+            route_start_epochs
+                .iter()
+                .copied()
+                .filter(|epoch| *epoch > reward_epoch)
+                .min()
+        });
+        let reward_to_next_route_seconds = first_reward_epoch
+            .zip(first_next_route_epoch)
+            .map(|(reward, next_route)| (next_route - reward).max(0))
+            .unwrap_or(0);
         let mut active_days = HashSet::new();
         for epoch in self
             .world
@@ -1965,8 +1980,58 @@ impl<'a> ClientAppProjectionContext<'a> {
         {
             active_days.insert(epoch / 86_400);
         }
+        let active_day_count = active_days.len() as i64;
         let daily_return_resume_count =
-            (active_days.len() as i64).max(if route_backlog_count > 0 { 1 } else { 0 });
+            active_day_count.max(if route_backlog_count > 0 { 1 } else { 0 });
+        let paid_task_count = purchase_count.max(work_order_count);
+        let reward_to_next_route_percent =
+            trillionnium_percent_i64(next_route_opened_count, reward_claimed_count);
+        let d1_resume_percent =
+            trillionnium_percent_i64(daily_return_resume_count, route_started_count);
+        let abandon_or_recovery_percent =
+            trillionnium_percent_i64(abandoned_or_recovery_count, route_started_count);
+        let route_runner_cohort_quality = json!({
+            "contract_version": TRILLIONNIUM_ROUTE_RUNNER_COHORT_QUALITY_CONTRACT_VERSION,
+            "status": trillionnium_retention_band(reward_to_next_route_percent),
+            "reward_to_next_route_conversion_percent": reward_to_next_route_percent,
+            "d1_resume_rate_percent": d1_resume_percent,
+            "route_abandon_or_recovery_rate_percent": abandon_or_recovery_percent,
+            "time_to_first_proof_seconds": route_start_to_evidence_seconds,
+            "time_to_next_route_seconds": reward_to_next_route_seconds,
+            "first_next_route_epoch": first_next_route_epoch,
+            "sample_mode": if reward_claimed_count > 0 { "runtime_projection_cohort" } else { "sparse_no_reward_sample" },
+            "retention_action": "show stronger reward → next-route CTA, streak incentive, and route reason before adding map density",
+            "abandon_reason_breakdown": {
+                "review_hold": review_hold_count,
+                "rejection": rejection_count,
+                "reopen": reopen_count,
+                "cancellation": cancellation_count
+            },
+            "readiness_checks": [
+                "reward_to_next_route_conversion_visible",
+                "d1_resume_rate_visible",
+                "route_abandon_reason_breakdown_visible",
+                "time_to_first_proof_visible",
+                "time_to_next_route_visible"
+            ]
+        });
+        let commercial_operating_dashboard = trillionnium_commercial_operating_dashboard_json(
+            route_started_count,
+            paid_task_count,
+            reward_claimed_count,
+            next_route_opened_count,
+            delivery_count,
+            acceptance_count,
+            purchase_count,
+            abandoned_or_recovery_count,
+        );
+        let route_archetypes = trillionnium_world_route_archetypes_json(
+            route_backlog_count,
+            listed_count,
+            work_order_count,
+            completion_count,
+            active_day_count,
+        );
         let funnel_steps = vec![
             json!({"step_id": "first_focus_selected", "label": "Map focus selected / 选择地图焦点", "count": if self.world.world_player_positions.contains_key(matrix_user_id) { 1 } else { 0 }, "completed": self.world.world_player_positions.contains_key(matrix_user_id)}),
             json!({"step_id": "world_action_started", "label": "World action started / 开始世界行动", "count": world_action_count, "completed": world_action_count > 0}),
@@ -2006,12 +2071,15 @@ impl<'a> ClientAppProjectionContext<'a> {
                 "first_route_start_epoch": first_route_start_epoch,
                 "first_evidence_epoch": first_evidence_epoch,
                 "first_reward_epoch": first_reward_epoch,
+                "first_next_route_epoch": first_next_route_epoch,
                 "route_start_to_evidence_seconds": route_start_to_evidence_seconds,
                 "evidence_to_reward_seconds": evidence_to_reward_seconds,
+                "reward_to_next_route_seconds": reward_to_next_route_seconds,
                 "p50_seconds": time_to_reward_seconds,
                 "target_seconds": 1800,
                 "within_target": time_to_reward_sample_count > 0 && time_to_reward_seconds <= 1800,
             },
+            "cohort_quality": route_runner_cohort_quality,
             "resume_hooks": [
                 {"hook_id": "daily_resume_next_route", "event": "daily_return_resume", "source": "route_backlog_count", "count": daily_return_resume_count},
                 {"hook_id": "reward_claim_reminder", "event": "reward_claimed", "source": "league_rewards_plus_world_acceptance", "count": reward_claimed_count},
@@ -2025,7 +2093,10 @@ impl<'a> ClientAppProjectionContext<'a> {
                 "cex_consumer_entry_trillionnium_route_runner_funnel_next_route_opened_count",
                 "cex_consumer_entry_trillionnium_route_runner_funnel_abandoned_or_recovery_count",
                 "cex_consumer_entry_trillionnium_route_runner_funnel_time_to_reward_seconds",
-                "cex_consumer_entry_trillionnium_route_runner_funnel_daily_return_resume_count"
+                "cex_consumer_entry_trillionnium_route_runner_funnel_daily_return_resume_count",
+                "cex_consumer_entry_trillionnium_route_runner_funnel_reward_to_next_route_percent",
+                "cex_consumer_entry_trillionnium_route_runner_funnel_d1_resume_percent",
+                "cex_consumer_entry_trillionnium_route_runner_funnel_route_abandon_or_recovery_percent"
             ],
             "readiness_checks": [
                 "route_started_event_count_visible",
@@ -2034,7 +2105,12 @@ impl<'a> ClientAppProjectionContext<'a> {
                 "next_route_opened_count_visible",
                 "abandoned_or_recovery_count_visible",
                 "time_to_reward_target_visible",
-                "daily_return_resume_visible"
+                "daily_return_resume_visible",
+                "reward_to_next_route_conversion_visible",
+                "d1_resume_rate_visible",
+                "route_abandon_reason_breakdown_visible",
+                "time_to_first_proof_visible",
+                "time_to_next_route_visible"
             ]
         });
         json!({
@@ -2056,7 +2132,7 @@ impl<'a> ClientAppProjectionContext<'a> {
                 "playability_telemetry_event_count": playability_telemetry_event_count,
                 "market_tax_sink_count": market_tax_sink_count,
                 "encounter_state_event_count": encounter_state_event_count,
-                "active_day_count": active_days.len(),
+                "active_day_count": active_day_count,
                 "progression_level": progression_level,
                 "successful_task_count": successful_task_count,
                 "live_event_count": map_metrics.live_event_count,
@@ -2083,6 +2159,8 @@ impl<'a> ClientAppProjectionContext<'a> {
                 "steps": funnel_steps,
             },
             "route_runner_funnel_telemetry": route_runner_funnel_telemetry,
+            "route_archetypes": route_archetypes,
+            "commercial_operating_dashboard": commercial_operating_dashboard,
             "anti_cheese_policy": {
                 "policy_id": "trillionnium_playability_anti_cheese_v1",
                 "cooldown_seconds": 300,
@@ -2099,6 +2177,9 @@ impl<'a> ClientAppProjectionContext<'a> {
                 "league_encounter_state": "trillionnium_league_encounter_state_v1",
                 "telemetry_stream": "world_economy_events:playability_telemetry",
                 "route_runner_funnel_telemetry": TRILLIONNIUM_ROUTE_RUNNER_FUNNEL_TELEMETRY_CONTRACT_VERSION,
+                "route_runner_cohort_quality": TRILLIONNIUM_ROUTE_RUNNER_COHORT_QUALITY_CONTRACT_VERSION,
+                "route_archetypes": TRILLIONNIUM_WORLD_ROUTE_ARCHETYPE_CONTRACT_VERSION,
+                "commercial_operating_dashboard": TRILLIONNIUM_WORLD_COMMERCIAL_OPERATING_DASHBOARD_CONTRACT_VERSION,
                 "balance_config": "trillionnium_playability_balance_config_v1"
             },
             "playability_balance_config": {
@@ -2133,6 +2214,9 @@ impl<'a> ClientAppProjectionContext<'a> {
                 "league_encounter_state_visible",
                 "persistent_telemetry_stream_visible",
                 "route_runner_funnel_telemetry_visible",
+                "route_runner_cohort_quality_visible",
+                "route_archetype_catalog_visible",
+                "commercial_operating_dashboard_visible",
                 "time_to_reward_visible",
                 "daily_return_resume_visible",
                 "balance_config_visible"
@@ -2427,6 +2511,14 @@ impl<'a> ClientAppProjectionContext<'a> {
             .get("route_runner_funnel_telemetry")
             .cloned()
             .unwrap_or_else(|| json!({}));
+        let route_archetypes = economy_retention_ops
+            .get("route_archetypes")
+            .cloned()
+            .unwrap_or_else(|| json!({}));
+        let commercial_operating_dashboard = economy_retention_ops
+            .get("commercial_operating_dashboard")
+            .cloned()
+            .unwrap_or_else(|| json!({}));
         let map_hub = app_context.into_client_app_map_hub_json(&map_metrics);
         json!({
             "kind": "trillionnium_client_app",
@@ -2445,6 +2537,8 @@ impl<'a> ClientAppProjectionContext<'a> {
             "next_best_actions": next_best_actions,
             "economy_retention_ops": economy_retention_ops,
             "route_runner_funnel_telemetry": route_runner_funnel_telemetry,
+            "route_archetypes": route_archetypes,
+            "commercial_operating_dashboard": commercial_operating_dashboard,
             "map": map,
             "feed": feed,
             "map_hub": map_hub,

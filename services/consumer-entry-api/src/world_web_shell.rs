@@ -694,6 +694,57 @@ pub(super) async fn get_world_web_shell(
         .and_then(|handoff| handoff.get("first_route_mastery_xp"))
         .and_then(Value::as_u64)
         .unwrap_or(0);
+    let world_route_archetype_catalog = trillionnium_world_route_archetypes_json(
+        map_avatar_task_route_count as i64,
+        league.world.world_listings.len() as i64,
+        league.world.world_work_orders.len() as i64,
+        league.world.world_contract_completions.len() as i64,
+        1,
+    );
+    let world_route_archetype_cards = world_route_archetype_catalog
+        .get("archetypes")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .take(5)
+        .map(|archetype| {
+            let archetype_id = archetype
+                .get("archetype_id")
+                .and_then(Value::as_str)
+                .unwrap_or("route");
+            let label = archetype
+                .get("label")
+                .and_then(Value::as_str)
+                .unwrap_or("Route archetype");
+            let proof_mode = archetype
+                .get("proof_mode")
+                .and_then(Value::as_str)
+                .unwrap_or("proof package");
+            let reward_model = archetype
+                .get("reward_model")
+                .and_then(Value::as_str)
+                .unwrap_or("reward + next route");
+            let risk_model = archetype
+                .get("risk_model")
+                .and_then(Value::as_str)
+                .unwrap_or("review risk");
+            let cta = archetype
+                .get("primary_cta_copy")
+                .and_then(Value::as_str)
+                .unwrap_or("Run route");
+            format!(
+                "<article class=\"mini route-archetype\" data-route-archetype=\"{}\"><strong>{}</strong><span>{}</span><small>{}</small><code>{} · {}</code></article>",
+                escape_html_text(archetype_id),
+                escape_world_visible_text(label),
+                escape_world_visible_text(proof_mode),
+                escape_world_visible_text(reward_model),
+                escape_html_text(risk_model),
+                escape_html_text(cta),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
     let map_player_density_mode = world_map_status_label(
         world_viewport
             .get("player_density")
@@ -1225,6 +1276,10 @@ pub(super) async fn get_world_web_shell(
     .world-hero-kicker {{ display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }}
     .world-hero-title {{ display:grid; gap:10px; }}
     .world-hero-actions {{ display:flex; flex-wrap:wrap; gap:10px; margin-top:2px; }}
+    .world-mobile-action-sheet {{ display:grid; gap:9px; border:1px solid rgba(248,195,91,.24); background:linear-gradient(145deg,rgba(248,195,91,.13),rgba(100,227,255,.07)); border-radius:20px; padding:14px; }}
+    .world-mobile-action-sheet p {{ margin:0; color:var(--muted); line-height:1.38; }}
+    .world-mobile-action-sheet .world-route-stepper {{ display:flex; flex-wrap:wrap; gap:7px; }}
+    .world-mobile-action-sheet .world-route-stepper span {{ border:1px solid rgba(100,227,255,.22); background:rgba(100,227,255,.075); color:var(--cyan); border-radius:999px; padding:6px 9px; font-size:12px; font-weight:850; }}
     .world-mobile-promise {{ display:flex; flex-wrap:wrap; gap:8px; }}
     .world-mobile-promise span {{ border:1px solid rgba(100,227,255,.2); background:rgba(100,227,255,.075); color:var(--cyan); border-radius:999px; padding:8px 11px; font-size:12px; font-weight:850; }}
     .hero-card {{ display:grid; gap:14px; align-content:space-between; }}
@@ -1314,6 +1369,8 @@ pub(super) async fn get_world_web_shell(
     @keyframes trillionnium-runner-bob {{ 0%,100% {{ transform:translateY(0) scale(1); }} 50% {{ transform:translateY(-5px) scale(1.06); }} }}
     .mini {{ display:grid; gap:7px; padding:14px; border-radius:16px; background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.08); }}
     #world-real-map {{ min-height:min(58vh,620px); border-radius:22px; overflow:hidden; border:1px solid rgba(100,227,255,.24); box-shadow:0 24px 90px rgba(0,0,0,.42); background:#0b1220; }}
+    #world-real-map .leaflet-tile-pane {{ filter:saturate(.72) contrast(.88) brightness(.82); }}
+    #world-real-map .trillionnium-active-route-line {{ filter:drop-shadow(0 0 8px rgba(100,227,255,.58)); }}
     #world-real-map .leaflet-control-zoom a {{ width:40px; height:40px; line-height:40px; font-size:20px; }}
     .asset strong {{ color:var(--green); }}
     .mini span,.mini small,.timeline small,.timeline em {{ color:var(--muted); }}
@@ -1323,6 +1380,7 @@ pub(super) async fn get_world_web_shell(
     code {{ color:var(--cyan); background:rgba(100,227,255,.08); padding:3px 7px; border-radius:8px; max-width:100%; overflow-wrap:anywhere; word-break:break-word; white-space:normal; }}
     .cta {{ color:var(--bg); background:linear-gradient(135deg,var(--gold),#7dff9b); padding:14px 18px; border-radius:16px; display:inline-flex; justify-content:center; align-items:center; font-weight:800; text-decoration:none; }}
     .cta.secondary {{ color:var(--text); background:rgba(255,255,255,.07); border:1px solid rgba(100,227,255,.24); }}
+    .secondary-link {{ color:var(--cyan); font-weight:850; text-decoration:none; border-bottom:1px solid rgba(100,227,255,.42); width:max-content; min-height:44px; display:inline-flex; align-items:center; }}
     @media (max-width:1050px) {{
       header.world-hero {{ padding:22px min(4vw,34px) 12px; gap:14px; grid-template-columns:1fr; }}
       .world-hero-main {{ min-height:auto; gap:12px; }}
@@ -1379,7 +1437,9 @@ pub(super) async fn get_world_web_shell(
       .world-mobile-promise span {{ padding:6px 8px; font-size:11px; }}
       .language-switcher {{ padding:5px 6px 5px 8px; font-size:11px; }}
       .language-switcher select {{ min-height:40px; min-width:82px; max-width:112px; padding:6px 22px 6px 8px; font-size:11px; }}
-      .world-hero-actions {{ display:grid; grid-template-columns:1fr 1fr; gap:8px; }}
+      .world-hero-actions {{ display:grid; grid-template-columns:1fr; gap:8px; }}
+      .world-mobile-action-sheet {{ padding:11px; border-radius:16px; }}
+      .world-mobile-action-sheet .world-route-stepper span {{ font-size:11px; padding:5px 7px; }}
       .world-hero-actions .cta,.hero-card .cta,.world-map-player-summary .cta {{ min-height:44px; padding:10px 11px; border-radius:14px; font-size:13px; }}
       button,input,textarea,select,.focus-chip,.overlay-toggle {{ min-height:44px; }}
       .hero-card,.panel,.card {{ padding:15px; border-radius:20px; }}
@@ -1447,23 +1507,33 @@ pub(super) async fn get_world_web_shell(
         <p class="subtitle" data-i18n-en="Global-first open world built for one-thumb exploration: pick a real city focus, accept a bounty, submit a result, get rated, and claim rewards." data-i18n-zh="面向海外首发、为单手探索重做的开放世界：选择现实城市焦点，接取悬赏，提交成果，获得评级并领取奖励。">Global-first open world built for one-thumb exploration: pick a real city focus, accept a bounty, submit a result, get rated, and claim rewards.</p>
       </div>
       <div class="world-mobile-promise" aria-label="World mobile promises" data-i18n-aria-label-en="World mobile promises" data-i18n-aria-label-zh="世界移动端承诺">
-        <span data-i18n-en="Map first" data-i18n-zh="地图优先">Map first</span>
-        <span data-i18n-en="Player actions only" data-i18n-zh="只露出玩家行动">Player actions only</span>
-        <span data-i18n-en="Stats stay compact" data-i18n-zh="统计保持紧凑">Stats stay compact</span>
+        <span data-i18n-en="Current route" data-i18n-zh="当前路线">Current route</span>
+        <span data-i18n-en="Next action" data-i18n-zh="下一步动作">Next action</span>
+        <span data-i18n-en="Reward / XP" data-i18n-zh="奖励 / XP">Reward / XP</span>
       </div>
-      <div id="world-hero-mobile-actions" class="world-hero-actions">
-        <a class="cta" href='#world-real-map' data-i18n-en="Open Map" data-i18n-zh="打开地图">Open Map</a>
-        <a class="cta secondary" href='#world-action-console' data-i18n-en="Start Action" data-i18n-zh="发起行动">Start Action</a>
+      <div id="world-hero-mobile-actions" class="world-hero-actions" data-contract-version="trillionnium_mobile_single_primary_cta_v1" data-parity-source="app-mobile-primary-cta" data-primary-cta-count="1" data-first-screen-loop="pick_route_submit_proof_claim_reward">
+        <section id="world-mobile-route-first-sheet" class="world-mobile-action-sheet" aria-label="World mobile one route first" data-i18n-aria-label-en="World mobile one route first" data-i18n-aria-label-zh="世界移动端一条路线优先">
+          <strong data-i18n-en="Current route" data-i18n-zh="当前路线">Current route</strong>
+          <p id="world-mobile-current-route" data-i18n-en="{map_route_runner_handoff_summary}" data-i18n-zh="{map_route_runner_handoff_summary}">{map_route_runner_handoff_summary}</p>
+          <div class="world-route-stepper" aria-label="Pick route submit proof claim reward" data-i18n-aria-label-en="Pick route submit proof claim reward" data-i18n-aria-label-zh="选路线、交证据、领奖励">
+            <span data-i18n-en="Pick route" data-i18n-zh="选路线">Pick route</span>
+            <span data-i18n-en="Submit proof" data-i18n-zh="交证据">Submit proof</span>
+            <span data-i18n-en="Claim reward" data-i18n-zh="领奖励">Claim reward</span>
+          </div>
+          <p id="world-mobile-next-action" data-i18n-en="Next action: submit proof or claim reward from the active route." data-i18n-zh="下一步动作：围绕当前路线提交证据或领取奖励。">Next action: submit proof or claim reward from the active route.</p>
+          <p id="world-mobile-reward-xp" data-route-mastery-contract="{map_route_runner_mastery_contract}" data-route-mastery-tier="{map_route_runner_mastery_tier}" data-route-mastery-xp="{map_route_runner_mastery_xp}">Reward / XP · {map_route_runner_reward_claim_count} claim · {map_route_runner_mastery_xp} XP · {map_route_runner_mastery_tier}</p>
+          <a id="world-mobile-primary-cta" class="cta" href='#world-action-console' data-i18n-en="Continue route" data-i18n-zh="继续当前路线">Continue route</a>
+        </section>
       </div>
     </section>
     <aside class="hero-card">
       <strong data-i18n-en="Next Adventure" data-i18n-zh="下一步冒险">Next Adventure</strong>
       <ol class="world-hero-steps">
-        <li><b data-i18n-en="1 · Focus" data-i18n-zh="1 · 选焦点">1 · Focus</b><span data-i18n-en="Tap a map place, event, or route." data-i18n-zh="点选地图地点、事件或路线。">Tap a map place, event, or route.</span></li>
-        <li><b data-i18n-en="2 · Quest" data-i18n-zh="2 · 接任务">2 · Quest</b><span data-i18n-en="Accept a bounty and submit results." data-i18n-zh="接取悬赏并提交成果。">Accept a bounty and submit results.</span></li>
-        <li><b data-i18n-en="3 · Reward" data-i18n-zh="3 · 拿奖励">3 · Reward</b><span data-i18n-en="Get rated, paid, and routed onward." data-i18n-zh="获得评级、奖励和下一步路线。">Get rated, paid, and routed onward.</span></li>
+        <li><b data-i18n-en="1 · Route" data-i18n-zh="1 · 路线">1 · Route</b><span data-i18n-en="Pick one nearby route first." data-i18n-zh="先选择附近一条路线。">Pick one nearby route first.</span></li>
+        <li><b data-i18n-en="2 · Proof" data-i18n-zh="2 · 证据">2 · Proof</b><span data-i18n-en="Submit proof tied to the active objective." data-i18n-zh="提交当前目标关联证据。">Submit proof tied to the active objective.</span></li>
+        <li><b data-i18n-en="3 · Reward" data-i18n-zh="3 · 奖励">3 · Reward</b><span data-i18n-en="Claim reward, XP, and the next route." data-i18n-zh="领取奖励、XP 和下一条路线。">Claim reward, XP, and the next route.</span></li>
       </ol>
-      <a id="world-league-link" class="cta" href="/league" data-i18n-en="Enter League Arena" data-i18n-zh="进入 League 竞技场">Enter League Arena</a>
+      <a id="world-league-link" class="secondary-link" href="/league" data-i18n-en="League arena stays one tap away" data-i18n-zh="League 竞技场保留一跳入口">League arena stays one tap away</a>
     </aside>
   </header>
   <main>
@@ -1509,10 +1579,13 @@ pub(super) async fn get_world_web_shell(
             <a class="cta" href='#world-action-console' data-i18n-en="Start Next Action" data-i18n-zh="发起下一步行动">Start Next Action</a>
           </div>
           <ol class="world-map-loop-steps" aria-label="World player loop" data-i18n-aria-label-en="World player loop" data-i18n-aria-label-zh="世界玩家三步循环">
-            <li><b data-i18n-en="1 · Choose focus" data-i18n-zh="1 · 选择焦点">1 · Choose focus</b><span data-i18n-en="Tap a place, event, or route." data-i18n-zh="点选地点、事件或路线。">Tap a place, event, or route.</span></li>
-            <li><b data-i18n-en="2 · Accept bounty" data-i18n-zh="2 · 接悬赏">2 · Accept bounty</b><span data-i18n-en="Convert the focus into a quest card." data-i18n-zh="把焦点转成任务牌。">Convert the focus into a quest card.</span></li>
-            <li><b data-i18n-en="3 · Submit result" data-i18n-zh="3 · 提交成果">3 · Submit result</b><span data-i18n-en="Get rated, rewarded, and routed onward." data-i18n-zh="获得评级、奖励和下一步路线。">Get rated, rewarded, and routed onward.</span></li>
+            <li><b data-i18n-en="1 · Pick route" data-i18n-zh="1 · 选路线">1 · Pick route</b><span data-i18n-en="One route first, not every dashboard concept." data-i18n-zh="先看一条路线，不先看所有仪表盘概念。">One route first, not every dashboard concept.</span></li>
+            <li><b data-i18n-en="2 · Submit proof" data-i18n-zh="2 · 交证据">2 · Submit proof</b><span data-i18n-en="Tie proof to the active objective." data-i18n-zh="把证据绑定到当前目标。">Tie proof to the active objective.</span></li>
+            <li><b data-i18n-en="3 · Claim reward" data-i18n-zh="3 · 领奖励">3 · Claim reward</b><span data-i18n-en="Claim XP, then open the next route." data-i18n-zh="领取 XP，然后开启下一条路线。">Claim XP, then open the next route.</span></li>
           </ol>
+          <section id="world-route-archetype-catalog" class="mini-grid" data-contract-version="trillionnium_world_route_archetypes_v1" aria-label="World route archetypes" data-i18n-aria-label-en="World route archetypes" data-i18n-aria-label-zh="世界路线类型">
+            {world_route_archetype_cards}
+          </section>
           <div id="world-map-camera-actions" class="overlay-toggle-bar">
 {shared_map_camera_actions_html}
           </div>
@@ -2304,6 +2377,7 @@ pub(super) async fn get_world_web_shell(
         map_route_runner_mastery_contract = escape_html_text(map_route_runner_mastery_contract),
         map_route_runner_mastery_tier = escape_html_text(map_route_runner_mastery_tier),
         map_route_runner_mastery_xp = map_route_runner_mastery_xp,
+        world_route_archetype_cards = world_route_archetype_cards,
         map_engine_id = escape_html_text(map_engine_id),
         zone_cards = zone_cards,
         map_cards = map_cards,
