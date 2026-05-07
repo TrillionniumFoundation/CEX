@@ -21,7 +21,7 @@
       }
     ]
   },
-  "description": "Repo-local example dashboard for Trillionnium route-runner reward/next-route handoff readiness. It consumes consumer-entry-api /metrics gauges and pairs with the CexTrillionniumRouteRunnerHandoff* Prometheus alerts.",
+  "description": "Repo-local example dashboard for Trillionnium route-runner reward/next-route handoff readiness, including route mastery progression. It consumes consumer-entry-api /metrics gauges and pairs with the CexTrillionniumRouteRunnerHandoff* Prometheus alerts.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 1,
@@ -342,6 +342,77 @@
         }
       ],
       "title": "Runner / reward / next-route action counts",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 12
+      },
+      "id": 5,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_contract_visible",
+          "legendFormat": "mastery contract visible",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_runner_count",
+          "legendFormat": "mastery runners",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_route_runner_handoff_first_route_mastery_xp",
+          "legendFormat": "first runner XP",
+          "range": true,
+          "refId": "C"
+        }
+      ],
+      "title": "Route mastery progression",
       "type": "timeseries"
     }
   ],

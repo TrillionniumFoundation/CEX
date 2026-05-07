@@ -317,6 +317,32 @@ groups:
       runbook: docs/operator-runbook-v1.md
       first_action: curl -s http://127.0.0.1:8090/health | jq '.trillionnium_world_playability_scorecard.route_runner_handoff_gate
         | {reward_claim_action_count, next_route_action_count, first_next_route_status}'
+  - alert: CexTrillionniumRouteRunnerHandoffRouteMasteryMissing
+    expr: cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_contract_visible
+      == 0 or cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_runner_count
+      == 0 or cex_consumer_entry_trillionnium_route_runner_handoff_first_route_mastery_xp
+      == 0
+    for: 10m
+    labels:
+      severity: warning
+      service: consumer-entry-api
+      family: product-edge
+      component: trillionnium-route-runner-handoff
+      owner: product-ops
+      route_hint: chat
+    annotations:
+      summary: Trillionnium route-runner mastery progression is missing
+      description: 'Route-runner handoff is expected to expose the trillionnium_route_mastery_v1
+        contract,
+
+        at least one mastery runner, and non-zero first-runner XP. If this fires,
+        players may
+
+        still see route runners but lose visible XP/tier/next-goal progression.
+
+        '
+      runbook: docs/operator-runbook-v1.md
+      first_action: curl -s http://127.0.0.1:8090/metrics | grep 'cex_consumer_entry_trillionnium_route_runner_handoff_.*mastery'
 - name: cex-core-runtime-operator-signals-from-wrapper
   rules:
   - alert: CexGatewayInfoEndpointUnreachable

@@ -426,6 +426,7 @@ curl -s -X POST -H 'x-admin-token: <admin-token>' -H 'content-type: application/
 - `CexTrillionniumRouteRunnerHandoffFeedSourceMissing`
 - `CexTrillionniumRouteRunnerHandoffRunnerCountZero`
 - `CexTrillionniumRouteRunnerHandoffActionsMissing`
+- `CexTrillionniumRouteRunnerHandoffRouteMasteryMissing`
 
 这些 alerts 带统一标签：`service=consumer-entry-api`、`family=product-edge`、`component=trillionnium-route-runner-handoff`、`owner=product-ops`。Alertmanager 示例配置会先匹配这个 component，再回退到普通 `product-edge` route。
 
@@ -493,7 +494,7 @@ curl -s -X POST -H 'x-admin-token: <admin-token>' -H 'content-type: application/
    scripts/assemble-monitoring-bundles.sh --check --bundle prometheus
    scripts/test-trillionnium-route-runner-handoff-monitoring.sh
    scripts/deploy-monitoring-bundles.sh --bundle all --mode copy --force --verify --verify-mode command \
-     --verify-prometheus-command 'test -f run/monitoring-live-target/prometheus/rules.d/cex-monitoring-bundle.rules.yml && grep -q CexTrillionniumRouteRunnerHandoffAllGatesNotGreen run/monitoring-live-target/prometheus/rules.d/cex-monitoring-bundle.rules.yml' \
+     --verify-prometheus-command 'test -f run/monitoring-live-target/prometheus/rules.d/cex-monitoring-bundle.rules.yml && grep -q CexTrillionniumRouteRunnerHandoffRouteMasteryMissing run/monitoring-live-target/prometheus/rules.d/cex-monitoring-bundle.rules.yml' \
      --verify-alertmanager-command 'test -f run/monitoring-live-target/alertmanager/conf.d/cex-monitoring-bundle.yml'
    scripts/check-trillionnium-route-runner-handoff-monitoring.sh --summary-file run/route-runner-handoff-monitoring-check.json
    ```

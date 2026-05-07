@@ -217,7 +217,18 @@ expected_alerts = {
     },
     'CexTrillionniumRouteRunnerHandoffActionsMissing': {
         'metric': 'cex_consumer_entry_trillionnium_route_runner_handoff_reward_claim_action_count',
-        'extra_metric': 'cex_consumer_entry_trillionnium_route_runner_handoff_next_route_action_count',
+        'extra_metrics': ['cex_consumer_entry_trillionnium_route_runner_handoff_next_route_action_count'],
+        'expr_fragments': ['== 0', ' or '],
+        'for': '10m',
+        'severity': 'warning',
+        'route_hint': 'chat',
+    },
+    'CexTrillionniumRouteRunnerHandoffRouteMasteryMissing': {
+        'metric': 'cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_contract_visible',
+        'extra_metrics': [
+            'cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_runner_count',
+            'cex_consumer_entry_trillionnium_route_runner_handoff_first_route_mastery_xp',
+        ],
         'expr_fragments': ['== 0', ' or '],
         'for': '10m',
         'severity': 'warning',
@@ -238,8 +249,8 @@ for name, expected in expected_alerts.items():
     labels = (rule or {}).get('labels') or {}
     expr = str((rule or {}).get('expr') or '')
     metric_visible = expected['metric'] in expr
-    extra_metric = expected.get('extra_metric')
-    extra_metric_visible = True if not extra_metric else extra_metric in expr
+    extra_metrics = expected.get('extra_metrics') or []
+    extra_metrics_visible = all(metric in expr for metric in extra_metrics)
     expr_fragments = expected.get('expr_fragments') or []
     expr_semantics_ok = all(fragment in expr for fragment in expr_fragments)
     duration_ok = str((rule or {}).get('for') or '') == expected['for']
@@ -256,7 +267,8 @@ for name, expected in expected_alerts.items():
     result = {
         'present': rule is not None,
         'metric_visible': metric_visible,
-        'extra_metric_visible': extra_metric_visible,
+        'extra_metrics': extra_metrics,
+        'extra_metrics_visible': extra_metrics_visible,
         'expr': expr,
         'expr_fragments': expr_fragments,
         'expr_semantics_ok': expr_semantics_ok,
@@ -274,7 +286,7 @@ for name, expected in expected_alerts.items():
     result['ok'] = bool(
         result['present']
         and metric_visible
-        and extra_metric_visible
+        and extra_metrics_visible
         and expr_semantics_ok
         and duration_ok
         and labels_ok
@@ -330,6 +342,9 @@ dashboard_required_metrics = [
     'cex_consumer_entry_trillionnium_route_runner_handoff_runner_count',
     'cex_consumer_entry_trillionnium_route_runner_handoff_reward_claim_action_count',
     'cex_consumer_entry_trillionnium_route_runner_handoff_next_route_action_count',
+    'cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_contract_visible',
+    'cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_runner_count',
+    'cex_consumer_entry_trillionnium_route_runner_handoff_first_route_mastery_xp',
 ]
 expected_dashboard = {
     'uid': 'cex-trillionnium-route-runner-handoff',
@@ -362,6 +377,15 @@ expected_dashboard = {
                 'cex_consumer_entry_trillionnium_route_runner_handoff_runner_count',
                 'cex_consumer_entry_trillionnium_route_runner_handoff_reward_claim_action_count',
                 'cex_consumer_entry_trillionnium_route_runner_handoff_next_route_action_count',
+            ],
+            'threshold_values': [1],
+        },
+        'Route mastery progression': {
+            'type': 'timeseries',
+            'metrics': [
+                'cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_contract_visible',
+                'cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_runner_count',
+                'cex_consumer_entry_trillionnium_route_runner_handoff_first_route_mastery_xp',
             ],
             'threshold_values': [1],
         },
