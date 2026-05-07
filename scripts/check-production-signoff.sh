@@ -14,6 +14,7 @@ CEX_SIGNOFF_REQUIRE_GIT_CLEAN="${CEX_SIGNOFF_REQUIRE_GIT_CLEAN:-1}"
 CEX_SIGNOFF_OUT_DIR="${CEX_SIGNOFF_OUT_DIR:-$CEX_PROJECT_ROOT/run/signoff}"
 CEX_PROVIDER_PROBE_MODEL="${CEX_PROVIDER_PROBE_MODEL:-google/gemini-2.5-flash}"
 CONSUMER_ENTRY_BASE_URL="${CONSUMER_ENTRY_BASE_URL:-http://127.0.0.1:8090}"
+CEX_MONITORING_DEPLOY_METADATA_PATH="${CEX_MONITORING_DEPLOY_METADATA_PATH:-$CEX_PROJECT_ROOT/run/monitoring-live-target/metadata/monitoring-deploy-metadata.yml}"
 
 usage() {
   cat <<'EOF'
@@ -52,6 +53,7 @@ RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
 SUMMARY_PATH="$CEX_SIGNOFF_OUT_DIR/production-signoff-$RUN_ID.summary.json"
 READINESS_LOG="$CEX_SIGNOFF_OUT_DIR/production-signoff-$RUN_ID.readiness.log"
 ROUTE_RUNNER_HANDOFF_EVIDENCE_PATH="$CEX_SIGNOFF_OUT_DIR/production-signoff-$RUN_ID.route-runner-handoff.json"
+ROUTE_RUNNER_HANDOFF_MONITORING_EVIDENCE_PATH="$CEX_SIGNOFF_OUT_DIR/production-signoff-$RUN_ID.route-runner-handoff-monitoring.json"
 
 failures=0
 failure_messages=()
@@ -202,10 +204,153 @@ else
 fi
 rm -f "$route_runner_handoff_health_file"
 
+route_runner_handoff_monitoring_evidence_ok=false
+route_runner_handoff_monitoring_status=0
+if python3 - "$CEX_MONITORING_DEPLOY_METADATA_PATH" "$ROUTE_RUNNER_HANDOFF_MONITORING_EVIDENCE_PATH" <<'PY'
+from pathlib import Path
+from datetime import datetime, timezone
+import json
+import sys
+import yaml
+
+metadata_path = Path(sys.argv[1])
+out_path = Path(sys.argv[2])
+if not metadata_path.exists():
+    raise SystemExit(f'monitoring deploy metadata missing: {metadata_path}')
+
+metadata = yaml.safe_load(metadata_path.read_text()) or {}
+overall = (((metadata.get('postDeployActions') or {}).get('overall')) or {})
+deployed = metadata.get('deployed') or {}
+
+def deployed_path(section: str) -> Path:
+    raw = ((deployed.get(section) or {}).get('deployedPath'))
+    if not raw:
+        raise SystemExit(f'monitoring deployed path missing: {section}')
+    path = Path(raw)
+    if not path.is_absolute():
+        path = metadata_path.parent / path
+    if not path.exists():
+        raise SystemExit(f'monitoring deployed artifact missing: {section} {path}')
+    return path
+
+prometheus_path = deployed_path('prometheus')
+alertmanager_path = deployed_path('alertmanager')
+prometheus = yaml.safe_load(prometheus_path.read_text()) or {}
+alertmanager = yaml.safe_load(alertmanager_path.read_text()) or {}
+
+expected_alerts = {
+    'CexTrillionniumRouteRunnerHandoffAllGatesNotGreen': 'cex_consumer_entry_trillionnium_route_runner_handoff_all_gates_green',
+    'CexTrillionniumRouteRunnerHandoffFeedSourceMissing': 'cex_consumer_entry_trillionnium_route_runner_handoff_feed_source_count',
+    'CexTrillionniumRouteRunnerHandoffRunnerCountZero': 'cex_consumer_entry_trillionnium_route_runner_handoff_runner_count',
+    'CexTrillionniumRouteRunnerHandoffActionsMissing': 'cex_consumer_entry_trillionnium_route_runner_handoff_reward_claim_action_count',
+}
+rules_by_alert = {}
+for group in prometheus.get('groups') or []:
+    for rule in group.get('rules') or []:
+        name = rule.get('alert')
+        if name:
+            rules_by_alert[name] = rule
+
+alert_results = {}
+for name, metric in expected_alerts.items():
+    rule = rules_by_alert.get(name)
+    labels = (rule or {}).get('labels') or {}
+    expr = str((rule or {}).get('expr') or '')
+    alert_results[name] = {
+        'present': rule is not None,
+        'metric_visible': metric in expr,
+        'next_route_metric_visible': (
+            name != 'CexTrillionniumRouteRunnerHandoffActionsMissing'
+            or 'cex_consumer_entry_trillionnium_route_runner_handoff_next_route_action_count' in expr
+        ),
+        'service': labels.get('service'),
+        'family': labels.get('family'),
+        'component': labels.get('component'),
+        'owner': labels.get('owner'),
+        'labels_ok': (
+            labels.get('service') == 'consumer-entry-api'
+            and labels.get('family') == 'product-edge'
+            and labels.get('component') == 'trillionnium-route-runner-handoff'
+            and labels.get('owner') == 'product-ops'
+        ),
+    }
+
+routes = ((alertmanager.get('route') or {}).get('routes')) or []
+def matcher_set(route):
+    return set(str(matcher) for matcher in (route.get('matchers') or []))
+
+handoff_matchers = {
+    'service="consumer-entry-api"',
+    'family="product-edge"',
+    'component="trillionnium-route-runner-handoff"',
+}
+handoff_route_index = None
+generic_product_edge_index = None
+generic_severity_index = None
+for idx, route in enumerate(routes):
+    matchers = matcher_set(route)
+    if handoff_matchers.issubset(matchers) and handoff_route_index is None:
+        handoff_route_index = idx
+    if matchers == {'family="product-edge"'} and generic_product_edge_index is None:
+        generic_product_edge_index = idx
+    if matchers in ({'severity="critical"'}, {'severity="warning"'}) and generic_severity_index is None:
+        generic_severity_index = idx
+
+alert_contract_ok = all(
+    result['present']
+    and result['metric_visible']
+    and result['next_route_metric_visible']
+    and result['labels_ok']
+    for result in alert_results.values()
+)
+route_order_ok = (
+    handoff_route_index is not None
+    and generic_product_edge_index is not None
+    and handoff_route_index < generic_product_edge_index
+    and (generic_severity_index is None or handoff_route_index < generic_severity_index)
+)
+post_deploy_ok = overall.get('successful') is True and overall.get('requiresAttention') is not True
+
+deployed_at = metadata.get('deployedAt')
+deployed_age_seconds = None
+if deployed_at:
+    parsed = datetime.fromisoformat(str(deployed_at).replace('Z', '+00:00'))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    deployed_age_seconds = int((datetime.now(timezone.utc) - parsed.astimezone(timezone.utc)).total_seconds())
+
+evidence = {
+    'ok': bool(post_deploy_ok and alert_contract_ok and route_order_ok),
+    'contract_version': 'trillionnium_signoff_route_runner_handoff_monitoring_evidence_v1',
+    'metadata_path': str(metadata_path),
+    'prometheus_bundle_path': str(prometheus_path),
+    'alertmanager_bundle_path': str(alertmanager_path),
+    'deployed_at': deployed_at,
+    'deployed_age_seconds': deployed_age_seconds,
+    'post_deploy_overall': overall,
+    'alert_results': alert_results,
+    'alert_names': list(expected_alerts.keys()),
+    'handoff_route_index': handoff_route_index,
+    'generic_product_edge_route_index': generic_product_edge_index,
+    'generic_severity_route_index': generic_severity_index,
+    'route_order_ok': route_order_ok,
+}
+out_path.write_text(json.dumps(evidence, indent=2, sort_keys=True) + '\n')
+if not evidence['ok']:
+    raise SystemExit('route-runner handoff monitoring signoff evidence not green')
+PY
+then
+  route_runner_handoff_monitoring_evidence_ok=true
+  pass "route-runner handoff monitoring signoff evidence green ($ROUTE_RUNNER_HANDOFF_MONITORING_EVIDENCE_PATH)"
+else
+  route_runner_handoff_monitoring_status=$?
+  record_failure "route-runner handoff monitoring signoff evidence failed (status=$route_runner_handoff_monitoring_status path=$ROUTE_RUNNER_HANDOFF_MONITORING_EVIDENCE_PATH)"
+fi
+
 head_commit="$(git -C "$CEX_PROJECT_ROOT" rev-parse --short HEAD)"
 ended_at_epoch="$(date +%s)"
 
-python3 - "$SUMMARY_PATH" "$RUN_ID" "$CEX_SIGNOFF_SCOPE" "$head_commit" "$failures" "$readiness_status" "$READINESS_LOG" "$soak_summary_path" "$soak_ok" "$soak_age" "$CEX_PROVIDER_PROBE_MODEL" "$ended_at_epoch" "$ROUTE_RUNNER_HANDOFF_EVIDENCE_PATH" "$route_runner_handoff_evidence_ok" "$route_runner_handoff_status" <<'PY'
+python3 - "$SUMMARY_PATH" "$RUN_ID" "$CEX_SIGNOFF_SCOPE" "$head_commit" "$failures" "$readiness_status" "$READINESS_LOG" "$soak_summary_path" "$soak_ok" "$soak_age" "$CEX_PROVIDER_PROBE_MODEL" "$ended_at_epoch" "$ROUTE_RUNNER_HANDOFF_EVIDENCE_PATH" "$route_runner_handoff_evidence_ok" "$route_runner_handoff_status" "$ROUTE_RUNNER_HANDOFF_MONITORING_EVIDENCE_PATH" "$route_runner_handoff_monitoring_evidence_ok" "$route_runner_handoff_monitoring_status" <<'PY'
 from pathlib import Path
 import json, sys
 summary_path = Path(sys.argv[1])
@@ -214,6 +359,10 @@ route_runner_handoff_evidence_path = Path(sys.argv[13])
 route_runner_handoff_evidence = None
 if route_runner_handoff_evidence_path.exists():
     route_runner_handoff_evidence = json.loads(route_runner_handoff_evidence_path.read_text())
+route_runner_handoff_monitoring_evidence_path = Path(sys.argv[16])
+route_runner_handoff_monitoring_evidence = None
+if route_runner_handoff_monitoring_evidence_path.exists():
+    route_runner_handoff_monitoring_evidence = json.loads(route_runner_handoff_monitoring_evidence_path.read_text())
 summary = {
     'ok': failures == 0,
     'kind': 'production_signoff',
@@ -238,6 +387,12 @@ summary = {
         'ok': sys.argv[14] == 'true',
         'exit_code': int(sys.argv[15]),
         'evidence': route_runner_handoff_evidence,
+    },
+    'route_runner_handoff_monitoring_evidence': {
+        'summary_path': sys.argv[16],
+        'ok': sys.argv[17] == 'true',
+        'exit_code': int(sys.argv[18]),
+        'evidence': route_runner_handoff_monitoring_evidence,
     },
 }
 summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + '\n')
