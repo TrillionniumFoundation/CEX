@@ -246,20 +246,71 @@ def route_story_kind_ok(card, expected_kind, command_prefix=None, require_live_t
             return False
     return True
 
+
+def route_runner_handoff_ok(card):
+    handoff = card.get('route_runner_handoff') or {}
+    runner_count = int(handoff.get('runner_count') or 0)
+    reward_claim_count = int(handoff.get('reward_claim_action_count') or 0)
+    next_route_count = int(handoff.get('next_route_action_count') or 0)
+    return (
+        handoff.get('contract_version') == 'trillionnium_route_runner_handoff_v1'
+        and handoff.get('supports_route_runner_reward_claim_actions') is True
+        and handoff.get('supports_route_runner_next_route_actions') is True
+        and handoff.get('supports_checkpoint_reward_history') is True
+        and runner_count >= 1
+        and reward_claim_count >= 1
+        and next_route_count >= 1
+        and int(card.get('avatar_route_runner_count') or 0) == runner_count
+        and int(card.get('route_runner_reward_claim_action_count') or 0) == reward_claim_count
+        and int(card.get('route_runner_next_route_action_count') or 0) == next_route_count
+        and bool(handoff.get('first_task_id'))
+        and bool(handoff.get('first_progress_label'))
+        and bool(handoff.get('first_reward_claim_status'))
+        and bool(handoff.get('first_next_route_status'))
+        and bool(handoff.get('first_next_route_action_body'))
+        and bool(handoff.get('first_next_route_sequence_summary'))
+        and bool(handoff.get('handoff_prompt'))
+        and card.get('route_runner_first_task_id') == handoff.get('first_task_id')
+        and card.get('route_runner_next_route_status') == handoff.get('first_next_route_status')
+        and card.get('route_runner_next_route_action_body') == handoff.get('first_next_route_action_body')
+        and card.get('route_runner_next_route_sequence_summary') == handoff.get('first_next_route_sequence_summary')
+        and card.get('route_runner_reward_claim_status') == handoff.get('first_reward_claim_status')
+    )
+
+
+def route_runner_handoff_summary(prefix, card):
+    handoff = card.get('route_runner_handoff') or {}
+    return {
+        f'{prefix}_route_runner_handoff_contract_version': handoff.get('contract_version'),
+        f'{prefix}_avatar_route_runner_count': card.get('avatar_route_runner_count'),
+        f'{prefix}_route_runner_handoff_runner_count': handoff.get('runner_count'),
+        f'{prefix}_route_runner_reward_claim_action_count': card.get('route_runner_reward_claim_action_count'),
+        f'{prefix}_route_runner_next_route_action_count': card.get('route_runner_next_route_action_count'),
+        f'{prefix}_route_runner_next_route_ready_count': card.get('route_runner_next_route_ready_count'),
+        f'{prefix}_route_runner_first_task_id': card.get('route_runner_first_task_id'),
+        f'{prefix}_route_runner_first_progress_label': card.get('route_runner_first_progress_label'),
+        f'{prefix}_route_runner_reward_claim_status': card.get('route_runner_reward_claim_status'),
+        f'{prefix}_route_runner_next_route_status': card.get('route_runner_next_route_status'),
+        f'{prefix}_route_runner_next_route_action_body': card.get('route_runner_next_route_action_body'),
+        f'{prefix}_route_runner_next_route_sequence_summary': card.get('route_runner_next_route_sequence_summary'),
+        f'{prefix}_route_runner_handoff_summary': handoff.get('summary'),
+        f'{prefix}_route_runner_handoff_prompt': handoff.get('handoff_prompt'),
+    }
+
 marker = f'真房间闭环 E2E {int(time.time())}'
 task_result = send_and_wait('/task ' + marker, 'task_status', lambda content, card: marker in (content.get('formatted_body') or ''))
 task_id = task_result['reply']['card']['task_id']
 status_result = send_and_wait('/status ' + task_id, 'task_status', lambda content, card: card.get('task_id') == task_id)
 balance_result = send_and_wait('/balance', 'wallet_summary')
 plans_result = send_and_wait('/plans', 'package_summary')
-client_app_result = send_and_wait('/app', 'trillionnium_client_app', lambda content, card: int(card.get('module_count') or 0) >= 5 and card.get('has_world_map') is True and card.get('has_real_world_map_engine') is True and card.get('map_engine_id') == 'leaflet_openstreetmap_v1' and card.get('tile_provider') == 'OpenStreetMap' and card.get('primary_entry_module_id') == 'world_map' and map_renderer_adapter_ok(card) and bool(card.get('active_region_id')) and int(card.get('tile_shard_count') or 0) >= 1 and int(card.get('nearby_poi_count') or 0) >= 1 and int(card.get('prefetch_count') or 0) >= 1 and int(card.get('live_event_count') or 0) >= 1 and bool(card.get('player_density_mode')) and card.get('has_first_playable_onboarding') is True and card.get('onboarding_contract_version') == 'trillionnium_first_playable_onboarding_v1' and card.get('onboarding_completion_target') == 'first_playable_loop_100' and int(card.get('onboarding_step_count') or 0) >= 5 and ('route_preview_item_count' in card) and ('route_task_graph_count' in card) and route_story_ok(card, command_prefix='/world action') and route_opportunity_target_ok(card, expected_action_label='Open world action lane') and card.get('has_face_duel') is True and card.get('has_social') is True and card.get('has_wallet') is True and card.get('has_progression') is True and int(card.get('progression_level') or 0) >= 1)
-client_feed_result = send_and_wait('/feed', 'trillionnium_client_feed', lambda content, card: int(card.get('item_count') or 0) >= 1 and int(card.get('source_count') or 0) >= 6 and bool(card.get('active_region_id')) and bool(card.get('top_title')) and bool(card.get('top_action_label')) and bool(card.get('top_action_panel_id')) and route_story_ok(card, command_prefix='/world action') and route_opportunity_target_ok(card, expected_action_label='Open world action lane'))
+client_app_result = send_and_wait('/app', 'trillionnium_client_app', lambda content, card: int(card.get('module_count') or 0) >= 5 and card.get('has_world_map') is True and card.get('has_real_world_map_engine') is True and card.get('map_engine_id') == 'leaflet_openstreetmap_v1' and card.get('tile_provider') == 'OpenStreetMap' and card.get('primary_entry_module_id') == 'world_map' and map_renderer_adapter_ok(card) and bool(card.get('active_region_id')) and int(card.get('tile_shard_count') or 0) >= 1 and int(card.get('nearby_poi_count') or 0) >= 1 and int(card.get('prefetch_count') or 0) >= 1 and int(card.get('live_event_count') or 0) >= 1 and bool(card.get('player_density_mode')) and card.get('has_first_playable_onboarding') is True and card.get('onboarding_contract_version') == 'trillionnium_first_playable_onboarding_v1' and card.get('onboarding_completion_target') == 'first_playable_loop_100' and int(card.get('onboarding_step_count') or 0) >= 5 and ('route_preview_item_count' in card) and ('route_task_graph_count' in card) and route_story_ok(card, command_prefix='/world action') and route_opportunity_target_ok(card, expected_action_label='Open world action lane') and route_runner_handoff_ok(card) and card.get('has_face_duel') is True and card.get('has_social') is True and card.get('has_wallet') is True and card.get('has_progression') is True and int(card.get('progression_level') or 0) >= 1)
+client_feed_result = send_and_wait('/feed', 'trillionnium_client_feed', lambda content, card: int(card.get('item_count') or 0) >= 1 and int(card.get('source_count') or 0) >= 7 and bool(card.get('active_region_id')) and bool(card.get('top_title')) and bool(card.get('top_action_label')) and bool(card.get('top_action_panel_id')) and route_story_ok(card, command_prefix='/world action') and route_opportunity_target_ok(card, expected_action_label='Open world action lane') and route_runner_handoff_ok(card))
 client_feed_commerce_result = send_and_wait('/feed commerce', 'trillionnium_client_feed', lambda content, card: card.get('feed_filter') == 'commerce' and card.get('feed_filter_label') == '成交' and int(card.get('visible_item_count') or 0) >= 1 and card.get('top_feed_group') == 'commerce' and bool(card.get('top_action_label')) and bool(card.get('top_action_panel_id')))
 client_social_result = send_and_wait('/social', 'trillionnium_client_social', lambda content, card: int(card.get('contact_count') or 0) >= 1)
 client_duel_result = send_and_wait('/duel nearby Face duel opening move: choose Oracle Scout, scout opponent intent, use Forge Builder follow-up, and record fair-play evidence.', 'trillionnium_client_duel', lambda content, card: card.get('match_id') == 'face-duel-001' and bool(card.get('task_id')))
 league_result = send_and_wait('/league', 'league_home')
-world_result = send_and_wait('/world', 'trillionnium_world', lambda content, card: int(card.get('zone_count') or 0) >= 4 and map_renderer_adapter_ok(card) and ('route_preview_item_count' in card) and ('route_task_graph_count' in card) and route_story_ok(card, command_prefix='/world action') and route_opportunity_target_ok(card, expected_action_label='Open world action lane'))
-world_map_result = send_and_wait('/map', 'trillionnium_world_map', lambda content, card: int(card.get('node_count') or 0) >= 8 and bool(card.get('current_node_id')) and card.get('has_real_world_map_engine') is True and card.get('map_engine_id') == 'leaflet_openstreetmap_v1' and card.get('tile_provider') == 'OpenStreetMap' and card.get('mirror_scope') == 'global_real_world_tiles' and map_renderer_adapter_ok(card) and bool(card.get('active_region_id')) and ('route_preview_item_count' in card) and ('route_task_graph_count' in card) and route_story_ok(card, command_prefix='/world action') and route_opportunity_target_ok(card, expected_action_label='Open world action lane'))
+world_result = send_and_wait('/world', 'trillionnium_world', lambda content, card: int(card.get('zone_count') or 0) >= 4 and map_renderer_adapter_ok(card) and ('route_preview_item_count' in card) and ('route_task_graph_count' in card) and route_story_ok(card, command_prefix='/world action') and route_opportunity_target_ok(card, expected_action_label='Open world action lane') and route_runner_handoff_ok(card))
+world_map_result = send_and_wait('/map', 'trillionnium_world_map', lambda content, card: int(card.get('node_count') or 0) >= 8 and bool(card.get('current_node_id')) and card.get('has_real_world_map_engine') is True and card.get('map_engine_id') == 'leaflet_openstreetmap_v1' and card.get('tile_provider') == 'OpenStreetMap' and card.get('mirror_scope') == 'global_real_world_tiles' and map_renderer_adapter_ok(card) and bool(card.get('active_region_id')) and ('route_preview_item_count' in card) and ('route_task_graph_count' in card) and route_story_ok(card, command_prefix='/world action') and route_opportunity_target_ok(card, expected_action_label='Open world action lane') and route_runner_handoff_ok(card))
 world_map_exit = str(world_map_result['reply']['card'].get('exits') or 'east').split('→', 1)[0].strip().split(' / ', 1)[0] or 'east'
 world_map_move_result = send_and_wait('/go ' + world_map_exit, 'trillionnium_world_map_move', lambda content, card: bool(card.get('to_node_id')) and bool(card.get('location_id')))
 world_action_result = send_and_wait('/world action 我要在镜像城市开一家 AI 设计公司，招募 Agent，服务真实客户。', 'trillionnium_world_action', lambda content, card: card.get('event_kind') in ('venture', 'craft', 'market', 'explore', 'recruit'))
@@ -646,6 +697,13 @@ summary.update({
     'world_work_cancellation_route_next_opportunity_command': world_work_cancellation_result['reply']['card'].get('route_next_opportunity_command'),
     'world_work_cancellation_route_next_opportunity_node_id': world_work_cancellation_result['reply']['card'].get('route_next_opportunity_node_id'),
 })
+for prefix, result in [
+    ('client_app', client_app_result),
+    ('client_feed', client_feed_result),
+    ('world', world_result),
+    ('world_map', world_map_result),
+]:
+    summary.update(route_runner_handoff_summary(prefix, result['reply']['card']))
 for prefix, result in [
     ('world_assets', world_assets_result),
     ('world_asset_upgrade', world_asset_upgrade_result),
