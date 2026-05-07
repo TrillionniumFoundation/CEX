@@ -120,6 +120,7 @@ fn all_maturity_axes_converged(maturity: &Value, axis_ids: &[&str]) -> bool {
 fn mobile_shell_ux_contract_green(app: &Value) -> bool {
     let mobile_shell_contract = app.get("mobile_shell_contract");
     let primary_cta = mobile_shell_contract.and_then(|contract| contract.get("primary_cta"));
+    let copy_layering = mobile_shell_contract.and_then(|contract| contract.get("copy_layering"));
     let readiness_checks = mobile_shell_contract
         .and_then(|contract| contract.get("readiness_checks"))
         .and_then(Value::as_array)
@@ -145,7 +146,24 @@ fn mobile_shell_ux_contract_green(app: &Value) -> bool {
             .and_then(|cta| cta.get("target_id"))
             .and_then(Value::as_str)
             == Some("app-map-action-rail");
+    let copy_layering_green = copy_layering
+        .and_then(|copy| copy.get("contract_version"))
+        .and_then(Value::as_str)
+        == Some("trillionnium_mobile_copy_layering_v1")
+        && copy_layering
+            .and_then(|copy| copy.get("summary_id"))
+            .and_then(Value::as_str)
+            == Some("app-map-copy-summary")
+        && copy_layering
+            .and_then(|copy| copy.get("details_id"))
+            .and_then(Value::as_str)
+            == Some("app-map-copy-layer-details")
+        && copy_layering
+            .and_then(|copy| copy.get("default_state"))
+            .and_then(Value::as_str)
+            == Some("collapsed");
     primary_cta_green
+        && copy_layering_green
         && [
             "four_tab_mobile_shell_visible",
             "mobile_tablist_a11y_visible",
@@ -158,6 +176,7 @@ fn mobile_shell_ux_contract_green(app: &Value) -> bool {
             "web_session_feed_hydration_visible",
             "feed_api_hydration_visible",
             "mobile_bottom_sheet_single_primary_cta_visible",
+            "mobile_copy_layering_visible",
             "next_action_rail_visible",
             "playability_coach_visible",
             "p0_next_best_action_visible",

@@ -1643,6 +1643,13 @@ impl<'a> ClientAppProjectionContext<'a> {
                 "mode": "fixed_above_bottom_tabs_on_mobile",
                 "single_primary_cta": true,
             },
+            "copy_layering": {
+                "contract_version": "trillionnium_mobile_copy_layering_v1",
+                "summary_id": "app-map-copy-summary",
+                "details_id": "app-map-copy-layer-details",
+                "mode": "short_summary_plus_collapsed_details",
+                "default_state": "collapsed",
+            },
             "resilience": {
                 "feed_api_hydration": "loadFeedSurface",
                 "web_session_feed_path": "/app/web/feed",
@@ -1661,6 +1668,7 @@ impl<'a> ClientAppProjectionContext<'a> {
                 "web_session_feed_hydration_visible",
                 "feed_api_hydration_visible",
                 "mobile_bottom_sheet_single_primary_cta_visible",
+                "mobile_copy_layering_visible",
                 "next_action_rail_visible",
                 "playability_coach_visible",
                 "p0_next_best_action_visible",

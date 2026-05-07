@@ -1044,6 +1044,10 @@ pub(super) async fn get_client_app_web_shell(
     .app-mobile-action-sheet::before {{ content:""; display:none; position:absolute; top:6px; left:50%; width:42px; height:4px; transform:translateX(-50%); border-radius:999px; background:rgba(246,247,251,.32); }}
     .app-mobile-primary-cta {{ white-space:nowrap; }}
     .app-mobile-primary-cta::after {{ content:" →"; }}
+    .app-copy-layer-summary {{ margin:8px 0 0; font-size:14px; line-height:1.42; }}
+    .app-copy-layer-details {{ margin-top:8px; border:1px solid rgba(255,255,255,.1); background:rgba(255,255,255,.035); border-radius:16px; padding:9px 11px; }}
+    .app-copy-layer-details summary {{ cursor:pointer; color:var(--cyan); font-size:12px; font-weight:900; min-height:34px; display:flex; align-items:center; }}
+    .app-copy-layer-details p {{ margin:6px 0 0; font-size:13px; line-height:1.42; }}
     .map-technical-drawer,.app-progress-drawer {{ border:1px solid rgba(255,255,255,.1); background:rgba(255,255,255,.035); border-radius:18px; padding:10px; }}
     #app-tile-shards-live,
     #app-region-shards-live,
@@ -1077,18 +1081,23 @@ pub(super) async fn get_client_app_web_shell(
       h1 {{ font-size:25px; }}
       header > .subtitle {{ margin:4px 0 0; display:-webkit-box; -webkit-line-clamp:1; -webkit-box-orient:vertical; overflow:hidden; }}
       .subtitle {{ font-size:13px; line-height:1.34; }}
-      .app-topbar-meta {{ display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:7px; margin-bottom:5px; }}
+      .app-topbar-meta {{ display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:6px; margin-bottom:5px; }}
       .app-topbar-meta > p {{ margin:0; min-width:0; }}
-      .app-topbar-actions {{ gap:5px; flex-wrap:nowrap; }}
-      .app-topbar-actions a {{ min-height:40px; padding:0 8px; font-size:11px; }}
+      .app-topbar-actions {{ gap:4px; flex-wrap:nowrap; min-width:0; }}
+      .app-topbar-actions p {{ display:none; }}
+      .app-topbar-actions a {{ min-height:38px; padding:0 7px; font-size:10px; }}
       .app-beta-chip {{ max-width:150px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; padding:5px 8px; font-size:10px; }}
-      header .language-switcher {{ min-height:40px; padding:4px 5px 4px 7px; font-size:10px; }}
-      header .language-switcher select {{ min-height:40px; min-width:76px; max-width:102px; padding:5px 20px 5px 7px; font-size:10px; }}
+      header .language-switcher {{ min-height:40px; padding:4px 5px; font-size:10px; }}
+      header .language-switcher > span {{ display:none; }}
+      header .language-switcher select {{ min-height:40px; min-width:86px; max-width:112px; padding:5px 20px 5px 7px; font-size:10px; }}
       .app-search-shell {{ gap:7px; margin-top:7px; }}
       .app-search-input {{ min-height:40px; padding:10px 12px; border-radius:14px; font-size:14px; }}
       .app-search-clear {{ padding:8px 9px; border-radius:12px; }}
-      .app-ux-status {{ margin-top:5px; min-height:22px; }}
-      .app-ux-pill {{ padding:5px 9px; font-size:11px; }}
+      .app-ux-status {{ margin-top:5px; min-height:20px; }}
+      .app-ux-pill {{ padding:4px 8px; font-size:10px; }}
+      .app-copy-layer-summary {{ display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; margin-top:6px; }}
+      .app-copy-layer-details {{ padding:7px 9px; margin-top:6px; }}
+      .app-copy-layer-details summary {{ min-height:30px; font-size:11px; }}
 
       #app-tab-map {{ order:1; }}
       #app-tab-map.is-active {{ display:contents; }}
@@ -1124,11 +1133,13 @@ pub(super) async fn get_client_app_web_shell(
       .hud-chip,.focus-chip,.overlay-toggle {{ padding:7px 9px; font-size:12px; min-height:44px; }}
       .app-bottom-tab,.quest-cta,.app-search-clear,.language-switcher,.language-switcher select {{ min-height:44px; }}
       .quest-summary {{ grid-template-columns:1fr; }}
-      .app-map-product-strip {{ position:fixed; left:12px; right:12px; bottom:calc(76px + env(safe-area-inset-bottom, 0px)); z-index:28; grid-template-columns:minmax(0,1fr) auto; margin:0; padding:16px 10px 10px; border-radius:22px 22px 17px 17px; background:rgba(9,13,27,.92); box-shadow:0 -10px 45px rgba(0,0,0,.42); backdrop-filter:blur(16px); }}
+      .app-map-product-strip {{ position:fixed; left:12px; right:12px; bottom:calc(76px + env(safe-area-inset-bottom, 0px)); z-index:28; grid-template-columns:minmax(0,1fr) auto; gap:8px; margin:0; padding:14px 10px 9px; border-radius:22px 22px 17px 17px; background:rgba(9,13,27,.92); box-shadow:0 -10px 45px rgba(0,0,0,.42); backdrop-filter:blur(16px); }}
       .app-mobile-action-sheet::before {{ display:block; }}
-      .app-map-product-strip .subtitle {{ margin:0; font-size:12px; line-height:1.28; }}
-      #app-map-camera-summary {{ display:none; }}
-      .app-map-product-strip .quest-cta {{ min-width:118px; min-height:42px; padding:0 12px; }}
+      .app-map-product-strip strong {{ margin-bottom:2px; font-size:11px; text-transform:uppercase; letter-spacing:.04em; }}
+      .app-map-product-strip .subtitle {{ margin:0; font-size:11px; line-height:1.22; }}
+      #app-map-density-summary,#app-map-camera-summary {{ display:none; }}
+      #app-route-runner-handoff-summary {{ display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }}
+      .app-map-product-strip .quest-cta {{ min-width:112px; min-height:40px; padding:0 10px; font-size:12px; }}
       .quest-hero {{ gap:8px; }}
       .quest-next-card .subtitle {{ display:none; }}
       .quest-status-card .subtitle {{ display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }}
@@ -1146,6 +1157,9 @@ pub(super) async fn get_client_app_web_shell(
       .economy-card span,.economy-card small {{ display:none; }}
       #app-first-playable-steps {{ display:none; }}
     }}
+    @media (max-width: 600px) {{
+      body {{ padding-bottom:calc(104px + env(safe-area-inset-bottom, 0px)); }}
+    }}
     @media (min-width: 601px) and (max-width: 820px) {{
       #real-world-map {{ min-height:min(28svh,260px); }}
       .app-map-product-strip {{ position:static; margin:0; box-shadow:none; backdrop-filter:none; }}
@@ -1161,13 +1175,13 @@ pub(super) async fn get_client_app_web_shell(
       <div class="app-topbar-actions"><p><a href="/world" data-i18n-en="World" data-i18n-zh="世界">World</a><a href="/league" data-i18n-en="Arena" data-i18n-zh="竞技场">Arena</a></p>{app_header_language_switcher}</div>
     </div>
     <h1>Trillionnium World</h1>
-    <p class="subtitle"><span data-i18n-en="Mobile reality-mirror adventure for overseas-first launch: search cities and agents, then use four tabs — Messages, World, Feed, Me. Current focus:" data-i18n-zh="面向海外首发的移动现实镜像冒险：搜索城市和 Agent，并使用「消息、世界、动态、我」四个页签。当前位置：">Mobile reality-mirror adventure for overseas-first launch: search cities and agents, then use four tabs — Messages, World, Feed, Me. Current focus:</span> <strong>{}</strong></p>
+    <p class="subtitle"><span data-i18n-en="Pick a route, run one quest, claim the reward. Current focus:" data-i18n-zh="选路线、跑任务、领奖励。当前位置：">Pick a route, run one quest, claim the reward. Current focus:</span> <strong>{}</strong></p>
     <div class="app-search-shell">
-      <input id="app-global-search" class="app-search-input" type="search" inputmode="search" placeholder="Search places, agents, quests" data-i18n-placeholder-en="Search places, agents, quests" data-i18n-placeholder-zh="搜索地点、联系人、任务、动态" aria-label="Global search" data-i18n-aria-label-en="Global search" data-i18n-aria-label-zh="全局搜索" />
+      <input id="app-global-search" class="app-search-input" type="search" inputmode="search" placeholder="Search world" data-i18n-placeholder-en="Search world" data-i18n-placeholder-zh="搜索世界" aria-label="Global search" data-i18n-aria-label-en="Global search" data-i18n-aria-label-zh="全局搜索" />
       <button id="app-search-clear" class="app-search-clear" type="button" aria-label="Clear global search" data-i18n-aria-label-en="Clear global search" data-i18n-aria-label-zh="清空全局搜索" data-i18n-en="Clear" data-i18n-zh="清空" hidden>Clear</button>
     </div>
     <div id="app-ux-status" class="app-ux-status" aria-live="polite">
-      <span id="app-ux-status-pill" class="app-ux-pill" data-state="ready" data-i18n-en="Adventure ready · World tab active" data-i18n-zh="冒险准备完成 · 世界页已激活">Adventure ready · World tab active</span>
+      <span id="app-ux-status-pill" class="app-ux-pill" data-state="ready" data-i18n-en="Ready · World" data-i18n-zh="已就绪 · 世界">Ready · World</span>
       <span id="app-ux-live-status" class="sr-only" data-i18n-en="Adventure ready" data-i18n-zh="冒险体验已准备完成">Adventure ready</span>
     </div>
     <div id="app-search-empty-state" class="app-search-empty" role="status" aria-live="polite" data-i18n-en="No results · Try another keyword or tab." data-i18n-zh="无匹配结果 · 换个关键词或切换底部 Tab。">No results · Try another keyword or tab.</div>
@@ -1221,7 +1235,8 @@ pub(super) async fn get_client_app_web_shell(
       <div class="map-panel">
         <span class="badge" data-i18n-en="{}" data-i18n-zh="Trillionnium 世界地图">{}</span>
         <h2 data-i18n-en="OpenStreetMap upgraded into a playable world" data-i18n-zh="把 OpenStreetMap 升级成可玩的世界地图">OpenStreetMap upgraded into a playable world</h2>
-        <p data-i18n-en="{}" data-i18n-zh="Trillionnium World Map 不是普通地图工具，而是在 OpenStreetMap 真实地理底座上叠加游戏人物、路线节点、任务牌、实时事件和交付闭环。角色会在地图上跑来跑去，接任务、提交证据、拿评级和奖励。">{}</p>
+        <p id="app-map-copy-summary" class="app-copy-layer-summary" data-contract-version="trillionnium_mobile_copy_layering_v1" data-i18n-en="Pick a nearby route, watch your runner move, then claim the reward or open the next route." data-i18n-zh="选择附近路线，看角色跑图，然后领奖或开启下一条路线。">Pick a nearby route, watch your runner move, then claim the reward or open the next route.</p>
+        <details id="app-map-copy-layer-details" class="app-copy-layer-details" data-contract-version="trillionnium_mobile_copy_layering_v1" data-default-state="collapsed"><summary data-i18n-en="Why this map matters" data-i18n-zh="为什么这张地图重要">Why this map matters</summary><p data-i18n-en="{}" data-i18n-zh="Trillionnium World Map 不是普通地图工具，而是在 OpenStreetMap 真实地理底座上叠加游戏人物、路线节点、任务牌、实时事件和交付闭环。角色会在地图上跑来跑去，接任务、提交证据、拿评级和奖励。">{}</p><p><strong data-i18n-en="Game Map Main Entry" data-i18n-zh="游戏地图主入口">Game Map Main Entry</strong>: <span data-i18n-en="move your avatar between nearby places, live events, and bounty nodes before entering other modules." data-i18n-zh="先让角色在附近地点、实时事件和悬赏节点之间跑图，再进入其他模块。">move your avatar between nearby places, live events, and bounty nodes before entering other modules.</span></p></details>
         <div id="app-mobile-action-sheet" class="app-map-product-strip app-mobile-action-sheet" aria-label="Mobile route action sheet" data-i18n-aria-label-en="Mobile route action sheet" data-i18n-aria-label-zh="移动路线行动面板" data-contract-version="trillionnium_mobile_single_primary_cta_v1" data-bottom-sheet-mode="fixed_above_bottom_tabs_on_mobile" data-primary-cta-count="1" data-primary-cta-target="app-map-action-rail">
           <div>
             <strong data-i18n-en="Current Status" data-i18n-zh="当前状态">Current Status</strong>
@@ -1231,7 +1246,6 @@ pub(super) async fn get_client_app_web_shell(
           </div>
           <a id="app-mobile-primary-cta" class="quest-cta app-mobile-primary-cta" href='#app-map-action-rail' data-primary-cta="world-route-focus" data-primary-cta-target="app-map-action-rail" data-i18n-en="Continue Route" data-i18n-zh="继续路线">Continue Route</a>
         </div>
-        <p><strong data-i18n-en="Game Map Main Entry" data-i18n-zh="游戏地图主入口">Game Map Main Entry</strong>: <span data-i18n-en="move your avatar between nearby places, live events, and bounty nodes before entering other modules." data-i18n-zh="先让角色在附近地点、实时事件和悬赏节点之间跑图，再进入其他模块。">move your avatar between nearby places, live events, and bounty nodes before entering other modules.</span></p>
         <div id="app-map-camera-actions" class="overlay-toggle-bar">
 {shared_map_camera_actions_html}
         </div>
@@ -1467,7 +1481,7 @@ pub(super) async fn get_client_app_web_shell(
           button.tabIndex = active ? 0 : -1;
         }});
         if (appSearchInput) appSearchInput.placeholder = appTabPlaceholder(activeAppTab);
-        announceUxStatus(uiText('Adventure ready · ' + appTabLabel(activeAppTab) + ' tab active', '冒险准备完成 · ' + appTabLabel(activeAppTab) + '页已激活'), 'ready');
+        announceUxStatus(uiText('Ready · ' + appTabLabel(activeAppTab), '已就绪 · ' + appTabLabel(activeAppTab)), 'ready');
         applyAppSearchFilter();
         if (activeAppTab === 'feed') {{
           renderFeedSurface(lastFeed, lastSelection);

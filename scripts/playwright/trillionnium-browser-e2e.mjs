@@ -381,6 +381,11 @@ async function main() {
   assert(await count(page, '#app-mobile-action-sheet[data-contract-version="trillionnium_mobile_single_primary_cta_v1"]') === 1, 'mobile bottom action sheet contract missing');
   assert(await count(page, '#app-mobile-action-sheet [data-primary-cta]') === 1, 'mobile bottom action sheet must expose exactly one primary CTA');
   assert(await page.locator('#app-mobile-primary-cta').first().getAttribute('data-primary-cta-target') === 'app-map-action-rail', 'mobile primary CTA target mismatch');
+  assert(await count(page, '#app-map-copy-summary[data-contract-version="trillionnium_mobile_copy_layering_v1"]') === 1, 'mobile copy layering summary contract missing');
+  assert(await count(page, '#app-map-copy-layer-details[data-contract-version="trillionnium_mobile_copy_layering_v1"][data-default-state="collapsed"]') === 1, 'mobile copy layering collapsed details contract missing');
+  assert(await page.locator('#app-map-copy-layer-details').first().evaluate((el) => el.open) === false, 'mobile copy layering details must default collapsed');
+  const mobileCopySummary = await page.locator('#app-map-copy-summary').first().innerText({ timeout: 10_000 });
+  assert(mobileCopySummary.length <= 150 && mobileCopySummary.includes('Pick a nearby route'), 'mobile copy summary must be short and action-first', mobileCopySummary);
   const mobileCtaText = await page.locator('#app-mobile-action-sheet').first().innerText({ timeout: 10_000 });
   for (const needle of ['Continue Route', 'runner', 'reward', 'next-route']) {
     assert(mobileCtaText.includes(needle), `mobile bottom action sheet copy missing: ${needle}`, mobileCtaText);
@@ -389,7 +394,9 @@ async function main() {
   assert(appJson?.mobile_shell_contract?.contract_version === 'trillionnium_mobile_shell_ux_v1', 'mobile shell UX contract missing from client app json', appJson?.mobile_shell_contract);
   assert(appJson?.mobile_shell_contract?.primary_cta?.contract_version === 'trillionnium_mobile_single_primary_cta_v1', 'mobile single primary CTA JSON contract missing', appJson?.mobile_shell_contract?.primary_cta);
   assert(appJson?.mobile_shell_contract?.primary_cta?.single_primary_cta === true, 'mobile single primary CTA JSON single flag missing', appJson?.mobile_shell_contract?.primary_cta);
-  for (const expectedCheck of ['mobile_tablist_a11y_visible', 'keyboard_tab_navigation_visible', 'search_empty_state_visible', 'search_clear_and_escape_visible', 'aria_live_ux_status_visible', 'offline_feed_fallback_status_visible', 'web_session_feed_hydration_visible', 'mobile_bottom_sheet_single_primary_cta_visible']) {
+  assert(appJson?.mobile_shell_contract?.copy_layering?.contract_version === 'trillionnium_mobile_copy_layering_v1', 'mobile copy layering JSON contract missing', appJson?.mobile_shell_contract?.copy_layering);
+  assert(appJson?.mobile_shell_contract?.copy_layering?.default_state === 'collapsed', 'mobile copy layering JSON default state missing', appJson?.mobile_shell_contract?.copy_layering);
+  for (const expectedCheck of ['mobile_tablist_a11y_visible', 'keyboard_tab_navigation_visible', 'search_empty_state_visible', 'search_clear_and_escape_visible', 'aria_live_ux_status_visible', 'offline_feed_fallback_status_visible', 'web_session_feed_hydration_visible', 'mobile_bottom_sheet_single_primary_cta_visible', 'mobile_copy_layering_visible']) {
     assert(mobileShellChecks.includes(expectedCheck), `mobile shell UX readiness check missing: ${expectedCheck}`, mobileShellChecks);
   }
   assert(appJson?.feed?.web_session_path === '/app/web/feed', 'web session feed hydration path missing', appJson?.feed);

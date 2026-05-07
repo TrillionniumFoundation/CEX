@@ -148,6 +148,14 @@ function checkMobile(result, limits) {
     assertMetric((cta.text || '').includes('runner'), `${result.profile}/app mobile bottom sheet must keep runner context`, cta);
     assertMetric((cta.text || '').includes('next-route'), `${result.profile}/app mobile bottom sheet must keep next-route context`, cta);
     assertMetric((cta.text || '').includes('reward'), `${result.profile}/app mobile bottom sheet must keep reward context`, cta);
+    const copy = result.mobileCopyLayering || {};
+    assertMetric(copy.summaryPresent === true, `${result.profile}/app mobile copy summary missing`, copy);
+    assertMetric(copy.summaryContractVersion === 'trillionnium_mobile_copy_layering_v1', `${result.profile}/app mobile copy layering contract missing`, copy);
+    assertMetric(copy.detailsPresent === true, `${result.profile}/app mobile copy details missing`, copy);
+    assertMetric(copy.detailsContractVersion === 'trillionnium_mobile_copy_layering_v1', `${result.profile}/app mobile copy details contract missing`, copy);
+    assertMetric(copy.defaultState === 'collapsed' && copy.detailsOpen === false, `${result.profile}/app mobile copy details must default collapsed`, copy);
+    assertMetric(Number(copy.summaryLength || 0) > 0 && Number(copy.summaryLength || 0) <= 150, `${result.profile}/app mobile copy summary is too dense`, copy);
+    assertMetric((copy.summaryText || '').includes('Pick a nearby route'), `${result.profile}/app mobile copy summary must be action-first`, copy);
     if (result.profile === 'mobile') {
       const sheet = yOf(result, 'mobileSheet');
       assertMetric(sheet >= Math.floor(result.viewport.vh * 0.58), `${result.profile}/app mobile bottom sheet key selector is not docked`, { sheet, viewport: result.viewport });
@@ -312,6 +320,8 @@ async function auditPage(page, profile, target) {
     const handoffElements = [appRouteHandoff, appFeedHandoff, worldRouteHandoff].filter(Boolean);
     const handoffText = handoffElements.map((el) => text(el)).join(' · ');
     const mobileSheet = document.getElementById('app-mobile-action-sheet');
+    const copySummary = document.getElementById('app-map-copy-summary');
+    const copyDetails = document.getElementById('app-map-copy-layer-details');
     const mobilePrimaryCtas = Array.from(document.querySelectorAll('#app-mobile-action-sheet [data-primary-cta]')).filter(visible);
     const primaryCta = mobilePrimaryCtas[0] || null;
     const sheetRect = mobileSheet?.getBoundingClientRect();
@@ -326,6 +336,17 @@ async function auditPage(page, profile, target) {
       sheetY: sheetRect ? Math.round(sheetRect.top) : null,
       sheetBottom: sheetRect ? Math.round(sheetRect.bottom) : null,
       text: text(mobileSheet).slice(0, 360),
+    };
+    const mobileCopyLayering = {
+      summaryPresent: Boolean(copySummary),
+      summaryContractVersion: copySummary?.dataset.contractVersion || null,
+      summaryText: text(copySummary),
+      summaryLength: text(copySummary).length,
+      detailsPresent: Boolean(copyDetails),
+      detailsContractVersion: copyDetails?.dataset.contractVersion || null,
+      defaultState: copyDetails?.dataset.defaultState || null,
+      detailsOpen: Boolean(copyDetails?.open),
+      detailsVisibleText: text(copyDetails).slice(0, 260),
     };
     const routeRunnerHandoff = {
       appRouteSummaryPresent: Boolean(appRouteHandoff),
@@ -354,6 +375,7 @@ async function auditPage(page, profile, target) {
       key,
       routeRunnerHandoff,
       mobilePrimaryCta,
+      mobileCopyLayering,
       firstViewportButtons,
       firstViewportText: text(document.body).slice(0, 1400),
     };
