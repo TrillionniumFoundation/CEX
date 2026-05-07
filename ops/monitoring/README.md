@@ -57,8 +57,9 @@ If you want to validate just this focused handoff monitoring contract without ru
 
 - `scripts/check-trillionnium-route-runner-handoff-monitoring.sh`
 - `scripts/check-trillionnium-route-runner-handoff-monitoring.sh --summary-file run/monitoring-route-runner-handoff-summary.json`
+- `scripts/test-trillionnium-route-runner-handoff-monitoring.sh`
 
-The check validates live-target metadata freshness, Prometheus alert metric/label coverage, Alertmanager route order, and the dashboard metric set. Production readiness and production signoff also call this script so the standalone contract cannot drift from launch gates.
+The check validates live-target metadata freshness, Prometheus alert metric/label coverage, Alertmanager route order, and the dashboard metric set. Production readiness and production signoff also call this script so the standalone contract cannot drift from launch gates. The test script runs a positive fixture plus negative fixtures for alert label drift, route-order regression, dashboard metric loss, and stale deploy metadata.
 
 If you want to regenerate the combined bundles from the manifest, use:
 

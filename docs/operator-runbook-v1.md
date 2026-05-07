@@ -487,6 +487,7 @@ curl -s -X POST -H 'x-admin-token: <admin-token>' -H 'content-type: application/
 
    ```bash
    scripts/assemble-monitoring-bundles.sh --check --bundle prometheus
+   scripts/test-trillionnium-route-runner-handoff-monitoring.sh
    scripts/deploy-monitoring-bundles.sh --bundle all --mode copy --force --verify --verify-mode command \
      --verify-prometheus-command 'test -f run/monitoring-live-target/prometheus/rules.d/cex-monitoring-bundle.rules.yml && grep -q CexTrillionniumRouteRunnerHandoffAllGatesNotGreen run/monitoring-live-target/prometheus/rules.d/cex-monitoring-bundle.rules.yml' \
      --verify-alertmanager-command 'test -f run/monitoring-live-target/alertmanager/conf.d/cex-monitoring-bundle.yml'
