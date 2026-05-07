@@ -158,6 +158,12 @@ def gate_ok(gate):
         and gate.get('sources_include_route_runner_handoff') is True
         and gate.get('feed_handoff_contract_version') == 'trillionnium_route_runner_handoff_v1'
         and gate.get('map_hub_handoff_contract_version') == 'trillionnium_route_runner_handoff_v1'
+        and gate.get('supports_route_mastery_progression') is True
+        and gate.get('route_mastery_contract_version') == 'trillionnium_route_mastery_v1'
+        and int(gate.get('route_mastery_runner_count') or 0) >= 1
+        and int(gate.get('first_route_mastery_xp') or 0) >= 1
+        and bool(gate.get('first_route_mastery_tier'))
+        and 'evidence' in str(gate.get('first_route_mastery_next_goal') or '').lower()
         and int(gate.get('runner_count') or 0) >= 1
         and int(gate.get('reward_claim_action_count') or 0) >= 1
         and int(gate.get('next_route_action_count') or 0) >= 1
@@ -185,6 +191,11 @@ evidence = {
     'runner_count': primary_gate.get('runner_count'),
     'reward_claim_action_count': primary_gate.get('reward_claim_action_count'),
     'next_route_action_count': primary_gate.get('next_route_action_count'),
+    'route_mastery_contract_version': primary_gate.get('route_mastery_contract_version'),
+    'route_mastery_runner_count': primary_gate.get('route_mastery_runner_count'),
+    'first_route_mastery_xp': primary_gate.get('first_route_mastery_xp'),
+    'first_route_mastery_tier': primary_gate.get('first_route_mastery_tier'),
+    'first_route_mastery_next_goal': primary_gate.get('first_route_mastery_next_goal'),
     'first_next_route_status': primary_gate.get('first_next_route_status'),
     'first_next_route_sequence_summary': primary_gate.get('first_next_route_sequence_summary'),
     'handoff_prompt': primary_gate.get('handoff_prompt'),
