@@ -10,6 +10,11 @@ prometheus:
     services:
     - consumer-entry-api
     family: entry-identity
+  - path: ops/monitoring/prometheus/consumer-entry-trillionnium-route-runner-handoff-alerts.example.yml
+    source: service-metrics
+    services:
+    - consumer-entry-api
+    family: product-edge
   - path: ops/monitoring/prometheus/core-runtime-operator-signals-from-wrapper.example.yml
     source: wrapper-bridge
     bridge: scripts/render-operator-signals-prometheus.sh
@@ -62,6 +67,8 @@ bridgeScripts:
 notes:
 - consumer-entry identity governance currently has both direct metrics rules and wrapper-derived
   endpoint/abuse rules
+- Trillionnium route-runner handoff readiness now has direct consumer-entry metrics rules;
+  Alertmanager routes them through the existing product-edge family route
 - gateway-service and execution-service now both have native /metrics gauges while
   the minimal bundle keeps wrapper-derived alerts during migration
 - matrix-entry-adapter currently participates through wrapper-derived product-edge

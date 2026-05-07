@@ -1,0 +1,71 @@
+# Example Prometheus alert rules for Trillionnium route-runner handoff readiness.
+# These rules consume direct consumer-entry /metrics gauges so operators do not
+# need to infer handoff health only from health JSON, E2E summaries, or signoff artifacts.
+
+groups:
+  - name: cex-consumer-entry-trillionnium-route-runner-handoff
+    rules:
+      - alert: CexTrillionniumRouteRunnerHandoffAllGatesNotGreen
+        expr: cex_consumer_entry_trillionnium_route_runner_handoff_all_gates_green == 0
+        for: 5m
+        labels:
+          severity: critical
+          service: consumer-entry-api
+          family: product-edge
+          route_hint: page
+        annotations:
+          summary: Trillionnium route-runner handoff gates are not all green
+          description: |
+            At least one of the route-runner handoff readiness gates is not green across
+            playability, closed-beta, real-user beta, or public-commercial health evidence.
+            This blocks a production signoff-quality Trillionnium handoff posture.
+          runbook: docs/operator-runbook-v1.md
+          first_action: "curl -s http://127.0.0.1:8090/health | jq '.trillionnium_world_playability_scorecard.route_runner_handoff_gate, .trillionnium_world_closed_beta_prototype.route_runner_handoff_gate, .trillionnium_world_real_user_beta.route_runner_handoff_gate, .trillionnium_world_public_commercial_product.route_runner_handoff_gate'"
+
+      - alert: CexTrillionniumRouteRunnerHandoffFeedSourceMissing
+        expr: cex_consumer_entry_trillionnium_route_runner_handoff_feed_source_count < 7
+        for: 5m
+        labels:
+          severity: critical
+          service: consumer-entry-api
+          family: product-edge
+          route_hint: page
+        annotations:
+          summary: Trillionnium route-runner handoff feed source is missing or incomplete
+          description: |
+            The client feed source count dropped below the expected handoff-ready source set.
+            The route_runner_handoff source may have disappeared from /feed or /app feed hydration.
+          runbook: docs/operator-runbook-v1.md
+          first_action: "curl -s http://127.0.0.1:8090/health | jq '.trillionnium_world_playability_scorecard.route_runner_handoff_gate'"
+
+      - alert: CexTrillionniumRouteRunnerHandoffRunnerCountZero
+        expr: cex_consumer_entry_trillionnium_route_runner_handoff_runner_count == 0
+        for: 10m
+        labels:
+          severity: warning
+          service: consumer-entry-api
+          family: product-edge
+          route_hint: chat
+        annotations:
+          summary: Trillionnium route-runner handoff has no active runners
+          description: |
+            Route-runner handoff evidence exists but currently reports zero runners.
+            Check whether world map projection, feed hydration, or seeded first-session routes regressed.
+          runbook: docs/operator-runbook-v1.md
+          first_action: "curl -s http://127.0.0.1:8090/metrics | grep cex_consumer_entry_trillionnium_route_runner_handoff"
+
+      - alert: CexTrillionniumRouteRunnerHandoffActionsMissing
+        expr: cex_consumer_entry_trillionnium_route_runner_handoff_reward_claim_action_count == 0 or cex_consumer_entry_trillionnium_route_runner_handoff_next_route_action_count == 0
+        for: 10m
+        labels:
+          severity: warning
+          service: consumer-entry-api
+          family: product-edge
+          route_hint: chat
+        annotations:
+          summary: Trillionnium route-runner handoff actions are missing
+          description: |
+            Reward-claim or next-route handoff actions dropped to zero. Players may see runners
+            without a clear claim-reward / open-next-route path.
+          runbook: docs/operator-runbook-v1.md
+          first_action: "curl -s http://127.0.0.1:8090/health | jq '.trillionnium_world_playability_scorecard.route_runner_handoff_gate | {reward_claim_action_count, next_route_action_count, first_next_route_status}'"
