@@ -40,12 +40,12 @@ alertmanager:
   files:
   - path: ops/monitoring/alertmanager/consumer-entry-identity-governance-routing.example.yml
     family: entry-identity
-  - path: ops/monitoring/alertmanager/core-runtime-operator-signals-from-wrapper-routing.example.yml
-    family: core-runtime
   - path: ops/monitoring/alertmanager/product-edge-operator-signals-from-wrapper-routing.example.yml
     family: product-edge
   - path: ops/monitoring/alertmanager/monitoring-deploy-operator-signals-from-wrapper-routing.example.yml
     family: monitoring-deploy
+  - path: ops/monitoring/alertmanager/core-runtime-operator-signals-from-wrapper-routing.example.yml
+    family: core-runtime
 managementScripts:
 - scripts/assemble-monitoring-bundles.sh
 - scripts/export-monitoring-bundles.sh
@@ -68,7 +68,8 @@ notes:
 - consumer-entry identity governance currently has both direct metrics rules and wrapper-derived
   endpoint/abuse rules
 - Trillionnium route-runner handoff readiness now has direct consumer-entry metrics rules;
-  Alertmanager routes them through the existing product-edge family route
+  Alertmanager routes them through a component-specific product-edge route before
+  generic severity fallback routes
 - gateway-service and execution-service now both have native /metrics gauges while
   the minimal bundle keeps wrapper-derived alerts during migration
 - matrix-entry-adapter currently participates through wrapper-derived product-edge

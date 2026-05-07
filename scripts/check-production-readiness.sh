@@ -403,12 +403,92 @@ if overall.get('successful') is not True or overall.get('requiresAttention') is 
     raise SystemExit('monitoring deploy post action is not successful')
 deployed = data.get('deployed') or {}
 missing = []
+deployed_paths = {}
 for section in ('prometheus', 'alertmanager'):
     deployed_path = ((deployed.get(section) or {}).get('deployedPath'))
-    if not deployed_path or not Path(deployed_path).exists():
+    if deployed_path:
+        deployed_path = Path(deployed_path)
+        if not deployed_path.is_absolute():
+            deployed_path = path.parent / deployed_path
+    if not deployed_path or not deployed_path.exists():
         missing.append(section)
+    else:
+        deployed_paths[section] = deployed_path
 if missing:
     raise SystemExit('missing deployed monitoring artifacts: ' + ','.join(missing))
+
+prometheus_path = deployed_paths['prometheus']
+alertmanager_path = deployed_paths['alertmanager']
+prometheus_data = yaml.safe_load(prometheus_path.read_text()) or {}
+alertmanager_data = yaml.safe_load(alertmanager_path.read_text()) or {}
+
+expected_alerts = {
+    'CexTrillionniumRouteRunnerHandoffAllGatesNotGreen': 'cex_consumer_entry_trillionnium_route_runner_handoff_all_gates_green',
+    'CexTrillionniumRouteRunnerHandoffFeedSourceMissing': 'cex_consumer_entry_trillionnium_route_runner_handoff_feed_source_count',
+    'CexTrillionniumRouteRunnerHandoffRunnerCountZero': 'cex_consumer_entry_trillionnium_route_runner_handoff_runner_count',
+    'CexTrillionniumRouteRunnerHandoffActionsMissing': 'cex_consumer_entry_trillionnium_route_runner_handoff_reward_claim_action_count',
+}
+rules_by_alert = {}
+for group in prometheus_data.get('groups') or []:
+    for rule in group.get('rules') or []:
+        alert_name = rule.get('alert')
+        if alert_name:
+            rules_by_alert[alert_name] = rule
+missing_alerts = []
+bad_alerts = []
+for alert_name, metric_fragment in expected_alerts.items():
+    rule = rules_by_alert.get(alert_name)
+    if not rule:
+        missing_alerts.append(alert_name)
+        continue
+    labels = rule.get('labels') or {}
+    expr = str(rule.get('expr') or '')
+    if (
+        labels.get('service') != 'consumer-entry-api'
+        or labels.get('family') != 'product-edge'
+        or labels.get('component') != 'trillionnium-route-runner-handoff'
+        or labels.get('owner') != 'product-ops'
+        or metric_fragment not in expr
+    ):
+        bad_alerts.append(alert_name)
+if missing_alerts or bad_alerts:
+    details = []
+    if missing_alerts:
+        details.append('missing=' + ','.join(missing_alerts))
+    if bad_alerts:
+        details.append('bad=' + ','.join(bad_alerts))
+    raise SystemExit('route-runner handoff prometheus alert contract invalid: ' + ';'.join(details))
+actions_rule = rules_by_alert.get('CexTrillionniumRouteRunnerHandoffActionsMissing') or {}
+if 'cex_consumer_entry_trillionnium_route_runner_handoff_next_route_action_count' not in str(actions_rule.get('expr') or ''):
+    raise SystemExit('route-runner handoff actions alert missing next-route action metric')
+
+routes = ((alertmanager_data.get('route') or {}).get('routes')) or []
+def matcher_set(route):
+    return set(str(matcher) for matcher in (route.get('matchers') or []))
+
+handoff_matchers = {
+    'service="consumer-entry-api"',
+    'family="product-edge"',
+    'component="trillionnium-route-runner-handoff"',
+}
+handoff_route_index = None
+generic_product_edge_index = None
+generic_severity_index = None
+for idx, route in enumerate(routes):
+    matchers = matcher_set(route)
+    if handoff_matchers.issubset(matchers) and handoff_route_index is None:
+        handoff_route_index = idx
+    if matchers == {'family="product-edge"'} and generic_product_edge_index is None:
+        generic_product_edge_index = idx
+    if matchers in ({'severity="critical"'}, {'severity="warning"'}) and generic_severity_index is None:
+        generic_severity_index = idx
+if handoff_route_index is None:
+    raise SystemExit('route-runner handoff alertmanager component route missing')
+if generic_product_edge_index is None or handoff_route_index > generic_product_edge_index:
+    raise SystemExit('route-runner handoff alertmanager route must precede generic product-edge route')
+if generic_severity_index is not None and handoff_route_index > generic_severity_index:
+    raise SystemExit('route-runner handoff alertmanager route must precede generic severity fallback routes')
+
 deployed_at = data.get('deployedAt')
 if not deployed_at:
     raise SystemExit('missing deployedAt')
