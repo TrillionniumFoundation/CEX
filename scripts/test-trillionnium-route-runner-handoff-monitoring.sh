@@ -157,6 +157,21 @@ Path(sys.argv[2]).write_text(yaml.safe_dump(data, sort_keys=False))
 PY
 assert_fail_contains bad_mastery_expr 'CexTrillionniumRouteRunnerHandoffRouteMasteryMissing' --prometheus-bundle "$PROMETHEUS_BAD_MASTERY_EXPR"
 
+PROMETHEUS_BAD_RUM_EXPR="$TMP_DIR/prometheus-bad-rum-expr.yml"
+python3 - "$PROMETHEUS_GOOD" "$PROMETHEUS_BAD_RUM_EXPR" <<'PY'
+from pathlib import Path
+import sys
+import yaml
+
+data = yaml.safe_load(Path(sys.argv[1]).read_text())
+for group in data.get('groups') or []:
+    for rule in group.get('rules') or []:
+        if rule.get('alert') == 'CexTrillionniumWorldMapRumSloWarmupRawRed':
+            rule['expr'] = 'cex_consumer_entry_trillionnium_world_map_rum_slo_warming == 0'
+Path(sys.argv[2]).write_text(yaml.safe_dump(data, sort_keys=False))
+PY
+assert_fail_contains bad_rum_expr 'CexTrillionniumWorldMapRumSloWarmupRawRed' --prometheus-bundle "$PROMETHEUS_BAD_RUM_EXPR"
+
 ALERTMANAGER_BAD_ORDER="$TMP_DIR/alertmanager-bad-order.yml"
 python3 - "$ALERTMANAGER_GOOD" "$ALERTMANAGER_BAD_ORDER" <<'PY'
 from pathlib import Path

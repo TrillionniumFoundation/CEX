@@ -572,9 +572,58 @@
           "legendFormat": "future engine gate",
           "range": true,
           "refId": "N"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_map_rum_slo_gate_green",
+          "legendFormat": "map RUM SLO gate",
+          "range": true,
+          "refId": "O"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_map_rum_slo_raw_split_green",
+          "legendFormat": "map RUM raw split green",
+          "range": true,
+          "refId": "P"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_map_rum_slo_sample_count",
+          "legendFormat": "map RUM samples",
+          "range": true,
+          "refId": "Q"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_map_rum_slo_enforcement_active",
+          "legendFormat": "map RUM enforcement active",
+          "range": true,
+          "refId": "R"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_map_rum_slo_warming",
+          "legendFormat": "map RUM warming",
+          "range": true,
+          "refId": "S"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_map_delta_cache_gate_green",
+          "legendFormat": "map delta cache gate",
+          "range": true,
+          "refId": "T"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_map_delta_failure_rate_percent",
+          "legendFormat": "map delta failure %",
+          "range": true,
+          "refId": "U"
         }
       ],
-      "title": "Mobile map readability / funnel / future engine",
+      "title": "Mobile map runtime / funnel / future engine",
       "type": "timeseries"
     },
     {

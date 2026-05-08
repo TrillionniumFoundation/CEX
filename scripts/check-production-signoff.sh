@@ -294,6 +294,13 @@ metric_thresholds = {
     'cex_consumer_entry_trillionnium_route_runner_funnel_time_to_reward_seconds': 0,
     'cex_consumer_entry_trillionnium_route_runner_funnel_daily_return_resume_count': 0,
     'cex_consumer_entry_trillionnium_world_future_engine_readiness_gate_green': 1,
+    'cex_consumer_entry_trillionnium_world_map_rum_slo_gate_green': 1,
+    'cex_consumer_entry_trillionnium_world_map_rum_slo_raw_split_green': 0,
+    'cex_consumer_entry_trillionnium_world_map_rum_slo_sample_count': 0,
+    'cex_consumer_entry_trillionnium_world_map_rum_slo_enforcement_active': 0,
+    'cex_consumer_entry_trillionnium_world_map_rum_slo_warming': 0,
+    'cex_consumer_entry_trillionnium_world_map_delta_cache_gate_green': 1,
+    'cex_consumer_entry_trillionnium_world_map_delta_failure_rate_percent': 0,
 }
 metric_values = {name: metric_value(name) for name in metric_thresholds}
 metric_results = {

@@ -117,6 +117,44 @@ groups:
           runbook: docs/operator-runbook-v1.md
           first_action: "curl -s http://127.0.0.1:8090/health | jq '.trillionnium_world_playability_scorecard.map_readability_lod_gate'"
 
+      - alert: CexTrillionniumWorldMapRumSloEnforcedNotGreen
+        expr: cex_consumer_entry_trillionnium_world_map_rum_slo_enforcement_active == 1 and cex_consumer_entry_trillionnium_world_map_rum_slo_raw_split_green == 0
+        for: 5m
+        labels:
+          severity: critical
+          service: consumer-entry-api
+          family: product-edge
+          component: trillionnium-route-runner-handoff
+          owner: product-ops
+          route_hint: page
+        annotations:
+          summary: Trillionnium World Map RUM SLO is enforced and not green
+          description: |
+            The RUM SLO gate has enough samples to enforce, and at least one app/world or
+            mobile/desktop split is outside the map runtime budget. Treat this as a production
+            player-experience regression before adding map density or promoting a new renderer.
+          runbook: docs/operator-runbook-v1.md
+          first_action: "curl -s http://127.0.0.1:8090/health | jq '.trillionnium_world_map_rum_slo_gate'"
+
+      - alert: CexTrillionniumWorldMapRumSloWarmupRawRed
+        expr: cex_consumer_entry_trillionnium_world_map_rum_slo_warming == 1 and cex_consumer_entry_trillionnium_world_map_rum_slo_raw_split_green == 0
+        for: 15m
+        labels:
+          severity: warning
+          service: consumer-entry-api
+          family: product-edge
+          component: trillionnium-route-runner-handoff
+          owner: product-ops
+          route_hint: product
+        annotations:
+          summary: Trillionnium World Map RUM warmup has a raw red split
+          description: |
+            The top-level RUM SLO gate is still in low-sample warmup, but raw split telemetry is
+            already red. Product ops should inspect sample count, surface/device split, and recent
+            weak-network recovery before treating the green warmup gate as launch comfort.
+          runbook: docs/operator-runbook-v1.md
+          first_action: "curl -s http://127.0.0.1:8090/metrics | grep 'cex_consumer_entry_trillionnium_world_map_rum_slo'"
+
       - alert: CexTrillionniumRouteRunnerFunnelTelemetryMissing
         expr: cex_consumer_entry_trillionnium_route_runner_funnel_telemetry_contract_visible == 0
         for: 10m

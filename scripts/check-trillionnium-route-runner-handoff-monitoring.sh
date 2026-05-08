@@ -243,6 +243,22 @@ expected_alerts = {
         'severity': 'critical',
         'route_hint': 'page',
     },
+    'CexTrillionniumWorldMapRumSloEnforcedNotGreen': {
+        'metric': 'cex_consumer_entry_trillionnium_world_map_rum_slo_enforcement_active',
+        'extra_metrics': ['cex_consumer_entry_trillionnium_world_map_rum_slo_raw_split_green'],
+        'expr_fragments': ['== 1', 'and', '== 0'],
+        'for': '5m',
+        'severity': 'critical',
+        'route_hint': 'page',
+    },
+    'CexTrillionniumWorldMapRumSloWarmupRawRed': {
+        'metric': 'cex_consumer_entry_trillionnium_world_map_rum_slo_warming',
+        'extra_metrics': ['cex_consumer_entry_trillionnium_world_map_rum_slo_raw_split_green'],
+        'expr_fragments': ['== 1', 'and', '== 0'],
+        'for': '15m',
+        'severity': 'warning',
+        'route_hint': 'product',
+    },
     'CexTrillionniumRouteRunnerFunnelTelemetryMissing': {
         'metric': 'cex_consumer_entry_trillionnium_route_runner_funnel_telemetry_contract_visible',
         'expr_fragments': ['== 0'],
@@ -409,6 +425,13 @@ dashboard_required_metrics = [
     'cex_consumer_entry_trillionnium_route_runner_funnel_d1_resume_percent',
     'cex_consumer_entry_trillionnium_route_runner_funnel_reward_to_next_route_percent',
     'cex_consumer_entry_trillionnium_world_future_engine_readiness_gate_green',
+    'cex_consumer_entry_trillionnium_world_map_rum_slo_gate_green',
+    'cex_consumer_entry_trillionnium_world_map_rum_slo_raw_split_green',
+    'cex_consumer_entry_trillionnium_world_map_rum_slo_sample_count',
+    'cex_consumer_entry_trillionnium_world_map_rum_slo_enforcement_active',
+    'cex_consumer_entry_trillionnium_world_map_rum_slo_warming',
+    'cex_consumer_entry_trillionnium_world_map_delta_cache_gate_green',
+    'cex_consumer_entry_trillionnium_world_map_delta_failure_rate_percent',
 ]
 expected_dashboard = {
     'uid': 'cex-trillionnium-route-runner-handoff',
@@ -472,7 +495,7 @@ expected_dashboard = {
             ],
             'threshold_values': [1],
         },
-        'Mobile map readability / funnel / future engine': {
+        'Mobile map runtime / funnel / future engine': {
             'type': 'timeseries',
             'metrics': [
                 'cex_consumer_entry_trillionnium_world_map_readability_lod_gate_green',
@@ -489,6 +512,13 @@ expected_dashboard = {
                 'cex_consumer_entry_trillionnium_route_runner_funnel_time_to_reward_seconds',
                 'cex_consumer_entry_trillionnium_route_runner_funnel_daily_return_resume_count',
                 'cex_consumer_entry_trillionnium_world_future_engine_readiness_gate_green',
+                'cex_consumer_entry_trillionnium_world_map_rum_slo_gate_green',
+                'cex_consumer_entry_trillionnium_world_map_rum_slo_raw_split_green',
+                'cex_consumer_entry_trillionnium_world_map_rum_slo_sample_count',
+                'cex_consumer_entry_trillionnium_world_map_rum_slo_enforcement_active',
+                'cex_consumer_entry_trillionnium_world_map_rum_slo_warming',
+                'cex_consumer_entry_trillionnium_world_map_delta_cache_gate_green',
+                'cex_consumer_entry_trillionnium_world_map_delta_failure_rate_percent',
             ],
             'threshold_values': [1],
         },

@@ -248,6 +248,21 @@ else
         and $gate.telemetry_precondition_visible == true
         and ($gate.promotion_blocker_count | type) == "number"
         and $gate.promotion_blocker_count >= 1;
+      def world_map_rum_slo_gate_observable($gate):
+        $gate.contract_version == "trillionnium_world_map_rum_slo_v1"
+        and $gate.green == true
+        and ($gate.raw_split_green | type) == "boolean"
+        and ($gate.sample_count | type) == "number"
+        and ($gate.min_enforcement_sample_count | type) == "number"
+        and (($gate.enforcement_status // "") == "warming_until_min_samples" or ($gate.enforcement_status // "") == "enforced")
+        and (if ($gate.enforcement_status // "") == "enforced" then $gate.raw_split_green == true else true end);
+      def world_map_delta_cache_gate_green($gate):
+        $gate.contract_version == "trillionnium_world_map_delta_cache_gate_v1"
+        and $gate.transport_delta_contract_version == "trillionnium_world_map_transport_delta_v1"
+        and $gate.entity_delta_cache_contract == "entity_group_versioned_delta_v1"
+        and $gate.failure_rate_within_target == true
+        and $gate.noop_and_snapshot_fallback_are_not_failures == true
+        and $gate.etag_304_compatible == true;
       route_runner_handoff_gate_green(.trillionnium_world_playability_scorecard.route_runner_handoff_gate)
       and route_runner_handoff_gate_green(.trillionnium_world_closed_beta_prototype.route_runner_handoff_gate)
       and route_runner_handoff_gate_green(.trillionnium_world_real_user_beta.route_runner_handoff_gate)
@@ -255,8 +270,10 @@ else
       and map_readability_lod_gate_green(.trillionnium_world_playability_scorecard.map_readability_lod_gate)
       and route_runner_funnel_telemetry_gate_green(.trillionnium_world_playability_scorecard.route_runner_funnel_telemetry_gate)
       and future_engine_readiness_gate_green(.trillionnium_world_playability_scorecard.future_engine_readiness_gate)
+      and world_map_rum_slo_gate_observable(.trillionnium_world_map_rum_slo_gate)
+      and world_map_delta_cache_gate_green(.trillionnium_world_map_delta_cache_gate)
     ' "$consumer_health_file" >/dev/null; then
-      fail 'production runtime requires route-runner handoff/mastery plus map readability LOD, funnel telemetry, and future-engine readiness gates'
+      fail 'production runtime requires route-runner handoff/mastery plus map readability LOD, funnel telemetry, future-engine readiness, RUM SLO, and delta-cache gates'
     fi
   fi
 
