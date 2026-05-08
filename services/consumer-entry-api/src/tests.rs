@@ -3320,6 +3320,8 @@ async fn world_map_runtime_endpoints_expose_rum_delta_cache_and_mobile_ia_gates(
     );
     assert!(metrics_body.contains("cex_consumer_entry_trillionnium_world_map_rum_slo_warming 1"));
     assert!(metrics_body
+        .contains("cex_consumer_entry_trillionnium_world_map_rum_sample_matrix_gate_green 1"));
+    assert!(metrics_body
         .contains("cex_consumer_entry_trillionnium_world_map_rum_sample_matrix_raw_green 1"));
     assert!(metrics_body
         .contains("cex_consumer_entry_trillionnium_world_map_rum_sample_matrix_coverage_count 12"));
@@ -11928,6 +11930,21 @@ async fn metrics_endpoint_exposes_identity_governance_gauges() {
     assert!(body
         .contains("cex_consumer_entry_trillionnium_world_map_weak_network_resilience_gate_green"));
     assert!(body.contains("cex_consumer_entry_trillionnium_world_map_location_privacy_gate_green"));
+    assert!(body.contains("cex_consumer_entry_trillionnium_world_map_rum_sample_matrix_gate_green"));
+    assert!(
+        body.contains("cex_consumer_entry_trillionnium_world_map_density_scalability_gate_green")
+    );
+    assert!(
+        body.contains("cex_consumer_entry_trillionnium_world_map_offline_action_queue_gate_green")
+    );
+    assert!(body.contains(
+        "cex_consumer_entry_trillionnium_world_map_gameplay_accessibility_i18n_gate_green"
+    ));
+    assert!(body
+        .contains("cex_consumer_entry_trillionnium_world_map_maplibre_shadow_parity_gate_green"));
+    assert!(
+        body.contains("cex_consumer_entry_trillionnium_world_map_maplibre_canary_rollback_ready")
+    );
     assert!(body.contains(
         "cex_consumer_entry_trillionnium_world_map_readability_lod_visible_marker_budget"
     ));
@@ -11953,6 +11970,20 @@ async fn metrics_endpoint_exposes_identity_governance_gauges() {
     assert!(body.contains("cex_consumer_entry_trillionnium_route_runner_funnel_d1_resume_percent"));
     assert!(body.contains(
         "cex_consumer_entry_trillionnium_world_commercial_operating_dashboard_gate_green"
+    ));
+    assert!(body
+        .contains("cex_consumer_entry_trillionnium_world_route_recommendation_quality_gate_green"));
+    assert!(body.contains(
+        "cex_consumer_entry_trillionnium_world_route_recommendation_quality_score_percent"
+    ));
+    assert!(body.contains(
+        "cex_consumer_entry_trillionnium_world_route_recommendation_reward_lift_visible"
+    ));
+    assert!(body.contains(
+        "cex_consumer_entry_trillionnium_world_route_recommendation_abandon_risk_visible"
+    ));
+    assert!(body.contains(
+        "cex_consumer_entry_trillionnium_world_route_recommendation_denominator_consistent"
     ));
     assert!(body.contains(
         "cex_consumer_entry_trillionnium_world_commercial_reward_claim_to_next_commission_percent"

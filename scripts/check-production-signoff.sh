@@ -246,8 +246,17 @@ def future_engine_readiness_ok(gate):
         and gate.get('rollback_plan_visible') is True
         and gate.get('lod_precondition_visible') is True
         and gate.get('telemetry_precondition_visible') is True
+        and gate.get('cohort_quality_precondition_visible') is True
+        and gate.get('world_mobile_entry_parity_precondition_visible') is True
+        and gate.get('semantic_map_layers_precondition_visible') is True
+        and gate.get('shadow_renderer_precondition_visible') is True
+        and gate.get('shadow_renderer_contract_version') == 'trillionnium_world_map_renderer_shadow_v1'
+        and gate.get('shadow_renderer_status') == 'shadow_only_not_user_facing'
+        and gate.get('maplibre_shadow_parity_contract_version') == 'trillionnium_world_map_maplibre_shadow_parity_v1'
+        and gate.get('maplibre_shadow_marker_cluster_popup_focus_parity_visible') is True
+        and gate.get('maplibre_canary_rollback_drill_visible') is True
         and isinstance(gate.get('promotion_blocker_count'), (int, float))
-        and gate.get('promotion_blocker_count') >= 1
+        and gate.get('promotion_blocker_count') >= 3
     )
 
 def world_map_runtime_safety_ok(gate):
@@ -259,27 +268,55 @@ def world_map_runtime_safety_ok(gate):
         and gate.get('rum_slo_quantiles_visible') is True
         and gate.get('rum_slo_surface_split_visible') is True
         and gate.get('rum_slo_device_split_visible') is True
+        and gate.get('rum_sample_matrix_contract_version') == 'trillionnium_world_map_real_user_rum_matrix_v1'
+        and int(gate.get('rum_sample_matrix_per_bucket_min_samples') or 0) >= 1
+        and gate.get('rum_sample_matrix_cache_network_kinds_visible') is True
         and gate.get('weak_network_contract_version') == 'trillionnium_world_map_weak_network_resilience_v1'
         and gate.get('weak_network_cached_snapshot_visible') is True
         and gate.get('weak_network_delta_first_visible') is True
         and gate.get('weak_network_snapshot_fallback_visible') is True
+        and gate.get('offline_action_queue_contract_version') == 'trillionnium_world_map_offline_action_queue_v1'
+        and gate.get('offline_banner_visible') is True
+        and gate.get('pending_action_queue_visible') is True
+        and gate.get('conflict_sync_recovery_visible') is True
         and gate.get('location_privacy_contract_version') == 'trillionnium_world_map_location_privacy_v1'
         and gate.get('rum_excludes_lat_lng') is True
         and gate.get('personalized_map_cache_private') is True
         and gate.get('viewport_api_304_supported') is True
         and gate.get('entity_delta_cache_contract') == 'entity_group_versioned_delta_v1'
+        and gate.get('changed_group_rendering_required') is True
+        and gate.get('visible_marker_delta_required') is True
+        and gate.get('marker_cluster_delta_required') is True
+        and gate.get('viewport_request_abort_visible') is True
+        and gate.get('deferred_card_render_visible') is True
+        and gate.get('marker_cluster_policy_visible') is True
+        and gate.get('density_scalability_contract_version') == 'trillionnium_world_map_density_scalability_v1'
+        and gate.get('projection_cache_strategy_visible') is True
+        and gate.get('frontend_virtualization_visible') is True
+        and gate.get('adaptive_density_scheduler_visible') is True
+        and gate.get('gameplay_accessibility_contract_version') == 'trillionnium_world_map_gameplay_accessibility_i18n_v1'
+        and gate.get('screen_reader_reduced_motion_touch_targets_visible') is True
     )
 
 def world_map_rum_slo_ok(gate):
     if not isinstance(gate, dict):
         return False
     enforcement_status = gate.get('enforcement_status')
+    required_bucket_count = int(gate.get('sample_matrix_required_bucket_count') or 0)
+    coverage_count = int(gate.get('sample_matrix_coverage_count') or 0)
+    missing_bucket_count = int(gate.get('sample_matrix_missing_bucket_count') or 0)
     return (
         gate.get('contract_version') == 'trillionnium_world_map_rum_slo_v1'
         and gate.get('green') is True
         and isinstance(gate.get('raw_split_green'), bool)
         and isinstance(gate.get('sample_count'), (int, float))
         and isinstance(gate.get('min_enforcement_sample_count'), (int, float))
+        and gate.get('sample_matrix_contract_version') == 'trillionnium_world_map_real_user_rum_matrix_v1'
+        and required_bucket_count == 12
+        and int(gate.get('per_bucket_min_samples') or 0) >= 1
+        and coverage_count >= required_bucket_count
+        and missing_bucket_count == 0
+        and gate.get('sample_matrix_raw_green') is True
         and enforcement_status in {'warming_until_min_samples', 'enforced'}
         and (gate.get('raw_split_green') is True if enforcement_status == 'enforced' else True)
     )
@@ -296,6 +333,27 @@ def world_map_delta_cache_ok(gate):
         and gate.get('etag_304_compatible') is True
     )
 
+
+def commercial_operating_dashboard_ok(gate):
+    if not isinstance(gate, dict):
+        return False
+    return (
+        gate.get('contract_version') == 'trillionnium_world_commercial_operating_dashboard_gate_v1'
+        and gate.get('dashboard_contract_version') == 'trillionnium_world_commercial_operating_dashboard_v1'
+        and isinstance(gate.get('route_start_to_paid_task_conversion_percent'), (int, float))
+        and isinstance(gate.get('reward_claim_to_next_commission_percent'), (int, float))
+        and isinstance(gate.get('seller_completion_quality_percent'), (int, float))
+        and isinstance(gate.get('buyer_repeat_order_count'), (int, float))
+        and isinstance(gate.get('dispute_refund_reopen_count'), (int, float))
+        and gate.get('route_recommendation_policy_contract_version') == 'trillionnium_world_route_recommendation_policy_v1'
+        and gate.get('route_recommendation_policy_visible') is True
+        and gate.get('route_recommendation_quality_contract_version') == 'trillionnium_world_route_recommendation_quality_v1'
+        and isinstance(gate.get('route_recommendation_quality_score_percent'), (int, float))
+        and gate.get('route_recommendation_reward_lift_visible') is True
+        and gate.get('route_recommendation_abandon_risk_visible') is True
+        and gate.get('route_recommendation_denominator_consistent') is True
+    )
+
 gate_sources = {
     'playability': (health.get('trillionnium_world_playability_scorecard') or {}).get('route_runner_handoff_gate') or {},
     'closed_beta': (health.get('trillionnium_world_closed_beta_prototype') or {}).get('route_runner_handoff_gate') or {},
@@ -308,6 +366,7 @@ playability_scorecard = health.get('trillionnium_world_playability_scorecard') o
 product_gate_sources = {
     'map_readability_lod': playability_scorecard.get('map_readability_lod_gate') or {},
     'route_runner_funnel_telemetry': playability_scorecard.get('route_runner_funnel_telemetry_gate') or {},
+    'commercial_operating_dashboard': playability_scorecard.get('commercial_operating_dashboard_gate') or {},
     'future_engine_readiness': playability_scorecard.get('future_engine_readiness_gate') or {},
     'world_map_runtime_safety': health.get('trillionnium_world_map_runtime_safety_gate') or {},
     'world_map_rum_slo': health.get('trillionnium_world_map_rum_slo_gate') or {},
@@ -316,6 +375,7 @@ product_gate_sources = {
 product_gate_results = {
     'map_readability_lod': map_readability_lod_ok(product_gate_sources['map_readability_lod']),
     'route_runner_funnel_telemetry': route_runner_funnel_telemetry_ok(product_gate_sources['route_runner_funnel_telemetry']),
+    'commercial_operating_dashboard': commercial_operating_dashboard_ok(product_gate_sources['commercial_operating_dashboard']),
     'future_engine_readiness': future_engine_readiness_ok(product_gate_sources['future_engine_readiness']),
     'world_map_runtime_safety': world_map_runtime_safety_ok(product_gate_sources['world_map_runtime_safety']),
     'world_map_rum_slo': world_map_rum_slo_ok(product_gate_sources['world_map_rum_slo']),
@@ -348,14 +408,28 @@ metric_thresholds = {
     'cex_consumer_entry_trillionnium_world_future_engine_readiness_gate_green': 1,
     'cex_consumer_entry_trillionnium_world_map_rum_slo_gate_green': 1,
     'cex_consumer_entry_trillionnium_world_map_rum_slo_raw_split_green': 0,
-    'cex_consumer_entry_trillionnium_world_map_rum_slo_sample_count': 0,
+    'cex_consumer_entry_trillionnium_world_map_rum_slo_sample_count': 12,
     'cex_consumer_entry_trillionnium_world_map_rum_slo_enforcement_active': 0,
     'cex_consumer_entry_trillionnium_world_map_rum_slo_warming': 0,
+    'cex_consumer_entry_trillionnium_world_map_rum_sample_matrix_gate_green': 1,
+    'cex_consumer_entry_trillionnium_world_map_rum_sample_matrix_raw_green': 1,
+    'cex_consumer_entry_trillionnium_world_map_rum_sample_matrix_coverage_count': 12,
+    'cex_consumer_entry_trillionnium_world_map_rum_sample_matrix_missing_bucket_count': 0,
     'cex_consumer_entry_trillionnium_world_map_delta_cache_gate_green': 1,
     'cex_consumer_entry_trillionnium_world_map_delta_failure_rate_percent': 0,
     'cex_consumer_entry_trillionnium_world_map_runtime_safety_gate_green': 1,
     'cex_consumer_entry_trillionnium_world_map_weak_network_resilience_gate_green': 1,
     'cex_consumer_entry_trillionnium_world_map_location_privacy_gate_green': 1,
+    'cex_consumer_entry_trillionnium_world_map_density_scalability_gate_green': 1,
+    'cex_consumer_entry_trillionnium_world_map_offline_action_queue_gate_green': 1,
+    'cex_consumer_entry_trillionnium_world_map_gameplay_accessibility_i18n_gate_green': 1,
+    'cex_consumer_entry_trillionnium_world_map_maplibre_shadow_parity_gate_green': 1,
+    'cex_consumer_entry_trillionnium_world_map_maplibre_canary_rollback_ready': 1,
+    'cex_consumer_entry_trillionnium_world_route_recommendation_quality_gate_green': 1,
+    'cex_consumer_entry_trillionnium_world_route_recommendation_quality_score_percent': 0,
+    'cex_consumer_entry_trillionnium_world_route_recommendation_reward_lift_visible': 1,
+    'cex_consumer_entry_trillionnium_world_route_recommendation_abandon_risk_visible': 1,
+    'cex_consumer_entry_trillionnium_world_route_recommendation_denominator_consistent': 1,
 }
 metric_values = {name: metric_value(name) for name in metric_thresholds}
 metric_results = {

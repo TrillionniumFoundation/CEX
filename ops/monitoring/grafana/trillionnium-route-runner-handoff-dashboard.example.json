@@ -642,6 +642,69 @@
           "legendFormat": "map location privacy gate",
           "range": true,
           "refId": "X"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_map_rum_sample_matrix_gate_green",
+          "legendFormat": "RUM matrix gate",
+          "range": true,
+          "refId": "Y"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_map_rum_sample_matrix_raw_green",
+          "legendFormat": "RUM matrix raw green",
+          "range": true,
+          "refId": "Z"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_map_rum_sample_matrix_coverage_count",
+          "legendFormat": "RUM matrix buckets",
+          "range": true,
+          "refId": "R27"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_map_rum_sample_matrix_missing_bucket_count",
+          "legendFormat": "RUM matrix missing buckets",
+          "range": true,
+          "refId": "R28"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_map_density_scalability_gate_green",
+          "legendFormat": "density scalability",
+          "range": true,
+          "refId": "R29"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_map_offline_action_queue_gate_green",
+          "legendFormat": "offline action queue",
+          "range": true,
+          "refId": "R30"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_map_gameplay_accessibility_i18n_gate_green",
+          "legendFormat": "gameplay a11y/i18n",
+          "range": true,
+          "refId": "R31"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_map_maplibre_shadow_parity_gate_green",
+          "legendFormat": "MapLibre shadow parity",
+          "range": true,
+          "refId": "R32"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_map_maplibre_canary_rollback_ready",
+          "legendFormat": "MapLibre rollback ready",
+          "range": true,
+          "refId": "R33"
         }
       ],
       "title": "Mobile map runtime / funnel / future engine",
@@ -710,6 +773,41 @@
           "expr": "cex_consumer_entry_trillionnium_world_commercial_dispute_refund_reopen_count",
           "legendFormat": "world_commercial_dispute_refund_reopen_count",
           "refId": "K"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_route_recommendation_quality_gate_green",
+          "legendFormat": "route rec quality gate",
+          "range": true,
+          "refId": "L"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_route_recommendation_quality_score_percent",
+          "legendFormat": "route rec quality %",
+          "range": true,
+          "refId": "M"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_route_recommendation_reward_lift_visible",
+          "legendFormat": "route rec reward lift visible",
+          "range": true,
+          "refId": "N"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_route_recommendation_abandon_risk_visible",
+          "legendFormat": "route rec abandon risk visible",
+          "range": true,
+          "refId": "O"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_route_recommendation_denominator_consistent",
+          "legendFormat": "route rec denominator consistent",
+          "range": true,
+          "refId": "P"
         }
       ],
       "fieldConfig": {

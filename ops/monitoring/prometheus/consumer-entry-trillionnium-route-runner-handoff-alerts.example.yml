@@ -136,6 +136,43 @@ groups:
           runbook: docs/operator-runbook-v1.md
           first_action: "curl -s http://127.0.0.1:8090/health | jq '.trillionnium_world_map_runtime_safety_gate'"
 
+      - alert: CexTrillionniumWorldMapDensityScalabilityNotGreen
+        expr: cex_consumer_entry_trillionnium_world_map_density_scalability_gate_green == 0
+        for: 5m
+        labels:
+          severity: critical
+          service: consumer-entry-api
+          family: product-edge
+          component: trillionnium-route-runner-handoff
+          owner: product-ops
+          route_hint: page
+        annotations:
+          summary: Trillionnium World Map density scalability gate is not green
+          description: |
+            The P1 density/scalability contract regressed. Operators should verify backend
+            projection cache, server-timing visibility, frontend virtualization, and adaptive
+            density scheduling before increasing marker density or rollout cohorts.
+          runbook: docs/operator-runbook-v1.md
+          first_action: "curl -s http://127.0.0.1:8090/health | jq '.trillionnium_world_map_runtime_safety_gate | {density_scalability_contract_version, projection_cache_strategy_visible, frontend_virtualization_visible, adaptive_density_scheduler_visible}'"
+
+      - alert: CexTrillionniumWorldMapOfflineActionQueueNotGreen
+        expr: cex_consumer_entry_trillionnium_world_map_offline_action_queue_gate_green == 0
+        for: 10m
+        labels:
+          severity: warning
+          service: consumer-entry-api
+          family: product-edge
+          component: trillionnium-route-runner-handoff
+          owner: product-ops
+          route_hint: page
+        annotations:
+          summary: Trillionnium World Map offline action queue gate is not green
+          description: |
+            The P1 weak-network productization path regressed. Mobile users may lose the visible
+            offline banner, pending action queue, or conflict-sync recovery path during reconnect.
+          runbook: docs/operator-runbook-v1.md
+          first_action: "curl -s http://127.0.0.1:8090/health | jq '.trillionnium_world_map_runtime_safety_gate | {offline_action_queue_contract_version, offline_banner_visible, pending_action_queue_visible, conflict_sync_recovery_visible}'"
+
       - alert: CexTrillionniumWorldMapRumSloEnforcedNotGreen
         expr: cex_consumer_entry_trillionnium_world_map_rum_slo_enforcement_active == 1 and cex_consumer_entry_trillionnium_world_map_rum_slo_raw_split_green == 0
         for: 5m
@@ -173,6 +210,25 @@ groups:
             weak-network recovery before treating the green warmup gate as launch comfort.
           runbook: docs/operator-runbook-v1.md
           first_action: "curl -s http://127.0.0.1:8090/metrics | grep 'cex_consumer_entry_trillionnium_world_map_rum_slo'"
+
+      - alert: CexTrillionniumWorldMapRumMatrixCoverageMissing
+        expr: cex_consumer_entry_trillionnium_world_map_rum_sample_matrix_gate_green == 0 or cex_consumer_entry_trillionnium_world_map_rum_sample_matrix_missing_bucket_count > 0
+        for: 15m
+        labels:
+          severity: warning
+          service: consumer-entry-api
+          family: product-edge
+          component: trillionnium-route-runner-handoff
+          owner: product-ops
+          route_hint: product
+        annotations:
+          summary: Trillionnium World Map real-user RUM matrix has missing buckets
+          description: |
+            The P0-next RUM matrix should cover /app and /world across mobile/desktop and cold,
+            warm-delta/304, and weak-network cached-snapshot sample kinds. Missing buckets mean a
+            green warmup gate is not enough for signoff-quality production evidence.
+          runbook: docs/operator-runbook-v1.md
+          first_action: "curl -s http://127.0.0.1:8090/metrics | grep 'cex_consumer_entry_trillionnium_world_map_rum_sample_matrix'"
 
       - alert: CexTrillionniumWorldMapDeltaCacheNotGreen
         expr: cex_consumer_entry_trillionnium_world_map_delta_cache_gate_green == 0
@@ -287,6 +343,25 @@ groups:
           runbook: docs/operator-runbook-v1.md
           first_action: "curl -s http://127.0.0.1:8090/health | jq '.trillionnium_world_playability_scorecard.commercial_operating_dashboard_gate, .trillionnium_world_public_commercial_product.commercial_operating_dashboard_gate'"
 
+      - alert: CexTrillionniumWorldRouteRecommendationQualityNotGreen
+        expr: cex_consumer_entry_trillionnium_world_route_recommendation_quality_gate_green == 0
+        for: 10m
+        labels:
+          severity: warning
+          service: consumer-entry-api
+          family: product-edge
+          component: trillionnium-route-runner-handoff
+          owner: product-ops
+          route_hint: product
+        annotations:
+          summary: Trillionnium route recommendation quality gate is not green
+          description: |
+            The P0-next recommendation quality contract regressed. Check reward-to-next-route lift,
+            abandon risk, and denominator consistency before trusting route recommendations as a
+            commercial/retention lever.
+          runbook: docs/operator-runbook-v1.md
+          first_action: "curl -s http://127.0.0.1:8090/metrics | grep 'cex_consumer_entry_trillionnium_world_route_recommendation'"
+
       - alert: CexTrillionniumWorldFutureEngineReadinessNotGreen
         expr: cex_consumer_entry_trillionnium_world_future_engine_readiness_gate_green == 0
         for: 10m
@@ -305,3 +380,41 @@ groups:
             telemetry, rollback, and adapter preconditions are visible.
           runbook: docs/operator-runbook-v1.md
           first_action: "curl -s http://127.0.0.1:8090/health | jq '.trillionnium_world_playability_scorecard.future_engine_readiness_gate'"
+
+      - alert: CexTrillionniumWorldMapMapLibreShadowParityNotGreen
+        expr: cex_consumer_entry_trillionnium_world_map_maplibre_shadow_parity_gate_green == 0 or cex_consumer_entry_trillionnium_world_map_maplibre_canary_rollback_ready == 0
+        for: 10m
+        labels:
+          severity: warning
+          service: consumer-entry-api
+          family: product-edge
+          component: trillionnium-route-runner-handoff
+          owner: product-ops
+          route_hint: chat
+        annotations:
+          summary: Trillionnium MapLibre shadow parity/canary rollback gate is not green
+          description: |
+            The P1.5 renderer migration safety contract regressed. Leaflet must remain live and
+            MapLibre must remain shadow-only until marker cluster, popup, focus/action parity and
+            rollback drill readiness are visible again.
+          runbook: docs/operator-runbook-v1.md
+          first_action: "curl -s http://127.0.0.1:8090/health | jq '.trillionnium_world_playability_scorecard.future_engine_readiness_gate | {maplibre_shadow_parity_contract_version, maplibre_shadow_marker_cluster_popup_focus_parity_visible, maplibre_canary_rollback_drill_visible, shadow_renderer_status}'"
+
+      - alert: CexTrillionniumWorldMapGameplayAccessibilityI18nNotGreen
+        expr: cex_consumer_entry_trillionnium_world_map_gameplay_accessibility_i18n_gate_green == 0
+        for: 10m
+        labels:
+          severity: warning
+          service: consumer-entry-api
+          family: product-edge
+          component: trillionnium-route-runner-handoff
+          owner: product-ops
+          route_hint: product
+        annotations:
+          summary: Trillionnium map gameplay accessibility/i18n gate is not green
+          description: |
+            The P2 semantic gameplay polish contract regressed. Verify semantic legend/avatar
+            feedback copy still exposes screen-reader labels, reduced-motion behavior, 44px touch
+            targets, and bilingual/i18n hooks before widening beta traffic.
+          runbook: docs/operator-runbook-v1.md
+          first_action: "curl -s http://127.0.0.1:8090/health | jq '.trillionnium_world_map_runtime_safety_gate | {gameplay_accessibility_contract_version, screen_reader_reduced_motion_touch_targets_visible}'"

@@ -4073,6 +4073,86 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
         is_world_map_rum_slo_metrics_gate_green(&world_map_rum_slo_metrics_gate);
     let world_map_delta_cache_gate_green =
         is_world_map_delta_cache_gate_green(&world_map_delta_cache_gate);
+    let world_map_rum_sample_matrix_gate_green = world_map_rum_slo_metrics_gate
+        .get("sample_matrix_raw_green")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let world_map_density_scalability_gate_green = world_map_runtime_safety_gate
+        .get("density_scalability_contract_version")
+        .and_then(Value::as_str)
+        == Some("trillionnium_world_map_density_scalability_v1")
+        && world_map_runtime_safety_gate
+            .get("projection_cache_strategy_visible")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && world_map_runtime_safety_gate
+            .get("frontend_virtualization_visible")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && world_map_runtime_safety_gate
+            .get("adaptive_density_scheduler_visible")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+    let world_map_offline_action_queue_gate_green = world_map_runtime_safety_gate
+        .get("offline_action_queue_contract_version")
+        .and_then(Value::as_str)
+        == Some("trillionnium_world_map_offline_action_queue_v1")
+        && world_map_runtime_safety_gate
+            .get("offline_banner_visible")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && world_map_runtime_safety_gate
+            .get("pending_action_queue_visible")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && world_map_runtime_safety_gate
+            .get("conflict_sync_recovery_visible")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+    let world_map_gameplay_accessibility_i18n_gate_green = world_map_runtime_safety_gate
+        .get("gameplay_accessibility_contract_version")
+        .and_then(Value::as_str)
+        == Some("trillionnium_world_map_gameplay_accessibility_i18n_v1")
+        && world_map_runtime_safety_gate
+            .get("screen_reader_reduced_motion_touch_targets_visible")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+    let world_map_maplibre_shadow_parity_gate_green = future_engine_readiness_gate
+        .get("maplibre_shadow_parity_contract_version")
+        .and_then(Value::as_str)
+        == Some("trillionnium_world_map_maplibre_shadow_parity_v1")
+        && future_engine_readiness_gate
+            .get("maplibre_shadow_marker_cluster_popup_focus_parity_visible")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+    let world_map_maplibre_canary_rollback_ready = future_engine_readiness_gate
+        .get("maplibre_canary_rollback_drill_visible")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        && future_engine_readiness_gate
+            .get("rollback_plan_visible")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && future_engine_readiness_gate
+            .get("shadow_renderer_status")
+            .and_then(Value::as_str)
+            == Some("shadow_only_not_user_facing");
+    let world_route_recommendation_quality_gate_green = commercial_operating_dashboard_gate
+        .get("route_recommendation_quality_contract_version")
+        .and_then(Value::as_str)
+        == Some("trillionnium_world_route_recommendation_quality_v1")
+        && commercial_operating_dashboard_gate
+            .get("route_recommendation_reward_lift_visible")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && commercial_operating_dashboard_gate
+            .get("route_recommendation_abandon_risk_visible")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && commercial_operating_dashboard_gate
+            .get("route_recommendation_denominator_consistent")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
     let body = format!(
         concat!(
             "# TYPE cex_consumer_entry_task_create_requests_total counter\n",
@@ -4137,6 +4217,8 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
             "cex_consumer_entry_trillionnium_world_map_rum_slo_enforcement_active {}\n",
             "# TYPE cex_consumer_entry_trillionnium_world_map_rum_slo_warming gauge\n",
             "cex_consumer_entry_trillionnium_world_map_rum_slo_warming {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_map_rum_sample_matrix_gate_green gauge\n",
+            "cex_consumer_entry_trillionnium_world_map_rum_sample_matrix_gate_green {}\n",
             "# TYPE cex_consumer_entry_trillionnium_world_map_rum_sample_matrix_raw_green gauge\n",
             "cex_consumer_entry_trillionnium_world_map_rum_sample_matrix_raw_green {}\n",
             "# TYPE cex_consumer_entry_trillionnium_world_map_rum_sample_matrix_coverage_count gauge\n",
@@ -4159,6 +4241,16 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
             "cex_consumer_entry_trillionnium_world_map_weak_network_resilience_gate_green {}\n",
             "# TYPE cex_consumer_entry_trillionnium_world_map_location_privacy_gate_green gauge\n",
             "cex_consumer_entry_trillionnium_world_map_location_privacy_gate_green {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_map_density_scalability_gate_green gauge\n",
+            "cex_consumer_entry_trillionnium_world_map_density_scalability_gate_green {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_map_offline_action_queue_gate_green gauge\n",
+            "cex_consumer_entry_trillionnium_world_map_offline_action_queue_gate_green {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_map_gameplay_accessibility_i18n_gate_green gauge\n",
+            "cex_consumer_entry_trillionnium_world_map_gameplay_accessibility_i18n_gate_green {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_map_maplibre_shadow_parity_gate_green gauge\n",
+            "cex_consumer_entry_trillionnium_world_map_maplibre_shadow_parity_gate_green {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_map_maplibre_canary_rollback_ready gauge\n",
+            "cex_consumer_entry_trillionnium_world_map_maplibre_canary_rollback_ready {}\n",
             "# TYPE cex_consumer_entry_profile_validation_ok gauge\n",
             "cex_consumer_entry_profile_validation_ok {}\n",
             "# TYPE cex_consumer_entry_ingress_protected gauge\n",
@@ -4345,6 +4437,16 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
             "cex_consumer_entry_trillionnium_route_runner_funnel_time_to_next_route_seconds {}\n",
             "# TYPE cex_consumer_entry_trillionnium_world_commercial_operating_dashboard_gate_green gauge\n",
             "cex_consumer_entry_trillionnium_world_commercial_operating_dashboard_gate_green {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_route_recommendation_quality_gate_green gauge\n",
+            "cex_consumer_entry_trillionnium_world_route_recommendation_quality_gate_green {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_route_recommendation_quality_score_percent gauge\n",
+            "cex_consumer_entry_trillionnium_world_route_recommendation_quality_score_percent {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_route_recommendation_reward_lift_visible gauge\n",
+            "cex_consumer_entry_trillionnium_world_route_recommendation_reward_lift_visible {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_route_recommendation_abandon_risk_visible gauge\n",
+            "cex_consumer_entry_trillionnium_world_route_recommendation_abandon_risk_visible {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_route_recommendation_denominator_consistent gauge\n",
+            "cex_consumer_entry_trillionnium_world_route_recommendation_denominator_consistent {}\n",
             "# TYPE cex_consumer_entry_trillionnium_world_commercial_route_start_to_paid_task_percent gauge\n",
             "cex_consumer_entry_trillionnium_world_commercial_route_start_to_paid_task_percent {}\n",
             "# TYPE cex_consumer_entry_trillionnium_world_commercial_reward_claim_to_next_commission_percent gauge\n",
@@ -4547,6 +4649,7 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
                 .and_then(Value::as_str)
                 == Some("warming_until_min_samples"),
         ),
+        gauge_bool(world_map_rum_sample_matrix_gate_green),
         gauge_bool(
             world_map_rum_slo_metrics_gate
                 .get("sample_matrix_raw_green")
@@ -4603,6 +4706,11 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
                     .and_then(Value::as_bool)
                     .unwrap_or(false),
         ),
+        gauge_bool(world_map_density_scalability_gate_green),
+        gauge_bool(world_map_offline_action_queue_gate_green),
+        gauge_bool(world_map_gameplay_accessibility_i18n_gate_green),
+        gauge_bool(world_map_maplibre_shadow_parity_gate_green),
+        gauge_bool(world_map_maplibre_canary_rollback_ready),
         profile_ok,
         if state.config().ingress_token.is_some() {
             1
@@ -4888,6 +4996,29 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
         gate_i64(route_runner_funnel_telemetry_gate, "time_to_first_proof_seconds"),
         gate_i64(route_runner_funnel_telemetry_gate, "time_to_next_route_seconds"),
         gauge_bool(commercial_operating_dashboard_gate_green),
+        gauge_bool(world_route_recommendation_quality_gate_green),
+        gate_i64(
+            commercial_operating_dashboard_gate,
+            "route_recommendation_quality_score_percent",
+        ),
+        gauge_bool(
+            commercial_operating_dashboard_gate
+                .get("route_recommendation_reward_lift_visible")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        ),
+        gauge_bool(
+            commercial_operating_dashboard_gate
+                .get("route_recommendation_abandon_risk_visible")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        ),
+        gauge_bool(
+            commercial_operating_dashboard_gate
+                .get("route_recommendation_denominator_consistent")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        ),
         gate_i64(
             commercial_operating_dashboard_gate,
             "route_start_to_paid_task_conversion_percent",

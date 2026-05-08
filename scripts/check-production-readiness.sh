@@ -246,31 +246,64 @@ else
         and $gate.rollback_plan_visible == true
         and $gate.lod_precondition_visible == true
         and $gate.telemetry_precondition_visible == true
+        and $gate.cohort_quality_precondition_visible == true
+        and $gate.world_mobile_entry_parity_precondition_visible == true
+        and $gate.semantic_map_layers_precondition_visible == true
+        and $gate.shadow_renderer_precondition_visible == true
+        and $gate.shadow_renderer_contract_version == "trillionnium_world_map_renderer_shadow_v1"
+        and $gate.shadow_renderer_status == "shadow_only_not_user_facing"
+        and $gate.maplibre_shadow_parity_contract_version == "trillionnium_world_map_maplibre_shadow_parity_v1"
+        and $gate.maplibre_shadow_marker_cluster_popup_focus_parity_visible == true
+        and $gate.maplibre_canary_rollback_drill_visible == true
         and ($gate.promotion_blocker_count | type) == "number"
-        and $gate.promotion_blocker_count >= 1;
+        and $gate.promotion_blocker_count >= 3;
       def world_map_runtime_safety_gate_green($gate):
         $gate.contract_version == "trillionnium_world_map_runtime_safety_gate_v1"
         and $gate.rum_slo_contract_version == "trillionnium_world_map_rum_slo_v1"
         and $gate.rum_slo_quantiles_visible == true
         and $gate.rum_slo_surface_split_visible == true
         and $gate.rum_slo_device_split_visible == true
+        and $gate.rum_sample_matrix_contract_version == "trillionnium_world_map_real_user_rum_matrix_v1"
+        and $gate.rum_sample_matrix_per_bucket_min_samples >= 1
+        and $gate.rum_sample_matrix_cache_network_kinds_visible == true
         and $gate.weak_network_contract_version == "trillionnium_world_map_weak_network_resilience_v1"
         and $gate.weak_network_cached_snapshot_visible == true
         and $gate.weak_network_delta_first_visible == true
         and $gate.weak_network_snapshot_fallback_visible == true
+        and $gate.offline_action_queue_contract_version == "trillionnium_world_map_offline_action_queue_v1"
+        and $gate.offline_banner_visible == true
+        and $gate.pending_action_queue_visible == true
+        and $gate.conflict_sync_recovery_visible == true
         and $gate.location_privacy_contract_version == "trillionnium_world_map_location_privacy_v1"
         and $gate.rum_excludes_lat_lng == true
         and $gate.personalized_map_cache_private == true
         and $gate.viewport_api_304_supported == true
-        and $gate.entity_delta_cache_contract == "entity_group_versioned_delta_v1";
+        and $gate.entity_delta_cache_contract == "entity_group_versioned_delta_v1"
+        and $gate.changed_group_rendering_required == true
+        and $gate.visible_marker_delta_required == true
+        and $gate.marker_cluster_delta_required == true
+        and $gate.viewport_request_abort_visible == true
+        and $gate.deferred_card_render_visible == true
+        and $gate.marker_cluster_policy_visible == true
+        and $gate.density_scalability_contract_version == "trillionnium_world_map_density_scalability_v1"
+        and $gate.projection_cache_strategy_visible == true
+        and $gate.frontend_virtualization_visible == true
+        and $gate.adaptive_density_scheduler_visible == true
+        and $gate.gameplay_accessibility_contract_version == "trillionnium_world_map_gameplay_accessibility_i18n_v1"
+        and $gate.screen_reader_reduced_motion_touch_targets_visible == true;
       def world_map_rum_slo_gate_observable($gate):
         $gate.contract_version == "trillionnium_world_map_rum_slo_v1"
         and $gate.green == true
         and ($gate.raw_split_green | type) == "boolean"
         and ($gate.sample_count | type) == "number"
         and ($gate.min_enforcement_sample_count | type) == "number"
+        and $gate.sample_matrix_contract_version == "trillionnium_world_map_real_user_rum_matrix_v1"
+        and $gate.sample_matrix_required_bucket_count == 12
+        and $gate.per_bucket_min_samples >= 1
+        and ($gate.sample_matrix_coverage_count | type) == "number"
+        and ($gate.sample_matrix_missing_bucket_count | type) == "number"
         and (($gate.enforcement_status // "") == "warming_until_min_samples" or ($gate.enforcement_status // "") == "enforced")
-        and (if ($gate.enforcement_status // "") == "enforced" then $gate.raw_split_green == true else true end);
+        and (if ($gate.enforcement_status // "") == "enforced" then ($gate.raw_split_green == true and $gate.sample_matrix_raw_green == true and $gate.sample_matrix_missing_bucket_count == 0) else true end);
       def world_map_delta_cache_gate_green($gate):
         $gate.contract_version == "trillionnium_world_map_delta_cache_gate_v1"
         and $gate.transport_delta_contract_version == "trillionnium_world_map_transport_delta_v1"
@@ -278,18 +311,34 @@ else
         and $gate.failure_rate_within_target == true
         and $gate.noop_and_snapshot_fallback_are_not_failures == true
         and $gate.etag_304_compatible == true;
+      def commercial_operating_dashboard_gate_green($gate):
+        $gate.contract_version == "trillionnium_world_commercial_operating_dashboard_gate_v1"
+        and $gate.dashboard_contract_version == "trillionnium_world_commercial_operating_dashboard_v1"
+        and ($gate.route_start_to_paid_task_conversion_percent | type) == "number"
+        and ($gate.reward_claim_to_next_commission_percent | type) == "number"
+        and ($gate.seller_completion_quality_percent | type) == "number"
+        and ($gate.buyer_repeat_order_count | type) == "number"
+        and ($gate.dispute_refund_reopen_count | type) == "number"
+        and $gate.route_recommendation_policy_contract_version == "trillionnium_world_route_recommendation_policy_v1"
+        and $gate.route_recommendation_policy_visible == true
+        and $gate.route_recommendation_quality_contract_version == "trillionnium_world_route_recommendation_quality_v1"
+        and ($gate.route_recommendation_quality_score_percent | type) == "number"
+        and $gate.route_recommendation_reward_lift_visible == true
+        and $gate.route_recommendation_abandon_risk_visible == true
+        and $gate.route_recommendation_denominator_consistent == true;
       route_runner_handoff_gate_green(.trillionnium_world_playability_scorecard.route_runner_handoff_gate)
       and route_runner_handoff_gate_green(.trillionnium_world_closed_beta_prototype.route_runner_handoff_gate)
       and route_runner_handoff_gate_green(.trillionnium_world_real_user_beta.route_runner_handoff_gate)
       and route_runner_handoff_gate_green(.trillionnium_world_public_commercial_product.route_runner_handoff_gate)
       and map_readability_lod_gate_green(.trillionnium_world_playability_scorecard.map_readability_lod_gate)
       and route_runner_funnel_telemetry_gate_green(.trillionnium_world_playability_scorecard.route_runner_funnel_telemetry_gate)
+      and commercial_operating_dashboard_gate_green(.trillionnium_world_playability_scorecard.commercial_operating_dashboard_gate)
       and future_engine_readiness_gate_green(.trillionnium_world_playability_scorecard.future_engine_readiness_gate)
       and world_map_runtime_safety_gate_green(.trillionnium_world_map_runtime_safety_gate)
       and world_map_rum_slo_gate_observable(.trillionnium_world_map_rum_slo_gate)
       and world_map_delta_cache_gate_green(.trillionnium_world_map_delta_cache_gate)
     ' "$consumer_health_file" >/dev/null; then
-      fail 'production runtime requires route-runner handoff/mastery plus map readability LOD, funnel telemetry, future-engine readiness, map runtime safety, RUM SLO, and delta-cache gates'
+      fail 'production runtime requires route-runner handoff/mastery plus map readability LOD, funnel telemetry, route recommendation quality, future-engine MapLibre shadow readiness, map runtime safety, RUM SLO/matrix, offline queue, density, gameplay accessibility, and delta-cache gates'
     fi
   fi
 
