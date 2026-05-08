@@ -1166,6 +1166,10 @@ fn world_map_viewport_includes_prefetch_density_and_live_events() {
         viewport["transport_delta_contract"]["contract_version"],
         "trillionnium_world_map_transport_delta_v1"
     );
+    assert_eq!(
+        viewport["transport_delta_contract"]["entity_delta_cache"]["mode"],
+        "entity_group_versioned_delta_v1"
+    );
     assert!(
         viewport["transport_delta_contract"]["presence_payload"]["presence_delta_required"]
             .as_bool()
@@ -1186,6 +1190,18 @@ fn world_map_viewport_includes_prefetch_density_and_live_events() {
         viewport["renderer_shadow_parity"]["status"],
         "shadow_only_not_user_facing"
     );
+    assert_eq!(
+        viewport["rum_slo_contract"]["contract_version"],
+        "trillionnium_world_map_rum_slo_v1"
+    );
+    assert_eq!(
+        viewport["weak_network_resilience"]["contract_version"],
+        "trillionnium_world_map_weak_network_resilience_v1"
+    );
+    assert_eq!(
+        viewport["location_privacy_contract"]["contract_version"],
+        "trillionnium_world_map_location_privacy_v1"
+    );
     assert!(
         viewport["renderer_shadow_parity"]["parity_result"]["counts_match"]
             .as_bool()
@@ -1193,7 +1209,10 @@ fn world_map_viewport_includes_prefetch_density_and_live_events() {
     );
     assert!(viewport["delta_cursor"]
         .as_str()
-        .is_some_and(|cursor| !cursor.is_empty()));
+        .is_some_and(|cursor| !cursor.is_empty() && cursor.contains(";gv=")));
+    assert!(viewport["entity_group_versions"]
+        .as_object()
+        .is_some_and(|versions| versions.contains_key("avatar_route_runners")));
     assert!(viewport["delta_path"]
         .as_str()
         .unwrap_or_default()
@@ -1210,6 +1229,18 @@ fn world_map_viewport_includes_prefetch_density_and_live_events() {
         viewport["viewport_contract"]["supports_renderer_shadow_parity"],
         true
     );
+    assert_eq!(
+        viewport["viewport_contract"]["supports_rum_slo_quantiles"],
+        true
+    );
+    assert_eq!(
+        viewport["viewport_contract"]["supports_weak_network_resilience"],
+        true
+    );
+    assert_eq!(
+        viewport["viewport_contract"]["supports_location_privacy"],
+        true
+    );
     let initial_cursor = viewport["delta_cursor"].as_str().unwrap().to_string();
     let noop_delta = world_map_delta_json(
         &league.world,
@@ -1223,6 +1254,12 @@ fn world_map_viewport_includes_prefetch_density_and_live_events() {
     );
     assert_eq!(noop_delta["changed"], false);
     assert_eq!(noop_delta["snapshot_fallback_required"], true);
+    assert_eq!(noop_delta["snapshot_fallback_is_failure"], false);
+    assert_eq!(
+        noop_delta["entity_delta"]["mode"],
+        "entity_group_versioned_delta_v1"
+    );
+    assert_eq!(noop_delta["entity_delta"]["changed_group_count"], 0);
     assert_eq!(noop_delta["next_cursor"], initial_cursor);
     let changed_delta = world_map_delta_json(
         &league.world,
@@ -1235,6 +1272,13 @@ fn world_map_viewport_includes_prefetch_density_and_live_events() {
         Some("stale-cursor".to_string()),
     );
     assert_eq!(changed_delta["changed"], true);
+    assert_eq!(
+        changed_delta["delta_mode"],
+        "entity_group_versioned_delta_v1"
+    );
+    assert!(changed_delta["entity_delta"]["changed_group_count"]
+        .as_u64()
+        .is_some_and(|count| count > 0));
     assert!(changed_delta["delta"]["live_event_stream"]
         .as_array()
         .is_some());
@@ -3061,6 +3105,11 @@ async fn world_map_runtime_endpoints_expose_rum_delta_cache_and_mobile_ia_gates(
     assert!(app_body.contains("truncated_runtime_bootstrap_with_lazy_delta_hydration"));
     assert!(app_body.contains("buildViewportDeltaUrl"));
     assert!(app_body.contains("postMapRumSample"));
+    assert!(app_body.contains("trillionnium_world_map_rum_slo_v1"));
+    assert!(app_body.contains("trillionnium_world_map_weak_network_resilience_v1"));
+    assert!(app_body.contains("trillionnium_world_map_location_privacy_v1"));
+    assert!(app_body.contains("viewportWeakNetworkCacheKey"));
+    assert!(app_body.contains("buildMapLibreShadowParityProbe"));
 
     let (world_status, world_headers, world_body) =
         send_text_request_with_headers(&app, "GET", "/world", &[]).await;
@@ -3073,6 +3122,9 @@ async fn world_map_runtime_endpoints_expose_rum_delta_cache_and_mobile_ia_gates(
     );
     assert!(world_body.contains("world-secondary-collapsed"));
     assert!(world_body.contains("data-mobile-ia=\"collapsed_secondary_panel\""));
+    assert!(world_body.contains("world-map-rum-slo"));
+    assert!(world_body.contains("world-map-weak-network"));
+    assert!(world_body.contains("world-map-location-privacy"));
 
     let (delta_status, delta_headers, delta_body) = send_text_request_with_headers(
         &app,
@@ -3094,6 +3146,14 @@ async fn world_map_runtime_endpoints_expose_rum_delta_cache_and_mobile_ia_gates(
         "trillionnium_world_map_transport_delta_v1"
     );
     assert_eq!(delta["changed"], true);
+    assert_eq!(delta["delta_mode"], "entity_group_versioned_delta_v1");
+    assert_eq!(
+        delta["entity_delta_cache"]["mode"],
+        "entity_group_versioned_delta_v1"
+    );
+    assert!(delta["entity_delta"]["changed_group_count"]
+        .as_u64()
+        .is_some_and(|count| count > 0));
     assert!(delta["delta"]["avatar_route_runners"].as_array().is_some());
     assert_eq!(
         delta["renderer_shadow_parity"]["shadow_engine_id"],
@@ -3105,7 +3165,7 @@ async fn world_map_runtime_endpoints_expose_rum_delta_cache_and_mobile_ia_gates(
         .replace(';', "%3B")
         .replace('=', "%3D")
         .replace(':', "%3A");
-    let (noop_status, _, noop_body) = send_text_request_with_headers(
+    let (noop_status, noop_headers, noop_body) = send_text_request_with_headers(
         &app,
         "GET",
         &format!("/world/web/map-delta?lat=31.230400&lng=121.473700&zoom=15&radius_km=4.5&limit=6&cursor={encoded_cursor}"),
@@ -3116,6 +3176,29 @@ async fn world_map_runtime_endpoints_expose_rum_delta_cache_and_mobile_ia_gates(
     let noop_delta: Value = serde_json::from_str(&noop_body).expect("decode noop delta response");
     assert_eq!(noop_delta["changed"], false);
     assert_eq!(noop_delta["snapshot_fallback_required"], true);
+    assert_eq!(noop_delta["snapshot_fallback_is_failure"], false);
+    assert_eq!(noop_delta["entity_delta"]["changed_group_count"], 0);
+    let noop_etag = noop_headers
+        .get("etag")
+        .and_then(|value| value.to_str().ok())
+        .expect("noop etag")
+        .to_string();
+    let (not_modified_status, not_modified_headers, not_modified_body) =
+        send_text_request_with_headers(
+            &app,
+            "GET",
+            &format!("/world/web/map-delta?lat=31.230400&lng=121.473700&zoom=15&radius_km=4.5&limit=6&cursor={encoded_cursor}"),
+            &[("if-none-match", noop_etag.as_str())],
+        )
+        .await;
+    assert_eq!(not_modified_status, StatusCode::NOT_MODIFIED);
+    assert!(not_modified_body.is_empty());
+    assert_eq!(
+        not_modified_headers
+            .get("x-trillionnium-cache-contract")
+            .and_then(|value| value.to_str().ok()),
+        Some("trillionnium_world_map_payload_cache_v1")
+    );
 
     let (rum_status, rum_body) = send_json_request(
         &app,
@@ -3127,6 +3210,7 @@ async fn world_map_runtime_endpoints_expose_rum_delta_cache_and_mobile_ia_gates(
             "surface_id": "world-map-shell-panel",
             "session_id": "rum-test-session",
             "sample_kind": "first_map_interactive",
+            "user_agent_class": "mobile",
             "viewport_cursor": cursor,
             "first_map_interactive_ms": 1234,
             "viewport_refresh_ms": 88,
@@ -3141,15 +3225,29 @@ async fn world_map_runtime_endpoints_expose_rum_delta_cache_and_mobile_ia_gates(
     assert_eq!(rum_body["session_id"], "rum-test-session");
     assert_eq!(rum_body["metrics"]["sample_count"], 1);
     assert_eq!(rum_body["metrics"]["first_map_interactive_max_ms"], 1234);
+    assert_eq!(rum_body["metrics"]["first_map_interactive_p95_ms"], 1234);
+    assert_eq!(
+        rum_body["metrics"]["slo_gate"]["contract_version"],
+        "trillionnium_world_map_rum_slo_v1"
+    );
+    assert_eq!(rum_body["metrics"]["slo_gate"]["green"], true);
 
     let (metrics_status, metrics_body) = send_metrics_request(&app).await;
     assert_eq!(metrics_status, StatusCode::OK);
     assert!(metrics_body.contains("cex_consumer_entry_trillionnium_world_map_rum_samples_total 1"));
     assert!(
-        metrics_body.contains("cex_consumer_entry_trillionnium_world_map_delta_requests_total 2")
+        metrics_body.contains("cex_consumer_entry_trillionnium_world_map_delta_requests_total 3")
     );
     assert!(metrics_body
-        .contains("cex_consumer_entry_trillionnium_world_map_delta_noop_responses_total 1"));
+        .contains("cex_consumer_entry_trillionnium_world_map_delta_noop_responses_total 2"));
+    assert!(metrics_body.contains("cex_consumer_entry_trillionnium_world_map_rum_slo_gate_green 1"));
+    assert!(
+        metrics_body.contains("cex_consumer_entry_trillionnium_world_map_delta_cache_gate_green 1")
+    );
+    assert!(metrics_body
+        .contains("cex_consumer_entry_trillionnium_world_map_runtime_safety_gate_green 1"));
+    assert!(metrics_body
+        .contains("cex_consumer_entry_trillionnium_world_map_location_privacy_gate_green 1"));
 }
 
 fn prompt_has_delivery_anchor(body: &str, lower: &str) -> bool {
@@ -11498,6 +11596,34 @@ async fn health_endpoint_exposes_identity_governance_overview() {
         "trillionnium_world_map_renderer_shadow_v1"
     );
     assert_eq!(
+        body["trillionnium_world_playability_scorecard"]["world_map_runtime_safety_gate"]
+            ["contract_version"],
+        "trillionnium_world_map_runtime_safety_gate_v1"
+    );
+    assert_eq!(
+        body["trillionnium_world_playability_scorecard"]["world_map_runtime_safety_gate"]
+            ["rum_slo_contract_version"],
+        "trillionnium_world_map_rum_slo_v1"
+    );
+    assert_eq!(
+        body["trillionnium_world_playability_scorecard"]["world_map_runtime_safety_gate"]
+            ["weak_network_contract_version"],
+        "trillionnium_world_map_weak_network_resilience_v1"
+    );
+    assert_eq!(
+        body["trillionnium_world_playability_scorecard"]["world_map_runtime_safety_gate"]
+            ["location_privacy_contract_version"],
+        "trillionnium_world_map_location_privacy_v1"
+    );
+    assert_eq!(
+        body["trillionnium_world_map_rum_slo_gate"]["contract_version"],
+        "trillionnium_world_map_rum_slo_v1"
+    );
+    assert_eq!(
+        body["trillionnium_world_map_delta_cache_gate"]["entity_delta_cache_contract"],
+        "entity_group_versioned_delta_v1"
+    );
+    assert_eq!(
         body["trillionnium_world_playability_scorecard"]["map_readability_lod_gate"]
             ["runtime_performance_budget_contract_version"],
         "trillionnium_world_map_runtime_performance_budget_v1"
@@ -11525,6 +11651,13 @@ async fn health_endpoint_exposes_identity_governance_overview() {
             .unwrap()
             .iter()
             .any(|check| check["check_id"] == "future_engine_readiness_contract_visible")
+    );
+    assert!(
+        body["trillionnium_world_playability_scorecard"]["axes"]["observability_gates"]["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|check| check["check_id"] == "world_map_rum_delta_weak_privacy_gates_visible")
     );
     assert!(
         body["trillionnium_world_playability_scorecard"]["user_metric_axes"]
@@ -11664,6 +11797,12 @@ async fn metrics_endpoint_exposes_identity_governance_gauges() {
         "cex_consumer_entry_trillionnium_route_runner_handoff_route_mastery_next_goal_evidence_visible"
     ));
     assert!(body.contains("cex_consumer_entry_trillionnium_world_map_readability_lod_gate_green"));
+    assert!(body.contains("cex_consumer_entry_trillionnium_world_map_rum_slo_gate_green"));
+    assert!(body.contains("cex_consumer_entry_trillionnium_world_map_delta_cache_gate_green"));
+    assert!(body.contains("cex_consumer_entry_trillionnium_world_map_runtime_safety_gate_green"));
+    assert!(body
+        .contains("cex_consumer_entry_trillionnium_world_map_weak_network_resilience_gate_green"));
+    assert!(body.contains("cex_consumer_entry_trillionnium_world_map_location_privacy_gate_green"));
     assert!(body.contains(
         "cex_consumer_entry_trillionnium_world_map_readability_lod_visible_marker_budget"
     ));

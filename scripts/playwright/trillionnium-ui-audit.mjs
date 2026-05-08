@@ -180,6 +180,22 @@ function checkMobile(result, limits) {
     assertMetric(transport.subsystemContract === 'trillionnium_world_map_subsystem_v1', `${result.profile}/app map subsystem contract missing`, transport);
     assertMetric(String(transport.presenceDeltaRequired) === 'true', `${result.profile}/app presence delta requirement missing`, transport);
     assertMetric(String(transport.snapshotFallbackRequired) === 'true', `${result.profile}/app snapshot fallback requirement missing`, transport);
+    const rumSlo = result.mapRumSlo || {};
+    assertMetric(rumSlo.present === true, `${result.profile}/app map RUM SLO contract missing`, rumSlo);
+    assertMetric(rumSlo.contractVersion === 'trillionnium_world_map_rum_slo_v1', `${result.profile}/app map RUM SLO contract version missing`, rumSlo);
+    assertMetric((rumSlo.quantiles || '').includes('p50') && (rumSlo.quantiles || '').includes('p95') && (rumSlo.quantiles || '').includes('p99'), `${result.profile}/app RUM SLO quantiles missing`, rumSlo);
+    assertMetric((rumSlo.surfaceSplit || '').includes('app') && (rumSlo.surfaceSplit || '').includes('world'), `${result.profile}/app RUM SLO surface split missing`, rumSlo);
+    assertMetric((rumSlo.deviceSplit || '').includes('mobile') && (rumSlo.deviceSplit || '').includes('desktop'), `${result.profile}/app RUM SLO device split missing`, rumSlo);
+    const weakNetwork = result.mapWeakNetwork || {};
+    assertMetric(weakNetwork.present === true, `${result.profile}/app weak-network contract missing`, weakNetwork);
+    assertMetric(weakNetwork.contractVersion === 'trillionnium_world_map_weak_network_resilience_v1', `${result.profile}/app weak-network contract version missing`, weakNetwork);
+    assertMetric(weakNetwork.cacheKey === 'trillionnium-world-map:last-good-viewport:v1', `${result.profile}/app weak-network cache key missing`, weakNetwork);
+    assertMetric(String(weakNetwork.delta304Supported) === 'true', `${result.profile}/app weak-network 304 support missing`, weakNetwork);
+    const privacy = result.mapLocationPrivacy || {};
+    assertMetric(privacy.present === true, `${result.profile}/app location privacy contract missing`, privacy);
+    assertMetric(privacy.contractVersion === 'trillionnium_world_map_location_privacy_v1', `${result.profile}/app location privacy contract version missing`, privacy);
+    assertMetric(String(privacy.rumExcludesLatLng) === 'true', `${result.profile}/app RUM location privacy flag missing`, privacy);
+    assertMetric(privacy.cacheControl === 'private', `${result.profile}/app personalized map cache must stay private`, privacy);
     if (result.profile === 'mobile') {
       const sheet = yOf(result, 'mobileSheet');
       assertMetric(sheet >= Math.floor(result.viewport.vh * 0.58), `${result.profile}/app mobile bottom sheet key selector is not docked`, { sheet, viewport: result.viewport });
@@ -222,6 +238,18 @@ function checkMobile(result, limits) {
     assertMetric(transport.subsystemContract === 'trillionnium_world_map_subsystem_v1', `${result.profile}/world map subsystem contract missing`, transport);
     assertMetric(transport.paritySource === 'app-map-transport-delta', `${result.profile}/world map transport must declare /app parity`, transport);
     assertMetric(String(transport.presenceDeltaRequired) === 'true', `${result.profile}/world presence delta requirement missing`, transport);
+    const rumSlo = result.mapRumSlo || {};
+    assertMetric(rumSlo.contractVersion === 'trillionnium_world_map_rum_slo_v1', `${result.profile}/world map RUM SLO contract version missing`, rumSlo);
+    assertMetric(rumSlo.paritySource === 'app-map-rum-slo', `${result.profile}/world map RUM SLO must declare /app parity`, rumSlo);
+    assertMetric((rumSlo.quantiles || '').includes('p95') && (rumSlo.deviceSplit || '').includes('mobile'), `${result.profile}/world map RUM SLO dimensions missing`, rumSlo);
+    const weakNetwork = result.mapWeakNetwork || {};
+    assertMetric(weakNetwork.contractVersion === 'trillionnium_world_map_weak_network_resilience_v1', `${result.profile}/world weak-network contract version missing`, weakNetwork);
+    assertMetric(weakNetwork.paritySource === 'app-map-weak-network', `${result.profile}/world weak-network must declare /app parity`, weakNetwork);
+    assertMetric(weakNetwork.cacheKey === 'trillionnium-world-map:last-good-viewport:v1' && String(weakNetwork.delta304Supported) === 'true', `${result.profile}/world weak-network cache/304 missing`, weakNetwork);
+    const privacy = result.mapLocationPrivacy || {};
+    assertMetric(privacy.contractVersion === 'trillionnium_world_map_location_privacy_v1', `${result.profile}/world location privacy contract version missing`, privacy);
+    assertMetric(privacy.paritySource === 'app-map-location-privacy', `${result.profile}/world privacy must declare /app parity`, privacy);
+    assertMetric(String(privacy.rumExcludesLatLng) === 'true' && privacy.cacheControl === 'private', `${result.profile}/world privacy cache/RUM flags missing`, privacy);
     const shadow = result.shadowRenderer || {};
     assertMetric(shadow.contractVersion === 'trillionnium_world_map_renderer_shadow_v1', `${result.profile}/world shadow renderer contract missing`, shadow);
     assertMetric(shadow.activeEngine === 'leaflet_openstreetmap_v1' && shadow.shadowEngine === 'maplibre_gl_v1', `${result.profile}/world shadow renderer engine ids missing`, shadow);
@@ -379,6 +407,9 @@ async function auditPage(page, profile, target) {
     const worldMapReadabilityLod = document.getElementById('world-map-readability-lod');
     const mapPerformanceBudgetElement = document.getElementById(targetName === 'world' ? 'world-map-performance-budget' : 'app-map-performance-budget');
     const mapTransportDeltaElement = document.getElementById(targetName === 'world' ? 'world-map-transport-delta' : 'app-map-transport-delta');
+    const mapRumSloElement = document.getElementById(targetName === 'world' ? 'world-map-rum-slo' : 'app-map-rum-slo');
+    const mapWeakNetworkElement = document.getElementById(targetName === 'world' ? 'world-map-weak-network' : 'app-map-weak-network');
+    const mapLocationPrivacyElement = document.getElementById(targetName === 'world' ? 'world-map-location-privacy' : 'app-map-location-privacy');
     const worldMapShadowRenderer = document.getElementById('world-map-shadow-renderer');
     const handoffElements = [appRouteHandoff, appFeedHandoff, worldRouteHandoff].filter(Boolean);
     const handoffText = handoffElements.map((el) => text(el)).join(' · ');
@@ -472,6 +503,31 @@ async function auditPage(page, profile, target) {
       paritySource: mapTransportDeltaElement?.dataset.paritySource || null,
       text: text(mapTransportDeltaElement).slice(0, 260),
     };
+    const mapRumSlo = {
+      present: Boolean(mapRumSloElement),
+      contractVersion: mapRumSloElement?.dataset.contractVersion || null,
+      quantiles: mapRumSloElement?.dataset.quantiles || null,
+      surfaceSplit: mapRumSloElement?.dataset.surfaceSplit || null,
+      deviceSplit: mapRumSloElement?.dataset.deviceSplit || null,
+      paritySource: mapRumSloElement?.dataset.paritySource || null,
+      text: text(mapRumSloElement).slice(0, 260),
+    };
+    const mapWeakNetwork = {
+      present: Boolean(mapWeakNetworkElement),
+      contractVersion: mapWeakNetworkElement?.dataset.contractVersion || null,
+      cacheKey: mapWeakNetworkElement?.dataset.cacheKey || null,
+      delta304Supported: mapWeakNetworkElement?.getAttribute('data-delta-304-supported') || null,
+      paritySource: mapWeakNetworkElement?.dataset.paritySource || null,
+      text: text(mapWeakNetworkElement).slice(0, 260),
+    };
+    const mapLocationPrivacy = {
+      present: Boolean(mapLocationPrivacyElement),
+      contractVersion: mapLocationPrivacyElement?.dataset.contractVersion || null,
+      rumExcludesLatLng: mapLocationPrivacyElement?.dataset.rumExcludesLatLng || null,
+      cacheControl: mapLocationPrivacyElement?.dataset.cacheControl || null,
+      paritySource: mapLocationPrivacyElement?.dataset.paritySource || null,
+      text: text(mapLocationPrivacyElement).slice(0, 260),
+    };
     const shadowRenderer = {
       present: Boolean(worldMapShadowRenderer),
       contractVersion: worldMapShadowRenderer?.dataset.contractVersion || null,
@@ -513,6 +569,9 @@ async function auditPage(page, profile, target) {
       worldMapReadability,
       mapPerformanceBudget,
       mapTransportDelta,
+      mapRumSlo,
+      mapWeakNetwork,
+      mapLocationPrivacy,
       shadowRenderer,
       firstViewportButtons,
       firstViewportText: text(document.body).slice(0, 1400),

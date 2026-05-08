@@ -19,6 +19,7 @@ const DEFAULT_LEAGUE_LLM_JUDGE_TIMEOUT_MS: u64 = 2500;
 const DEFAULT_LEAGUE_WEB_SESSION_TTL_SECS: u64 = 3600;
 const DEFAULT_SESSION_AUTH_MAX_CLOCK_SKEW_SECS: u64 = 300;
 const DEFAULT_SESSION_AUTH_MAX_TTL_SECS: u64 = 900;
+const WORLD_MAP_RUM_RECENT_WINDOW: usize = 512;
 const USER_SESSION_ASSERTION_HEADER: &str = "x-cex-user-session";
 const USER_SESSION_SIGNATURE_HEADER: &str = "x-cex-user-session-signature";
 use chrono::Utc;
@@ -94,6 +95,17 @@ struct AppStateInner {
     metrics: ConsumerEntryMetrics,
 }
 
+#[derive(Debug, Clone)]
+struct WorldMapRumObservation {
+    surface_class: String,
+    device_class: String,
+    first_map_interactive_ms: Option<u64>,
+    viewport_refresh_ms: Option<u64>,
+    focus_to_action_rail_ms: Option<u64>,
+    main_thread_long_task_ms: Option<u64>,
+    tile_error_count: u64,
+}
+
 #[derive(Debug, Default)]
 struct ConsumerEntryMetrics {
     task_create_requests: AtomicU64,
@@ -125,9 +137,11 @@ struct ConsumerEntryMetrics {
     world_map_rum_long_task_ms_sum: AtomicU64,
     world_map_rum_long_task_ms_max: AtomicU64,
     world_map_rum_tile_errors: AtomicU64,
+    world_map_rum_recent: std::sync::Mutex<VecDeque<WorldMapRumObservation>>,
     world_map_delta_requests: AtomicU64,
     world_map_delta_noop_responses: AtomicU64,
     world_map_delta_snapshot_fallbacks: AtomicU64,
+    world_map_delta_failures: AtomicU64,
 }
 
 impl ConsumerEntryMetrics {
@@ -264,6 +278,12 @@ impl ConsumerEntryMetrics {
             sample.tile_error_count.unwrap_or(0).min(10_000),
             Ordering::Relaxed,
         );
+        if let Ok(mut recent) = self.world_map_rum_recent.lock() {
+            recent.push_back(WorldMapRumObservation::from_request(sample));
+            while recent.len() > WORLD_MAP_RUM_RECENT_WINDOW {
+                recent.pop_front();
+            }
+        }
     }
 
     fn snapshot(&self) -> Value {
@@ -288,12 +308,36 @@ impl ConsumerEntryMetrics {
             "session_auth_failures": self.session_auth_failures.load(Ordering::Relaxed),
             "replay_hits": self.replay_hits.load(Ordering::Relaxed),
             "world_map_rum": self.world_map_rum_snapshot(),
-            "world_map_delta": {
-                "requests": self.world_map_delta_requests.load(Ordering::Relaxed),
-                "noop_responses": self.world_map_delta_noop_responses.load(Ordering::Relaxed),
-                "snapshot_fallbacks": self.world_map_delta_snapshot_fallbacks.load(Ordering::Relaxed),
-                "contract_version": TRILLIONNIUM_WORLD_MAP_TRANSPORT_DELTA_CONTRACT_VERSION,
-            },
+            "world_map_delta": self.world_map_delta_snapshot(),
+        })
+    }
+
+    fn world_map_delta_snapshot(&self) -> Value {
+        let requests = self.world_map_delta_requests.load(Ordering::Relaxed);
+        let noop_responses = self.world_map_delta_noop_responses.load(Ordering::Relaxed);
+        let snapshot_fallbacks = self
+            .world_map_delta_snapshot_fallbacks
+            .load(Ordering::Relaxed);
+        let failures = self.world_map_delta_failures.load(Ordering::Relaxed);
+        let percent = |value: u64| {
+            if requests == 0 {
+                0
+            } else {
+                ((value as f64 / requests.max(1) as f64) * 100.0).round() as u64
+            }
+        };
+        json!({
+            "contract_version": TRILLIONNIUM_WORLD_MAP_TRANSPORT_DELTA_CONTRACT_VERSION,
+            "requests": requests,
+            "noop_responses": noop_responses,
+            "snapshot_fallbacks": snapshot_fallbacks,
+            "failures": failures,
+            "noop_rate_percent": percent(noop_responses),
+            "snapshot_fallback_rate_percent": percent(snapshot_fallbacks),
+            "failure_rate_percent": percent(failures),
+            "snapshot_fallback_failure_rate_percent": percent(failures),
+            "entity_delta_cache_contract": "entity_group_versioned_delta_v1",
+            "failure_rate_within_target": failures == 0,
         })
     }
 
@@ -306,21 +350,257 @@ impl ConsumerEntryMetrics {
                 sum.load(Ordering::Relaxed) / samples.max(1)
             }
         };
+        let recent = self
+            .world_map_rum_recent
+            .lock()
+            .map(|samples| samples.iter().cloned().collect::<Vec<_>>())
+            .unwrap_or_default();
+        let distributions = world_map_rum_distribution_json(&recent);
+        let slo_gate = distributions
+            .get("slo_gate")
+            .cloned()
+            .unwrap_or_else(|| json!({}));
         json!({
             "contract_version": TRILLIONNIUM_WORLD_MAP_RUNTIME_PERFORMANCE_BUDGET_CONTRACT_VERSION,
             "sample_count": samples,
             "first_map_interactive_avg_ms": avg(&self.world_map_rum_first_interactive_ms_sum),
             "first_map_interactive_max_ms": self.world_map_rum_first_interactive_ms_max.load(Ordering::Relaxed),
+            "first_map_interactive_p50_ms": distributions.get("global").and_then(|global| global.get("first_map_interactive")).and_then(|metric| metric.get("p50_ms")).and_then(Value::as_u64).unwrap_or(0),
+            "first_map_interactive_p95_ms": distributions.get("global").and_then(|global| global.get("first_map_interactive")).and_then(|metric| metric.get("p95_ms")).and_then(Value::as_u64).unwrap_or(0),
+            "first_map_interactive_p99_ms": distributions.get("global").and_then(|global| global.get("first_map_interactive")).and_then(|metric| metric.get("p99_ms")).and_then(Value::as_u64).unwrap_or(0),
             "viewport_refresh_avg_ms": avg(&self.world_map_rum_viewport_refresh_ms_sum),
             "viewport_refresh_max_ms": self.world_map_rum_viewport_refresh_ms_max.load(Ordering::Relaxed),
+            "viewport_refresh_p50_ms": distributions.get("global").and_then(|global| global.get("viewport_refresh")).and_then(|metric| metric.get("p50_ms")).and_then(Value::as_u64).unwrap_or(0),
+            "viewport_refresh_p95_ms": distributions.get("global").and_then(|global| global.get("viewport_refresh")).and_then(|metric| metric.get("p95_ms")).and_then(Value::as_u64).unwrap_or(0),
+            "viewport_refresh_p99_ms": distributions.get("global").and_then(|global| global.get("viewport_refresh")).and_then(|metric| metric.get("p99_ms")).and_then(Value::as_u64).unwrap_or(0),
             "focus_to_action_rail_avg_ms": avg(&self.world_map_rum_focus_to_action_ms_sum),
             "focus_to_action_rail_max_ms": self.world_map_rum_focus_to_action_ms_max.load(Ordering::Relaxed),
+            "focus_to_action_rail_p50_ms": distributions.get("global").and_then(|global| global.get("focus_to_action_rail")).and_then(|metric| metric.get("p50_ms")).and_then(Value::as_u64).unwrap_or(0),
+            "focus_to_action_rail_p95_ms": distributions.get("global").and_then(|global| global.get("focus_to_action_rail")).and_then(|metric| metric.get("p95_ms")).and_then(Value::as_u64).unwrap_or(0),
+            "focus_to_action_rail_p99_ms": distributions.get("global").and_then(|global| global.get("focus_to_action_rail")).and_then(|metric| metric.get("p99_ms")).and_then(Value::as_u64).unwrap_or(0),
             "main_thread_long_task_avg_ms": avg(&self.world_map_rum_long_task_ms_sum),
             "main_thread_long_task_max_ms": self.world_map_rum_long_task_ms_max.load(Ordering::Relaxed),
             "tile_error_count": self.world_map_rum_tile_errors.load(Ordering::Relaxed),
+            "distributions": distributions,
+            "slo_gate": slo_gate,
             "source": "browser_real_user_measurement_endpoint",
         })
     }
+}
+
+impl WorldMapRumObservation {
+    fn from_request(sample: &WorldMapRumRequest) -> Self {
+        Self {
+            surface_class: normalize_world_map_rum_surface(sample.surface_id.as_deref()),
+            device_class: normalize_world_map_rum_device(sample.user_agent_class.as_deref()),
+            first_map_interactive_ms: sample
+                .first_map_interactive_ms
+                .map(|value| value.min(60_000)),
+            viewport_refresh_ms: sample.viewport_refresh_ms.map(|value| value.min(60_000)),
+            focus_to_action_rail_ms: sample
+                .focus_to_action_rail_ms
+                .map(|value| value.min(60_000)),
+            main_thread_long_task_ms: sample
+                .main_thread_long_task_ms
+                .map(|value| value.min(60_000)),
+            tile_error_count: sample.tile_error_count.unwrap_or(0).min(10_000),
+        }
+    }
+}
+
+fn normalize_world_map_rum_surface(surface_id: Option<&str>) -> String {
+    let normalized = surface_id.unwrap_or("world").trim().to_ascii_lowercase();
+    if normalized.contains("app") {
+        "app".to_string()
+    } else if normalized.contains("world") {
+        "world".to_string()
+    } else {
+        "world".to_string()
+    }
+}
+
+fn normalize_world_map_rum_device(user_agent_class: Option<&str>) -> String {
+    let normalized = user_agent_class
+        .unwrap_or("desktop")
+        .trim()
+        .to_ascii_lowercase();
+    if normalized.contains("mobile")
+        || normalized.contains("android")
+        || normalized.contains("iphone")
+        || normalized.contains("ios")
+    {
+        "mobile".to_string()
+    } else {
+        "desktop".to_string()
+    }
+}
+
+fn percentile_from_sorted(values: &[u64], percentile: u64) -> u64 {
+    if values.is_empty() {
+        return 0;
+    }
+    let last = values.len() - 1;
+    let index = ((last as u64 * percentile) + 99) / 100;
+    values[index.min(last as u64) as usize]
+}
+
+fn world_map_rum_metric_summary_json<F>(
+    observations: &[WorldMapRumObservation],
+    target_ms: u64,
+    extract: F,
+) -> Value
+where
+    F: Fn(&WorldMapRumObservation) -> Option<u64>,
+{
+    let mut values = observations.iter().filter_map(extract).collect::<Vec<_>>();
+    values.sort_unstable();
+    let sample_count = values.len() as u64;
+    let p50_ms = percentile_from_sorted(&values, 50);
+    let p95_ms = percentile_from_sorted(&values, 95);
+    let p99_ms = percentile_from_sorted(&values, 99);
+    json!({
+        "sample_count": sample_count,
+        "target_ms": target_ms,
+        "p50_ms": p50_ms,
+        "p95_ms": p95_ms,
+        "p99_ms": p99_ms,
+        "p95_within_target": sample_count == 0 || p95_ms <= target_ms,
+    })
+}
+
+fn world_map_rum_dimension_summary_json(
+    observations: &[WorldMapRumObservation],
+    surface_class: &str,
+    device_class: &str,
+) -> Value {
+    let sample_count = observations.len() as u64;
+    let tile_error_count = observations
+        .iter()
+        .map(|sample| sample.tile_error_count)
+        .sum::<u64>();
+    let tile_error_rate_percent = if sample_count == 0 {
+        0
+    } else {
+        ((tile_error_count as f64 / sample_count.max(1) as f64) * 100.0).round() as u64
+    };
+    let first_map_interactive = world_map_rum_metric_summary_json(observations, 2000, |sample| {
+        sample.first_map_interactive_ms
+    });
+    let viewport_refresh =
+        world_map_rum_metric_summary_json(observations, 250, |sample| sample.viewport_refresh_ms);
+    let focus_to_action_rail = world_map_rum_metric_summary_json(observations, 300, |sample| {
+        sample.focus_to_action_rail_ms
+    });
+    let main_thread_long_task = world_map_rum_metric_summary_json(observations, 100, |sample| {
+        sample.main_thread_long_task_ms
+    });
+    let metric_green = |metric: &Value| {
+        metric
+            .get("p95_within_target")
+            .and_then(Value::as_bool)
+            .unwrap_or(true)
+    };
+    json!({
+        "surface_class": surface_class,
+        "device_class": device_class,
+        "sample_count": sample_count,
+        "first_map_interactive": first_map_interactive,
+        "viewport_refresh": viewport_refresh,
+        "focus_to_action_rail": focus_to_action_rail,
+        "main_thread_long_task": main_thread_long_task,
+        "tile_error_count": tile_error_count,
+        "tile_error_rate_percent": tile_error_rate_percent,
+        "tile_error_rate_target_percent": 1,
+        "tile_error_rate_within_target": tile_error_rate_percent <= 1,
+        "green": metric_green(&first_map_interactive)
+            && metric_green(&viewport_refresh)
+            && metric_green(&focus_to_action_rail)
+            && metric_green(&main_thread_long_task)
+            && tile_error_rate_percent <= 1,
+    })
+}
+
+fn world_map_rum_filtered_summary_json(
+    observations: &[WorldMapRumObservation],
+    surface_class: &str,
+    device_class: &str,
+) -> Value {
+    let filtered = observations
+        .iter()
+        .filter(|sample| {
+            (surface_class == "all" || sample.surface_class == surface_class)
+                && (device_class == "all" || sample.device_class == device_class)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    world_map_rum_dimension_summary_json(&filtered, surface_class, device_class)
+}
+
+fn world_map_rum_distribution_json(observations: &[WorldMapRumObservation]) -> Value {
+    let global = world_map_rum_filtered_summary_json(observations, "all", "all");
+    let app = world_map_rum_filtered_summary_json(observations, "app", "all");
+    let world = world_map_rum_filtered_summary_json(observations, "world", "all");
+    let mobile = world_map_rum_filtered_summary_json(observations, "all", "mobile");
+    let desktop = world_map_rum_filtered_summary_json(observations, "all", "desktop");
+    let app_mobile = world_map_rum_filtered_summary_json(observations, "app", "mobile");
+    let app_desktop = world_map_rum_filtered_summary_json(observations, "app", "desktop");
+    let world_mobile = world_map_rum_filtered_summary_json(observations, "world", "mobile");
+    let world_desktop = world_map_rum_filtered_summary_json(observations, "world", "desktop");
+    let split_green = [
+        &global,
+        &app,
+        &world,
+        &mobile,
+        &desktop,
+        &app_mobile,
+        &app_desktop,
+        &world_mobile,
+        &world_desktop,
+    ]
+    .iter()
+    .all(|summary| {
+        summary
+            .get("green")
+            .and_then(Value::as_bool)
+            .unwrap_or(true)
+    });
+    json!({
+        "contract_version": TRILLIONNIUM_WORLD_MAP_RUM_SLO_CONTRACT_VERSION,
+        "global": global,
+        "by_surface": {
+            "app": app,
+            "world": world,
+        },
+        "by_device_class": {
+            "mobile": mobile,
+            "desktop": desktop,
+        },
+        "by_surface_device": {
+            "app_mobile": app_mobile,
+            "app_desktop": app_desktop,
+            "world_mobile": world_mobile,
+            "world_desktop": world_desktop,
+        },
+        "slo_gate": {
+            "contract_version": TRILLIONNIUM_WORLD_MAP_RUM_SLO_CONTRACT_VERSION,
+            "sample_count": observations.len(),
+            "split_by_surface": ["app", "world"],
+            "split_by_device_class": ["mobile", "desktop"],
+            "first_map_interactive_target_ms": 2000,
+            "viewport_refresh_p95_target_ms": 250,
+            "focus_to_action_rail_target_ms": 300,
+            "main_thread_long_task_budget_ms": 100,
+            "tile_error_rate_target_percent": 1,
+            "green": split_green,
+            "readiness_checks": [
+                "p50_p95_p99_quantiles_visible",
+                "app_world_surface_split_visible",
+                "mobile_desktop_device_split_visible",
+                "tile_error_rate_visible",
+                "slo_targets_bound_to_runtime_budget"
+            ]
+        }
+    })
 }
 
 fn atomic_max(target: &AtomicU64, value: u64) {

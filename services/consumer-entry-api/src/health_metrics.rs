@@ -916,6 +916,174 @@ fn is_future_engine_readiness_gate_green(gate: &Value) -> bool {
             >= 3
 }
 
+fn app_world_map_runtime_safety_gate_json(app: &Value) -> Value {
+    let mobile_contract = app.get("mobile_shell_contract");
+    let viewport = app.get("map_hub").and_then(|hub| hub.get("viewport"));
+    let viewport_api = viewport.and_then(|viewport| viewport.get("viewport_api"));
+    let transport_delta_contract =
+        viewport.and_then(|viewport| viewport.get("transport_delta_contract"));
+    let rum_slo_contract = viewport
+        .and_then(|viewport| viewport.get("rum_slo_contract"))
+        .or_else(|| mobile_contract.and_then(|contract| contract.get("rum_slo_contract")));
+    let weak_network_contract = viewport
+        .and_then(|viewport| viewport.get("weak_network_resilience"))
+        .or_else(|| mobile_contract.and_then(|contract| contract.get("weak_network_resilience")));
+    let location_privacy_contract = viewport
+        .and_then(|viewport| viewport.get("location_privacy_contract"))
+        .or_else(|| mobile_contract.and_then(|contract| contract.get("location_privacy_contract")));
+    json!({
+        "contract_version": "trillionnium_world_map_runtime_safety_gate_v1",
+        "rum_slo_contract_version": rum_slo_contract.and_then(|contract| contract.get("contract_version")).and_then(Value::as_str),
+        "rum_slo_quantiles_visible": rum_slo_contract.and_then(|contract| contract.get("required_dimensions")).and_then(|dimensions| dimensions.get("quantiles")).and_then(Value::as_array).is_some_and(|quantiles| quantiles.iter().any(|value| value == "p50") && quantiles.iter().any(|value| value == "p95") && quantiles.iter().any(|value| value == "p99")),
+        "rum_slo_surface_split_visible": rum_slo_contract.and_then(|contract| contract.get("required_dimensions")).and_then(|dimensions| dimensions.get("surfaces")).and_then(Value::as_array).is_some_and(|surfaces| surfaces.iter().any(|value| value == "app") && surfaces.iter().any(|value| value == "world")),
+        "rum_slo_device_split_visible": rum_slo_contract.and_then(|contract| contract.get("required_dimensions")).and_then(|dimensions| dimensions.get("device_classes")).and_then(Value::as_array).is_some_and(|devices| devices.iter().any(|value| value == "mobile") && devices.iter().any(|value| value == "desktop")),
+        "weak_network_contract_version": weak_network_contract.and_then(|contract| contract.get("contract_version")).and_then(Value::as_str),
+        "weak_network_cached_snapshot_visible": weak_network_contract.and_then(|contract| contract.get("strategy")).and_then(|strategy| strategy.get("local_cached_snapshot_after_network_error")).and_then(Value::as_bool).unwrap_or(false),
+        "weak_network_delta_first_visible": weak_network_contract.and_then(|contract| contract.get("strategy")).and_then(|strategy| strategy.get("delta_first")).and_then(Value::as_bool).unwrap_or(false),
+        "weak_network_snapshot_fallback_visible": weak_network_contract.and_then(|contract| contract.get("strategy")).and_then(|strategy| strategy.get("snapshot_fallback_after_delta_error")).and_then(Value::as_bool).unwrap_or(false),
+        "location_privacy_contract_version": location_privacy_contract.and_then(|contract| contract.get("contract_version")).and_then(Value::as_str),
+        "rum_excludes_lat_lng": location_privacy_contract.and_then(|contract| contract.get("rules")).and_then(|rules| rules.get("rum_payload_excludes_lat_lng")).and_then(Value::as_bool).unwrap_or(false),
+        "personalized_map_cache_private": location_privacy_contract.and_then(|contract| contract.get("rules")).and_then(|rules| rules.get("viewport_cache_control")).and_then(Value::as_str) == Some("private") && location_privacy_contract.and_then(|contract| contract.get("rules")).and_then(|rules| rules.get("delta_cache_control")).and_then(Value::as_str) == Some("private"),
+        "viewport_api_304_supported": viewport_api.and_then(|api| api.get("not_modified_304_supported")).and_then(Value::as_bool).or_else(|| transport_delta_contract.and_then(|contract| contract.get("entity_delta_cache")).and_then(|cache| cache.get("not_modified_304_compatible")).and_then(Value::as_bool)).unwrap_or(false),
+        "entity_delta_cache_contract": viewport_api.and_then(|api| api.get("entity_delta_cache_contract")).and_then(Value::as_str).or_else(|| transport_delta_contract.and_then(|contract| contract.get("entity_delta_cache")).and_then(|cache| cache.get("mode")).and_then(Value::as_str)),
+    })
+}
+
+fn is_world_map_runtime_safety_gate_green(gate: &Value) -> bool {
+    gate.get("contract_version").and_then(Value::as_str)
+        == Some("trillionnium_world_map_runtime_safety_gate_v1")
+        && gate.get("rum_slo_contract_version").and_then(Value::as_str)
+            == Some("trillionnium_world_map_rum_slo_v1")
+        && gate
+            .get("rum_slo_quantiles_visible")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && gate
+            .get("rum_slo_surface_split_visible")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && gate
+            .get("rum_slo_device_split_visible")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && gate
+            .get("weak_network_contract_version")
+            .and_then(Value::as_str)
+            == Some("trillionnium_world_map_weak_network_resilience_v1")
+        && gate
+            .get("weak_network_cached_snapshot_visible")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && gate
+            .get("weak_network_delta_first_visible")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && gate
+            .get("weak_network_snapshot_fallback_visible")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && gate
+            .get("location_privacy_contract_version")
+            .and_then(Value::as_str)
+            == Some("trillionnium_world_map_location_privacy_v1")
+        && gate
+            .get("rum_excludes_lat_lng")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && gate
+            .get("personalized_map_cache_private")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && gate
+            .get("viewport_api_304_supported")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && gate
+            .get("entity_delta_cache_contract")
+            .and_then(Value::as_str)
+            == Some("entity_group_versioned_delta_v1")
+}
+
+fn world_map_rum_slo_gate_from_metrics(metrics_snapshot: &Value) -> Value {
+    metrics_snapshot
+        .get("world_map_rum")
+        .and_then(|rum| rum.get("slo_gate"))
+        .cloned()
+        .unwrap_or_else(|| {
+            json!({
+                "contract_version": "trillionnium_world_map_rum_slo_v1",
+                "sample_count": 0,
+                "green": true,
+                "status": "no_samples_yet_contract_ready"
+            })
+        })
+}
+
+fn is_world_map_rum_slo_metrics_gate_green(gate: &Value) -> bool {
+    gate.get("contract_version").and_then(Value::as_str)
+        == Some("trillionnium_world_map_rum_slo_v1")
+        && gate.get("green").and_then(Value::as_bool).unwrap_or(false)
+        && gate
+            .get("split_by_surface")
+            .and_then(Value::as_array)
+            .is_none_or(|surfaces| {
+                surfaces.iter().any(|value| value == "app")
+                    && surfaces.iter().any(|value| value == "world")
+            })
+        && gate
+            .get("split_by_device_class")
+            .and_then(Value::as_array)
+            .is_none_or(|devices| {
+                devices.iter().any(|value| value == "mobile")
+                    && devices.iter().any(|value| value == "desktop")
+            })
+}
+
+fn world_map_delta_cache_gate_from_metrics(metrics_snapshot: &Value) -> Value {
+    let delta = metrics_snapshot
+        .get("world_map_delta")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    json!({
+        "contract_version": "trillionnium_world_map_delta_cache_gate_v1",
+        "transport_delta_contract_version": delta.get("contract_version").and_then(Value::as_str),
+        "entity_delta_cache_contract": delta.get("entity_delta_cache_contract").and_then(Value::as_str),
+        "requests": delta.get("requests").and_then(Value::as_u64).unwrap_or(0),
+        "noop_responses": delta.get("noop_responses").and_then(Value::as_u64).unwrap_or(0),
+        "snapshot_fallbacks": delta.get("snapshot_fallbacks").and_then(Value::as_u64).unwrap_or(0),
+        "failures": delta.get("failures").and_then(Value::as_u64).unwrap_or(0),
+        "snapshot_fallback_failure_rate_percent": delta.get("snapshot_fallback_failure_rate_percent").and_then(Value::as_u64).unwrap_or(0),
+        "failure_rate_within_target": delta.get("failure_rate_within_target").and_then(Value::as_bool).unwrap_or(false),
+        "noop_and_snapshot_fallback_are_not_failures": true,
+        "etag_304_compatible": true,
+    })
+}
+
+fn is_world_map_delta_cache_gate_green(gate: &Value) -> bool {
+    gate.get("contract_version").and_then(Value::as_str)
+        == Some("trillionnium_world_map_delta_cache_gate_v1")
+        && gate
+            .get("transport_delta_contract_version")
+            .and_then(Value::as_str)
+            == Some("trillionnium_world_map_transport_delta_v1")
+        && gate
+            .get("entity_delta_cache_contract")
+            .and_then(Value::as_str)
+            == Some("entity_group_versioned_delta_v1")
+        && gate
+            .get("failure_rate_within_target")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && gate
+            .get("noop_and_snapshot_fallback_are_not_failures")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && gate
+            .get("etag_304_compatible")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+}
+
 fn route_runner_handoff_gate_u64(gate: &Value, key: &str) -> u64 {
     gate.get(key).and_then(Value::as_u64).unwrap_or(0)
 }
@@ -1417,6 +1585,9 @@ fn trillionnium_world_playability_scorecard_json(
     let future_engine_readiness_gate = app_future_engine_readiness_gate_json(&app);
     let future_engine_readiness_gate_green =
         is_future_engine_readiness_gate_green(&future_engine_readiness_gate);
+    let world_map_runtime_safety_gate = app_world_map_runtime_safety_gate_json(&app);
+    let world_map_runtime_safety_gate_green =
+        is_world_map_runtime_safety_gate_green(&world_map_runtime_safety_gate);
     let ops_persistent_telemetry_green = ops_contract_v1
         && ops_check("persistent_telemetry_stream_visible")
         && ops_check("route_runner_funnel_telemetry_visible")
@@ -1836,10 +2007,11 @@ fn trillionnium_world_playability_scorecard_json(
             ("real_user_beta_overall_100", trillionnium_world_real_user_beta.get("overall_percent").and_then(Value::as_u64) == Some(100)),
             ("public_commercial_overall_100", trillionnium_world_public_commercial_product.get("overall_percent").and_then(Value::as_u64) == Some(100)),
             ("feed_api_path_configured", feed_api_path_configured && feed_route_runner_handoff_green),
-            ("playability_runtime_contracts_exposed", route_contract_version_present && route_runner_handoff_gate_green && coach_p0_p1_p2_green && world_home_playability_runtime_green && ops_contract_v1 && ops_engine_contracts_green && ops_balance_config_green && map_readability_lod_gate_green && route_runner_funnel_telemetry_gate_green && commercial_operating_dashboard_gate_green && future_engine_readiness_gate_green),
+            ("playability_runtime_contracts_exposed", route_contract_version_present && route_runner_handoff_gate_green && coach_p0_p1_p2_green && world_home_playability_runtime_green && ops_contract_v1 && ops_engine_contracts_green && ops_balance_config_green && map_readability_lod_gate_green && route_runner_funnel_telemetry_gate_green && commercial_operating_dashboard_gate_green && future_engine_readiness_gate_green && world_map_runtime_safety_gate_green),
             ("mobile_contract_readiness_dense", mobile_readiness_checks.len() >= 10),
             ("scorecard_has_runtime_funnel_data", feed_item_count >= 20 && route_task_graph_count >= 10 && route_runner_handoff_gate_green && ops_funnel_green && ops_persistent_telemetry_green && route_runner_funnel_telemetry_gate_green && commercial_operating_dashboard_gate_green),
             ("future_engine_readiness_contract_visible", future_engine_readiness_gate_green),
+            ("world_map_rum_delta_weak_privacy_gates_visible", world_map_runtime_safety_gate_green),
             ("repository_backed_world_state_dense", world.world_economy_events.len() >= 20 && !world.world_contract_completions.is_empty()),
         ],
     );
@@ -1856,7 +2028,7 @@ fn trillionnium_world_playability_scorecard_json(
             ("public_commercial_gate_100", trillionnium_world_public_commercial_product.get("overall_percent").and_then(Value::as_u64) == Some(100)),
             ("mobile_shell_contract_green", mobile_shell_ux_green),
             ("feed_api_path_configured", feed_api_path_configured && feed_route_runner_handoff_green),
-            ("playability_runtime_contracts_present", route_contract_version_present && route_runner_handoff_gate_green && coach_p0_p1_p2_green && world_home_playability_runtime_green && ops_contract_v1 && ops_engine_contracts_green && ops_balance_config_green && map_readability_lod_gate_green && route_runner_funnel_telemetry_gate_green && commercial_operating_dashboard_gate_green && future_engine_readiness_gate_green),
+            ("playability_runtime_contracts_present", route_contract_version_present && route_runner_handoff_gate_green && coach_p0_p1_p2_green && world_home_playability_runtime_green && ops_contract_v1 && ops_engine_contracts_green && ops_balance_config_green && map_readability_lod_gate_green && route_runner_funnel_telemetry_gate_green && commercial_operating_dashboard_gate_green && future_engine_readiness_gate_green && world_map_runtime_safety_gate_green),
             ("score_events_runtime_present", score_event_count >= 6),
             ("world_state_dense_enough_for_smoke", feed_item_count >= 20 && route_runner_handoff_gate_green && world.world_economy_events.len() >= 20),
         ],
@@ -2023,6 +2195,7 @@ fn trillionnium_world_playability_scorecard_json(
         "route_runner_funnel_telemetry_gate": route_runner_funnel_telemetry_gate,
         "commercial_operating_dashboard_gate": commercial_operating_dashboard_gate,
         "future_engine_readiness_gate": future_engine_readiness_gate,
+        "world_map_runtime_safety_gate": world_map_runtime_safety_gate,
         "axes": axes,
         "user_metric_axes": user_metric_axes,
     });
@@ -3330,6 +3503,14 @@ pub(super) async fn health(State(state): State<AppState>) -> Json<Value> {
             playability_scorecard,
         )
     };
+    let metrics_snapshot = state.inner.metrics.snapshot();
+    let world_map_rum_slo_metrics_gate = world_map_rum_slo_gate_from_metrics(&metrics_snapshot);
+    let world_map_delta_cache_gate = world_map_delta_cache_gate_from_metrics(&metrics_snapshot);
+    let empty_scorecard_gate = json!({});
+    let world_map_runtime_safety_gate = trillionnium_world_playability_scorecard
+        .get("world_map_runtime_safety_gate")
+        .unwrap_or(&empty_scorecard_gate)
+        .clone();
     Json(json!({
         "status": "ok",
         "service": "consumer-entry-api",
@@ -3387,6 +3568,9 @@ pub(super) async fn health(State(state): State<AppState>) -> Json<Value> {
         "league_repository_runtime": league_repository_runtime,
         "trillionnium_world_public_commercial_product": trillionnium_world_public_commercial_product,
         "trillionnium_world_playability_scorecard": trillionnium_world_playability_scorecard,
+        "trillionnium_world_map_runtime_safety_gate": world_map_runtime_safety_gate,
+        "trillionnium_world_map_rum_slo_gate": world_map_rum_slo_metrics_gate,
+        "trillionnium_world_map_delta_cache_gate": world_map_delta_cache_gate,
         "trillionnium_world_real_user_beta": trillionnium_world_real_user_beta,
         "trillionnium_world_closed_beta_prototype": trillionnium_world_closed_beta_prototype,
         "trillionnium_world_maturity": trillionnium_world_maturity,
@@ -3505,7 +3689,7 @@ pub(super) async fn health(State(state): State<AppState>) -> Json<Value> {
         "replay_cache_size": state.config().replay_cache_size,
         "replay_store_path": state.config().replay_store_path,
         "replay_store_enabled": state.config().replay_store_path.is_some(),
-        "metrics": state.inner.metrics.snapshot(),
+        "metrics": metrics_snapshot,
     }))
 }
 
@@ -3684,6 +3868,9 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
     let future_engine_readiness_gate = trillionnium_world_playability_scorecard
         .get("future_engine_readiness_gate")
         .unwrap_or(&empty_scorecard_gate);
+    let world_map_runtime_safety_gate = trillionnium_world_playability_scorecard
+        .get("world_map_runtime_safety_gate")
+        .unwrap_or(&empty_scorecard_gate);
     let map_readability_lod_gate_green =
         is_map_readability_lod_gate_green(map_readability_lod_gate);
     let route_runner_funnel_telemetry_gate_green =
@@ -3692,6 +3879,23 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
         is_commercial_operating_dashboard_gate_green(commercial_operating_dashboard_gate);
     let future_engine_readiness_gate_green =
         is_future_engine_readiness_gate_green(future_engine_readiness_gate);
+    let world_map_runtime_safety_gate_green =
+        is_world_map_runtime_safety_gate_green(world_map_runtime_safety_gate);
+    let metrics_snapshot = state.inner.metrics.snapshot();
+    let world_map_rum_snapshot = metrics_snapshot
+        .get("world_map_rum")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let world_map_delta_snapshot = metrics_snapshot
+        .get("world_map_delta")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let world_map_rum_slo_metrics_gate = world_map_rum_slo_gate_from_metrics(&metrics_snapshot);
+    let world_map_delta_cache_gate = world_map_delta_cache_gate_from_metrics(&metrics_snapshot);
+    let world_map_rum_slo_metrics_gate_green =
+        is_world_map_rum_slo_metrics_gate_green(&world_map_rum_slo_metrics_gate);
+    let world_map_delta_cache_gate_green =
+        is_world_map_delta_cache_gate_green(&world_map_delta_cache_gate);
     let body = format!(
         concat!(
             "# TYPE cex_consumer_entry_task_create_requests_total counter\n",
@@ -3744,6 +3948,26 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
             "cex_consumer_entry_trillionnium_world_map_delta_noop_responses_total {}\n",
             "# TYPE cex_consumer_entry_trillionnium_world_map_delta_snapshot_fallbacks_total counter\n",
             "cex_consumer_entry_trillionnium_world_map_delta_snapshot_fallbacks_total {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_map_delta_failures_total counter\n",
+            "cex_consumer_entry_trillionnium_world_map_delta_failures_total {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_map_rum_slo_gate_green gauge\n",
+            "cex_consumer_entry_trillionnium_world_map_rum_slo_gate_green {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_map_rum_first_interactive_p95_ms gauge\n",
+            "cex_consumer_entry_trillionnium_world_map_rum_first_interactive_p95_ms {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_map_rum_viewport_refresh_p95_ms gauge\n",
+            "cex_consumer_entry_trillionnium_world_map_rum_viewport_refresh_p95_ms {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_map_rum_focus_to_action_p95_ms gauge\n",
+            "cex_consumer_entry_trillionnium_world_map_rum_focus_to_action_p95_ms {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_map_delta_failure_rate_percent gauge\n",
+            "cex_consumer_entry_trillionnium_world_map_delta_failure_rate_percent {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_map_delta_cache_gate_green gauge\n",
+            "cex_consumer_entry_trillionnium_world_map_delta_cache_gate_green {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_map_runtime_safety_gate_green gauge\n",
+            "cex_consumer_entry_trillionnium_world_map_runtime_safety_gate_green {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_map_weak_network_resilience_gate_green gauge\n",
+            "cex_consumer_entry_trillionnium_world_map_weak_network_resilience_gate_green {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_map_location_privacy_gate_green gauge\n",
+            "cex_consumer_entry_trillionnium_world_map_location_privacy_gate_green {}\n",
             "# TYPE cex_consumer_entry_profile_validation_ok gauge\n",
             "cex_consumer_entry_profile_validation_ok {}\n",
             "# TYPE cex_consumer_entry_ingress_protected gauge\n",
@@ -4104,6 +4328,54 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
             .metrics
             .world_map_delta_snapshot_fallbacks
             .load(Ordering::Relaxed),
+        state
+            .inner
+            .metrics
+            .world_map_delta_failures
+            .load(Ordering::Relaxed),
+        gauge_bool(world_map_rum_slo_metrics_gate_green),
+        world_map_rum_snapshot
+            .get("first_map_interactive_p95_ms")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        world_map_rum_snapshot
+            .get("viewport_refresh_p95_ms")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        world_map_rum_snapshot
+            .get("focus_to_action_rail_p95_ms")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        world_map_delta_snapshot
+            .get("failure_rate_percent")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        gauge_bool(world_map_delta_cache_gate_green),
+        gauge_bool(world_map_runtime_safety_gate_green),
+        gauge_bool(
+            world_map_runtime_safety_gate
+                .get("weak_network_cached_snapshot_visible")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+                && world_map_runtime_safety_gate
+                    .get("weak_network_delta_first_visible")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                && world_map_runtime_safety_gate
+                    .get("weak_network_snapshot_fallback_visible")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+        ),
+        gauge_bool(
+            world_map_runtime_safety_gate
+                .get("rum_excludes_lat_lng")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+                && world_map_runtime_safety_gate
+                    .get("personalized_map_cache_private")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+        ),
         profile_ok,
         if state.config().ingress_token.is_some() {
             1

@@ -2207,14 +2207,202 @@ fn world_map_viewport_cursor(viewport: &Value) -> String {
         })
         .max()
         .unwrap_or(0);
-    format!(
+    let base_cursor = format!(
         "region={active_region_id};tile={tile_id};z={zoom};e={latest_event_epoch};r={latest_runner_epoch};m={};a={}",
         viewport.get("marker_count").and_then(Value::as_i64).unwrap_or(0),
         viewport
             .get("player_avatar_count")
             .and_then(Value::as_i64)
             .unwrap_or(0)
+    );
+    world_map_cursor_with_entity_versions(&base_cursor, &world_map_entity_group_versions(viewport))
+}
+
+fn world_map_hash_json(value: &Value) -> String {
+    let bytes = serde_json::to_vec(value).unwrap_or_default();
+    let digest = Sha256::digest(bytes);
+    digest
+        .iter()
+        .take(8)
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>()
+}
+
+fn world_map_entity_group_payloads(viewport: &Value) -> Vec<(&'static str, Value)> {
+    vec![
+        (
+            "active_region",
+            viewport
+                .get("active_region")
+                .cloned()
+                .unwrap_or(Value::Null),
+        ),
+        (
+            "stream_region_shards",
+            viewport
+                .get("stream_region_shards")
+                .cloned()
+                .unwrap_or_else(|| json!([])),
+        ),
+        (
+            "visible_tile_shards",
+            viewport
+                .get("visible_tile_shards")
+                .cloned()
+                .unwrap_or_else(|| json!([])),
+        ),
+        (
+            "prefetch_queue",
+            viewport
+                .get("prefetch_queue")
+                .cloned()
+                .unwrap_or_else(|| json!([])),
+        ),
+        (
+            "player_avatars",
+            viewport
+                .get("player_avatars")
+                .cloned()
+                .unwrap_or_else(|| json!([])),
+        ),
+        (
+            "avatar_task_routes",
+            viewport
+                .get("avatar_task_routes")
+                .cloned()
+                .unwrap_or_else(|| json!([])),
+        ),
+        (
+            "avatar_route_runners",
+            viewport
+                .get("avatar_route_runners")
+                .cloned()
+                .unwrap_or_else(|| json!([])),
+        ),
+        (
+            "live_event_stream",
+            viewport
+                .get("live_event_stream")
+                .cloned()
+                .unwrap_or_else(|| json!([])),
+        ),
+        (
+            "route_runner_handoff",
+            viewport
+                .get("route_runner_handoff")
+                .cloned()
+                .unwrap_or(Value::Null),
+        ),
+        (
+            "player_density",
+            viewport
+                .get("player_density")
+                .cloned()
+                .unwrap_or(Value::Null),
+        ),
+    ]
+}
+
+fn world_map_entity_group_versions(viewport: &Value) -> Map<String, Value> {
+    let mut versions = Map::new();
+    for (group_id, payload) in world_map_entity_group_payloads(viewport) {
+        versions.insert(group_id.to_string(), json!(world_map_hash_json(&payload)));
+    }
+    versions
+}
+
+fn world_map_entity_versions_cursor(versions: &Map<String, Value>) -> String {
+    let mut pairs = versions
+        .iter()
+        .filter_map(|(key, value)| value.as_str().map(|hash| format!("{key}:{hash}")))
+        .collect::<Vec<_>>();
+    pairs.sort();
+    pairs.join(",")
+}
+
+fn world_map_cursor_with_entity_versions(
+    base_cursor: &str,
+    versions: &Map<String, Value>,
+) -> String {
+    format!(
+        "{base_cursor};gv={}",
+        world_map_entity_versions_cursor(versions)
     )
+}
+
+fn parse_world_map_entity_versions(cursor: Option<&str>) -> HashMap<String, String> {
+    let Some(cursor) = cursor else {
+        return HashMap::new();
+    };
+    let Some(group_versions) = cursor.split(";gv=").nth(1) else {
+        return HashMap::new();
+    };
+    group_versions
+        .split(',')
+        .filter_map(|pair| {
+            let (key, value) = pair.split_once(':')?;
+            let key = key.trim();
+            let value = value.trim();
+            (!key.is_empty() && !value.is_empty()).then(|| (key.to_string(), value.to_string()))
+        })
+        .collect()
+}
+
+fn world_map_entity_delta_json(
+    viewport: &Value,
+    cursor: Option<&str>,
+    changed: bool,
+) -> (Value, Vec<String>) {
+    let versions = world_map_entity_group_versions(viewport);
+    let previous_versions = parse_world_map_entity_versions(cursor);
+    let changed_groups = if !changed {
+        Vec::new()
+    } else if previous_versions.is_empty() {
+        versions.keys().cloned().collect::<Vec<_>>()
+    } else {
+        versions
+            .iter()
+            .filter_map(|(group_id, version)| {
+                let current = version.as_str().unwrap_or_default();
+                (previous_versions.get(group_id).map(String::as_str) != Some(current))
+                    .then(|| group_id.clone())
+            })
+            .collect::<Vec<_>>()
+    };
+    let changed_group_set = changed_groups.iter().cloned().collect::<HashSet<_>>();
+    let mut groups = Map::new();
+    for (group_id, payload) in world_map_entity_group_payloads(viewport) {
+        if changed_group_set.contains(group_id) {
+            groups.insert(group_id.to_string(), payload);
+        }
+    }
+    (
+        json!({
+            "contract_version": TRILLIONNIUM_WORLD_MAP_TRANSPORT_DELTA_CONTRACT_VERSION,
+            "mode": "entity_group_versioned_delta_v1",
+            "changed_groups_only": true,
+            "cursor_carries_group_versions": true,
+            "changed_group_count": changed_groups.len(),
+            "changed_groups": changed_groups,
+            "group_versions": versions,
+            "groups": groups,
+            "noop_can_reuse_cached_snapshot": !changed,
+            "snapshot_fallback_is_failure": false,
+            "etag_304_compatible": true,
+        }),
+        changed_groups,
+    )
+}
+
+fn world_map_delta_payload_json(viewport: &Value, changed_group_ids: &[String]) -> Value {
+    let changed_group_set = changed_group_ids.iter().cloned().collect::<HashSet<_>>();
+    let mut payload = Map::new();
+    for (group_id, value) in world_map_entity_group_payloads(viewport) {
+        if changed_group_set.contains(group_id) {
+            payload.insert(group_id.to_string(), value);
+        }
+    }
+    Value::Object(payload)
 }
 
 fn world_map_weak_etag(cursor: &str) -> String {
@@ -2242,6 +2430,8 @@ pub(super) fn world_map_delta_json(
         .map(str::to_string)
         .unwrap_or_else(|| world_map_viewport_cursor(&viewport));
     let changed = cursor.as_deref() != Some(next_cursor.as_str());
+    let (entity_delta, changed_group_ids) =
+        world_map_entity_delta_json(&viewport, cursor.as_deref(), changed);
     let snapshot_fallback_path = viewport
         .get("viewport_path")
         .and_then(Value::as_str)
@@ -2257,18 +2447,7 @@ pub(super) fn world_map_delta_json(
         .cloned()
         .unwrap_or_else(|| trillionnium_world_map_renderer_shadow_parity_json(&viewport));
     let delta_payload = if changed {
-        json!({
-            "active_region": viewport.get("active_region").cloned().unwrap_or(Value::Null),
-            "stream_region_shards": viewport.get("stream_region_shards").cloned().unwrap_or_else(|| json!([])),
-            "visible_tile_shards": viewport.get("visible_tile_shards").cloned().unwrap_or_else(|| json!([])),
-            "prefetch_queue": viewport.get("prefetch_queue").cloned().unwrap_or_else(|| json!([])),
-            "player_avatars": viewport.get("player_avatars").cloned().unwrap_or_else(|| json!([])),
-            "avatar_task_routes": viewport.get("avatar_task_routes").cloned().unwrap_or_else(|| json!([])),
-            "avatar_route_runners": viewport.get("avatar_route_runners").cloned().unwrap_or_else(|| json!([])),
-            "live_event_stream": viewport.get("live_event_stream").cloned().unwrap_or_else(|| json!([])),
-            "route_runner_handoff": viewport.get("route_runner_handoff").cloned().unwrap_or(Value::Null),
-            "player_density": viewport.get("player_density").cloned().unwrap_or(Value::Null),
-        })
+        world_map_delta_payload_json(&viewport, &changed_group_ids)
     } else {
         json!({})
     };
@@ -2281,13 +2460,24 @@ pub(super) fn world_map_delta_json(
         "delta_cursor": next_cursor,
         "etag": world_map_weak_etag(&next_cursor),
         "changed": changed,
+        "delta_mode": "entity_group_versioned_delta_v1",
         "snapshot_fallback_required": !changed,
+        "snapshot_fallback_reason": if changed { "not_required_changed_entity_delta_available" } else { "not_changed_client_can_keep_cached_snapshot" },
+        "snapshot_fallback_is_failure": false,
         "snapshot_fallback_path": snapshot_fallback_path,
         "web_session_snapshot_fallback_path": web_session_snapshot_fallback_path,
         "active_region_id": viewport.get("active_region").and_then(|region| region.get("region_id")).and_then(Value::as_str),
         "center": viewport.get("center").cloned().unwrap_or(Value::Null),
         "zoom": viewport.get("zoom").cloned().unwrap_or(Value::Null),
         "delta": delta_payload,
+        "entity_delta": entity_delta,
+        "entity_delta_cache": {
+            "contract_version": TRILLIONNIUM_WORLD_MAP_TRANSPORT_DELTA_CONTRACT_VERSION,
+            "mode": "entity_group_versioned_delta_v1",
+            "etag": world_map_weak_etag(&next_cursor),
+            "not_modified_304_compatible": true,
+            "private_cache_required": true
+        },
         "counts": {
             "marker_count": viewport.get("marker_count").and_then(Value::as_i64).unwrap_or(0),
             "live_event_count": viewport.get("live_event_count").and_then(Value::as_i64).unwrap_or(0),
@@ -2303,7 +2493,9 @@ pub(super) fn world_map_delta_json(
             "route_runner_delta_payload_available",
             "snapshot_fallback_path_available",
             "etag_emitted",
-            "shadow_parity_attached"
+            "shadow_parity_attached",
+            "entity_group_delta_versions_attached",
+            "not_modified_304_cache_compatible"
         ]
     })
 }
@@ -2505,7 +2697,7 @@ pub(super) fn world_map_viewport_json(
         "/world/web/map-viewport?lat={:.6}&lng={:.6}&zoom={}&radius_km={:.1}&limit={}",
         center_lat, center_lng, zoom, radius_km, marker_limit
     );
-    let delta_cursor_preview = format!(
+    let delta_cursor_base = format!(
         "region={active_region_id};tile={};z={zoom};e={};r={};m={marker_count};a={player_avatar_count}",
         tile_center
             .get("tile_id")
@@ -2527,6 +2719,21 @@ pub(super) fn world_map_viewport_json(
             .max()
             .unwrap_or(0)
     );
+    let viewport_entity_payload = json!({
+        "active_region": active_region.clone(),
+        "stream_region_shards": stream_region_shards.clone(),
+        "visible_tile_shards": visible_tile_shards.clone(),
+        "prefetch_queue": prefetch_queue.clone(),
+        "player_avatars": player_avatars.clone(),
+        "avatar_task_routes": avatar_task_routes.clone(),
+        "avatar_route_runners": avatar_route_runners.clone(),
+        "live_event_stream": live_event_stream.clone(),
+        "route_runner_handoff": route_runner_handoff.clone(),
+        "player_density": player_density.clone(),
+    });
+    let entity_group_versions = world_map_entity_group_versions(&viewport_entity_payload);
+    let delta_cursor_preview =
+        world_map_cursor_with_entity_versions(&delta_cursor_base, &entity_group_versions);
     let delta_path = format!(
         "/v1/world/map/{}/delta?lat={:.6}&lng={:.6}&zoom={}&radius_km={:.1}&limit={}&cursor={{cursor}}",
         matrix_user_id, center_lat, center_lng, zoom, radius_km, marker_limit
@@ -2581,6 +2788,9 @@ pub(super) fn world_map_viewport_json(
         "map_readability_lod": map_readability_lod,
         "runtime_performance_budget": runtime_performance_budget,
         "transport_delta_contract": transport_delta_contract,
+        "rum_slo_contract": trillionnium_world_map_rum_slo_contract_json(),
+        "weak_network_resilience": trillionnium_world_map_weak_network_resilience_contract_json(),
+        "location_privacy_contract": trillionnium_world_map_location_privacy_contract_json(),
         "renderer_shadow_parity": renderer_shadow_parity,
         "gameplay_layer_contract": trillionnium_world_map_gameplay_layer_contract_json(),
         "live_event_stream": live_event_stream,
@@ -2588,6 +2798,7 @@ pub(super) fn world_map_viewport_json(
         "live_event_count": live_event_count,
         "delta_cursor": delta_cursor_preview,
         "viewport_cursor": delta_cursor_preview,
+        "entity_group_versions": entity_group_versions,
         "etag": world_map_weak_etag(&delta_cursor_preview),
         "viewport_path": viewport_path,
         "web_session_viewport_path": web_session_viewport_path,
@@ -2616,6 +2827,13 @@ pub(super) fn world_map_viewport_json(
             "transport_delta_contract_version": TRILLIONNIUM_WORLD_MAP_TRANSPORT_DELTA_CONTRACT_VERSION,
             "supports_renderer_shadow_parity": true,
             "renderer_shadow_contract_version": TRILLIONNIUM_WORLD_MAP_RENDERER_SHADOW_CONTRACT_VERSION,
+            "supports_rum_slo_quantiles": true,
+            "rum_slo_contract_version": TRILLIONNIUM_WORLD_MAP_RUM_SLO_CONTRACT_VERSION,
+            "supports_weak_network_resilience": true,
+            "weak_network_contract_version": TRILLIONNIUM_WORLD_MAP_WEAK_NETWORK_CONTRACT_VERSION,
+            "supports_location_privacy": true,
+            "location_privacy_contract_version": TRILLIONNIUM_WORLD_MAP_LOCATION_PRIVACY_CONTRACT_VERSION,
+            "supports_entity_group_delta_versions": true,
             "supports_agent_party_state": true,
             "supports_agent_party_handoff_actions": true,
         }
@@ -2718,6 +2936,10 @@ pub(super) fn real_world_map_engine_json(
             "delta_path_template": "/v1/world/map/{matrix_user_id}/delta?lat={lat}&lng={lng}&zoom={zoom}&radius_km={radius_km}&limit={limit}&cursor={cursor}",
             "web_session_delta_path_template": "/world/web/map-delta?lat={lat}&lng={lng}&zoom={zoom}&radius_km={radius_km}&limit={limit}&cursor={cursor}",
             "rum_web_session_path": "/world/web/map-rum",
+            "not_modified_304_supported": true,
+            "entity_delta_cache_contract": "entity_group_versioned_delta_v1",
+            "weak_network_contract_version": TRILLIONNIUM_WORLD_MAP_WEAK_NETWORK_CONTRACT_VERSION,
+            "location_privacy_contract_version": TRILLIONNIUM_WORLD_MAP_LOCATION_PRIVACY_CONTRACT_VERSION,
             "default_radius_km": 4.5,
             "supported_zoom_min": 3,
             "supported_zoom_max": 19,

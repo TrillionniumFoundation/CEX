@@ -8,6 +8,8 @@ pub(super) const TRILLIONNIUM_WORLD_COMMERCIAL_OPERATING_DASHBOARD_CONTRACT_VERS
     "trillionnium_world_commercial_operating_dashboard_v1";
 pub(super) const TRILLIONNIUM_WORLD_MAP_RUNTIME_PERFORMANCE_BUDGET_CONTRACT_VERSION: &str =
     "trillionnium_world_map_runtime_performance_budget_v1";
+pub(super) const TRILLIONNIUM_WORLD_MAP_RUM_SLO_CONTRACT_VERSION: &str =
+    "trillionnium_world_map_rum_slo_v1";
 pub(super) const TRILLIONNIUM_WORLD_MAP_FIRST_SCREEN_DECISION_CONTRACT_VERSION: &str =
     "trillionnium_world_map_first_screen_decision_v1";
 pub(super) const TRILLIONNIUM_WORLD_MAP_RENDERER_SHADOW_CONTRACT_VERSION: &str =
@@ -26,6 +28,10 @@ pub(super) const TRILLIONNIUM_WORLD_MAP_MODULE_BOUNDARY_CONTRACT_VERSION: &str =
     "trillionnium_world_map_module_boundary_v1";
 pub(super) const TRILLIONNIUM_WORLD_MAP_PAYLOAD_CACHE_CONTRACT_VERSION: &str =
     "trillionnium_world_map_payload_cache_v1";
+pub(super) const TRILLIONNIUM_WORLD_MAP_WEAK_NETWORK_CONTRACT_VERSION: &str =
+    "trillionnium_world_map_weak_network_resilience_v1";
+pub(super) const TRILLIONNIUM_WORLD_MAP_LOCATION_PRIVACY_CONTRACT_VERSION: &str =
+    "trillionnium_world_map_location_privacy_v1";
 
 pub(super) fn trillionnium_percent_i64(numerator: i64, denominator: i64) -> i64 {
     if denominator <= 0 {
@@ -103,7 +109,41 @@ pub(super) fn trillionnium_world_map_runtime_performance_budget_json(
             "long_task_budget_visible",
             "low_end_mobile_floor_visible",
             "delta_update_requirement_visible",
-            "avatar_runner_degrade_strategy_visible"
+            "avatar_runner_degrade_strategy_visible",
+            "rum_slo_quantiles_required"
+        ]
+    })
+}
+
+pub(super) fn trillionnium_world_map_rum_slo_contract_json() -> Value {
+    json!({
+        "contract_version": TRILLIONNIUM_WORLD_MAP_RUM_SLO_CONTRACT_VERSION,
+        "status": "hard_gate_quantiles_before_map_density",
+        "required_dimensions": {
+            "surfaces": ["app", "world"],
+            "device_classes": ["mobile", "desktop"],
+            "quantiles": ["p50", "p95", "p99"]
+        },
+        "targets": {
+            "first_map_interactive_p95_ms": 2000,
+            "viewport_refresh_p95_ms": 250,
+            "focus_to_action_rail_p95_ms": 300,
+            "main_thread_long_task_p95_ms": 100,
+            "tile_error_rate_percent": 1,
+            "delta_snapshot_fallback_failure_rate_percent": 0
+        },
+        "evidence_sources": [
+            "/world/web/map-rum",
+            "/v1/world/map/{matrix_user_id}/rum",
+            "/metrics",
+            "/health.metrics.world_map_rum.slo_gate"
+        ],
+        "readiness_checks": [
+            "p50_p95_p99_quantiles_visible",
+            "app_world_surface_split_visible",
+            "mobile_desktop_device_split_visible",
+            "tile_error_rate_visible",
+            "delta_failure_rate_visible"
         ]
     })
 }
@@ -234,7 +274,8 @@ pub(super) fn trillionnium_world_map_renderer_shadow_parity_json(viewport: &Valu
             "live_event_focus_ids_match": true,
             "primary_cta_targets_match": true,
             "counts_match": true,
-            "shadow_user_facing": false
+            "shadow_user_facing": false,
+            "browser_shadow_harness_required": true
         },
         "readiness_checks": [
             "same_viewport_payload_used",
@@ -242,7 +283,8 @@ pub(super) fn trillionnium_world_map_renderer_shadow_parity_json(viewport: &Valu
             "route_focus_ids_compared",
             "live_event_focus_ids_compared",
             "primary_cta_targets_compared",
-            "shadow_stays_not_user_facing"
+            "shadow_stays_not_user_facing",
+            "browser_shadow_probe_exported"
         ]
     })
 }
@@ -308,11 +350,17 @@ pub(super) fn trillionnium_world_route_recommendation_policy_json(
 
 pub(super) fn trillionnium_world_map_subsystem_contract_json() -> Value {
     let module_boundary = trillionnium_world_map_module_boundary_contract_json();
+    let rum_slo = trillionnium_world_map_rum_slo_contract_json();
+    let weak_network = trillionnium_world_map_weak_network_resilience_contract_json();
+    let location_privacy = trillionnium_world_map_location_privacy_contract_json();
     json!({
         "contract_version": TRILLIONNIUM_WORLD_MAP_SUBSYSTEM_CONTRACT_VERSION,
         "status": "map_operated_as_product_subsystem",
         "optimization_scope": "p0_p1_p2_full_world_map_push",
         "module_boundary_contract": module_boundary,
+        "rum_slo_contract": rum_slo,
+        "weak_network_resilience_contract": weak_network,
+        "location_privacy_contract": location_privacy,
         "subsystems": [
             {"subsystem_id": "world_map_domain", "owns": ["world objects", "routes", "events", "commerce risk"]},
             {"subsystem_id": "world_map_projection", "owns": ["viewport payload", "LOD", "semantic roles", "route-first copy"]},
@@ -331,7 +379,10 @@ pub(super) fn trillionnium_world_map_subsystem_contract_json() -> Value {
             "raw_vs_cohort_metric_boundary_visible",
             "renderer_shadow_boundary_visible",
             "route_recommendation_policy_visible",
-            "module_boundary_gate_visible"
+            "module_boundary_gate_visible",
+            "rum_slo_gate_visible",
+            "weak_network_resilience_visible",
+            "location_privacy_gate_visible"
         ]
     })
 }
@@ -381,8 +432,17 @@ pub(super) fn trillionnium_world_map_transport_delta_contract_json(
             "tile_center",
             "viewport_zoom",
             "event_epoch",
-            "avatar_route_runner_epoch"
+            "avatar_route_runner_epoch",
+            "entity_group_versions"
         ],
+        "entity_delta_cache": {
+            "mode": "entity_group_versioned_delta_v1",
+            "changed_groups_only": true,
+            "cursor_carries_group_versions": true,
+            "noop_keeps_cached_snapshot": true,
+            "etag_required": true,
+            "not_modified_304_compatible": true
+        },
         "shard_payload": {
             "tile_shard_count": tile_shard_count,
             "prefetch_count": prefetch_count,
@@ -408,7 +468,60 @@ pub(super) fn trillionnium_world_map_transport_delta_contract_json(
             "region_shard_key_visible",
             "presence_delta_visible",
             "payload_budget_visible",
-            "transport_boundary_visible"
+            "transport_boundary_visible",
+            "entity_group_versions_visible",
+            "etag_304_cache_compatible"
+        ]
+    })
+}
+
+pub(super) fn trillionnium_world_map_weak_network_resilience_contract_json() -> Value {
+    json!({
+        "contract_version": TRILLIONNIUM_WORLD_MAP_WEAK_NETWORK_CONTRACT_VERSION,
+        "status": "cache_first_delta_with_snapshot_recovery",
+        "strategy": {
+            "delta_first": true,
+            "stale_snapshot_cache_key": "trillionnium-world-map:last-good-viewport:v1",
+            "snapshot_fallback_after_delta_error": true,
+            "local_cached_snapshot_after_network_error": true,
+            "backoff_ms": [250, 500, 1000, 2000],
+            "low_end_device_limit": 6,
+            "offline_status_sample_kind": "weak_network_cached_snapshot"
+        },
+        "readiness_checks": [
+            "delta_fetch_error_does_not_blank_map",
+            "snapshot_fetch_error_can_use_cached_viewport",
+            "backoff_policy_visible",
+            "rum_beacon_marks_weak_network_fallback",
+            "cache_key_versioned"
+        ]
+    })
+}
+
+pub(super) fn trillionnium_world_map_location_privacy_contract_json() -> Value {
+    json!({
+        "contract_version": TRILLIONNIUM_WORLD_MAP_LOCATION_PRIVACY_CONTRACT_VERSION,
+        "status": "precise_location_not_emitted_in_rum_or_public_cache",
+        "rules": {
+            "rum_payload_excludes_lat_lng": true,
+            "viewport_cache_control": "private",
+            "delta_cache_control": "private",
+            "cursor_uses_region_tile_epoch_counts_not_raw_path": true,
+            "web_session_authorized_before_personalized_map": true,
+            "public_renderer_shadow_has_counts_not_user_location": true
+        },
+        "allowed_location_precision": {
+            "viewport_query": "camera_request_only_private_response",
+            "rum": "surface/device/cursor_only",
+            "metrics": "aggregate_quantiles_only",
+            "health": "contract_and_aggregate_only"
+        },
+        "readiness_checks": [
+            "rum_payload_has_no_lat_lng",
+            "personalized_map_responses_private_cache",
+            "metrics_are_aggregate_only",
+            "shadow_model_excludes_user_precise_location",
+            "web_session_auth_for_personalized_surface"
         ]
     })
 }

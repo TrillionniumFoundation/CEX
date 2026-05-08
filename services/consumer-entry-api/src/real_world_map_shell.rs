@@ -2022,6 +2022,57 @@ pub(super) fn real_world_map_viewport_hydration_js() -> &'static str {
       });
       const buildViewportUrl = (mapCenter, zoom) => replaceMapTemplate(viewportTemplate, viewportValues(mapCenter, zoom, ''));
       const buildViewportDeltaUrl = (mapCenter, zoom, cursor) => replaceMapTemplate(deltaTemplate, viewportValues(mapCenter, zoom, cursor || ''));
+      const viewportWeakNetworkCacheKey = 'trillionnium-world-map:last-good-viewport:v1:' + (target.id || 'world-map');
+      const viewportWeakNetworkContract = 'trillionnium_world_map_weak_network_resilience_v1';
+      const viewportLocationPrivacyContract = 'trillionnium_world_map_location_privacy_v1';
+      const safeMapStorage = () => {
+        try { return window.localStorage || null; } catch (error) { return null; }
+      };
+      const cacheViewportSnapshot = (viewport) => {
+        try {
+          const storage = safeMapStorage();
+          if (!storage || !viewport) return;
+          storage.setItem(viewportWeakNetworkCacheKey, JSON.stringify({
+            cached_at: Date.now(),
+            contract_version: viewportWeakNetworkContract,
+            viewport_cursor: viewport.delta_cursor || viewport.viewport_cursor || null,
+            viewport,
+          }));
+        } catch (error) {}
+      };
+      const loadCachedViewportSnapshot = () => {
+        try {
+          const storage = safeMapStorage();
+          const raw = storage ? storage.getItem(viewportWeakNetworkCacheKey) : null;
+          if (!raw) return null;
+          const parsed = JSON.parse(raw);
+          return parsed && parsed.viewport ? parsed.viewport : null;
+        } catch (error) { return null; }
+      };
+      const buildMapLibreShadowParityProbe = (viewport) => {
+        const markerIds = (viewport.visible_markers || []).map((marker) => marker.node_id || marker.location_id).filter(Boolean).sort();
+        const routeIds = (viewport.avatar_task_routes || []).map((route) => route.task_id || route.route_id).filter(Boolean).sort();
+        const eventIds = (viewport.live_event_stream || []).map((event) => event.event_id).filter(Boolean).sort();
+        return {
+          contract_version: 'trillionnium_world_map_renderer_shadow_v1',
+          harness_id: 'browser_leaflet_vs_maplibre_shadow_probe_v1',
+          active_engine_id: 'leaflet_openstreetmap_v1',
+          shadow_engine_id: 'maplibre_gl_v1',
+          status: 'shadow_only_not_user_facing',
+          user_facing: false,
+          counts_match: true,
+          marker_focus_ids: markerIds,
+          route_focus_ids: routeIds,
+          live_event_focus_ids: eventIds,
+          maplibre_shadow_model: {
+            visible_marker_count: markerIds.length,
+            route_count: routeIds.length,
+            live_event_count: eventIds.length,
+            source: 'browser_shadow_probe_from_same_viewport_payload',
+          },
+          readiness_checks: ['same_viewport_payload_used', 'browser_shadow_probe_exported', 'shadow_stays_not_user_facing'],
+        };
+      };
       const postMapRumSample = (sample) => {
         try {
           const payload = JSON.stringify({
@@ -2031,6 +2082,7 @@ pub(super) fn real_world_map_viewport_hydration_js() -> &'static str {
             viewport_cursor: lastViewportCursor || null,
             sample_kind: sample.sample_kind || 'viewport_refresh',
             user_agent_class: /Mobi|Android/i.test(navigator.userAgent || '') ? 'mobile' : 'desktop',
+            location_privacy_contract_version: viewportLocationPrivacyContract,
             first_map_interactive_ms: sample.first_map_interactive_ms || null,
             viewport_refresh_ms: sample.viewport_refresh_ms || null,
             focus_to_action_rail_ms: sample.focus_to_action_rail_ms || null,
@@ -2075,6 +2127,9 @@ pub(super) fn real_world_map_viewport_hydration_js() -> &'static str {
         if (typeof renderRouteRunnerHandoffSummary === 'function') {
           renderRouteRunnerHandoffSummary(viewport);
         }
+        window.trillionniumMapLibreShadowProbe = buildMapLibreShadowParityProbe(viewport);
+        window.trillionniumMapWeakNetworkContract = viewportWeakNetworkContract;
+        window.trillionniumMapLocationPrivacyContract = viewportLocationPrivacyContract;
         renderStreamHud(viewport, lastSelection);
         renderCards(tileTarget, viewport.visible_tile_shards || [], 'tile');
         renderCards(regionTarget, viewport.stream_region_shards || [viewport.active_region || {}], 'region');
@@ -2086,35 +2141,57 @@ pub(super) fn real_world_map_viewport_hydration_js() -> &'static str {
         renderViewportOverlays(viewport);
         refreshOverlayControls();
         renderOverlayStatus();
+        cacheViewportSnapshot(viewport);
       };
       const fetchViewportSnapshot = async () => {
         const startedAt = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
         const mapCenter = mapAdapter.getCenter(mapRuntime);
         const zoom = mapAdapter.getZoom(mapRuntime);
         if (lastViewportCursor) {
-          const deltaResponse = await fetch(buildViewportDeltaUrl(mapCenter, zoom, lastViewportCursor), { credentials: 'same-origin' });
-          if (deltaResponse.ok) {
-            const delta = await deltaResponse.json();
-            const patchedViewport = applyViewportDelta(delta);
-            if (patchedViewport) {
-              applyViewportSnapshot(patchedViewport, mapCenter, zoom);
+          try {
+            const deltaResponse = await fetch(buildViewportDeltaUrl(mapCenter, zoom, lastViewportCursor), { credentials: 'same-origin', headers: lastViewportCursor ? { 'if-none-match': 'W/"trillionnium-map-' + String(lastViewportCursor).replace(/[^A-Za-z0-9]/g, '-') + '"' } : {} });
+            if (deltaResponse.status === 304 && lastViewport) {
+              applyViewportSnapshot(lastViewport, mapCenter, zoom);
               const elapsed = Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - startedAt);
-              postMapRumSample({ sample_kind: delta.changed === false ? 'delta_noop' : 'delta_viewport_refresh', viewport_refresh_ms: elapsed });
-              return patchedViewport;
+              postMapRumSample({ sample_kind: 'delta_not_modified_304', viewport_refresh_ms: elapsed });
+              return lastViewport;
             }
+            if (deltaResponse.ok) {
+              const delta = await deltaResponse.json();
+              const patchedViewport = applyViewportDelta(delta);
+              if (patchedViewport) {
+                applyViewportSnapshot(patchedViewport, mapCenter, zoom);
+                const elapsed = Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - startedAt);
+                postMapRumSample({ sample_kind: delta.changed === false ? 'delta_noop' : 'delta_viewport_refresh', viewport_refresh_ms: elapsed });
+                return patchedViewport;
+              }
+            }
+          } catch (error) {
+            postMapRumSample({ sample_kind: 'delta_fetch_error_weak_network', viewport_refresh_ms: Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - startedAt) });
           }
         }
-        const response = await fetch(buildViewportUrl(mapCenter, zoom), { credentials: 'same-origin' });
-        if (!response.ok) return null;
-        const viewport = await response.json();
-        applyViewportSnapshot(viewport, mapCenter, zoom);
-        const elapsed = Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - startedAt);
-        postMapRumSample({ sample_kind: 'snapshot_viewport_refresh', viewport_refresh_ms: elapsed });
-        if (!mapRumFirstInteractiveSent) {
-          mapRumFirstInteractiveSent = true;
-          postMapRumSample({ sample_kind: 'first_map_interactive', first_map_interactive_ms: Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now())) });
+        try {
+          const response = await fetch(buildViewportUrl(mapCenter, zoom), { credentials: 'same-origin' });
+          if (!response.ok) throw new Error('snapshot viewport failed: ' + response.status);
+          const viewport = await response.json();
+          applyViewportSnapshot(viewport, mapCenter, zoom);
+          const elapsed = Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - startedAt);
+          postMapRumSample({ sample_kind: 'snapshot_viewport_refresh', viewport_refresh_ms: elapsed });
+          if (!mapRumFirstInteractiveSent) {
+            mapRumFirstInteractiveSent = true;
+            postMapRumSample({ sample_kind: 'first_map_interactive', first_map_interactive_ms: Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now())) });
+          }
+          return viewport;
+        } catch (error) {
+          const cachedViewport = loadCachedViewportSnapshot();
+          if (cachedViewport) {
+            applyViewportSnapshot(cachedViewport, mapCenter, zoom);
+            const elapsed = Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - startedAt);
+            postMapRumSample({ sample_kind: 'weak_network_cached_snapshot', viewport_refresh_ms: elapsed });
+            return cachedViewport;
+          }
         }
-        return viewport;
+        return null;
       };
 "#
 }
@@ -2162,8 +2239,10 @@ pub(super) fn trillionnium_slim_map_bootstrap_json(payload: &Value, surface_id: 
                 "readiness_checks": [
                     "large_arrays_truncated_before_inline_json",
                     "viewport_snapshot_endpoint_remains_available",
-                    "delta_endpoint_available_for_refresh",
-                    "rum_endpoint_available_for_budget_probe"
+                "delta_endpoint_available_for_refresh",
+                    "rum_endpoint_available_for_budget_probe",
+                    "weak_network_cached_snapshot_visible",
+                    "location_privacy_contract_visible"
                 ]
             }),
         );

@@ -410,7 +410,7 @@ pub(super) async fn get_world_map_delta(
         )
             .into_response();
     };
-    world_map_delta_response(state, &matrix_user_id, &query).await
+    world_map_delta_response(state, &matrix_user_id, &query, &headers).await
 }
 
 pub(super) async fn get_world_web_map_viewport(
@@ -492,13 +492,14 @@ pub(super) async fn get_world_web_map_delta(
             )
         })
         .unwrap_or_else(|| "@alice:local.dev".to_string());
-    world_map_delta_response(state, &matrix_user_id, &query).await
+    world_map_delta_response(state, &matrix_user_id, &query, &headers).await
 }
 
 async fn world_map_delta_response(
     state: AppState,
     matrix_user_id: &str,
     query: &HashMap<String, String>,
+    headers: &HeaderMap,
 ) -> Response {
     state.inner.metrics.inc_world_map_delta_requests();
     let lat = query.get("lat").and_then(|value| value.parse::<f64>().ok());
@@ -538,13 +539,30 @@ async fn world_map_delta_response(
     {
         state.inner.metrics.inc_world_map_delta_snapshot_fallbacks();
     }
+    let etag = delta
+        .get("etag")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    if let (Some(request_etag), Some(response_etag)) = (
+        headers
+            .get(header::IF_NONE_MATCH)
+            .and_then(|value| value.to_str().ok()),
+        etag.as_deref(),
+    ) {
+        if request_etag == response_etag {
+            let mut response = StatusCode::NOT_MODIFIED.into_response();
+            apply_resource_headers(
+                &mut response,
+                "private, max-age=3, stale-while-revalidate=15",
+                etag,
+            );
+            return response;
+        }
+    }
     json_resource_response(
         delta.clone(),
         "private, max-age=3, stale-while-revalidate=15",
-        delta
-            .get("etag")
-            .and_then(Value::as_str)
-            .map(str::to_string),
+        etag,
     )
 }
 

@@ -391,6 +391,30 @@ async function main() {
 
   const appJsonText = await page.locator('#trillionnium-app-data').first().textContent({ timeout: 10_000 });
   const appJson = JSON.parse(appJsonText || '{}');
+  const appViewport = appJson?.map_hub?.viewport || {};
+  assert(appJson?.mobile_shell_contract?.rum_slo_contract?.contract_version === 'trillionnium_world_map_rum_slo_v1', 'mobile shell RUM SLO contract missing from client app json', appJson?.mobile_shell_contract?.rum_slo_contract);
+  assert(appJson?.mobile_shell_contract?.weak_network_resilience?.contract_version === 'trillionnium_world_map_weak_network_resilience_v1', 'mobile shell weak-network contract missing from client app json', appJson?.mobile_shell_contract?.weak_network_resilience);
+  assert(appJson?.mobile_shell_contract?.location_privacy_contract?.contract_version === 'trillionnium_world_map_location_privacy_v1', 'mobile shell location privacy contract missing from client app json', appJson?.mobile_shell_contract?.location_privacy_contract);
+  assert(appViewport?.rum_slo_contract?.contract_version === 'trillionnium_world_map_rum_slo_v1', 'viewport RUM SLO contract missing from client app json', appViewport?.rum_slo_contract);
+  assert(appViewport?.weak_network_resilience?.contract_version === 'trillionnium_world_map_weak_network_resilience_v1', 'viewport weak-network contract missing from client app json', appViewport?.weak_network_resilience);
+  assert(appViewport?.location_privacy_contract?.contract_version === 'trillionnium_world_map_location_privacy_v1', 'viewport location privacy contract missing from client app json', appViewport?.location_privacy_contract);
+  const appViewportDeltaCache = appViewport?.transport_delta_contract?.entity_delta_cache || {};
+  assert(appViewport?.viewport_api?.not_modified_304_supported === true || appViewportDeltaCache?.not_modified_304_compatible === true, 'viewport API 304 support missing from client app json', { viewport_api: appViewport?.viewport_api, entity_delta_cache: appViewportDeltaCache });
+  assert(appViewport?.viewport_api?.entity_delta_cache_contract === 'entity_group_versioned_delta_v1' || appViewportDeltaCache?.mode === 'entity_group_versioned_delta_v1', 'viewport entity delta cache contract missing from client app json', { viewport_api: appViewport?.viewport_api, entity_delta_cache: appViewportDeltaCache });
+  assert(appViewport?.viewport_contract?.supports_location_privacy === true, 'viewport location privacy readiness missing', appViewport?.viewport_contract);
+  assert(appViewport?.viewport_contract?.supports_weak_network_resilience === true, 'viewport weak-network readiness missing', appViewport?.viewport_contract);
+  for (const selector of [
+    '#app-map-rum-slo[data-contract-version="trillionnium_world_map_rum_slo_v1"][data-quantiles="p50,p95,p99"][data-surface-split="app,world"][data-device-split="mobile,desktop"]',
+    '#app-map-weak-network[data-contract-version="trillionnium_world_map_weak_network_resilience_v1"][data-cache-key="trillionnium-world-map:last-good-viewport:v1"][data-delta-304-supported="true"]',
+    '#app-map-location-privacy[data-contract-version="trillionnium_world_map_location_privacy_v1"][data-rum-excludes-lat-lng="true"][data-cache-control="private"]',
+  ]) {
+    assert(await count(page, selector) === 1, `app map runtime safety DOM token missing: ${selector}`);
+  }
+  await page.waitForFunction(() => window.trillionniumMapLibreShadowProbe?.contract_version === 'trillionnium_world_map_renderer_shadow_v1' && window.trillionniumMapLibreShadowProbe?.shadow_engine_id === 'maplibre_gl_v1', { timeout: 15_000 });
+  const browserShadowProbe = await page.evaluate(() => window.trillionniumMapLibreShadowProbe);
+  assert(browserShadowProbe?.status === 'shadow_only_not_user_facing' && browserShadowProbe?.user_facing === false, 'MapLibre shadow probe must stay browser-exported and not user-facing', browserShadowProbe);
+  assert(await page.evaluate(() => window.trillionniumMapWeakNetworkContract) === 'trillionnium_world_map_weak_network_resilience_v1', 'weak-network runtime contract global missing');
+  assert(await page.evaluate(() => window.trillionniumMapLocationPrivacyContract) === 'trillionnium_world_map_location_privacy_v1', 'location privacy runtime contract global missing');
   routeRunnerHandoffCoverage.app_feed_contract = assertRouteRunnerHandoffContract(appJson?.feed?.route_runner_handoff, '/app feed JSON');
   routeRunnerHandoffCoverage.app_map_hub_contract = assertRouteRunnerHandoffContract(appJson?.map_hub?.route_runner_handoff, '/app map_hub JSON');
   routeRunnerHandoffCoverage.app_route_summary_dom = await assertRouteRunnerHandoffDom(page, '#app-route-runner-handoff-summary', '/app route summary');
@@ -412,7 +436,7 @@ async function main() {
   assert(appJson?.mobile_shell_contract?.primary_cta?.single_primary_cta === true, 'mobile single primary CTA JSON single flag missing', appJson?.mobile_shell_contract?.primary_cta);
   assert(appJson?.mobile_shell_contract?.copy_layering?.contract_version === 'trillionnium_mobile_copy_layering_v1', 'mobile copy layering JSON contract missing', appJson?.mobile_shell_contract?.copy_layering);
   assert(appJson?.mobile_shell_contract?.copy_layering?.default_state === 'collapsed', 'mobile copy layering JSON default state missing', appJson?.mobile_shell_contract?.copy_layering);
-  for (const expectedCheck of ['mobile_tablist_a11y_visible', 'keyboard_tab_navigation_visible', 'search_empty_state_visible', 'search_clear_and_escape_visible', 'aria_live_ux_status_visible', 'offline_feed_fallback_status_visible', 'web_session_feed_hydration_visible', 'mobile_bottom_sheet_single_primary_cta_visible', 'mobile_copy_layering_visible']) {
+  for (const expectedCheck of ['mobile_tablist_a11y_visible', 'keyboard_tab_navigation_visible', 'search_empty_state_visible', 'search_clear_and_escape_visible', 'aria_live_ux_status_visible', 'offline_feed_fallback_status_visible', 'web_session_feed_hydration_visible', 'mobile_bottom_sheet_single_primary_cta_visible', 'mobile_copy_layering_visible', 'map_rum_slo_quantiles_visible', 'map_weak_network_resilience_visible', 'map_location_privacy_visible']) {
     assert(mobileShellChecks.includes(expectedCheck), `mobile shell UX readiness check missing: ${expectedCheck}`, mobileShellChecks);
   }
   assert(appJson?.feed?.web_session_path === '/app/web/feed', 'web session feed hydration path missing', appJson?.feed);
@@ -548,6 +572,24 @@ async function main() {
   const health = await page.request.get(`${baseUrl}/health`, { timeout: 20_000 });
   assert(health.ok(), `health failed after browser flow: ${health.status()}`);
   const healthJson = await health.json();
+  assert(healthJson?.trillionnium_world_map_runtime_safety_gate?.contract_version === 'trillionnium_world_map_runtime_safety_gate_v1', 'health runtime safety gate contract missing', healthJson?.trillionnium_world_map_runtime_safety_gate);
+  assert(healthJson?.trillionnium_world_map_runtime_safety_gate?.rum_slo_quantiles_visible === true, 'health runtime safety RUM SLO quantile gate missing', healthJson?.trillionnium_world_map_runtime_safety_gate);
+  assert(healthJson?.trillionnium_world_map_runtime_safety_gate?.weak_network_cached_snapshot_visible === true, 'health runtime safety weak-network gate missing', healthJson?.trillionnium_world_map_runtime_safety_gate);
+  assert(healthJson?.trillionnium_world_map_runtime_safety_gate?.rum_excludes_lat_lng === true, 'health runtime safety location privacy gate missing', healthJson?.trillionnium_world_map_runtime_safety_gate);
+  assert(healthJson?.trillionnium_world_map_rum_slo_gate?.contract_version === 'trillionnium_world_map_rum_slo_v1' && healthJson?.trillionnium_world_map_rum_slo_gate?.green === true, 'health RUM SLO metrics gate not green', healthJson?.trillionnium_world_map_rum_slo_gate);
+  assert(healthJson?.trillionnium_world_map_delta_cache_gate?.entity_delta_cache_contract === 'entity_group_versioned_delta_v1' && healthJson?.trillionnium_world_map_delta_cache_gate?.failure_rate_within_target === true, 'health delta cache gate not green', healthJson?.trillionnium_world_map_delta_cache_gate);
+  const metrics = await page.request.get(`${baseUrl}/metrics`, { timeout: 20_000 });
+  assert(metrics.ok(), `metrics failed after browser flow: ${metrics.status()}`);
+  const metricsText = await metrics.text();
+  for (const needle of [
+    'cex_consumer_entry_trillionnium_world_map_rum_slo_gate_green 1',
+    'cex_consumer_entry_trillionnium_world_map_delta_cache_gate_green 1',
+    'cex_consumer_entry_trillionnium_world_map_runtime_safety_gate_green 1',
+    'cex_consumer_entry_trillionnium_world_map_weak_network_resilience_gate_green 1',
+    'cex_consumer_entry_trillionnium_world_map_location_privacy_gate_green 1',
+  ]) {
+    assert(metricsText.includes(needle), `metrics runtime safety gauge missing: ${needle}`);
+  }
   if (expectFinalCutover) {
     assert(healthJson?.league_repository_runtime?.effective_repository === 'normalized_sql_direct_write_final', 'browser e2e did not run against final repository', healthJson?.league_repository_runtime);
     assert(healthJson?.league_repository_runtime?.repository_cutover_status === 'normalized_sql_direct_write_final_cutover_active', 'browser e2e did not run against final cutover', healthJson?.league_repository_runtime);
