@@ -1272,6 +1272,140 @@ pub(super) async fn post_world_action(
         .into_response()
 }
 
+async fn record_world_tactics_command(
+    state: &AppState,
+    payload: WorldTacticsCommandRequest,
+) -> Result<(LeagueState, WorldEvent, Value, Value), Response> {
+    let matrix_user_id = match normalize_league_matrix_user(&payload.matrix_user_id) {
+        Some(value) => value,
+        None => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "matrix_user_id is required" })),
+            )
+                .into_response())
+        }
+    };
+    let command = validate_text_payload(&payload.command, state.config().max_text_chars)?;
+    let body = payload
+        .body
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| validate_text_payload(value, state.config().max_text_chars))
+        .transpose()?;
+    let snapshot = {
+        let mut league = state.inner.league_state.lock().await;
+        let now = Utc::now().timestamp();
+        let outcome = apply_world_tactics_command(
+            &mut league.world,
+            &matrix_user_id,
+            &command,
+            payload.unit_id.as_deref(),
+            payload.target_tile.as_deref(),
+            payload.skill_id.as_deref(),
+            payload.osm_game_overlay_id.as_deref(),
+            now,
+        );
+        let accepted = outcome
+            .get("accepted")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let location_id = payload
+            .osm_game_overlay_id
+            .as_deref()
+            .and_then(|overlay| overlay.strip_prefix("trillionnium-world-node:"))
+            .filter(|node_id| league.world.world_locations.contains_key(*node_id))
+            .unwrap_or_else(|| world_default_location_for_kind("tactics"))
+            .to_string();
+        let result = outcome
+            .get("result")
+            .and_then(Value::as_str)
+            .unwrap_or(if accepted {
+                "tactics_command_accepted"
+            } else {
+                "tactics_command_rejected"
+            })
+            .to_string();
+        let event_body = body.unwrap_or_else(|| {
+            format!(
+                "tactics command={} unit={} tile={} skill={}",
+                command,
+                payload.unit_id.as_deref().unwrap_or("lord"),
+                payload.target_tile.as_deref().unwrap_or("none"),
+                payload.skill_id.as_deref().unwrap_or("none")
+            )
+        });
+        let event = WorldEvent {
+            event_id: league_hash_id(
+                "world-tactics-event",
+                &format!("{}:{}:{}:{}", matrix_user_id, command, now, event_body),
+            ),
+            actor_matrix_user_id: matrix_user_id.clone(),
+            room_id: payload.room_id.clone(),
+            location_id: location_id.clone(),
+            event_kind: format!("tactics_{command}"),
+            body: event_body,
+            result,
+            impact_score: if accepted { 8 } else { 0 },
+            cex_task_id: None,
+            cex_status: None,
+            created_at_epoch: now,
+        };
+        league.world.world_events.push(event.clone());
+        if accepted {
+            league.world.world_relationships.push(WorldRelationship {
+                relationship_id: league_hash_id(
+                    "world-tactics-rel",
+                    &format!("{}:{}:{}", matrix_user_id, command, now),
+                ),
+                from_id: matrix_user_id.clone(),
+                to_id: payload
+                    .skill_id
+                    .clone()
+                    .or_else(|| payload.unit_id.clone())
+                    .unwrap_or_else(|| "lord".to_string()),
+                relation_kind: format!("tactics_{command}"),
+                strength: 8,
+                updated_at_epoch: now,
+            });
+        }
+        let home = world_home_json(&league);
+        (league.clone(), event, outcome, home)
+    };
+    Ok(snapshot)
+}
+
+pub(super) async fn post_world_tactics_command(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<WorldTacticsCommandRequest>,
+) -> Response {
+    if let Err(response) = authorize_ingress(&headers, state.config()) {
+        state.inner.metrics.inc_ingress_auth_failures();
+        return response;
+    }
+    let snapshot = match record_world_tactics_command(&state, payload).await {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    if let Err(response) =
+        persist_league_state_after_command(&state, &snapshot.0, "world_tactics_command").await
+    {
+        return response;
+    }
+    (
+        StatusCode::OK,
+        Json(json!({
+            "kind": "trillionnium_world_tactics_command",
+            "event": snapshot.1,
+            "outcome": snapshot.2,
+            "home": snapshot.3,
+        })),
+    )
+        .into_response()
+}
+
 pub(super) async fn post_world_web_action(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1343,4 +1477,83 @@ pub(super) async fn post_world_web_action(
             .into_response();
     }
     Redirect::to("/world?played=1#world-action-console").into_response()
+}
+
+pub(super) async fn post_world_web_tactics_command(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Form(payload): Form<WorldWebTacticsCommandRequest>,
+) -> Response {
+    let web_session = match authorize_league_web_session(&state, &headers, payload.csrf.as_deref())
+    {
+        Ok(value) => value,
+        Err(response) => {
+            if matches!(state.config().runtime_profile, RuntimeProfile::LocalDev)
+                && cookie_value(&headers, &state.config().league_web_session_cookie_name).is_none()
+            {
+                None
+            } else {
+                return response;
+            }
+        }
+    };
+    let matrix_user_id = web_session
+        .as_ref()
+        .map(|session| session.matrix_user_id.clone())
+        .or_else(|| {
+            normalize_league_matrix_user(
+                payload
+                    .matrix_user_id
+                    .as_deref()
+                    .unwrap_or("@alice:local.dev"),
+            )
+        })
+        .unwrap_or_else(|| "@alice:local.dev".to_string());
+    let command = payload
+        .command
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("select_unit")
+        .to_string();
+    let request = WorldTacticsCommandRequest {
+        matrix_user_id,
+        room_id: web_session
+            .as_ref()
+            .and_then(|session| session.room_id.clone())
+            .or_else(|| Some("!web-local:local.dev".to_string())),
+        command,
+        unit_id: payload.unit_id,
+        target_tile: payload.target_tile,
+        skill_id: payload.skill_id,
+        osm_game_overlay_id: payload.osm_game_overlay_id,
+        body: payload.body,
+    };
+    let snapshot = match record_world_tactics_command(&state, request).await {
+        Ok(value) => value,
+        Err(_response) => {
+            return Redirect::to(
+                "/world?tactics=0&recovery=command-input#trillionnium-tactics-game-shell",
+            )
+            .into_response()
+        }
+    };
+    if let Err(_response) =
+        persist_league_state_after_command(&state, &snapshot.0, "world_tactics_command").await
+    {
+        return Redirect::to(
+            "/world?tactics=0&recovery=persistence#trillionnium-tactics-game-shell",
+        )
+        .into_response();
+    }
+    let accepted = snapshot
+        .2
+        .get("accepted")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if accepted {
+        Redirect::to("/world?tactics=1#trillionnium-tactics-game-shell").into_response()
+    } else {
+        Redirect::to("/world?tactics=0#trillionnium-tactics-game-shell").into_response()
+    }
 }

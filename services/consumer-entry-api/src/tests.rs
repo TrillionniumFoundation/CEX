@@ -18,24 +18,24 @@ use super::{
     normalized_repository_direct_write_contract_json,
     normalized_repository_read_model_contract_json,
     normalized_repository_world_home_read_model_sql, normalized_world_shadow_sql_contract_json,
-    openstreetmap_fixture_identity_for, openstreetmap_geodata_v1_json, parse_csv_list,
-    project_consumer_status, prune_rate_limit_cache, real_world_map_engine_json,
-    resolve_chat_identity, session_auth_issuer_registry_active_key_diff_json,
-    sign_user_session_assertion, validate_text_payload, world_home_json,
-    world_jianghu_character_projection_json, world_map_delta_json, world_map_json,
-    world_map_viewport_json, world_route_ui_contract_json, world_tactics_board_projection_json,
-    AppState, AppStateInner, ConsumerEntryConfig, ConsumerEntryMetrics, CreateChatTaskRequest,
-    IdentityBindingAuditState, IdentityBindingEntry, IdentityBindingMetadata,
-    IdentityBindingRevisionApprovalState, IdentityBindingStore, IdentityBindings, LeagueMatchEntry,
-    LeaguePlayer, LeagueReward, LeagueStateRepositorySnapshot, LeagueSubmission,
-    LeagueWebSessionClaims, MatrixMessageRequest, ProductUserIdentity, RateLimitCache, ReplayCache,
-    RuntimeProfile, SessionAuthIssuerRegistryIssuer, SessionAuthIssuerRegistryMetadata,
-    SessionAuthIssuerRegistryRuntimeState, UserSessionAuthClaims, WorldAsset, WorldCompany,
-    WorldContract, WorldContractCompletion, WorldEconomyEvent, WorldEvent, WorldListing,
-    WorldMapNode, WorldPlayerPosition, WorldPurchase, WorldRelationship, WorldShop,
-    WorldWorkCancellation, WorldWorkOrder, WorldWorkRejection, DEFAULT_LEAGUE_LLM_JUDGE_TIMEOUT_MS,
-    DEFAULT_LEAGUE_WEB_SESSION_TTL_SECS, DEFAULT_MAX_TEXT_CHARS,
-    TRILLIONNIUM_REPOSITORY_MIGRATION_FLOOR, USER_SESSION_ASSERTION_HEADER,
+    openstreetmap_fixture_identity_for, openstreetmap_geodata_v1_json,
+    openstreetmap_provider_mode_status_json, parse_csv_list, project_consumer_status,
+    prune_rate_limit_cache, real_world_map_engine_json, resolve_chat_identity,
+    session_auth_issuer_registry_active_key_diff_json, sign_user_session_assertion,
+    validate_text_payload, world_home_json, world_jianghu_character_projection_json,
+    world_map_delta_json, world_map_json, world_map_viewport_json, world_route_ui_contract_json,
+    world_tactics_board_projection_json, AppState, AppStateInner, ConsumerEntryConfig,
+    ConsumerEntryMetrics, CreateChatTaskRequest, IdentityBindingAuditState, IdentityBindingEntry,
+    IdentityBindingMetadata, IdentityBindingRevisionApprovalState, IdentityBindingStore,
+    IdentityBindings, LeagueMatchEntry, LeaguePlayer, LeagueReward, LeagueStateRepositorySnapshot,
+    LeagueSubmission, LeagueWebSessionClaims, MatrixMessageRequest, ProductUserIdentity,
+    RateLimitCache, ReplayCache, RuntimeProfile, SessionAuthIssuerRegistryIssuer,
+    SessionAuthIssuerRegistryMetadata, SessionAuthIssuerRegistryRuntimeState,
+    UserSessionAuthClaims, WorldAsset, WorldCompany, WorldContract, WorldContractCompletion,
+    WorldEconomyEvent, WorldEvent, WorldListing, WorldMapNode, WorldPlayerPosition, WorldPurchase,
+    WorldRelationship, WorldShop, WorldWorkCancellation, WorldWorkOrder, WorldWorkRejection,
+    DEFAULT_LEAGUE_LLM_JUDGE_TIMEOUT_MS, DEFAULT_LEAGUE_WEB_SESSION_TTL_SECS,
+    DEFAULT_MAX_TEXT_CHARS, TRILLIONNIUM_REPOSITORY_MIGRATION_FLOOR, USER_SESSION_ASSERTION_HEADER,
     USER_SESSION_SIGNATURE_HEADER, WORLD_ROUTE_ACTION_TEXTAREA_ID, WORLD_ROUTE_CONTRACTS_PANEL_ID,
     WORLD_ROUTE_CONTRACT_INPUT_ID, WORLD_ROUTE_WORK_DELIVER_TEXTAREA_ID,
 };
@@ -2190,6 +2190,40 @@ fn openstreetmap_geodata_provider_uses_stable_fixture_identities() {
         geodata["fixture_layers_contract_version"],
         "openstreetmap_fixture_layers_v1"
     );
+    assert_eq!(geodata["provider_mode"], "fixture");
+    assert_eq!(
+        geodata["provider_mode_contract_version"],
+        "openstreetmap_provider_mode_v1"
+    );
+    assert_eq!(geodata["provider_mode_status"]["enabled"], true);
+    assert_eq!(geodata["provider_mode_status"]["fail_closed"], false);
+    assert_eq!(
+        geodata["derived_database_metadata_contract_version"],
+        "openstreetmap_derived_database_metadata_v1"
+    );
+    assert_eq!(
+        geodata["derived_database_metadata"]["source_of_truth"],
+        "rust_openstreetmap_data_provider"
+    );
+    assert_eq!(
+        geodata["derived_database_metadata"]["odbl"]["database_license"],
+        "ODbL-1.0"
+    );
+    assert_eq!(
+        geodata["derived_database_metadata"]["odbl"]["derived_database_tracking_required"],
+        true
+    );
+    for mode in [
+        "overpass_bbox_cache",
+        "geofabrik_extract_import",
+        "vendor_tile_cache",
+        "unknown-live-mode",
+    ] {
+        let status = openstreetmap_provider_mode_status_json(mode);
+        assert_eq!(status["enabled"], false);
+        assert_eq!(status["fail_closed"], true);
+        assert_eq!(status["network_ingestion_enabled"], false);
+    }
     assert_eq!(
         geodata["fixture_layers"]["source_of_truth"],
         "rust_openstreetmap_data_provider"
@@ -2295,6 +2329,22 @@ fn world_tactics_projection_binds_jianghu_state_to_osm_objectives() {
         "trillionnium_jianghu_skill_v1"
     );
     assert_eq!(
+        tactics["command_outcome_contract_version"],
+        "trillionnium_world_tactics_command_outcome_v1"
+    );
+    assert_eq!(
+        tactics["jianghu_training_contract_version"],
+        "trillionnium_jianghu_training_command_v1"
+    );
+    assert_eq!(
+        tactics["jianghu_sect_contract_version"],
+        "trillionnium_jianghu_sect_v1"
+    );
+    assert_eq!(
+        tactics["jianghu_npc_contract_version"],
+        "trillionnium_jianghu_npc_v1"
+    );
+    assert_eq!(
         tactics["open_source_base"]["repo"],
         "tranchikhang/MedievalWar"
     );
@@ -2327,6 +2377,12 @@ fn world_tactics_projection_binds_jianghu_state_to_osm_objectives() {
         .unwrap()
         .iter()
         .any(|command| command["command"] == "end_turn"));
+    assert!(tactics["available_commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|command| command["command"] == "train_skill"
+            && command["validation_owner"] == "rust_mentor_training_validator"));
     assert_eq!(
         tactics["turn_state"]["source_of_truth"],
         "rust_tactics_turn_handler"
@@ -2377,6 +2433,107 @@ fn world_tactics_projection_binds_jianghu_state_to_osm_objectives() {
         .unwrap()
         .iter()
         .any(|command| command["command"] == "move_unit"));
+    assert!(tactics["training_commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|command| command["skill_id"] == "basic_unarmed"
+            && command["required_semantic_role"] == "civic_square"
+            && command["validation_owner"] == "rust_mentor_training_validator"
+            && command["required_osm_game_overlay_id"]
+                .as_str()
+                .unwrap_or_default()
+                .starts_with("trillionnium-world-node:")));
+    assert!(tactics["sects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|sect| sect["sect_id"] == "cloud-ledger-hall"
+            && sect["contract_version"] == "trillionnium_jianghu_sect_v1"
+            && sect["title_ladder"].as_array().unwrap().len() >= 3));
+    assert!(tactics["npcs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|npc| npc["npc_id"] == "npc-street-compass-sifu"
+            && npc["contract_version"] == "trillionnium_jianghu_npc_v1"
+            && npc["command_descriptors"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|descriptor| descriptor == "train_skill")));
+    assert_eq!(
+        tactics["npc_relationship_model"]["source_of_truth"],
+        "rust_jianghu_npc_model"
+    );
+}
+
+#[tokio::test]
+async fn world_tactics_command_endpoint_validates_training_place_and_mutates_character() {
+    let state = AppState::new(test_config());
+    let app = build_router(state.clone());
+
+    let (blocked_status, blocked) = send_json_request(
+        &app,
+        "POST",
+        "/v1/world/tactics/command",
+        &[],
+        json!({
+            "matrix_user_id": "@alice:local.dev",
+            "room_id": "!world:local.dev",
+            "command": "train_skill",
+            "unit_id": "lord",
+            "target_tile": "G8",
+            "skill_id": "basic_unarmed",
+            "osm_game_overlay_id": "trillionnium-world-node:starter-studio",
+            "body": "try training at the wrong OSM place"
+        }),
+    )
+    .await;
+    assert_eq!(blocked_status, StatusCode::OK);
+    assert_eq!(blocked["outcome"]["accepted"], false);
+    assert_eq!(blocked["outcome"]["result"], "training_place_mismatch");
+    assert_eq!(
+        blocked["outcome"]["source_of_truth"],
+        "rust_mentor_training_validator"
+    );
+
+    let (trained_status, trained) = send_json_request(
+        &app,
+        "POST",
+        "/v1/world/tactics/command",
+        &[],
+        json!({
+            "matrix_user_id": "@alice:local.dev",
+            "room_id": "!world:local.dev",
+            "command": "train_skill",
+            "unit_id": "lord",
+            "target_tile": "G8",
+            "skill_id": "basic_unarmed",
+            "osm_game_overlay_id": "trillionnium-world-node:mirror-city-square",
+            "body": "mentor training with the Street Compass Sifu"
+        }),
+    )
+    .await;
+    assert_eq!(trained_status, StatusCode::OK);
+    assert_eq!(trained["kind"], "trillionnium_world_tactics_command");
+    assert_eq!(trained["outcome"]["accepted"], true);
+    assert_eq!(trained["outcome"]["result"], "skill_trained");
+    assert_eq!(trained["outcome"]["skill_id"], "basic_unarmed");
+    assert_eq!(trained["outcome"]["required_semantic_role"], "civic_square");
+    assert_eq!(
+        trained["outcome"]["source_of_truth"],
+        "rust_mentor_training_validator"
+    );
+
+    let guard = state.inner.league_state.lock().await;
+    let character = world_jianghu_character_projection_json(&guard.world, "@alice:local.dev");
+    assert!(character["skill_ids"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|skill_id| skill_id == "basic_unarmed"));
+    assert_eq!(character["title"], "得授新艺");
 }
 
 #[test]
@@ -3250,6 +3407,17 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(world_html.contains("trillionnium_world_tactics_unit_v1"));
     assert!(world_html.contains("trillionnium_world_tactics_command_v1"));
     assert!(world_html.contains("trillionnium_jianghu_skill_v1"));
+    assert!(world_html.contains("trillionnium_jianghu_training_command_v1"));
+    assert!(world_html.contains("trillionnium_jianghu_sect_v1"));
+    assert!(world_html.contains("trillionnium_jianghu_npc_v1"));
+    assert!(world_html.contains("/world/web/tactics-command"));
+    assert!(world_html.contains("/v1/world/tactics/command"));
+    assert!(world_html.contains("rust_mentor_training_validator"));
+    assert!(world_html.contains("rust_mentor_training_command_model"));
+    assert!(world_html.contains("rust_jianghu_sect_model"));
+    assert!(world_html.contains("rust_jianghu_npc_model"));
+    assert!(world_html.contains("导师修炼"));
+    assert!(world_html.contains("npc-street-compass-sifu"));
     assert!(world_html.contains("data-source-of-truth=\"rust_trillionnium_game_state\""));
     assert!(world_html.contains("data-interface-style=\"turn_based_strategy_rpg\""));
     assert!(world_html.contains("data-open-source-base=\"tranchikhang/MedievalWar\""));

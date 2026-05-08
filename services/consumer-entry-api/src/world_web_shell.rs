@@ -335,6 +335,162 @@ fn world_tactics_command_grid_html(tactics_board: &Value) -> String {
         .join("\n")
 }
 
+fn world_jianghu_training_forms_html(
+    tactics_board: &Value,
+    current_matrix_user_id: &str,
+    csrf_input: &str,
+) -> String {
+    tactics_board
+        .get("training_commands")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|command| {
+            let skill_id = command
+                .get("skill_id")
+                .and_then(Value::as_str)
+                .unwrap_or("basic_unarmed");
+            let mentor_npc_id = command
+                .get("mentor_npc_id")
+                .and_then(Value::as_str)
+                .unwrap_or("npc-street-compass-sifu");
+            let required_role = command
+                .get("required_semantic_role")
+                .and_then(Value::as_str)
+                .unwrap_or("civic_square");
+            let required_overlay_id = command
+                .get("required_osm_game_overlay_id")
+                .and_then(Value::as_str)
+                .unwrap_or("trillionnium-world-node:mirror-city-square");
+            let cost_xp = command
+                .get("cost_xp")
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
+            let cooldown_seconds = command
+                .get("cooldown_seconds")
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
+            let contract_version = command
+                .get("contract_version")
+                .and_then(Value::as_str)
+                .unwrap_or("trillionnium_jianghu_training_command_v1");
+            format!(
+                "<form class=\"jianghu-training-form\" method=\"post\" action=\"/world/web/tactics-command\" data-training-contract=\"{}\" data-command=\"train_skill\" data-validation-owner=\"rust_mentor_training_validator\" data-source-of-truth=\"rust_mentor_training_command_model\" data-web-role=\"intent_only_visualization_input\">{}<input type=\"hidden\" name=\"matrix_user_id\" value=\"{}\"><input type=\"hidden\" name=\"command\" value=\"train_skill\"><input type=\"hidden\" name=\"unit_id\" value=\"lord\"><input type=\"hidden\" name=\"target_tile\" value=\"G8\"><input type=\"hidden\" name=\"skill_id\" value=\"{}\"><input type=\"hidden\" name=\"osm_game_overlay_id\" value=\"{}\"><input type=\"hidden\" name=\"body\" value=\"mentor training: {} at {}\"><button type=\"submit\">修炼 {}</button><small>mentor={} · place={} · cost={}xp · cooldown={}s</small></form>",
+                escape_html_text(contract_version),
+                csrf_input,
+                escape_html_text(current_matrix_user_id),
+                escape_html_text(skill_id),
+                escape_html_text(required_overlay_id),
+                escape_html_text(skill_id),
+                escape_html_text(required_role),
+                escape_world_visible_text(skill_id),
+                escape_html_text(mentor_npc_id),
+                escape_html_text(required_role),
+                cost_xp,
+                cooldown_seconds,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn world_jianghu_sect_cards_html(tactics_board: &Value) -> String {
+    tactics_board
+        .get("sects")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|sect| {
+            let sect_id = sect.get("sect_id").and_then(Value::as_str).unwrap_or("sect");
+            let display_name = sect
+                .get("display_name")
+                .and_then(Value::as_str)
+                .unwrap_or(sect_id);
+            let specialization = sect
+                .get("specialization")
+                .and_then(Value::as_str)
+                .unwrap_or("world_training");
+            let anchor_role = sect
+                .get("anchor_semantic_role")
+                .and_then(Value::as_str)
+                .unwrap_or("sect_hall");
+            let overlay_id = sect
+                .get("osm_game_overlay_id")
+                .and_then(Value::as_str)
+                .unwrap_or("none");
+            let contract_version = sect
+                .get("contract_version")
+                .and_then(Value::as_str)
+                .unwrap_or("trillionnium_jianghu_sect_v1");
+            let titles = sect
+                .get("title_ladder")
+                .and_then(Value::as_array)
+                .map(|titles| {
+                    titles
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join(" → ")
+                })
+                .unwrap_or_default();
+            format!(
+                "<article class=\"mini jianghu-sect-card\" data-sect-id=\"{}\" data-sect-contract=\"{}\" data-osm-game-overlay-id=\"{}\" data-source-of-truth=\"rust_jianghu_sect_model\"><strong>{}</strong><span>{}</span><code>{}</code><small>{}</small></article>",
+                escape_html_text(sect_id),
+                escape_html_text(contract_version),
+                escape_html_text(overlay_id),
+                escape_world_visible_text(display_name),
+                escape_world_visible_text(specialization),
+                escape_html_text(anchor_role),
+                escape_world_visible_text(&titles),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn world_jianghu_npc_cards_html(tactics_board: &Value) -> String {
+    tactics_board
+        .get("npcs")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|npc| {
+            let npc_id = npc.get("npc_id").and_then(Value::as_str).unwrap_or("npc");
+            let display_name = npc
+                .get("display_name")
+                .and_then(Value::as_str)
+                .unwrap_or(npc_id);
+            let role = npc.get("role").and_then(Value::as_str).unwrap_or("mentor");
+            let sect_id = npc
+                .get("sect_id")
+                .and_then(Value::as_str)
+                .unwrap_or("none");
+            let overlay_id = npc
+                .get("osm_game_overlay_id")
+                .and_then(Value::as_str)
+                .unwrap_or("none");
+            let contract_version = npc
+                .get("contract_version")
+                .and_then(Value::as_str)
+                .unwrap_or("trillionnium_jianghu_npc_v1");
+            format!(
+                "<article class=\"mini jianghu-npc-card\" data-npc-id=\"{}\" data-npc-contract=\"{}\" data-sect-id=\"{}\" data-osm-game-overlay-id=\"{}\" data-source-of-truth=\"rust_jianghu_npc_model\"><strong>{}</strong><span>{}</span><small>{}</small></article>",
+                escape_html_text(npc_id),
+                escape_html_text(contract_version),
+                escape_html_text(sect_id),
+                escape_html_text(overlay_id),
+                escape_world_visible_text(display_name),
+                escape_world_visible_text(role),
+                escape_html_text(sect_id),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn world_jianghu_status_html(jianghu_character: &Value) -> String {
     let attributes = jianghu_character.get("attributes").unwrap_or(&Value::Null);
     [
@@ -755,6 +911,10 @@ pub(super) async fn get_world_web_shell(
     let tactics_objective_markers = world_tactics_objectives_html(&tactics_board);
     let tactics_battle_log = world_tactics_battle_log_html(&tactics_board);
     let tactics_command_grid = world_tactics_command_grid_html(&tactics_board);
+    let jianghu_training_forms =
+        world_jianghu_training_forms_html(&tactics_board, current_matrix_user_id, &csrf_input);
+    let jianghu_sect_cards = world_jianghu_sect_cards_html(&tactics_board);
+    let jianghu_npc_cards = world_jianghu_npc_cards_html(&tactics_board);
     let jianghu_status_lines = world_jianghu_status_html(&jianghu_character);
     let jianghu_character_contract = jianghu_character
         .get("contract_version")
@@ -2062,6 +2222,11 @@ pub(super) async fn get_world_web_shell(
             <nav class="tactics-command-grid" aria-label="Tactical actions" data-i18n-aria-label-en="Tactical actions" data-i18n-aria-label-zh="战术动作">
               {tactics_command_grid}
             </nav>
+            <section id="trillionnium-jianghu-training" class="jianghu-training-panel" data-training-contract="trillionnium_jianghu_training_command_v1" data-command-endpoint="/world/web/tactics-command" data-api-command-endpoint="/v1/world/tactics/command" data-source-of-truth="rust_mentor_training_validator" aria-label="Jianghu mentor training" data-i18n-aria-label-en="Jianghu mentor training" data-i18n-aria-label-zh="江湖导师修炼">
+              <h4 data-i18n-en="Mentor training" data-i18n-zh="导师修炼">导师修炼</h4>
+              <p data-i18n-en="Web sends intent only; Rust checks mentor, OSM place, cost, cooldown, and skill mutation." data-i18n-zh="网页只提交意图；Rust 校验导师、OSM 地点、消耗、冷却和技能变更。">网页只提交意图；Rust 校验导师、OSM 地点、消耗、冷却和技能变更。</p>
+              {jianghu_training_forms}
+            </section>
             <div class="tactics-chip-row" aria-label="Tactics rules" data-i18n-aria-label-en="Tactics rules" data-i18n-aria-label-zh="战棋规则">
               <span data-i18n-en="deterministic combat" data-i18n-zh="确定性战斗">确定性战斗</span>
               <span data-i18n-en="RPS unit counters" data-i18n-zh="兵种相克">兵种相克</span>
@@ -2081,6 +2246,11 @@ pub(super) async fn get_world_web_shell(
               <li data-i18n-en="资源：悬赏牌变成军令，奖励池变成战利品。" data-i18n-zh="资源：悬赏牌变成军令，奖励池变成战利品。">资源：悬赏牌变成军令，奖励池变成战利品。</li>
               <li data-i18n-en="底图：OpenClawStreetMap 只做地形和遭遇输入，不抢主界面。" data-i18n-zh="底图：OpenClawStreetMap 只做地形和遭遇输入，不抢主界面。">底图：OpenClawStreetMap 只做地形和遭遇输入，不抢主界面。</li>
             </ul>
+            <section class="jianghu-social-grid" data-sect-contract="trillionnium_jianghu_sect_v1" data-npc-contract="trillionnium_jianghu_npc_v1" data-source-of-truth="rust_jianghu_npc_model" aria-label="Jianghu sects and NPCs" data-i18n-aria-label-en="Jianghu sects and NPCs" data-i18n-aria-label-zh="江湖门派与 NPC">
+              <h4 data-i18n-en="Sects / mentors / NPCs" data-i18n-zh="门派 / 导师 / NPC">门派 / 导师 / NPC</h4>
+              <div class="mini-grid">{jianghu_sect_cards}</div>
+              <div class="mini-grid">{jianghu_npc_cards}</div>
+            </section>
             <small data-i18n-en="Next mod path: replace placeholder units with Trillionnium agents, convert POIs into capture points, and use route evidence as battle reports." data-i18n-zh="下一步魔改：把占位单位替换为 Trillionnium Agent，把 POI 转成占领点，把路线证据转成战报。">下一步魔改：把占位单位替换为 Trillionnium Agent，把 POI 转成占领点，把路线证据转成战报。</small>
           </aside>
         </section>
@@ -2915,6 +3085,9 @@ pub(super) async fn get_world_web_shell(
         tactics_objective_markers = tactics_objective_markers,
         tactics_battle_log = tactics_battle_log,
         tactics_command_grid = tactics_command_grid,
+        jianghu_training_forms = jianghu_training_forms,
+        jianghu_sect_cards = jianghu_sect_cards,
+        jianghu_npc_cards = jianghu_npc_cards,
         jianghu_status_lines = jianghu_status_lines,
         jianghu_display_name = escape_world_visible_text(jianghu_display_name),
         jianghu_title = escape_world_visible_text(jianghu_title),

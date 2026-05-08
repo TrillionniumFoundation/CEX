@@ -3,6 +3,90 @@ use super::*;
 pub(super) const OPENSTREETMAP_GEODATA_CONTRACT_VERSION: &str = "openstreetmap_geodata_v1";
 pub(super) const OPENSTREETMAP_FIXTURE_LAYERS_CONTRACT_VERSION: &str =
     "openstreetmap_fixture_layers_v1";
+pub(super) const OPENSTREETMAP_DERIVED_DATABASE_METADATA_CONTRACT_VERSION: &str =
+    "openstreetmap_derived_database_metadata_v1";
+pub(super) const OPENSTREETMAP_PROVIDER_MODE_CONTRACT_VERSION: &str =
+    "openstreetmap_provider_mode_v1";
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub(super) enum OpenStreetMapProviderMode {
+    Fixture,
+    OverpassBboxCache,
+    GeofabrikExtractImport,
+    VendorTileCache,
+    Unknown,
+}
+
+impl OpenStreetMapProviderMode {
+    pub(super) fn from_str(value: &str) -> Self {
+        match value {
+            "fixture" => Self::Fixture,
+            "overpass_bbox_cache" => Self::OverpassBboxCache,
+            "geofabrik_extract_import" => Self::GeofabrikExtractImport,
+            "vendor_tile_cache" => Self::VendorTileCache,
+            _ => Self::Unknown,
+        }
+    }
+
+    pub(super) fn as_str(self) -> &'static str {
+        match self {
+            Self::Fixture => "fixture",
+            Self::OverpassBboxCache => "overpass_bbox_cache",
+            Self::GeofabrikExtractImport => "geofabrik_extract_import",
+            Self::VendorTileCache => "vendor_tile_cache",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    pub(super) fn enabled(self) -> bool {
+        matches!(self, Self::Fixture)
+    }
+
+    pub(super) fn fail_closed_reason(self) -> &'static str {
+        match self {
+            Self::Fixture => "fixture_provider_allowed_without_network_ingestion",
+            Self::OverpassBboxCache => {
+                "blocked_until_bbox_cache_rate_limit_and_odbl_tracking_exist"
+            }
+            Self::GeofabrikExtractImport => {
+                "blocked_until_extract_import_pipeline_and_derived_database_manifest_exist"
+            }
+            Self::VendorTileCache => {
+                "blocked_until_vendor_contract_cache_and_attribution_manifest_exist"
+            }
+            Self::Unknown => "unknown_provider_mode_fail_closed",
+        }
+    }
+}
+
+pub(super) fn openstreetmap_provider_mode_status_json(mode: &str) -> Value {
+    let parsed = OpenStreetMapProviderMode::from_str(mode);
+    json!({
+        "contract_version": OPENSTREETMAP_PROVIDER_MODE_CONTRACT_VERSION,
+        "mode": parsed.as_str(),
+        "requested_mode": mode,
+        "enabled": parsed.enabled(),
+        "fail_closed": !parsed.enabled(),
+        "network_ingestion_enabled": false,
+        "reason": parsed.fail_closed_reason(),
+        "source_of_truth": "rust_openstreetmap_data_provider",
+    })
+}
+
+fn openstreetmap_provider_modes_json() -> Value {
+    Value::Array(
+        [
+            "fixture",
+            "overpass_bbox_cache",
+            "geofabrik_extract_import",
+            "vendor_tile_cache",
+            "unknown",
+        ]
+        .into_iter()
+        .map(openstreetmap_provider_mode_status_json)
+        .collect::<Vec<_>>(),
+    )
+}
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct OpenStreetMapSemanticRoleMapping {
@@ -693,6 +777,50 @@ pub(super) fn openstreetmap_fixture_layers_json(nodes: &[WorldMapNode]) -> Value
     })
 }
 
+fn openstreetmap_derived_database_metadata_json(
+    nodes: &[WorldMapNode],
+    fixture_layers: &Value,
+) -> Value {
+    let layer_counts = fixture_layers
+        .get("layer_feature_counts")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let total_layer_features = layer_counts
+        .as_object()
+        .map(|counts| counts.values().filter_map(Value::as_u64).sum::<u64>())
+        .unwrap_or(0);
+    json!({
+        "contract_version": OPENSTREETMAP_DERIVED_DATABASE_METADATA_CONTRACT_VERSION,
+        "source_of_truth": "rust_openstreetmap_data_provider",
+        "provider_mode": "fixture",
+        "fixture_source": "trillionnium_world_default_fixture_nodes",
+        "fixture_source_revision": "openstreetmap_fixture_layers_v1",
+        "imported_at_epoch": 0,
+        "import_timestamp_policy": "stable_fixture_epoch_until_real_import_pipeline_exists",
+        "transform_version": "trillionnium_osm_fixture_transform_v1",
+        "derived_database_snapshot_id": format!(
+            "osm-fixture-v1-n{}-l{}",
+            nodes.len(), total_layer_features
+        ),
+        "node_feature_count": nodes.len(),
+        "layer_feature_count": total_layer_features,
+        "layer_feature_counts": layer_counts,
+        "odbl": {
+            "attribution": "© OpenStreetMap contributors",
+            "database_license": "ODbL-1.0",
+            "share_alike_note": "Track and publish derived database metadata before enabling live/imported OSM databases.",
+            "derived_database_tracking_required": true,
+            "public_tile_server_policy": "do_not_use_public_osm_tile_servers_for_production_traffic",
+        },
+        "readiness_checks": [
+            "fixture_source_declared",
+            "transform_version_declared",
+            "odbl_share_alike_note_present",
+            "live_import_disabled_until_tracking_exists"
+        ],
+    })
+}
+
 pub(super) fn openstreetmap_geodata_v1_json(
     nodes: &[WorldMapNode],
     current_node: Option<&WorldMapNode>,
@@ -712,11 +840,17 @@ pub(super) fn openstreetmap_geodata_v1_json(
         .map(|node| provider.feature_json(node))
         .unwrap_or(Value::Null);
     let fixture_layers = openstreetmap_fixture_layers_json(nodes);
+    let derived_database_metadata =
+        openstreetmap_derived_database_metadata_json(nodes, &fixture_layers);
     json!({
         "kind": OPENSTREETMAP_GEODATA_CONTRACT_VERSION,
         "contract_version": OPENSTREETMAP_GEODATA_CONTRACT_VERSION,
         "provider_contract": "OpenStreetMapDataProvider",
         "provider_id": provider.provider_id(),
+        "provider_mode": "fixture",
+        "provider_mode_contract_version": OPENSTREETMAP_PROVIDER_MODE_CONTRACT_VERSION,
+        "provider_mode_status": openstreetmap_provider_mode_status_json("fixture"),
+        "provider_modes": openstreetmap_provider_modes_json(),
         "source_mode": provider.source_mode(),
         "source_of_truth": "rust_openstreetmap_data_provider",
         "web_role": "visualization_input_only",
@@ -729,6 +863,8 @@ pub(super) fn openstreetmap_geodata_v1_json(
         "osm_layers": ["roads", "pois", "buildings", "areas", "admin_boundaries", "tags"],
         "fixture_layers_contract_version": OPENSTREETMAP_FIXTURE_LAYERS_CONTRACT_VERSION,
         "fixture_layers": fixture_layers,
+        "derived_database_metadata": derived_database_metadata,
+        "derived_database_metadata_contract_version": OPENSTREETMAP_DERIVED_DATABASE_METADATA_CONTRACT_VERSION,
         "semantic_role_mapping": openstreetmap_semantic_role_mappings_json(),
         "production_ingestion_plan": {
             "live_overpass_enabled": false,

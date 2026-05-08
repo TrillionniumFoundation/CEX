@@ -341,7 +341,7 @@ Initial Trillionnium skill families:
 Progress tree hooks:
 
 - [x] TW-3.5a Add skill definition model: id, family, level, xp, unlock conditions, combat/world effects.
-- [ ] TW-3.5b Add training command: mentor/OSM place requirement + cost + cooldown.
+- [x] TW-3.5b Add training command: mentor/OSM place requirement + cost + cooldown.
 - [x] TW-3.5c Bind selected skills to tactics actions: move, attack, evade, inspect, negotiate.
 
 #### Sects / factions / mentors
@@ -361,7 +361,7 @@ Initial Trillionnium sect/faction examples:
 
 Progress tree hooks:
 
-- [ ] TW-3.5d Add sect/faction model: id, title ladder, mentor NPCs, entry requirements, benefits.
+- [x] TW-3.5d Add sect/faction model: id, title ladder, mentor NPCs, entry requirements, benefits.
 - [ ] TW-3.5e Bind sect halls to OSM objectives/POIs through `game_overlay_id`.
 - [ ] TW-3.5f Add mentor training task flow and Rust validation.
 
@@ -387,7 +387,7 @@ struct JianghuNpc {
 
 Progress tree hooks:
 
-- [ ] TW-3.5g Add NPC model and fixture NPCs.
+- [x] TW-3.5g Add NPC model and fixture NPCs.
 - [ ] TW-3.5h Bind NPC spawn/anchor to OSM features.
 - [ ] TW-3.5i Add talk/training/task-offer command descriptors in projection JSON.
 
@@ -602,9 +602,9 @@ git log --oneline -5
   - Keep deterministic fallback for missing fixtures.
 - [x] TW-1.8 Add roads/buildings/areas/admin boundary fixture layers.
   - Implemented `openstreetmap_fixture_layers_v1` with roads, buildings, areas, admin boundaries, semantic-role mapping, and no live ingestion.
-- [ ] TW-1.9 Add derived database tracking metadata.
+- [x] TW-1.9 Add derived database tracking metadata.
   - Include fixture source, import timestamp, transform version, and ODbL share-alike note.
-- [ ] TW-1.10 Add provider-mode enum and test each mode is fail-closed.
+- [x] TW-1.10 Add provider-mode enum and test each mode is fail-closed.
   - `fixture`
   - `overpass_bbox_cache` future
   - `geofabrik_extract_import` future
@@ -628,7 +628,7 @@ git log --oneline -5
   - Implemented `trillionnium_world_tactics_unit_v1`: `unit_id`, `owner`, `class/archetype`, `hp`, `energy`, `position`, `move_range`, `attack_range`, `status_effects`, source owner.
 - [x] TW-2.8 Define Rust-side turn/action command model.
   - Implemented `trillionnium_world_tactics_command_v1`: `select_unit`, `move_unit`, `attack`, `use_skill`, `interact`, `end_turn`, validation owner, required skill, action cost.
-- [ ] TW-2.9 Add command endpoints/forms for tactics actions.
+- [x] TW-2.9 Add command endpoints/forms for tactics actions.
   - Web sends intent; Rust validates and mutates state.
 - [x] TW-2.10 Replace static board rendering with Rust-projected board state.
 - [ ] TW-2.11 Decide integration strategy for actual MedievalWar/Phaser code.
@@ -650,13 +650,13 @@ git log --oneline -5
 - [x] TW-3.4c Add tests for attribute projection and derived stats.
 - [ ] TW-3.5 Define skill/sect/mentor/NPC relationship models in Rust.
 - [x] TW-3.5a Add skill definition model and fixture skills.
-- [ ] TW-3.5b Add training command with mentor/OSM-place requirement.
+- [x] TW-3.5b Add training command with mentor/OSM-place requirement.
 - [x] TW-3.5c Bind skills to tactics actions and world task effects.
   - First binding is in tactics command descriptors via `required_skill_id`; world task effects are recorded on skill definitions for follow-up handler enforcement.
-- [ ] TW-3.5d Add sect/faction model and title ladder.
+- [x] TW-3.5d Add sect/faction model and title ladder.
 - [ ] TW-3.5e Bind sect halls/mentor anchors to OSM `game_overlay_id`.
 - [ ] TW-3.5f Add mentor training task flow.
-- [ ] TW-3.5g Add NPC model and fixture NPCs.
+- [x] TW-3.5g Add NPC model and fixture NPCs.
 - [ ] TW-3.5h Bind NPC spawn/anchor to OSM features.
 - [ ] TW-3.5i Add talk/training/task-offer command descriptors in projection JSON.
 - [ ] TW-3.6 Define text battle/task log style without copying original content.
@@ -832,10 +832,29 @@ Expected first-slice deliverables:
   - [x] TW-3.5a Jianghu skill definition model.
   - [x] TW-3.5c First skill-to-tactics command bindings.
 - Remaining next:
-  - [ ] TW-1.9 derived geodata database tracking metadata.
-  - [ ] TW-1.10 provider-mode enum and fail-closed tests.
-  - [ ] TW-2.9 tactics command endpoints/forms.
-  - [ ] TW-3.5b/d/g mentor training, sect, and NPC models.
+  - [x] TW-1.9 derived geodata database tracking metadata.
+  - [x] TW-1.10 provider-mode enum and fail-closed tests.
+  - [x] TW-2.9 tactics command endpoints/forms.
+  - [x] TW-3.5b/d/g mentor training, sect, and NPC models.
+
+#### Update 2026-05-08 20:1x CST
+
+- Commit: pending until final validation completes.
+- Completed next full-dev slice:
+  - [x] TW-1.9 `openstreetmap_derived_database_metadata_v1`: fixture source, stable import epoch, transform version, derived snapshot id, feature counts, and ODbL/share-alike tracking note.
+  - [x] TW-1.10 `openstreetmap_provider_mode_v1`: `fixture` enabled; `overpass_bbox_cache`, `geofabrik_extract_import`, `vendor_tile_cache`, and unknown modes fail closed with network ingestion disabled.
+  - [x] TW-2.9 tactics command intents: `/v1/world/tactics/command` JSON route and `/world/web/tactics-command` form route; Web submits intent, Rust validates and records outcome/event.
+  - [x] TW-3.5b `trillionnium_jianghu_training_command_v1`: mentor/OSM-place/cost/cooldown training descriptors plus Rust validator.
+  - [x] TW-3.5d `trillionnium_jianghu_sect_v1`: sect/faction fixture model with OSM anchors, mentor NPCs, requirements, benefits, title ladders.
+  - [x] TW-3.5g `trillionnium_jianghu_npc_v1`: fixture NPCs with OSM anchors, schedules, task capabilities, and training/talk/task command descriptors.
+- Validation so far:
+  - `cargo test -p consumer-entry-api -- --nocapture` green (`132 passed`).
+  - `cargo fmt --all -- --check`, `git diff --check`, `bash -n scripts/check-trillionnium-league-web-e2e.sh`, `cargo test -p matrix-entry-adapter -p ledger-service -- --nocapture` green.
+  - local-production restart required restarting the project compose Postgres service; after restart, Web E2E green at `run/league-web/web-e2e-summary-1778259366.json`.
+  - `CEX_ENV_FILE=run/local-production/.env scripts/check-production-readiness.sh` green: `READY production readiness smoke passed`.
+- Remaining next:
+  - [ ] TW-3.5e/f/h/i bind sect halls, mentor training task flow, NPC anchors, and talk/training/task-offer descriptors more deeply.
+  - [ ] TW-3.6+ Jianghu task archetypes and native battle/task log style.
 
 ---
 
@@ -853,9 +872,9 @@ Expected first-slice deliverables:
   - targeted tactics/Jianghu projection test green.
   - targeted `/world` HTML contract test green.
 - Next recommended slice:
-  - [ ] TW-1.9 / TW-1.10 derived geodata metadata and provider-mode fail-closed enum.
-  - [ ] TW-2.9 command endpoints/forms for tactics intents.
-  - [ ] TW-3.5b/d/g mentor training, sect/faction, and NPC relationship models.
+  - [x] TW-1.9 / TW-1.10 derived geodata metadata and provider-mode fail-closed enum.
+  - [x] TW-2.9 command endpoints/forms for tactics intents.
+  - [x] TW-3.5b/d/g mentor training, sect/faction, and NPC relationship models.
 
 ---
 
@@ -900,6 +919,6 @@ Also append a one-paragraph summary to `/home/qian/.openclaw/workspace/memory/YY
 
 If the next instruction is simply “continue”, start here:
 
-> **TW-1.9 / TW-1.10 / TW-2.9 / TW-3.5b/d/g:** add derived geodata tracking + provider modes, expose Rust tactics command intent endpoints/forms, and introduce mentor/sect/NPC relationship models.
+> **TW-3.5e/f/h/i + TW-3.6+:** deepen sect hall / mentor / NPC OSM bindings, add mentor training task flow and talk/training/task-offer command descriptors, then define Trillionnium-native Jianghu task archetypes and battle/task log style.
 
 Do not start live Overpass/Geofabrik ingestion yet. Do not promote MapLibre. Do not convert the web shell into a standalone JS source of truth.

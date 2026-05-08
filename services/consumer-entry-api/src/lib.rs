@@ -1905,6 +1905,30 @@ struct WorldWebActionRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct WorldTacticsCommandRequest {
+    matrix_user_id: String,
+    room_id: Option<String>,
+    command: String,
+    unit_id: Option<String>,
+    target_tile: Option<String>,
+    skill_id: Option<String>,
+    osm_game_overlay_id: Option<String>,
+    body: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorldWebTacticsCommandRequest {
+    matrix_user_id: Option<String>,
+    csrf: Option<String>,
+    command: Option<String>,
+    unit_id: Option<String>,
+    target_tile: Option<String>,
+    skill_id: Option<String>,
+    osm_game_overlay_id: Option<String>,
+    body: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct WorldContractCompleteRequest {
     matrix_user_id: String,
     room_id: Option<String>,
@@ -4015,6 +4039,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/world/web/map-delta", get(get_world_web_map_delta))
         .route("/world/web/map-rum", post(post_world_web_map_rum))
         .route("/world/web/action", post(post_world_web_action))
+        .route(
+            "/world/web/tactics-command",
+            post(post_world_web_tactics_command),
+        )
         .route("/world/web/map-move", post(post_world_web_map_move))
         .route(
             "/world/web/contract",
@@ -4053,6 +4081,10 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/v1/world/map/move", post(move_world_map))
         .route("/v1/world/action", post(post_world_action))
+        .route(
+            "/v1/world/tactics/command",
+            post(post_world_tactics_command),
+        )
         .route("/v1/world/assets", get(get_world_assets))
         .route(
             "/v1/world/assets/:asset_id/upgrade",
