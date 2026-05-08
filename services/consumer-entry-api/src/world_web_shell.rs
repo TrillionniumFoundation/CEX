@@ -127,6 +127,244 @@ fn escape_world_visible_text(value: &str) -> String {
     i18n_span_from_bilingual_slash_copy(&copy).unwrap_or_else(|| escape_html_text(&copy))
 }
 
+fn world_tactics_board_cells_html(tactics_board: &Value) -> String {
+    tactics_board
+        .get("board")
+        .and_then(|board| board.get("cells"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|cell| {
+            let tile_id = cell
+                .get("tile_id")
+                .and_then(Value::as_str)
+                .unwrap_or("A1");
+            let terrain = cell
+                .get("terrain")
+                .and_then(Value::as_str)
+                .unwrap_or("plain");
+            let overlay_id = cell
+                .get("osm_game_overlay_id")
+                .and_then(Value::as_str)
+                .unwrap_or("none");
+            let movement_cost = cell
+                .get("movement_cost")
+                .and_then(Value::as_i64)
+                .unwrap_or(1);
+            format!(
+                "<span class=\"tactics-tile terrain-{}\" data-tile=\"{}\" data-terrain=\"{}\" data-osm-game-overlay-id=\"{}\" data-movement-cost=\"{}\" data-source-of-truth=\"rust_tactics_board_projection\" aria-label=\"tactical tile {}\"><small>{}</small></span>",
+                escape_html_text(terrain),
+                escape_html_text(tile_id),
+                escape_html_text(terrain),
+                escape_html_text(overlay_id),
+                movement_cost,
+                escape_html_text(tile_id),
+                escape_html_text(tile_id),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn world_tactics_units_html(tactics_board: &Value) -> String {
+    tactics_board
+        .get("units")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|unit| {
+            let unit_id = unit
+                .get("unit_id")
+                .and_then(Value::as_str)
+                .unwrap_or("unit");
+            let side = unit.get("side").and_then(Value::as_str).unwrap_or("ally");
+            let label = unit.get("label").and_then(Value::as_str).unwrap_or("?");
+            let title = unit.get("title").and_then(Value::as_str).unwrap_or(unit_id);
+            let grid_column = unit
+                .get("grid_column")
+                .and_then(Value::as_i64)
+                .unwrap_or(1);
+            let grid_row = unit.get("grid_row").and_then(Value::as_i64).unwrap_or(1);
+            let hp = unit.get("hp").and_then(Value::as_i64).unwrap_or(1);
+            let unit_move = unit.get("move").and_then(Value::as_i64).unwrap_or(1);
+            let overlay_id = unit
+                .get("osm_game_overlay_id")
+                .and_then(Value::as_str)
+                .unwrap_or("none");
+            let class_name = match side {
+                "player" => "player",
+                "enemy" => "enemy",
+                _ => "ally",
+            };
+            format!(
+                "<span class=\"tactics-unit {}\" style=\"grid-column:{};grid-row:{}\" data-unit=\"{}\" data-side=\"{}\" data-hp=\"{}\" data-move=\"{}\" data-osm-game-overlay-id=\"{}\" data-source-of-truth=\"rust_trillionnium_game_state\" title=\"{}\">{}</span>",
+                class_name,
+                grid_column,
+                grid_row,
+                escape_html_text(unit_id),
+                escape_html_text(side),
+                hp,
+                unit_move,
+                escape_html_text(overlay_id),
+                escape_html_text(title),
+                escape_world_visible_text(label),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn world_tactics_objectives_html(tactics_board: &Value) -> String {
+    tactics_board
+        .get("objectives")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|objective| {
+            let objective_id = objective
+                .get("objective_id")
+                .and_then(Value::as_str)
+                .unwrap_or("objective");
+            let label = objective
+                .get("label")
+                .and_then(Value::as_str)
+                .unwrap_or("赏");
+            let title = objective
+                .get("title")
+                .and_then(Value::as_str)
+                .unwrap_or("占领目标 / Objective");
+            let grid_column = objective
+                .get("grid_column")
+                .and_then(Value::as_i64)
+                .unwrap_or(1);
+            let grid_row = objective
+                .get("grid_row")
+                .and_then(Value::as_i64)
+                .unwrap_or(1);
+            let overlay_id = objective
+                .get("osm_game_overlay_id")
+                .and_then(Value::as_str)
+                .unwrap_or("none");
+            format!(
+                "<span class=\"tactics-marker objective\" style=\"grid-column:{};grid-row:{}\" data-objective=\"{}\" data-osm-game-overlay-id=\"{}\" data-completion-owner=\"rust_command_handler_ledger_progression\" title=\"{}\">{}</span>",
+                grid_column,
+                grid_row,
+                escape_html_text(objective_id),
+                escape_html_text(overlay_id),
+                escape_html_text(title),
+                escape_world_visible_text(label),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn world_tactics_battle_log_html(tactics_board: &Value) -> String {
+    tactics_board
+        .get("battle_log")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|entry| {
+            let kind = entry.get("kind").and_then(Value::as_str).unwrap_or("log");
+            let text = entry.get("text").and_then(Value::as_str).unwrap_or(">");
+            format!(
+                "<p data-log-kind=\"{}\" data-source-of-truth=\"rust_tactics_board_projection\">{}</p>",
+                escape_html_text(kind),
+                escape_world_visible_text(text),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn world_tactics_command_grid_html(tactics_board: &Value) -> String {
+    tactics_board
+        .get("available_commands")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .enumerate()
+        .map(|(index, command)| {
+            let command_id = command
+                .get("command")
+                .and_then(Value::as_str)
+                .unwrap_or("inspect");
+            let label = command
+                .get("label")
+                .and_then(Value::as_str)
+                .unwrap_or(command_id);
+            let web_target = command
+                .get("web_target")
+                .and_then(Value::as_str)
+                .unwrap_or("#trillionnium-tactics-game-shell");
+            let command_contract = command
+                .get("contract_version")
+                .and_then(Value::as_str)
+                .unwrap_or("trillionnium_world_tactics_command_v1");
+            let validation_owner = command
+                .get("validation_owner")
+                .and_then(Value::as_str)
+                .unwrap_or("rust_tactics_command_validator");
+            let required_skill_id = command
+                .get("required_skill_id")
+                .and_then(Value::as_str)
+                .unwrap_or("none");
+            let class_name = if index == 0 {
+                "tactics-command primary"
+            } else {
+                "tactics-command"
+            };
+            format!(
+                "<a class=\"{}\" href='{}' data-command=\"{}\" data-command-contract=\"{}\" data-validation-owner=\"{}\" data-required-skill-id=\"{}\" data-source-of-truth=\"rust_tactics_command_model\">{}</a>",
+                class_name,
+                escape_html_text(web_target),
+                escape_html_text(command_id),
+                escape_html_text(command_contract),
+                escape_html_text(validation_owner),
+                escape_html_text(required_skill_id),
+                escape_world_visible_text(label),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn world_jianghu_status_html(jianghu_character: &Value) -> String {
+    let attributes = jianghu_character.get("attributes").unwrap_or(&Value::Null);
+    [
+        ("体魄", "physique"),
+        ("臂力", "force"),
+        ("身法", "agility"),
+        ("悟性", "insight"),
+        ("定力", "resolve"),
+        ("声望", "reputation"),
+    ]
+    .into_iter()
+    .map(|(label, key)| {
+        let value = attributes.get(key).and_then(Value::as_i64).unwrap_or(0);
+        let width = if key == "reputation" {
+            (50 + value).clamp(5, 100)
+        } else {
+            (value * 6).clamp(5, 100)
+        };
+        format!(
+            "<div class=\"tactics-stat-line jianghu-stat\" data-attribute=\"{}\" data-source-of-truth=\"rust_jianghu_character\"><span>{}</span><div class=\"tactics-meter\"><span style=\"width:{}%\"></span></div><b>{}</b></div>",
+            escape_html_text(key),
+            escape_world_visible_text(label),
+            width,
+            value,
+        )
+    })
+    .collect::<Vec<_>>()
+    .join("\n")
+}
+
 fn world_node_kind_label(kind: &str) -> &str {
     match kind {
         "hub_square" => "hub square",
@@ -284,7 +522,7 @@ pub(super) async fn get_world_web_shell(
     let current_map_node_id = league
         .world
         .world_player_positions
-        .get("@alice:local.dev")
+        .get(current_matrix_user_id)
         .map(|position| position.node_id.clone())
         .filter(|node_id| league.world.world_map_nodes.contains_key(node_id))
         .unwrap_or_else(|| default_world_node_id().to_string());
@@ -427,6 +665,10 @@ pub(super) async fn get_world_web_shell(
         .get("feature_count")
         .and_then(Value::as_u64)
         .unwrap_or(0);
+    let osm_fixture_layers_contract = openstreetmap_geodata
+        .get("fixture_layers_contract_version")
+        .and_then(Value::as_str)
+        .unwrap_or("openstreetmap_fixture_layers_v1");
     let osm_geodata_feature_cards = openstreetmap_geodata
         .get("features")
         .and_then(Value::as_array)
@@ -478,6 +720,54 @@ pub(super) async fn get_world_web_shell(
         })
         .collect::<Vec<_>>()
         .join("\n");
+    let tactics_board = world_map.get("tactics_board").cloned().unwrap_or_else(|| {
+        world_tactics_board_projection_json(
+            &league.world,
+            current_matrix_user_id,
+            current_map_node,
+            &openstreetmap_geodata,
+        )
+    });
+    let jianghu_character = world_map
+        .get("jianghu_character")
+        .cloned()
+        .unwrap_or_else(|| {
+            world_jianghu_character_projection_json(&league.world, current_matrix_user_id)
+        });
+    let tactics_board_contract = tactics_board
+        .get("contract_version")
+        .and_then(Value::as_str)
+        .unwrap_or("trillionnium_world_tactics_board_v1");
+    let tactics_unit_contract = tactics_board
+        .get("unit_contract_version")
+        .and_then(Value::as_str)
+        .unwrap_or("trillionnium_world_tactics_unit_v1");
+    let tactics_command_contract = tactics_board
+        .get("command_contract_version")
+        .and_then(Value::as_str)
+        .unwrap_or("trillionnium_world_tactics_command_v1");
+    let jianghu_skill_contract = tactics_board
+        .get("jianghu_skill_contract_version")
+        .and_then(Value::as_str)
+        .unwrap_or("trillionnium_jianghu_skill_v1");
+    let tactics_board_cells = world_tactics_board_cells_html(&tactics_board);
+    let tactics_board_units = world_tactics_units_html(&tactics_board);
+    let tactics_objective_markers = world_tactics_objectives_html(&tactics_board);
+    let tactics_battle_log = world_tactics_battle_log_html(&tactics_board);
+    let tactics_command_grid = world_tactics_command_grid_html(&tactics_board);
+    let jianghu_status_lines = world_jianghu_status_html(&jianghu_character);
+    let jianghu_character_contract = jianghu_character
+        .get("contract_version")
+        .and_then(Value::as_str)
+        .unwrap_or("trillionnium_jianghu_character_v1");
+    let jianghu_title = jianghu_character
+        .get("title")
+        .and_then(Value::as_str)
+        .unwrap_or("初入江湖");
+    let jianghu_display_name = jianghu_character
+        .get("display_name")
+        .and_then(Value::as_str)
+        .unwrap_or("镜城游侠");
     let viewport_path = world_viewport
         .get("viewport_path")
         .and_then(Value::as_str)
@@ -1332,30 +1622,6 @@ pub(super) async fn get_world_web_shell(
         real_world_map_render_cards_js(RealWorldMapShellCardStyle::WorldMini);
     let world_header_language_switcher =
         trillionnium_language_inline_switcher_html("trillionnium-world-language-select");
-    let tactics_board_cells = (0..8)
-        .flat_map(|row| {
-            (0..8).map(move |col| {
-                let tile_label = format!(
-                    "{}{}",
-                    (b'A' + col as u8) as char,
-                    8usize.saturating_sub(row)
-                );
-                let terrain = match (row, col) {
-                    (0, 6) | (1, 5) | (2, 6) => "objective",
-                    (1, 1) | (2, 2) | (3, 3) | (4, 4) | (5, 5) => "road",
-                    (2, 0) | (3, 0) | (5, 2) | (6, 2) => "forest",
-                    (0, 3) | (1, 3) | (2, 3) | (3, 4) | (4, 5) => "river",
-                    (6, 0) | (7, 1) => "camp",
-                    (3, 6) | (4, 6) => "market",
-                    _ => "plain",
-                };
-                format!(
-                    "<span class=\"tactics-tile terrain-{terrain}\" data-tile=\"{tile_label}\" aria-label=\"tactical tile {tile_label}\"><small>{tile_label}</small></span>"
-                )
-            })
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
 
     Html(format!(
         r#"<!doctype html>
@@ -1771,38 +2037,30 @@ pub(super) async fn get_world_web_shell(
     </section>
     <section id="world-map-shell-panel" class="panel" data-bootstrap-mode="truncated_runtime_bootstrap_with_lazy_delta_hydration" data-bootstrap-payload-bytes="{world_map_bootstrap_bytes}" data-cache-contract="trillionnium_world_map_payload_cache_v1">
       <div class="map-shell">
-        <section id="trillionnium-tactics-game-shell" class="tactics-game-shell" data-contract-version="trillionnium_open_source_tactics_world_shell_v1" data-interface-style="turn_based_strategy_rpg" data-open-source-base="tranchikhang/MedievalWar" data-base-license="MIT" data-base-url="https://github.com/tranchikhang/MedievalWar" data-base-engine="Phaser 3" data-base-patterns="map,cursor,control,turn_system,pathfinding,context_menu,objectives,ai" data-asset-policy="no_proprietary_assets_css_tokens_first" data-map-engine-role="openclawstreetmap_underlay" data-underlay-engine="{map_engine_id}" data-underlay-provider="{tile_provider}" aria-label="Open-source tactics Trillionnium game shell" data-i18n-aria-label-en="Open-source tactics Trillionnium game shell" data-i18n-aria-label-zh="开源战棋 Trillionnium 游戏界面">
+        <section id="trillionnium-tactics-game-shell" class="tactics-game-shell" data-contract-version="trillionnium_open_source_tactics_world_shell_v1" data-tactics-board-contract="{tactics_board_contract}" data-tactics-unit-contract="{tactics_unit_contract}" data-tactics-command-contract="{tactics_command_contract}" data-jianghu-character-contract="{jianghu_character_contract}" data-jianghu-skill-contract="{jianghu_skill_contract}" data-interface-style="turn_based_strategy_rpg" data-open-source-base="tranchikhang/MedievalWar" data-base-license="MIT" data-base-url="https://github.com/tranchikhang/MedievalWar" data-base-engine="Phaser 3" data-base-patterns="map,cursor,control,turn_system,pathfinding,context_menu,objectives,ai" data-asset-policy="no_proprietary_assets_css_tokens_first" data-map-engine-role="openclawstreetmap_underlay" data-underlay-engine="{map_engine_id}" data-underlay-provider="{tile_provider}" data-source-of-truth="rust_trillionnium_game_state" aria-label="Open-source tactics Trillionnium game shell" data-i18n-aria-label-en="Open-source tactics Trillionnium game shell" data-i18n-aria-label-zh="开源战棋 Trillionnium 游戏界面">
           <article class="tactics-board-card">
             <div class="tactics-board-title"><span data-i18n-en="【Three Kingdoms Tactics】Mirror Street Battle" data-i18n-zh="【三国战棋】镜像街巷战役">【三国战棋】镜像街巷战役</span><code data-engine-role="underlay" data-underlay-name="OpenClawStreetMap" data-i18n-en="real street engine" data-i18n-zh="真实街巷引擎">真实街巷引擎</code></div>
             <div class="tactics-board" role="grid" aria-label="Trillionnium turn based tactics board" data-i18n-aria-label-en="Trillionnium turn based tactics board" data-i18n-aria-label-zh="Trillionnium 回合制战棋棋盘">
               {tactics_board_cells}
               <span class="tactics-selection-ring" aria-hidden="true"></span>
-              <span class="tactics-unit player" style="grid-column:2;grid-row:7" data-unit="lord" data-hp="32" data-move="4" title="主公 / Lord">主</span>
-              <span class="tactics-unit ally" style="grid-column:3;grid-row:6" data-unit="strategist" data-hp="24" data-move="3" title="军师 / Strategist">策</span>
-              <span class="tactics-unit ally" style="grid-column:1;grid-row:8" data-unit="agent-squad" data-hp="28" data-move="5" title="Agent 斥候 / Scout">斥</span>
-              <span class="tactics-unit enemy" style="grid-column:7;grid-row:2" data-unit="rival-warlord" data-hp="30" data-move="3" title="敌将 / Rival">敌</span>
-              <span class="tactics-unit enemy" style="grid-column:6;grid-row:4" data-unit="market-bandit" data-hp="18" data-move="4" title="流寇 / Bandit">寇</span>
-              <span class="tactics-marker objective" style="grid-column:7;grid-row:1" data-objective="bounty-gate" title="占领目标 / Objective">赏</span>
+              {tactics_board_units}
+              {tactics_objective_markers}
             </div>
             <div class="tactics-log" aria-label="Tactics battle log" data-i18n-aria-label-en="Tactics battle log" data-i18n-aria-label-zh="战棋战报">
-              <p data-i18n-en="> base: tranchikhang/MedievalWar MIT · Phaser 3 map/cursor/turn/pathfinding/objective loop." data-i18n-zh="> 底座：tranchikhang/MedievalWar MIT · Phaser 3 地图/光标/回合/寻路/目标循环。">&gt; 底座：tranchikhang/MedievalWar MIT · Phaser 3 地图/光标/回合/寻路/目标循环。</p>
-              <p data-i18n-en="> map: OpenClawStreetMap provides terrain, distance, events, and objectives." data-i18n-zh="> 地图：OpenClawStreetMap 提供地形、距离、事件和目标。">&gt; 地图：OpenClawStreetMap 提供地形、距离、事件和目标。</p>
-              <p data-i18n-en="> status: {events} live events, {listings} bounty cards, {map_avatar_route_runner_count} moving squads." data-i18n-zh="> 状态：{events} 条实时事件、{listings} 张悬赏牌、{map_avatar_route_runner_count} 支移动小队。">&gt; 状态：{events} 条实时事件、{listings} 张悬赏牌、{map_avatar_route_runner_count} 支移动小队。</p>
+              {tactics_battle_log}
+              <p data-log-kind="status" data-source-of-truth="rust_world_projection" data-i18n-en="> status: {events} live events, {listings} bounty cards, {map_avatar_route_runner_count} moving squads." data-i18n-zh="> 状态：{events} 条实时事件、{listings} 张悬赏牌、{map_avatar_route_runner_count} 支移动小队。">&gt; 状态：{events} 条实时事件、{listings} 张悬赏牌、{map_avatar_route_runner_count} 支移动小队。</p>
             </div>
           </article>
           <aside class="tactics-command-card" aria-label="Tactics command menu" data-i18n-aria-label-en="Tactics command menu" data-i18n-aria-label-zh="战棋指令菜单">
             <h3 data-i18n-en="战棋指令菜单" data-i18n-zh="战棋指令菜单">战棋指令菜单</h3>
+            <div class="tactics-base-note" data-source-of-truth="rust_jianghu_character"><strong>{jianghu_display_name}</strong><span>{jianghu_title}</span></div>
+            {jianghu_status_lines}
             <div class="tactics-stat-line"><span data-i18n-en="军令" data-i18n-zh="军令">军令</span><div class="tactics-meter"><span style="width:86%"></span></div><b>{map_avatar_route_runner_count}</b></div>
             <div class="tactics-stat-line"><span data-i18n-en="声望" data-i18n-zh="声望">声望</span><div class="tactics-meter"><span style="width:72%"></span></div><b>{map_route_runner_mastery_xp}</b></div>
             <div class="tactics-stat-line"><span data-i18n-en="悬赏" data-i18n-zh="悬赏">悬赏</span><div class="tactics-meter"><span style="width:64%"></span></div><b>{listings}</b></div>
             <div class="tactics-stat-line"><span data-i18n-en="领奖" data-i18n-zh="领奖">领奖</span><div class="tactics-meter"><span style="width:58%"></span></div><b>{map_route_runner_reward_claim_count}</b></div>
             <nav class="tactics-command-grid" aria-label="Tactical actions" data-i18n-aria-label-en="Tactical actions" data-i18n-aria-label-zh="战术动作">
-              <a class="tactics-command primary" href='#trillionnium-tactics-game-shell' data-i18n-en="选中单位" data-i18n-zh="选中单位">选中单位</a>
-              <a class="tactics-command" href='#world-map-route-flow-actions' data-i18n-en="行军路线" data-i18n-zh="行军路线">行军路线</a>
-              <a class="tactics-command" href='#world-commerce-panel' data-i18n-en="接取悬赏" data-i18n-zh="接取悬赏">接取悬赏</a>
-              <a class="tactics-command" href='#world-work-deliver-body' data-i18n-en="提交战报" data-i18n-zh="提交战报">提交战报</a>
-              <a class="tactics-command" href='#world-route-task-graph-live' data-i18n-en="势力脉络" data-i18n-zh="势力脉络">势力脉络</a>
-              <a class="tactics-command" href='#world-real-map' data-i18n-en="查看底图" data-i18n-zh="查看底图">查看底图</a>
+              {tactics_command_grid}
             </nav>
             <div class="tactics-chip-row" aria-label="Tactics rules" data-i18n-aria-label-en="Tactics rules" data-i18n-aria-label-zh="战棋规则">
               <span data-i18n-en="deterministic combat" data-i18n-zh="确定性战斗">确定性战斗</span>
@@ -1876,8 +2134,8 @@ pub(super) async fn get_world_web_shell(
           <div id="world-map-route-flow-actions" class="focus-stack"></div>
           <details class="dev-details world-advanced-map-drawer">
             <summary data-i18n-en="Advanced map layers" data-i18n-zh="高级地图图层">Advanced map layers</summary>
-            <section id="world-openstreetmap-geodata" class="mini-grid" data-contract-version="{osm_geodata_contract}" data-provider-contract="{osm_geodata_provider_contract}" data-provider-id="{osm_geodata_provider_id}" data-source-mode="{osm_geodata_source_mode}" data-source-of-truth="rust_openstreetmap_data_provider" data-web-role="visualization_input_only" data-feature-count="{osm_geodata_feature_count}" data-legal-obligation="odbl_database_obligations" aria-label="OpenStreetMap geodata substrate" data-i18n-aria-label-en="OpenStreetMap geodata substrate" data-i18n-aria-label-zh="OpenStreetMap 地理数据底座">
-              <article class="mini osm-contract"><strong>OpenStreetMapDataProvider</strong><span>openstreetmap_geodata_v1 · Rust source of truth · fixture first before Overpass/Geofabrik</span><code>osm_id · osm_type · lat/lng · tags · game_overlay_id</code><small>Do not use public OSM tile servers for production traffic; cache/self-host/vendor first.</small></article>
+            <section id="world-openstreetmap-geodata" class="mini-grid" data-contract-version="{osm_geodata_contract}" data-fixture-layers-contract="{osm_fixture_layers_contract}" data-semantic-role-example="mentor_training_anchor" data-provider-contract="{osm_geodata_provider_contract}" data-provider-id="{osm_geodata_provider_id}" data-source-mode="{osm_geodata_source_mode}" data-source-of-truth="rust_openstreetmap_data_provider" data-web-role="visualization_input_only" data-feature-count="{osm_geodata_feature_count}" data-legal-obligation="odbl_database_obligations" aria-label="OpenStreetMap geodata substrate" data-i18n-aria-label-en="OpenStreetMap geodata substrate" data-i18n-aria-label-zh="OpenStreetMap 地理数据底座">
+              <article class="mini osm-contract"><strong>OpenStreetMapDataProvider</strong><span>openstreetmap_geodata_v1 · openstreetmap_fixture_layers_v1 · Rust source of truth · fixture first before Overpass/Geofabrik</span><code>osm_id · osm_type · lat/lng · tags · game_overlay_id · mentor_training_anchor</code><small>Do not use public OSM tile servers for production traffic; cache/self-host/vendor first.</small></article>
               {osm_geodata_feature_cards}
             </section>
             <div id="world-tile-shards-live" class="mini-grid">{tile_shard_cards}</div>
@@ -2645,7 +2903,21 @@ pub(super) async fn get_world_web_shell(
         osm_geodata_provider_id = escape_html_text(osm_geodata_provider_id),
         osm_geodata_source_mode = escape_html_text(osm_geodata_source_mode),
         osm_geodata_feature_count = osm_geodata_feature_count,
+        osm_fixture_layers_contract = escape_html_text(osm_fixture_layers_contract),
         osm_geodata_feature_cards = osm_geodata_feature_cards,
+        tactics_board_contract = escape_html_text(tactics_board_contract),
+        tactics_unit_contract = escape_html_text(tactics_unit_contract),
+        tactics_command_contract = escape_html_text(tactics_command_contract),
+        jianghu_character_contract = escape_html_text(jianghu_character_contract),
+        jianghu_skill_contract = escape_html_text(jianghu_skill_contract),
+        tactics_board_cells = tactics_board_cells,
+        tactics_board_units = tactics_board_units,
+        tactics_objective_markers = tactics_objective_markers,
+        tactics_battle_log = tactics_battle_log,
+        tactics_command_grid = tactics_command_grid,
+        jianghu_status_lines = jianghu_status_lines,
+        jianghu_display_name = escape_world_visible_text(jianghu_display_name),
+        jianghu_title = escape_world_visible_text(jianghu_title),
         tile_shard_cards = tile_shard_cards,
         region_shard_cards = region_shard_cards,
         lod_layer_cards = lod_layer_cards,

@@ -7,7 +7,6 @@ const TRILLIONNIUM_WORLD_MAP_READABILITY_LOD_CONTRACT_VERSION: &str =
     "trillionnium_world_map_readability_lod_v1";
 const TRILLIONNIUM_WORLD_FUTURE_ENGINE_READINESS_CONTRACT_VERSION: &str =
     "trillionnium_world_future_engine_readiness_v1";
-const OPENSTREETMAP_GEODATA_CONTRACT_VERSION: &str = "openstreetmap_geodata_v1";
 
 fn route_runner_now_epoch() -> i64 {
     Utc::now().timestamp()
@@ -492,232 +491,6 @@ pub(super) fn world_home_json(league: &LeagueState) -> Value {
 
 pub(super) fn default_world_node_id() -> &'static str {
     "mirror-city-square"
-}
-
-pub(super) fn real_world_node_coordinates(node: &WorldMapNode) -> (f64, f64) {
-    // Trillionnium World is a reality-mirror overlay. The first playable city is
-    // anchored to a real map around Shanghai city center, then fine-grained MUD / Gather
-    // nodes are placed as walkable markers on top of the real-world tile engine.
-    const BASE_LAT: f64 = 31.230416;
-    const BASE_LNG: f64 = 121.473701;
-    const LAT_STEP: f64 = 0.0048;
-    const LNG_STEP: f64 = 0.0065;
-    let lat = BASE_LAT - (node.y as f64 * LAT_STEP);
-    let lng = BASE_LNG + (node.x as f64 * LNG_STEP);
-    (lat, lng)
-}
-
-trait OpenStreetMapDataProvider {
-    fn provider_id(&self) -> &'static str;
-    fn source_mode(&self) -> &'static str;
-    fn feature_json(&self, node: &WorldMapNode) -> Value;
-
-    fn features_json(&self, nodes: &[WorldMapNode]) -> Vec<Value> {
-        nodes.iter().map(|node| self.feature_json(node)).collect()
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-struct FixtureOpenStreetMapDataProvider;
-
-impl OpenStreetMapDataProvider for FixtureOpenStreetMapDataProvider {
-    fn provider_id(&self) -> &'static str {
-        "fixture_openstreetmap_data_provider_v1"
-    }
-
-    fn source_mode(&self) -> &'static str {
-        "local_fixture_mock_first_no_live_overpass"
-    }
-
-    fn feature_json(&self, node: &WorldMapNode) -> Value {
-        openstreetmap_geodata_feature_json(self, node)
-    }
-}
-
-fn openstreetmap_osm_type(node: &WorldMapNode) -> &'static str {
-    if node
-        .interaction_tags
-        .iter()
-        .any(|tag| tag == "guild" || tag == "raid")
-    {
-        "relation"
-    } else if matches!(
-        node.node_kind.as_str(),
-        "hub_square" | "market_gate" | "arena_gate" | "delivery_dock" | "dispute_desk"
-    ) {
-        "way"
-    } else {
-        "node"
-    }
-}
-
-fn openstreetmap_osm_id(node: &WorldMapNode) -> i64 {
-    let mut hash = 14_695_981_039_346_656_037_u64;
-    for byte in node.node_id.bytes() {
-        hash ^= byte as u64;
-        hash = hash.wrapping_mul(1_099_511_628_211);
-    }
-    1_770_000_000_i64 + (hash % 8_000_000_000) as i64
-}
-
-fn openstreetmap_game_overlay_id(node: &WorldMapNode) -> String {
-    format!("trillionnium-world-node:{}", node.node_id)
-}
-
-fn openstreetmap_amenity_tag(node: &WorldMapNode) -> &'static str {
-    if node
-        .interaction_tags
-        .iter()
-        .any(|tag| tag == "wallet" || tag == "ledger")
-    {
-        "bank"
-    } else if node
-        .interaction_tags
-        .iter()
-        .any(|tag| tag == "market" || tag == "buy" || tag == "sell" || tag == "listing")
-    {
-        "marketplace"
-    } else if node
-        .interaction_tags
-        .iter()
-        .any(|tag| tag == "arena" || tag == "raid" || tag == "guild")
-    {
-        "events_venue"
-    } else if node
-        .interaction_tags
-        .iter()
-        .any(|tag| tag == "craft" || tag == "asset" || tag == "upgrade")
-    {
-        "workshop"
-    } else {
-        "community_centre"
-    }
-}
-
-fn openstreetmap_node_tags_json(node: &WorldMapNode) -> Value {
-    let mut tags = Map::new();
-    tags.insert("name".to_string(), json!(node.name.as_str()));
-    tags.insert("name:zh".to_string(), json!(node.name.as_str()));
-    tags.insert(
-        "amenity".to_string(),
-        json!(openstreetmap_amenity_tag(node)),
-    );
-    tags.insert("source".to_string(), json!("trillionnium_fixture"));
-    tags.insert(
-        "trillionnium:node_id".to_string(),
-        json!(node.node_id.as_str()),
-    );
-    tags.insert(
-        "trillionnium:location_id".to_string(),
-        json!(node.location_id.as_str()),
-    );
-    tags.insert(
-        "trillionnium:zone_id".to_string(),
-        json!(node.zone_id.as_str()),
-    );
-    tags.insert(
-        "trillionnium:node_kind".to_string(),
-        json!(node.node_kind.as_str()),
-    );
-    tags.insert(
-        "trillionnium:game_overlay_id".to_string(),
-        json!(openstreetmap_game_overlay_id(node)),
-    );
-    tags.insert(
-        "trillionnium:interaction_tags".to_string(),
-        json!(node.interaction_tags.join(",")),
-    );
-    Value::Object(tags)
-}
-
-fn openstreetmap_geodata_feature_json(
-    provider: &dyn OpenStreetMapDataProvider,
-    node: &WorldMapNode,
-) -> Value {
-    let (lat, lng) = real_world_node_coordinates(node);
-    let osm_type = openstreetmap_osm_type(node);
-    let osm_id = openstreetmap_osm_id(node);
-    let game_overlay_id = openstreetmap_game_overlay_id(node);
-    json!({
-        "feature_id": format!("{osm_type}/{osm_id}"),
-        "contract_version": OPENSTREETMAP_GEODATA_CONTRACT_VERSION,
-        "provider_id": provider.provider_id(),
-        "source_mode": provider.source_mode(),
-        "osm_type": osm_type,
-        "osm_id": osm_id,
-        "lat": lat,
-        "lng": lng,
-        "lat_string": format!("{lat:.6}"),
-        "lng_string": format!("{lng:.6}"),
-        "geometry": {
-            "type": "Point",
-            "coordinates": [lng, lat],
-            "projection": "EPSG:4326",
-        },
-        "tags": openstreetmap_node_tags_json(node),
-        "game_overlay_id": game_overlay_id,
-        "game_binding": {
-            "source_of_truth": "rust_world_state",
-            "projection_owner": "OpenStreetMapDataProvider",
-            "web_role": "visualization_input_only",
-            "node_id": &node.node_id,
-            "location_id": &node.location_id,
-            "zone_id": &node.zone_id,
-            "node_kind": &node.node_kind,
-            "x": node.x,
-            "y": node.y,
-            "interaction_tags": &node.interaction_tags,
-            "freedom_hooks": &node.freedom_hooks,
-        }
-    })
-}
-
-pub(super) fn openstreetmap_geodata_v1_json(
-    nodes: &[WorldMapNode],
-    current_node: Option<&WorldMapNode>,
-) -> Value {
-    let provider = FixtureOpenStreetMapDataProvider;
-    let features = provider.features_json(nodes);
-    let current_feature = current_node
-        .map(|node| provider.feature_json(node))
-        .unwrap_or(Value::Null);
-    json!({
-        "kind": OPENSTREETMAP_GEODATA_CONTRACT_VERSION,
-        "contract_version": OPENSTREETMAP_GEODATA_CONTRACT_VERSION,
-        "provider_contract": "OpenStreetMapDataProvider",
-        "provider_id": provider.provider_id(),
-        "source_mode": provider.source_mode(),
-        "source_of_truth": "rust_openstreetmap_data_provider",
-        "web_role": "visualization_input_only",
-        "gameplay_owner": "trillionnium_rust_world_state",
-        "ingestion_stage": "fixture_mock_before_overpass_or_geofabrik",
-        "feature_count": features.len(),
-        "feature_identity_fields": ["osm_id", "osm_type", "lat", "lng", "tags", "game_overlay_id"],
-        "osm_layers": ["roads", "pois", "buildings", "areas", "admin_boundaries", "tags"],
-        "production_ingestion_plan": {
-            "live_overpass_enabled": false,
-            "geofabrik_import_enabled": false,
-            "cache_or_self_host_required_before_production_traffic": true,
-            "public_tile_server_policy": "do_not_use_public_osm_tile_servers_for_production_traffic",
-            "next_provider_modes": ["overpass_bbox_cache", "geofabrik_extract_import", "vendor_tile_cache"],
-        },
-        "legal": {
-            "attribution": "© OpenStreetMap contributors",
-            "database_license": "ODbL-1.0",
-            "attribution_required": true,
-            "odbl_database_obligations": true,
-            "derived_database_tracking_required": true,
-        },
-        "current_feature": current_feature,
-        "features": features,
-        "readiness_checks": [
-            "rust_provider_owns_geodata_projection",
-            "web_shell_only_reads_projection_json",
-            "osm_identity_fields_visible",
-            "fixture_path_precedes_live_ingestion",
-            "production_cache_required_before_osm_traffic"
-        ]
-    })
 }
 
 pub(super) fn world_map_primary_action_json(
@@ -3392,6 +3165,14 @@ impl<'a> WorldMapProjectionContext<'a> {
             .unwrap_or_default();
         let real_world_map_engine = real_world_map_engine_json(&nodes, current_node.as_ref());
         let openstreetmap_geodata = openstreetmap_geodata_v1_json(&nodes, current_node.as_ref());
+        let tactics_board = world_tactics_board_projection_json(
+            self.world,
+            self.matrix_user_id,
+            current_node.as_ref(),
+            &openstreetmap_geodata,
+        );
+        let jianghu_character =
+            world_jianghu_character_projection_json(self.world, self.matrix_user_id);
         let avatar_task_routes = world_map_avatar_task_routes_json(
             self.world,
             &self.indexes,
@@ -3413,6 +3194,8 @@ impl<'a> WorldMapProjectionContext<'a> {
             "fallback_style": "hero_tale_gather_text_map_v1",
             "real_world_map_engine": real_world_map_engine,
             "openstreetmap_geodata": openstreetmap_geodata,
+            "tactics_board": tactics_board,
+            "jianghu_character": jianghu_character,
             "route_preview": self.route_artifacts.preview.clone(),
             "route_task_graph": self.route_artifacts.task_graph.clone(),
             "route_story": self.route_artifacts.story.to_value(),

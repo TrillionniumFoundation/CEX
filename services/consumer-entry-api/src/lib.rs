@@ -49,6 +49,10 @@ mod world_map_optimization;
 use world_map_optimization::*;
 mod real_world_map_shell;
 use real_world_map_shell::*;
+mod openstreetmap_geodata;
+use openstreetmap_geodata::*;
+mod world_tactics;
+use world_tactics::*;
 mod world_map_projection;
 use world_map_projection::*;
 mod league_core;
@@ -1733,6 +1737,8 @@ struct WorldState {
     world_map_nodes: HashMap<String, WorldMapNode>,
     #[serde(default)]
     world_player_positions: HashMap<String, WorldPlayerPosition>,
+    #[serde(default)]
+    world_jianghu_characters: HashMap<String, WorldJianghuCharacter>,
     #[serde(default)]
     world_assets: Vec<WorldAsset>,
     #[serde(default)]

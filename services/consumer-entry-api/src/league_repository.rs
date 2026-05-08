@@ -257,6 +257,7 @@ pub(super) fn default_league_state() -> LeagueState {
             world_entities,
             world_map_nodes,
             world_player_positions: HashMap::new(),
+            world_jianghu_characters: HashMap::new(),
             world_assets: Vec::new(),
             world_asset_upgrades: Vec::new(),
             world_companies: Vec::new(),

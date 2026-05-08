@@ -7,7 +7,7 @@ use super::{
     build_matrix_room_rate_limit_key, build_matrix_session_rate_limit_key,
     build_matrix_user_rate_limit_key, build_router, build_world_indexes,
     build_world_route_artifacts, client_app_json, client_feed_json, default_league_state,
-    encode_league_web_session, evaluate_identity_binding_reload_governance,
+    default_world_node_id, encode_league_web_session, evaluate_identity_binding_reload_governance,
     get_client_app_web_shell, get_world_web_shell, league_hash_id, league_hidden_test_event,
     league_state_hash, league_state_repository_write_set_for_command,
     league_state_sql_cutover_plan_json, league_state_sql_shadow_validation_json,
@@ -18,17 +18,18 @@ use super::{
     normalized_repository_direct_write_contract_json,
     normalized_repository_read_model_contract_json,
     normalized_repository_world_home_read_model_sql, normalized_world_shadow_sql_contract_json,
-    openstreetmap_geodata_v1_json, parse_csv_list, project_consumer_status, prune_rate_limit_cache,
-    real_world_map_engine_json, resolve_chat_identity,
-    session_auth_issuer_registry_active_key_diff_json, sign_user_session_assertion,
-    validate_text_payload, world_home_json, world_map_delta_json, world_map_json,
-    world_map_viewport_json, world_route_ui_contract_json, AppState, AppStateInner,
-    ConsumerEntryConfig, ConsumerEntryMetrics, CreateChatTaskRequest, IdentityBindingAuditState,
-    IdentityBindingEntry, IdentityBindingMetadata, IdentityBindingRevisionApprovalState,
-    IdentityBindingStore, IdentityBindings, LeagueMatchEntry, LeaguePlayer, LeagueReward,
-    LeagueStateRepositorySnapshot, LeagueSubmission, LeagueWebSessionClaims, MatrixMessageRequest,
-    ProductUserIdentity, RateLimitCache, ReplayCache, RuntimeProfile,
-    SessionAuthIssuerRegistryIssuer, SessionAuthIssuerRegistryMetadata,
+    openstreetmap_fixture_identity_for, openstreetmap_geodata_v1_json, parse_csv_list,
+    project_consumer_status, prune_rate_limit_cache, real_world_map_engine_json,
+    resolve_chat_identity, session_auth_issuer_registry_active_key_diff_json,
+    sign_user_session_assertion, validate_text_payload, world_home_json,
+    world_jianghu_character_projection_json, world_map_delta_json, world_map_json,
+    world_map_viewport_json, world_route_ui_contract_json, world_tactics_board_projection_json,
+    AppState, AppStateInner, ConsumerEntryConfig, ConsumerEntryMetrics, CreateChatTaskRequest,
+    IdentityBindingAuditState, IdentityBindingEntry, IdentityBindingMetadata,
+    IdentityBindingRevisionApprovalState, IdentityBindingStore, IdentityBindings, LeagueMatchEntry,
+    LeaguePlayer, LeagueReward, LeagueStateRepositorySnapshot, LeagueSubmission,
+    LeagueWebSessionClaims, MatrixMessageRequest, ProductUserIdentity, RateLimitCache, ReplayCache,
+    RuntimeProfile, SessionAuthIssuerRegistryIssuer, SessionAuthIssuerRegistryMetadata,
     SessionAuthIssuerRegistryRuntimeState, UserSessionAuthClaims, WorldAsset, WorldCompany,
     WorldContract, WorldContractCompletion, WorldEconomyEvent, WorldEvent, WorldListing,
     WorldMapNode, WorldPlayerPosition, WorldPurchase, WorldRelationship, WorldShop,
@@ -2176,6 +2177,209 @@ fn real_world_map_engine_declares_shared_renderer_adapter() {
 }
 
 #[test]
+fn openstreetmap_geodata_provider_uses_stable_fixture_identities() {
+    let league = default_league_state();
+    let nodes: Vec<WorldMapNode> = league.world.world_map_nodes.values().cloned().collect();
+    let geodata = openstreetmap_geodata_v1_json(&nodes, None);
+
+    assert_eq!(
+        geodata["fixture_identity_mode"],
+        "stable_fixture_table_with_deterministic_hash_fallback"
+    );
+    assert_eq!(
+        geodata["fixture_layers_contract_version"],
+        "openstreetmap_fixture_layers_v1"
+    );
+    assert_eq!(
+        geodata["fixture_layers"]["source_of_truth"],
+        "rust_openstreetmap_data_provider"
+    );
+    assert!(
+        geodata["fixture_layers"]["layer_feature_counts"]["roads"]
+            .as_u64()
+            .unwrap_or_default()
+            > 0
+    );
+    assert!(
+        geodata["fixture_layers"]["layer_feature_counts"]["buildings"]
+            .as_u64()
+            .unwrap_or_default()
+            > 0
+    );
+    assert!(
+        geodata["fixture_layers"]["layer_feature_counts"]["areas"]
+            .as_u64()
+            .unwrap_or_default()
+            > 0
+    );
+    assert!(
+        geodata["fixture_layers"]["layer_feature_counts"]["admin_boundaries"]
+            .as_u64()
+            .unwrap_or_default()
+            > 0
+    );
+    assert!(geodata["semantic_role_mapping"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|mapping| mapping["semantic_role"] == "mentor_home"
+            && mapping["game_system_role"] == "mentor_training_anchor"));
+    assert_eq!(
+        geodata["stable_fixture_count"].as_u64().unwrap_or_default(),
+        nodes.len() as u64
+    );
+    let market_node = league
+        .world
+        .world_map_nodes
+        .get("zbj-market-gate")
+        .expect("market gate fixture node should exist");
+    let identity = openstreetmap_fixture_identity_for(market_node);
+    assert_eq!(identity.osm_type, "way");
+    assert_eq!(identity.osm_id, 31_230_416_201);
+    assert_eq!(identity.semantic_role, "market");
+    let market_feature = geodata["features"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|feature| feature["game_binding"]["node_id"] == "zbj-market-gate")
+        .expect("market gate should have a projected OSM fixture feature");
+    assert_eq!(market_feature["stable_fixture_identity"], true);
+    assert_eq!(market_feature["semantic_role"], "market");
+    assert_eq!(market_feature["source_layer"], "pois");
+    assert_eq!(market_feature["game_system_role"], "bounty_market_anchor");
+    assert_eq!(
+        market_feature["completion_owner"],
+        "rust_market_command_handler"
+    );
+    assert_eq!(market_feature["osm_id"], 31_230_416_201_i64);
+    assert_eq!(
+        market_feature["tags"]["trillionnium:semantic_role"],
+        "market"
+    );
+    assert!(market_feature["objective_seed"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("way:31230416201"));
+}
+
+#[test]
+fn world_tactics_projection_binds_jianghu_state_to_osm_objectives() {
+    let league = default_league_state();
+    let nodes: Vec<WorldMapNode> = league.world.world_map_nodes.values().cloned().collect();
+    let current_node = league.world.world_map_nodes.get(default_world_node_id());
+    let geodata = openstreetmap_geodata_v1_json(&nodes, current_node);
+    let tactics = world_tactics_board_projection_json(
+        &league.world,
+        "@alice:local.dev",
+        current_node,
+        &geodata,
+    );
+    let jianghu = world_jianghu_character_projection_json(&league.world, "@alice:local.dev");
+
+    assert_eq!(
+        tactics["contract_version"],
+        "trillionnium_world_tactics_board_v1"
+    );
+    assert_eq!(tactics["source_of_truth"], "rust_trillionnium_game_state");
+    assert_eq!(tactics["web_role"], "visualization_input_only");
+    assert_eq!(
+        tactics["unit_contract_version"],
+        "trillionnium_world_tactics_unit_v1"
+    );
+    assert_eq!(
+        tactics["command_contract_version"],
+        "trillionnium_world_tactics_command_v1"
+    );
+    assert_eq!(
+        tactics["jianghu_skill_contract_version"],
+        "trillionnium_jianghu_skill_v1"
+    );
+    assert_eq!(
+        tactics["open_source_base"]["repo"],
+        "tranchikhang/MedievalWar"
+    );
+    assert_eq!(tactics["board"]["cells"].as_array().unwrap().len(), 64);
+    assert_eq!(
+        tactics["jianghu_character"]["contract_version"],
+        "trillionnium_jianghu_character_v1"
+    );
+    assert_eq!(
+        tactics["units"][0]["contract_version"],
+        "trillionnium_world_tactics_unit_v1"
+    );
+    assert_eq!(
+        tactics["units"][0]["source_of_truth"],
+        "rust_tactics_unit_model"
+    );
+    assert_eq!(tactics["units"][0]["owner"], "player");
+    assert!(tactics["units"][0]["max_hp"].as_i64().unwrap_or_default() >= 100);
+    assert_eq!(
+        tactics["available_commands"][2]["contract_version"],
+        "trillionnium_world_tactics_command_v1"
+    );
+    assert_eq!(tactics["available_commands"][2]["command"], "attack");
+    assert_eq!(
+        tactics["available_commands"][2]["validation_owner"],
+        "rust_tactics_combat_handler"
+    );
+    assert!(tactics["available_commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|command| command["command"] == "end_turn"));
+    assert_eq!(
+        tactics["turn_state"]["source_of_truth"],
+        "rust_tactics_turn_handler"
+    );
+    assert!(tactics["skill_definitions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|skill| skill["skill_id"] == "reading_and_contracts"
+            && skill["training_anchor_role"] == "ledger_hall"));
+    assert_eq!(
+        jianghu["mechanics_reference_layer"],
+        "gmud_rmxp_hero_yxts_llm_reference_only"
+    );
+    assert_eq!(jianghu["attributes"]["physique"], 12);
+    assert_eq!(jianghu["attributes"]["force"], 11);
+    assert_eq!(jianghu["attributes"]["agility"], 12);
+    assert_eq!(jianghu["attributes"]["insight"], 13);
+    assert!(
+        jianghu["attributes"]["derived_stats"]["max_hp"]
+            .as_i64()
+            .unwrap_or_default()
+            >= 100
+    );
+    assert_eq!(
+        jianghu["skill_definition_contract"],
+        "trillionnium_jianghu_skill_v1"
+    );
+    assert!(jianghu["known_skills"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|skill| skill["skill_id"] == "basic_inner_power"));
+    assert_eq!(
+        tactics["osm_objective_source"]["provider_contract"],
+        "OpenStreetMapDataProvider"
+    );
+    assert_eq!(
+        tactics["osm_objective_source"]["rust_command_handler_decides_completion"],
+        true
+    );
+    let objective_overlay = tactics["objectives"][0]["osm_game_overlay_id"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(objective_overlay.starts_with("trillionnium-world-node:"));
+    assert!(tactics["available_commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|command| command["command"] == "move_unit"));
+}
+
+#[test]
 fn world_home_json_exposes_shared_renderer_adapter_for_matrix_cards() {
     let league = default_league_state();
     let home = world_home_json(&league);
@@ -3038,6 +3242,15 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(world_html.contains("renderPlayerAvatar"));
     assert!(world_html.contains("renderMovingAvatar"));
     assert!(world_html.contains("trillionnium_open_source_tactics_world_shell_v1"));
+    assert!(
+        world_html.contains("data-tactics-board-contract=\"trillionnium_world_tactics_board_v1\"")
+    );
+    assert!(world_html
+        .contains("data-jianghu-character-contract=\"trillionnium_jianghu_character_v1\""));
+    assert!(world_html.contains("trillionnium_world_tactics_unit_v1"));
+    assert!(world_html.contains("trillionnium_world_tactics_command_v1"));
+    assert!(world_html.contains("trillionnium_jianghu_skill_v1"));
+    assert!(world_html.contains("data-source-of-truth=\"rust_trillionnium_game_state\""));
     assert!(world_html.contains("data-interface-style=\"turn_based_strategy_rpg\""));
     assert!(world_html.contains("data-open-source-base=\"tranchikhang/MedievalWar\""));
     assert!(world_html.contains("data-base-license=\"MIT\""));
@@ -3047,6 +3260,17 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(world_html.contains("OpenClawStreetMap"));
     assert!(world_html.contains("三国魔改界面"));
     assert!(world_html.contains("战棋指令菜单"));
+    assert!(world_html.contains("data-source-of-truth=\"rust_tactics_board_projection\""));
+    assert!(world_html.contains("data-source-of-truth=\"rust_jianghu_character\""));
+    assert!(world_html.contains("data-source-of-truth=\"rust_tactics_command_model\""));
+    assert!(world_html.contains("data-validation-owner=\"rust_tactics_combat_handler\""));
+    assert!(world_html.contains("data-required-skill-id=\"basic_inner_power\""));
+    assert!(world_html.contains("发起攻击"));
+    assert!(world_html.contains("结束回合"));
+    assert!(
+        world_html.contains("data-completion-owner=\"rust_command_handler_ledger_progression\"")
+    );
+    assert!(world_html.contains("gmud/RMXP-Hero/yxts-llm"));
     assert!(world_html.contains("Phaser 3 地图/光标/回合/寻路/目标循环"));
     assert!(world_html.contains("data-openclawstreetmap-role=\"supporting_engine_diagnostics\""));
     assert!(world_html.contains("支撑层，不是主界面"));
@@ -3054,6 +3278,7 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(world_html.contains("openstreetmap_geodata_v1"));
     assert!(world_html.contains("OpenStreetMapDataProvider"));
     assert!(world_html.contains("fixture_openstreetmap_data_provider_v1"));
+    assert!(world_html.contains("stable_fixture_table"));
     assert!(world_html.contains("data-source-of-truth=\"rust_openstreetmap_data_provider\""));
     assert!(world_html.contains("data-web-role=\"visualization_input_only\""));
     assert!(world_html.contains("osm_id"));

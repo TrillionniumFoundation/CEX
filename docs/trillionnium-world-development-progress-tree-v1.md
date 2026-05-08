@@ -315,7 +315,7 @@ struct JianghuAttributes {
 
 Progress tree hooks:
 
-- [ ] TW-3.4a Add `JianghuAttributes` Rust model.
+- [x] TW-3.4a Add `JianghuAttributes` Rust model.
 - [ ] TW-3.4b Add derived stats: max HP, internal energy, move range modifier, learning speed, negotiation bonus.
 - [ ] TW-3.4c Add tests proving derived stats are deterministic and capped.
 
@@ -340,9 +340,9 @@ Initial Trillionnium skill families:
 
 Progress tree hooks:
 
-- [ ] TW-3.5a Add skill definition model: id, family, level, xp, unlock conditions, combat/world effects.
+- [x] TW-3.5a Add skill definition model: id, family, level, xp, unlock conditions, combat/world effects.
 - [ ] TW-3.5b Add training command: mentor/OSM place requirement + cost + cooldown.
-- [ ] TW-3.5c Bind selected skills to tactics actions: move, attack, evade, inspect, negotiate.
+- [x] TW-3.5c Bind selected skills to tactics actions: move, attack, evade, inspect, negotiate.
 
 #### Sects / factions / mentors
 
@@ -454,7 +454,7 @@ Mapping examples:
 
 Progress tree hooks:
 
-- [ ] TW-1.8a Add OSM semantic role mapping table in Rust.
+- [x] TW-1.8a Add OSM semantic role mapping table in Rust.
 - [ ] TW-3.7a Add objective generator from `OpenStreetMapDataProvider` features.
 - [ ] TW-3.7b Add deterministic seed so the same fixture/world state yields stable objectives.
 - [ ] TW-3.7c Add tests proving OSM can suggest objectives but Rust command handlers decide completion.
@@ -594,14 +594,14 @@ git log --oneline -5
   - Current fields: `osm_id`, `osm_type`, `lat`, `lng`, `tags`, `game_overlay_id`
 - [x] TW-1.4 Expose OSM metadata in `real_world_map_engine` and `world_map_json`.
 - [x] TW-1.5 Surface OSM contract in `/world` advanced layer as support substrate.
-- [ ] TW-1.6 Split OSM provider code into a dedicated module/file.
-  - Suggested file: `services/consumer-entry-api/src/openstreetmap_geodata.rs`
+- [x] TW-1.6 Split OSM provider code into a dedicated module/file.
+  - Implemented file: `services/consumer-entry-api/src/openstreetmap_geodata.rs`
   - Keep `world_map_projection.rs` as projection assembly, not provider implementation.
-- [ ] TW-1.7 Add explicit fixture dataset instead of deriving all OSM IDs from `node_id` hashes.
-  - Suggested fixture: stable sample OSM identities for Shanghai core nodes.
+- [x] TW-1.7 Add explicit fixture dataset instead of deriving all OSM IDs from `node_id` hashes.
+  - Implemented fixture: stable sample OSM identities for default Shanghai core world nodes.
   - Keep deterministic fallback for missing fixtures.
-- [ ] TW-1.8 Add roads/buildings/areas/admin boundary fixture layers.
-  - Do not add live ingestion yet.
+- [x] TW-1.8 Add roads/buildings/areas/admin boundary fixture layers.
+  - Implemented `openstreetmap_fixture_layers_v1` with roads, buildings, areas, admin boundaries, semantic-role mapping, and no live ingestion.
 - [ ] TW-1.9 Add derived database tracking metadata.
   - Include fixture source, import timestamp, transform version, and ODbL share-alike note.
 - [ ] TW-1.10 Add provider-mode enum and test each mode is fail-closed.
@@ -621,16 +621,16 @@ git log --oneline -5
   - Current: `trillionnium_open_source_tactics_world_shell_v1`
 - [~] TW-2.5 Keep current CSS tactics board as scaffold only.
   - It is a visual direction marker, not the final game loop.
-- [ ] TW-2.6 Define Rust-side tactics board model.
-  - Board size / terrain / occupied cells / objectives / turn state / active unit.
-  - Projection should come from Rust JSON, not hard-coded HTML loops.
-- [ ] TW-2.7 Define Rust-side unit model.
-  - `unit_id`, `owner`, `class/archetype`, `hp`, `energy`, `position`, `move_range`, `attack_range`, `status_effects`.
-- [ ] TW-2.8 Define Rust-side turn/action command model.
-  - `select_unit`, `move_unit`, `attack`, `use_skill`, `interact`, `end_turn`.
+- [x] TW-2.6 Define Rust-side tactics board model.
+  - Implemented first projection: `trillionnium_world_tactics_board_v1` with cells, terrain, units, objectives, commands, OSM objective source.
+  - `/world` now renders board cells/units/objectives/commands from Rust projection JSON, not hard-coded HTML loops.
+- [x] TW-2.7 Define Rust-side unit model.
+  - Implemented `trillionnium_world_tactics_unit_v1`: `unit_id`, `owner`, `class/archetype`, `hp`, `energy`, `position`, `move_range`, `attack_range`, `status_effects`, source owner.
+- [x] TW-2.8 Define Rust-side turn/action command model.
+  - Implemented `trillionnium_world_tactics_command_v1`: `select_unit`, `move_unit`, `attack`, `use_skill`, `interact`, `end_turn`, validation owner, required skill, action cost.
 - [ ] TW-2.9 Add command endpoints/forms for tactics actions.
   - Web sends intent; Rust validates and mutates state.
-- [ ] TW-2.10 Replace static board rendering with Rust-projected board state.
+- [x] TW-2.10 Replace static board rendering with Rust-projected board state.
 - [ ] TW-2.11 Decide integration strategy for actual MedievalWar/Phaser code.
   - Option A: port patterns only, no vendored code.
   - Option B: vendor MIT code under `third_party/` with license notice.
@@ -645,13 +645,14 @@ git log --oneline -5
 - [ ] TW-3.4 Define Trillionnium-native character attributes.
   - Required fields: `physique`, `force`, `agility`, `insight`, `resolve`, `craft`, `commerce`, `reputation`.
   - Source inspiration: gmud/RMXP-Hero/yxts-llm attribute loops; names/content must be Trillionnium-native.
-- [ ] TW-3.4a Add `JianghuAttributes` Rust model.
-- [ ] TW-3.4b Add deterministic derived stats and caps.
-- [ ] TW-3.4c Add tests for attribute progression and derived stats.
+- [x] TW-3.4a Add `JianghuAttributes` Rust model.
+- [x] TW-3.4b Add deterministic derived stats and caps.
+- [x] TW-3.4c Add tests for attribute projection and derived stats.
 - [ ] TW-3.5 Define skill/sect/mentor/NPC relationship models in Rust.
-- [ ] TW-3.5a Add skill definition model and fixture skills.
+- [x] TW-3.5a Add skill definition model and fixture skills.
 - [ ] TW-3.5b Add training command with mentor/OSM-place requirement.
-- [ ] TW-3.5c Bind skills to tactics actions and world task effects.
+- [x] TW-3.5c Bind skills to tactics actions and world task effects.
+  - First binding is in tactics command descriptors via `required_skill_id`; world task effects are recorded on skill definitions for follow-up handler enforcement.
 - [ ] TW-3.5d Add sect/faction model and title ladder.
 - [ ] TW-3.5e Bind sect halls/mentor anchors to OSM `game_overlay_id`.
 - [ ] TW-3.5f Add mentor training task flow.
@@ -772,12 +773,14 @@ Full product checkpoint gate when touching core world runtime:
 
 ## Recommended Next Development Slice
 
-The safest next slice is **TW-1.6 + TW-1.7 + TW-2.6 + TW-3.4a**:
+The safest next slice after checkpoint `ab5f046` was **TW-1.6 + TW-1.7 + TW-2.6 + TW-3.4a**; that slice is now implemented in the active working tree and should be committed after validation.
 
-1. Move OSM provider implementation out of `world_map_projection.rs` into a dedicated Rust module.
-2. Add an explicit OSM fixture dataset with stable feature identities.
-3. Start a Rust-side tactics board projection model, but do not yet add full combat.
-4. Add the first Rust-native `JianghuAttributes` model so gmud/RMXP-Hero/yxts-llm mechanics begin entering Trillionnium at Layer 3, not in the browser.
+The next development slice after the current checkpoint should be **TW-1.9 + TW-1.10 + TW-2.9 + TW-3.5b/d/g**:
+
+1. Add derived OSM database tracking metadata and provider-mode fail-closed enum.
+2. Add Rust command endpoints/forms for tactics intents.
+3. Add mentor/OSM-place training requirements and initial sect/NPC relationship models.
+4. Keep command validation in Rust; web remains visualization/input only.
 
 Why this order:
 
@@ -800,6 +803,59 @@ Expected first-slice deliverables:
   - `openstreetmap_geodata_v1`
   - `visualization_input_only`
   - `openclawstreetmap_underlay`
+
+---
+
+## Latest Development Update
+
+#### Update 2026-05-08 18:4x CST
+
+- Commit: pending until validation completes.
+- Changed files:
+  - `services/consumer-entry-api/src/openstreetmap_geodata.rs`
+  - `services/consumer-entry-api/src/world_tactics.rs`
+  - `services/consumer-entry-api/src/lib.rs`
+  - `services/consumer-entry-api/src/league_repository.rs`
+  - `services/consumer-entry-api/src/world_map_projection.rs`
+  - `services/consumer-entry-api/src/world_web_shell.rs`
+  - `services/consumer-entry-api/src/tests.rs`
+  - `scripts/check-trillionnium-league-web-e2e.sh`
+- Completed:
+  - [x] TW-1.6 OSM provider split into dedicated Rust module.
+  - [x] TW-1.7 stable fixture OSM identities added for default world nodes.
+  - [x] TW-2.6 Rust-owned tactics board projection added.
+  - [x] TW-3.4a/b/c first Jianghu attributes model, derived stats, and tests added.
+- Remaining next:
+  - [x] TW-1.8 OSM roads/buildings/areas/admin-boundary fixture layers.
+  - [x] TW-2.7 Rust-side tactics unit model.
+  - [x] TW-2.8 Rust-side tactics command model.
+  - [x] TW-3.5a Jianghu skill definition model.
+  - [x] TW-3.5c First skill-to-tactics command bindings.
+- Remaining next:
+  - [ ] TW-1.9 derived geodata database tracking metadata.
+  - [ ] TW-1.10 provider-mode enum and fail-closed tests.
+  - [ ] TW-2.9 tactics command endpoints/forms.
+  - [ ] TW-3.5b/d/g mentor training, sect, and NPC models.
+
+---
+
+#### Update 2026-05-08 19:1x CST
+
+- Commit: pending until validation completes.
+- Completed next full-dev slice:
+  - [x] TW-1.8 `openstreetmap_fixture_layers_v1`: roads, buildings, areas, admin-boundaries, semantic-role mapping, no live Overpass/Geofabrik.
+  - [x] TW-2.7 `trillionnium_world_tactics_unit_v1`: Rust-owned unit model with owner/class/hp/energy/position/move/attack/status effects.
+  - [x] TW-2.8 `trillionnium_world_tactics_command_v1`: Rust-owned command descriptor model with validation owner, required skill, cost, and web intent target.
+  - [x] TW-3.5a `trillionnium_jianghu_skill_v1`: Trillionnium-native fixture skill definitions.
+  - [x] TW-3.5c first skill-to-command bindings via `required_skill_id`.
+- Validation so far:
+  - targeted OSM fixture identity/layer test green.
+  - targeted tactics/Jianghu projection test green.
+  - targeted `/world` HTML contract test green.
+- Next recommended slice:
+  - [ ] TW-1.9 / TW-1.10 derived geodata metadata and provider-mode fail-closed enum.
+  - [ ] TW-2.9 command endpoints/forms for tactics intents.
+  - [ ] TW-3.5b/d/g mentor training, sect/faction, and NPC relationship models.
 
 ---
 
@@ -844,6 +900,6 @@ Also append a one-paragraph summary to `/home/qian/.openclaw/workspace/memory/YY
 
 If the next instruction is simply “continue”, start here:
 
-> **TW-1.6 / TW-1.7 / TW-2.6 / TW-3.4a:** split the OSM provider into a dedicated Rust module, add stable fixture identities, introduce the first Rust-owned tactics board projection, and add the first `JianghuAttributes` Rust model.
+> **TW-1.9 / TW-1.10 / TW-2.9 / TW-3.5b/d/g:** add derived geodata tracking + provider modes, expose Rust tactics command intent endpoints/forms, and introduce mentor/sect/NPC relationship models.
 
 Do not start live Overpass/Geofabrik ingestion yet. Do not promote MapLibre. Do not convert the web shell into a standalone JS source of truth.
