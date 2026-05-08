@@ -24,6 +24,7 @@
 6. **只有在明确需要 3D 地理世界时再引入 CesiumJS**。
 7. **新的可玩前台界面以 `tranchikhang/MedievalWar` 为直接战棋魔改底座**；详见 `docs/trillionnium-open-source-tactics-base-selection-v1.md`。
 8. **白金英雄坛说 / 英雄坛说 系项目不作为直接 UI fork**，但可作为江湖机制参考层；详见 `docs/trillionnium-open-source-hero-tan-shuo-base-selection-v1.md`。
+9. **后续开发按进度树推进**，不要靠聊天记忆续命；详见 `docs/trillionnium-world-development-progress-tree-v1.md`。
 
 这与当前仓库里已经落下的路线一致：
 
