@@ -121,3 +121,8 @@ They do not yet provide:
 ## Trillionnium route recommendation quality hard gate
 
 The route-runner handoff bundle now treats route recommendation quality as an actual score gate, not only a visibility check. `cex_consumer_entry_trillionnium_world_route_recommendation_quality_gate_green` requires the `trillionnium_world_route_recommendation_quality_v1` status to be `quality_gate_ready`, the quality score to meet its 60% target, raw counts to be preserved, denominator policy to remain consistent, and risk controls to stay visible. Alert `CexTrillionniumWorldRouteRecommendationQualityBelowTarget` fires when the score drops below target even if the broader commercial dashboard is still present.
+
+
+## MapLibre shadow canary safety
+
+MapLibre remains a shadow/candidate renderer only. The route-runner handoff monitoring bundle now exports `cex_consumer_entry_trillionnium_world_map_maplibre_canary_percent`, `*_shadow_only`, `*_canary_starts_at_zero`, and `*_rollback_drill_evidence_required`; `CexTrillionniumWorldMapMapLibreCanaryNotZero` pages if the canary percent moves above zero before a fresh explicit signoff.

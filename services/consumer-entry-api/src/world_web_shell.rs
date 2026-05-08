@@ -403,6 +403,81 @@ pub(super) async fn get_world_web_shell(
         .get("scaling_goal")
         .and_then(Value::as_str)
         .unwrap_or("many_players_via_lightweight_nodes_routes_and_region_shards");
+    let openstreetmap_geodata = world_map
+        .get("openstreetmap_geodata")
+        .cloned()
+        .unwrap_or_else(|| openstreetmap_geodata_v1_json(&map_nodes, current_map_node));
+    let osm_geodata_contract = openstreetmap_geodata
+        .get("contract_version")
+        .and_then(Value::as_str)
+        .unwrap_or("openstreetmap_geodata_v1");
+    let osm_geodata_provider_contract = openstreetmap_geodata
+        .get("provider_contract")
+        .and_then(Value::as_str)
+        .unwrap_or("OpenStreetMapDataProvider");
+    let osm_geodata_provider_id = openstreetmap_geodata
+        .get("provider_id")
+        .and_then(Value::as_str)
+        .unwrap_or("fixture_openstreetmap_data_provider_v1");
+    let osm_geodata_source_mode = openstreetmap_geodata
+        .get("source_mode")
+        .and_then(Value::as_str)
+        .unwrap_or("local_fixture_mock_first_no_live_overpass");
+    let osm_geodata_feature_count = openstreetmap_geodata
+        .get("feature_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let osm_geodata_feature_cards = openstreetmap_geodata
+        .get("features")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .take(6)
+        .map(|feature| {
+            let osm_type = feature
+                .get("osm_type")
+                .and_then(Value::as_str)
+                .unwrap_or("node");
+            let osm_id = feature.get("osm_id").and_then(Value::as_i64).unwrap_or(0);
+            let name = feature
+                .get("tags")
+                .and_then(|tags| tags.get("name"))
+                .and_then(Value::as_str)
+                .unwrap_or("OSM feature");
+            let node_id = feature
+                .get("game_binding")
+                .and_then(|binding| binding.get("node_id"))
+                .and_then(Value::as_str)
+                .unwrap_or("world-node");
+            let game_overlay_id = feature
+                .get("game_overlay_id")
+                .and_then(Value::as_str)
+                .unwrap_or("trillionnium-world-node:unknown");
+            let lat = feature
+                .get("lat_string")
+                .and_then(Value::as_str)
+                .unwrap_or("0.000000");
+            let lng = feature
+                .get("lng_string")
+                .and_then(Value::as_str)
+                .unwrap_or("0.000000");
+            format!(
+                "<article class=\"mini osm-feature\" data-osm-type=\"{}\" data-osm-id=\"{}\" data-game-overlay-id=\"{}\"><strong>{}</strong><span>osm_type={} · osm_id={} · {},{}</span><code>{}</code><small>{}</small></article>",
+                escape_html_text(osm_type),
+                osm_id,
+                escape_html_text(game_overlay_id),
+                escape_world_visible_text(name),
+                escape_html_text(osm_type),
+                osm_id,
+                escape_html_text(lat),
+                escape_html_text(lng),
+                escape_html_text(node_id),
+                escape_html_text(game_overlay_id),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
     let viewport_path = world_viewport
         .get("viewport_path")
         .and_then(Value::as_str)
@@ -1257,6 +1332,30 @@ pub(super) async fn get_world_web_shell(
         real_world_map_render_cards_js(RealWorldMapShellCardStyle::WorldMini);
     let world_header_language_switcher =
         trillionnium_language_inline_switcher_html("trillionnium-world-language-select");
+    let tactics_board_cells = (0..8)
+        .flat_map(|row| {
+            (0..8).map(move |col| {
+                let tile_label = format!(
+                    "{}{}",
+                    (b'A' + col as u8) as char,
+                    8usize.saturating_sub(row)
+                );
+                let terrain = match (row, col) {
+                    (0, 6) | (1, 5) | (2, 6) => "objective",
+                    (1, 1) | (2, 2) | (3, 3) | (4, 4) | (5, 5) => "road",
+                    (2, 0) | (3, 0) | (5, 2) | (6, 2) => "forest",
+                    (0, 3) | (1, 3) | (2, 3) | (3, 4) | (4, 5) => "river",
+                    (6, 0) | (7, 1) => "camp",
+                    (3, 6) | (4, 6) => "market",
+                    _ => "plain",
+                };
+                format!(
+                    "<span class=\"tactics-tile terrain-{terrain}\" data-tile=\"{tile_label}\" aria-label=\"tactical tile {tile_label}\"><small>{tile_label}</small></span>"
+                )
+            })
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
 
     Html(format!(
         r#"<!doctype html>
@@ -1280,6 +1379,85 @@ pub(super) async fn get_world_web_shell(
     .world-hero-kicker {{ display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }}
     .world-hero-title {{ display:grid; gap:10px; }}
     .world-hero-actions {{ display:flex; flex-wrap:wrap; gap:10px; margin-top:2px; }}
+    .jianghu-game-shell {{ position:relative; grid-column:1 / -1; display:grid; grid-template-columns:minmax(340px,1.05fr) minmax(280px,.7fr) minmax(280px,.75fr); gap:14px; align-items:stretch; border:1px solid rgba(248,195,91,.32); background:radial-gradient(circle at 18% 0%,rgba(248,195,91,.16),transparent 28rem),linear-gradient(145deg,rgba(19,17,10,.94),rgba(8,10,18,.92)); box-shadow:0 26px 90px rgba(0,0,0,.48), inset 0 0 0 1px rgba(255,255,255,.045); border-radius:26px; padding:16px; margin-bottom:16px; overflow:hidden; }}
+    .jianghu-game-shell::before {{ content:""; position:absolute; inset:0; pointer-events:none; opacity:.13; background-image:linear-gradient(90deg,rgba(100,227,255,.42) 1px,transparent 1px),linear-gradient(0deg,rgba(100,227,255,.32) 1px,transparent 1px),radial-gradient(circle at 68% 34%,rgba(125,255,155,.7),transparent 0.35rem); background-size:54px 54px,54px 54px,100% 100%; mask-image:linear-gradient(180deg,rgba(0,0,0,.75),transparent 72%); }}
+    .jianghu-game-shell > * {{ position:relative; z-index:1; }}
+    .jianghu-room,.jianghu-status,.jianghu-engine-card {{ min-width:0; border:1px solid rgba(248,195,91,.2); background:linear-gradient(180deg,rgba(255,245,205,.08),rgba(255,255,255,.035)); border-radius:20px; padding:16px; }}
+    .jianghu-room {{ display:grid; gap:12px; font-family:"Noto Serif SC", "Songti SC", ui-serif, Georgia, serif; }}
+    .jianghu-room-title {{ display:flex; justify-content:space-between; gap:10px; align-items:center; color:var(--gold); font-weight:950; letter-spacing:.08em; }}
+    .jianghu-log {{ display:grid; gap:7px; border:1px solid rgba(125,255,155,.16); background:rgba(0,0,0,.28); border-radius:16px; padding:12px; color:#d6ffd8; font-size:13px; line-height:1.45; }}
+    .jianghu-log p {{ margin:0; }}
+    .jianghu-prompt {{ display:flex; gap:8px; align-items:center; border-top:1px dashed rgba(248,195,91,.18); padding-top:9px; color:var(--gold); font-weight:950; }}
+    .jianghu-prompt code {{ color:#071018; background:linear-gradient(135deg,#f8c35b,#7dff9b); border-radius:999px; padding:4px 8px; }}
+    .jianghu-scene-text {{ min-height:178px; border-radius:16px; padding:16px; color:#f7e7bd; background:linear-gradient(180deg,rgba(2,5,8,.86),rgba(8,10,15,.92)); border:1px solid rgba(248,195,91,.18); box-shadow:inset 0 0 34px rgba(0,0,0,.54); line-height:1.7; }}
+    .jianghu-scene-text p {{ margin:0 0 10px; }}
+    .jianghu-scene-text code {{ color:#7dff9b; background:rgba(125,255,155,.08); }}
+    .jianghu-exits {{ display:flex; flex-wrap:wrap; gap:8px; margin:0; padding:0; list-style:none; }}
+    .jianghu-exits li {{ border:1px solid rgba(100,227,255,.2); background:rgba(100,227,255,.07); color:var(--cyan); border-radius:999px; padding:6px 10px; font-size:12px; font-weight:900; }}
+    .jianghu-command-grid {{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }}
+    .jianghu-command {{ min-height:44px; display:flex; align-items:center; justify-content:center; text-align:center; text-decoration:none; border-radius:14px; border:1px solid rgba(248,195,91,.24); background:rgba(248,195,91,.095); color:#ffe2a2; font-weight:950; }}
+    .jianghu-command.primary {{ color:#071018; background:linear-gradient(135deg,#f8c35b,#7dff9b); }}
+    .jianghu-status {{ display:grid; gap:10px; }}
+    .jianghu-status h3,.jianghu-engine-card h3 {{ margin:0; color:var(--gold); }}
+    .jianghu-stat-line {{ display:grid; grid-template-columns:78px minmax(0,1fr) auto; gap:8px; align-items:center; color:var(--muted); font-size:13px; }}
+    .jianghu-meter {{ height:9px; border-radius:999px; overflow:hidden; background:rgba(255,255,255,.08); }}
+    .jianghu-meter span {{ display:block; height:100%; border-radius:inherit; background:linear-gradient(90deg,#64e3ff,#7dff9b); }}
+    .jianghu-inventory {{ display:flex; flex-wrap:wrap; gap:7px; }}
+    .jianghu-inventory span {{ border:1px solid rgba(255,255,255,.12); background:rgba(255,255,255,.055); color:var(--text); border-radius:999px; padding:6px 9px; font-size:12px; }}
+    .jianghu-engine-card {{ display:grid; gap:10px; }}
+    .jianghu-engine-rune {{ border:1px dashed rgba(248,195,91,.24); background:rgba(248,195,91,.055); border-radius:16px; padding:12px; }}
+    .jianghu-engine-rune b {{ display:block; color:#ffe2a2; font-size:20px; margin:2px 0; letter-spacing:-.02em; }}
+    .jianghu-engine-rune code {{ color:var(--cyan); background:rgba(100,227,255,.08); border-radius:999px; padding:2px 7px; }}
+    .jianghu-engine-card small {{ color:var(--muted); line-height:1.45; }}
+    .jianghu-bounty-list {{ display:grid; gap:7px; margin:0; padding:0; list-style:none; }}
+    .jianghu-bounty-list li {{ border:1px solid rgba(255,255,255,.1); background:rgba(255,255,255,.05); border-radius:14px; padding:9px 10px; color:#f7e7bd; font-size:13px; }}
+    .jianghu-game-shell [data-engine-role=underlay] {{ color:var(--cyan); font-weight:900; }}
+    .jianghu-engine-drawer {{ grid-column:1 / -1; border:1px solid rgba(100,227,255,.18); background:rgba(100,227,255,.045); border-radius:18px; overflow:hidden; }}
+    .jianghu-engine-drawer > summary {{ cursor:pointer; list-style:none; display:flex; justify-content:space-between; gap:10px; align-items:center; padding:13px 15px; color:var(--cyan); font-weight:950; }}
+    .jianghu-engine-drawer > summary::-webkit-details-marker {{ display:none; }}
+    .jianghu-engine-drawer > summary::after {{ content:"+"; color:var(--gold); font-size:20px; }}
+    .jianghu-engine-drawer[open] > summary::after {{ content:"–"; }}
+    .jianghu-engine-drawer-body {{ max-height:360px; overflow:auto; padding:0 15px 15px; }}
+    .jianghu-underlay-label {{ grid-column:1 / -1; display:flex; justify-content:space-between; gap:10px; align-items:center; border:1px solid rgba(248,195,91,.18); background:rgba(248,195,91,.06); border-radius:16px; padding:10px 12px; color:var(--muted); font-size:12px; font-weight:850; }}
+    .jianghu-underlay-label strong {{ color:var(--gold); }}
+    .tactics-game-shell {{ position:relative; grid-column:1 / -1; display:grid; grid-template-columns:minmax(360px,1.15fr) minmax(280px,.72fr) minmax(280px,.76fr); gap:14px; align-items:stretch; border:1px solid rgba(248,195,91,.34); background:radial-gradient(circle at 18% 0%,rgba(248,195,91,.18),transparent 26rem),radial-gradient(circle at 78% 26%,rgba(100,227,255,.14),transparent 22rem),linear-gradient(145deg,rgba(16,18,26,.96),rgba(6,8,15,.94)); box-shadow:0 26px 90px rgba(0,0,0,.52), inset 0 0 0 1px rgba(255,255,255,.045); border-radius:26px; padding:16px; margin-bottom:16px; overflow:hidden; }}
+    .tactics-game-shell::before {{ content:""; position:absolute; inset:0; pointer-events:none; opacity:.16; background-image:linear-gradient(90deg,rgba(248,195,91,.42) 1px,transparent 1px),linear-gradient(0deg,rgba(248,195,91,.32) 1px,transparent 1px); background-size:56px 56px; mask-image:linear-gradient(180deg,rgba(0,0,0,.75),transparent 80%); }}
+    .tactics-game-shell > * {{ position:relative; z-index:1; }}
+    .tactics-board-card,.tactics-command-card,.tactics-base-card {{ min-width:0; border:1px solid rgba(248,195,91,.22); background:linear-gradient(180deg,rgba(255,245,205,.08),rgba(255,255,255,.035)); border-radius:20px; padding:16px; }}
+    .tactics-board-card {{ display:grid; gap:12px; }}
+    .tactics-board-title {{ display:flex; justify-content:space-between; gap:10px; align-items:center; color:var(--gold); font-weight:950; letter-spacing:.06em; }}
+    .tactics-board-title code,.tactics-base-card code {{ color:var(--cyan); background:rgba(100,227,255,.08); border-radius:999px; padding:3px 8px; }}
+    .tactics-board {{ --tile-size:minmax(28px,1fr); position:relative; display:grid; grid-template-columns:repeat(8,var(--tile-size)); grid-template-rows:repeat(8,var(--tile-size)); gap:4px; min-height:clamp(330px,46vw,540px); border:1px solid rgba(248,195,91,.24); border-radius:18px; padding:9px; background:linear-gradient(135deg,rgba(1,4,9,.84),rgba(19,20,26,.94)); box-shadow:inset 0 0 50px rgba(0,0,0,.56); }}
+    .tactics-tile {{ position:relative; min-width:0; min-height:0; border:1px solid rgba(255,255,255,.085); border-radius:10px; background:rgba(255,255,255,.055); }}
+    .tactics-tile small {{ position:absolute; left:5px; top:4px; color:rgba(246,247,251,.38); font-size:10px; font-weight:850; }}
+    .terrain-road {{ background:linear-gradient(135deg,rgba(248,195,91,.24),rgba(255,255,255,.06)); }}
+    .terrain-forest {{ background:linear-gradient(135deg,rgba(125,255,155,.22),rgba(26,77,46,.16)); }}
+    .terrain-river {{ background:linear-gradient(135deg,rgba(100,227,255,.28),rgba(25,71,96,.18)); }}
+    .terrain-camp {{ background:linear-gradient(135deg,rgba(167,139,250,.26),rgba(248,195,91,.1)); }}
+    .terrain-market {{ background:linear-gradient(135deg,rgba(248,195,91,.26),rgba(100,227,255,.12)); }}
+    .terrain-objective {{ background:linear-gradient(135deg,rgba(255,105,135,.32),rgba(248,195,91,.18)); box-shadow:0 0 0 1px rgba(248,195,91,.26),0 0 18px rgba(248,195,91,.18); }}
+    .tactics-unit,.tactics-marker {{ align-self:center; justify-self:center; width:min(78%,50px); aspect-ratio:1; display:grid; place-items:center; border-radius:14px; font-size:clamp(18px,3vw,30px); font-weight:950; box-shadow:0 8px 22px rgba(0,0,0,.44),0 0 0 2px rgba(6,7,17,.76); z-index:3; }}
+    .tactics-unit.player {{ background:linear-gradient(135deg,#f8c35b,#7dff9b); color:#071018; }}
+    .tactics-unit.ally {{ background:linear-gradient(135deg,#64e3ff,#a78bfa); color:#06101a; }}
+    .tactics-unit.enemy {{ background:linear-gradient(135deg,#ff6b8d,#f8c35b); color:#1c050b; }}
+    .tactics-marker.objective {{ background:rgba(248,195,91,.16); border:1px dashed rgba(248,195,91,.62); color:#ffe2a2; }}
+    .tactics-selection-ring {{ grid-column:2; grid-row:7; z-index:4; border:2px solid #fff5b8; border-radius:16px; box-shadow:0 0 20px rgba(248,195,91,.7), inset 0 0 18px rgba(248,195,91,.22); pointer-events:none; animation:tactics-cursor-pulse 1.2s ease-in-out infinite; }}
+    @keyframes tactics-cursor-pulse {{ 0%,100% {{ opacity:.52; transform:scale(.96); }} 50% {{ opacity:1; transform:scale(1.04); }} }}
+    .tactics-log {{ display:grid; gap:7px; border:1px solid rgba(125,255,155,.16); background:rgba(0,0,0,.28); border-radius:16px; padding:12px; color:#d6ffd8; font-size:13px; line-height:1.45; }}
+    .tactics-log p {{ margin:0; }}
+    .tactics-command-card,.tactics-base-card {{ display:grid; gap:10px; }}
+    .tactics-command-card h3,.tactics-base-card h3 {{ margin:0; color:var(--gold); }}
+    .tactics-command-grid {{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }}
+    .tactics-command {{ min-height:44px; display:flex; align-items:center; justify-content:center; text-align:center; text-decoration:none; border-radius:14px; border:1px solid rgba(248,195,91,.24); background:rgba(248,195,91,.095); color:#ffe2a2; font-weight:950; }}
+    .tactics-command.primary {{ color:#071018; background:linear-gradient(135deg,#f8c35b,#7dff9b); }}
+    .tactics-stat-line {{ display:grid; grid-template-columns:88px minmax(0,1fr) auto; gap:8px; align-items:center; color:var(--muted); font-size:13px; }}
+    .tactics-meter {{ height:9px; border-radius:999px; overflow:hidden; background:rgba(255,255,255,.08); }}
+    .tactics-meter span {{ display:block; height:100%; border-radius:inherit; background:linear-gradient(90deg,#64e3ff,#7dff9b); }}
+    .tactics-chip-row {{ display:flex; flex-wrap:wrap; gap:7px; }}
+    .tactics-chip-row span {{ border:1px solid rgba(255,255,255,.12); background:rgba(255,255,255,.055); color:var(--text); border-radius:999px; padding:6px 9px; font-size:12px; }}
+    .tactics-base-note {{ border:1px dashed rgba(248,195,91,.25); background:rgba(248,195,91,.06); border-radius:16px; padding:12px; color:#f7e7bd; line-height:1.5; }}
+    .tactics-battle-list {{ display:grid; gap:7px; margin:0; padding:0; list-style:none; }}
+    .tactics-battle-list li {{ border:1px solid rgba(255,255,255,.1); background:rgba(255,255,255,.05); border-radius:14px; padding:9px 10px; color:#f7e7bd; font-size:13px; }}
     .world-mobile-action-sheet {{ display:grid; gap:9px; border:1px solid rgba(248,195,91,.24); background:linear-gradient(145deg,rgba(248,195,91,.13),rgba(100,227,255,.07)); border-radius:20px; padding:14px; }}
     .world-mobile-action-sheet p {{ margin:0; color:var(--muted); line-height:1.38; }}
     .world-mobile-action-sheet .world-route-stepper {{ display:flex; flex-wrap:wrap; gap:7px; }}
@@ -1310,8 +1488,8 @@ pub(super) async fn get_world_web_shell(
     .stat b {{ display:block; font-size:19px; color:var(--gold); }}
     main {{ padding:20px min(6vw,72px) 60px; display:grid; gap:24px; }}
     main > section {{ order:8; }}
-    #world-pulse-strip {{ order:1; }}
-    #world-map-shell-panel {{ order:2; }}
+    #world-map-shell-panel {{ order:1; }}
+    #world-pulse-strip {{ order:2; }}
     main > .play {{ order:3; }}
     #world-map-move-panel {{ order:4; }}
     #world-commerce-panel {{ order:5; }}
@@ -1340,8 +1518,8 @@ pub(super) async fn get_world_web_shell(
     .dev-details summary {{ cursor:pointer; width:max-content; border:1px solid rgba(255,255,255,.1); border-radius:999px; padding:8px 12px; min-height:36px; display:inline-flex; align-items:center; background:rgba(255,255,255,.05); color:rgba(246,247,251,.72); font-size:12px; font-weight:800; }}
     .play {{ display:grid; grid-template-columns:.8fr 1.2fr; gap:18px; align-items:start; }}
     .play .timeline {{ max-height:680px; overflow:auto; padding-right:4px; }}
-    .map-shell {{ display:grid; grid-template-columns:minmax(320px,.9fr) minmax(360px,1.1fr); gap:18px; align-items:start; }}
-    #world-map-shell-panel .map-copy {{ max-height:680px; overflow:auto; }}
+    .map-shell {{ display:grid; grid-template-columns:1fr; gap:14px; align-items:start; }}
+    #world-map-shell-panel .map-copy {{ max-height:none; overflow:hidden; }}
     #world-commerce-panel {{ max-height:840px; overflow:auto; }}
     #world-map-move-panel {{ max-height:680px; overflow:auto; }}
     #world-assets-panel,
@@ -1372,7 +1550,7 @@ pub(super) async fn get_world_web_shell(
     @keyframes trillionnium-route-pulse {{ 0%,100% {{ opacity:.55; transform:scale(1); }} 50% {{ opacity:1; transform:scale(1.08); }} }}
     @keyframes trillionnium-runner-bob {{ 0%,100% {{ transform:translateY(0) scale(1); }} 50% {{ transform:translateY(-5px) scale(1.06); }} }}
     .mini {{ display:grid; gap:7px; padding:14px; border-radius:16px; background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.08); }}
-    #world-real-map {{ min-height:min(58vh,620px); border-radius:22px; overflow:hidden; border:1px solid rgba(100,227,255,.24); box-shadow:0 24px 90px rgba(0,0,0,.42); background:#0b1220; }}
+    #world-real-map {{ min-height:min(28vh,260px); border-radius:20px; overflow:hidden; border:1px solid rgba(100,227,255,.24); box-shadow:0 18px 60px rgba(0,0,0,.34); background:#0b1220; opacity:.72; }}
     #world-real-map .leaflet-tile-pane {{ filter:saturate(.72) contrast(.88) brightness(.82); }}
     #world-real-map .trillionnium-active-route-line {{ filter:drop-shadow(0 0 8px rgba(100,227,255,.58)); }}
     #world-real-map .leaflet-control-zoom a {{ width:40px; height:40px; line-height:40px; font-size:20px; }}
@@ -1385,6 +1563,12 @@ pub(super) async fn get_world_web_shell(
     .cta {{ color:var(--bg); background:linear-gradient(135deg,var(--gold),#7dff9b); padding:14px 18px; border-radius:16px; display:inline-flex; justify-content:center; align-items:center; font-weight:800; text-decoration:none; }}
     .cta.secondary {{ color:var(--text); background:rgba(255,255,255,.07); border:1px solid rgba(100,227,255,.24); }}
     .secondary-link {{ color:var(--cyan); font-weight:850; text-decoration:none; border-bottom:1px solid rgba(100,227,255,.42); width:max-content; min-height:44px; display:inline-flex; align-items:center; }}
+    @media (max-width:1180px) {{
+      .jianghu-game-shell {{ grid-template-columns:1fr; }}
+      .jianghu-command-grid {{ grid-template-columns:repeat(3,minmax(0,1fr)); }}
+      .tactics-game-shell {{ grid-template-columns:1fr; }}
+      .tactics-command-grid {{ grid-template-columns:repeat(3,minmax(0,1fr)); }}
+    }}
     @media (max-width:1050px) {{
       header.world-hero {{ padding:22px min(4vw,34px) 12px; gap:14px; grid-template-columns:1fr; }}
       .world-hero-main {{ min-height:auto; gap:12px; }}
@@ -1402,8 +1586,11 @@ pub(super) async fn get_world_web_shell(
       #world-commerce-panel {{ order:4; }}
       #world-map-move-panel {{ order:5; }}
       #world-map-shell-panel .map-shell {{ display:contents; }}
-      #world-real-map {{ order:1; min-height:min(54svh,460px); }}
-      #world-map-shell-panel .map-copy {{ order:7; max-height:560px; overflow:auto; border:1px solid rgba(255,255,255,.12); background:linear-gradient(145deg,rgba(255,255,255,.09),rgba(255,255,255,.035)); border-radius:22px; padding:20px; }}
+      .jianghu-game-shell {{ order:1; }}
+      .tactics-game-shell {{ order:1; }}
+      .jianghu-underlay-label {{ order:6; }}
+      #world-real-map {{ order:7; min-height:min(28svh,240px); }}
+      #world-map-shell-panel .map-copy {{ order:8; max-height:none; overflow:hidden; border:1px solid rgba(100,227,255,.18); background:rgba(100,227,255,.045); border-radius:22px; padding:0; }}
       #world-map-move-panel .mini-grid,
       #world-commerce-panel #world-purchase-cards-live,
       #world-commerce-panel #world-work-orders-live,
@@ -1442,6 +1629,18 @@ pub(super) async fn get_world_web_shell(
       .language-switcher {{ padding:5px 6px 5px 8px; font-size:11px; }}
       .language-switcher select {{ min-height:40px; min-width:82px; max-width:112px; padding:6px 22px 6px 8px; font-size:11px; }}
       .world-hero-actions {{ display:grid; grid-template-columns:1fr; gap:8px; }}
+      .jianghu-game-shell {{ padding:10px; border-radius:20px; gap:10px; }}
+      .jianghu-room,.jianghu-status,.jianghu-engine-card {{ padding:12px; border-radius:16px; }}
+      .jianghu-scene-text {{ min-height:150px; padding:12px; font-size:13px; line-height:1.58; }}
+      .jianghu-command-grid {{ grid-template-columns:repeat(2,minmax(0,1fr)); }}
+      .jianghu-command {{ font-size:12px; padding:8px; }}
+      .tactics-game-shell {{ padding:10px; border-radius:20px; gap:10px; }}
+      .tactics-board-card,.tactics-command-card,.tactics-base-card {{ padding:12px; border-radius:16px; }}
+      .tactics-board {{ min-height:min(88vw,430px); gap:3px; padding:6px; border-radius:15px; }}
+      .tactics-tile {{ border-radius:7px; }}
+      .tactics-tile small {{ display:none; }}
+      .tactics-command-grid {{ grid-template-columns:repeat(2,minmax(0,1fr)); }}
+      .tactics-command {{ font-size:12px; padding:8px; }}
       .world-mobile-action-sheet {{ padding:11px; border-radius:16px; }}
       .world-mobile-action-sheet .world-route-stepper span {{ font-size:11px; padding:5px 7px; }}
       .world-hero-actions .cta,.hero-card .cta,.world-map-player-summary .cta {{ min-height:44px; padding:10px 11px; border-radius:14px; font-size:13px; }}
@@ -1474,9 +1673,10 @@ pub(super) async fn get_world_web_shell(
       #world-commerce-panel {{ order:4; }}
       #world-map-move-panel {{ order:5; }}
       #world-map-shell-panel .map-shell {{ display:contents; }}
-      #world-map-shell-panel .map-copy {{ order:7; border:1px solid rgba(255,255,255,.12); background:linear-gradient(145deg,rgba(255,255,255,.09),rgba(255,255,255,.035)); border-radius:20px; padding:15px; }}
+      #world-map-shell-panel .map-copy {{ order:8; border:1px solid rgba(100,227,255,.18); background:rgba(100,227,255,.045); border-radius:20px; padding:0; }}
       .map-shell {{ gap:12px; }}
-      #world-real-map {{ order:1; min-height:min(54svh,410px); border-radius:18px; }}
+      .jianghu-underlay-label {{ order:6; }}
+      #world-real-map {{ order:7; min-height:min(28svh,220px); border-radius:18px; }}
       .map-stream-hud,.overlay-toggle-bar,.focus-stack {{ gap:6px; }}
       .hud-chip,.focus-chip,.overlay-toggle {{ padding:7px 9px; font-size:12px; }}
       #world-map-shell-panel .map-copy {{ max-height:560px; overflow:auto; }}
@@ -1507,14 +1707,14 @@ pub(super) async fn get_world_web_shell(
 <body>
   <header id="world-mobile-first-screen" class="world-hero">
     <section class="world-hero-main">
-      <div class="world-hero-kicker"><div class="pill" data-i18n-en="Reality Mirror Adventure" data-i18n-zh="现实镜像冒险">Reality Mirror Adventure</div><div id="world-language-switcher">{world_header_language_switcher}</div></div>
+      <div class="world-hero-kicker"><div class="pill" data-i18n-en="Open-source tactics RPG · Three Kingdoms mod shell" data-i18n-zh="开源战棋 RPG · 三国魔改界面">Open-source tactics RPG · 三国魔改界面</div><div id="world-language-switcher">{world_header_language_switcher}</div></div>
       <div class="world-hero-title">
-        <h1>Trillionnium World</h1>
-        <p class="subtitle" data-i18n-en="Global-first open world built for one-thumb exploration: pick a real city focus, accept a bounty, submit a result, get rated, and claim rewards." data-i18n-zh="面向海外首发、为单手探索重做的开放世界：选择现实城市焦点，接取悬赏，提交成果，获得评级并领取奖励。">Global-first open world built for one-thumb exploration: pick a real city focus, accept a bounty, submit a result, get rated, and claim rewards.</p>
+        <h1>Trillionnium 战棋志</h1>
+        <p class="subtitle" data-i18n-en="Global-first open world rebuilt on a real open-source tactics base: tranchikhang/MedievalWar (MIT, Phaser 3, Fire Emblem-inspired) supplies the map/cursor/turn/pathfinding/menu/objective loop, while OpenClawStreetMap quietly feeds real streets, encounters, and route rewards underneath." data-i18n-zh="面向海外首发的战棋式开放世界：以 MIT 开源 tranchikhang/MedievalWar（Phaser 3、Fire Emblem 风格）作为地图/光标/回合/寻路/菜单/目标循环底座魔改；OpenClawStreetMap 在后台提供真实街巷、遭遇和路线奖励。">Global-first open world rebuilt on a real open-source tactics base: tranchikhang/MedievalWar (MIT, Phaser 3, Fire Emblem-inspired) supplies the map/cursor/turn/pathfinding/menu/objective loop, while OpenClawStreetMap quietly feeds real streets, encounters, and route rewards underneath.</p>
       </div>
       <div class="world-mobile-promise" aria-label="World mobile promises" data-i18n-aria-label-en="World mobile promises" data-i18n-aria-label-zh="世界移动端承诺">
-        <span data-i18n-en="Current route" data-i18n-zh="当前路线">Current route</span>
-        <span data-i18n-en="Next action" data-i18n-zh="下一步动作">Next action</span>
+        <span data-i18n-en="Unit turn" data-i18n-zh="单位回合">Unit turn</span>
+        <span data-i18n-en="Capture objective" data-i18n-zh="占领目标">Capture objective</span>
         <span data-i18n-en="Reward / XP" data-i18n-zh="奖励 / XP">Reward / XP</span>
       </div>
       <div id="world-hero-mobile-actions" class="world-hero-actions" data-contract-version="trillionnium_mobile_single_primary_cta_v1" data-first-screen-decision-contract="trillionnium_world_map_first_screen_decision_v1" data-parity-source="app-mobile-primary-cta" data-primary-cta-count="1" data-first-screen-loop="pick_route_submit_proof_claim_reward">
@@ -1522,22 +1722,22 @@ pub(super) async fn get_world_web_shell(
           <strong data-i18n-en="Current route" data-i18n-zh="当前路线">Current route</strong>
           <p id="world-mobile-current-route" data-i18n-en="{map_route_runner_handoff_summary}" data-i18n-zh="{map_route_runner_handoff_summary}">{map_route_runner_handoff_summary}</p>
           <div class="world-route-stepper" aria-label="Pick route submit proof claim reward" data-i18n-aria-label-en="Pick route submit proof claim reward" data-i18n-aria-label-zh="选路线、交证据、领奖励">
-            <span data-i18n-en="Pick route" data-i18n-zh="选路线">Pick route</span>
-            <span data-i18n-en="Submit proof" data-i18n-zh="交证据">Submit proof</span>
+            <span data-i18n-en="Select unit" data-i18n-zh="选中单位">Select unit</span>
+            <span data-i18n-en="Move / attack" data-i18n-zh="移动 / 攻击">Move / attack</span>
             <span data-i18n-en="Claim reward" data-i18n-zh="领奖励">Claim reward</span>
           </div>
-          <p id="world-mobile-next-action" data-i18n-en="Next action: submit proof or claim reward from the active route." data-i18n-zh="下一步动作：围绕当前路线提交证据或领取奖励。">Next action: submit proof or claim reward from the active route.</p>
+          <p id="world-mobile-next-action" data-i18n-en="Next action: move the selected unit toward the real-street objective, then submit proof or claim reward." data-i18n-zh="下一步动作：让选中单位推进到真实街巷目标，再提交证据或领取奖励。">Next action: move the selected unit toward the real-street objective, then submit proof or claim reward.</p>
           <p id="world-mobile-reward-xp" data-route-mastery-contract="{map_route_runner_mastery_contract}" data-route-mastery-tier="{map_route_runner_mastery_tier}" data-route-mastery-xp="{map_route_runner_mastery_xp}">Reward / XP · {map_route_runner_reward_claim_count} claim · {map_route_runner_mastery_xp} XP · {map_route_runner_mastery_tier}</p>
-          <a id="world-mobile-primary-cta" class="cta" href='#world-action-console' data-i18n-en="Continue route" data-i18n-zh="继续当前路线">Continue route</a>
+          <a id="world-mobile-primary-cta" class="cta" href='#trillionnium-tactics-game-shell' data-i18n-en="Enter tactics board" data-i18n-zh="进入战棋棋盘">Enter tactics board</a>
         </section>
       </div>
     </section>
     <aside class="hero-card">
       <strong data-i18n-en="Next Adventure" data-i18n-zh="下一步冒险">Next Adventure</strong>
       <ol class="world-hero-steps">
-        <li><b data-i18n-en="1 · Route" data-i18n-zh="1 · 路线">1 · Route</b><span data-i18n-en="Pick one nearby route first." data-i18n-zh="先选择附近一条路线。">Pick one nearby route first.</span></li>
-        <li><b data-i18n-en="2 · Proof" data-i18n-zh="2 · 证据">2 · Proof</b><span data-i18n-en="Submit proof tied to the active objective." data-i18n-zh="提交当前目标关联证据。">Submit proof tied to the active objective.</span></li>
-        <li><b data-i18n-en="3 · Reward" data-i18n-zh="3 · 奖励">3 · Reward</b><span data-i18n-en="Claim reward, XP, and the next route." data-i18n-zh="领取奖励、XP 和下一条路线。">Claim reward, XP, and the next route.</span></li>
+        <li><b data-i18n-en="1 · Unit" data-i18n-zh="1 · 单位">1 · Unit</b><span data-i18n-en="Select a hero, adviser, or agent squad." data-i18n-zh="选中主公、军师或 Agent 小队。">Select a hero, adviser, or agent squad.</span></li>
+        <li><b data-i18n-en="2 · Move" data-i18n-zh="2 · 行军">2 · Move</b><span data-i18n-en="Advance across real-street terrain." data-i18n-zh="沿真实街巷地形推进。">Advance across real-street terrain.</span></li>
+        <li><b data-i18n-en="3 · Reward" data-i18n-zh="3 · 战利品">3 · Reward</b><span data-i18n-en="Capture the objective, submit proof, and claim XP." data-i18n-zh="占领目标、提交证据并领取 XP。">Capture the objective, submit proof, and claim XP.</span></li>
       </ol>
       <a id="world-league-link" class="secondary-link" href="/league" data-i18n-en="League arena stays one tap away" data-i18n-zh="League 竞技场保留一跳入口">League arena stays one tap away</a>
     </aside>
@@ -1571,7 +1771,64 @@ pub(super) async fn get_world_web_shell(
     </section>
     <section id="world-map-shell-panel" class="panel" data-bootstrap-mode="truncated_runtime_bootstrap_with_lazy_delta_hydration" data-bootstrap-payload-bytes="{world_map_bootstrap_bytes}" data-cache-contract="trillionnium_world_map_payload_cache_v1">
       <div class="map-shell">
-        <div class="map-copy">
+        <section id="trillionnium-tactics-game-shell" class="tactics-game-shell" data-contract-version="trillionnium_open_source_tactics_world_shell_v1" data-interface-style="turn_based_strategy_rpg" data-open-source-base="tranchikhang/MedievalWar" data-base-license="MIT" data-base-url="https://github.com/tranchikhang/MedievalWar" data-base-engine="Phaser 3" data-base-patterns="map,cursor,control,turn_system,pathfinding,context_menu,objectives,ai" data-asset-policy="no_proprietary_assets_css_tokens_first" data-map-engine-role="openclawstreetmap_underlay" data-underlay-engine="{map_engine_id}" data-underlay-provider="{tile_provider}" aria-label="Open-source tactics Trillionnium game shell" data-i18n-aria-label-en="Open-source tactics Trillionnium game shell" data-i18n-aria-label-zh="开源战棋 Trillionnium 游戏界面">
+          <article class="tactics-board-card">
+            <div class="tactics-board-title"><span data-i18n-en="【Three Kingdoms Tactics】Mirror Street Battle" data-i18n-zh="【三国战棋】镜像街巷战役">【三国战棋】镜像街巷战役</span><code data-engine-role="underlay" data-underlay-name="OpenClawStreetMap" data-i18n-en="real street engine" data-i18n-zh="真实街巷引擎">真实街巷引擎</code></div>
+            <div class="tactics-board" role="grid" aria-label="Trillionnium turn based tactics board" data-i18n-aria-label-en="Trillionnium turn based tactics board" data-i18n-aria-label-zh="Trillionnium 回合制战棋棋盘">
+              {tactics_board_cells}
+              <span class="tactics-selection-ring" aria-hidden="true"></span>
+              <span class="tactics-unit player" style="grid-column:2;grid-row:7" data-unit="lord" data-hp="32" data-move="4" title="主公 / Lord">主</span>
+              <span class="tactics-unit ally" style="grid-column:3;grid-row:6" data-unit="strategist" data-hp="24" data-move="3" title="军师 / Strategist">策</span>
+              <span class="tactics-unit ally" style="grid-column:1;grid-row:8" data-unit="agent-squad" data-hp="28" data-move="5" title="Agent 斥候 / Scout">斥</span>
+              <span class="tactics-unit enemy" style="grid-column:7;grid-row:2" data-unit="rival-warlord" data-hp="30" data-move="3" title="敌将 / Rival">敌</span>
+              <span class="tactics-unit enemy" style="grid-column:6;grid-row:4" data-unit="market-bandit" data-hp="18" data-move="4" title="流寇 / Bandit">寇</span>
+              <span class="tactics-marker objective" style="grid-column:7;grid-row:1" data-objective="bounty-gate" title="占领目标 / Objective">赏</span>
+            </div>
+            <div class="tactics-log" aria-label="Tactics battle log" data-i18n-aria-label-en="Tactics battle log" data-i18n-aria-label-zh="战棋战报">
+              <p data-i18n-en="> base: tranchikhang/MedievalWar MIT · Phaser 3 map/cursor/turn/pathfinding/objective loop." data-i18n-zh="> 底座：tranchikhang/MedievalWar MIT · Phaser 3 地图/光标/回合/寻路/目标循环。">&gt; 底座：tranchikhang/MedievalWar MIT · Phaser 3 地图/光标/回合/寻路/目标循环。</p>
+              <p data-i18n-en="> map: OpenClawStreetMap provides terrain, distance, events, and objectives." data-i18n-zh="> 地图：OpenClawStreetMap 提供地形、距离、事件和目标。">&gt; 地图：OpenClawStreetMap 提供地形、距离、事件和目标。</p>
+              <p data-i18n-en="> status: {events} live events, {listings} bounty cards, {map_avatar_route_runner_count} moving squads." data-i18n-zh="> 状态：{events} 条实时事件、{listings} 张悬赏牌、{map_avatar_route_runner_count} 支移动小队。">&gt; 状态：{events} 条实时事件、{listings} 张悬赏牌、{map_avatar_route_runner_count} 支移动小队。</p>
+            </div>
+          </article>
+          <aside class="tactics-command-card" aria-label="Tactics command menu" data-i18n-aria-label-en="Tactics command menu" data-i18n-aria-label-zh="战棋指令菜单">
+            <h3 data-i18n-en="战棋指令菜单" data-i18n-zh="战棋指令菜单">战棋指令菜单</h3>
+            <div class="tactics-stat-line"><span data-i18n-en="军令" data-i18n-zh="军令">军令</span><div class="tactics-meter"><span style="width:86%"></span></div><b>{map_avatar_route_runner_count}</b></div>
+            <div class="tactics-stat-line"><span data-i18n-en="声望" data-i18n-zh="声望">声望</span><div class="tactics-meter"><span style="width:72%"></span></div><b>{map_route_runner_mastery_xp}</b></div>
+            <div class="tactics-stat-line"><span data-i18n-en="悬赏" data-i18n-zh="悬赏">悬赏</span><div class="tactics-meter"><span style="width:64%"></span></div><b>{listings}</b></div>
+            <div class="tactics-stat-line"><span data-i18n-en="领奖" data-i18n-zh="领奖">领奖</span><div class="tactics-meter"><span style="width:58%"></span></div><b>{map_route_runner_reward_claim_count}</b></div>
+            <nav class="tactics-command-grid" aria-label="Tactical actions" data-i18n-aria-label-en="Tactical actions" data-i18n-aria-label-zh="战术动作">
+              <a class="tactics-command primary" href='#trillionnium-tactics-game-shell' data-i18n-en="选中单位" data-i18n-zh="选中单位">选中单位</a>
+              <a class="tactics-command" href='#world-map-route-flow-actions' data-i18n-en="行军路线" data-i18n-zh="行军路线">行军路线</a>
+              <a class="tactics-command" href='#world-commerce-panel' data-i18n-en="接取悬赏" data-i18n-zh="接取悬赏">接取悬赏</a>
+              <a class="tactics-command" href='#world-work-deliver-body' data-i18n-en="提交战报" data-i18n-zh="提交战报">提交战报</a>
+              <a class="tactics-command" href='#world-route-task-graph-live' data-i18n-en="势力脉络" data-i18n-zh="势力脉络">势力脉络</a>
+              <a class="tactics-command" href='#world-real-map' data-i18n-en="查看底图" data-i18n-zh="查看底图">查看底图</a>
+            </nav>
+            <div class="tactics-chip-row" aria-label="Tactics rules" data-i18n-aria-label-en="Tactics rules" data-i18n-aria-label-zh="战棋规则">
+              <span data-i18n-en="deterministic combat" data-i18n-zh="确定性战斗">确定性战斗</span>
+              <span data-i18n-en="RPS unit counters" data-i18n-zh="兵种相克">兵种相克</span>
+              <span data-i18n-en="real-street terrain" data-i18n-zh="真实街巷地形">真实街巷地形</span>
+              <span data-i18n-en="proof-gated rewards" data-i18n-zh="证据领奖">证据领奖</span>
+            </div>
+          </aside>
+          <aside class="tactics-base-card" aria-label="Open source base and OpenClawStreetMap support" data-i18n-aria-label-en="Open source base and OpenClawStreetMap support" data-i18n-aria-label-zh="开源底座与 OpenClawStreetMap 支撑">
+            <h3 data-i18n-en="开源底座 · 三国魔改" data-i18n-zh="开源底座 · 三国魔改">开源底座 · 三国魔改</h3>
+            <div class="tactics-base-note">
+              <strong data-i18n-en="Base: tranchikhang/MedievalWar" data-i18n-zh="底座：tranchikhang/MedievalWar">底座：tranchikhang/MedievalWar</strong>
+              <p data-i18n-en="MIT licensed Phaser 3 tactics game: map loading, cursor control, context menu, unit turn system, movement/pathfinding, enemy AI, and map objectives are the modding base; proprietary Three Kingdoms titles are only style references." data-i18n-zh="MIT 许可的 Phaser 3 战棋游戏：地图加载、光标控制、上下文菜单、单位回合、移动/寻路、敌方 AI 和地图目标作为魔改底座；三国群英传/三国策/三国志/三国霸业等商业作品只作风格参考，不复制素材或代码。">MIT 许可的 Phaser 3 战棋游戏：地图加载、光标控制、上下文菜单、单位回合、移动/寻路、敌方 AI 和地图目标作为魔改底座；三国群英传/三国策/三国志/三国霸业等商业作品只作风格参考，不复制素材或代码。</p>
+              <code>https://github.com/tranchikhang/MedievalWar</code>
+            </div>
+            <ul class="tactics-battle-list" aria-label="Battle objectives" data-i18n-aria-label-en="Battle objectives" data-i18n-aria-label-zh="战役目标">
+              <li data-i18n-en="胜利：占领真实街区目标点，带回证据包。" data-i18n-zh="胜利：占领真实街区目标点，带回证据包。">胜利：占领真实街区目标点，带回证据包。</li>
+              <li data-i18n-en="资源：悬赏牌变成军令，奖励池变成战利品。" data-i18n-zh="资源：悬赏牌变成军令，奖励池变成战利品。">资源：悬赏牌变成军令，奖励池变成战利品。</li>
+              <li data-i18n-en="底图：OpenClawStreetMap 只做地形和遭遇输入，不抢主界面。" data-i18n-zh="底图：OpenClawStreetMap 只做地形和遭遇输入，不抢主界面。">底图：OpenClawStreetMap 只做地形和遭遇输入，不抢主界面。</li>
+            </ul>
+            <small data-i18n-en="Next mod path: replace placeholder units with Trillionnium agents, convert POIs into capture points, and use route evidence as battle reports." data-i18n-zh="下一步魔改：把占位单位替换为 Trillionnium Agent，把 POI 转成占领点，把路线证据转成战报。">下一步魔改：把占位单位替换为 Trillionnium Agent，把 POI 转成占领点，把路线证据转成战报。</small>
+          </aside>
+        </section>
+        <details class="map-copy jianghu-engine-drawer" data-default-state="collapsed" data-openclawstreetmap-role="supporting_engine_diagnostics">
+          <summary data-i18n-en="OpenClawStreetMap underlay / engine details" data-i18n-zh="OpenClawStreetMap 底层引擎 / 技术细节">OpenClawStreetMap 底层引擎 / 技术细节</summary>
+          <div class="jianghu-engine-drawer-body">
           <div class="pill" data-i18n-en="{map_product_name_html}" data-i18n-zh="Trillionnium 世界地图">{map_product_name_html}</div>
           <h2 data-i18n-en="OpenStreetMap upgraded into a playable world" data-i18n-zh="把 OpenStreetMap 升级成可玩的世界地图">OpenStreetMap upgraded into a playable world</h2>
           <p class="subtitle" data-i18n-en="{map_upgrade_model_html}" data-i18n-zh="Trillionnium World Map 不是普通地图工具，而是在 OpenStreetMap 真实地理底座上叠加游戏人物、路线节点、任务牌、实时事件和交付闭环。角色会在地图上跑来跑去，接任务、提交证据、拿评级和奖励。">{map_upgrade_model_html}</p>
@@ -1619,6 +1876,10 @@ pub(super) async fn get_world_web_shell(
           <div id="world-map-route-flow-actions" class="focus-stack"></div>
           <details class="dev-details world-advanced-map-drawer">
             <summary data-i18n-en="Advanced map layers" data-i18n-zh="高级地图图层">Advanced map layers</summary>
+            <section id="world-openstreetmap-geodata" class="mini-grid" data-contract-version="{osm_geodata_contract}" data-provider-contract="{osm_geodata_provider_contract}" data-provider-id="{osm_geodata_provider_id}" data-source-mode="{osm_geodata_source_mode}" data-source-of-truth="rust_openstreetmap_data_provider" data-web-role="visualization_input_only" data-feature-count="{osm_geodata_feature_count}" data-legal-obligation="odbl_database_obligations" aria-label="OpenStreetMap geodata substrate" data-i18n-aria-label-en="OpenStreetMap geodata substrate" data-i18n-aria-label-zh="OpenStreetMap 地理数据底座">
+              <article class="mini osm-contract"><strong>OpenStreetMapDataProvider</strong><span>openstreetmap_geodata_v1 · Rust source of truth · fixture first before Overpass/Geofabrik</span><code>osm_id · osm_type · lat/lng · tags · game_overlay_id</code><small>Do not use public OSM tile servers for production traffic; cache/self-host/vendor first.</small></article>
+              {osm_geodata_feature_cards}
+            </section>
             <div id="world-tile-shards-live" class="mini-grid">{tile_shard_cards}</div>
             <div id="world-region-shards-live" class="mini-grid" style="margin-top:12px">{region_shard_cards}</div>
             <div class="mini-grid" style="margin-top:12px">{lod_layer_cards}</div>
@@ -1648,7 +1909,9 @@ pub(super) async fn get_world_web_shell(
             <p id="world-map-overlay-status" class="subtitle" data-i18n-en="Active layers: density, regions, tiles, prefetch rings, live events, task routes, moving avatars, player avatars." data-i18n-zh="当前图层：密度、区域、地图块、预热圈、实时事件、任务路线、动态角色、跑图角色。">Active layers: density, regions, tiles, prefetch rings, live events, task routes, moving avatars, player avatars.</p>
             <p id="world-map-overlay-legend" class="subtitle" data-i18n-en="Layer legend: regional anchors, active tiles, prefetch rings, live-event pulses, avatar task routes, animated runners, and running avatars." data-i18n-zh="图层说明：区域锚点、活跃地图块、预热探索圈、实时事件脉冲、角色任务路线、动态跑图和跑图角色。">Layer legend: regional anchors, active tiles, prefetch rings, live-event pulses, avatar task routes, animated runners, and running avatars.</p>
           </details>
-        </div>
+          </div>
+        </details>
+        <div class="jianghu-underlay-label" data-i18n-en="OpenClawStreetMap engine viewport · supporting layer, not the main UI" data-i18n-zh="OpenClawStreetMap 引擎视口 · 支撑层，不是主界面"><strong>OpenClawStreetMap</strong><span data-i18n-en="supporting real-world engine viewport" data-i18n-zh="底层真实世界引擎视口">supporting real-world engine viewport</span></div>
         <div id="world-real-map" data-engine="{map_engine_id}" data-provider="{tile_provider}" aria-label="Trillionnium World Map" data-i18n-aria-label-en="Trillionnium World Map" data-i18n-aria-label-zh="Trillionnium 世界地图"></div>
       </div>
     </section>
@@ -2377,6 +2640,12 @@ pub(super) async fn get_world_web_shell(
         full_mirror_strategy = escape_html_text(full_mirror_strategy),
         simplification_style = escape_html_text(simplification_style),
         scaling_goal = escape_html_text(scaling_goal),
+        osm_geodata_contract = escape_html_text(osm_geodata_contract),
+        osm_geodata_provider_contract = escape_html_text(osm_geodata_provider_contract),
+        osm_geodata_provider_id = escape_html_text(osm_geodata_provider_id),
+        osm_geodata_source_mode = escape_html_text(osm_geodata_source_mode),
+        osm_geodata_feature_count = osm_geodata_feature_count,
+        osm_geodata_feature_cards = osm_geodata_feature_cards,
         tile_shard_cards = tile_shard_cards,
         region_shard_cards = region_shard_cards,
         lod_layer_cards = lod_layer_cards,

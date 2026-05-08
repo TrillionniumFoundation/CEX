@@ -2455,6 +2455,7 @@ pub(super) fn trillionnium_slim_map_bootstrap_json(payload: &Value, surface_id: 
         (&["real_world_map_engine", "region_shards"][..], 6usize),
         (&["real_world_map_engine", "poi_hotspots"][..], 6usize),
         (&["real_world_map_engine", "tile_pyramid"][..], 4usize),
+        (&["openstreetmap_geodata", "features"][..], 18usize),
         (&["map", "real_world_map_engine", "markers"][..], 18usize),
         (
             &["map", "real_world_map_engine", "route_edges"][..],
@@ -2464,6 +2465,7 @@ pub(super) fn trillionnium_slim_map_bootstrap_json(payload: &Value, surface_id: 
             &["map", "real_world_map_engine", "region_shards"][..],
             6usize,
         ),
+        (&["map", "openstreetmap_geodata", "features"][..], 18usize),
         (&["map_hub", "route_preview", "items"][..], 8usize),
         (&["map_hub", "route_task_graph", "tasks"][..], 6usize),
         (&["feed", "items"][..], 10usize),

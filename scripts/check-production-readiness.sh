@@ -253,7 +253,12 @@ else
         and $gate.shadow_renderer_contract_version == "trillionnium_world_map_renderer_shadow_v1"
         and $gate.shadow_renderer_status == "shadow_only_not_user_facing"
         and $gate.maplibre_shadow_parity_contract_version == "trillionnium_world_map_maplibre_shadow_parity_v1"
+        and $gate.maplibre_shadow_only == true
         and $gate.maplibre_shadow_marker_cluster_popup_focus_parity_visible == true
+        and $gate.maplibre_canary_percent == 0
+        and $gate.maplibre_canary_starts_at_zero == true
+        and $gate.maplibre_max_canary_percent_without_new_signoff <= 1
+        and $gate.maplibre_rollback_drill_evidence_required == true
         and $gate.maplibre_canary_rollback_drill_visible == true
         and ($gate.promotion_blocker_count | type) == "number"
         and $gate.promotion_blocker_count >= 3;

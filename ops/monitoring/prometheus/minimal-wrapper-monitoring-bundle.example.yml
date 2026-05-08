@@ -759,6 +759,30 @@ groups:
       first_action: curl -s http://127.0.0.1:8090/health | jq '.trillionnium_world_playability_scorecard.future_engine_readiness_gate
         | {maplibre_shadow_parity_contract_version, maplibre_shadow_marker_cluster_popup_focus_parity_visible,
         maplibre_canary_rollback_drill_visible, shadow_renderer_status}'
+  - alert: CexTrillionniumWorldMapMapLibreCanaryNotZero
+    expr: cex_consumer_entry_trillionnium_world_map_maplibre_canary_percent > 0
+    for: 5m
+    labels:
+      severity: critical
+      service: consumer-entry-api
+      family: product-edge
+      component: trillionnium-route-runner-handoff
+      owner: product-ops
+      route_hint: page
+    annotations:
+      summary: Trillionnium MapLibre shadow canary is no longer zero
+      description: 'MapLibre must remain shadow-only until a new explicit signoff
+        promotes it. Any non-zero
+
+        canary percent means the candidate renderer is leaking toward user-facing
+        rollout and
+
+        should be rolled back to Leaflet/OpenStreetMap immediately.
+
+        '
+      runbook: docs/operator-runbook-v1.md
+      first_action: curl -s http://127.0.0.1:8090/health | jq '.trillionnium_world_playability_scorecard.future_engine_readiness_gate
+        | {active_engine_id,candidate_engine_id,shadow_renderer_status,maplibre_shadow_only,maplibre_canary_percent,maplibre_canary_starts_at_zero,maplibre_max_canary_percent_without_new_signoff,maplibre_rollback_drill_evidence_required}'
   - alert: CexTrillionniumWorldMapGameplayAccessibilityI18nNotGreen
     expr: cex_consumer_entry_trillionnium_world_map_gameplay_accessibility_i18n_gate_green
       == 0

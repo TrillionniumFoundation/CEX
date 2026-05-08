@@ -705,6 +705,31 @@
           "legendFormat": "MapLibre rollback ready",
           "range": true,
           "refId": "R33"
+        },
+        {
+          "expr": "cex_consumer_entry_trillionnium_world_map_maplibre_shadow_only",
+          "legendFormat": "map_maplibre_shadow_only",
+          "refId": "b"
+        },
+        {
+          "expr": "cex_consumer_entry_trillionnium_world_map_maplibre_canary_percent",
+          "legendFormat": "map_maplibre_canary_percent",
+          "refId": "c"
+        },
+        {
+          "expr": "cex_consumer_entry_trillionnium_world_map_maplibre_max_canary_percent_without_new_signoff",
+          "legendFormat": "map_maplibre_max_canary_percent_without_new_signoff",
+          "refId": "d"
+        },
+        {
+          "expr": "cex_consumer_entry_trillionnium_world_map_maplibre_canary_starts_at_zero",
+          "legendFormat": "map_maplibre_canary_starts_at_zero",
+          "refId": "e"
+        },
+        {
+          "expr": "cex_consumer_entry_trillionnium_world_map_maplibre_rollback_drill_evidence_required",
+          "legendFormat": "map_maplibre_rollback_drill_evidence_required",
+          "refId": "f"
         }
       ],
       "title": "Mobile map runtime / funnel / future engine",

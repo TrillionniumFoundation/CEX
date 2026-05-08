@@ -18,10 +18,11 @@ use super::{
     normalized_repository_direct_write_contract_json,
     normalized_repository_read_model_contract_json,
     normalized_repository_world_home_read_model_sql, normalized_world_shadow_sql_contract_json,
-    parse_csv_list, project_consumer_status, prune_rate_limit_cache, real_world_map_engine_json,
-    resolve_chat_identity, session_auth_issuer_registry_active_key_diff_json,
-    sign_user_session_assertion, validate_text_payload, world_home_json, world_map_delta_json,
-    world_map_json, world_map_viewport_json, world_route_ui_contract_json, AppState, AppStateInner,
+    openstreetmap_geodata_v1_json, parse_csv_list, project_consumer_status, prune_rate_limit_cache,
+    real_world_map_engine_json, resolve_chat_identity,
+    session_auth_issuer_registry_active_key_diff_json, sign_user_session_assertion,
+    validate_text_payload, world_home_json, world_map_delta_json, world_map_json,
+    world_map_viewport_json, world_route_ui_contract_json, AppState, AppStateInner,
     ConsumerEntryConfig, ConsumerEntryMetrics, CreateChatTaskRequest, IdentityBindingAuditState,
     IdentityBindingEntry, IdentityBindingMetadata, IdentityBindingRevisionApprovalState,
     IdentityBindingStore, IdentityBindings, LeagueMatchEntry, LeaguePlayer, LeagueReward,
@@ -1693,6 +1694,45 @@ fn world_client_surfaces_expose_projection_layer_contracts() {
     assert_eq!(map["projection_context"], "WorldMapProjectionContext");
     assert_eq!(map["index_layer"], "WorldIndexes::sorted_map_node_ids_v1");
     assert_eq!(
+        map["openstreetmap_geodata"]["contract_version"],
+        "openstreetmap_geodata_v1"
+    );
+    assert_eq!(
+        map["openstreetmap_geodata"]["provider_contract"],
+        "OpenStreetMapDataProvider"
+    );
+    assert_eq!(
+        map["openstreetmap_geodata"]["source_of_truth"],
+        "rust_openstreetmap_data_provider"
+    );
+    assert_eq!(
+        map["openstreetmap_geodata"]["web_role"],
+        "visualization_input_only"
+    );
+    assert_eq!(
+        map["openstreetmap_geodata"]["production_ingestion_plan"]["live_overpass_enabled"],
+        false
+    );
+    let osm_features = map["openstreetmap_geodata"]["features"].as_array().unwrap();
+    assert!(osm_features.len() >= 8);
+    assert!(osm_features
+        .iter()
+        .all(|feature| feature.get("osm_id").and_then(Value::as_i64).is_some()));
+    assert!(osm_features.iter().all(|feature| matches!(
+        feature.get("osm_type").and_then(Value::as_str),
+        Some("node" | "way" | "relation")
+    )));
+    assert!(osm_features.iter().all(|feature| feature
+        .get("tags")
+        .and_then(|tags| tags.get("trillionnium:node_id"))
+        .and_then(Value::as_str)
+        .is_some()));
+    assert!(osm_features.iter().all(|feature| feature
+        .get("game_overlay_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .starts_with("trillionnium-world-node:")));
+    assert_eq!(
         map["route_preview"]["projection_layer"],
         "world_route_projection_v1"
     );
@@ -2011,6 +2051,32 @@ fn real_world_map_engine_declares_shared_renderer_adapter() {
     let league = default_league_state();
     let nodes: Vec<WorldMapNode> = league.world.world_map_nodes.values().cloned().collect();
     let engine = real_world_map_engine_json(&nodes, None);
+    let geodata = openstreetmap_geodata_v1_json(&nodes, None);
+    assert_eq!(
+        engine["geodata_provider_contract"]["provider_contract"],
+        "OpenStreetMapDataProvider"
+    );
+    assert_eq!(geodata["contract_version"], "openstreetmap_geodata_v1");
+    assert_eq!(
+        geodata["provider_id"],
+        "fixture_openstreetmap_data_provider_v1"
+    );
+    assert_eq!(
+        geodata["production_ingestion_plan"]
+            ["cache_or_self_host_required_before_production_traffic"],
+        true
+    );
+    let first_feature = geodata["features"]
+        .as_array()
+        .and_then(|features| features.first())
+        .expect("OSM geodata fixture should project world nodes");
+    assert!(first_feature["osm_id"].as_i64().unwrap_or(0) > 0);
+    assert!(first_feature["lat"].as_f64().is_some());
+    assert!(first_feature["lng"].as_f64().is_some());
+    assert!(first_feature["game_overlay_id"]
+        .as_str()
+        .unwrap_or_default()
+        .starts_with("trillionnium-world-node:"));
     assert_eq!(
         engine["renderer_adapter"]["adapter_id"],
         "leaflet_renderer_adapter_v1"
@@ -2117,6 +2183,22 @@ fn world_home_json_exposes_shared_renderer_adapter_for_matrix_cards() {
 
     assert_eq!(engine["engine_id"], "leaflet_openstreetmap_v1");
     assert_eq!(engine["tile_provider"], "OpenStreetMap");
+    assert_eq!(
+        engine["geodata_provider_contract"]["contract_version"],
+        "openstreetmap_geodata_v1"
+    );
+    assert_eq!(
+        home["openstreetmap_geodata"]["provider_contract"],
+        "OpenStreetMapDataProvider"
+    );
+    assert_eq!(
+        home["openstreetmap_geodata"]["gameplay_owner"],
+        "trillionnium_rust_world_state"
+    );
+    assert_eq!(
+        home["openstreetmap_geodata"]["legal"]["odbl_database_obligations"],
+        true
+    );
     assert_eq!(
         engine["renderer_adapter"]["adapter_id"],
         "leaflet_renderer_adapter_v1"
@@ -2955,6 +3037,30 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(world_html.contains("renderEventPulse"));
     assert!(world_html.contains("renderPlayerAvatar"));
     assert!(world_html.contains("renderMovingAvatar"));
+    assert!(world_html.contains("trillionnium_open_source_tactics_world_shell_v1"));
+    assert!(world_html.contains("data-interface-style=\"turn_based_strategy_rpg\""));
+    assert!(world_html.contains("data-open-source-base=\"tranchikhang/MedievalWar\""));
+    assert!(world_html.contains("data-base-license=\"MIT\""));
+    assert!(world_html.contains("data-base-engine=\"Phaser 3\""));
+    assert!(world_html.contains("data-base-patterns=\"map,cursor,control,turn_system,pathfinding,context_menu,objectives,ai\""));
+    assert!(world_html.contains("data-map-engine-role=\"openclawstreetmap_underlay\""));
+    assert!(world_html.contains("OpenClawStreetMap"));
+    assert!(world_html.contains("三国魔改界面"));
+    assert!(world_html.contains("战棋指令菜单"));
+    assert!(world_html.contains("Phaser 3 地图/光标/回合/寻路/目标循环"));
+    assert!(world_html.contains("data-openclawstreetmap-role=\"supporting_engine_diagnostics\""));
+    assert!(world_html.contains("支撑层，不是主界面"));
+    assert!(world_html.contains("world-openstreetmap-geodata"));
+    assert!(world_html.contains("openstreetmap_geodata_v1"));
+    assert!(world_html.contains("OpenStreetMapDataProvider"));
+    assert!(world_html.contains("fixture_openstreetmap_data_provider_v1"));
+    assert!(world_html.contains("data-source-of-truth=\"rust_openstreetmap_data_provider\""));
+    assert!(world_html.contains("data-web-role=\"visualization_input_only\""));
+    assert!(world_html.contains("osm_id"));
+    assert!(world_html.contains("osm_type"));
+    assert!(world_html.contains("game_overlay_id"));
+    assert!(world_html.contains("odbl_database_obligations"));
+    assert!(world_html.contains("no_live_overpass"));
     assert!(world_html.contains("Trillionnium World Map"));
     assert!(world_html.contains("OpenStreetMap upgraded into a playable world"));
     assert!(world_html.contains("Player avatars / 跑图角色"));
@@ -11727,6 +11833,31 @@ async fn health_endpoint_exposes_identity_governance_overview() {
     );
     assert_eq!(
         body["trillionnium_world_playability_scorecard"]["future_engine_readiness_gate"]
+            ["maplibre_shadow_only"],
+        true
+    );
+    assert_eq!(
+        body["trillionnium_world_playability_scorecard"]["future_engine_readiness_gate"]
+            ["maplibre_canary_percent"],
+        0
+    );
+    assert_eq!(
+        body["trillionnium_world_playability_scorecard"]["future_engine_readiness_gate"]
+            ["maplibre_max_canary_percent_without_new_signoff"],
+        1
+    );
+    assert_eq!(
+        body["trillionnium_world_playability_scorecard"]["future_engine_readiness_gate"]
+            ["maplibre_canary_starts_at_zero"],
+        true
+    );
+    assert_eq!(
+        body["trillionnium_world_playability_scorecard"]["future_engine_readiness_gate"]
+            ["maplibre_rollback_drill_evidence_required"],
+        true
+    );
+    assert_eq!(
+        body["trillionnium_world_playability_scorecard"]["future_engine_readiness_gate"]
             ["maplibre_canary_rollback_drill_visible"],
         true
     );
@@ -11970,6 +12101,17 @@ async fn metrics_endpoint_exposes_identity_governance_gauges() {
     ));
     assert!(body
         .contains("cex_consumer_entry_trillionnium_world_map_maplibre_shadow_parity_gate_green"));
+    assert!(body.contains("cex_consumer_entry_trillionnium_world_map_maplibre_shadow_only"));
+    assert!(body.contains("cex_consumer_entry_trillionnium_world_map_maplibre_canary_percent"));
+    assert!(body.contains(
+        "cex_consumer_entry_trillionnium_world_map_maplibre_max_canary_percent_without_new_signoff"
+    ));
+    assert!(
+        body.contains("cex_consumer_entry_trillionnium_world_map_maplibre_canary_starts_at_zero")
+    );
+    assert!(body.contains(
+        "cex_consumer_entry_trillionnium_world_map_maplibre_rollback_drill_evidence_required"
+    ));
     assert!(
         body.contains("cex_consumer_entry_trillionnium_world_map_maplibre_canary_rollback_ready")
     );

@@ -908,7 +908,12 @@ fn app_future_engine_readiness_gate_json(app: &Value) -> Value {
         "shadow_renderer_contract_version": future_engine_readiness.and_then(|readiness| readiness.get("shadow_renderer_contract")).and_then(|shadow| shadow.get("contract_version")).and_then(Value::as_str),
         "shadow_renderer_status": future_engine_readiness.and_then(|readiness| readiness.get("shadow_renderer_contract")).and_then(|shadow| shadow.get("status")).and_then(Value::as_str),
         "maplibre_shadow_parity_contract_version": future_engine_readiness.and_then(|readiness| readiness.get("shadow_renderer_contract")).and_then(|shadow| shadow.get("maplibre_shadow_parity")).and_then(|parity| parity.get("contract_version")).and_then(Value::as_str),
+        "maplibre_shadow_only": future_engine_readiness.and_then(|readiness| readiness.get("shadow_renderer_contract")).and_then(|shadow| shadow.get("maplibre_shadow_parity")).and_then(|parity| parity.get("rollout_readiness")).and_then(|rollout| rollout.get("shadow_only")).and_then(Value::as_bool).unwrap_or(false),
         "maplibre_shadow_marker_cluster_popup_focus_parity_visible": future_engine_readiness.and_then(|readiness| readiness.get("shadow_renderer_contract")).and_then(|shadow| shadow.get("parity_checks")).and_then(Value::as_array).is_some_and(|checks| checks.iter().any(|value| value == "same_marker_cluster_count") && checks.iter().any(|value| value == "same_popup_semantics") && checks.iter().any(|value| value == "same_focus_and_action_behavior")),
+        "maplibre_canary_percent": future_engine_readiness.and_then(|readiness| readiness.get("shadow_renderer_contract")).and_then(|shadow| shadow.get("maplibre_shadow_parity")).and_then(|parity| parity.get("rollout_readiness")).and_then(|rollout| rollout.get("canary_percent")).and_then(Value::as_i64).unwrap_or(100),
+        "maplibre_canary_starts_at_zero": future_engine_readiness.and_then(|readiness| readiness.get("shadow_renderer_contract")).and_then(|shadow| shadow.get("maplibre_shadow_parity")).and_then(|parity| parity.get("rollout_readiness")).and_then(|rollout| rollout.get("canary_percent")).and_then(Value::as_i64).unwrap_or(100) == 0,
+        "maplibre_max_canary_percent_without_new_signoff": future_engine_readiness.and_then(|readiness| readiness.get("shadow_renderer_contract")).and_then(|shadow| shadow.get("maplibre_shadow_parity")).and_then(|parity| parity.get("rollout_readiness")).and_then(|rollout| rollout.get("max_canary_percent_without_new_signoff")).and_then(Value::as_i64).unwrap_or(100),
+        "maplibre_rollback_drill_evidence_required": future_engine_readiness.and_then(|readiness| readiness.get("shadow_renderer_contract")).and_then(|shadow| shadow.get("maplibre_shadow_parity")).and_then(|parity| parity.get("rollout_readiness")).and_then(|rollout| rollout.get("rollback_drill_evidence_required")).and_then(Value::as_bool).unwrap_or(false),
         "maplibre_canary_rollback_drill_visible": future_engine_readiness.and_then(|readiness| readiness.get("shadow_renderer_contract")).and_then(|shadow| shadow.get("canary_policy")).and_then(|policy| policy.get("rollback_drill_required")).and_then(Value::as_bool).unwrap_or(false),
         "rollback_plan_visible": future_engine_readiness.and_then(|readiness| readiness.get("rollback_plan")).and_then(|plan| plan.get("candidate_is_shadow_only")).and_then(Value::as_bool).unwrap_or(false),
         "promotion_blocker_count": future_engine_readiness.and_then(|readiness| readiness.get("promotion_blockers")).and_then(Value::as_array).map(Vec::len).unwrap_or(0),
@@ -966,7 +971,29 @@ fn is_future_engine_readiness_gate_green(gate: &Value) -> bool {
             .and_then(Value::as_str)
             == Some("trillionnium_world_map_maplibre_shadow_parity_v1")
         && gate
+            .get("maplibre_shadow_only")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && gate
             .get("maplibre_shadow_marker_cluster_popup_focus_parity_visible")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && gate
+            .get("maplibre_canary_percent")
+            .and_then(Value::as_i64)
+            .unwrap_or(100)
+            == 0
+        && gate
+            .get("maplibre_canary_starts_at_zero")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && gate
+            .get("maplibre_max_canary_percent_without_new_signoff")
+            .and_then(Value::as_i64)
+            .unwrap_or(100)
+            <= 1
+        && gate
+            .get("maplibre_rollback_drill_evidence_required")
             .and_then(Value::as_bool)
             .unwrap_or(false)
         && gate
@@ -4154,13 +4181,35 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
         .and_then(Value::as_str)
         == Some("trillionnium_world_map_maplibre_shadow_parity_v1")
         && future_engine_readiness_gate
+            .get("maplibre_shadow_only")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && future_engine_readiness_gate
             .get("maplibre_shadow_marker_cluster_popup_focus_parity_visible")
             .and_then(Value::as_bool)
             .unwrap_or(false);
     let world_map_maplibre_canary_rollback_ready = future_engine_readiness_gate
-        .get("maplibre_canary_rollback_drill_visible")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
+        .get("maplibre_canary_percent")
+        .and_then(Value::as_i64)
+        .unwrap_or(100)
+        == 0
+        && future_engine_readiness_gate
+            .get("maplibre_canary_starts_at_zero")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && future_engine_readiness_gate
+            .get("maplibre_max_canary_percent_without_new_signoff")
+            .and_then(Value::as_i64)
+            .unwrap_or(100)
+            <= 1
+        && future_engine_readiness_gate
+            .get("maplibre_rollback_drill_evidence_required")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && future_engine_readiness_gate
+            .get("maplibre_canary_rollback_drill_visible")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
         && future_engine_readiness_gate
             .get("rollback_plan_visible")
             .and_then(Value::as_bool)
@@ -4305,6 +4354,16 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
             "cex_consumer_entry_trillionnium_world_map_gameplay_accessibility_i18n_gate_green {}\n",
             "# TYPE cex_consumer_entry_trillionnium_world_map_maplibre_shadow_parity_gate_green gauge\n",
             "cex_consumer_entry_trillionnium_world_map_maplibre_shadow_parity_gate_green {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_map_maplibre_shadow_only gauge\n",
+            "cex_consumer_entry_trillionnium_world_map_maplibre_shadow_only {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_map_maplibre_canary_percent gauge\n",
+            "cex_consumer_entry_trillionnium_world_map_maplibre_canary_percent {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_map_maplibre_max_canary_percent_without_new_signoff gauge\n",
+            "cex_consumer_entry_trillionnium_world_map_maplibre_max_canary_percent_without_new_signoff {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_map_maplibre_canary_starts_at_zero gauge\n",
+            "cex_consumer_entry_trillionnium_world_map_maplibre_canary_starts_at_zero {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_map_maplibre_rollback_drill_evidence_required gauge\n",
+            "cex_consumer_entry_trillionnium_world_map_maplibre_rollback_drill_evidence_required {}\n",
             "# TYPE cex_consumer_entry_trillionnium_world_map_maplibre_canary_rollback_ready gauge\n",
             "cex_consumer_entry_trillionnium_world_map_maplibre_canary_rollback_ready {}\n",
             "# TYPE cex_consumer_entry_profile_validation_ok gauge\n",
@@ -4774,6 +4833,32 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
         gauge_bool(world_map_offline_action_queue_gate_green),
         gauge_bool(world_map_gameplay_accessibility_i18n_gate_green),
         gauge_bool(world_map_maplibre_shadow_parity_gate_green),
+        gauge_bool(
+            future_engine_readiness_gate
+                .get("maplibre_shadow_only")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        ),
+        future_engine_readiness_gate
+            .get("maplibre_canary_percent")
+            .and_then(Value::as_i64)
+            .unwrap_or(100),
+        future_engine_readiness_gate
+            .get("maplibre_max_canary_percent_without_new_signoff")
+            .and_then(Value::as_i64)
+            .unwrap_or(100),
+        gauge_bool(
+            future_engine_readiness_gate
+                .get("maplibre_canary_starts_at_zero")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        ),
+        gauge_bool(
+            future_engine_readiness_gate
+                .get("maplibre_rollback_drill_evidence_required")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        ),
         gauge_bool(world_map_maplibre_canary_rollback_ready),
         profile_ok,
         if state.config().ingress_token.is_some() {
