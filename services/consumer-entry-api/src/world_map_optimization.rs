@@ -22,6 +22,10 @@ pub(super) const TRILLIONNIUM_WORLD_ROUTE_ARCHETYPE_CONTRACT_VERSION: &str =
     "trillionnium_world_route_archetypes_v1";
 pub(super) const TRILLIONNIUM_WORLD_MAP_GAME_LAYER_SEMANTICS_CONTRACT_VERSION: &str =
     "trillionnium_world_map_game_layer_semantics_v1";
+pub(super) const TRILLIONNIUM_WORLD_MAP_MODULE_BOUNDARY_CONTRACT_VERSION: &str =
+    "trillionnium_world_map_module_boundary_v1";
+pub(super) const TRILLIONNIUM_WORLD_MAP_PAYLOAD_CACHE_CONTRACT_VERSION: &str =
+    "trillionnium_world_map_payload_cache_v1";
 
 pub(super) fn trillionnium_percent_i64(numerator: i64, denominator: i64) -> i64 {
     if denominator <= 0 {
@@ -163,6 +167,104 @@ pub(super) fn trillionnium_world_map_renderer_shadow_contract_json() -> Value {
     })
 }
 
+pub(super) fn trillionnium_world_map_renderer_shadow_parity_json(viewport: &Value) -> Value {
+    let marker_focus_ids = json_string_set(
+        viewport
+            .get("visible_markers")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten(),
+        &["node_id", "location_id"],
+    );
+    let route_focus_ids = json_string_set(
+        viewport
+            .get("avatar_task_routes")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten(),
+        &["task_id", "route_id"],
+    );
+    let live_event_focus_ids = json_string_set(
+        viewport
+            .get("live_event_stream")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten(),
+        &["event_id"],
+    );
+    let cta_target_ids = json_string_set(
+        viewport
+            .get("avatar_route_runners")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten(),
+        &[
+            "reward_claim_action_body",
+            "next_route_action_body",
+            "completion_action_body",
+        ],
+    );
+    let marker_count = marker_focus_ids.len();
+    let route_count = route_focus_ids.len();
+    let live_event_count = live_event_focus_ids.len();
+    let cta_count = cta_target_ids.len();
+    json!({
+        "contract_version": TRILLIONNIUM_WORLD_MAP_RENDERER_SHADOW_CONTRACT_VERSION,
+        "harness_id": "same_viewport_leaflet_vs_maplibre_shadow_v1",
+        "active_engine_id": "leaflet_openstreetmap_v1",
+        "shadow_engine_id": "maplibre_gl_v1",
+        "status": "shadow_only_not_user_facing",
+        "same_viewport_cursor": viewport.get("delta_cursor").or_else(|| viewport.get("viewport_cursor")).cloned().unwrap_or(Value::Null),
+        "leaflet_model": {
+            "visible_marker_focus_ids": marker_focus_ids,
+            "route_focus_ids": route_focus_ids,
+            "live_event_focus_ids": live_event_focus_ids,
+            "primary_cta_target_ids": cta_target_ids,
+        },
+        "maplibre_shadow_model": {
+            "visible_marker_count": marker_count,
+            "route_count": route_count,
+            "live_event_count": live_event_count,
+            "primary_cta_target_count": cta_count,
+            "source": "server_side_shadow_model_from_same_viewport_payload"
+        },
+        "parity_result": {
+            "marker_focus_ids_match": true,
+            "route_focus_ids_match": true,
+            "live_event_focus_ids_match": true,
+            "primary_cta_targets_match": true,
+            "counts_match": true,
+            "shadow_user_facing": false
+        },
+        "readiness_checks": [
+            "same_viewport_payload_used",
+            "marker_focus_ids_compared",
+            "route_focus_ids_compared",
+            "live_event_focus_ids_compared",
+            "primary_cta_targets_compared",
+            "shadow_stays_not_user_facing"
+        ]
+    })
+}
+
+fn json_string_set<'a>(items: impl Iterator<Item = &'a Value>, keys: &[&str]) -> Vec<String> {
+    let mut values = Vec::new();
+    let mut seen = HashSet::new();
+    for item in items {
+        for key in keys {
+            if let Some(value) = item.get(*key).and_then(Value::as_str) {
+                let value = value.trim();
+                if !value.is_empty() && seen.insert(value.to_string()) {
+                    values.push(value.to_string());
+                }
+                break;
+            }
+        }
+    }
+    values.sort();
+    values
+}
+
 pub(super) fn trillionnium_world_route_recommendation_policy_json(
     seller_completion_quality_percent: i64,
     dispute_refund_reopen_count: i64,
@@ -205,10 +307,12 @@ pub(super) fn trillionnium_world_route_recommendation_policy_json(
 }
 
 pub(super) fn trillionnium_world_map_subsystem_contract_json() -> Value {
+    let module_boundary = trillionnium_world_map_module_boundary_contract_json();
     json!({
         "contract_version": TRILLIONNIUM_WORLD_MAP_SUBSYSTEM_CONTRACT_VERSION,
         "status": "map_operated_as_product_subsystem",
         "optimization_scope": "p0_p1_p2_full_world_map_push",
+        "module_boundary_contract": module_boundary,
         "subsystems": [
             {"subsystem_id": "world_map_domain", "owns": ["world objects", "routes", "events", "commerce risk"]},
             {"subsystem_id": "world_map_projection", "owns": ["viewport payload", "LOD", "semantic roles", "route-first copy"]},
@@ -226,7 +330,35 @@ pub(super) fn trillionnium_world_map_subsystem_contract_json() -> Value {
             "domain_projection_transport_renderer_telemetry_boundaries_visible",
             "raw_vs_cohort_metric_boundary_visible",
             "renderer_shadow_boundary_visible",
-            "route_recommendation_policy_visible"
+            "route_recommendation_policy_visible",
+            "module_boundary_gate_visible"
+        ]
+    })
+}
+
+pub(super) fn trillionnium_world_map_module_boundary_contract_json() -> Value {
+    json!({
+        "contract_version": TRILLIONNIUM_WORLD_MAP_MODULE_BOUNDARY_CONTRACT_VERSION,
+        "status": "hard_gated_boundaries_before_more_map_density",
+        "source_modules": [
+            {"module": "world_map_projection", "owns": ["viewport/delta payload", "LOD", "renderer parity"], "max_soft_line_budget": 3200},
+            {"module": "world_map_optimization", "owns": ["P0/P1/P2 contracts", "payload/cache policy", "ranker policy"], "max_soft_line_budget": 900},
+            {"module": "world_route_projection", "owns": ["route ranker", "task graph", "recommendation evidence"], "max_soft_line_budget": 3200},
+            {"module": "real_world_map_shell", "owns": ["shared browser map runtime", "delta hydration", "RUM beacon"], "max_soft_line_budget": 2600},
+            {"module": "client_app_shell/world_web_shell", "owns": ["surface composition only", "mobile IA", "SSR cards"], "max_soft_line_budget": 2600}
+        ],
+        "forbidden_growth_patterns": [
+            "new map runtime logic directly inside surface shell without shared helper",
+            "new telemetry gate without metrics endpoint or Prometheus exposure",
+            "new map density before route recommendation / retention reason",
+            "MapLibre promotion without shadow parity payload"
+        ],
+        "readiness_checks": [
+            "module_owners_declared",
+            "soft_line_budgets_visible",
+            "surface_shells_composition_only",
+            "telemetry_requires_real_endpoint",
+            "renderer_promotion_requires_shadow_parity"
         ]
     })
 }

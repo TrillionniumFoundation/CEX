@@ -1025,7 +1025,11 @@ pub(super) async fn get_client_app_web_shell(
         .and_then(|calendar| calendar.get("return_reason"))
         .and_then(Value::as_str)
         .unwrap_or("Queued route payoff, market movement, raid window, and next unlock.");
-    let app_data_json = serde_json::to_string(&app)
+    let app_bootstrap = trillionnium_slim_map_bootstrap_json(&app, "client_app_web_shell");
+    let app_bootstrap_bytes = serde_json::to_string(&app_bootstrap)
+        .map(|value| value.len())
+        .unwrap_or(0);
+    let app_data_json = serde_json::to_string(&app_bootstrap)
         .unwrap_or_else(|_| "{}".to_string())
         .replace("</", "<\\/");
     let current_matrix_user_id_json = serde_json::to_string(current_matrix_user_id)
@@ -1363,7 +1367,7 @@ pub(super) async fn get_client_app_web_shell(
       </div>
       <section id="app-message-cards" class="grid">{}</section>
     </section>
-    <section id="app-tab-map" class="app-tab-panel is-active" data-app-panel="map" role="tabpanel" aria-labelledby="app-tab-button-map" aria-hidden="false">
+    <section id="app-tab-map" class="app-tab-panel is-active" data-app-panel="map" role="tabpanel" aria-labelledby="app-tab-button-map" aria-hidden="false" data-bootstrap-mode="truncated_runtime_bootstrap_with_lazy_delta_hydration" data-bootstrap-payload-bytes="{}" data-cache-contract="trillionnium_world_map_payload_cache_v1">
       <div class="app-tab-header">
         <h2 data-i18n-en="World" data-i18n-zh="世界">World</h2>
         <p class="subtitle" data-i18n-en="Main stage for exploration, routes, events, and actions." data-i18n-zh="探索、路线、事件和行动都从这里展开。">Main stage for exploration, routes, events, and actions.</p>
@@ -1561,6 +1565,8 @@ pub(super) async fn get_client_app_web_shell(
       const feedWebSessionPath = ((((app.feed || {{}}).web_session_path) || '')) || '/app/web/feed';
       const feedFilterLabels = {};
       let lastViewport = null;
+      let lastViewportCursor = null;
+      let mapRumFirstInteractiveSent = false;
       let lastFeed = app.feed || {{}};
       let lastSelection = null;
       let lastRouteActions = [];
@@ -2190,6 +2196,7 @@ pub(super) async fn get_client_app_web_shell(
         onboarding_command_disclosure_copy_html,
         onboarding_step_cards,
         message_cards,
+        app_bootstrap_bytes,
         escape_html_text(map_product_name),
         escape_html_text(map_product_name),
         escape_html_text(map_upgrade_model),
@@ -2241,4 +2248,12 @@ pub(super) async fn get_client_app_web_shell(
         current_matrix_user_id_json,
         feed_filter_labels_js,
     ))
+}
+
+pub(super) async fn get_client_app_web_shell_response(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let html = get_client_app_web_shell(State(state), headers).await.0;
+    html_resource_response(html, "trillionnium_world_map_app_shell_payload_v1")
 }

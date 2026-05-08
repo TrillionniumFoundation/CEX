@@ -3,7 +3,7 @@
 
 use axum::{
     extract::{Form, Path, Query, State},
-    http::{header, HeaderMap, StatusCode},
+    http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode},
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
     Json, Router,
@@ -115,6 +115,19 @@ struct ConsumerEntryMetrics {
     session_auth_successes: AtomicU64,
     session_auth_failures: AtomicU64,
     replay_hits: AtomicU64,
+    world_map_rum_samples: AtomicU64,
+    world_map_rum_first_interactive_ms_sum: AtomicU64,
+    world_map_rum_first_interactive_ms_max: AtomicU64,
+    world_map_rum_viewport_refresh_ms_sum: AtomicU64,
+    world_map_rum_viewport_refresh_ms_max: AtomicU64,
+    world_map_rum_focus_to_action_ms_sum: AtomicU64,
+    world_map_rum_focus_to_action_ms_max: AtomicU64,
+    world_map_rum_long_task_ms_sum: AtomicU64,
+    world_map_rum_long_task_ms_max: AtomicU64,
+    world_map_rum_tile_errors: AtomicU64,
+    world_map_delta_requests: AtomicU64,
+    world_map_delta_noop_responses: AtomicU64,
+    world_map_delta_snapshot_fallbacks: AtomicU64,
 }
 
 impl ConsumerEntryMetrics {
@@ -206,6 +219,53 @@ impl ConsumerEntryMetrics {
         self.replay_hits.fetch_add(1, Ordering::Relaxed);
     }
 
+    fn inc_world_map_delta_requests(&self) {
+        self.world_map_delta_requests
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn inc_world_map_delta_noop_responses(&self) {
+        self.world_map_delta_noop_responses
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn inc_world_map_delta_snapshot_fallbacks(&self) {
+        self.world_map_delta_snapshot_fallbacks
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_world_map_rum(&self, sample: &WorldMapRumRequest) {
+        self.world_map_rum_samples.fetch_add(1, Ordering::Relaxed);
+        if let Some(value) = sample.first_map_interactive_ms {
+            let value = value.min(60_000);
+            self.world_map_rum_first_interactive_ms_sum
+                .fetch_add(value, Ordering::Relaxed);
+            atomic_max(&self.world_map_rum_first_interactive_ms_max, value);
+        }
+        if let Some(value) = sample.viewport_refresh_ms {
+            let value = value.min(60_000);
+            self.world_map_rum_viewport_refresh_ms_sum
+                .fetch_add(value, Ordering::Relaxed);
+            atomic_max(&self.world_map_rum_viewport_refresh_ms_max, value);
+        }
+        if let Some(value) = sample.focus_to_action_rail_ms {
+            let value = value.min(60_000);
+            self.world_map_rum_focus_to_action_ms_sum
+                .fetch_add(value, Ordering::Relaxed);
+            atomic_max(&self.world_map_rum_focus_to_action_ms_max, value);
+        }
+        if let Some(value) = sample.main_thread_long_task_ms {
+            let value = value.min(60_000);
+            self.world_map_rum_long_task_ms_sum
+                .fetch_add(value, Ordering::Relaxed);
+            atomic_max(&self.world_map_rum_long_task_ms_max, value);
+        }
+        self.world_map_rum_tile_errors.fetch_add(
+            sample.tile_error_count.unwrap_or(0).min(10_000),
+            Ordering::Relaxed,
+        );
+    }
+
     fn snapshot(&self) -> Value {
         json!({
             "task_create_requests": self.task_create_requests.load(Ordering::Relaxed),
@@ -227,7 +287,94 @@ impl ConsumerEntryMetrics {
             "session_auth_successes": self.session_auth_successes.load(Ordering::Relaxed),
             "session_auth_failures": self.session_auth_failures.load(Ordering::Relaxed),
             "replay_hits": self.replay_hits.load(Ordering::Relaxed),
+            "world_map_rum": self.world_map_rum_snapshot(),
+            "world_map_delta": {
+                "requests": self.world_map_delta_requests.load(Ordering::Relaxed),
+                "noop_responses": self.world_map_delta_noop_responses.load(Ordering::Relaxed),
+                "snapshot_fallbacks": self.world_map_delta_snapshot_fallbacks.load(Ordering::Relaxed),
+                "contract_version": TRILLIONNIUM_WORLD_MAP_TRANSPORT_DELTA_CONTRACT_VERSION,
+            },
         })
+    }
+
+    fn world_map_rum_snapshot(&self) -> Value {
+        let samples = self.world_map_rum_samples.load(Ordering::Relaxed);
+        let avg = |sum: &AtomicU64| {
+            if samples == 0 {
+                0
+            } else {
+                sum.load(Ordering::Relaxed) / samples.max(1)
+            }
+        };
+        json!({
+            "contract_version": TRILLIONNIUM_WORLD_MAP_RUNTIME_PERFORMANCE_BUDGET_CONTRACT_VERSION,
+            "sample_count": samples,
+            "first_map_interactive_avg_ms": avg(&self.world_map_rum_first_interactive_ms_sum),
+            "first_map_interactive_max_ms": self.world_map_rum_first_interactive_ms_max.load(Ordering::Relaxed),
+            "viewport_refresh_avg_ms": avg(&self.world_map_rum_viewport_refresh_ms_sum),
+            "viewport_refresh_max_ms": self.world_map_rum_viewport_refresh_ms_max.load(Ordering::Relaxed),
+            "focus_to_action_rail_avg_ms": avg(&self.world_map_rum_focus_to_action_ms_sum),
+            "focus_to_action_rail_max_ms": self.world_map_rum_focus_to_action_ms_max.load(Ordering::Relaxed),
+            "main_thread_long_task_avg_ms": avg(&self.world_map_rum_long_task_ms_sum),
+            "main_thread_long_task_max_ms": self.world_map_rum_long_task_ms_max.load(Ordering::Relaxed),
+            "tile_error_count": self.world_map_rum_tile_errors.load(Ordering::Relaxed),
+            "source": "browser_real_user_measurement_endpoint",
+        })
+    }
+}
+
+fn atomic_max(target: &AtomicU64, value: u64) {
+    let mut current = target.load(Ordering::Relaxed);
+    while value > current {
+        match target.compare_exchange(current, value, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => break,
+            Err(next) => current = next,
+        }
+    }
+}
+
+fn html_resource_response(body: String, resource_contract: &'static str) -> Response {
+    let mut response = Html(body).into_response();
+    apply_resource_headers(
+        &mut response,
+        "private, max-age=30, stale-while-revalidate=120",
+        None,
+    );
+    response.headers_mut().insert(
+        HeaderName::from_static("x-trillionnium-resource-contract"),
+        HeaderValue::from_static(resource_contract),
+    );
+    response
+}
+
+fn json_resource_response(
+    value: Value,
+    cache_control: &'static str,
+    etag: Option<String>,
+) -> Response {
+    let mut response = Json(value).into_response();
+    apply_resource_headers(&mut response, cache_control, etag);
+    response
+}
+
+fn apply_resource_headers(
+    response: &mut Response,
+    cache_control: &'static str,
+    etag: Option<String>,
+) {
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static(cache_control),
+    );
+    response
+        .headers_mut()
+        .insert(header::VARY, HeaderValue::from_static("Accept-Encoding"));
+    response.headers_mut().insert(
+        HeaderName::from_static("x-trillionnium-cache-contract"),
+        HeaderValue::from_static("trillionnium_world_map_payload_cache_v1"),
+    );
+    if let Some(etag) = etag.and_then(|value| HeaderValue::from_str(&value).ok()) {
+        response.headers_mut().insert(header::ETAG, etag);
     }
 }
 
@@ -1519,6 +1666,21 @@ struct WorldWebMapMoveRequest {
     matrix_user_id: Option<String>,
     csrf: Option<String>,
     target: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorldMapRumRequest {
+    matrix_user_id: Option<String>,
+    surface_id: Option<String>,
+    session_id: Option<String>,
+    viewport_cursor: Option<String>,
+    sample_kind: Option<String>,
+    user_agent_class: Option<String>,
+    first_map_interactive_ms: Option<u64>,
+    viewport_refresh_ms: Option<u64>,
+    focus_to_action_rail_ms: Option<u64>,
+    main_thread_long_task_ms: Option<u64>,
+    tile_error_count: Option<u64>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -3424,13 +3586,15 @@ pub fn build_router(state: AppState) -> Router {
         .route("/favicon.ico", get(get_favicon))
         .route("/health", get(health))
         .route("/metrics", get(metrics))
-        .route("/app", get(get_client_app_web_shell))
+        .route("/app", get(get_client_app_web_shell_response))
         .route("/league", get(get_league_web_shell))
-        .route("/world", get(get_world_web_shell))
+        .route("/world", get(get_world_web_shell_response))
         .route("/league/web/session", post(post_league_web_session))
         .route("/league/web/action", post(post_league_web_action))
         .route("/app/web/map-viewport", get(get_world_web_map_viewport))
         .route("/world/web/map-viewport", get(get_world_web_map_viewport))
+        .route("/world/web/map-delta", get(get_world_web_map_delta))
+        .route("/world/web/map-rum", post(post_world_web_map_rum))
         .route("/world/web/action", post(post_world_web_action))
         .route("/world/web/map-move", post(post_world_web_map_move))
         .route(
@@ -3459,6 +3623,14 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/v1/world/map/:matrix_user_id/viewport",
             get(get_world_map_viewport),
+        )
+        .route(
+            "/v1/world/map/:matrix_user_id/delta",
+            get(get_world_map_delta),
+        )
+        .route(
+            "/v1/world/map/:matrix_user_id/rum",
+            post(post_world_map_rum),
         )
         .route("/v1/world/map/move", post(move_world_map))
         .route("/v1/world/action", post(post_world_action))

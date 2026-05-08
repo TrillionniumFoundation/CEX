@@ -738,14 +738,137 @@ impl<'a> WorldRouteProjectionContext<'a> {
             .collect()
     }
 
+    fn recommendation_ranked_preview_item(&self, mut item: Value) -> Value {
+        let (score, reasons) = self.route_recommendation_score(&item);
+        if let Some(object) = item.as_object_mut() {
+            object.insert("route_recommendation_score".to_string(), json!(score));
+            object.insert(
+                "route_recommendation_policy_contract_version".to_string(),
+                json!(TRILLIONNIUM_WORLD_ROUTE_RECOMMENDATION_POLICY_CONTRACT_VERSION),
+            );
+            object.insert("route_recommendation_reasons".to_string(), reasons);
+            object.insert(
+                "route_recommendation_ranker".to_string(),
+                json!("commercial_quality_weighted_route_ranker_v1"),
+            );
+        }
+        item
+    }
+
+    fn route_recommendation_score(&self, item: &Value) -> (i64, Value) {
+        let bucket = item
+            .get("route_bucket")
+            .and_then(Value::as_str)
+            .unwrap_or("event");
+        let status = item
+            .get("route_status")
+            .and_then(Value::as_str)
+            .unwrap_or("pending")
+            .to_ascii_lowercase();
+        let summary = item
+            .get("summary")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let detail = item
+            .get("detail")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let has_location = item
+            .get("location_id")
+            .and_then(Value::as_str)
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false);
+        let has_task = item
+            .get("task_id")
+            .and_then(Value::as_str)
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false)
+            || item.get("work_order_id").and_then(Value::as_str).is_some();
+        let active_route_relevance = match bucket {
+            "work_order" | "delivery" | "contract" => 35,
+            "purchase" | "event" => 28,
+            "completion" | "acceptance" => 20,
+            _ => 16,
+        } + if has_task { 5 } else { 0 };
+        let seller_completion_quality = if matches!(bucket, "acceptance" | "completion")
+            || status.contains("completed")
+            || status.contains("accepted")
+            || status.contains("settled")
+        {
+            25
+        } else if matches!(bucket, "delivery" | "work_order" | "contract") {
+            18
+        } else {
+            10
+        };
+        let low_dispute_risk = if matches!(bucket, "rejection" | "reopen" | "cancellation")
+            || status.contains("refund")
+            || status.contains("rejected")
+            || status.contains("cancel")
+        {
+            4
+        } else if summary.contains("risk")
+            || detail.contains("risk")
+            || summary.contains("evidence")
+        {
+            18
+        } else {
+            14
+        };
+        let reward_to_next_route_lift = if status.contains("reward")
+            || status.contains("claim")
+            || matches!(bucket, "acceptance" | "completion")
+        {
+            15
+        } else if matches!(bucket, "delivery" | "work_order") {
+            11
+        } else {
+            7
+        };
+        let geographic_nearness = if has_location { 5 } else { 0 };
+        let score = active_route_relevance
+            + seller_completion_quality
+            + low_dispute_risk
+            + reward_to_next_route_lift
+            + geographic_nearness;
+        (
+            score,
+            json!({
+                "active_route_relevance": active_route_relevance,
+                "seller_completion_quality": seller_completion_quality,
+                "low_dispute_risk": low_dispute_risk,
+                "reward_to_next_route_lift": reward_to_next_route_lift,
+                "geographic_nearness": geographic_nearness,
+                "suppressed_for_dispute_risk": low_dispute_risk < 10,
+                "policy": "prefer completable, low-risk, evidence-clear routes before raw recency or map density"
+            }),
+        )
+    }
+
     fn preview_json(&self) -> Value {
-        let mut items = self.preview_items();
+        let mut items = self
+            .preview_items()
+            .into_iter()
+            .map(|item| self.recommendation_ranked_preview_item(item))
+            .collect::<Vec<_>>();
 
         items.sort_by(|left, right| {
             right
-                .get("created_at_epoch")
+                .get("route_recommendation_score")
                 .and_then(Value::as_i64)
-                .cmp(&left.get("created_at_epoch").and_then(Value::as_i64))
+                .cmp(
+                    &left
+                        .get("route_recommendation_score")
+                        .and_then(Value::as_i64),
+                )
+                .then_with(|| {
+                    right
+                        .get("created_at_epoch")
+                        .and_then(Value::as_i64)
+                        .cmp(&left.get("created_at_epoch").and_then(Value::as_i64))
+                })
         });
         items.truncate(24);
 
@@ -763,6 +886,9 @@ impl<'a> WorldRouteProjectionContext<'a> {
             "projection_layer": "world_route_projection_v1",
             "projection_context": "WorldRouteProjectionContext",
             "index_layer": "WorldIndexes::recent_route_indices_v1",
+            "ranker": "commercial_quality_weighted_route_ranker_v1",
+            "ranker_contract_version": TRILLIONNIUM_WORLD_ROUTE_RECOMMENDATION_POLICY_CONTRACT_VERSION,
+            "ranker_inputs": ["active_route_relevance", "seller_completion_quality", "low_dispute_risk", "reward_to_next_route_lift", "geographic_nearness"],
             "item_count": items.len(),
             "task_linked_count": task_linked_count,
             "items": items,

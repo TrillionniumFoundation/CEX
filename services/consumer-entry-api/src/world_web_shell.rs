@@ -752,7 +752,11 @@ pub(super) async fn get_world_web_shell(
             .and_then(Value::as_str)
             .unwrap_or("dense"),
     );
-    let world_map_data_json = serde_json::to_string(&world_map)
+    let world_map_bootstrap = trillionnium_slim_map_bootstrap_json(&world_map, "world_web_shell");
+    let world_map_bootstrap_bytes = serde_json::to_string(&world_map_bootstrap)
+        .map(|value| value.len())
+        .unwrap_or(0);
+    let world_map_data_json = serde_json::to_string(&world_map_bootstrap)
         .unwrap_or_else(|_| "{}".to_string())
         .replace("</", "<\\/");
     let latest_asset_id = world_indexes
@@ -1495,6 +1499,8 @@ pub(super) async fn get_world_web_shell(
       main > section > .grid {{ max-height:420px; overflow:auto; padding-right:4px; }}
       .timeline {{ max-height:420px; overflow:auto; padding-right:4px; }}
       .timeline li {{ grid-template-columns:1fr; }}
+      .world-secondary-collapsed {{ max-height:104px !important; overflow:hidden; position:relative; }}
+      .world-secondary-collapsed::after {{ content:'More in command palette / 更多内容进入命令抽屉'; position:absolute; left:12px; right:12px; bottom:8px; padding:7px 10px; border-radius:999px; background:rgba(6,7,17,.88); color:var(--muted); font-size:11px; border:1px solid rgba(255,255,255,.1); }}
     }}
   </style>
 </head>
@@ -1563,7 +1569,7 @@ pub(super) async fn get_world_web_shell(
         </div>
       </details>
     </section>
-    <section id="world-map-shell-panel" class="panel">
+    <section id="world-map-shell-panel" class="panel" data-bootstrap-mode="truncated_runtime_bootstrap_with_lazy_delta_hydration" data-bootstrap-payload-bytes="{world_map_bootstrap_bytes}" data-cache-contract="trillionnium_world_map_payload_cache_v1">
       <div class="map-shell">
         <div class="map-copy">
           <div class="pill" data-i18n-en="{map_product_name_html}" data-i18n-zh="Trillionnium 世界地图">{map_product_name_html}</div>
@@ -1643,7 +1649,7 @@ pub(super) async fn get_world_web_shell(
         <div id="world-real-map" data-engine="{map_engine_id}" data-provider="{tile_provider}" aria-label="Trillionnium World Map" data-i18n-aria-label-en="Trillionnium World Map" data-i18n-aria-label-zh="Trillionnium 世界地图"></div>
       </div>
     </section>
-    <section>
+    <section class="world-secondary-collapsed" data-mobile-ia="collapsed_secondary_panel">
       <h2 data-i18n-en="World Regions" data-i18n-zh="世界区域">World Regions</h2>
       <div class="grid">{zone_cards}</div>
     </section>
@@ -1671,20 +1677,20 @@ pub(super) async fn get_world_web_shell(
           <button type="submit" data-i18n-en="Submit World Action" data-i18n-zh="提交世界行动">Submit World Action</button>
         </form>
       </div>
-      <div class="panel">
+      <div class="panel world-secondary-collapsed" data-mobile-ia="collapsed_secondary_panel">
         <h2 data-i18n-en="World Event Timeline" data-i18n-zh="世界事件时间线">World Event Timeline</h2>
         <ul id="world-event-timeline" class="timeline">{event_items}</ul>
       </div>
     </section>
-    <section class="panel">
+    <section class="panel world-secondary-collapsed" data-mobile-ia="collapsed_secondary_panel">
       <h2 data-i18n-en="Places" data-i18n-zh="地点">Places</h2>
       <div class="mini-grid">{location_cards}</div>
     </section>
-    <section class="panel">
+    <section class="panel world-secondary-collapsed" data-mobile-ia="collapsed_secondary_panel">
       <h2 data-i18n-en="Agent Residents · NPC" data-i18n-zh="Agent 居民 · NPC">Agent Residents · NPC</h2>
       <div class="mini-grid">{entity_cards}</div>
     </section>
-    <section id="world-assets-panel" class="panel">
+    <section id="world-assets-panel" class="panel world-secondary-collapsed" data-mobile-ia="collapsed_secondary_panel">
       <h2 data-i18n-en="Character Items" data-i18n-zh="角色道具">Character Items</h2>
       <div class="mini-grid">{asset_cards}</div>
       <form method="post" action="/world/web/asset" style="margin-top:16px">
@@ -1695,7 +1701,7 @@ pub(super) async fn get_world_web_shell(
         <button type="submit" data-i18n-en="Upgrade Item" data-i18n-zh="升级道具">Upgrade Item</button>
       </form>
     </section>
-    <section id="world-companies-panel" class="panel">
+    <section id="world-companies-panel" class="panel world-secondary-collapsed" data-mobile-ia="collapsed_secondary_panel">
       <h2 data-i18n-en="Studios and Hubs" data-i18n-zh="工坊与据点">Studios and Hubs</h2>
       <div class="mini-grid">{company_cards}</div>
       <form method="post" action="/world/web/company" style="margin-top:16px">
@@ -1706,7 +1712,7 @@ pub(super) async fn get_world_web_shell(
         <button type="submit" data-i18n-en="Launch Studio" data-i18n-zh="建立工坊">Launch Studio</button>
       </form>
     </section>
-    <section id="world-listings-panel" class="panel">
+    <section id="world-listings-panel" class="panel world-secondary-collapsed" data-mobile-ia="collapsed_secondary_panel">
       <h2 data-i18n-en="Hubs and Quest Cards" data-i18n-zh="据点与任务牌">Hubs and Quest Cards</h2>
       <div class="mini-grid">{shop_cards}</div>
       <div class="mini-grid" style="margin-top:12px">{listing_cards}</div>
@@ -1778,12 +1784,12 @@ pub(super) async fn get_world_web_shell(
       </form>
       </details>
     </section>
-    <section class="panel">
+    <section class="panel world-secondary-collapsed" data-mobile-ia="collapsed_secondary_panel">
       <h2 data-i18n-en="Faction Reputation Map" data-i18n-zh="阵营声望图">Faction Reputation Map</h2>
       <div class="mini-grid">{faction_cards}</div>
       <div class="mini-grid" style="margin-top:12px">{standing_cards}</div>
     </section>
-    <section id="world-contracts-panel" class="panel">
+    <section id="world-contracts-panel" class="panel world-secondary-collapsed" data-mobile-ia="collapsed_secondary_panel">
       <h2 data-i18n-en="World Contracts" data-i18n-zh="世界契约">World Contracts</h2>
       <div id="world-contract-cards-live" class="mini-grid">{contract_cards}</div>
       <form id="world-contract-completion-form" method="post" action="/world/web/contract" style="margin-top:16px">
@@ -1794,11 +1800,11 @@ pub(super) async fn get_world_web_shell(
         <button type="submit" data-i18n-en="Complete Contract" data-i18n-zh="完成契约">Complete Contract</button>
       </form>
     </section>
-    <section class="panel">
+    <section class="panel world-secondary-collapsed" data-mobile-ia="collapsed_secondary_panel">
       <h2 data-i18n-en="Quest Route Graph" data-i18n-zh="任务路线图">Quest Route Graph</h2>
       <div id="world-route-task-graph-live" class="mini-grid">{world_route_task_graph_cards}</div>
     </section>
-    <section class="panel">
+    <section class="panel world-secondary-collapsed" data-mobile-ia="collapsed_secondary_panel">
       <h2 data-i18n-en="Playable Commands" data-i18n-zh="可玩指令">Playable Commands</h2>
       <p class="subtitle"><code>/world</code> <code data-i18n-en="/world action Launch an AI Design Studio" data-i18n-zh="/world action 我要开一家 AI 设计工坊">/world action Launch an AI Design Studio</code> <code>/league</code> <code>/arena</code> <code>/guild</code> <code>/raid</code></p>
     </section>
@@ -1844,6 +1850,8 @@ pub(super) async fn get_world_web_shell(
 
       const routeTaskGraphItems = ((((payload.route_task_graph || {{}}).tasks) || []));
       let lastViewport = null;
+      let lastViewportCursor = null;
+      let mapRumFirstInteractiveSent = false;
       let lastSelection = null;
       let routeFilterMode = 'all';
       {shared_map_runtime_primitives_js}
@@ -2420,5 +2428,17 @@ pub(super) async fn get_world_web_shell(
         csrf_input = csrf_input,
         language_runtime_script = trillionnium_language_runtime_script(),
         world_map_data_json = world_map_data_json,
+        world_map_bootstrap_bytes = world_map_bootstrap_bytes,
     ))
+}
+
+pub(super) async fn get_world_web_shell_response(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<HashMap<String, String>>,
+) -> Response {
+    let html = get_world_web_shell(State(state), headers, Query(query))
+        .await
+        .0;
+    html_resource_response(html, "trillionnium_world_map_world_shell_payload_v1")
 }

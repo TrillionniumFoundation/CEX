@@ -2174,6 +2174,140 @@ pub(super) fn real_world_map_planned_upgrade_engine_json() -> Value {
     })
 }
 
+fn world_map_viewport_cursor(viewport: &Value) -> String {
+    let active_region_id = viewport
+        .get("active_region")
+        .and_then(|region| region.get("region_id"))
+        .and_then(Value::as_str)
+        .unwrap_or("cn-shanghai-core");
+    let tile_id = viewport
+        .get("tile_center")
+        .and_then(|tile| tile.get("tile_id"))
+        .and_then(Value::as_str)
+        .unwrap_or("tile:unknown");
+    let zoom = viewport.get("zoom").and_then(Value::as_i64).unwrap_or(15);
+    let latest_event_epoch = viewport
+        .get("live_event_stream")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|event| event.get("created_at_epoch").and_then(Value::as_i64))
+        .max()
+        .unwrap_or(0);
+    let latest_runner_epoch = viewport
+        .get("avatar_route_runners")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|runner| {
+            runner
+                .get("lifecycle")
+                .and_then(|lifecycle| lifecycle.get("updated_at_epoch"))
+                .and_then(Value::as_i64)
+        })
+        .max()
+        .unwrap_or(0);
+    format!(
+        "region={active_region_id};tile={tile_id};z={zoom};e={latest_event_epoch};r={latest_runner_epoch};m={};a={}",
+        viewport.get("marker_count").and_then(Value::as_i64).unwrap_or(0),
+        viewport
+            .get("player_avatar_count")
+            .and_then(Value::as_i64)
+            .unwrap_or(0)
+    )
+}
+
+fn world_map_weak_etag(cursor: &str) -> String {
+    let safe = cursor
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+        .collect::<String>();
+    format!("W/\"trillionnium-map-{safe}\"")
+}
+
+pub(super) fn world_map_delta_json(
+    world: &WorldState,
+    matrix_user_id: &str,
+    lat: Option<f64>,
+    lng: Option<f64>,
+    zoom: Option<i64>,
+    radius_km: Option<f64>,
+    limit: Option<usize>,
+    cursor: Option<String>,
+) -> Value {
+    let viewport = world_map_viewport_json(world, matrix_user_id, lat, lng, zoom, radius_km, limit);
+    let next_cursor = viewport
+        .get("delta_cursor")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| world_map_viewport_cursor(&viewport));
+    let changed = cursor.as_deref() != Some(next_cursor.as_str());
+    let snapshot_fallback_path = viewport
+        .get("viewport_path")
+        .and_then(Value::as_str)
+        .unwrap_or("/v1/world/map/{matrix_user_id}/viewport")
+        .to_string();
+    let web_session_snapshot_fallback_path = viewport
+        .get("web_session_viewport_path")
+        .and_then(Value::as_str)
+        .unwrap_or("/world/web/map-viewport")
+        .to_string();
+    let shadow_parity = viewport
+        .get("renderer_shadow_parity")
+        .cloned()
+        .unwrap_or_else(|| trillionnium_world_map_renderer_shadow_parity_json(&viewport));
+    let delta_payload = if changed {
+        json!({
+            "active_region": viewport.get("active_region").cloned().unwrap_or(Value::Null),
+            "stream_region_shards": viewport.get("stream_region_shards").cloned().unwrap_or_else(|| json!([])),
+            "visible_tile_shards": viewport.get("visible_tile_shards").cloned().unwrap_or_else(|| json!([])),
+            "prefetch_queue": viewport.get("prefetch_queue").cloned().unwrap_or_else(|| json!([])),
+            "player_avatars": viewport.get("player_avatars").cloned().unwrap_or_else(|| json!([])),
+            "avatar_task_routes": viewport.get("avatar_task_routes").cloned().unwrap_or_else(|| json!([])),
+            "avatar_route_runners": viewport.get("avatar_route_runners").cloned().unwrap_or_else(|| json!([])),
+            "live_event_stream": viewport.get("live_event_stream").cloned().unwrap_or_else(|| json!([])),
+            "route_runner_handoff": viewport.get("route_runner_handoff").cloned().unwrap_or(Value::Null),
+            "player_density": viewport.get("player_density").cloned().unwrap_or(Value::Null),
+        })
+    } else {
+        json!({})
+    };
+    json!({
+        "kind": "trillionnium_world_map_delta",
+        "contract_version": TRILLIONNIUM_WORLD_MAP_TRANSPORT_DELTA_CONTRACT_VERSION,
+        "matrix_user_id": matrix_user_id,
+        "cursor": cursor,
+        "next_cursor": next_cursor,
+        "delta_cursor": next_cursor,
+        "etag": world_map_weak_etag(&next_cursor),
+        "changed": changed,
+        "snapshot_fallback_required": !changed,
+        "snapshot_fallback_path": snapshot_fallback_path,
+        "web_session_snapshot_fallback_path": web_session_snapshot_fallback_path,
+        "active_region_id": viewport.get("active_region").and_then(|region| region.get("region_id")).and_then(Value::as_str),
+        "center": viewport.get("center").cloned().unwrap_or(Value::Null),
+        "zoom": viewport.get("zoom").cloned().unwrap_or(Value::Null),
+        "delta": delta_payload,
+        "counts": {
+            "marker_count": viewport.get("marker_count").and_then(Value::as_i64).unwrap_or(0),
+            "live_event_count": viewport.get("live_event_count").and_then(Value::as_i64).unwrap_or(0),
+            "player_avatar_count": viewport.get("player_avatar_count").and_then(Value::as_i64).unwrap_or(0),
+            "avatar_route_runner_count": viewport.get("avatar_route_runner_count").and_then(Value::as_i64).unwrap_or(0),
+            "tile_shard_count": viewport.get("tile_shard_count").and_then(Value::as_i64).unwrap_or(0),
+        },
+        "transport_delta_contract": viewport.get("transport_delta_contract").cloned().unwrap_or_else(|| trillionnium_world_map_transport_delta_contract_json("cn-shanghai-core", 0, 0, 0, 0, 0)),
+        "renderer_shadow_parity": shadow_parity,
+        "readiness_checks": [
+            "cursor_compared_against_server_viewport_state",
+            "presence_delta_payload_available",
+            "route_runner_delta_payload_available",
+            "snapshot_fallback_path_available",
+            "etag_emitted",
+            "shadow_parity_attached"
+        ]
+    })
+}
+
 pub(super) fn world_map_viewport_json(
     world: &WorldState,
     matrix_user_id: &str,
@@ -2371,6 +2505,43 @@ pub(super) fn world_map_viewport_json(
         "/world/web/map-viewport?lat={:.6}&lng={:.6}&zoom={}&radius_km={:.1}&limit={}",
         center_lat, center_lng, zoom, radius_km, marker_limit
     );
+    let delta_cursor_preview = format!(
+        "region={active_region_id};tile={};z={zoom};e={};r={};m={marker_count};a={player_avatar_count}",
+        tile_center
+            .get("tile_id")
+            .and_then(Value::as_str)
+            .unwrap_or("tile:unknown"),
+        live_event_stream
+            .iter()
+            .filter_map(|event| event.get("created_at_epoch").and_then(Value::as_i64))
+            .max()
+            .unwrap_or(0),
+        avatar_route_runners
+            .iter()
+            .filter_map(|runner| {
+                runner
+                    .get("lifecycle")
+                    .and_then(|lifecycle| lifecycle.get("updated_at_epoch"))
+                    .and_then(Value::as_i64)
+            })
+            .max()
+            .unwrap_or(0)
+    );
+    let delta_path = format!(
+        "/v1/world/map/{}/delta?lat={:.6}&lng={:.6}&zoom={}&radius_km={:.1}&limit={}&cursor={{cursor}}",
+        matrix_user_id, center_lat, center_lng, zoom, radius_km, marker_limit
+    );
+    let web_session_delta_path = format!(
+        "/world/web/map-delta?lat={:.6}&lng={:.6}&zoom={}&radius_km={:.1}&limit={}&cursor={{cursor}}",
+        center_lat, center_lng, zoom, radius_km, marker_limit
+    );
+    let renderer_shadow_parity = trillionnium_world_map_renderer_shadow_parity_json(&json!({
+        "delta_cursor": delta_cursor_preview,
+        "visible_markers": visible_markers.clone(),
+        "avatar_task_routes": avatar_task_routes.clone(),
+        "avatar_route_runners": avatar_route_runners.clone(),
+        "live_event_stream": live_event_stream.clone(),
+    }));
 
     json!({
         "kind": "trillionnium_world_map_viewport",
@@ -2410,12 +2581,18 @@ pub(super) fn world_map_viewport_json(
         "map_readability_lod": map_readability_lod,
         "runtime_performance_budget": runtime_performance_budget,
         "transport_delta_contract": transport_delta_contract,
+        "renderer_shadow_parity": renderer_shadow_parity,
         "gameplay_layer_contract": trillionnium_world_map_gameplay_layer_contract_json(),
         "live_event_stream": live_event_stream,
         "live_event_stream_index_layer": "WorldIndexes::event_indices_by_location_v1",
         "live_event_count": live_event_count,
+        "delta_cursor": delta_cursor_preview,
+        "viewport_cursor": delta_cursor_preview,
+        "etag": world_map_weak_etag(&delta_cursor_preview),
         "viewport_path": viewport_path,
         "web_session_viewport_path": web_session_viewport_path,
+        "delta_path": delta_path,
+        "web_session_delta_path": web_session_delta_path,
         "viewport_contract": {
             "purpose": "stream active region shards, POIs, nearby world nodes, live events, and tile prefetch hints for the current camera",
             "default_radius_km": world_map_default_radius_km(zoom),
@@ -2435,6 +2612,10 @@ pub(super) fn world_map_viewport_json(
             "supports_route_runner_next_route_actions": true,
             "supports_map_readability_lod": true,
             "map_readability_lod_contract_version": TRILLIONNIUM_WORLD_MAP_READABILITY_LOD_CONTRACT_VERSION,
+            "supports_transport_delta_endpoint": true,
+            "transport_delta_contract_version": TRILLIONNIUM_WORLD_MAP_TRANSPORT_DELTA_CONTRACT_VERSION,
+            "supports_renderer_shadow_parity": true,
+            "renderer_shadow_contract_version": TRILLIONNIUM_WORLD_MAP_RENDERER_SHADOW_CONTRACT_VERSION,
             "supports_agent_party_state": true,
             "supports_agent_party_handoff_actions": true,
         }
@@ -2534,6 +2715,9 @@ pub(super) fn real_world_map_engine_json(
         "viewport_api": {
             "path_template": "/v1/world/map/{matrix_user_id}/viewport?lat={lat}&lng={lng}&zoom={zoom}&radius_km={radius_km}&limit={limit}",
             "web_session_path_template": "/world/web/map-viewport?lat={lat}&lng={lng}&zoom={zoom}&radius_km={radius_km}&limit={limit}",
+            "delta_path_template": "/v1/world/map/{matrix_user_id}/delta?lat={lat}&lng={lng}&zoom={zoom}&radius_km={radius_km}&limit={limit}&cursor={cursor}",
+            "web_session_delta_path_template": "/world/web/map-delta?lat={lat}&lng={lng}&zoom={zoom}&radius_km={radius_km}&limit={limit}&cursor={cursor}",
+            "rum_web_session_path": "/world/web/map-rum",
             "default_radius_km": 4.5,
             "supported_zoom_min": 3,
             "supported_zoom_max": 19,

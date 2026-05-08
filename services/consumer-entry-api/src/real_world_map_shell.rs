@@ -2005,16 +2005,67 @@ pub(super) fn real_world_map_route_action_js() -> String {
 }
 
 pub(super) fn real_world_map_viewport_hydration_js() -> &'static str {
-    r#"      const buildViewportUrl = (mapCenter, zoom) => {
-        return viewportTemplate
-          .replace('{{lat}}', mapCenter.lat.toFixed(6))
-          .replace('{{lng}}', mapCenter.lng.toFixed(6))
-          .replace('{{zoom}}', String(zoom))
-          .replace('{{radius_km}}', zoom >= 14 ? '4.5' : (zoom >= 10 ? '22.0' : '120.0'))
-          .replace('{{limit}}', zoom >= 14 ? '6' : '4');
+    r#"      const viewportApi = (engine.viewport_api || {});
+      const deltaTemplate = viewportApi.web_session_delta_path_template || '/world/web/map-delta?lat={lat}&lng={lng}&zoom={zoom}&radius_km={radius_km}&limit={limit}&cursor={cursor}';
+      const mapRumPath = viewportApi.rum_web_session_path || '/world/web/map-rum';
+      const replaceMapTemplate = (template, values) => Object.entries(values).reduce((url, [key, value]) => {
+        const encoded = encodeURIComponent(String(value));
+        return url.split('{{' + key + '}}').join(encoded).split('{' + key + '}').join(encoded);
+      }, template);
+      const viewportValues = (mapCenter, zoom, cursor) => ({
+        lat: mapCenter.lat.toFixed(6),
+        lng: mapCenter.lng.toFixed(6),
+        zoom: String(zoom),
+        radius_km: zoom >= 14 ? '4.5' : (zoom >= 10 ? '22.0' : '120.0'),
+        limit: zoom >= 14 ? '6' : '4',
+        cursor: cursor || '',
+      });
+      const buildViewportUrl = (mapCenter, zoom) => replaceMapTemplate(viewportTemplate, viewportValues(mapCenter, zoom, ''));
+      const buildViewportDeltaUrl = (mapCenter, zoom, cursor) => replaceMapTemplate(deltaTemplate, viewportValues(mapCenter, zoom, cursor || ''));
+      const postMapRumSample = (sample) => {
+        try {
+          const payload = JSON.stringify({
+            matrix_user_id: (typeof currentMatrixUserId !== 'undefined' ? currentMatrixUserId : '@alice:local.dev'),
+            surface_id: target.id || 'world-map',
+            session_id: 'web-session-map-runtime',
+            viewport_cursor: lastViewportCursor || null,
+            sample_kind: sample.sample_kind || 'viewport_refresh',
+            user_agent_class: /Mobi|Android/i.test(navigator.userAgent || '') ? 'mobile' : 'desktop',
+            first_map_interactive_ms: sample.first_map_interactive_ms || null,
+            viewport_refresh_ms: sample.viewport_refresh_ms || null,
+            focus_to_action_rail_ms: sample.focus_to_action_rail_ms || null,
+            main_thread_long_task_ms: sample.main_thread_long_task_ms || null,
+            tile_error_count: sample.tile_error_count || 0,
+          });
+          if (navigator.sendBeacon) {
+            const ok = navigator.sendBeacon(mapRumPath, new Blob([payload], { type: 'application/json' }));
+            if (ok) return;
+          }
+          fetch(mapRumPath, { method: 'POST', credentials: 'same-origin', keepalive: true, headers: { 'content-type': 'application/json' }, body: payload }).catch(() => {});
+        } catch (error) {}
+      };
+      const applyViewportDelta = (delta) => {
+        if (!lastViewport || !delta || delta.changed === false) return lastViewport;
+        const patch = delta.delta || {};
+        const viewport = { ...lastViewport };
+        ['active_region', 'stream_region_shards', 'visible_tile_shards', 'prefetch_queue', 'player_avatars', 'avatar_task_routes', 'avatar_route_runners', 'live_event_stream', 'route_runner_handoff', 'player_density'].forEach((key) => {
+          if (patch[key] !== undefined) viewport[key] = patch[key];
+        });
+        viewport.delta_cursor = delta.next_cursor || delta.delta_cursor || viewport.delta_cursor;
+        viewport.viewport_cursor = viewport.delta_cursor;
+        viewport.renderer_shadow_parity = delta.renderer_shadow_parity || viewport.renderer_shadow_parity;
+        if (delta.counts) {
+          viewport.marker_count = delta.counts.marker_count ?? viewport.marker_count;
+          viewport.live_event_count = delta.counts.live_event_count ?? viewport.live_event_count;
+          viewport.player_avatar_count = delta.counts.player_avatar_count ?? viewport.player_avatar_count;
+          viewport.avatar_route_runner_count = delta.counts.avatar_route_runner_count ?? viewport.avatar_route_runner_count;
+          viewport.tile_shard_count = delta.counts.tile_shard_count ?? viewport.tile_shard_count;
+        }
+        return viewport;
       };
       const applyViewportSnapshot = (viewport, mapCenter, zoom) => {
         lastViewport = viewport;
+        lastViewportCursor = viewport.delta_cursor || viewport.viewport_cursor || lastViewportCursor;
         if (densitySummary) {
           densitySummary.textContent = mapText(((viewport.player_density || {}).summary) || '地图密度加载中…');
         }
@@ -2037,13 +2088,108 @@ pub(super) fn real_world_map_viewport_hydration_js() -> &'static str {
         renderOverlayStatus();
       };
       const fetchViewportSnapshot = async () => {
+        const startedAt = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
         const mapCenter = mapAdapter.getCenter(mapRuntime);
         const zoom = mapAdapter.getZoom(mapRuntime);
+        if (lastViewportCursor) {
+          const deltaResponse = await fetch(buildViewportDeltaUrl(mapCenter, zoom, lastViewportCursor), { credentials: 'same-origin' });
+          if (deltaResponse.ok) {
+            const delta = await deltaResponse.json();
+            const patchedViewport = applyViewportDelta(delta);
+            if (patchedViewport) {
+              applyViewportSnapshot(patchedViewport, mapCenter, zoom);
+              const elapsed = Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - startedAt);
+              postMapRumSample({ sample_kind: delta.changed === false ? 'delta_noop' : 'delta_viewport_refresh', viewport_refresh_ms: elapsed });
+              return patchedViewport;
+            }
+          }
+        }
         const response = await fetch(buildViewportUrl(mapCenter, zoom), { credentials: 'same-origin' });
         if (!response.ok) return null;
         const viewport = await response.json();
         applyViewportSnapshot(viewport, mapCenter, zoom);
+        const elapsed = Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - startedAt);
+        postMapRumSample({ sample_kind: 'snapshot_viewport_refresh', viewport_refresh_ms: elapsed });
+        if (!mapRumFirstInteractiveSent) {
+          mapRumFirstInteractiveSent = true;
+          postMapRumSample({ sample_kind: 'first_map_interactive', first_map_interactive_ms: Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now())) });
+        }
         return viewport;
       };
 "#
+}
+
+pub(super) fn trillionnium_slim_map_bootstrap_json(payload: &Value, surface_id: &str) -> Value {
+    let mut slim = payload.clone();
+    for (path, limit) in [
+        (&["real_world_map_engine", "markers"][..], 18usize),
+        (&["real_world_map_engine", "route_edges"][..], 24usize),
+        (&["real_world_map_engine", "region_shards"][..], 6usize),
+        (&["real_world_map_engine", "poi_hotspots"][..], 6usize),
+        (&["real_world_map_engine", "tile_pyramid"][..], 4usize),
+        (&["map", "real_world_map_engine", "markers"][..], 18usize),
+        (
+            &["map", "real_world_map_engine", "route_edges"][..],
+            24usize,
+        ),
+        (
+            &["map", "real_world_map_engine", "region_shards"][..],
+            6usize,
+        ),
+        (&["map_hub", "route_preview", "items"][..], 8usize),
+        (&["map_hub", "route_task_graph", "tasks"][..], 6usize),
+        (&["feed", "items"][..], 10usize),
+        (&["nearby_agents"][..], 6usize),
+        (&["route_preview", "items"][..], 8usize),
+        (&["route_task_graph", "tasks"][..], 6usize),
+        (&["visible_markers"][..], 18usize),
+        (&["live_event_stream"][..], 6usize),
+        (&["avatar_task_routes"][..], 6usize),
+        (&["avatar_route_runners"][..], 6usize),
+    ] {
+        truncate_json_array_at_path(&mut slim, path, limit);
+    }
+    if let Some(object) = slim.as_object_mut() {
+        object.insert(
+            "bootstrap_payload_contract".to_string(),
+            json!({
+                "contract_version": TRILLIONNIUM_WORLD_MAP_PAYLOAD_CACHE_CONTRACT_VERSION,
+                "surface_id": surface_id,
+                "mode": "truncated_runtime_bootstrap_with_lazy_delta_hydration",
+                "snapshot_source": "SSR cards + viewport/delta endpoint",
+                "cache_control_header_required": true,
+                "vary_accept_encoding_header_required": true,
+                "readiness_checks": [
+                    "large_arrays_truncated_before_inline_json",
+                    "viewport_snapshot_endpoint_remains_available",
+                    "delta_endpoint_available_for_refresh",
+                    "rum_endpoint_available_for_budget_probe"
+                ]
+            }),
+        );
+    }
+    slim
+}
+
+fn truncate_json_array_at_path(root: &mut Value, path: &[&str], limit: usize) {
+    let Some((last, parents)) = path.split_last() else {
+        return;
+    };
+    let mut current = root;
+    for key in parents {
+        let Some(next) = current
+            .as_object_mut()
+            .and_then(|object| object.get_mut(*key))
+        else {
+            return;
+        };
+        current = next;
+    }
+    if let Some(array) = current
+        .as_object_mut()
+        .and_then(|object| object.get_mut(*last))
+        .and_then(Value::as_array_mut)
+    {
+        array.truncate(limit);
+    }
 }

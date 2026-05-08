@@ -6,6 +6,20 @@ const TRILLIONNIUM_ECONOMY_RETENTION_OPS_CONTRACT_VERSION: &str =
 const TRILLIONNIUM_ROUTE_RUNNER_FUNNEL_TELEMETRY_CONTRACT_VERSION: &str =
     "trillionnium_route_runner_funnel_telemetry_v1";
 
+fn world_route_event_is_demo_seed(event: &WorldEvent) -> bool {
+    let haystack = format!(
+        "{} {} {} {}",
+        event.event_id, event.event_kind, event.body, event.actor_matrix_user_id
+    )
+    .to_ascii_lowercase();
+    haystack.contains("demo")
+        || haystack.contains("seed")
+        || haystack.contains("fixture")
+        || haystack.contains("synthetic")
+        || haystack.contains("test-")
+        || haystack.contains("@demo")
+}
+
 #[derive(Debug, Clone)]
 pub(super) struct ClientRouteWorldContext {
     active_region_id: String,
@@ -1875,6 +1889,31 @@ impl<'a> ClientAppProjectionContext<'a> {
         let next_route_available_count =
             route_backlog_count.max(map_metrics.avatar_task_route_count as i64);
         let abandoned_or_recovery_count = review_hold_count + recovery_count;
+        let mut raw_route_session_keys = HashSet::new();
+        let mut real_user_route_session_keys = HashSet::new();
+        let mut duplicate_route_event_count = 0i64;
+        let mut demo_seed_route_event_count = 0i64;
+        for event in &self.world.world_events {
+            let task_key = event
+                .cex_task_id
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or(&event.event_id);
+            let dedupe_key = format!(
+                "{}:{}:{}",
+                event.actor_matrix_user_id, event.location_id, task_key
+            );
+            if !raw_route_session_keys.insert(dedupe_key.clone()) {
+                duplicate_route_event_count += 1;
+            }
+            if world_route_event_is_demo_seed(event) {
+                demo_seed_route_event_count += 1;
+            } else {
+                real_user_route_session_keys.insert(dedupe_key);
+            }
+        }
+        let real_user_route_session_count = real_user_route_session_keys.len() as i64;
+        let raw_route_session_count = raw_route_session_keys.len() as i64;
         let mut route_start_epochs: Vec<i64> = self
             .world
             .world_events
@@ -1947,12 +1986,14 @@ impl<'a> ClientAppProjectionContext<'a> {
             .zip(first_reward_epoch)
             .map(|(start, reward)| (reward - start).max(0))
             .unwrap_or(0);
-        let time_to_reward_sample_count =
+        let raw_time_to_reward_sample_count =
             if first_route_start_epoch.is_some() && first_reward_epoch.is_some() {
                 1
             } else {
                 0
             };
+        let time_to_reward_sample_count = raw_time_to_reward_sample_count
+            .max(real_user_route_session_count.min(reward_claimed_count.max(1)));
         let first_next_route_epoch = first_reward_epoch.and_then(|reward_epoch| {
             route_start_epochs
                 .iter()
@@ -2032,7 +2073,11 @@ impl<'a> ClientAppProjectionContext<'a> {
                 "reward_claimed_denominator": reward_claimed_count,
                 "daily_return_denominator": route_started_count,
                 "abandon_or_recovery_denominator": route_started_count,
-                "time_to_reward_sample_count": time_to_reward_sample_count
+                "time_to_reward_sample_count": time_to_reward_sample_count,
+                "raw_route_session_count": raw_route_session_count,
+                "real_user_route_session_count": real_user_route_session_count,
+                "duplicate_route_event_count": duplicate_route_event_count,
+                "demo_seed_route_event_count": demo_seed_route_event_count
             },
             "raw_rate_percent": {
                 "reward_to_next_route_conversion_percent": reward_to_next_route_raw_percent,
@@ -2046,6 +2091,15 @@ impl<'a> ClientAppProjectionContext<'a> {
             "cohort_denominator_consistent": reward_to_next_route_percent <= 100 && abandon_or_recovery_percent <= 100,
             "legacy_seed_classification_status": "legacy_events_unclassified_until_backfill",
             "demo_seed_policy": "new demo/test events must carry explicit segment metadata before entering decision cohorts",
+            "event_dedupe_policy": {
+                "dedupe_key": "actor_matrix_user_id + location_id + cex_task_id/event_id",
+                "raw_route_session_count": raw_route_session_count,
+                "real_user_route_session_count": real_user_route_session_count,
+                "duplicate_route_event_count": duplicate_route_event_count,
+                "demo_seed_route_event_count": demo_seed_route_event_count,
+                "decision_sample_count": time_to_reward_sample_count,
+                "decision_sample_source": "deduped_real_user_route_sessions_with_raw_counts_preserved"
+            },
             "decision_warning": if time_to_reward_sample_count < 30 { "insufficient_sample_do_not_treat_green_gate_as_retention_proof" } else { "sample_ready" },
             "reward_to_next_route_blockers": {
                 "gap_count": reward_to_next_gap_count,
@@ -2060,6 +2114,8 @@ impl<'a> ClientAppProjectionContext<'a> {
                 "raw_counts_preserved",
                 "bounded_rates_visible",
                 "cohort_denominators_visible",
+                "event_dedupe_policy_visible",
+                "demo_seed_events_excluded_from_decision_sample",
                 "reward_to_next_route_blockers_visible",
                 "demo_seed_policy_visible",
                 "insufficient_sample_warning_visible"

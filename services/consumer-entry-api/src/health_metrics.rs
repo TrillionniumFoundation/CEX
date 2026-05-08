@@ -664,6 +664,10 @@ fn app_route_runner_funnel_telemetry_gate_json(app: &Value) -> Value {
         "time_to_reward_within_target": time_to_reward.and_then(|time| time.get("within_target")).and_then(Value::as_bool).unwrap_or(false),
         "sample_count": time_to_reward.and_then(|time| time.get("sample_count")).and_then(Value::as_i64).unwrap_or(0),
         "cohort_denominator_consistent": funnel_integrity.and_then(|integrity| integrity.get("cohort_denominator_consistent")).and_then(Value::as_bool).unwrap_or(false),
+        "event_dedupe_policy_visible": funnel_integrity.and_then(|integrity| integrity.get("event_dedupe_policy")).and_then(Value::as_object).is_some(),
+        "real_user_route_session_count": funnel_integrity.and_then(|integrity| integrity.get("cohort_denominators")).and_then(|denominators| denominators.get("real_user_route_session_count")).and_then(Value::as_i64).unwrap_or(0),
+        "duplicate_route_event_count": funnel_integrity.and_then(|integrity| integrity.get("cohort_denominators")).and_then(|denominators| denominators.get("duplicate_route_event_count")).and_then(Value::as_i64).unwrap_or(0),
+        "demo_seed_route_event_count": funnel_integrity.and_then(|integrity| integrity.get("cohort_denominators")).and_then(|denominators| denominators.get("demo_seed_route_event_count")).and_then(Value::as_i64).unwrap_or(0),
         "decision_metric_mode": funnel_integrity.and_then(|integrity| integrity.get("decision_metric_mode")).and_then(Value::as_str),
         "demo_seed_policy_visible": funnel_integrity.and_then(|integrity| integrity.get("demo_seed_policy")).and_then(Value::as_str).is_some_and(|policy| !policy.trim().is_empty()),
         "reward_to_next_route_blockers_visible": funnel_integrity.and_then(|integrity| integrity.get("reward_to_next_route_blockers")).and_then(|blockers| blockers.get("blocked_reason_candidates")).and_then(Value::as_array).is_some_and(|reasons| reasons.len() >= 3),
@@ -745,6 +749,10 @@ fn is_route_runner_funnel_telemetry_gate_green(gate: &Value) -> bool {
             .unwrap_or(false)
         && gate
             .get("cohort_denominator_consistent")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && gate
+            .get("event_dedupe_policy_visible")
             .and_then(Value::as_bool)
             .unwrap_or(false)
         && gate.get("decision_metric_mode").and_then(Value::as_str)
@@ -3724,6 +3732,18 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
             "cex_consumer_entry_session_auth_failures_total {}\n",
             "# TYPE cex_consumer_entry_replay_hits_total counter\n",
             "cex_consumer_entry_replay_hits_total {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_map_rum_samples_total counter\n",
+            "cex_consumer_entry_trillionnium_world_map_rum_samples_total {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_map_rum_first_interactive_max_ms gauge\n",
+            "cex_consumer_entry_trillionnium_world_map_rum_first_interactive_max_ms {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_map_rum_viewport_refresh_max_ms gauge\n",
+            "cex_consumer_entry_trillionnium_world_map_rum_viewport_refresh_max_ms {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_map_delta_requests_total counter\n",
+            "cex_consumer_entry_trillionnium_world_map_delta_requests_total {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_map_delta_noop_responses_total counter\n",
+            "cex_consumer_entry_trillionnium_world_map_delta_noop_responses_total {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_map_delta_snapshot_fallbacks_total counter\n",
+            "cex_consumer_entry_trillionnium_world_map_delta_snapshot_fallbacks_total {}\n",
             "# TYPE cex_consumer_entry_profile_validation_ok gauge\n",
             "cex_consumer_entry_profile_validation_ok {}\n",
             "# TYPE cex_consumer_entry_ingress_protected gauge\n",
@@ -4054,6 +4074,36 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
             .session_auth_failures
             .load(Ordering::Relaxed),
         state.inner.metrics.replay_hits.load(Ordering::Relaxed),
+        state
+            .inner
+            .metrics
+            .world_map_rum_samples
+            .load(Ordering::Relaxed),
+        state
+            .inner
+            .metrics
+            .world_map_rum_first_interactive_ms_max
+            .load(Ordering::Relaxed),
+        state
+            .inner
+            .metrics
+            .world_map_rum_viewport_refresh_ms_max
+            .load(Ordering::Relaxed),
+        state
+            .inner
+            .metrics
+            .world_map_delta_requests
+            .load(Ordering::Relaxed),
+        state
+            .inner
+            .metrics
+            .world_map_delta_noop_responses
+            .load(Ordering::Relaxed),
+        state
+            .inner
+            .metrics
+            .world_map_delta_snapshot_fallbacks
+            .load(Ordering::Relaxed),
         profile_ok,
         if state.config().ingress_token.is_some() {
             1

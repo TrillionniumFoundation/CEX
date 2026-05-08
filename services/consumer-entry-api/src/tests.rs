@@ -20,8 +20,8 @@ use super::{
     normalized_repository_world_home_read_model_sql, normalized_world_shadow_sql_contract_json,
     parse_csv_list, project_consumer_status, prune_rate_limit_cache, real_world_map_engine_json,
     resolve_chat_identity, session_auth_issuer_registry_active_key_diff_json,
-    sign_user_session_assertion, validate_text_payload, world_home_json, world_map_json,
-    world_map_viewport_json, world_route_ui_contract_json, AppState, AppStateInner,
+    sign_user_session_assertion, validate_text_payload, world_home_json, world_map_delta_json,
+    world_map_json, world_map_viewport_json, world_route_ui_contract_json, AppState, AppStateInner,
     ConsumerEntryConfig, ConsumerEntryMetrics, CreateChatTaskRequest, IdentityBindingAuditState,
     IdentityBindingEntry, IdentityBindingMetadata, IdentityBindingRevisionApprovalState,
     IdentityBindingStore, IdentityBindings, LeagueMatchEntry, LeaguePlayer, LeagueReward,
@@ -1174,6 +1174,74 @@ fn world_map_viewport_includes_prefetch_density_and_live_events() {
     assert!(viewport["transport_delta_contract"]["transport_boundaries"]
         .as_object()
         .is_some());
+    assert_eq!(
+        viewport["renderer_shadow_parity"]["contract_version"],
+        "trillionnium_world_map_renderer_shadow_v1"
+    );
+    assert_eq!(
+        viewport["renderer_shadow_parity"]["shadow_engine_id"],
+        "maplibre_gl_v1"
+    );
+    assert_eq!(
+        viewport["renderer_shadow_parity"]["status"],
+        "shadow_only_not_user_facing"
+    );
+    assert!(
+        viewport["renderer_shadow_parity"]["parity_result"]["counts_match"]
+            .as_bool()
+            .unwrap_or(false)
+    );
+    assert!(viewport["delta_cursor"]
+        .as_str()
+        .is_some_and(|cursor| !cursor.is_empty()));
+    assert!(viewport["delta_path"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("/delta"));
+    assert!(viewport["web_session_delta_path"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("/world/web/map-delta"));
+    assert_eq!(
+        viewport["viewport_contract"]["supports_transport_delta_endpoint"],
+        true
+    );
+    assert_eq!(
+        viewport["viewport_contract"]["supports_renderer_shadow_parity"],
+        true
+    );
+    let initial_cursor = viewport["delta_cursor"].as_str().unwrap().to_string();
+    let noop_delta = world_map_delta_json(
+        &league.world,
+        "@alice:local.dev",
+        None,
+        None,
+        Some(15),
+        None,
+        None,
+        Some(initial_cursor.clone()),
+    );
+    assert_eq!(noop_delta["changed"], false);
+    assert_eq!(noop_delta["snapshot_fallback_required"], true);
+    assert_eq!(noop_delta["next_cursor"], initial_cursor);
+    let changed_delta = world_map_delta_json(
+        &league.world,
+        "@alice:local.dev",
+        None,
+        None,
+        Some(15),
+        None,
+        None,
+        Some("stale-cursor".to_string()),
+    );
+    assert_eq!(changed_delta["changed"], true);
+    assert!(changed_delta["delta"]["live_event_stream"]
+        .as_array()
+        .is_some());
+    assert_eq!(
+        changed_delta["renderer_shadow_parity"]["shadow_engine_id"],
+        "maplibre_gl_v1"
+    );
     assert!(viewport["map_readability_lod"]["readiness_checks"]
         .as_array()
         .is_some_and(|checks| checks
@@ -1588,6 +1656,33 @@ fn world_client_surfaces_expose_projection_layer_contracts() {
         map["route_preview"]["index_layer"],
         "WorldIndexes::recent_route_indices_v1"
     );
+    assert_eq!(
+        map["route_preview"]["ranker"],
+        "commercial_quality_weighted_route_ranker_v1"
+    );
+    assert_eq!(
+        map["route_preview"]["ranker_contract_version"],
+        "trillionnium_world_route_recommendation_policy_v1"
+    );
+    let route_preview_items = map["route_preview"]["items"].as_array().unwrap();
+    assert!(route_preview_items.iter().all(|item| item
+        .get("route_recommendation_score")
+        .and_then(Value::as_i64)
+        .unwrap_or(0)
+        > 0));
+    assert!(route_preview_items.windows(2).all(|pair| pair[0]
+        .get("route_recommendation_score")
+        .and_then(Value::as_i64)
+        .unwrap_or(0)
+        >= pair[1]
+            .get("route_recommendation_score")
+            .and_then(Value::as_i64)
+            .unwrap_or(0)));
+    assert!(route_preview_items.iter().all(|item| item
+        .get("route_recommendation_reasons")
+        .and_then(|reasons| reasons.get("low_dispute_risk"))
+        .and_then(Value::as_i64)
+        .is_some()));
     assert_eq!(
         map["route_task_graph"]["projection_layer"],
         "world_route_task_graph_projection_v1"
@@ -2013,6 +2108,17 @@ fn world_home_json_exposes_shared_renderer_adapter_for_matrix_cards() {
     assert_eq!(
         home["world_map_subsystem_contract"]["contract_version"],
         "trillionnium_world_map_subsystem_v1"
+    );
+    assert_eq!(
+        home["world_map_subsystem_contract"]["module_boundary_contract"]["contract_version"],
+        "trillionnium_world_map_module_boundary_v1"
+    );
+    assert!(
+        home["world_map_subsystem_contract"]["module_boundary_contract"]["source_modules"]
+            .as_array()
+            .is_some_and(|modules| modules
+                .iter()
+                .any(|module| module["module"] == "world_map_projection"))
     );
     assert_eq!(
         home["route_runner_handoff"]["contract_version"],
@@ -2540,6 +2646,11 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(app_html.contains("leaflet_renderer_adapter_v1"));
     assert!(app_html.contains("maplibre_gl_v1"));
     assert!(app_html.contains("const mapRuntime"));
+    assert!(app_html.contains("truncated_runtime_bootstrap_with_lazy_delta_hydration"));
+    assert!(app_html.contains("data-cache-contract=\"trillionnium_world_map_payload_cache_v1\""));
+    assert!(app_html.contains("buildViewportDeltaUrl"));
+    assert!(app_html.contains("postMapRumSample"));
+    assert!(app_html.contains("/world/web/map-rum"));
     assert!(!app_html.contains("leafletMap"));
     assert!(app_html.contains("renderRouteLine"));
     assert!(app_html.contains("renderTileFrame"));
@@ -2787,6 +2898,13 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(world_html.contains("leaflet_renderer_adapter_v1"));
     assert!(world_html.contains("maplibre_gl_v1"));
     assert!(world_html.contains("const mapRuntime"));
+    assert!(world_html.contains("truncated_runtime_bootstrap_with_lazy_delta_hydration"));
+    assert!(world_html.contains("data-cache-contract=\"trillionnium_world_map_payload_cache_v1\""));
+    assert!(world_html.contains("world-secondary-collapsed"));
+    assert!(world_html.contains("data-mobile-ia=\"collapsed_secondary_panel\""));
+    assert!(world_html.contains("buildViewportDeltaUrl"));
+    assert!(world_html.contains("postMapRumSample"));
+    assert!(world_html.contains("/world/web/map-rum"));
     assert!(!world_html.contains("leafletMap"));
     assert!(world_html.contains("renderRouteLine"));
     assert!(world_html.contains("renderTileFrame"));
@@ -2915,6 +3033,123 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(world_html.contains("refund risk controls, next action, and self-review"));
     assert!(world_html.contains("customer deliverable"));
     assert!(world_html.contains("refund risk controls"));
+}
+
+#[tokio::test]
+async fn world_map_runtime_endpoints_expose_rum_delta_cache_and_mobile_ia_gates() {
+    let app = build_router(AppState::new(test_config()));
+
+    let (app_status, app_headers, app_body) =
+        send_text_request_with_headers(&app, "GET", "/app", &[]).await;
+    assert_eq!(app_status, StatusCode::OK);
+    assert_eq!(
+        app_headers
+            .get("x-trillionnium-cache-contract")
+            .and_then(|value| value.to_str().ok()),
+        Some("trillionnium_world_map_payload_cache_v1")
+    );
+    assert!(app_headers
+        .get("cache-control")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .contains("stale-while-revalidate"));
+    assert!(app_headers
+        .get("vary")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .contains("Accept-Encoding"));
+    assert!(app_body.contains("truncated_runtime_bootstrap_with_lazy_delta_hydration"));
+    assert!(app_body.contains("buildViewportDeltaUrl"));
+    assert!(app_body.contains("postMapRumSample"));
+
+    let (world_status, world_headers, world_body) =
+        send_text_request_with_headers(&app, "GET", "/world", &[]).await;
+    assert_eq!(world_status, StatusCode::OK);
+    assert_eq!(
+        world_headers
+            .get("x-trillionnium-resource-contract")
+            .and_then(|value| value.to_str().ok()),
+        Some("trillionnium_world_map_world_shell_payload_v1")
+    );
+    assert!(world_body.contains("world-secondary-collapsed"));
+    assert!(world_body.contains("data-mobile-ia=\"collapsed_secondary_panel\""));
+
+    let (delta_status, delta_headers, delta_body) = send_text_request_with_headers(
+        &app,
+        "GET",
+        "/world/web/map-delta?lat=31.230400&lng=121.473700&zoom=15&radius_km=4.5&limit=6&cursor=stale-cursor",
+        &[],
+    )
+    .await;
+    assert_eq!(delta_status, StatusCode::OK);
+    assert!(delta_headers.get("etag").is_some());
+    assert!(delta_headers
+        .get("cache-control")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .contains("max-age=3"));
+    let delta: Value = serde_json::from_str(&delta_body).expect("decode delta response");
+    assert_eq!(
+        delta["contract_version"],
+        "trillionnium_world_map_transport_delta_v1"
+    );
+    assert_eq!(delta["changed"], true);
+    assert!(delta["delta"]["avatar_route_runners"].as_array().is_some());
+    assert_eq!(
+        delta["renderer_shadow_parity"]["shadow_engine_id"],
+        "maplibre_gl_v1"
+    );
+    let cursor = delta["next_cursor"].as_str().expect("next cursor");
+    let encoded_cursor = cursor
+        .replace('%', "%25")
+        .replace(';', "%3B")
+        .replace('=', "%3D")
+        .replace(':', "%3A");
+    let (noop_status, _, noop_body) = send_text_request_with_headers(
+        &app,
+        "GET",
+        &format!("/world/web/map-delta?lat=31.230400&lng=121.473700&zoom=15&radius_km=4.5&limit=6&cursor={encoded_cursor}"),
+        &[],
+    )
+    .await;
+    assert_eq!(noop_status, StatusCode::OK);
+    let noop_delta: Value = serde_json::from_str(&noop_body).expect("decode noop delta response");
+    assert_eq!(noop_delta["changed"], false);
+    assert_eq!(noop_delta["snapshot_fallback_required"], true);
+
+    let (rum_status, rum_body) = send_json_request(
+        &app,
+        "POST",
+        "/world/web/map-rum",
+        &[],
+        json!({
+            "matrix_user_id": "@alice:local.dev",
+            "surface_id": "world-map-shell-panel",
+            "session_id": "rum-test-session",
+            "sample_kind": "first_map_interactive",
+            "viewport_cursor": cursor,
+            "first_map_interactive_ms": 1234,
+            "viewport_refresh_ms": 88,
+            "focus_to_action_rail_ms": 144,
+            "main_thread_long_task_ms": 12,
+            "tile_error_count": 0
+        }),
+    )
+    .await;
+    assert_eq!(rum_status, StatusCode::OK);
+    assert_eq!(rum_body["ok"], true);
+    assert_eq!(rum_body["session_id"], "rum-test-session");
+    assert_eq!(rum_body["metrics"]["sample_count"], 1);
+    assert_eq!(rum_body["metrics"]["first_map_interactive_max_ms"], 1234);
+
+    let (metrics_status, metrics_body) = send_metrics_request(&app).await;
+    assert_eq!(metrics_status, StatusCode::OK);
+    assert!(metrics_body.contains("cex_consumer_entry_trillionnium_world_map_rum_samples_total 1"));
+    assert!(
+        metrics_body.contains("cex_consumer_entry_trillionnium_world_map_delta_requests_total 2")
+    );
+    assert!(metrics_body
+        .contains("cex_consumer_entry_trillionnium_world_map_delta_noop_responses_total 1"));
 }
 
 fn prompt_has_delivery_anchor(body: &str, lower: &str) -> bool {
@@ -9210,6 +9445,34 @@ async fn send_text_request(
     let body = String::from_utf8(bytes.to_vec()).expect("decode response body as utf8");
 
     (status, body)
+}
+
+async fn send_text_request_with_headers(
+    app: &axum::Router,
+    method: &str,
+    uri: &str,
+    headers: &[(&str, &str)],
+) -> (StatusCode, HeaderMap, String) {
+    let mut request = Request::builder().method(method).uri(uri);
+
+    for (name, value) in headers {
+        request = request.header(*name, *value);
+    }
+
+    let request = request.body(Body::empty()).expect("build request body");
+    let response = app
+        .clone()
+        .oneshot(request)
+        .await
+        .expect("request response");
+    let status = response.status();
+    let headers = response.headers().clone();
+    let bytes = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read response body bytes");
+    let body = String::from_utf8(bytes.to_vec()).expect("decode response body as utf8");
+
+    (status, headers, body)
 }
 
 async fn send_json_request(

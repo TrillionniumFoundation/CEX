@@ -374,19 +374,43 @@ pub(super) async fn get_world_map_viewport(
         .get("limit")
         .and_then(|value| value.parse::<usize>().ok());
     let league = state.inner.league_state.lock().await;
-    (
-        StatusCode::OK,
-        Json(world_map_viewport_json(
-            &league.world,
-            &matrix_user_id,
-            lat,
-            lng,
-            zoom,
-            radius_km,
-            limit,
-        )),
+    let viewport = world_map_viewport_json(
+        &league.world,
+        &matrix_user_id,
+        lat,
+        lng,
+        zoom,
+        radius_km,
+        limit,
+    );
+    json_resource_response(
+        viewport.clone(),
+        "private, max-age=5, stale-while-revalidate=25",
+        viewport
+            .get("etag")
+            .and_then(Value::as_str)
+            .map(str::to_string),
     )
-        .into_response()
+}
+
+pub(super) async fn get_world_map_delta(
+    Path(matrix_user_id): Path<String>,
+    Query(query): Query<HashMap<String, String>>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(response) = authorize_ingress(&headers, state.config()) {
+        state.inner.metrics.inc_ingress_auth_failures();
+        return response;
+    }
+    let Some(matrix_user_id) = normalize_league_matrix_user(&matrix_user_id) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "matrix_user_id is required" })),
+        )
+            .into_response();
+    };
+    world_map_delta_response(state, &matrix_user_id, &query).await
 }
 
 pub(super) async fn get_world_web_map_viewport(
@@ -425,19 +449,172 @@ pub(super) async fn get_world_web_map_viewport(
         .get("limit")
         .and_then(|value| value.parse::<usize>().ok());
     let league = state.inner.league_state.lock().await;
-    (
-        StatusCode::OK,
-        Json(world_map_viewport_json(
-            &league.world,
-            &matrix_user_id,
-            lat,
-            lng,
-            zoom,
-            radius_km,
-            limit,
-        )),
+    let viewport = world_map_viewport_json(
+        &league.world,
+        &matrix_user_id,
+        lat,
+        lng,
+        zoom,
+        radius_km,
+        limit,
+    );
+    json_resource_response(
+        viewport.clone(),
+        "private, max-age=5, stale-while-revalidate=25",
+        viewport
+            .get("etag")
+            .and_then(Value::as_str)
+            .map(str::to_string),
     )
-        .into_response()
+}
+
+pub(super) async fn get_world_web_map_delta(
+    Query(query): Query<HashMap<String, String>>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let allow_missing_cookie = matches!(state.config().runtime_profile, RuntimeProfile::LocalDev)
+        || !state.config().league_web_session_required;
+    let web_session =
+        match authorize_league_web_session_readonly(&state, &headers, allow_missing_cookie) {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    let matrix_user_id = web_session
+        .as_ref()
+        .map(|session| session.matrix_user_id.clone())
+        .or_else(|| {
+            normalize_league_matrix_user(
+                query
+                    .get("matrix_user_id")
+                    .map(String::as_str)
+                    .unwrap_or("@alice:local.dev"),
+            )
+        })
+        .unwrap_or_else(|| "@alice:local.dev".to_string());
+    world_map_delta_response(state, &matrix_user_id, &query).await
+}
+
+async fn world_map_delta_response(
+    state: AppState,
+    matrix_user_id: &str,
+    query: &HashMap<String, String>,
+) -> Response {
+    state.inner.metrics.inc_world_map_delta_requests();
+    let lat = query.get("lat").and_then(|value| value.parse::<f64>().ok());
+    let lng = query.get("lng").and_then(|value| value.parse::<f64>().ok());
+    let zoom = query
+        .get("zoom")
+        .and_then(|value| value.parse::<i64>().ok());
+    let radius_km = query
+        .get("radius_km")
+        .and_then(|value| value.parse::<f64>().ok());
+    let limit = query
+        .get("limit")
+        .and_then(|value| value.parse::<usize>().ok());
+    let cursor = query.get("cursor").cloned();
+    let league = state.inner.league_state.lock().await;
+    let delta = world_map_delta_json(
+        &league.world,
+        matrix_user_id,
+        lat,
+        lng,
+        zoom,
+        radius_km,
+        limit,
+        cursor,
+    );
+    if !delta
+        .get("changed")
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
+    {
+        state.inner.metrics.inc_world_map_delta_noop_responses();
+    }
+    if delta
+        .get("snapshot_fallback_required")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        state.inner.metrics.inc_world_map_delta_snapshot_fallbacks();
+    }
+    json_resource_response(
+        delta.clone(),
+        "private, max-age=3, stale-while-revalidate=15",
+        delta
+            .get("etag")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+    )
+}
+
+pub(super) async fn post_world_map_rum(
+    Path(matrix_user_id): Path<String>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(mut payload): Json<WorldMapRumRequest>,
+) -> Response {
+    if let Err(response) = authorize_ingress(&headers, state.config()) {
+        state.inner.metrics.inc_ingress_auth_failures();
+        return response;
+    }
+    payload.matrix_user_id = normalize_league_matrix_user(
+        payload
+            .matrix_user_id
+            .as_deref()
+            .unwrap_or(matrix_user_id.as_str()),
+    );
+    if payload.matrix_user_id.is_none() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "matrix_user_id is required" })),
+        )
+            .into_response();
+    }
+    world_map_rum_response(&state, &payload)
+}
+
+pub(super) async fn post_world_web_map_rum(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(mut payload): Json<WorldMapRumRequest>,
+) -> Response {
+    let allow_missing_cookie = matches!(state.config().runtime_profile, RuntimeProfile::LocalDev)
+        || !state.config().league_web_session_required;
+    let web_session =
+        match authorize_league_web_session_readonly(&state, &headers, allow_missing_cookie) {
+            Ok(value) => value,
+            Err(response) => return response,
+        };
+    payload.matrix_user_id = web_session
+        .as_ref()
+        .map(|session| session.matrix_user_id.clone())
+        .or_else(|| {
+            normalize_league_matrix_user(
+                payload
+                    .matrix_user_id
+                    .as_deref()
+                    .unwrap_or("@alice:local.dev"),
+            )
+        });
+    world_map_rum_response(&state, &payload)
+}
+
+fn world_map_rum_response(state: &AppState, payload: &WorldMapRumRequest) -> Response {
+    state.inner.metrics.record_world_map_rum(payload);
+    Json(json!({
+        "ok": true,
+        "contract_version": TRILLIONNIUM_WORLD_MAP_RUNTIME_PERFORMANCE_BUDGET_CONTRACT_VERSION,
+        "source": "world_map_real_user_measurement",
+        "matrix_user_id": &payload.matrix_user_id,
+        "surface_id": &payload.surface_id,
+        "session_id": &payload.session_id,
+        "sample_kind": &payload.sample_kind,
+        "user_agent_class": &payload.user_agent_class,
+        "viewport_cursor": &payload.viewport_cursor,
+        "metrics": state.inner.metrics.world_map_rum_snapshot(),
+    }))
+    .into_response()
 }
 
 pub(super) async fn move_world_map_inner(
