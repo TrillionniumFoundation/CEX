@@ -782,6 +782,11 @@ fn app_commercial_operating_dashboard_gate_json(app: &Value) -> Value {
         "dispute_refund_reopen_count": dashboard.and_then(|dashboard| dashboard.get("dispute_refund_reopen_count")).and_then(Value::as_i64).unwrap_or(0),
         "route_recommendation_policy_contract_version": dashboard.and_then(|dashboard| dashboard.get("route_recommendation_policy")).and_then(|policy| policy.get("contract_version")).and_then(Value::as_str),
         "route_recommendation_policy_visible": dashboard.and_then(|dashboard| dashboard.get("route_recommendation_policy")).and_then(|policy| policy.get("ranking_weights")).and_then(Value::as_object).is_some(),
+        "route_recommendation_quality_contract_version": dashboard.and_then(|dashboard| dashboard.get("route_recommendation_quality")).and_then(|quality| quality.get("contract_version")).and_then(Value::as_str).or_else(|| dashboard.and_then(|dashboard| dashboard.get("route_recommendation_policy")).and_then(|policy| policy.get("quality_gate")).and_then(|quality| quality.get("contract_version")).and_then(Value::as_str)),
+        "route_recommendation_quality_score_percent": dashboard.and_then(|dashboard| dashboard.get("route_recommendation_quality")).and_then(|quality| quality.get("quality_score_percent")).and_then(Value::as_i64).unwrap_or(0),
+        "route_recommendation_reward_lift_visible": dashboard.and_then(|dashboard| dashboard.get("route_recommendation_quality")).and_then(|quality| quality.get("reward_to_next_route_lift_percent")).and_then(Value::as_i64).is_some(),
+        "route_recommendation_abandon_risk_visible": dashboard.and_then(|dashboard| dashboard.get("route_recommendation_quality")).and_then(|quality| quality.get("route_abandon_risk_percent")).and_then(Value::as_i64).is_some(),
+        "route_recommendation_denominator_consistent": dashboard.and_then(|dashboard| dashboard.get("route_recommendation_quality")).and_then(|quality| quality.get("denominator_policy")).and_then(|policy| policy.get("cohort_denominator_consistent")).and_then(Value::as_bool).unwrap_or(false),
     })
 }
 
@@ -820,6 +825,22 @@ fn is_commercial_operating_dashboard_gate_green(gate: &Value) -> bool {
             .get("route_recommendation_policy_visible")
             .and_then(Value::as_bool)
             .unwrap_or(false)
+        && gate
+            .get("route_recommendation_quality_contract_version")
+            .and_then(Value::as_str)
+            == Some("trillionnium_world_route_recommendation_quality_v1")
+        && gate
+            .get("route_recommendation_reward_lift_visible")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && gate
+            .get("route_recommendation_abandon_risk_visible")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && gate
+            .get("route_recommendation_denominator_consistent")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
 }
 
 fn app_future_engine_readiness_gate_json(app: &Value) -> Value {
@@ -854,6 +875,9 @@ fn app_future_engine_readiness_gate_json(app: &Value) -> Value {
         "shadow_renderer_precondition_visible": has_precondition("shadow_renderer_contract_green"),
         "shadow_renderer_contract_version": future_engine_readiness.and_then(|readiness| readiness.get("shadow_renderer_contract")).and_then(|shadow| shadow.get("contract_version")).and_then(Value::as_str),
         "shadow_renderer_status": future_engine_readiness.and_then(|readiness| readiness.get("shadow_renderer_contract")).and_then(|shadow| shadow.get("status")).and_then(Value::as_str),
+        "maplibre_shadow_parity_contract_version": future_engine_readiness.and_then(|readiness| readiness.get("shadow_renderer_contract")).and_then(|shadow| shadow.get("maplibre_shadow_parity")).and_then(|parity| parity.get("contract_version")).and_then(Value::as_str),
+        "maplibre_shadow_marker_cluster_popup_focus_parity_visible": future_engine_readiness.and_then(|readiness| readiness.get("shadow_renderer_contract")).and_then(|shadow| shadow.get("parity_checks")).and_then(Value::as_array).is_some_and(|checks| checks.iter().any(|value| value == "same_marker_cluster_count") && checks.iter().any(|value| value == "same_popup_semantics") && checks.iter().any(|value| value == "same_focus_and_action_behavior")),
+        "maplibre_canary_rollback_drill_visible": future_engine_readiness.and_then(|readiness| readiness.get("shadow_renderer_contract")).and_then(|shadow| shadow.get("canary_policy")).and_then(|policy| policy.get("rollback_drill_required")).and_then(Value::as_bool).unwrap_or(false),
         "rollback_plan_visible": future_engine_readiness.and_then(|readiness| readiness.get("rollback_plan")).and_then(|plan| plan.get("candidate_is_shadow_only")).and_then(Value::as_bool).unwrap_or(false),
         "promotion_blocker_count": future_engine_readiness.and_then(|readiness| readiness.get("promotion_blockers")).and_then(Value::as_array).map(Vec::len).unwrap_or(0),
     })
@@ -906,6 +930,18 @@ fn is_future_engine_readiness_gate_green(gate: &Value) -> bool {
         && gate.get("shadow_renderer_status").and_then(Value::as_str)
             == Some("shadow_only_not_user_facing")
         && gate
+            .get("maplibre_shadow_parity_contract_version")
+            .and_then(Value::as_str)
+            == Some("trillionnium_world_map_maplibre_shadow_parity_v1")
+        && gate
+            .get("maplibre_shadow_marker_cluster_popup_focus_parity_visible")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && gate
+            .get("maplibre_canary_rollback_drill_visible")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && gate
             .get("rollback_plan_visible")
             .and_then(Value::as_bool)
             .unwrap_or(false)
@@ -932,22 +968,41 @@ fn app_world_map_runtime_safety_gate_json(app: &Value) -> Value {
     let rum_slo_contract = viewport
         .and_then(|viewport| viewport.get("rum_slo_contract"))
         .or_else(|| mobile_contract.and_then(|contract| contract.get("rum_slo_contract")));
+    let rum_sample_matrix = rum_slo_contract.and_then(|contract| contract.get("sample_matrix"));
     let weak_network_contract = viewport
         .and_then(|viewport| viewport.get("weak_network_resilience"))
         .or_else(|| mobile_contract.and_then(|contract| contract.get("weak_network_resilience")));
+    let offline_action_queue =
+        weak_network_contract.and_then(|contract| contract.get("offline_action_queue"));
     let location_privacy_contract = viewport
         .and_then(|viewport| viewport.get("location_privacy_contract"))
         .or_else(|| mobile_contract.and_then(|contract| contract.get("location_privacy_contract")));
+    let density_scalability =
+        runtime_performance_budget.and_then(|budget| budget.get("density_scalability"));
+    let gameplay_accessibility = viewport
+        .and_then(|viewport| viewport.get("gameplay_accessibility_i18n"))
+        .or_else(|| {
+            viewport
+                .and_then(|viewport| viewport.get("gameplay_layer_contract"))
+                .and_then(|contract| contract.get("accessibility_i18n"))
+        });
     json!({
         "contract_version": "trillionnium_world_map_runtime_safety_gate_v1",
         "rum_slo_contract_version": rum_slo_contract.and_then(|contract| contract.get("contract_version")).and_then(Value::as_str),
         "rum_slo_quantiles_visible": rum_slo_contract.and_then(|contract| contract.get("required_dimensions")).and_then(|dimensions| dimensions.get("quantiles")).and_then(Value::as_array).is_some_and(|quantiles| quantiles.iter().any(|value| value == "p50") && quantiles.iter().any(|value| value == "p95") && quantiles.iter().any(|value| value == "p99")),
         "rum_slo_surface_split_visible": rum_slo_contract.and_then(|contract| contract.get("required_dimensions")).and_then(|dimensions| dimensions.get("surfaces")).and_then(Value::as_array).is_some_and(|surfaces| surfaces.iter().any(|value| value == "app") && surfaces.iter().any(|value| value == "world")),
         "rum_slo_device_split_visible": rum_slo_contract.and_then(|contract| contract.get("required_dimensions")).and_then(|dimensions| dimensions.get("device_classes")).and_then(Value::as_array).is_some_and(|devices| devices.iter().any(|value| value == "mobile") && devices.iter().any(|value| value == "desktop")),
+        "rum_sample_matrix_contract_version": rum_sample_matrix.and_then(|matrix| matrix.get("contract_version")).and_then(Value::as_str),
+        "rum_sample_matrix_per_bucket_min_samples": rum_sample_matrix.and_then(|matrix| matrix.get("per_bucket_min_samples")).and_then(Value::as_i64).unwrap_or(0),
+        "rum_sample_matrix_cache_network_kinds_visible": rum_sample_matrix.and_then(|matrix| matrix.get("required_sample_kinds")).and_then(Value::as_array).is_some_and(|kinds| kinds.iter().any(|value| value == "cold_cache_interactive") && kinds.iter().any(|value| value == "warm_delta_or_304") && kinds.iter().any(|value| value == "weak_network_cached_snapshot")),
         "weak_network_contract_version": weak_network_contract.and_then(|contract| contract.get("contract_version")).and_then(Value::as_str),
         "weak_network_cached_snapshot_visible": weak_network_contract.and_then(|contract| contract.get("strategy")).and_then(|strategy| strategy.get("local_cached_snapshot_after_network_error")).and_then(Value::as_bool).unwrap_or(false),
         "weak_network_delta_first_visible": weak_network_contract.and_then(|contract| contract.get("strategy")).and_then(|strategy| strategy.get("delta_first")).and_then(Value::as_bool).unwrap_or(false),
         "weak_network_snapshot_fallback_visible": weak_network_contract.and_then(|contract| contract.get("strategy")).and_then(|strategy| strategy.get("snapshot_fallback_after_delta_error")).and_then(Value::as_bool).unwrap_or(false),
+        "offline_action_queue_contract_version": offline_action_queue.and_then(|queue| queue.get("contract_version")).and_then(Value::as_str),
+        "offline_banner_visible": offline_action_queue.and_then(|queue| queue.get("offline_banner")).and_then(|banner| banner.get("aria_live")).and_then(Value::as_str) == Some("polite"),
+        "pending_action_queue_visible": offline_action_queue.and_then(|queue| queue.get("pending_action_queue")).and_then(|pending| pending.get("sync_on_reconnect_required")).and_then(Value::as_bool).unwrap_or(false),
+        "conflict_sync_recovery_visible": offline_action_queue.and_then(|queue| queue.get("conflict_recovery")).and_then(|conflict| conflict.get("conflict_banner_required")).and_then(Value::as_bool).unwrap_or(false),
         "location_privacy_contract_version": location_privacy_contract.and_then(|contract| contract.get("contract_version")).and_then(Value::as_str),
         "rum_excludes_lat_lng": location_privacy_contract.and_then(|contract| contract.get("rules")).and_then(|rules| rules.get("rum_payload_excludes_lat_lng")).and_then(Value::as_bool).unwrap_or(false),
         "personalized_map_cache_private": location_privacy_contract.and_then(|contract| contract.get("rules")).and_then(|rules| rules.get("viewport_cache_control")).and_then(Value::as_str) == Some("private") && location_privacy_contract.and_then(|contract| contract.get("rules")).and_then(|rules| rules.get("delta_cache_control")).and_then(Value::as_str) == Some("private"),
@@ -959,6 +1014,12 @@ fn app_world_map_runtime_safety_gate_json(app: &Value) -> Value {
         "viewport_request_abort_visible": runtime_performance_budget.and_then(|budget| budget.get("degrade_strategy")).and_then(|strategy| strategy.get("abort_previous_viewport_request")).and_then(Value::as_bool).unwrap_or(false),
         "deferred_card_render_visible": runtime_performance_budget.and_then(|budget| budget.get("degrade_strategy")).and_then(|strategy| strategy.get("defer_noncritical_card_render")).and_then(Value::as_bool).unwrap_or(false),
         "marker_cluster_policy_visible": runtime_performance_budget.and_then(|budget| budget.get("degrade_strategy")).and_then(|strategy| strategy.get("cluster_markers_before_hiding")).and_then(Value::as_bool).unwrap_or(false),
+        "density_scalability_contract_version": density_scalability.and_then(|density| density.get("contract_version")).and_then(Value::as_str),
+        "projection_cache_strategy_visible": density_scalability.and_then(|density| density.get("backend_projection")).and_then(|backend| backend.get("spatial_tile_cache_required")).and_then(Value::as_bool).unwrap_or(false) && density_scalability.and_then(|density| density.get("backend_projection")).and_then(|backend| backend.get("server_timing_header_required")).and_then(Value::as_bool).unwrap_or(false),
+        "frontend_virtualization_visible": density_scalability.and_then(|density| density.get("frontend_virtualization")).and_then(|frontend| frontend.get("virtualize_dense_cards_required")).and_then(Value::as_bool).unwrap_or(false),
+        "adaptive_density_scheduler_visible": density_scalability.and_then(|density| density.get("adaptive_density_scheduler")).and_then(|scheduler| scheduler.get("actions")).and_then(Value::as_array).is_some_and(|actions| actions.iter().any(|value| value == "cluster_markers") && actions.iter().any(|value| value == "defer_cards")),
+        "gameplay_accessibility_contract_version": gameplay_accessibility.and_then(|contract| contract.get("contract_version")).and_then(Value::as_str),
+        "screen_reader_reduced_motion_touch_targets_visible": gameplay_accessibility.and_then(|contract| contract.get("accessibility")).and_then(|a11y| a11y.get("screen_reader_labels_required")).and_then(Value::as_bool).unwrap_or(false) && gameplay_accessibility.and_then(|contract| contract.get("accessibility")).and_then(|a11y| a11y.get("reduced_motion_required")).and_then(Value::as_bool).unwrap_or(false) && gameplay_accessibility.and_then(|contract| contract.get("accessibility")).and_then(|a11y| a11y.get("touch_target_min_px")).and_then(Value::as_i64).unwrap_or(0) >= 44,
     })
 }
 
@@ -980,6 +1041,19 @@ fn is_world_map_runtime_safety_gate_green(gate: &Value) -> bool {
             .and_then(Value::as_bool)
             .unwrap_or(false)
         && gate
+            .get("rum_sample_matrix_contract_version")
+            .and_then(Value::as_str)
+            == Some("trillionnium_world_map_real_user_rum_matrix_v1")
+        && gate
+            .get("rum_sample_matrix_per_bucket_min_samples")
+            .and_then(Value::as_i64)
+            .unwrap_or(0)
+            >= 1
+        && gate
+            .get("rum_sample_matrix_cache_network_kinds_visible")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && gate
             .get("weak_network_contract_version")
             .and_then(Value::as_str)
             == Some("trillionnium_world_map_weak_network_resilience_v1")
@@ -993,6 +1067,22 @@ fn is_world_map_runtime_safety_gate_green(gate: &Value) -> bool {
             .unwrap_or(false)
         && gate
             .get("weak_network_snapshot_fallback_visible")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && gate
+            .get("offline_action_queue_contract_version")
+            .and_then(Value::as_str)
+            == Some("trillionnium_world_map_offline_action_queue_v1")
+        && gate
+            .get("offline_banner_visible")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && gate
+            .get("pending_action_queue_visible")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && gate
+            .get("conflict_sync_recovery_visible")
             .and_then(Value::as_bool)
             .unwrap_or(false)
         && gate
@@ -1039,6 +1129,30 @@ fn is_world_map_runtime_safety_gate_green(gate: &Value) -> bool {
             .get("marker_cluster_policy_visible")
             .and_then(Value::as_bool)
             .unwrap_or(false)
+        && gate
+            .get("density_scalability_contract_version")
+            .and_then(Value::as_str)
+            == Some("trillionnium_world_map_density_scalability_v1")
+        && gate
+            .get("projection_cache_strategy_visible")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && gate
+            .get("frontend_virtualization_visible")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && gate
+            .get("adaptive_density_scheduler_visible")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && gate
+            .get("gameplay_accessibility_contract_version")
+            .and_then(Value::as_str)
+            == Some("trillionnium_world_map_gameplay_accessibility_i18n_v1")
+        && gate
+            .get("screen_reader_reduced_motion_touch_targets_visible")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
 }
 
 fn world_map_rum_slo_gate_from_metrics(metrics_snapshot: &Value) -> Value {
@@ -1073,6 +1187,32 @@ fn is_world_map_rum_slo_metrics_gate_green(gate: &Value) -> bool {
             .is_none_or(|devices| {
                 devices.iter().any(|value| value == "mobile")
                     && devices.iter().any(|value| value == "desktop")
+            })
+        && gate
+            .get("split_by_sample_kind")
+            .and_then(Value::as_array)
+            .is_none_or(|kinds| {
+                kinds.iter().any(|value| value == "cold_cache_interactive")
+                    && kinds.iter().any(|value| value == "warm_delta_or_304")
+                    && kinds
+                        .iter()
+                        .any(|value| value == "weak_network_cached_snapshot")
+            })
+        && gate
+            .get("sample_matrix_contract_version")
+            .and_then(Value::as_str)
+            .is_none_or(|value| value == "trillionnium_world_map_real_user_rum_matrix_v1")
+        && gate
+            .get("per_bucket_min_samples")
+            .and_then(Value::as_u64)
+            .is_none_or(|value| value >= 1)
+        && gate
+            .get("sample_matrix_missing_bucket_count")
+            .and_then(Value::as_u64)
+            .is_none_or(|missing| {
+                gate.get("enforcement_status").and_then(Value::as_str)
+                    == Some("warming_until_min_samples")
+                    || missing == 0
             })
 }
 
@@ -3997,6 +4137,12 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
             "cex_consumer_entry_trillionnium_world_map_rum_slo_enforcement_active {}\n",
             "# TYPE cex_consumer_entry_trillionnium_world_map_rum_slo_warming gauge\n",
             "cex_consumer_entry_trillionnium_world_map_rum_slo_warming {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_map_rum_sample_matrix_raw_green gauge\n",
+            "cex_consumer_entry_trillionnium_world_map_rum_sample_matrix_raw_green {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_map_rum_sample_matrix_coverage_count gauge\n",
+            "cex_consumer_entry_trillionnium_world_map_rum_sample_matrix_coverage_count {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_map_rum_sample_matrix_missing_bucket_count gauge\n",
+            "cex_consumer_entry_trillionnium_world_map_rum_sample_matrix_missing_bucket_count {}\n",
             "# TYPE cex_consumer_entry_trillionnium_world_map_rum_first_interactive_p95_ms gauge\n",
             "cex_consumer_entry_trillionnium_world_map_rum_first_interactive_p95_ms {}\n",
             "# TYPE cex_consumer_entry_trillionnium_world_map_rum_viewport_refresh_p95_ms gauge\n",
@@ -4401,6 +4547,20 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
                 .and_then(Value::as_str)
                 == Some("warming_until_min_samples"),
         ),
+        gauge_bool(
+            world_map_rum_slo_metrics_gate
+                .get("sample_matrix_raw_green")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        ),
+        world_map_rum_slo_metrics_gate
+            .get("sample_matrix_coverage_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        world_map_rum_slo_metrics_gate
+            .get("sample_matrix_missing_bucket_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
         world_map_rum_snapshot
             .get("first_map_interactive_p95_ms")
             .and_then(Value::as_u64)

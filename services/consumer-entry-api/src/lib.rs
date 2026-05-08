@@ -1,4 +1,4 @@
-#![recursion_limit = "256"]
+#![recursion_limit = "512"]
 #![allow(clippy::result_large_err, clippy::too_many_arguments)]
 
 use axum::{
@@ -99,6 +99,7 @@ struct AppStateInner {
 struct WorldMapRumObservation {
     surface_class: String,
     device_class: String,
+    sample_kind_class: String,
     first_map_interactive_ms: Option<u64>,
     viewport_refresh_ms: Option<u64>,
     focus_to_action_rail_ms: Option<u64>,
@@ -393,6 +394,7 @@ impl WorldMapRumObservation {
         Self {
             surface_class: normalize_world_map_rum_surface(sample.surface_id.as_deref()),
             device_class: normalize_world_map_rum_device(sample.user_agent_class.as_deref()),
+            sample_kind_class: normalize_world_map_rum_sample_kind(sample.sample_kind.as_deref()),
             first_map_interactive_ms: sample
                 .first_map_interactive_ms
                 .map(|value| value.min(60_000)),
@@ -405,6 +407,33 @@ impl WorldMapRumObservation {
                 .map(|value| value.min(60_000)),
             tile_error_count: sample.tile_error_count.unwrap_or(0).min(10_000),
         }
+    }
+}
+
+fn normalize_world_map_rum_sample_kind(sample_kind: Option<&str>) -> String {
+    let normalized = sample_kind
+        .unwrap_or("viewport_refresh")
+        .trim()
+        .to_ascii_lowercase();
+    if normalized.contains("weak")
+        || normalized.contains("offline")
+        || normalized.contains("cached_snapshot")
+        || normalized.contains("network")
+    {
+        "weak_network_cached_snapshot".to_string()
+    } else if normalized.contains("delta")
+        || normalized.contains("304")
+        || normalized.contains("noop")
+        || normalized.contains("viewport_refresh")
+    {
+        "warm_delta_or_304".to_string()
+    } else if normalized.contains("first_map_interactive")
+        || normalized.contains("runtime_ready")
+        || normalized.contains("snapshot_ready")
+    {
+        "cold_cache_interactive".to_string()
+    } else {
+        "warm_delta_or_304".to_string()
     }
 }
 
@@ -536,6 +565,88 @@ fn world_map_rum_filtered_summary_json(
     world_map_rum_dimension_summary_json(&filtered, surface_class, device_class)
 }
 
+fn world_map_rum_matrix_bucket_json(
+    observations: &[WorldMapRumObservation],
+    surface_class: &str,
+    device_class: &str,
+    sample_kind_class: &str,
+) -> Value {
+    let sample_count = observations
+        .iter()
+        .filter(|sample| {
+            sample.surface_class == surface_class
+                && sample.device_class == device_class
+                && sample.sample_kind_class == sample_kind_class
+        })
+        .count() as u64;
+    json!({
+        "bucket_id": format!("{surface_class}_{device_class}_{sample_kind_class}"),
+        "surface_class": surface_class,
+        "device_class": device_class,
+        "sample_kind_class": sample_kind_class,
+        "sample_count": sample_count,
+        "per_bucket_min_samples": 1,
+        "observed": sample_count >= 1,
+    })
+}
+
+fn world_map_rum_sample_matrix_json(observations: &[WorldMapRumObservation]) -> Value {
+    const SURFACES: [&str; 2] = ["app", "world"];
+    const DEVICES: [&str; 2] = ["mobile", "desktop"];
+    const SAMPLE_KINDS: [&str; 3] = [
+        "cold_cache_interactive",
+        "warm_delta_or_304",
+        "weak_network_cached_snapshot",
+    ];
+    let mut buckets = Vec::new();
+    for surface in SURFACES {
+        for device in DEVICES {
+            for sample_kind in SAMPLE_KINDS {
+                buckets.push(world_map_rum_matrix_bucket_json(
+                    observations,
+                    surface,
+                    device,
+                    sample_kind,
+                ));
+            }
+        }
+    }
+    let coverage_count = buckets
+        .iter()
+        .filter(|bucket| {
+            bucket
+                .get("observed")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        })
+        .count() as u64;
+    let required_bucket_count = buckets.len() as u64;
+    let raw_matrix_green = coverage_count == required_bucket_count;
+    let warming = observations.len() < 30;
+    json!({
+        "contract_version": TRILLIONNIUM_WORLD_MAP_REAL_USER_RUM_MATRIX_CONTRACT_VERSION,
+        "required_surfaces": SURFACES,
+        "required_device_classes": DEVICES,
+        "required_sample_kinds": SAMPLE_KINDS,
+        "per_bucket_min_samples": 1,
+        "global_min_samples_before_enforcement": 30,
+        "required_bucket_count": required_bucket_count,
+        "coverage_count": coverage_count,
+        "missing_bucket_count": required_bucket_count.saturating_sub(coverage_count),
+        "raw_matrix_green": raw_matrix_green,
+        "green": warming || raw_matrix_green,
+        "enforcement_status": if warming { "warming_until_min_samples" } else { "enforced" },
+        "buckets": buckets,
+        "readiness_checks": [
+            "app_world_surface_split_visible",
+            "mobile_desktop_device_split_visible",
+            "cold_warm_weak_sample_kinds_visible",
+            "per_bucket_min_sample_visible",
+            "raw_matrix_verdict_visible"
+        ]
+    })
+}
+
 fn world_map_rum_distribution_json(observations: &[WorldMapRumObservation]) -> Value {
     const RUM_SLO_MIN_ENFORCEMENT_SAMPLE_COUNT: usize = 30;
     let global = world_map_rum_filtered_summary_json(observations, "all", "all");
@@ -547,6 +658,15 @@ fn world_map_rum_distribution_json(observations: &[WorldMapRumObservation]) -> V
     let app_desktop = world_map_rum_filtered_summary_json(observations, "app", "desktop");
     let world_mobile = world_map_rum_filtered_summary_json(observations, "world", "mobile");
     let world_desktop = world_map_rum_filtered_summary_json(observations, "world", "desktop");
+    let sample_matrix = world_map_rum_sample_matrix_json(observations);
+    let sample_matrix_green = sample_matrix
+        .get("green")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let sample_matrix_raw_green = sample_matrix
+        .get("raw_matrix_green")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let split_green = [
         &global,
         &app,
@@ -564,7 +684,7 @@ fn world_map_rum_distribution_json(observations: &[WorldMapRumObservation]) -> V
             .get("green")
             .and_then(Value::as_bool)
             .unwrap_or(true)
-    });
+    }) && sample_matrix_green;
     let enforcement_warming = observations.len() < RUM_SLO_MIN_ENFORCEMENT_SAMPLE_COUNT;
     json!({
         "contract_version": TRILLIONNIUM_WORLD_MAP_RUM_SLO_CONTRACT_VERSION,
@@ -583,11 +703,13 @@ fn world_map_rum_distribution_json(observations: &[WorldMapRumObservation]) -> V
             "world_mobile": world_mobile,
             "world_desktop": world_desktop,
         },
+        "sample_matrix": sample_matrix,
         "slo_gate": {
             "contract_version": TRILLIONNIUM_WORLD_MAP_RUM_SLO_CONTRACT_VERSION,
             "sample_count": observations.len(),
             "split_by_surface": ["app", "world"],
             "split_by_device_class": ["mobile", "desktop"],
+            "split_by_sample_kind": ["cold_cache_interactive", "warm_delta_or_304", "weak_network_cached_snapshot"],
             "first_map_interactive_target_ms": 2000,
             "viewport_refresh_p95_target_ms": 250,
             "focus_to_action_rail_target_ms": 300,
@@ -595,6 +717,12 @@ fn world_map_rum_distribution_json(observations: &[WorldMapRumObservation]) -> V
             "tile_error_rate_target_percent": 1,
             "green": enforcement_warming || split_green,
             "raw_split_green": split_green,
+            "sample_matrix_contract_version": TRILLIONNIUM_WORLD_MAP_REAL_USER_RUM_MATRIX_CONTRACT_VERSION,
+            "sample_matrix_raw_green": sample_matrix_raw_green,
+            "sample_matrix_coverage_count": sample_matrix.get("coverage_count").and_then(Value::as_u64).unwrap_or(0),
+            "sample_matrix_required_bucket_count": sample_matrix.get("required_bucket_count").and_then(Value::as_u64).unwrap_or(12),
+            "sample_matrix_missing_bucket_count": sample_matrix.get("missing_bucket_count").and_then(Value::as_u64).unwrap_or(12),
+            "per_bucket_min_samples": 1,
             "min_enforcement_sample_count": RUM_SLO_MIN_ENFORCEMENT_SAMPLE_COUNT,
             "enforcement_status": if enforcement_warming { "warming_until_min_samples" } else { "enforced" },
             "readiness_checks": [

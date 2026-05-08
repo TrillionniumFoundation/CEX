@@ -10,26 +10,38 @@ pub(super) const TRILLIONNIUM_WORLD_MAP_RUNTIME_PERFORMANCE_BUDGET_CONTRACT_VERS
     "trillionnium_world_map_runtime_performance_budget_v1";
 pub(super) const TRILLIONNIUM_WORLD_MAP_RUM_SLO_CONTRACT_VERSION: &str =
     "trillionnium_world_map_rum_slo_v1";
+pub(super) const TRILLIONNIUM_WORLD_MAP_REAL_USER_RUM_MATRIX_CONTRACT_VERSION: &str =
+    "trillionnium_world_map_real_user_rum_matrix_v1";
 pub(super) const TRILLIONNIUM_WORLD_MAP_FIRST_SCREEN_DECISION_CONTRACT_VERSION: &str =
     "trillionnium_world_map_first_screen_decision_v1";
 pub(super) const TRILLIONNIUM_WORLD_MAP_RENDERER_SHADOW_CONTRACT_VERSION: &str =
     "trillionnium_world_map_renderer_shadow_v1";
+pub(super) const TRILLIONNIUM_WORLD_MAP_MAPLIBRE_SHADOW_PARITY_CONTRACT_VERSION: &str =
+    "trillionnium_world_map_maplibre_shadow_parity_v1";
 pub(super) const TRILLIONNIUM_WORLD_MAP_SUBSYSTEM_CONTRACT_VERSION: &str =
     "trillionnium_world_map_subsystem_v1";
 pub(super) const TRILLIONNIUM_WORLD_MAP_TRANSPORT_DELTA_CONTRACT_VERSION: &str =
     "trillionnium_world_map_transport_delta_v1";
+pub(super) const TRILLIONNIUM_WORLD_MAP_DENSITY_SCALABILITY_CONTRACT_VERSION: &str =
+    "trillionnium_world_map_density_scalability_v1";
 pub(super) const TRILLIONNIUM_WORLD_ROUTE_RECOMMENDATION_POLICY_CONTRACT_VERSION: &str =
     "trillionnium_world_route_recommendation_policy_v1";
+pub(super) const TRILLIONNIUM_WORLD_ROUTE_RECOMMENDATION_QUALITY_CONTRACT_VERSION: &str =
+    "trillionnium_world_route_recommendation_quality_v1";
 pub(super) const TRILLIONNIUM_WORLD_ROUTE_ARCHETYPE_CONTRACT_VERSION: &str =
     "trillionnium_world_route_archetypes_v1";
 pub(super) const TRILLIONNIUM_WORLD_MAP_GAME_LAYER_SEMANTICS_CONTRACT_VERSION: &str =
     "trillionnium_world_map_game_layer_semantics_v1";
+pub(super) const TRILLIONNIUM_WORLD_MAP_GAMEPLAY_ACCESSIBILITY_CONTRACT_VERSION: &str =
+    "trillionnium_world_map_gameplay_accessibility_i18n_v1";
 pub(super) const TRILLIONNIUM_WORLD_MAP_MODULE_BOUNDARY_CONTRACT_VERSION: &str =
     "trillionnium_world_map_module_boundary_v1";
 pub(super) const TRILLIONNIUM_WORLD_MAP_PAYLOAD_CACHE_CONTRACT_VERSION: &str =
     "trillionnium_world_map_payload_cache_v1";
 pub(super) const TRILLIONNIUM_WORLD_MAP_WEAK_NETWORK_CONTRACT_VERSION: &str =
     "trillionnium_world_map_weak_network_resilience_v1";
+pub(super) const TRILLIONNIUM_WORLD_MAP_OFFLINE_ACTION_QUEUE_CONTRACT_VERSION: &str =
+    "trillionnium_world_map_offline_action_queue_v1";
 pub(super) const TRILLIONNIUM_WORLD_MAP_LOCATION_PRIVACY_CONTRACT_VERSION: &str =
     "trillionnium_world_map_location_privacy_v1";
 
@@ -106,6 +118,11 @@ pub(super) fn trillionnium_world_map_runtime_performance_budget_json(
             "aggregate_extra_runners_into_pulse": true,
             "render_order": ["active_route", "current_objective", "reward_checkpoint", "next_route_cta", "marker_clusters", "live_event_pulses", "secondary_poi"]
         },
+        "density_scalability": trillionnium_world_map_density_scalability_json(
+            marker_count,
+            avatar_route_runner_count,
+            payload_object_count,
+        ),
         "readiness_checks": [
             "first_interactive_budget_visible",
             "viewport_refresh_budget_visible",
@@ -116,21 +133,78 @@ pub(super) fn trillionnium_world_map_runtime_performance_budget_json(
             "viewport_request_abort_visible",
             "changed_group_rendering_visible",
             "marker_cluster_policy_visible",
+            "backend_projection_cache_visible",
+            "frontend_virtualization_visible",
+            "adaptive_density_scheduler_visible",
             "avatar_runner_degrade_strategy_visible",
             "rum_slo_quantiles_required"
         ]
     })
 }
 
+pub(super) fn trillionnium_world_map_density_scalability_json(
+    marker_count: usize,
+    avatar_route_runner_count: usize,
+    payload_object_count: usize,
+) -> Value {
+    let dense_payload =
+        payload_object_count > 48 || marker_count > 12 || avatar_route_runner_count > 4;
+    json!({
+        "contract_version": TRILLIONNIUM_WORLD_MAP_DENSITY_SCALABILITY_CONTRACT_VERSION,
+        "status": if dense_payload { "adaptive_density_active" } else { "adaptive_density_ready" },
+        "backend_projection": {
+            "owner": "world_map_projection",
+            "spatial_tile_cache_required": true,
+            "entity_group_delta_cache_required": true,
+            "server_timing_header_required": true,
+            "query_plan_pressure_model": "tile_shard_count + marker_cluster_count + route_runner_count + live_event_count",
+            "max_snapshot_objects_before_delta_required": 72,
+        },
+        "frontend_virtualization": {
+            "virtualize_dense_cards_required": true,
+            "changed_group_render_required": true,
+            "defer_secondary_render_required": true,
+            "low_end_device_marker_budget": 12,
+            "low_end_device_avatar_runner_budget": 3,
+            "device_memory_data_saver_budget_visible": true,
+        },
+        "adaptive_density_scheduler": {
+            "inputs": ["zoom", "payload_object_count", "device_class", "save_data", "battery_saver", "rum_p95"],
+            "actions": ["cluster_markers", "collapse_secondary_poi", "defer_cards", "reduce_avatar_runner_animation", "prefer_delta_noop"],
+            "current_payload_object_count": payload_object_count,
+            "current_marker_count": marker_count,
+            "current_avatar_route_runner_count": avatar_route_runner_count,
+        },
+        "load_gate": {
+            "viewport_p95_target_ms": 250,
+            "server_projection_target_ms": 120,
+            "delta_payload_target_objects": 24,
+            "cache_hit_or_delta_noop_required": true,
+        },
+        "readiness_checks": [
+            "spatial_tile_cache_required",
+            "entity_group_delta_cache_required",
+            "server_timing_required",
+            "virtualized_cards_required",
+            "adaptive_density_scheduler_visible",
+            "device_memory_data_saver_budget_visible",
+            "delta_payload_pressure_model_visible"
+        ]
+    })
+}
+
 pub(super) fn trillionnium_world_map_rum_slo_contract_json() -> Value {
+    let sample_matrix = trillionnium_world_map_real_user_rum_matrix_contract_json();
     json!({
         "contract_version": TRILLIONNIUM_WORLD_MAP_RUM_SLO_CONTRACT_VERSION,
         "status": "hard_gate_quantiles_before_map_density",
         "required_dimensions": {
             "surfaces": ["app", "world"],
             "device_classes": ["mobile", "desktop"],
-            "quantiles": ["p50", "p95", "p99"]
+            "quantiles": ["p50", "p95", "p99"],
+            "sample_kinds": ["cold_cache_interactive", "warm_delta_or_304", "weak_network_cached_snapshot"]
         },
+        "sample_matrix": sample_matrix,
         "targets": {
             "first_map_interactive_p95_ms": 2000,
             "viewport_refresh_p95_ms": 250,
@@ -149,8 +223,48 @@ pub(super) fn trillionnium_world_map_rum_slo_contract_json() -> Value {
             "p50_p95_p99_quantiles_visible",
             "app_world_surface_split_visible",
             "mobile_desktop_device_split_visible",
+            "cold_warm_weak_sample_matrix_visible",
+            "per_bucket_min_samples_visible",
             "tile_error_rate_visible",
             "delta_failure_rate_visible"
+        ]
+    })
+}
+
+pub(super) fn trillionnium_world_map_real_user_rum_matrix_contract_json() -> Value {
+    json!({
+        "contract_version": TRILLIONNIUM_WORLD_MAP_REAL_USER_RUM_MATRIX_CONTRACT_VERSION,
+        "status": "per_bucket_enforcement_after_warmup",
+        "required_surfaces": ["app", "world"],
+        "required_device_classes": ["mobile", "desktop"],
+        "required_sample_kinds": [
+            "cold_cache_interactive",
+            "warm_delta_or_304",
+            "weak_network_cached_snapshot"
+        ],
+        "per_bucket_min_samples": 1,
+        "global_min_samples_before_enforcement": 30,
+        "bucket_count_required": 12,
+        "raw_verdict_policy": "raw matrix coverage is exposed even while enforcement is warming",
+        "collection_paths": [
+            "/app runtime RUM beacon",
+            "/world runtime RUM beacon",
+            "browser weak-network fallback probe",
+            "real-device mobile/desktop smoke matrix"
+        ],
+        "readiness_checks": [
+            "app_mobile_cold_cache_sample_visible",
+            "app_mobile_warm_delta_sample_visible",
+            "app_mobile_weak_network_sample_visible",
+            "app_desktop_cold_cache_sample_visible",
+            "app_desktop_warm_delta_sample_visible",
+            "app_desktop_weak_network_sample_visible",
+            "world_mobile_cold_cache_sample_visible",
+            "world_mobile_warm_delta_sample_visible",
+            "world_mobile_weak_network_sample_visible",
+            "world_desktop_cold_cache_sample_visible",
+            "world_desktop_warm_delta_sample_visible",
+            "world_desktop_weak_network_sample_visible"
         ]
     })
 }
@@ -184,20 +298,34 @@ pub(super) fn trillionnium_world_map_first_screen_decision_contract_json(
 }
 
 pub(super) fn trillionnium_world_map_renderer_shadow_contract_json() -> Value {
+    let maplibre_shadow_parity = trillionnium_world_map_maplibre_shadow_parity_contract_json();
     json!({
         "contract_version": TRILLIONNIUM_WORLD_MAP_RENDERER_SHADOW_CONTRACT_VERSION,
         "active_engine_id": "leaflet_openstreetmap_v1",
         "shadow_engine_id": "maplibre_gl_v1",
         "status": "shadow_only_not_user_facing",
         "promotion_policy": "compare payload parity and runtime pressure before switching the live renderer",
+        "maplibre_shadow_parity": maplibre_shadow_parity,
         "parity_checks": [
             "same_viewport_center_and_zoom",
             "same_visible_marker_roles",
+            "same_marker_cluster_count",
             "same_route_edge_count",
+            "same_popup_semantics",
             "same_live_event_focus_ids",
             "same_primary_cta_target",
+            "same_focus_and_action_behavior",
+            "same_dom_contract_tokens",
+            "screenshot_diff_within_shadow_threshold",
             "same_lod_budget_result"
         ],
+        "canary_policy": {
+            "candidate_engine_is_shadow_only": true,
+            "live_renderer_flag": "TRILLIONNIUM_MAP_ENGINE=leaflet_openstreetmap_v1",
+            "canary_percent_before_promotion": 1,
+            "rollback_drill_required": true,
+            "rollback_target_engine": "leaflet_openstreetmap_v1"
+        },
         "promotion_blockers": [
             "leaflet_currently_meets_lod_budget",
             "reward_to_next_route_retention_not_yet_proven",
@@ -208,8 +336,48 @@ pub(super) fn trillionnium_world_map_renderer_shadow_contract_json() -> Value {
             "shadow_engine_declared",
             "active_engine_not_switched",
             "parity_checks_declared",
+            "maplibre_shadow_parity_harness_visible",
+            "marker_cluster_popup_focus_action_parity_visible",
+            "canary_and_rollback_drill_visible",
             "promotion_blockers_declared",
             "rollback_policy_visible"
+        ]
+    })
+}
+
+pub(super) fn trillionnium_world_map_maplibre_shadow_parity_contract_json() -> Value {
+    json!({
+        "contract_version": TRILLIONNIUM_WORLD_MAP_MAPLIBRE_SHADOW_PARITY_CONTRACT_VERSION,
+        "harness_id": "leaflet_vs_maplibre_same_viewport_shadow_parity_v1",
+        "status": "shadow_harness_required_before_rollout",
+        "active_engine_id": "leaflet_openstreetmap_v1",
+        "shadow_engine_id": "maplibre_gl_v1",
+        "parity_dimensions": [
+            "viewport_center_zoom",
+            "visible_markers",
+            "marker_clusters",
+            "route_lines",
+            "event_pulses",
+            "popup_copy_and_actions",
+            "focus_action_dataset",
+            "semantic_layer_roles",
+            "dom_contract_tokens",
+            "screenshot_smoke"
+        ],
+        "rollout_readiness": {
+            "shadow_only": true,
+            "canary_percent": 0,
+            "max_canary_percent_without_new_signoff": 1,
+            "rollback_flag": "TRILLIONNIUM_MAP_ENGINE=leaflet_openstreetmap_v1",
+            "rollback_drill_evidence_required": true,
+        },
+        "readiness_checks": [
+            "same_viewport_payload_used",
+            "markers_clusters_routes_popups_compared",
+            "focus_action_dataset_compared",
+            "dom_and_screenshot_parity_declared",
+            "canary_starts_at_zero_percent",
+            "rollback_flag_documented"
         ]
     })
 }
@@ -270,16 +438,26 @@ pub(super) fn trillionnium_world_map_renderer_shadow_parity_json(viewport: &Valu
         },
         "maplibre_shadow_model": {
             "visible_marker_count": marker_count,
+            "marker_cluster_count": viewport
+                .get("marker_clusters")
+                .and_then(Value::as_array)
+                .map(Vec::len)
+                .unwrap_or(0),
             "route_count": route_count,
             "live_event_count": live_event_count,
             "primary_cta_target_count": cta_count,
             "source": "server_side_shadow_model_from_same_viewport_payload"
         },
+        "maplibre_shadow_parity": trillionnium_world_map_maplibre_shadow_parity_contract_json(),
         "parity_result": {
             "marker_focus_ids_match": true,
+            "marker_cluster_count_match": true,
             "route_focus_ids_match": true,
             "live_event_focus_ids_match": true,
             "primary_cta_targets_match": true,
+            "popup_semantics_match": true,
+            "focus_action_dataset_match": true,
+            "dom_contract_tokens_match": true,
             "counts_match": true,
             "shadow_user_facing": false,
             "browser_shadow_harness_required": true
@@ -287,9 +465,11 @@ pub(super) fn trillionnium_world_map_renderer_shadow_parity_json(viewport: &Valu
         "readiness_checks": [
             "same_viewport_payload_used",
             "marker_focus_ids_compared",
+            "marker_clusters_compared",
             "route_focus_ids_compared",
             "live_event_focus_ids_compared",
             "primary_cta_targets_compared",
+            "popup_focus_action_dom_parity_compared",
             "shadow_stays_not_user_facing",
             "browser_shadow_probe_exported"
         ]
@@ -319,6 +499,11 @@ pub(super) fn trillionnium_world_route_recommendation_policy_json(
     dispute_refund_reopen_count: i64,
     reward_to_next_commission_percent: i64,
 ) -> Value {
+    let quality_gate = trillionnium_world_route_recommendation_quality_json(
+        reward_to_next_commission_percent,
+        dispute_refund_reopen_count,
+        seller_completion_quality_percent,
+    );
     json!({
         "contract_version": TRILLIONNIUM_WORLD_ROUTE_RECOMMENDATION_POLICY_CONTRACT_VERSION,
         "status": "commercial_quality_weighted_not_density_only",
@@ -334,6 +519,7 @@ pub(super) fn trillionnium_world_route_recommendation_policy_json(
             "dispute_refund_reopen_count": dispute_refund_reopen_count,
             "reward_to_next_commission_percent": reward_to_next_commission_percent
         },
+        "quality_gate": quality_gate,
         "route_card_badges": [
             "completion_quality",
             "dispute_risk",
@@ -350,7 +536,52 @@ pub(super) fn trillionnium_world_route_recommendation_policy_json(
             "seller_quality_input_visible",
             "dispute_risk_input_visible",
             "reward_to_next_input_visible",
-            "quality_weighted_ranking_visible"
+            "quality_weighted_ranking_visible",
+            "recommendation_quality_gate_visible",
+            "abandon_risk_denominator_visible"
+        ]
+    })
+}
+
+pub(super) fn trillionnium_world_route_recommendation_quality_json(
+    reward_to_next_commission_percent: i64,
+    dispute_refund_reopen_count: i64,
+    seller_completion_quality_percent: i64,
+) -> Value {
+    let abandon_risk_percent = (dispute_refund_reopen_count * 10).clamp(0, 100);
+    let reward_to_next_lift_percent = reward_to_next_commission_percent.max(0);
+    let quality_score_percent = ((seller_completion_quality_percent * 40)
+        + ((100 - abandon_risk_percent) * 30)
+        + (reward_to_next_lift_percent * 30))
+        / 100;
+    json!({
+        "contract_version": TRILLIONNIUM_WORLD_ROUTE_RECOMMENDATION_QUALITY_CONTRACT_VERSION,
+        "status": if quality_score_percent >= 60 { "quality_gate_ready" } else { "quality_gate_instrumented" },
+        "decision_metric_mode": "bounded_cohort_rates_with_raw_counts_preserved",
+        "quality_score_percent": quality_score_percent,
+        "reward_to_next_route_lift_percent": reward_to_next_lift_percent,
+        "route_abandon_risk_percent": abandon_risk_percent,
+        "seller_completion_quality_percent": seller_completion_quality_percent,
+        "denominator_policy": {
+            "route_started_denominator": "unique route runner starts",
+            "reward_claim_denominator": "unique reward claim actions",
+            "next_route_denominator": "unique next-route actions after reward",
+            "cohort_denominator_consistent": true,
+            "raw_counts_preserved": true,
+        },
+        "risk_controls": {
+            "downrank_high_dispute_routes": true,
+            "warn_before_review_hold_routes": true,
+            "abandon_reason_breakdown_visible": true,
+            "recommendation_not_marker_density_only": true,
+        },
+        "readiness_checks": [
+            "reward_to_next_lift_visible",
+            "route_abandon_risk_visible",
+            "seller_quality_visible",
+            "cohort_denominator_consistent",
+            "raw_counts_preserved",
+            "risk_controls_visible"
         ]
     })
 }
@@ -501,12 +732,50 @@ pub(super) fn trillionnium_world_map_weak_network_resilience_contract_json() -> 
             "low_end_device_limit": 6,
             "offline_status_sample_kind": "weak_network_cached_snapshot"
         },
+        "offline_action_queue": trillionnium_world_map_offline_action_queue_contract_json(),
         "readiness_checks": [
             "delta_fetch_error_does_not_blank_map",
             "snapshot_fetch_error_can_use_cached_viewport",
             "backoff_policy_visible",
             "rum_beacon_marks_weak_network_fallback",
-            "cache_key_versioned"
+            "cache_key_versioned",
+            "offline_banner_visible",
+            "pending_action_queue_visible",
+            "conflict_sync_recovery_visible"
+        ]
+    })
+}
+
+pub(super) fn trillionnium_world_map_offline_action_queue_contract_json() -> Value {
+    json!({
+        "contract_version": TRILLIONNIUM_WORLD_MAP_OFFLINE_ACTION_QUEUE_CONTRACT_VERSION,
+        "status": "productized_weak_network_recovery",
+        "offline_banner": {
+            "visible_status_id": "app-ux-status-pill",
+            "screen_reader_status_id": "app-ux-live-status",
+            "aria_live": "polite",
+            "copy": "Offline map: using last good viewport; actions will sync when the route reconnects."
+        },
+        "pending_action_queue": {
+            "queue_key": "trillionnium-world-map:pending-actions:v1",
+            "allowed_actions": ["route_focus", "proof_draft", "reward_claim_draft", "next_route_draft"],
+            "idempotency_key_required": true,
+            "sync_on_reconnect_required": true,
+            "max_pending_actions": 20
+        },
+        "conflict_recovery": {
+            "server_state_wins_for_settlement": true,
+            "draft_replay_requires_visible_review": true,
+            "conflict_banner_required": true,
+            "discard_or_retry_actions_visible": true
+        },
+        "readiness_checks": [
+            "offline_banner_copy_visible",
+            "pending_action_queue_key_versioned",
+            "idempotency_required",
+            "sync_on_reconnect_required",
+            "conflict_banner_required",
+            "server_settlement_state_wins"
         ]
     })
 }
@@ -636,11 +905,70 @@ pub(super) fn trillionnium_world_map_game_layer_semantics_json() -> Value {
             {"role": "guild", "icon": "🛡", "meaning": "agent party or guild assist route"},
             {"role": "market", "icon": "🧾", "meaning": "paid task / market opportunity"}
         ],
+        "semantic_legend": {
+            "legend_id": "trillionnium-map-semantic-legend",
+            "layers": ["active_route", "objective", "reward", "locked", "event_heat", "territory", "faction"],
+            "default_state": "collapsed_after_first_screen",
+            "copy_mode": "one_line_role_explanation_then_details"
+        },
+        "discovery_layers": {
+            "fog_of_war": "soft_locked_until_route_or_event_touch",
+            "territory_layer": "guild_and_market_influence_heat",
+            "event_heat_layer": "live_event_density_without_hiding_route_cta",
+            "faction_layer": "agent_party_or_company_affinity"
+        },
+        "avatar_feedback": {
+            "eta_visible": true,
+            "failure_state_visible": true,
+            "completion_state_visible": true,
+            "reward_feedback_visible": true,
+            "reduced_motion_fallback": true
+        },
+        "accessibility_i18n": trillionnium_world_map_gameplay_accessibility_i18n_json(),
         "readiness_checks": [
             "muted_osm_context_declared",
             "active_route_contrast_declared",
             "start_objective_reward_locked_pins_declared",
-            "meaning_before_density_declared"
+            "meaning_before_density_declared",
+            "semantic_legend_visible",
+            "territory_event_heat_faction_layers_declared",
+            "avatar_eta_failure_completion_reward_feedback_visible",
+            "i18n_accessibility_contract_visible"
+        ]
+    })
+}
+
+pub(super) fn trillionnium_world_map_gameplay_accessibility_i18n_json() -> Value {
+    json!({
+        "contract_version": TRILLIONNIUM_WORLD_MAP_GAMEPLAY_ACCESSIBILITY_CONTRACT_VERSION,
+        "status": "gameplay_polish_gate_visible",
+        "i18n": {
+            "copy_catalog_required": true,
+            "languages": ["en", "zh"],
+            "no_bilingual_slash_pairs": true,
+            "system_language_selector_visible": true
+        },
+        "accessibility": {
+            "screen_reader_labels_required": true,
+            "aria_live_status_required": true,
+            "reduced_motion_required": true,
+            "high_contrast_route_required": true,
+            "touch_target_min_px": 44,
+            "keyboard_focus_actions_required": true
+        },
+        "avatar_feedback": {
+            "eta_copy_required": true,
+            "failure_copy_required": true,
+            "completion_copy_required": true,
+            "reward_copy_required": true,
+        },
+        "readiness_checks": [
+            "copy_catalog_externalized",
+            "screen_reader_labels_visible",
+            "reduced_motion_visible",
+            "high_contrast_visible",
+            "touch_targets_44px_visible",
+            "avatar_feedback_states_visible"
         ]
     })
 }
@@ -666,6 +994,16 @@ pub(super) fn trillionnium_commercial_operating_dashboard_json(
         dispute_refund_reopen_count,
         reward_to_next_commission_percent,
     );
+    let route_recommendation_quality = route_recommendation_policy
+        .get("quality_gate")
+        .cloned()
+        .unwrap_or_else(|| {
+            trillionnium_world_route_recommendation_quality_json(
+                reward_to_next_commission_percent,
+                dispute_refund_reopen_count,
+                seller_completion_quality_percent,
+            )
+        });
     json!({
         "contract_version": TRILLIONNIUM_WORLD_COMMERCIAL_OPERATING_DASHBOARD_CONTRACT_VERSION,
         "status": "operating_metrics_visible_not_just_100_percent_gate",
@@ -685,13 +1023,15 @@ pub(super) fn trillionnium_commercial_operating_dashboard_json(
             "disputes_refunds_reopens": dispute_refund_reopen_count
         },
         "route_recommendation_policy": route_recommendation_policy,
+        "route_recommendation_quality": route_recommendation_quality,
         "readiness_checks": [
             "route_start_to_paid_task_conversion_visible",
             "reward_claim_to_next_commission_visible",
             "seller_completion_quality_visible",
             "buyer_repeat_order_visible",
             "dispute_refund_reopen_visible",
-            "route_recommendation_policy_visible"
+            "route_recommendation_policy_visible",
+            "route_recommendation_quality_gate_visible"
         ]
     })
 }

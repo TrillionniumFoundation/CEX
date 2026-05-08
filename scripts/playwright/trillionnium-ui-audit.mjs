@@ -166,6 +166,7 @@ function checkMobile(result, limits) {
     assertMetric(Number(readability.avatarRunnerBudget || 0) <= 6, `${result.profile}/app avatar runner clutter budget drifted`, readability);
     assertMetric(Number(readability.copySummaryBudget || 0) <= 150, `${result.profile}/app copy budget drifted`, readability);
     assertMetric(readability.detailsDefaultState === 'collapsed', `${result.profile}/app dense map details must default collapsed`, readability);
+    assertMetric(String(readability.semanticLegendRequired) === 'true' && String(readability.avatarFeedbackRequired) === 'true' && String(readability.i18nA11yRequired) === 'true', `${result.profile}/app P2 semantic/avatar/i18n-a11y polish contract missing`, readability);
     assertMetric((readability.text || '').includes('One route first'), `${result.profile}/app readability copy must stay route-first`, readability);
     const perf = result.mapPerformanceBudget || {};
     assertMetric(perf.present === true, `${result.profile}/app map performance budget missing`, perf);
@@ -177,6 +178,7 @@ function checkMobile(result, limits) {
     assertMetric(String(perf.abortPreviousViewportRequest) === 'true', `${result.profile}/app stale viewport abort requirement missing`, perf);
     assertMetric(String(perf.deferNoncriticalCardRender) === 'true', `${result.profile}/app deferred card render requirement missing`, perf);
     assertMetric(String(perf.clusterMarkersBeforeHiding) === 'true', `${result.profile}/app marker cluster density policy missing`, perf);
+    assertMetric(String(perf.spatialCacheRequired) === 'true' && String(perf.virtualizedCardsRequired) === 'true' && String(perf.adaptiveDensityRequired) === 'true', `${result.profile}/app P1 density scalability DOM contract missing`, perf);
     const transport = result.mapTransportDelta || {};
     assertMetric(transport.present === true, `${result.profile}/app map transport delta contract missing`, transport);
     assertMetric(transport.contractVersion === 'trillionnium_world_map_transport_delta_v1', `${result.profile}/app map transport delta version missing`, transport);
@@ -192,11 +194,13 @@ function checkMobile(result, limits) {
     assertMetric((rumSlo.quantiles || '').includes('p50') && (rumSlo.quantiles || '').includes('p95') && (rumSlo.quantiles || '').includes('p99'), `${result.profile}/app RUM SLO quantiles missing`, rumSlo);
     assertMetric((rumSlo.surfaceSplit || '').includes('app') && (rumSlo.surfaceSplit || '').includes('world'), `${result.profile}/app RUM SLO surface split missing`, rumSlo);
     assertMetric((rumSlo.deviceSplit || '').includes('mobile') && (rumSlo.deviceSplit || '').includes('desktop'), `${result.profile}/app RUM SLO device split missing`, rumSlo);
+    assertMetric(rumSlo.matrixContract === 'trillionnium_world_map_real_user_rum_matrix_v1' && (rumSlo.sampleKinds || '').includes('cold_cache_interactive') && (rumSlo.sampleKinds || '').includes('weak_network_cached_snapshot') && Number(rumSlo.perBucketMinSamples || 0) >= 1, `${result.profile}/app real-user RUM matrix missing`, rumSlo);
     const weakNetwork = result.mapWeakNetwork || {};
     assertMetric(weakNetwork.present === true, `${result.profile}/app weak-network contract missing`, weakNetwork);
     assertMetric(weakNetwork.contractVersion === 'trillionnium_world_map_weak_network_resilience_v1', `${result.profile}/app weak-network contract version missing`, weakNetwork);
     assertMetric(weakNetwork.cacheKey === 'trillionnium-world-map:last-good-viewport:v1', `${result.profile}/app weak-network cache key missing`, weakNetwork);
     assertMetric(String(weakNetwork.delta304Supported) === 'true', `${result.profile}/app weak-network 304 support missing`, weakNetwork);
+    assertMetric(String(weakNetwork.offlineBannerRequired) === 'true' && String(weakNetwork.pendingActionQueueRequired) === 'true' && String(weakNetwork.conflictSyncRequired) === 'true', `${result.profile}/app weak-network productization contract missing`, weakNetwork);
     const privacy = result.mapLocationPrivacy || {};
     assertMetric(privacy.present === true, `${result.profile}/app location privacy contract missing`, privacy);
     assertMetric(privacy.contractVersion === 'trillionnium_world_map_location_privacy_v1', `${result.profile}/app location privacy contract version missing`, privacy);
@@ -234,6 +238,7 @@ function checkMobile(result, limits) {
     assertMetric(Number(readability.visibleMarkerBudget || 0) <= 18, `${result.profile}/world visible marker clutter budget drifted`, readability);
     assertMetric(Number(readability.avatarRunnerBudget || 0) <= 6, `${result.profile}/world avatar runner clutter budget drifted`, readability);
     assertMetric(readability.detailsDefaultState === 'collapsed', `${result.profile}/world dense map details must default collapsed`, readability);
+    assertMetric(String(readability.semanticLegendRequired) === 'true' && String(readability.avatarFeedbackRequired) === 'true' && String(readability.i18nA11yRequired) === 'true', `${result.profile}/world P2 semantic/avatar/i18n-a11y polish contract missing`, readability);
     const perf = result.mapPerformanceBudget || {};
     assertMetric(perf.present === true, `${result.profile}/world map performance budget missing`, perf);
     assertMetric(perf.contractVersion === 'trillionnium_world_map_runtime_performance_budget_v1', `${result.profile}/world map performance budget contract missing`, perf);
@@ -241,6 +246,7 @@ function checkMobile(result, limits) {
     assertMetric(String(perf.deltaViewportUpdatesRequired) === 'true', `${result.profile}/world delta viewport requirement missing`, perf);
     assertMetric(String(perf.abortPreviousViewportRequest) === 'true', `${result.profile}/world stale viewport abort requirement missing`, perf);
     assertMetric(String(perf.deferNoncriticalCardRender) === 'true', `${result.profile}/world deferred card render requirement missing`, perf);
+    assertMetric(String(perf.spatialCacheRequired) === 'true' && String(perf.virtualizedCardsRequired) === 'true' && String(perf.adaptiveDensityRequired) === 'true', `${result.profile}/world P1 density scalability DOM contract missing`, perf);
     assertMetric(String(perf.clusterMarkersBeforeHiding) === 'true', `${result.profile}/world marker cluster density policy missing`, perf);
     const transport = result.mapTransportDelta || {};
     assertMetric(transport.contractVersion === 'trillionnium_world_map_transport_delta_v1', `${result.profile}/world map transport delta version missing`, transport);
@@ -254,16 +260,19 @@ function checkMobile(result, limits) {
     assertMetric(rumSlo.contractVersion === 'trillionnium_world_map_rum_slo_v1', `${result.profile}/world map RUM SLO contract version missing`, rumSlo);
     assertMetric(rumSlo.paritySource === 'app-map-rum-slo', `${result.profile}/world map RUM SLO must declare /app parity`, rumSlo);
     assertMetric((rumSlo.quantiles || '').includes('p95') && (rumSlo.deviceSplit || '').includes('mobile'), `${result.profile}/world map RUM SLO dimensions missing`, rumSlo);
+    assertMetric(rumSlo.matrixContract === 'trillionnium_world_map_real_user_rum_matrix_v1' && Number(rumSlo.perBucketMinSamples || 0) >= 1, `${result.profile}/world real-user RUM matrix missing`, rumSlo);
     const weakNetwork = result.mapWeakNetwork || {};
     assertMetric(weakNetwork.contractVersion === 'trillionnium_world_map_weak_network_resilience_v1', `${result.profile}/world weak-network contract version missing`, weakNetwork);
     assertMetric(weakNetwork.paritySource === 'app-map-weak-network', `${result.profile}/world weak-network must declare /app parity`, weakNetwork);
     assertMetric(weakNetwork.cacheKey === 'trillionnium-world-map:last-good-viewport:v1' && String(weakNetwork.delta304Supported) === 'true', `${result.profile}/world weak-network cache/304 missing`, weakNetwork);
+    assertMetric(String(weakNetwork.offlineBannerRequired) === 'true' && String(weakNetwork.pendingActionQueueRequired) === 'true' && String(weakNetwork.conflictSyncRequired) === 'true', `${result.profile}/world weak-network productization contract missing`, weakNetwork);
     const privacy = result.mapLocationPrivacy || {};
     assertMetric(privacy.contractVersion === 'trillionnium_world_map_location_privacy_v1', `${result.profile}/world location privacy contract version missing`, privacy);
     assertMetric(privacy.paritySource === 'app-map-location-privacy', `${result.profile}/world privacy must declare /app parity`, privacy);
     assertMetric(String(privacy.rumExcludesLatLng) === 'true' && privacy.cacheControl === 'private', `${result.profile}/world privacy cache/RUM flags missing`, privacy);
     const shadow = result.shadowRenderer || {};
     assertMetric(shadow.contractVersion === 'trillionnium_world_map_renderer_shadow_v1', `${result.profile}/world shadow renderer contract missing`, shadow);
+    assertMetric(shadow.parityContract === 'trillionnium_world_map_maplibre_shadow_parity_v1' && String(shadow.rollbackDrillRequired) === 'true' && Number(shadow.canaryPercent || -1) === 0, `${result.profile}/world MapLibre shadow parity/canary/rollback contract missing`, shadow);
     assertMetric(shadow.activeEngine === 'leaflet_openstreetmap_v1' && shadow.shadowEngine === 'maplibre_gl_v1', `${result.profile}/world shadow renderer engine ids missing`, shadow);
     assertMetric(shadow.status === 'shadow_only_not_user_facing', `${result.profile}/world MapLibre must stay shadow-only`, shadow);
     const map = yOf(result, 'map');
@@ -480,6 +489,9 @@ async function auditPage(page, profile, target) {
       avatarRunnerBudget: appMapReadabilityLod?.dataset.avatarRunnerBudget || null,
       copySummaryBudget: appMapReadabilityLod?.dataset.copySummaryBudget || null,
       detailsDefaultState: appMapReadabilityLod?.dataset.detailsDefaultState || null,
+      semanticLegendRequired: appMapReadabilityLod?.dataset.semanticLegendRequired || null,
+      avatarFeedbackRequired: appMapReadabilityLod?.dataset.avatarFeedbackRequired || null,
+      i18nA11yRequired: appMapReadabilityLod?.dataset.i18nA11yRequired || null,
       text: text(appMapReadabilityLod).slice(0, 260),
     };
     const worldMapReadability = {
@@ -492,6 +504,9 @@ async function auditPage(page, profile, target) {
       avatarRunnerBudget: worldMapReadabilityLod?.dataset.avatarRunnerBudget || null,
       copySummaryBudget: worldMapReadabilityLod?.dataset.copySummaryBudget || null,
       detailsDefaultState: worldMapReadabilityLod?.dataset.detailsDefaultState || null,
+      semanticLegendRequired: worldMapReadabilityLod?.dataset.semanticLegendRequired || null,
+      avatarFeedbackRequired: worldMapReadabilityLod?.dataset.avatarFeedbackRequired || null,
+      i18nA11yRequired: worldMapReadabilityLod?.dataset.i18nA11yRequired || null,
       paritySource: worldMapReadabilityLod?.dataset.paritySource || null,
       text: text(worldMapReadabilityLod).slice(0, 260),
     };
@@ -507,6 +522,9 @@ async function auditPage(page, profile, target) {
       abortPreviousViewportRequest: mapPerformanceBudgetElement?.dataset.abortPreviousViewportRequest || null,
       deferNoncriticalCardRender: mapPerformanceBudgetElement?.dataset.deferNoncriticalCardRender || null,
       clusterMarkersBeforeHiding: mapPerformanceBudgetElement?.dataset.clusterMarkersBeforeHiding || null,
+      spatialCacheRequired: mapPerformanceBudgetElement?.dataset.spatialCacheRequired || null,
+      virtualizedCardsRequired: mapPerformanceBudgetElement?.dataset.virtualizedCardsRequired || null,
+      adaptiveDensityRequired: mapPerformanceBudgetElement?.dataset.adaptiveDensityRequired || null,
       text: text(mapPerformanceBudgetElement).slice(0, 260),
     };
     const mapTransportDelta = {
@@ -527,6 +545,9 @@ async function auditPage(page, profile, target) {
       quantiles: mapRumSloElement?.dataset.quantiles || null,
       surfaceSplit: mapRumSloElement?.dataset.surfaceSplit || null,
       deviceSplit: mapRumSloElement?.dataset.deviceSplit || null,
+      sampleKinds: mapRumSloElement?.dataset.sampleKinds || null,
+      perBucketMinSamples: mapRumSloElement?.dataset.perBucketMinSamples || null,
+      matrixContract: mapRumSloElement?.dataset.matrixContract || null,
       paritySource: mapRumSloElement?.dataset.paritySource || null,
       text: text(mapRumSloElement).slice(0, 260),
     };
@@ -535,6 +556,9 @@ async function auditPage(page, profile, target) {
       contractVersion: mapWeakNetworkElement?.dataset.contractVersion || null,
       cacheKey: mapWeakNetworkElement?.dataset.cacheKey || null,
       delta304Supported: mapWeakNetworkElement?.getAttribute('data-delta-304-supported') || null,
+      offlineBannerRequired: mapWeakNetworkElement?.dataset.offlineBannerRequired || null,
+      pendingActionQueueRequired: mapWeakNetworkElement?.dataset.pendingActionQueueRequired || null,
+      conflictSyncRequired: mapWeakNetworkElement?.dataset.conflictSyncRequired || null,
       paritySource: mapWeakNetworkElement?.dataset.paritySource || null,
       text: text(mapWeakNetworkElement).slice(0, 260),
     };
@@ -549,9 +573,12 @@ async function auditPage(page, profile, target) {
     const shadowRenderer = {
       present: Boolean(worldMapShadowRenderer),
       contractVersion: worldMapShadowRenderer?.dataset.contractVersion || null,
+      parityContract: worldMapShadowRenderer?.dataset.parityContract || null,
       activeEngine: worldMapShadowRenderer?.dataset.activeEngine || null,
       shadowEngine: worldMapShadowRenderer?.dataset.shadowEngine || null,
       status: worldMapShadowRenderer?.dataset.status || null,
+      canaryPercent: worldMapShadowRenderer?.dataset.canaryPercent || null,
+      rollbackDrillRequired: worldMapShadowRenderer?.dataset.rollbackDrillRequired || null,
       text: text(worldMapShadowRenderer).slice(0, 260),
     };
     const routeRunnerHandoff = {

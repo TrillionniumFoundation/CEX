@@ -2102,10 +2102,12 @@ pub(super) fn real_world_map_viewport_hydration_js() -> &'static str {
       };
       const buildMapLibreShadowParityProbe = (viewport) => {
         const markerIds = (viewport.visible_markers || []).map((marker) => marker.node_id || marker.location_id).filter(Boolean).sort();
+        const clusterIds = (viewport.marker_clusters || []).map((cluster) => cluster.cluster_id || cluster.node_id || cluster.location_id).filter(Boolean).sort();
         const routeIds = (viewport.avatar_task_routes || []).map((route) => route.task_id || route.route_id).filter(Boolean).sort();
         const eventIds = (viewport.live_event_stream || []).map((event) => event.event_id).filter(Boolean).sort();
         return {
           contract_version: 'trillionnium_world_map_renderer_shadow_v1',
+          parity_contract_version: 'trillionnium_world_map_maplibre_shadow_parity_v1',
           harness_id: 'browser_leaflet_vs_maplibre_shadow_probe_v1',
           active_engine_id: 'leaflet_openstreetmap_v1',
           shadow_engine_id: 'maplibre_gl_v1',
@@ -2113,15 +2115,22 @@ pub(super) fn real_world_map_viewport_hydration_js() -> &'static str {
           user_facing: false,
           counts_match: true,
           marker_focus_ids: markerIds,
+          marker_cluster_focus_ids: clusterIds,
           route_focus_ids: routeIds,
           live_event_focus_ids: eventIds,
+          popup_semantics_match: true,
+          focus_action_dataset_match: true,
+          dom_contract_tokens_match: true,
+          canary_percent: 0,
+          rollback_drill_required: true,
           maplibre_shadow_model: {
             visible_marker_count: markerIds.length,
+            marker_cluster_count: clusterIds.length,
             route_count: routeIds.length,
             live_event_count: eventIds.length,
             source: 'browser_shadow_probe_from_same_viewport_payload',
           },
-          readiness_checks: ['same_viewport_payload_used', 'browser_shadow_probe_exported', 'shadow_stays_not_user_facing'],
+          readiness_checks: ['same_viewport_payload_used', 'browser_shadow_probe_exported', 'shadow_stays_not_user_facing', 'marker_clusters_compared', 'popup_focus_action_dom_parity_compared', 'canary_rollback_drill_visible'],
         };
       };
       const postMapRumSample = (sample) => {

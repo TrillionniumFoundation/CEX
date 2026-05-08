@@ -3109,8 +3109,15 @@ async fn world_map_runtime_endpoints_expose_rum_delta_cache_and_mobile_ia_gates(
     assert!(app_body.contains("changed_group_deferred_render"));
     assert!(app_body.contains("focus_to_action_rail"));
     assert!(app_body.contains("trillionnium_world_map_rum_slo_v1"));
+    assert!(app_body.contains("trillionnium_world_map_real_user_rum_matrix_v1"));
+    assert!(
+        app_body.contains("cold_cache_interactive,warm_delta_or_304,weak_network_cached_snapshot")
+    );
+    assert!(app_body.contains("trillionnium_world_map_density_scalability_v1"));
     assert!(app_body.contains("trillionnium_world_map_weak_network_resilience_v1"));
+    assert!(app_body.contains("trillionnium_world_map_offline_action_queue_v1"));
     assert!(app_body.contains("trillionnium_world_map_location_privacy_v1"));
+    assert!(app_body.contains("trillionnium_world_map_gameplay_accessibility_i18n_v1"));
     assert!(app_body.contains("viewportWeakNetworkCacheKey"));
     assert!(app_body.contains("buildMapLibreShadowParityProbe"));
 
@@ -3128,6 +3135,9 @@ async fn world_map_runtime_endpoints_expose_rum_delta_cache_and_mobile_ia_gates(
     assert!(world_body.contains("world-map-rum-slo"));
     assert!(world_body.contains("world-map-weak-network"));
     assert!(world_body.contains("world-map-location-privacy"));
+    assert!(world_body
+        .contains("data-parity-contract=\"trillionnium_world_map_maplibre_shadow_parity_v1\""));
+    assert!(world_body.contains("data-rollback-drill-required=\"true\""));
 
     let (delta_status, delta_headers, delta_body) = send_text_request_with_headers(
         &app,
@@ -3172,6 +3182,10 @@ async fn world_map_runtime_endpoints_expose_rum_delta_cache_and_mobile_ia_gates(
     assert_eq!(
         delta["renderer_shadow_parity"]["shadow_engine_id"],
         "maplibre_gl_v1"
+    );
+    assert_eq!(
+        delta["renderer_shadow_parity"]["maplibre_shadow_parity"]["contract_version"],
+        "trillionnium_world_map_maplibre_shadow_parity_v1"
     );
     let cursor = delta["next_cursor"].as_str().expect("next cursor");
     let encoded_cursor = cursor
@@ -3255,9 +3269,44 @@ async fn world_map_runtime_endpoints_expose_rum_delta_cache_and_mobile_ia_gates(
     );
     assert_eq!(rum_body["metrics"]["slo_gate"]["green"], true);
 
+    for surface in ["app-map-shell-panel", "world-map-shell-panel"] {
+        for device in ["mobile", "desktop"] {
+            for sample_kind in [
+                "first_map_interactive_runtime_ready",
+                "delta_not_modified_304_fast_path",
+                "weak_network_cached_snapshot",
+            ] {
+                if surface == "world-map-shell-panel"
+                    && device == "mobile"
+                    && sample_kind == "first_map_interactive_runtime_ready"
+                {
+                    continue;
+                }
+                let mut payload = json!({
+                    "matrix_user_id": "@alice:local.dev",
+                    "surface_id": surface,
+                    "session_id": "rum-test-session-matrix",
+                    "sample_kind": sample_kind,
+                    "user_agent_class": device,
+                    "viewport_cursor": cursor,
+                    "tile_error_count": 0
+                });
+                if sample_kind.starts_with("first_map_interactive") {
+                    payload["first_map_interactive_ms"] = json!(140);
+                } else {
+                    payload["viewport_refresh_ms"] = json!(24);
+                }
+                let (status, body) =
+                    send_json_request(&app, "POST", "/world/web/map-rum", &[], payload).await;
+                assert_eq!(status, StatusCode::OK);
+                assert_eq!(body["ok"], true);
+            }
+        }
+    }
+
     let (metrics_status, metrics_body) = send_metrics_request(&app).await;
     assert_eq!(metrics_status, StatusCode::OK);
-    assert!(metrics_body.contains("cex_consumer_entry_trillionnium_world_map_rum_samples_total 1"));
+    assert!(metrics_body.contains("cex_consumer_entry_trillionnium_world_map_rum_samples_total 12"));
     assert!(
         metrics_body.contains("cex_consumer_entry_trillionnium_world_map_delta_requests_total 4")
     );
@@ -3267,9 +3316,16 @@ async fn world_map_runtime_endpoints_expose_rum_delta_cache_and_mobile_ia_gates(
     assert!(metrics_body
         .contains("cex_consumer_entry_trillionnium_world_map_rum_slo_raw_split_green 1"));
     assert!(
-        metrics_body.contains("cex_consumer_entry_trillionnium_world_map_rum_slo_sample_count 1")
+        metrics_body.contains("cex_consumer_entry_trillionnium_world_map_rum_slo_sample_count 12")
     );
     assert!(metrics_body.contains("cex_consumer_entry_trillionnium_world_map_rum_slo_warming 1"));
+    assert!(metrics_body
+        .contains("cex_consumer_entry_trillionnium_world_map_rum_sample_matrix_raw_green 1"));
+    assert!(metrics_body
+        .contains("cex_consumer_entry_trillionnium_world_map_rum_sample_matrix_coverage_count 12"));
+    assert!(metrics_body.contains(
+        "cex_consumer_entry_trillionnium_world_map_rum_sample_matrix_missing_bucket_count 0"
+    ));
     assert!(
         metrics_body.contains("cex_consumer_entry_trillionnium_world_map_delta_cache_gate_green 1")
     );
@@ -11600,6 +11656,16 @@ async fn health_endpoint_exposes_identity_governance_overview() {
             ["route_recommendation_policy_contract_version"],
         "trillionnium_world_route_recommendation_policy_v1"
     );
+    assert_eq!(
+        body["trillionnium_world_playability_scorecard"]["commercial_operating_dashboard_gate"]
+            ["route_recommendation_quality_contract_version"],
+        "trillionnium_world_route_recommendation_quality_v1"
+    );
+    assert_eq!(
+        body["trillionnium_world_playability_scorecard"]["commercial_operating_dashboard_gate"]
+            ["route_recommendation_denominator_consistent"],
+        true
+    );
     assert!(body["trillionnium_world_playability_scorecard"]
         ["commercial_operating_dashboard_gate"]["reward_claim_to_next_commission_percent"]
         .as_i64()
@@ -11625,6 +11691,16 @@ async fn health_endpoint_exposes_identity_governance_overview() {
         "trillionnium_world_map_renderer_shadow_v1"
     );
     assert_eq!(
+        body["trillionnium_world_playability_scorecard"]["future_engine_readiness_gate"]
+            ["maplibre_shadow_parity_contract_version"],
+        "trillionnium_world_map_maplibre_shadow_parity_v1"
+    );
+    assert_eq!(
+        body["trillionnium_world_playability_scorecard"]["future_engine_readiness_gate"]
+            ["maplibre_canary_rollback_drill_visible"],
+        true
+    );
+    assert_eq!(
         body["trillionnium_world_playability_scorecard"]["world_map_runtime_safety_gate"]
             ["contract_version"],
         "trillionnium_world_map_runtime_safety_gate_v1"
@@ -11641,8 +11717,28 @@ async fn health_endpoint_exposes_identity_governance_overview() {
     );
     assert_eq!(
         body["trillionnium_world_playability_scorecard"]["world_map_runtime_safety_gate"]
+            ["rum_sample_matrix_contract_version"],
+        "trillionnium_world_map_real_user_rum_matrix_v1"
+    );
+    assert_eq!(
+        body["trillionnium_world_playability_scorecard"]["world_map_runtime_safety_gate"]
+            ["offline_action_queue_contract_version"],
+        "trillionnium_world_map_offline_action_queue_v1"
+    );
+    assert_eq!(
+        body["trillionnium_world_playability_scorecard"]["world_map_runtime_safety_gate"]
             ["location_privacy_contract_version"],
         "trillionnium_world_map_location_privacy_v1"
+    );
+    assert_eq!(
+        body["trillionnium_world_playability_scorecard"]["world_map_runtime_safety_gate"]
+            ["density_scalability_contract_version"],
+        "trillionnium_world_map_density_scalability_v1"
+    );
+    assert_eq!(
+        body["trillionnium_world_playability_scorecard"]["world_map_runtime_safety_gate"]
+            ["gameplay_accessibility_contract_version"],
+        "trillionnium_world_map_gameplay_accessibility_i18n_v1"
     );
     assert_eq!(
         body["trillionnium_world_map_rum_slo_gate"]["contract_version"],
