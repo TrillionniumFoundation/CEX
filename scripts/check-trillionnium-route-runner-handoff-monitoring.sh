@@ -243,6 +243,13 @@ expected_alerts = {
         'severity': 'critical',
         'route_hint': 'page',
     },
+    'CexTrillionniumWorldMapRuntimeSafetyNotGreen': {
+        'metric': 'cex_consumer_entry_trillionnium_world_map_runtime_safety_gate_green',
+        'expr_fragments': ['== 0'],
+        'for': '5m',
+        'severity': 'critical',
+        'route_hint': 'page',
+    },
     'CexTrillionniumWorldMapRumSloEnforcedNotGreen': {
         'metric': 'cex_consumer_entry_trillionnium_world_map_rum_slo_enforcement_active',
         'extra_metrics': ['cex_consumer_entry_trillionnium_world_map_rum_slo_raw_split_green'],
@@ -258,6 +265,27 @@ expected_alerts = {
         'for': '15m',
         'severity': 'warning',
         'route_hint': 'product',
+    },
+    'CexTrillionniumWorldMapDeltaCacheNotGreen': {
+        'metric': 'cex_consumer_entry_trillionnium_world_map_delta_cache_gate_green',
+        'expr_fragments': ['== 0'],
+        'for': '5m',
+        'severity': 'critical',
+        'route_hint': 'page',
+    },
+    'CexTrillionniumWorldMapWeakNetworkResilienceNotGreen': {
+        'metric': 'cex_consumer_entry_trillionnium_world_map_weak_network_resilience_gate_green',
+        'expr_fragments': ['== 0'],
+        'for': '10m',
+        'severity': 'warning',
+        'route_hint': 'page',
+    },
+    'CexTrillionniumWorldMapLocationPrivacyNotGreen': {
+        'metric': 'cex_consumer_entry_trillionnium_world_map_location_privacy_gate_green',
+        'expr_fragments': ['== 0'],
+        'for': '5m',
+        'severity': 'critical',
+        'route_hint': 'security',
     },
     'CexTrillionniumRouteRunnerFunnelTelemetryMissing': {
         'metric': 'cex_consumer_entry_trillionnium_route_runner_funnel_telemetry_contract_visible',
@@ -432,6 +460,9 @@ dashboard_required_metrics = [
     'cex_consumer_entry_trillionnium_world_map_rum_slo_warming',
     'cex_consumer_entry_trillionnium_world_map_delta_cache_gate_green',
     'cex_consumer_entry_trillionnium_world_map_delta_failure_rate_percent',
+    'cex_consumer_entry_trillionnium_world_map_runtime_safety_gate_green',
+    'cex_consumer_entry_trillionnium_world_map_weak_network_resilience_gate_green',
+    'cex_consumer_entry_trillionnium_world_map_location_privacy_gate_green',
 ]
 expected_dashboard = {
     'uid': 'cex-trillionnium-route-runner-handoff',
@@ -519,6 +550,9 @@ expected_dashboard = {
                 'cex_consumer_entry_trillionnium_world_map_rum_slo_warming',
                 'cex_consumer_entry_trillionnium_world_map_delta_cache_gate_green',
                 'cex_consumer_entry_trillionnium_world_map_delta_failure_rate_percent',
+                'cex_consumer_entry_trillionnium_world_map_runtime_safety_gate_green',
+                'cex_consumer_entry_trillionnium_world_map_weak_network_resilience_gate_green',
+                'cex_consumer_entry_trillionnium_world_map_location_privacy_gate_green',
             ],
             'threshold_values': [1],
         },

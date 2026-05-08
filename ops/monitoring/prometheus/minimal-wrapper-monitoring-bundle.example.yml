@@ -372,6 +372,28 @@ groups:
         '
       runbook: docs/operator-runbook-v1.md
       first_action: curl -s http://127.0.0.1:8090/health | jq '.trillionnium_world_playability_scorecard.map_readability_lod_gate'
+  - alert: CexTrillionniumWorldMapRuntimeSafetyNotGreen
+    expr: cex_consumer_entry_trillionnium_world_map_runtime_safety_gate_green == 0
+    for: 5m
+    labels:
+      severity: critical
+      service: consumer-entry-api
+      family: product-edge
+      component: trillionnium-route-runner-handoff
+      owner: product-ops
+      route_hint: page
+    annotations:
+      summary: Trillionnium World Map runtime safety gate is not green
+      description: 'The combined map runtime safety contract regressed. This usually
+        means RUM split
+
+        coverage, weak-network recovery, private personalized cache policy, or delta/304
+
+        compatibility disappeared from the `/app` or `/world` map surface.
+
+        '
+      runbook: docs/operator-runbook-v1.md
+      first_action: curl -s http://127.0.0.1:8090/health | jq '.trillionnium_world_map_runtime_safety_gate'
   - alert: CexTrillionniumWorldMapRumSloEnforcedNotGreen
     expr: cex_consumer_entry_trillionnium_world_map_rum_slo_enforcement_active ==
       1 and cex_consumer_entry_trillionnium_world_map_rum_slo_raw_split_green == 0
@@ -420,6 +442,75 @@ groups:
         '
       runbook: docs/operator-runbook-v1.md
       first_action: curl -s http://127.0.0.1:8090/metrics | grep 'cex_consumer_entry_trillionnium_world_map_rum_slo'
+  - alert: CexTrillionniumWorldMapDeltaCacheNotGreen
+    expr: cex_consumer_entry_trillionnium_world_map_delta_cache_gate_green == 0
+    for: 5m
+    labels:
+      severity: critical
+      service: consumer-entry-api
+      family: product-edge
+      component: trillionnium-route-runner-handoff
+      owner: product-ops
+      route_hint: page
+    annotations:
+      summary: Trillionnium World Map delta/cache gate is not green
+      description: 'The map delta/cache contract is not production-safe. Check entity-group
+        cursor
+
+        compatibility, 304 responses, snapshot fallback behavior, and delta failure
+        rate before
+
+        expanding map density or relying on weak-network recovery.
+
+        '
+      runbook: docs/operator-runbook-v1.md
+      first_action: curl -s http://127.0.0.1:8090/health | jq '.trillionnium_world_map_delta_cache_gate'
+  - alert: CexTrillionniumWorldMapWeakNetworkResilienceNotGreen
+    expr: cex_consumer_entry_trillionnium_world_map_weak_network_resilience_gate_green
+      == 0
+    for: 10m
+    labels:
+      severity: warning
+      service: consumer-entry-api
+      family: product-edge
+      component: trillionnium-route-runner-handoff
+      owner: product-ops
+      route_hint: page
+    annotations:
+      summary: Trillionnium World Map weak-network resilience gate is not green
+      description: 'The map surface no longer exposes the required delta-first, snapshot-fallback,
+        and
+
+        last-good cached snapshot strategy. Mobile players may see blank or stale
+        map states
+
+        during network failures.
+
+        '
+      runbook: docs/operator-runbook-v1.md
+      first_action: curl -s http://127.0.0.1:8090/metrics | grep 'cex_consumer_entry_trillionnium_world_map_weak_network'
+  - alert: CexTrillionniumWorldMapLocationPrivacyNotGreen
+    expr: cex_consumer_entry_trillionnium_world_map_location_privacy_gate_green ==
+      0
+    for: 5m
+    labels:
+      severity: critical
+      service: consumer-entry-api
+      family: product-edge
+      component: trillionnium-route-runner-handoff
+      owner: product-ops
+      route_hint: security
+    annotations:
+      summary: Trillionnium World Map location privacy gate is not green
+      description: 'Personalized map caches or RUM payloads are no longer privacy-safe.
+        Stop promotion and
+
+        verify that RUM excludes lat/lng while viewport and delta cache-control stay
+        private.
+
+        '
+      runbook: docs/operator-runbook-v1.md
+      first_action: curl -s http://127.0.0.1:8090/health | jq '.trillionnium_world_map_runtime_safety_gate'
   - alert: CexTrillionniumRouteRunnerFunnelTelemetryMissing
     expr: cex_consumer_entry_trillionnium_route_runner_funnel_telemetry_contract_visible
       == 0

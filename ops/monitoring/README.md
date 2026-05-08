@@ -51,7 +51,7 @@ It tracks the same direct gauges used by the `CexTrillionniumRouteRunnerHandoff*
 - runner count
 - reward-claim and next-route action counts
 - route mastery contract visibility, mastery runner count, first-runner XP, tier visibility, and evidence-anchored next-goal visibility
-- Trillionnium World Map readability, RUM SLO warmup/enforcement/raw split, delta-cache, and future-engine readiness gauges
+- Trillionnium World Map readability, runtime safety, RUM SLO warmup/enforcement/raw split, delta-cache, weak-network, location-privacy, and future-engine readiness gauges
 
 Those alerts also carry `component=trillionnium-route-runner-handoff` and `owner=product-ops`, and the example Alertmanager product-edge routing file matches that component before the generic product-edge route.
 
@@ -61,7 +61,7 @@ If you want to validate just this focused handoff monitoring contract without ru
 - `scripts/check-trillionnium-route-runner-handoff-monitoring.sh --summary-file run/monitoring-route-runner-handoff-summary.json`
 - `scripts/test-trillionnium-route-runner-handoff-monitoring.sh`
 
-The check validates live-target metadata freshness, Prometheus alert expression/metric/label/annotation coverage, Alertmanager route order, and the dashboard UID/title/tags/panel metrics/thresholds, including the `trillionnium_route_mastery_v1` handoff metrics and map RUM warmup/enforcement gauges. Production readiness and production signoff also call this script so the standalone contract cannot drift from launch gates. The test script runs a positive fixture plus negative fixtures for alert label drift, alert expression drift, route-order regression, dashboard metric loss, dashboard threshold drift, and stale deploy metadata.
+The check validates live-target metadata freshness, Prometheus alert expression/metric/label/annotation coverage, Alertmanager route order, and the dashboard UID/title/tags/panel metrics/thresholds, including the `trillionnium_route_mastery_v1` handoff metrics and map runtime safety/RUM/delta/privacy gauges. Production readiness and production signoff also call this script so the standalone contract cannot drift from launch gates. The test script runs a positive fixture plus negative fixtures for alert label drift, alert expression drift, route-order regression, dashboard metric loss, dashboard threshold drift, and stale deploy metadata.
 
 If you want to regenerate the combined bundles from the manifest, use:
 

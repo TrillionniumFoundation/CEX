@@ -621,6 +621,27 @@
           "legendFormat": "map delta failure %",
           "range": true,
           "refId": "U"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_map_runtime_safety_gate_green",
+          "legendFormat": "map runtime safety gate",
+          "range": true,
+          "refId": "V"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_map_weak_network_resilience_gate_green",
+          "legendFormat": "map weak-network gate",
+          "range": true,
+          "refId": "W"
+        },
+        {
+          "editorMode": "code",
+          "expr": "cex_consumer_entry_trillionnium_world_map_location_privacy_gate_green",
+          "legendFormat": "map location privacy gate",
+          "range": true,
+          "refId": "X"
         }
       ],
       "title": "Mobile map runtime / funnel / future engine",

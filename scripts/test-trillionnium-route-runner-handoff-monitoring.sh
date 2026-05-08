@@ -157,6 +157,21 @@ Path(sys.argv[2]).write_text(yaml.safe_dump(data, sort_keys=False))
 PY
 assert_fail_contains bad_mastery_expr 'CexTrillionniumRouteRunnerHandoffRouteMasteryMissing' --prometheus-bundle "$PROMETHEUS_BAD_MASTERY_EXPR"
 
+PROMETHEUS_BAD_RUNTIME_EXPR="$TMP_DIR/prometheus-bad-runtime-expr.yml"
+python3 - "$PROMETHEUS_GOOD" "$PROMETHEUS_BAD_RUNTIME_EXPR" <<'PY'
+from pathlib import Path
+import sys
+import yaml
+
+data = yaml.safe_load(Path(sys.argv[1]).read_text())
+for group in data.get('groups') or []:
+    for rule in group.get('rules') or []:
+        if rule.get('alert') == 'CexTrillionniumWorldMapRuntimeSafetyNotGreen':
+            rule['expr'] = 'cex_consumer_entry_trillionnium_world_map_runtime_safety_gate_green == 1'
+Path(sys.argv[2]).write_text(yaml.safe_dump(data, sort_keys=False))
+PY
+assert_fail_contains bad_runtime_expr 'CexTrillionniumWorldMapRuntimeSafetyNotGreen' --prometheus-bundle "$PROMETHEUS_BAD_RUNTIME_EXPR"
+
 PROMETHEUS_BAD_RUM_EXPR="$TMP_DIR/prometheus-bad-rum-expr.yml"
 python3 - "$PROMETHEUS_GOOD" "$PROMETHEUS_BAD_RUM_EXPR" <<'PY'
 from pathlib import Path

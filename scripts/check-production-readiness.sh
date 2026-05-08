@@ -248,6 +248,21 @@ else
         and $gate.telemetry_precondition_visible == true
         and ($gate.promotion_blocker_count | type) == "number"
         and $gate.promotion_blocker_count >= 1;
+      def world_map_runtime_safety_gate_green($gate):
+        $gate.contract_version == "trillionnium_world_map_runtime_safety_gate_v1"
+        and $gate.rum_slo_contract_version == "trillionnium_world_map_rum_slo_v1"
+        and $gate.rum_slo_quantiles_visible == true
+        and $gate.rum_slo_surface_split_visible == true
+        and $gate.rum_slo_device_split_visible == true
+        and $gate.weak_network_contract_version == "trillionnium_world_map_weak_network_resilience_v1"
+        and $gate.weak_network_cached_snapshot_visible == true
+        and $gate.weak_network_delta_first_visible == true
+        and $gate.weak_network_snapshot_fallback_visible == true
+        and $gate.location_privacy_contract_version == "trillionnium_world_map_location_privacy_v1"
+        and $gate.rum_excludes_lat_lng == true
+        and $gate.personalized_map_cache_private == true
+        and $gate.viewport_api_304_supported == true
+        and $gate.entity_delta_cache_contract == "entity_group_versioned_delta_v1";
       def world_map_rum_slo_gate_observable($gate):
         $gate.contract_version == "trillionnium_world_map_rum_slo_v1"
         and $gate.green == true
@@ -270,10 +285,11 @@ else
       and map_readability_lod_gate_green(.trillionnium_world_playability_scorecard.map_readability_lod_gate)
       and route_runner_funnel_telemetry_gate_green(.trillionnium_world_playability_scorecard.route_runner_funnel_telemetry_gate)
       and future_engine_readiness_gate_green(.trillionnium_world_playability_scorecard.future_engine_readiness_gate)
+      and world_map_runtime_safety_gate_green(.trillionnium_world_map_runtime_safety_gate)
       and world_map_rum_slo_gate_observable(.trillionnium_world_map_rum_slo_gate)
       and world_map_delta_cache_gate_green(.trillionnium_world_map_delta_cache_gate)
     ' "$consumer_health_file" >/dev/null; then
-      fail 'production runtime requires route-runner handoff/mastery plus map readability LOD, funnel telemetry, future-engine readiness, RUM SLO, and delta-cache gates'
+      fail 'production runtime requires route-runner handoff/mastery plus map readability LOD, funnel telemetry, future-engine readiness, map runtime safety, RUM SLO, and delta-cache gates'
     fi
   fi
 
