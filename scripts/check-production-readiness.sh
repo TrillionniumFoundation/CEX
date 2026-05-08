@@ -322,10 +322,16 @@ else
         and $gate.route_recommendation_policy_contract_version == "trillionnium_world_route_recommendation_policy_v1"
         and $gate.route_recommendation_policy_visible == true
         and $gate.route_recommendation_quality_contract_version == "trillionnium_world_route_recommendation_quality_v1"
+        and $gate.route_recommendation_quality_status == "quality_gate_ready"
         and ($gate.route_recommendation_quality_score_percent | type) == "number"
+        and ($gate.route_recommendation_quality_score_target_percent | type) == "number"
+        and $gate.route_recommendation_quality_score_percent >= $gate.route_recommendation_quality_score_target_percent
+        and $gate.route_recommendation_quality_score_ready == true
         and $gate.route_recommendation_reward_lift_visible == true
         and $gate.route_recommendation_abandon_risk_visible == true
-        and $gate.route_recommendation_denominator_consistent == true;
+        and $gate.route_recommendation_denominator_consistent == true
+        and $gate.route_recommendation_raw_counts_preserved == true
+        and $gate.route_recommendation_risk_controls_visible == true;
       route_runner_handoff_gate_green(.trillionnium_world_playability_scorecard.route_runner_handoff_gate)
       and route_runner_handoff_gate_green(.trillionnium_world_closed_beta_prototype.route_runner_handoff_gate)
       and route_runner_handoff_gate_green(.trillionnium_world_real_user_beta.route_runner_handoff_gate)

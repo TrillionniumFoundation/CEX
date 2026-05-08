@@ -116,3 +116,8 @@ They do not yet provide:
 - silence policy / ownership / escalation tree beyond the focused route-runner component labels/routing example
 - a single blessed production deployment layout
 - a complete dashboard pack beyond the focused route-runner handoff starter
+
+
+## Trillionnium route recommendation quality hard gate
+
+The route-runner handoff bundle now treats route recommendation quality as an actual score gate, not only a visibility check. `cex_consumer_entry_trillionnium_world_route_recommendation_quality_gate_green` requires the `trillionnium_world_route_recommendation_quality_v1` status to be `quality_gate_ready`, the quality score to meet its 60% target, raw counts to be preserved, denominator policy to remain consistent, and risk controls to stay visible. Alert `CexTrillionniumWorldRouteRecommendationQualityBelowTarget` fires when the score drops below target even if the broader commercial dashboard is still present.

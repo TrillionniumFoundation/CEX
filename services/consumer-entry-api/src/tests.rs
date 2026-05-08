@@ -11663,9 +11663,37 @@ async fn health_endpoint_exposes_identity_governance_overview() {
             ["route_recommendation_quality_contract_version"],
         "trillionnium_world_route_recommendation_quality_v1"
     );
+    assert!(body["trillionnium_world_playability_scorecard"]
+        ["commercial_operating_dashboard_gate"]["route_recommendation_quality_status"]
+        .as_str()
+        .is_some());
+    assert_eq!(
+        body["trillionnium_world_playability_scorecard"]["commercial_operating_dashboard_gate"]
+            ["route_recommendation_quality_score_target_percent"],
+        60
+    );
+    let recommendation_quality_score = body["trillionnium_world_playability_scorecard"]
+        ["commercial_operating_dashboard_gate"]["route_recommendation_quality_score_percent"]
+        .as_i64()
+        .unwrap();
+    assert_eq!(
+        body["trillionnium_world_playability_scorecard"]["commercial_operating_dashboard_gate"]
+            ["route_recommendation_quality_score_ready"],
+        recommendation_quality_score >= 60
+    );
     assert_eq!(
         body["trillionnium_world_playability_scorecard"]["commercial_operating_dashboard_gate"]
             ["route_recommendation_denominator_consistent"],
+        true
+    );
+    assert_eq!(
+        body["trillionnium_world_playability_scorecard"]["commercial_operating_dashboard_gate"]
+            ["route_recommendation_raw_counts_preserved"],
+        true
+    );
+    assert_eq!(
+        body["trillionnium_world_playability_scorecard"]["commercial_operating_dashboard_gate"]
+            ["route_recommendation_risk_controls_visible"],
         true
     );
     assert!(body["trillionnium_world_playability_scorecard"]
@@ -11977,6 +12005,12 @@ async fn metrics_endpoint_exposes_identity_governance_gauges() {
         "cex_consumer_entry_trillionnium_world_route_recommendation_quality_score_percent"
     ));
     assert!(body.contains(
+        "cex_consumer_entry_trillionnium_world_route_recommendation_quality_score_target_percent"
+    ));
+    assert!(body.contains(
+        "cex_consumer_entry_trillionnium_world_route_recommendation_quality_score_ready"
+    ));
+    assert!(body.contains(
         "cex_consumer_entry_trillionnium_world_route_recommendation_reward_lift_visible"
     ));
     assert!(body.contains(
@@ -11984,6 +12018,12 @@ async fn metrics_endpoint_exposes_identity_governance_gauges() {
     ));
     assert!(body.contains(
         "cex_consumer_entry_trillionnium_world_route_recommendation_denominator_consistent"
+    ));
+    assert!(body.contains(
+        "cex_consumer_entry_trillionnium_world_route_recommendation_raw_counts_preserved"
+    ));
+    assert!(body.contains(
+        "cex_consumer_entry_trillionnium_world_route_recommendation_risk_controls_visible"
     ));
     assert!(body.contains(
         "cex_consumer_entry_trillionnium_world_commercial_reward_claim_to_next_commission_percent"

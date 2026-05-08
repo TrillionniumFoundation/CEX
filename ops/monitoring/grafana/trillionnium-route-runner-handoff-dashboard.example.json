@@ -808,6 +808,26 @@
           "legendFormat": "route rec denominator consistent",
           "range": true,
           "refId": "P"
+        },
+        {
+          "expr": "cex_consumer_entry_trillionnium_world_route_recommendation_quality_score_target_percent",
+          "legendFormat": "world_route_recommendation_quality_score_target_percent",
+          "refId": "Q"
+        },
+        {
+          "expr": "cex_consumer_entry_trillionnium_world_route_recommendation_quality_score_ready",
+          "legendFormat": "world_route_recommendation_quality_score_ready",
+          "refId": "R"
+        },
+        {
+          "expr": "cex_consumer_entry_trillionnium_world_route_recommendation_raw_counts_preserved",
+          "legendFormat": "world_route_recommendation_raw_counts_preserved",
+          "refId": "S"
+        },
+        {
+          "expr": "cex_consumer_entry_trillionnium_world_route_recommendation_risk_controls_visible",
+          "legendFormat": "world_route_recommendation_risk_controls_visible",
+          "refId": "T"
         }
       ],
       "fieldConfig": {

@@ -362,6 +362,26 @@ groups:
           runbook: docs/operator-runbook-v1.md
           first_action: "curl -s http://127.0.0.1:8090/metrics | grep 'cex_consumer_entry_trillionnium_world_route_recommendation'"
 
+
+      - alert: CexTrillionniumWorldRouteRecommendationQualityBelowTarget
+        expr: cex_consumer_entry_trillionnium_world_route_recommendation_quality_score_percent < cex_consumer_entry_trillionnium_world_route_recommendation_quality_score_target_percent
+        for: 30m
+        labels:
+          severity: warning
+          service: consumer-entry-api
+          family: product-edge
+          component: trillionnium-route-runner-handoff
+          owner: product-ops
+          route_hint: product
+        annotations:
+          summary: Trillionnium route recommendation quality is below target
+          description: |
+            The quality contract is visible but the actual recommendation quality score fell below
+            the commercial readiness target. Inspect reward lift, abandon risk, raw counts, and risk
+            controls before promoting route recommendations as a retention/commercial lever.
+          runbook: docs/operator-runbook-v1.md
+          first_action: "curl -s http://127.0.0.1:8090/health | jq '.trillionnium_world_playability_scorecard.commercial_operating_dashboard_gate | {route_recommendation_quality_status,route_recommendation_quality_score_percent,route_recommendation_quality_score_target_percent,route_recommendation_quality_score_ready,route_recommendation_raw_counts_preserved,route_recommendation_risk_controls_visible}'"
+
       - alert: CexTrillionniumWorldFutureEngineReadinessNotGreen
         expr: cex_consumer_entry_trillionnium_world_future_engine_readiness_gate_green == 0
         for: 10m

@@ -783,10 +783,18 @@ fn app_commercial_operating_dashboard_gate_json(app: &Value) -> Value {
         "route_recommendation_policy_contract_version": dashboard.and_then(|dashboard| dashboard.get("route_recommendation_policy")).and_then(|policy| policy.get("contract_version")).and_then(Value::as_str),
         "route_recommendation_policy_visible": dashboard.and_then(|dashboard| dashboard.get("route_recommendation_policy")).and_then(|policy| policy.get("ranking_weights")).and_then(Value::as_object).is_some(),
         "route_recommendation_quality_contract_version": dashboard.and_then(|dashboard| dashboard.get("route_recommendation_quality")).and_then(|quality| quality.get("contract_version")).and_then(Value::as_str).or_else(|| dashboard.and_then(|dashboard| dashboard.get("route_recommendation_policy")).and_then(|policy| policy.get("quality_gate")).and_then(|quality| quality.get("contract_version")).and_then(Value::as_str)),
+        "route_recommendation_quality_status": dashboard.and_then(|dashboard| dashboard.get("route_recommendation_quality")).and_then(|quality| quality.get("status")).and_then(Value::as_str),
         "route_recommendation_quality_score_percent": dashboard.and_then(|dashboard| dashboard.get("route_recommendation_quality")).and_then(|quality| quality.get("quality_score_percent")).and_then(Value::as_i64).unwrap_or(0),
+        "route_recommendation_quality_score_target_percent": 60,
+        "route_recommendation_quality_score_ready": dashboard.and_then(|dashboard| dashboard.get("route_recommendation_quality")).and_then(|quality| quality.get("quality_score_percent")).and_then(Value::as_i64).unwrap_or(0) >= 60,
         "route_recommendation_reward_lift_visible": dashboard.and_then(|dashboard| dashboard.get("route_recommendation_quality")).and_then(|quality| quality.get("reward_to_next_route_lift_percent")).and_then(Value::as_i64).is_some(),
         "route_recommendation_abandon_risk_visible": dashboard.and_then(|dashboard| dashboard.get("route_recommendation_quality")).and_then(|quality| quality.get("route_abandon_risk_percent")).and_then(Value::as_i64).is_some(),
         "route_recommendation_denominator_consistent": dashboard.and_then(|dashboard| dashboard.get("route_recommendation_quality")).and_then(|quality| quality.get("denominator_policy")).and_then(|policy| policy.get("cohort_denominator_consistent")).and_then(Value::as_bool).unwrap_or(false),
+        "route_recommendation_raw_counts_preserved": dashboard.and_then(|dashboard| dashboard.get("route_recommendation_quality")).and_then(|quality| quality.get("denominator_policy")).and_then(|policy| policy.get("raw_counts_preserved")).and_then(Value::as_bool).unwrap_or(false),
+        "route_recommendation_risk_controls_visible": dashboard.and_then(|dashboard| dashboard.get("route_recommendation_quality")).and_then(|quality| quality.get("risk_controls")).and_then(|controls| controls.get("downrank_high_dispute_routes")).and_then(Value::as_bool).unwrap_or(false)
+            && dashboard.and_then(|dashboard| dashboard.get("route_recommendation_quality")).and_then(|quality| quality.get("risk_controls")).and_then(|controls| controls.get("warn_before_review_hold_routes")).and_then(Value::as_bool).unwrap_or(false)
+            && dashboard.and_then(|dashboard| dashboard.get("route_recommendation_quality")).and_then(|quality| quality.get("risk_controls")).and_then(|controls| controls.get("abandon_reason_breakdown_visible")).and_then(Value::as_bool).unwrap_or(false)
+            && dashboard.and_then(|dashboard| dashboard.get("route_recommendation_quality")).and_then(|quality| quality.get("risk_controls")).and_then(|controls| controls.get("recommendation_not_marker_density_only")).and_then(Value::as_bool).unwrap_or(false),
     })
 }
 
@@ -830,6 +838,22 @@ fn is_commercial_operating_dashboard_gate_green(gate: &Value) -> bool {
             .and_then(Value::as_str)
             == Some("trillionnium_world_route_recommendation_quality_v1")
         && gate
+            .get("route_recommendation_quality_status")
+            .and_then(Value::as_str)
+            == Some("quality_gate_ready")
+        && gate
+            .get("route_recommendation_quality_score_percent")
+            .and_then(Value::as_i64)
+            .unwrap_or(0)
+            >= gate
+                .get("route_recommendation_quality_score_target_percent")
+                .and_then(Value::as_i64)
+                .unwrap_or(60)
+        && gate
+            .get("route_recommendation_quality_score_ready")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && gate
             .get("route_recommendation_reward_lift_visible")
             .and_then(Value::as_bool)
             .unwrap_or(false)
@@ -839,6 +863,14 @@ fn is_commercial_operating_dashboard_gate_green(gate: &Value) -> bool {
             .unwrap_or(false)
         && gate
             .get("route_recommendation_denominator_consistent")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && gate
+            .get("route_recommendation_raw_counts_preserved")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && gate
+            .get("route_recommendation_risk_controls_visible")
             .and_then(Value::as_bool)
             .unwrap_or(false)
 }
@@ -4142,6 +4174,22 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
         .and_then(Value::as_str)
         == Some("trillionnium_world_route_recommendation_quality_v1")
         && commercial_operating_dashboard_gate
+            .get("route_recommendation_quality_status")
+            .and_then(Value::as_str)
+            == Some("quality_gate_ready")
+        && commercial_operating_dashboard_gate
+            .get("route_recommendation_quality_score_percent")
+            .and_then(Value::as_i64)
+            .unwrap_or(0)
+            >= commercial_operating_dashboard_gate
+                .get("route_recommendation_quality_score_target_percent")
+                .and_then(Value::as_i64)
+                .unwrap_or(60)
+        && commercial_operating_dashboard_gate
+            .get("route_recommendation_quality_score_ready")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && commercial_operating_dashboard_gate
             .get("route_recommendation_reward_lift_visible")
             .and_then(Value::as_bool)
             .unwrap_or(false)
@@ -4151,6 +4199,14 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
             .unwrap_or(false)
         && commercial_operating_dashboard_gate
             .get("route_recommendation_denominator_consistent")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && commercial_operating_dashboard_gate
+            .get("route_recommendation_raw_counts_preserved")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && commercial_operating_dashboard_gate
+            .get("route_recommendation_risk_controls_visible")
             .and_then(Value::as_bool)
             .unwrap_or(false);
     let body = format!(
@@ -4441,12 +4497,20 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
             "cex_consumer_entry_trillionnium_world_route_recommendation_quality_gate_green {}\n",
             "# TYPE cex_consumer_entry_trillionnium_world_route_recommendation_quality_score_percent gauge\n",
             "cex_consumer_entry_trillionnium_world_route_recommendation_quality_score_percent {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_route_recommendation_quality_score_target_percent gauge\n",
+            "cex_consumer_entry_trillionnium_world_route_recommendation_quality_score_target_percent {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_route_recommendation_quality_score_ready gauge\n",
+            "cex_consumer_entry_trillionnium_world_route_recommendation_quality_score_ready {}\n",
             "# TYPE cex_consumer_entry_trillionnium_world_route_recommendation_reward_lift_visible gauge\n",
             "cex_consumer_entry_trillionnium_world_route_recommendation_reward_lift_visible {}\n",
             "# TYPE cex_consumer_entry_trillionnium_world_route_recommendation_abandon_risk_visible gauge\n",
             "cex_consumer_entry_trillionnium_world_route_recommendation_abandon_risk_visible {}\n",
             "# TYPE cex_consumer_entry_trillionnium_world_route_recommendation_denominator_consistent gauge\n",
             "cex_consumer_entry_trillionnium_world_route_recommendation_denominator_consistent {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_route_recommendation_raw_counts_preserved gauge\n",
+            "cex_consumer_entry_trillionnium_world_route_recommendation_raw_counts_preserved {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_route_recommendation_risk_controls_visible gauge\n",
+            "cex_consumer_entry_trillionnium_world_route_recommendation_risk_controls_visible {}\n",
             "# TYPE cex_consumer_entry_trillionnium_world_commercial_route_start_to_paid_task_percent gauge\n",
             "cex_consumer_entry_trillionnium_world_commercial_route_start_to_paid_task_percent {}\n",
             "# TYPE cex_consumer_entry_trillionnium_world_commercial_reward_claim_to_next_commission_percent gauge\n",
@@ -5001,6 +5065,16 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
             commercial_operating_dashboard_gate,
             "route_recommendation_quality_score_percent",
         ),
+        gate_i64(
+            commercial_operating_dashboard_gate,
+            "route_recommendation_quality_score_target_percent",
+        ),
+        gauge_bool(
+            commercial_operating_dashboard_gate
+                .get("route_recommendation_quality_score_ready")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        ),
         gauge_bool(
             commercial_operating_dashboard_gate
                 .get("route_recommendation_reward_lift_visible")
@@ -5016,6 +5090,18 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
         gauge_bool(
             commercial_operating_dashboard_gate
                 .get("route_recommendation_denominator_consistent")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        ),
+        gauge_bool(
+            commercial_operating_dashboard_gate
+                .get("route_recommendation_raw_counts_preserved")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        ),
+        gauge_bool(
+            commercial_operating_dashboard_gate
+                .get("route_recommendation_risk_controls_visible")
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
         ),

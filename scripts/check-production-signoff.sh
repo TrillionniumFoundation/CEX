@@ -348,10 +348,16 @@ def commercial_operating_dashboard_ok(gate):
         and gate.get('route_recommendation_policy_contract_version') == 'trillionnium_world_route_recommendation_policy_v1'
         and gate.get('route_recommendation_policy_visible') is True
         and gate.get('route_recommendation_quality_contract_version') == 'trillionnium_world_route_recommendation_quality_v1'
+        and gate.get('route_recommendation_quality_status') == 'quality_gate_ready'
         and isinstance(gate.get('route_recommendation_quality_score_percent'), (int, float))
+        and isinstance(gate.get('route_recommendation_quality_score_target_percent'), (int, float))
+        and gate.get('route_recommendation_quality_score_percent') >= gate.get('route_recommendation_quality_score_target_percent')
+        and gate.get('route_recommendation_quality_score_ready') is True
         and gate.get('route_recommendation_reward_lift_visible') is True
         and gate.get('route_recommendation_abandon_risk_visible') is True
         and gate.get('route_recommendation_denominator_consistent') is True
+        and gate.get('route_recommendation_raw_counts_preserved') is True
+        and gate.get('route_recommendation_risk_controls_visible') is True
     )
 
 gate_sources = {
@@ -426,10 +432,14 @@ metric_thresholds = {
     'cex_consumer_entry_trillionnium_world_map_maplibre_shadow_parity_gate_green': 1,
     'cex_consumer_entry_trillionnium_world_map_maplibre_canary_rollback_ready': 1,
     'cex_consumer_entry_trillionnium_world_route_recommendation_quality_gate_green': 1,
-    'cex_consumer_entry_trillionnium_world_route_recommendation_quality_score_percent': 0,
+    'cex_consumer_entry_trillionnium_world_route_recommendation_quality_score_percent': 60,
+    'cex_consumer_entry_trillionnium_world_route_recommendation_quality_score_target_percent': 60,
+    'cex_consumer_entry_trillionnium_world_route_recommendation_quality_score_ready': 1,
     'cex_consumer_entry_trillionnium_world_route_recommendation_reward_lift_visible': 1,
     'cex_consumer_entry_trillionnium_world_route_recommendation_abandon_risk_visible': 1,
     'cex_consumer_entry_trillionnium_world_route_recommendation_denominator_consistent': 1,
+    'cex_consumer_entry_trillionnium_world_route_recommendation_raw_counts_preserved': 1,
+    'cex_consumer_entry_trillionnium_world_route_recommendation_risk_controls_visible': 1,
 }
 metric_values = {name: metric_value(name) for name in metric_thresholds}
 metric_results = {
