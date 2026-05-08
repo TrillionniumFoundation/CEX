@@ -299,6 +299,10 @@ impl<'a> WorldHomeProjectionContext<'a> {
         );
         fields.insert("world".to_string(), json!("trillionnium_world"));
         fields.insert(
+            "world_map_subsystem_contract".to_string(),
+            trillionnium_world_map_subsystem_contract_json(),
+        );
+        fields.insert(
             "tagline".to_string(),
             json!("现实世界被游戏引擎化：城市、工坊、市场、Agent 居民、资产和自由行动。"),
         );
@@ -736,6 +740,18 @@ pub(super) fn world_map_readability_lod_contract_json(
         && live_event_count <= max_live_event_pulses
         && avatar_task_route_count <= max_avatar_task_routes
         && avatar_route_runner_count <= max_avatar_route_runners;
+    let payload_object_count = marker_count
+        + poi_hotspot_count
+        + live_event_count
+        + avatar_task_route_count
+        + avatar_route_runner_count;
+    let runtime_performance_budget = trillionnium_world_map_runtime_performance_budget_json(
+        marker_count,
+        max_visible_markers,
+        avatar_route_runner_count,
+        max_avatar_route_runners,
+        payload_object_count,
+    );
 
     json!({
         "contract_version": TRILLIONNIUM_WORLD_MAP_READABILITY_LOD_CONTRACT_VERSION,
@@ -770,6 +786,7 @@ pub(super) fn world_map_readability_lod_contract_json(
             "avatar_route_runners": avatar_route_runner_count,
             "within_budget": clutter_budget_ok,
         },
+        "runtime_performance_budget": runtime_performance_budget,
         "layer_priority": [
             "primary_route_runner_handoff",
             "reward_claim_or_next_route_cta",
@@ -2095,6 +2112,7 @@ pub(super) fn real_world_map_renderer_adapter_json() -> Value {
 }
 
 pub(super) fn real_world_map_future_engine_readiness_json() -> Value {
+    let renderer_shadow_contract = trillionnium_world_map_renderer_shadow_contract_json();
     json!({
         "contract_version": TRILLIONNIUM_WORLD_FUTURE_ENGINE_READINESS_CONTRACT_VERSION,
         "status": "adapter_ready_not_migrating",
@@ -2109,6 +2127,7 @@ pub(super) fn real_world_map_future_engine_readiness_json() -> Value {
             "route_runner_cohort_quality_green",
             "world_mobile_entry_parity_green",
             "semantic_map_layers_green",
+            "shadow_renderer_contract_green",
             "web_matrix_browser_e2e_green",
             "rollback_to_leaflet_documented"
         ],
@@ -2124,6 +2143,7 @@ pub(super) fn real_world_map_future_engine_readiness_json() -> Value {
             "target_viewport_p95_ms": 250,
             "target_tile_error_rate_percent": 1
         },
+        "shadow_renderer_contract": renderer_shadow_contract,
         "rollback_plan": {
             "active_engine_remains": "leaflet_openstreetmap_v1",
             "candidate_is_shadow_only": true,
@@ -2137,6 +2157,7 @@ pub(super) fn real_world_map_future_engine_readiness_json() -> Value {
             "telemetry_precondition_visible",
             "rollback_plan_visible",
             "promotion_blockers_visible",
+            "shadow_renderer_contract_visible",
             "product_loop_proof_before_migration_visible"
         ]
     })
@@ -2148,7 +2169,8 @@ pub(super) fn real_world_map_planned_upgrade_engine_json() -> Value {
         "promotion_trigger": "vector_webgl_pressure_after_adapter_seam",
         "status": "planned_not_active",
         "gating_contract": "renderer_adapter.adapter_contract_version >= 1",
-        "readiness_contract_version": TRILLIONNIUM_WORLD_FUTURE_ENGINE_READINESS_CONTRACT_VERSION
+        "readiness_contract_version": TRILLIONNIUM_WORLD_FUTURE_ENGINE_READINESS_CONTRACT_VERSION,
+        "shadow_renderer_contract_version": TRILLIONNIUM_WORLD_MAP_RENDERER_SHADOW_CONTRACT_VERSION
     })
 }
 
@@ -2305,6 +2327,18 @@ pub(super) fn world_map_viewport_json(
     let player_avatar_count = player_avatars.len();
     let avatar_task_route_count = avatar_task_routes.len();
     let avatar_route_runner_count = avatar_route_runners.len();
+    let active_region_id = active_region
+        .get("region_id")
+        .and_then(Value::as_str)
+        .unwrap_or("cn-shanghai-core");
+    let payload_object_count = marker_count
+        + poi_hotspots.len()
+        + live_event_count
+        + player_avatar_count
+        + avatar_task_route_count
+        + avatar_route_runner_count
+        + tile_shard_count
+        + prefetch_count;
     let route_runner_handoff =
         world_map_route_runner_handoff_json(avatar_task_route_count, &avatar_route_runners);
     let map_readability_lod = world_map_readability_lod_contract_json(
@@ -2316,6 +2350,18 @@ pub(super) fn world_map_viewport_json(
         avatar_task_route_count,
         avatar_route_runner_count,
         &player_density,
+    );
+    let runtime_performance_budget = map_readability_lod
+        .get("runtime_performance_budget")
+        .cloned()
+        .unwrap_or_else(|| trillionnium_world_map_runtime_performance_budget_json(0, 18, 0, 6, 0));
+    let transport_delta_contract = trillionnium_world_map_transport_delta_contract_json(
+        active_region_id,
+        tile_shard_count,
+        prefetch_count,
+        player_avatar_count,
+        avatar_route_runner_count,
+        payload_object_count,
     );
     let viewport_path = format!(
         "/v1/world/map/{}/viewport?lat={:.6}&lng={:.6}&zoom={}&radius_km={:.1}&limit={}",
@@ -2362,6 +2408,8 @@ pub(super) fn world_map_viewport_json(
         "avatar_route_runner_count": avatar_route_runner_count,
         "route_runner_handoff": route_runner_handoff,
         "map_readability_lod": map_readability_lod,
+        "runtime_performance_budget": runtime_performance_budget,
+        "transport_delta_contract": transport_delta_contract,
         "gameplay_layer_contract": trillionnium_world_map_gameplay_layer_contract_json(),
         "live_event_stream": live_event_stream,
         "live_event_stream_index_layer": "WorldIndexes::event_indices_by_location_v1",

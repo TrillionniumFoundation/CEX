@@ -167,6 +167,19 @@ function checkMobile(result, limits) {
     assertMetric(Number(readability.copySummaryBudget || 0) <= 150, `${result.profile}/app copy budget drifted`, readability);
     assertMetric(readability.detailsDefaultState === 'collapsed', `${result.profile}/app dense map details must default collapsed`, readability);
     assertMetric((readability.text || '').includes('One route first'), `${result.profile}/app readability copy must stay route-first`, readability);
+    const perf = result.mapPerformanceBudget || {};
+    assertMetric(perf.present === true, `${result.profile}/app map performance budget missing`, perf);
+    assertMetric(perf.contractVersion === 'trillionnium_world_map_runtime_performance_budget_v1', `${result.profile}/app map performance budget contract missing`, perf);
+    assertMetric(Number(perf.firstMapInteractiveTargetMs || 0) <= 2000, `${result.profile}/app first map interactive target drifted`, perf);
+    assertMetric(Number(perf.viewportRefreshP95TargetMs || 0) <= 250, `${result.profile}/app viewport refresh budget drifted`, perf);
+    assertMetric(Number(perf.focusToActionRailTargetMs || 0) <= 300, `${result.profile}/app focus-to-action budget drifted`, perf);
+    assertMetric(String(perf.deltaViewportUpdatesRequired) === 'true', `${result.profile}/app delta viewport requirement missing`, perf);
+    const transport = result.mapTransportDelta || {};
+    assertMetric(transport.present === true, `${result.profile}/app map transport delta contract missing`, transport);
+    assertMetric(transport.contractVersion === 'trillionnium_world_map_transport_delta_v1', `${result.profile}/app map transport delta version missing`, transport);
+    assertMetric(transport.subsystemContract === 'trillionnium_world_map_subsystem_v1', `${result.profile}/app map subsystem contract missing`, transport);
+    assertMetric(String(transport.presenceDeltaRequired) === 'true', `${result.profile}/app presence delta requirement missing`, transport);
+    assertMetric(String(transport.snapshotFallbackRequired) === 'true', `${result.profile}/app snapshot fallback requirement missing`, transport);
     if (result.profile === 'mobile') {
       const sheet = yOf(result, 'mobileSheet');
       assertMetric(sheet >= Math.floor(result.viewport.vh * 0.58), `${result.profile}/app mobile bottom sheet key selector is not docked`, { sheet, viewport: result.viewport });
@@ -190,6 +203,29 @@ function checkMobile(result, limits) {
       assertMetric((cta.text || '').includes(token), `${result.profile}/world route-first mobile copy missing ${token}`, cta);
     }
     assertMetric(Number(cta.routeMasteryXp || 0) > 0 && Boolean(cta.routeMasteryTier), `${result.profile}/world route-first mobile reward/XP data missing`, cta);
+    const readability = result.worldMapReadability || {};
+    assertMetric(readability.present === true, `${result.profile}/world map readability LOD contract missing`, readability);
+    assertMetric(readability.contractVersion === 'trillionnium_world_map_readability_lod_v1', `${result.profile}/world map readability LOD contract version missing`, readability);
+    assertMetric(readability.semanticLayerContract === 'trillionnium_world_map_game_layer_semantics_v1', `${result.profile}/world map semantic layer contract missing`, readability);
+    assertMetric(readability.paritySource === 'app-map-readability-lod', `${result.profile}/world map readability must declare /app parity`, readability);
+    assertMetric(Number(readability.primaryCtaBudget || 0) === 1, `${result.profile}/world map readability must keep one primary CTA`, readability);
+    assertMetric(Number(readability.visibleMarkerBudget || 0) <= 18, `${result.profile}/world visible marker clutter budget drifted`, readability);
+    assertMetric(Number(readability.avatarRunnerBudget || 0) <= 6, `${result.profile}/world avatar runner clutter budget drifted`, readability);
+    assertMetric(readability.detailsDefaultState === 'collapsed', `${result.profile}/world dense map details must default collapsed`, readability);
+    const perf = result.mapPerformanceBudget || {};
+    assertMetric(perf.present === true, `${result.profile}/world map performance budget missing`, perf);
+    assertMetric(perf.contractVersion === 'trillionnium_world_map_runtime_performance_budget_v1', `${result.profile}/world map performance budget contract missing`, perf);
+    assertMetric(Number(perf.focusToActionRailTargetMs || 0) <= 300, `${result.profile}/world focus-to-action budget drifted`, perf);
+    assertMetric(String(perf.deltaViewportUpdatesRequired) === 'true', `${result.profile}/world delta viewport requirement missing`, perf);
+    const transport = result.mapTransportDelta || {};
+    assertMetric(transport.contractVersion === 'trillionnium_world_map_transport_delta_v1', `${result.profile}/world map transport delta version missing`, transport);
+    assertMetric(transport.subsystemContract === 'trillionnium_world_map_subsystem_v1', `${result.profile}/world map subsystem contract missing`, transport);
+    assertMetric(transport.paritySource === 'app-map-transport-delta', `${result.profile}/world map transport must declare /app parity`, transport);
+    assertMetric(String(transport.presenceDeltaRequired) === 'true', `${result.profile}/world presence delta requirement missing`, transport);
+    const shadow = result.shadowRenderer || {};
+    assertMetric(shadow.contractVersion === 'trillionnium_world_map_renderer_shadow_v1', `${result.profile}/world shadow renderer contract missing`, shadow);
+    assertMetric(shadow.activeEngine === 'leaflet_openstreetmap_v1' && shadow.shadowEngine === 'maplibre_gl_v1', `${result.profile}/world shadow renderer engine ids missing`, shadow);
+    assertMetric(shadow.status === 'shadow_only_not_user_facing', `${result.profile}/world MapLibre must stay shadow-only`, shadow);
     const map = yOf(result, 'map');
     const pulse = yOf(result, 'pulse');
     const action = yOf(result, 'action');
@@ -340,6 +376,10 @@ async function auditPage(page, profile, target) {
     const appFeedHandoff = document.getElementById('app-feed-route-runner-handoff');
     const worldRouteHandoff = document.getElementById('world-route-runner-handoff-summary');
     const appMapReadabilityLod = document.getElementById('app-map-readability-lod');
+    const worldMapReadabilityLod = document.getElementById('world-map-readability-lod');
+    const mapPerformanceBudgetElement = document.getElementById(targetName === 'world' ? 'world-map-performance-budget' : 'app-map-performance-budget');
+    const mapTransportDeltaElement = document.getElementById(targetName === 'world' ? 'world-map-transport-delta' : 'app-map-transport-delta');
+    const worldMapShadowRenderer = document.getElementById('world-map-shadow-renderer');
     const handoffElements = [appRouteHandoff, appFeedHandoff, worldRouteHandoff].filter(Boolean);
     const handoffText = handoffElements.map((el) => text(el)).join(' · ');
     const mobileSheet = document.getElementById('app-mobile-action-sheet');
@@ -399,6 +439,47 @@ async function auditPage(page, profile, target) {
       detailsDefaultState: appMapReadabilityLod?.dataset.detailsDefaultState || null,
       text: text(appMapReadabilityLod).slice(0, 260),
     };
+    const worldMapReadability = {
+      present: Boolean(worldMapReadabilityLod),
+      contractVersion: worldMapReadabilityLod?.dataset.contractVersion || null,
+      semanticLayerContract: worldMapReadabilityLod?.dataset.semanticLayerContract || null,
+      firstScreenMode: worldMapReadabilityLod?.dataset.firstScreenMode || null,
+      primaryCtaBudget: worldMapReadabilityLod?.dataset.primaryCtaBudget || null,
+      visibleMarkerBudget: worldMapReadabilityLod?.dataset.visibleMarkerBudget || null,
+      avatarRunnerBudget: worldMapReadabilityLod?.dataset.avatarRunnerBudget || null,
+      copySummaryBudget: worldMapReadabilityLod?.dataset.copySummaryBudget || null,
+      detailsDefaultState: worldMapReadabilityLod?.dataset.detailsDefaultState || null,
+      paritySource: worldMapReadabilityLod?.dataset.paritySource || null,
+      text: text(worldMapReadabilityLod).slice(0, 260),
+    };
+    const mapPerformanceBudget = {
+      present: Boolean(mapPerformanceBudgetElement),
+      contractVersion: mapPerformanceBudgetElement?.dataset.contractVersion || null,
+      firstMapInteractiveTargetMs: mapPerformanceBudgetElement?.dataset.firstMapInteractiveTargetMs || null,
+      viewportRefreshP95TargetMs: mapPerformanceBudgetElement?.dataset.viewportRefreshP95TargetMs || null,
+      focusToActionRailTargetMs: mapPerformanceBudgetElement?.dataset.focusToActionRailTargetMs || null,
+      mainThreadLongTaskBudgetMs: mapPerformanceBudgetElement?.dataset.mainThreadLongTaskBudgetMs || null,
+      lowEndMobileFpsFloor: mapPerformanceBudgetElement?.dataset.lowEndMobileFpsFloor || null,
+      deltaViewportUpdatesRequired: mapPerformanceBudgetElement?.dataset.deltaViewportUpdatesRequired || null,
+      text: text(mapPerformanceBudgetElement).slice(0, 260),
+    };
+    const mapTransportDelta = {
+      present: Boolean(mapTransportDeltaElement),
+      contractVersion: mapTransportDeltaElement?.dataset.contractVersion || null,
+      subsystemContract: mapTransportDeltaElement?.dataset.subsystemContract || null,
+      presenceDeltaRequired: mapTransportDeltaElement?.dataset.presenceDeltaRequired || null,
+      snapshotFallbackRequired: mapTransportDeltaElement?.dataset.snapshotFallbackRequired || null,
+      paritySource: mapTransportDeltaElement?.dataset.paritySource || null,
+      text: text(mapTransportDeltaElement).slice(0, 260),
+    };
+    const shadowRenderer = {
+      present: Boolean(worldMapShadowRenderer),
+      contractVersion: worldMapShadowRenderer?.dataset.contractVersion || null,
+      activeEngine: worldMapShadowRenderer?.dataset.activeEngine || null,
+      shadowEngine: worldMapShadowRenderer?.dataset.shadowEngine || null,
+      status: worldMapShadowRenderer?.dataset.status || null,
+      text: text(worldMapShadowRenderer).slice(0, 260),
+    };
     const routeRunnerHandoff = {
       appRouteSummaryPresent: Boolean(appRouteHandoff),
       appFeedSummaryPresent: Boolean(appFeedHandoff),
@@ -429,6 +510,10 @@ async function auditPage(page, profile, target) {
       worldMobilePrimaryCta,
       mobileCopyLayering,
       mapReadabilityLod,
+      worldMapReadability,
+      mapPerformanceBudget,
+      mapTransportDelta,
+      shadowRenderer,
       firstViewportButtons,
       firstViewportText: text(document.body).slice(0, 1400),
     };

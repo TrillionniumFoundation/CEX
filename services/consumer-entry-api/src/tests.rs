@@ -1150,6 +1150,30 @@ fn world_map_viewport_includes_prefetch_density_and_live_events() {
         viewport["map_readability_lod"]["object_budget"]["within_budget"],
         true
     );
+    assert_eq!(
+        viewport["runtime_performance_budget"]["contract_version"],
+        "trillionnium_world_map_runtime_performance_budget_v1"
+    );
+    assert_eq!(
+        viewport["map_readability_lod"]["runtime_performance_budget"]["contract_version"],
+        "trillionnium_world_map_runtime_performance_budget_v1"
+    );
+    assert!(viewport["runtime_performance_budget"]["degrade_strategy"]
+        ["delta_viewport_updates_required"]
+        .as_bool()
+        .unwrap_or(false));
+    assert_eq!(
+        viewport["transport_delta_contract"]["contract_version"],
+        "trillionnium_world_map_transport_delta_v1"
+    );
+    assert!(
+        viewport["transport_delta_contract"]["presence_payload"]["presence_delta_required"]
+            .as_bool()
+            .unwrap_or(false)
+    );
+    assert!(viewport["transport_delta_contract"]["transport_boundaries"]
+        .as_object()
+        .is_some());
     assert!(viewport["map_readability_lod"]["readiness_checks"]
         .as_array()
         .is_some_and(|checks| checks
@@ -1890,6 +1914,15 @@ fn real_world_map_engine_declares_shared_renderer_adapter() {
         true
     );
     assert_eq!(
+        engine["renderer_adapter"]["future_engine_readiness"]["shadow_renderer_contract"]
+            ["contract_version"],
+        "trillionnium_world_map_renderer_shadow_v1"
+    );
+    assert_eq!(
+        engine["planned_upgrade_engine"]["shadow_renderer_contract_version"],
+        "trillionnium_world_map_renderer_shadow_v1"
+    );
+    assert_eq!(
         engine["renderer_adapter"]["adapter_contract"]["supports_future_engine_swap"],
         true
     );
@@ -1972,6 +2005,14 @@ fn world_home_json_exposes_shared_renderer_adapter_for_matrix_cards() {
     assert_eq!(
         engine["renderer_adapter"]["future_engine_readiness"]["contract_version"],
         "trillionnium_world_future_engine_readiness_v1"
+    );
+    assert_eq!(
+        engine["renderer_adapter"]["future_engine_readiness"]["shadow_renderer_contract"]["status"],
+        "shadow_only_not_user_facing"
+    );
+    assert_eq!(
+        home["world_map_subsystem_contract"]["contract_version"],
+        "trillionnium_world_map_subsystem_v1"
     );
     assert_eq!(
         home["route_runner_handoff"]["contract_version"],
@@ -2261,6 +2302,32 @@ fn client_app_map_hub_projects_stream_counts() {
             .is_some_and(|roles| roles.len() >= 4)
     );
     assert_eq!(
+        app["mobile_shell_contract"]["first_screen_decision"]["contract_version"],
+        "trillionnium_world_map_first_screen_decision_v1"
+    );
+    assert_eq!(
+        app["mobile_shell_contract"]["runtime_performance_budget"]["contract_version"],
+        "trillionnium_world_map_runtime_performance_budget_v1"
+    );
+    assert_eq!(
+        app["world_map_subsystem_contract"]["contract_version"],
+        "trillionnium_world_map_subsystem_v1"
+    );
+    assert_eq!(
+        app["map_hub"]["viewport"]["runtime_performance_budget"]["contract_version"],
+        "trillionnium_world_map_runtime_performance_budget_v1"
+    );
+    assert_eq!(
+        app["map_hub"]["viewport"]["transport_delta_contract"]["contract_version"],
+        "trillionnium_world_map_transport_delta_v1"
+    );
+    assert!(
+        app["map_hub"]["viewport"]["runtime_performance_budget"]["degrade_strategy"]
+            ["delta_viewport_updates_required"]
+            .as_bool()
+            .unwrap_or(false)
+    );
+    assert_eq!(
         app["economy_retention_ops"]["route_runner_funnel_telemetry"]["contract_version"],
         "trillionnium_route_runner_funnel_telemetry_v1"
     );
@@ -2298,6 +2365,18 @@ fn client_app_map_hub_projects_stream_counts() {
         app["route_runner_funnel_telemetry"]["cohort_quality"]["contract_version"],
         "trillionnium_route_runner_funnel_cohort_quality_v1"
     );
+    assert_eq!(
+        app["route_runner_funnel_telemetry"]["funnel_integrity"]["contract_version"],
+        "trillionnium_route_runner_funnel_integrity_v1"
+    );
+    assert!(app["route_runner_funnel_telemetry"]["funnel_integrity"]
+        ["cohort_denominator_consistent"]
+        .as_bool()
+        .unwrap_or(false));
+    assert!(app["route_runner_funnel_telemetry"]["funnel_integrity"]
+        ["reward_to_next_route_blockers"]["blocked_reason_candidates"]
+        .as_array()
+        .is_some_and(|reasons| reasons.len() >= 3));
     assert!(app["route_runner_funnel_telemetry"]["cohort_quality"]
         ["reward_to_next_route_conversion_percent"]
         .as_i64()
@@ -2322,6 +2401,10 @@ fn client_app_map_hub_projects_stream_counts() {
     assert_eq!(
         app["commercial_operating_dashboard"]["contract_version"],
         "trillionnium_world_commercial_operating_dashboard_v1"
+    );
+    assert_eq!(
+        app["commercial_operating_dashboard"]["route_recommendation_policy"]["contract_version"],
+        "trillionnium_world_route_recommendation_policy_v1"
     );
     assert!(
         app["commercial_operating_dashboard"]["route_start_to_paid_task_conversion_percent"]
@@ -11077,6 +11160,11 @@ async fn health_endpoint_exposes_identity_governance_overview() {
             ["cohort_quality_contract_version"],
         "trillionnium_route_runner_funnel_cohort_quality_v1"
     );
+    assert_eq!(
+        body["trillionnium_world_playability_scorecard"]["route_runner_funnel_telemetry_gate"]
+            ["funnel_integrity_contract_version"],
+        "trillionnium_route_runner_funnel_integrity_v1"
+    );
     assert!(
         body["trillionnium_world_playability_scorecard"]["route_runner_funnel_telemetry_gate"]
             ["route_started_count"]
@@ -11100,10 +11188,27 @@ async fn health_endpoint_exposes_identity_governance_overview() {
             .as_i64()
             .is_some()
     );
+    assert!(
+        body["trillionnium_world_playability_scorecard"]["route_runner_funnel_telemetry_gate"]
+            ["cohort_denominator_consistent"]
+            .as_bool()
+            .unwrap_or(false)
+    );
+    assert!(
+        body["trillionnium_world_playability_scorecard"]["route_runner_funnel_telemetry_gate"]
+            ["reward_to_next_route_blockers_visible"]
+            .as_bool()
+            .unwrap_or(false)
+    );
     assert_eq!(
         body["trillionnium_world_playability_scorecard"]["commercial_operating_dashboard_gate"]
             ["dashboard_contract_version"],
         "trillionnium_world_commercial_operating_dashboard_v1"
+    );
+    assert_eq!(
+        body["trillionnium_world_playability_scorecard"]["commercial_operating_dashboard_gate"]
+            ["route_recommendation_policy_contract_version"],
+        "trillionnium_world_route_recommendation_policy_v1"
     );
     assert!(body["trillionnium_world_playability_scorecard"]
         ["commercial_operating_dashboard_gate"]["reward_claim_to_next_commission_percent"]
@@ -11123,6 +11228,26 @@ async fn health_endpoint_exposes_identity_governance_overview() {
         body["trillionnium_world_playability_scorecard"]["future_engine_readiness_gate"]
             ["candidate_engine_id"],
         "maplibre_gl_v1"
+    );
+    assert_eq!(
+        body["trillionnium_world_playability_scorecard"]["future_engine_readiness_gate"]
+            ["shadow_renderer_contract_version"],
+        "trillionnium_world_map_renderer_shadow_v1"
+    );
+    assert_eq!(
+        body["trillionnium_world_playability_scorecard"]["map_readability_lod_gate"]
+            ["runtime_performance_budget_contract_version"],
+        "trillionnium_world_map_runtime_performance_budget_v1"
+    );
+    assert_eq!(
+        body["trillionnium_world_playability_scorecard"]["map_readability_lod_gate"]
+            ["map_subsystem_contract_version"],
+        "trillionnium_world_map_subsystem_v1"
+    );
+    assert_eq!(
+        body["trillionnium_world_playability_scorecard"]["map_readability_lod_gate"]
+            ["transport_delta_contract_version"],
+        "trillionnium_world_map_transport_delta_v1"
     );
     assert!(
         body["trillionnium_world_playability_scorecard"]["axes"]["surface_feedback"]["checks"]

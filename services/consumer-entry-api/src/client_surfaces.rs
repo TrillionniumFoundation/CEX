@@ -1645,6 +1645,13 @@ impl<'a> ClientAppProjectionContext<'a> {
                 "mode": "fixed_above_bottom_tabs_on_mobile",
                 "single_primary_cta": true,
             },
+            "first_screen_decision": trillionnium_world_map_first_screen_decision_contract_json(
+                "app",
+                "app-mobile-primary-cta",
+                "app-map-action-rail",
+                "app-map-copy-summary",
+                "app-map-copy-layer-details",
+            ),
             "copy_layering": {
                 "contract_version": "trillionnium_mobile_copy_layering_v1",
                 "summary_id": "app-map-copy-summary",
@@ -1665,6 +1672,15 @@ impl<'a> ClientAppProjectionContext<'a> {
                 "semantic_layer_contract_version": TRILLIONNIUM_WORLD_MAP_GAME_LAYER_SEMANTICS_CONTRACT_VERSION,
                 "semantic_roles": ["start", "objective", "reward", "locked", "guild", "market"],
             },
+            "runtime_performance_budget": {
+                "contract_version": TRILLIONNIUM_WORLD_MAP_RUNTIME_PERFORMANCE_BUDGET_CONTRACT_VERSION,
+                "first_map_interactive_target_ms": 2000,
+                "viewport_refresh_p95_target_ms": 250,
+                "focus_to_action_rail_target_ms": 300,
+                "main_thread_long_task_budget_ms": 100,
+                "low_end_mobile_fps_floor": 45,
+                "delta_viewport_updates_required": true,
+            },
             "resilience": {
                 "feed_api_hydration": "loadFeedSurface",
                 "web_session_feed_path": "/app/web/feed",
@@ -1683,8 +1699,10 @@ impl<'a> ClientAppProjectionContext<'a> {
                 "web_session_feed_hydration_visible",
                 "feed_api_hydration_visible",
                 "mobile_bottom_sheet_single_primary_cta_visible",
+                "first_screen_decision_contract_visible",
                 "mobile_copy_layering_visible",
                 "map_readability_lod_visible",
+                "map_runtime_performance_budget_visible",
                 "map_game_layer_semantics_visible",
                 "next_action_rail_visible",
                 "playability_coach_visible",
@@ -1854,7 +1872,7 @@ impl<'a> ClientAppProjectionContext<'a> {
             .max(work_order_count);
         let evidence_submitted_count = delivery_count + completion_count + submission_count;
         let reward_claimed_count = reward_count;
-        let next_route_opened_count =
+        let next_route_available_count =
             route_backlog_count.max(map_metrics.avatar_task_route_count as i64);
         let abandoned_or_recovery_count = review_hold_count + recovery_count;
         let mut route_start_epochs: Vec<i64> = self
@@ -1942,6 +1960,14 @@ impl<'a> ClientAppProjectionContext<'a> {
                 .filter(|epoch| *epoch > reward_epoch)
                 .min()
         });
+        let next_route_opened_count = first_reward_epoch
+            .map(|reward_epoch| {
+                route_start_epochs
+                    .iter()
+                    .filter(|epoch| **epoch > reward_epoch)
+                    .count() as i64
+            })
+            .unwrap_or(0);
         let reward_to_next_route_seconds = first_reward_epoch
             .zip(first_next_route_epoch)
             .map(|(reward, next_route)| (next_route - reward).max(0))
@@ -1984,22 +2010,74 @@ impl<'a> ClientAppProjectionContext<'a> {
         let daily_return_resume_count =
             active_day_count.max(if route_backlog_count > 0 { 1 } else { 0 });
         let paid_task_count = purchase_count.max(work_order_count);
-        let reward_to_next_route_percent =
+        let reward_to_next_route_raw_percent =
             trillionnium_percent_i64(next_route_opened_count, reward_claimed_count);
+        let reward_to_next_route_percent =
+            trillionnium_bounded_percent_i64(next_route_opened_count, reward_claimed_count);
         let d1_resume_percent =
-            trillionnium_percent_i64(daily_return_resume_count, route_started_count);
-        let abandon_or_recovery_percent =
+            trillionnium_bounded_percent_i64(daily_return_resume_count, route_started_count);
+        let abandon_or_recovery_raw_percent =
             trillionnium_percent_i64(abandoned_or_recovery_count, route_started_count);
+        let abandon_or_recovery_percent =
+            trillionnium_bounded_percent_i64(abandoned_or_recovery_count, route_started_count);
+        let reward_to_next_gap_count = reward_claimed_count
+            .saturating_sub(next_route_opened_count)
+            .max(0);
+        let route_runner_funnel_integrity = json!({
+            "contract_version": TRILLIONNIUM_ROUTE_RUNNER_FUNNEL_INTEGRITY_CONTRACT_VERSION,
+            "status": if time_to_reward_sample_count >= 30 { "decision_ready" } else { "visible_but_needs_larger_cohort" },
+            "decision_metric_mode": "bounded_cohort_rates_with_raw_counts_preserved",
+            "cohort_denominators": {
+                "route_started_denominator": route_started_count,
+                "reward_claimed_denominator": reward_claimed_count,
+                "daily_return_denominator": route_started_count,
+                "abandon_or_recovery_denominator": route_started_count,
+                "time_to_reward_sample_count": time_to_reward_sample_count
+            },
+            "raw_rate_percent": {
+                "reward_to_next_route_conversion_percent": reward_to_next_route_raw_percent,
+                "route_abandon_or_recovery_rate_percent": abandon_or_recovery_raw_percent
+            },
+            "bounded_rate_percent": {
+                "reward_to_next_route_conversion_percent": reward_to_next_route_percent,
+                "d1_resume_rate_percent": d1_resume_percent,
+                "route_abandon_or_recovery_rate_percent": abandon_or_recovery_percent
+            },
+            "cohort_denominator_consistent": reward_to_next_route_percent <= 100 && abandon_or_recovery_percent <= 100,
+            "legacy_seed_classification_status": "legacy_events_unclassified_until_backfill",
+            "demo_seed_policy": "new demo/test events must carry explicit segment metadata before entering decision cohorts",
+            "decision_warning": if time_to_reward_sample_count < 30 { "insufficient_sample_do_not_treat_green_gate_as_retention_proof" } else { "sample_ready" },
+            "reward_to_next_route_blockers": {
+                "gap_count": reward_to_next_gap_count,
+                "blocked_reason_candidates": [
+                    {"reason_id": "next_route_cta_not_salient", "count": reward_to_next_gap_count},
+                    {"reason_id": "reward_value_unclear", "count": reward_to_next_gap_count},
+                    {"reason_id": "proof_or_review_friction", "count": abandoned_or_recovery_count},
+                    {"reason_id": "insufficient_real_user_sample", "count": if time_to_reward_sample_count < 30 { 30 - time_to_reward_sample_count } else { 0 }}
+                ]
+            },
+            "readiness_checks": [
+                "raw_counts_preserved",
+                "bounded_rates_visible",
+                "cohort_denominators_visible",
+                "reward_to_next_route_blockers_visible",
+                "demo_seed_policy_visible",
+                "insufficient_sample_warning_visible"
+            ]
+        });
         let route_runner_cohort_quality = json!({
             "contract_version": TRILLIONNIUM_ROUTE_RUNNER_COHORT_QUALITY_CONTRACT_VERSION,
             "status": trillionnium_retention_band(reward_to_next_route_percent),
             "reward_to_next_route_conversion_percent": reward_to_next_route_percent,
+            "reward_to_next_route_raw_percent": reward_to_next_route_raw_percent,
             "d1_resume_rate_percent": d1_resume_percent,
             "route_abandon_or_recovery_rate_percent": abandon_or_recovery_percent,
+            "route_abandon_or_recovery_raw_percent": abandon_or_recovery_raw_percent,
             "time_to_first_proof_seconds": route_start_to_evidence_seconds,
             "time_to_next_route_seconds": reward_to_next_route_seconds,
             "first_next_route_epoch": first_next_route_epoch,
             "sample_mode": if reward_claimed_count > 0 { "runtime_projection_cohort" } else { "sparse_no_reward_sample" },
+            "decision_metric_mode": "bounded_rates_with_integrity_contract",
             "retention_action": "show stronger reward → next-route CTA, streak incentive, and route reason before adding map density",
             "abandon_reason_breakdown": {
                 "review_hold": review_hold_count,
@@ -2063,6 +2141,7 @@ impl<'a> ClientAppProjectionContext<'a> {
                 "evidence_submitted": evidence_submitted_count,
                 "reward_claimed": reward_claimed_count,
                 "next_route_opened": next_route_opened_count,
+                "next_route_available": next_route_available_count,
                 "abandoned_or_recovery": abandoned_or_recovery_count,
                 "daily_return_resume": daily_return_resume_count,
             },
@@ -2080,6 +2159,7 @@ impl<'a> ClientAppProjectionContext<'a> {
                 "within_target": time_to_reward_sample_count > 0 && time_to_reward_seconds <= 1800,
             },
             "cohort_quality": route_runner_cohort_quality,
+            "funnel_integrity": route_runner_funnel_integrity,
             "resume_hooks": [
                 {"hook_id": "daily_resume_next_route", "event": "daily_return_resume", "source": "route_backlog_count", "count": daily_return_resume_count},
                 {"hook_id": "reward_claim_reminder", "event": "reward_claimed", "source": "league_rewards_plus_world_acceptance", "count": reward_claimed_count},
@@ -2532,6 +2612,7 @@ impl<'a> ClientAppProjectionContext<'a> {
             "module_count": module_count,
             "route_contract": world_route_ui_contract_json(),
             "mobile_shell_contract": mobile_shell_contract,
+            "world_map_subsystem_contract": trillionnium_world_map_subsystem_contract_json(),
             "onboarding": onboarding,
             "playability_coach": playability_coach,
             "next_best_actions": next_best_actions,

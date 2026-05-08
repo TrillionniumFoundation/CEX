@@ -492,7 +492,17 @@ fn app_map_readability_lod_gate_json(app: &Value) -> Value {
         .get("map_hub")
         .and_then(|hub| hub.get("viewport"))
         .and_then(|viewport| viewport.get("map_readability_lod"));
+    let map_hub_viewport = app.get("map_hub").and_then(|hub| hub.get("viewport"));
     let game_layer_semantics = viewport_lod.and_then(|lod| lod.get("game_layer_semantics"));
+    let map_subsystem = app.get("world_map_subsystem_contract");
+    let transport_delta_contract =
+        map_hub_viewport.and_then(|viewport| viewport.get("transport_delta_contract"));
+    let runtime_performance_budget = viewport_lod
+        .and_then(|lod| lod.get("runtime_performance_budget"))
+        .or_else(|| {
+            app.get("mobile_shell_contract")
+                .and_then(|contract| contract.get("runtime_performance_budget"))
+        });
     let semantic_roles = shell_lod
         .and_then(|lod| lod.get("semantic_roles"))
         .and_then(Value::as_array)
@@ -517,6 +527,16 @@ fn app_map_readability_lod_gate_json(app: &Value) -> Value {
         "semantic_role_count": semantic_roles.len(),
         "muted_osm_context_visible": game_layer_semantics.and_then(|semantics| semantics.get("base_map_treatment")).and_then(|base| base.get("openstreetmap_role")).and_then(Value::as_str) == Some("muted_context_layer"),
         "active_route_contrast_visible": game_layer_semantics.and_then(|semantics| semantics.get("active_route_style")).and_then(|style| style.get("class_name")).and_then(Value::as_str) == Some("trillionnium-active-route-line"),
+        "runtime_performance_budget_contract_version": runtime_performance_budget.and_then(|budget| budget.get("contract_version")).and_then(Value::as_str),
+        "first_map_interactive_target_ms": runtime_performance_budget.and_then(|budget| budget.get("budget_targets")).and_then(|targets| targets.get("first_map_interactive_target_ms")).and_then(Value::as_u64).or_else(|| runtime_performance_budget.and_then(|budget| budget.get("first_map_interactive_target_ms")).and_then(Value::as_u64)).unwrap_or(0),
+        "viewport_refresh_p95_target_ms": runtime_performance_budget.and_then(|budget| budget.get("budget_targets")).and_then(|targets| targets.get("viewport_refresh_p95_target_ms")).and_then(Value::as_u64).or_else(|| runtime_performance_budget.and_then(|budget| budget.get("viewport_refresh_p95_target_ms")).and_then(Value::as_u64)).unwrap_or(0),
+        "focus_to_action_rail_target_ms": runtime_performance_budget.and_then(|budget| budget.get("budget_targets")).and_then(|targets| targets.get("focus_to_action_rail_target_ms")).and_then(Value::as_u64).or_else(|| runtime_performance_budget.and_then(|budget| budget.get("focus_to_action_rail_target_ms")).and_then(Value::as_u64)).unwrap_or(0),
+        "low_end_mobile_fps_floor": runtime_performance_budget.and_then(|budget| budget.get("budget_targets")).and_then(|targets| targets.get("low_end_mobile_fps_floor")).and_then(Value::as_u64).or_else(|| runtime_performance_budget.and_then(|budget| budget.get("low_end_mobile_fps_floor")).and_then(Value::as_u64)).unwrap_or(0),
+        "delta_viewport_updates_required": runtime_performance_budget.and_then(|budget| budget.get("degrade_strategy")).and_then(|strategy| strategy.get("delta_viewport_updates_required")).and_then(Value::as_bool).or_else(|| runtime_performance_budget.and_then(|budget| budget.get("delta_viewport_updates_required")).and_then(Value::as_bool)).unwrap_or(false),
+        "map_subsystem_contract_version": map_subsystem.and_then(|subsystem| subsystem.get("contract_version")).and_then(Value::as_str),
+        "transport_delta_contract_version": transport_delta_contract.and_then(|transport| transport.get("contract_version")).and_then(Value::as_str),
+        "presence_delta_visible": transport_delta_contract.and_then(|transport| transport.get("presence_payload")).and_then(|presence| presence.get("presence_delta_required")).and_then(Value::as_bool).unwrap_or(false),
+        "transport_boundary_visible": transport_delta_contract.and_then(|transport| transport.get("transport_boundaries")).and_then(Value::as_object).is_some(),
     })
 }
 
@@ -570,6 +590,46 @@ fn is_map_readability_lod_gate_green(gate: &Value) -> bool {
             .get("active_route_contrast_visible")
             .and_then(Value::as_bool)
             .unwrap_or(false)
+        && gate
+            .get("runtime_performance_budget_contract_version")
+            .and_then(Value::as_str)
+            == Some("trillionnium_world_map_runtime_performance_budget_v1")
+        && gate
+            .get("first_map_interactive_target_ms")
+            .and_then(Value::as_u64)
+            .is_some_and(|value| value <= 2000)
+        && gate
+            .get("viewport_refresh_p95_target_ms")
+            .and_then(Value::as_u64)
+            .is_some_and(|value| value <= 250)
+        && gate
+            .get("focus_to_action_rail_target_ms")
+            .and_then(Value::as_u64)
+            .is_some_and(|value| value <= 300)
+        && gate
+            .get("low_end_mobile_fps_floor")
+            .and_then(Value::as_u64)
+            .is_some_and(|value| value >= 45)
+        && gate
+            .get("delta_viewport_updates_required")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && gate
+            .get("map_subsystem_contract_version")
+            .and_then(Value::as_str)
+            == Some("trillionnium_world_map_subsystem_v1")
+        && gate
+            .get("transport_delta_contract_version")
+            .and_then(Value::as_str)
+            == Some("trillionnium_world_map_transport_delta_v1")
+        && gate
+            .get("presence_delta_visible")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && gate
+            .get("transport_boundary_visible")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
 }
 
 fn app_route_runner_funnel_telemetry_gate_json(app: &Value) -> Value {
@@ -580,10 +640,12 @@ fn app_route_runner_funnel_telemetry_gate_json(app: &Value) -> Value {
     let event_counts = telemetry.and_then(|telemetry| telemetry.get("event_counts"));
     let time_to_reward = telemetry.and_then(|telemetry| telemetry.get("time_to_reward"));
     let cohort_quality = telemetry.and_then(|telemetry| telemetry.get("cohort_quality"));
+    let funnel_integrity = telemetry.and_then(|telemetry| telemetry.get("funnel_integrity"));
     json!({
         "contract_version": "trillionnium_route_runner_funnel_telemetry_gate_v1",
         "telemetry_contract_version": telemetry.and_then(|telemetry| telemetry.get("contract_version")).and_then(Value::as_str),
         "cohort_quality_contract_version": cohort_quality.and_then(|cohort| cohort.get("contract_version")).and_then(Value::as_str),
+        "funnel_integrity_contract_version": funnel_integrity.and_then(|integrity| integrity.get("contract_version")).and_then(Value::as_str),
         "telemetry_stream": telemetry.and_then(|telemetry| telemetry.get("telemetry_stream")).and_then(Value::as_str),
         "route_started_count": event_counts.and_then(|counts| counts.get("route_started")).and_then(Value::as_i64).unwrap_or(0),
         "evidence_submitted_count": event_counts.and_then(|counts| counts.get("evidence_submitted")).and_then(Value::as_i64).unwrap_or(0),
@@ -601,6 +663,10 @@ fn app_route_runner_funnel_telemetry_gate_json(app: &Value) -> Value {
         "time_to_reward_target_seconds": time_to_reward.and_then(|time| time.get("target_seconds")).and_then(Value::as_i64).unwrap_or(0),
         "time_to_reward_within_target": time_to_reward.and_then(|time| time.get("within_target")).and_then(Value::as_bool).unwrap_or(false),
         "sample_count": time_to_reward.and_then(|time| time.get("sample_count")).and_then(Value::as_i64).unwrap_or(0),
+        "cohort_denominator_consistent": funnel_integrity.and_then(|integrity| integrity.get("cohort_denominator_consistent")).and_then(Value::as_bool).unwrap_or(false),
+        "decision_metric_mode": funnel_integrity.and_then(|integrity| integrity.get("decision_metric_mode")).and_then(Value::as_str),
+        "demo_seed_policy_visible": funnel_integrity.and_then(|integrity| integrity.get("demo_seed_policy")).and_then(Value::as_str).is_some_and(|policy| !policy.trim().is_empty()),
+        "reward_to_next_route_blockers_visible": funnel_integrity.and_then(|integrity| integrity.get("reward_to_next_route_blockers")).and_then(|blockers| blockers.get("blocked_reason_candidates")).and_then(Value::as_array).is_some_and(|reasons| reasons.len() >= 3),
     })
 }
 
@@ -615,6 +681,10 @@ fn is_route_runner_funnel_telemetry_gate_green(gate: &Value) -> bool {
             .get("cohort_quality_contract_version")
             .and_then(Value::as_str)
             == Some("trillionnium_route_runner_funnel_cohort_quality_v1")
+        && gate
+            .get("funnel_integrity_contract_version")
+            .and_then(Value::as_str)
+            == Some("trillionnium_route_runner_funnel_integrity_v1")
         && gate.get("telemetry_stream").and_then(Value::as_str)
             == Some("world_economy_events:playability_telemetry")
         && gate
@@ -660,7 +730,7 @@ fn is_route_runner_funnel_telemetry_gate_green(gate: &Value) -> bool {
         && gate
             .get("route_abandon_or_recovery_rate_percent")
             .and_then(Value::as_i64)
-            .is_some()
+            .is_some_and(|percent| (0..=100).contains(&percent))
         && gate
             .get("time_to_first_proof_seconds")
             .and_then(Value::as_i64)
@@ -671,6 +741,20 @@ fn is_route_runner_funnel_telemetry_gate_green(gate: &Value) -> bool {
             .is_some()
         && gate
             .get("abandon_reason_breakdown_visible")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && gate
+            .get("cohort_denominator_consistent")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && gate.get("decision_metric_mode").and_then(Value::as_str)
+            == Some("bounded_cohort_rates_with_raw_counts_preserved")
+        && gate
+            .get("demo_seed_policy_visible")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && gate
+            .get("reward_to_next_route_blockers_visible")
             .and_then(Value::as_bool)
             .unwrap_or(false)
 }
@@ -688,6 +772,8 @@ fn app_commercial_operating_dashboard_gate_json(app: &Value) -> Value {
         "seller_completion_quality_percent": dashboard.and_then(|dashboard| dashboard.get("seller_completion_quality_percent")).and_then(Value::as_i64).unwrap_or(0),
         "buyer_repeat_order_count": dashboard.and_then(|dashboard| dashboard.get("buyer_repeat_order_count")).and_then(Value::as_i64).unwrap_or(0),
         "dispute_refund_reopen_count": dashboard.and_then(|dashboard| dashboard.get("dispute_refund_reopen_count")).and_then(Value::as_i64).unwrap_or(0),
+        "route_recommendation_policy_contract_version": dashboard.and_then(|dashboard| dashboard.get("route_recommendation_policy")).and_then(|policy| policy.get("contract_version")).and_then(Value::as_str),
+        "route_recommendation_policy_visible": dashboard.and_then(|dashboard| dashboard.get("route_recommendation_policy")).and_then(|policy| policy.get("ranking_weights")).and_then(Value::as_object).is_some(),
     })
 }
 
@@ -718,6 +804,14 @@ fn is_commercial_operating_dashboard_gate_green(gate: &Value) -> bool {
             .get("dispute_refund_reopen_count")
             .and_then(Value::as_i64)
             .is_some()
+        && gate
+            .get("route_recommendation_policy_contract_version")
+            .and_then(Value::as_str)
+            == Some("trillionnium_world_route_recommendation_policy_v1")
+        && gate
+            .get("route_recommendation_policy_visible")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
 }
 
 fn app_future_engine_readiness_gate_json(app: &Value) -> Value {
@@ -749,6 +843,9 @@ fn app_future_engine_readiness_gate_json(app: &Value) -> Value {
         "cohort_quality_precondition_visible": has_precondition("route_runner_cohort_quality_green"),
         "world_mobile_entry_parity_precondition_visible": has_precondition("world_mobile_entry_parity_green"),
         "semantic_map_layers_precondition_visible": has_precondition("semantic_map_layers_green"),
+        "shadow_renderer_precondition_visible": has_precondition("shadow_renderer_contract_green"),
+        "shadow_renderer_contract_version": future_engine_readiness.and_then(|readiness| readiness.get("shadow_renderer_contract")).and_then(|shadow| shadow.get("contract_version")).and_then(Value::as_str),
+        "shadow_renderer_status": future_engine_readiness.and_then(|readiness| readiness.get("shadow_renderer_contract")).and_then(|shadow| shadow.get("status")).and_then(Value::as_str),
         "rollback_plan_visible": future_engine_readiness.and_then(|readiness| readiness.get("rollback_plan")).and_then(|plan| plan.get("candidate_is_shadow_only")).and_then(Value::as_bool).unwrap_or(false),
         "promotion_blocker_count": future_engine_readiness.and_then(|readiness| readiness.get("promotion_blockers")).and_then(Value::as_array).map(Vec::len).unwrap_or(0),
     })
@@ -790,6 +887,16 @@ fn is_future_engine_readiness_gate_green(gate: &Value) -> bool {
             .get("semantic_map_layers_precondition_visible")
             .and_then(Value::as_bool)
             .unwrap_or(false)
+        && gate
+            .get("shadow_renderer_precondition_visible")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && gate
+            .get("shadow_renderer_contract_version")
+            .and_then(Value::as_str)
+            == Some("trillionnium_world_map_renderer_shadow_v1")
+        && gate.get("shadow_renderer_status").and_then(Value::as_str)
+            == Some("shadow_only_not_user_facing")
         && gate
             .get("rollback_plan_visible")
             .and_then(Value::as_bool)
