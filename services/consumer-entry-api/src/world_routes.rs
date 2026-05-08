@@ -1304,6 +1304,8 @@ async fn record_world_tactics_command(
             payload.unit_id.as_deref(),
             payload.target_tile.as_deref(),
             payload.skill_id.as_deref(),
+            payload.npc_id.as_deref(),
+            payload.task_archetype_id.as_deref(),
             payload.osm_game_overlay_id.as_deref(),
             now,
         );
@@ -1333,7 +1335,12 @@ async fn record_world_tactics_command(
                 command,
                 payload.unit_id.as_deref().unwrap_or("lord"),
                 payload.target_tile.as_deref().unwrap_or("none"),
-                payload.skill_id.as_deref().unwrap_or("none")
+                payload
+                    .skill_id
+                    .as_deref()
+                    .or(payload.npc_id.as_deref())
+                    .or(payload.task_archetype_id.as_deref())
+                    .unwrap_or("none")
             )
         });
         let event = WorldEvent {
@@ -1363,6 +1370,8 @@ async fn record_world_tactics_command(
                 to_id: payload
                     .skill_id
                     .clone()
+                    .or_else(|| payload.npc_id.clone())
+                    .or_else(|| payload.task_archetype_id.clone())
                     .or_else(|| payload.unit_id.clone())
                     .unwrap_or_else(|| "lord".to_string()),
                 relation_kind: format!("tactics_{command}"),
@@ -1526,6 +1535,8 @@ pub(super) async fn post_world_web_tactics_command(
         unit_id: payload.unit_id,
         target_tile: payload.target_tile,
         skill_id: payload.skill_id,
+        npc_id: payload.npc_id,
+        task_archetype_id: payload.task_archetype_id,
         osm_game_overlay_id: payload.osm_game_overlay_id,
         body: payload.body,
     };

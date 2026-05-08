@@ -362,8 +362,8 @@ Initial Trillionnium sect/faction examples:
 Progress tree hooks:
 
 - [x] TW-3.5d Add sect/faction model: id, title ladder, mentor NPCs, entry requirements, benefits.
-- [ ] TW-3.5e Bind sect halls to OSM objectives/POIs through `game_overlay_id`.
-- [ ] TW-3.5f Add mentor training task flow and Rust validation.
+- [x] TW-3.5e Bind sect halls to OSM objectives/POIs through `game_overlay_id`.
+- [x] TW-3.5f Add mentor training task flow and Rust validation.
 
 #### NPC society
 
@@ -388,8 +388,8 @@ struct JianghuNpc {
 Progress tree hooks:
 
 - [x] TW-3.5g Add NPC model and fixture NPCs.
-- [ ] TW-3.5h Bind NPC spawn/anchor to OSM features.
-- [ ] TW-3.5i Add talk/training/task-offer command descriptors in projection JSON.
+- [x] TW-3.5h Bind NPC spawn/anchor to OSM features.
+- [x] TW-3.5i Add talk/training/task-offer command descriptors in projection JSON.
 
 #### Tasks / quests
 
@@ -407,8 +407,8 @@ Initial task archetypes:
 
 Progress tree hooks:
 
-- [ ] TW-3.6a Add Jianghu task archetype enum.
-- [ ] TW-3.6b Generate task candidates from OSM provider semantic roles.
+- [x] TW-3.6a Add Jianghu task archetype enum.
+- [x] TW-3.6b Generate task candidates from OSM provider semantic roles.
 - [ ] TW-3.6c Bind task completion to Rust command handlers, not browser state.
 - [ ] TW-3.6d Route eligible rewards through ledger/review-hold/anti-cheese gates.
 
@@ -654,14 +654,14 @@ git log --oneline -5
 - [x] TW-3.5c Bind skills to tactics actions and world task effects.
   - First binding is in tactics command descriptors via `required_skill_id`; world task effects are recorded on skill definitions for follow-up handler enforcement.
 - [x] TW-3.5d Add sect/faction model and title ladder.
-- [ ] TW-3.5e Bind sect halls/mentor anchors to OSM `game_overlay_id`.
-- [ ] TW-3.5f Add mentor training task flow.
+- [x] TW-3.5e Bind sect halls/mentor anchors to OSM `game_overlay_id`.
+- [x] TW-3.5f Add mentor training task flow.
 - [x] TW-3.5g Add NPC model and fixture NPCs.
-- [ ] TW-3.5h Bind NPC spawn/anchor to OSM features.
-- [ ] TW-3.5i Add talk/training/task-offer command descriptors in projection JSON.
-- [ ] TW-3.6 Define text battle/task log style without copying original content.
-- [ ] TW-3.6a Add Jianghu task archetype enum.
-- [ ] TW-3.6b Generate task candidates from OSM provider semantic roles.
+- [x] TW-3.5h Bind NPC spawn/anchor to OSM features.
+- [x] TW-3.5i Add talk/training/task-offer command descriptors in projection JSON.
+- [x] TW-3.6 Define text battle/task log style without copying original content.
+- [x] TW-3.6a Add Jianghu task archetype enum.
+- [x] TW-3.6b Generate task candidates from OSM provider semantic roles.
 - [ ] TW-3.6c Bind task completion to Rust command handlers, not browser state.
 - [ ] TW-3.6d Route eligible rewards through ledger/review-hold/anti-cheese gates.
 - [ ] TW-3.6e Add combat log generator with original Trillionnium templates.
@@ -839,7 +839,7 @@ Expected first-slice deliverables:
 
 #### Update 2026-05-08 20:1x CST
 
-- Commit: pending until final validation completes.
+- Commit: `b6243f4 feat: wire trillionnium world tactics commands`
 - Completed next full-dev slice:
   - [x] TW-1.9 `openstreetmap_derived_database_metadata_v1`: fixture source, stable import epoch, transform version, derived snapshot id, feature counts, and ODbL/share-alike tracking note.
   - [x] TW-1.10 `openstreetmap_provider_mode_v1`: `fixture` enabled; `overpass_bbox_cache`, `geofabrik_extract_import`, `vendor_tile_cache`, and unknown modes fail closed with network ingestion disabled.
@@ -853,8 +853,28 @@ Expected first-slice deliverables:
   - local-production restart required restarting the project compose Postgres service; after restart, Web E2E green at `run/league-web/web-e2e-summary-1778259366.json`.
   - `CEX_ENV_FILE=run/local-production/.env scripts/check-production-readiness.sh` green: `READY production readiness smoke passed`.
 - Remaining next:
-  - [ ] TW-3.5e/f/h/i bind sect halls, mentor training task flow, NPC anchors, and talk/training/task-offer descriptors more deeply.
-  - [ ] TW-3.6+ Jianghu task archetypes and native battle/task log style.
+  - [x] TW-3.5e/f/h/i bind sect halls, mentor training task flow, NPC anchors, and talk/training/task-offer descriptors more deeply.
+  - [x] TW-3.6+ Jianghu task archetypes and native battle/task log style.
+
+#### Update 2026-05-09 01:2x CST
+
+- Commit: this checkpoint (`feat: bind jianghu npc tasks to osm`).
+- Completed next full-dev slice:
+  - [x] TW-3.5e `trillionnium_jianghu_sect_osm_binding_v1`: sect halls now carry explicit OSM anchor bindings, overlay IDs, feature IDs, OSM IDs/types, and fail-closed missing-anchor metadata.
+  - [x] TW-3.5f `trillionnium_jianghu_mentor_training_task_v1`: mentor training now projects task flows with travel/talk/submit/Rust-validate/mutate/record steps, and `train_skill` outcomes include task-flow evidence.
+  - [x] TW-3.5h `trillionnium_jianghu_npc_spawn_anchor_v1`: NPC fixtures now expose spawn anchors tied to OSM semantic-role features.
+  - [x] TW-3.5i `trillionnium_jianghu_npc_command_descriptor_v1`: NPC talk/train/task-offer command descriptors are projected, and `/v1/world/tactics/command` validates `talk_npc` / `offer_task` intents in Rust.
+  - [x] TW-3.6 / TW-3.6a / TW-3.6b: added Trillionnium-native Jianghu task archetypes, OSM-generated task candidates, and `trillionnium_jianghu_battle_log_style_v1` for native battle/task log text.
+- Validation so far:
+  - `cargo fmt --all -- --check`, `git diff --check`, and `bash -n scripts/check-trillionnium-league-web-e2e.sh` green.
+  - `cargo test -p consumer-entry-api world_tactics -- --nocapture` green (`2 passed`).
+  - `cargo test -p consumer-entry-api -- --nocapture` green (`132 passed`).
+  - local-production runtime restarted with `CEX_ENV_FILE=run/local-production/.env scripts/runtime-manager-linux.sh restart`.
+  - Web E2E green at `run/league-web/web-e2e-summary-1778260813.json`.
+  - `CEX_ENV_FILE=run/local-production/.env scripts/check-production-readiness.sh` green: `READY production readiness smoke passed`.
+- Remaining next:
+  - [ ] TW-3.6c/d bind task completion/rewards to Rust command handlers and ledger/review-hold gates.
+  - [ ] TW-3.7+ deepen deterministic tactics combat resolution and NPC relationship persistence.
 
 ---
 
@@ -919,6 +939,6 @@ Also append a one-paragraph summary to `/home/qian/.openclaw/workspace/memory/YY
 
 If the next instruction is simply “continue”, start here:
 
-> **TW-3.5e/f/h/i + TW-3.6+:** deepen sect hall / mentor / NPC OSM bindings, add mentor training task flow and talk/training/task-offer command descriptors, then define Trillionnium-native Jianghu task archetypes and battle/task log style.
+> **TW-3.6c/d + TW-3.7+:** bind generated Jianghu task completion and rewards to Rust command handlers / ledger / review-hold gates, then deepen deterministic tactics combat resolution and NPC relationship persistence.
 
 Do not start live Overpass/Geofabrik ingestion yet. Do not promote MapLibre. Do not convert the web shell into a standalone JS source of truth.

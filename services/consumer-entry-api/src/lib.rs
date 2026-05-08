@@ -1912,6 +1912,8 @@ struct WorldTacticsCommandRequest {
     unit_id: Option<String>,
     target_tile: Option<String>,
     skill_id: Option<String>,
+    npc_id: Option<String>,
+    task_archetype_id: Option<String>,
     osm_game_overlay_id: Option<String>,
     body: Option<String>,
 }
@@ -1924,6 +1926,8 @@ struct WorldWebTacticsCommandRequest {
     unit_id: Option<String>,
     target_tile: Option<String>,
     skill_id: Option<String>,
+    npc_id: Option<String>,
+    task_archetype_id: Option<String>,
     osm_game_overlay_id: Option<String>,
     body: Option<String>,
 }

@@ -2345,6 +2345,30 @@ fn world_tactics_projection_binds_jianghu_state_to_osm_objectives() {
         "trillionnium_jianghu_npc_v1"
     );
     assert_eq!(
+        tactics["jianghu_sect_osm_binding_contract_version"],
+        "trillionnium_jianghu_sect_osm_binding_v1"
+    );
+    assert_eq!(
+        tactics["jianghu_npc_spawn_contract_version"],
+        "trillionnium_jianghu_npc_spawn_anchor_v1"
+    );
+    assert_eq!(
+        tactics["jianghu_npc_command_descriptor_contract_version"],
+        "trillionnium_jianghu_npc_command_descriptor_v1"
+    );
+    assert_eq!(
+        tactics["mentor_training_task_contract_version"],
+        "trillionnium_jianghu_mentor_training_task_v1"
+    );
+    assert_eq!(
+        tactics["jianghu_task_archetype_contract_version"],
+        "trillionnium_jianghu_task_archetype_v1"
+    );
+    assert_eq!(
+        tactics["jianghu_battle_log_style_contract_version"],
+        "trillionnium_jianghu_battle_log_style_v1"
+    );
+    assert_eq!(
         tactics["open_source_base"]["repo"],
         "tranchikhang/MedievalWar"
     );
@@ -2383,6 +2407,18 @@ fn world_tactics_projection_binds_jianghu_state_to_osm_objectives() {
         .iter()
         .any(|command| command["command"] == "train_skill"
             && command["validation_owner"] == "rust_mentor_training_validator"));
+    assert!(tactics["available_commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|command| command["command"] == "talk_npc"
+            && command["validation_owner"] == "rust_jianghu_npc_interaction_validator"));
+    assert!(tactics["available_commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|command| command["command"] == "offer_task"
+            && command["validation_owner"] == "rust_jianghu_task_offer_validator"));
     assert_eq!(
         tactics["turn_state"]["source_of_truth"],
         "rust_tactics_turn_handler"
@@ -2450,6 +2486,10 @@ fn world_tactics_projection_binds_jianghu_state_to_osm_objectives() {
         .iter()
         .any(|sect| sect["sect_id"] == "cloud-ledger-hall"
             && sect["contract_version"] == "trillionnium_jianghu_sect_v1"
+            && sect["osm_anchor_binding"]["contract_version"]
+                == "trillionnium_jianghu_sect_osm_binding_v1"
+            && sect["osm_anchor_binding"]["source_of_truth"]
+                == "rust_openstreetmap_data_provider"
             && sect["title_ladder"].as_array().unwrap().len() >= 3));
     assert!(tactics["npcs"]
         .as_array()
@@ -2457,11 +2497,61 @@ fn world_tactics_projection_binds_jianghu_state_to_osm_objectives() {
         .iter()
         .any(|npc| npc["npc_id"] == "npc-street-compass-sifu"
             && npc["contract_version"] == "trillionnium_jianghu_npc_v1"
+            && npc["spawn_anchor"]["contract_version"]
+                == "trillionnium_jianghu_npc_spawn_anchor_v1"
             && npc["command_descriptors"]
                 .as_array()
                 .unwrap()
                 .iter()
-                .any(|descriptor| descriptor == "train_skill")));
+                .any(|descriptor| descriptor["command"] == "train_skill"
+                    && descriptor["contract_version"]
+                        == "trillionnium_jianghu_npc_command_descriptor_v1")));
+    assert!(tactics["npc_spawn_anchors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|anchor| anchor["binding_kind"] == "npc_spawn"
+            && anchor["osm_game_overlay_id"]
+                .as_str()
+                .unwrap_or_default()
+                .starts_with("trillionnium-world-node:")));
+    assert!(tactics["npc_command_descriptors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|descriptor| descriptor["command"] == "offer_task"
+            && descriptor["validation_owner"] == "rust_jianghu_task_offer_validator"));
+    assert!(tactics["mentor_training_task_flows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|flow| flow["skill_id"] == "basic_unarmed"
+            && flow["contract_version"] == "trillionnium_jianghu_mentor_training_task_v1"
+            && flow["steps"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|step| step == "rust_validate_skill_mentor_place_cost_cooldown")));
+    assert!(tactics["task_archetypes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|task| task["task_archetype_id"] == "sect_training_trial"
+            && task["contract_version"] == "trillionnium_jianghu_task_archetype_v1"));
+    assert!(tactics["task_candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|candidate| candidate["task_archetype_id"] == "market_settlement"));
+    assert_eq!(
+        tactics["battle_log_style"]["contract_version"],
+        "trillionnium_jianghu_battle_log_style_v1"
+    );
+    assert!(tactics["battle_log"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|entry| entry["style_contract"] == "trillionnium_jianghu_battle_log_style_v1"));
     assert_eq!(
         tactics["npc_relationship_model"]["source_of_truth"],
         "rust_jianghu_npc_model"
@@ -2526,6 +2616,59 @@ async fn world_tactics_command_endpoint_validates_training_place_and_mutates_cha
         "rust_mentor_training_validator"
     );
 
+    let (wrong_npc_status, wrong_npc) = send_json_request(
+        &app,
+        "POST",
+        "/v1/world/tactics/command",
+        &[],
+        json!({
+            "matrix_user_id": "@alice:local.dev",
+            "room_id": "!world:local.dev",
+            "command": "talk_npc",
+            "unit_id": "lord",
+            "target_tile": "G8",
+            "npc_id": "npc-street-compass-sifu",
+            "osm_game_overlay_id": "trillionnium-world-node:starter-studio",
+            "body": "try talking to the mentor at the wrong OSM anchor"
+        }),
+    )
+    .await;
+    assert_eq!(wrong_npc_status, StatusCode::OK);
+    assert_eq!(wrong_npc["outcome"]["accepted"], false);
+    assert_eq!(wrong_npc["outcome"]["result"], "npc_place_mismatch");
+    assert_eq!(
+        wrong_npc["outcome"]["source_of_truth"],
+        "rust_jianghu_npc_interaction_validator"
+    );
+
+    let (task_status, task_offer) = send_json_request(
+        &app,
+        "POST",
+        "/v1/world/tactics/command",
+        &[],
+        json!({
+            "matrix_user_id": "@alice:local.dev",
+            "room_id": "!world:local.dev",
+            "command": "offer_task",
+            "unit_id": "lord",
+            "target_tile": "G8",
+            "npc_id": "npc-street-compass-sifu",
+            "task_archetype_id": "courier_letter",
+            "osm_game_overlay_id": "trillionnium-world-node:mirror-city-square",
+            "body": "ask Compass Sifu Luo for a local courier task"
+        }),
+    )
+    .await;
+    assert_eq!(task_status, StatusCode::OK);
+    assert_eq!(task_offer["outcome"]["accepted"], true);
+    assert_eq!(task_offer["outcome"]["result"], "task_offer_recorded");
+    assert_eq!(task_offer["outcome"]["npc_id"], "npc-street-compass-sifu");
+    assert_eq!(task_offer["outcome"]["task_archetype_id"], "courier_letter");
+    assert_eq!(
+        task_offer["outcome"]["task_archetype_contract_version"],
+        "trillionnium_jianghu_task_archetype_v1"
+    );
+
     let guard = state.inner.league_state.lock().await;
     let character = world_jianghu_character_projection_json(&guard.world, "@alice:local.dev");
     assert!(character["skill_ids"]
@@ -2533,7 +2676,7 @@ async fn world_tactics_command_endpoint_validates_training_place_and_mutates_cha
         .unwrap()
         .iter()
         .any(|skill_id| skill_id == "basic_unarmed"));
-    assert_eq!(character["title"], "得授新艺");
+    assert_eq!(character["title"], "受领江湖任务");
 }
 
 #[test]
@@ -3410,14 +3553,27 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(world_html.contains("trillionnium_jianghu_training_command_v1"));
     assert!(world_html.contains("trillionnium_jianghu_sect_v1"));
     assert!(world_html.contains("trillionnium_jianghu_npc_v1"));
+    assert!(world_html.contains("trillionnium_jianghu_sect_osm_binding_v1"));
+    assert!(world_html.contains("trillionnium_jianghu_npc_spawn_anchor_v1"));
+    assert!(world_html.contains("trillionnium_jianghu_npc_command_descriptor_v1"));
+    assert!(world_html.contains("trillionnium_jianghu_mentor_training_task_v1"));
+    assert!(world_html.contains("trillionnium_jianghu_task_archetype_v1"));
+    assert!(world_html.contains("trillionnium_jianghu_battle_log_style_v1"));
     assert!(world_html.contains("/world/web/tactics-command"));
     assert!(world_html.contains("/v1/world/tactics/command"));
     assert!(world_html.contains("rust_mentor_training_validator"));
     assert!(world_html.contains("rust_mentor_training_command_model"));
     assert!(world_html.contains("rust_jianghu_sect_model"));
     assert!(world_html.contains("rust_jianghu_npc_model"));
+    assert!(world_html.contains("rust_jianghu_npc_interaction_validator"));
+    assert!(world_html.contains("rust_jianghu_task_offer_validator"));
     assert!(world_html.contains("导师修炼"));
     assert!(world_html.contains("npc-street-compass-sifu"));
+    assert!(world_html.contains("name=\"npc_id\""));
+    assert!(world_html.contains("name=\"task_archetype_id\""));
+    assert!(world_html.contains("talk_npc"));
+    assert!(world_html.contains("offer_task"));
+    assert!(world_html.contains("courier_letter"));
     assert!(world_html.contains("data-source-of-truth=\"rust_trillionnium_game_state\""));
     assert!(world_html.contains("data-interface-style=\"turn_based_strategy_rpg\""));
     assert!(world_html.contains("data-open-source-base=\"tranchikhang/MedievalWar\""));
