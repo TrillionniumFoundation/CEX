@@ -402,8 +402,12 @@ async function main() {
   const appViewportDeltaCache = appViewport?.transport_delta_contract?.entity_delta_cache || {};
   assert(appViewport?.viewport_api?.not_modified_304_supported === true || appViewportDeltaCache?.not_modified_304_compatible === true, 'viewport API 304 support missing from client app json', { viewport_api: appViewport?.viewport_api, entity_delta_cache: appViewportDeltaCache });
   assert(appViewport?.viewport_api?.entity_delta_cache_contract === 'entity_group_versioned_delta_v1' || appViewportDeltaCache?.mode === 'entity_group_versioned_delta_v1', 'viewport entity delta cache contract missing from client app json', { viewport_api: appViewport?.viewport_api, entity_delta_cache: appViewportDeltaCache });
+  assert(appViewportDeltaCache?.changed_group_rendering_required === true && appViewportDeltaCache?.visible_marker_delta_required === true && appViewportDeltaCache?.marker_cluster_delta_required === true, 'viewport changed-group marker/cluster delta contract missing from client app json', appViewportDeltaCache);
+  assert(Array.isArray(appViewport?.marker_clusters) && appViewport.marker_clusters.length >= 1, 'viewport marker clusters missing from client app json', appViewport?.marker_clusters);
+  assert(appViewport?.runtime_performance_budget?.degrade_strategy?.abort_previous_viewport_request === true && appViewport?.runtime_performance_budget?.degrade_strategy?.defer_noncritical_card_render === true && appViewport?.runtime_performance_budget?.degrade_strategy?.cluster_markers_before_hiding === true, 'viewport runtime P0/P1/P2 degrade strategy missing', appViewport?.runtime_performance_budget?.degrade_strategy);
   assert(appViewport?.viewport_contract?.supports_location_privacy === true, 'viewport location privacy readiness missing', appViewport?.viewport_contract);
   assert(appViewport?.viewport_contract?.supports_weak_network_resilience === true, 'viewport weak-network readiness missing', appViewport?.viewport_contract);
+  assert(appViewport?.viewport_contract?.supports_visible_marker_delta === true && appViewport?.viewport_contract?.supports_marker_clusters === true, 'viewport marker delta/cluster readiness missing', appViewport?.viewport_contract);
   for (const selector of [
     '#app-map-rum-slo[data-contract-version="trillionnium_world_map_rum_slo_v1"][data-quantiles="p50,p95,p99"][data-surface-split="app,world"][data-device-split="mobile,desktop"]',
     '#app-map-weak-network[data-contract-version="trillionnium_world_map_weak_network_resilience_v1"][data-cache-key="trillionnium-world-map:last-good-viewport:v1"][data-delta-304-supported="true"]',
@@ -434,6 +438,8 @@ async function main() {
   assert(runtimeDiagnostics?.cache_key?.includes('trillionnium-world-map:last-good-viewport:v1'), 'map runtime diagnostics cache key missing', runtimeDiagnostics);
   assert(runtimeDiagnostics?.cache_shape === 'slim_last_good_viewport_snapshot_v1' && runtimeDiagnostics?.cache_store_ok === true, 'map runtime weak-network cache must store slim last-good snapshot', runtimeDiagnostics);
   assert(runtimeDiagnostics?.shadow_probe_exported === true, 'map runtime diagnostics shadow probe missing', runtimeDiagnostics);
+  assert(runtimeDiagnostics?.changed_group_deferred_render_available === true && runtimeDiagnostics?.rum_focus_action_observer_installed === true, 'map runtime changed-group/focus RUM diagnostics missing', runtimeDiagnostics);
+  assert(typeof runtimeDiagnostics?.viewport_abort_count === 'number' && runtimeDiagnostics?.marker_cluster_count >= 1, 'map runtime abort/cluster diagnostics missing', runtimeDiagnostics);
   const rumLastSample = await page.evaluate(() => window.trillionniumMapRumLastSample);
   assert(rumLastSample?.precise_lat_lng_excluded === true && !('lat' in rumLastSample) && !('lng' in rumLastSample), 'browser RUM diagnostic must exclude precise lat/lng', rumLastSample);
   const deltaTemplate = appViewport?.viewport_api?.web_session_delta_path_template || '/world/web/map-delta?lat={lat}&lng={lng}&zoom={zoom}&radius_km={radius_km}&limit={limit}&cursor={cursor}';
@@ -449,9 +455,9 @@ async function main() {
     const first = await fetch(deltaUrl, { credentials: 'same-origin', cache: 'no-store' });
     const etag = first.headers.get('etag');
     const second = await fetch(deltaUrl, { credentials: 'same-origin', cache: 'no-store', headers: etag ? { 'if-none-match': etag, 'x-trillionnium-map-if-none-match': etag } : {} });
-    return { first_status: first.status, etag, second_status: second.status };
+    return { first_status: first.status, etag, server_timing: first.headers.get('server-timing'), server_ms: first.headers.get('x-trillionnium-world-map-server-ms'), second_status: second.status };
   }, { deltaUrl });
-  assert(deltaNotModifiedProbe.first_status === 200 && Boolean(deltaNotModifiedProbe.etag) && deltaNotModifiedProbe.second_status === 304, 'browser map delta 304 contract failed', deltaNotModifiedProbe);
+  assert(deltaNotModifiedProbe.first_status === 200 && Boolean(deltaNotModifiedProbe.etag) && Boolean(deltaNotModifiedProbe.server_timing) && Boolean(deltaNotModifiedProbe.server_ms) && deltaNotModifiedProbe.second_status === 304, 'browser map delta 304/server timing contract failed', deltaNotModifiedProbe);
   await page.route('**/world/web/map-delta**', (route) => route.abort('failed'));
   await page.route('**/world/web/map-viewport**', (route) => route.abort('failed'));
   const weakNetworkFallback = await page.evaluate(async () => {

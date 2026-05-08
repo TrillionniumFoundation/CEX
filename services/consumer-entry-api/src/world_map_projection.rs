@@ -1763,6 +1763,106 @@ pub(super) fn world_map_visible_tile_shards_json(
     shards
 }
 
+pub(super) fn world_map_marker_clusters_json(
+    center_lat: f64,
+    center_lng: f64,
+    zoom: i64,
+    visible_markers: &[Value],
+) -> Vec<Value> {
+    let cluster_zoom = if zoom >= 14 { zoom } else { (zoom + 2).min(14) };
+    let mut buckets: HashMap<(i64, i64, i64), Vec<&Value>> = HashMap::new();
+    for marker in visible_markers {
+        let marker_lat = marker
+            .get("lat")
+            .and_then(Value::as_f64)
+            .unwrap_or(center_lat);
+        let marker_lng = marker
+            .get("lng")
+            .and_then(Value::as_f64)
+            .unwrap_or(center_lng);
+        let (x, y, z) = world_map_tile_coord(marker_lat, marker_lng, cluster_zoom);
+        buckets.entry((x, y, z)).or_default().push(marker);
+    }
+
+    let mut clusters = buckets
+        .into_iter()
+        .map(|((x, y, z), markers)| {
+            let marker_count = markers.len();
+            let mut lat_sum = 0.0;
+            let mut lng_sum = 0.0;
+            let mut marker_ids = Vec::new();
+            let mut primary_node_kind = "poi".to_string();
+            for marker in markers {
+                let marker_lat = marker
+                    .get("lat")
+                    .and_then(Value::as_f64)
+                    .unwrap_or(center_lat);
+                let marker_lng = marker
+                    .get("lng")
+                    .and_then(Value::as_f64)
+                    .unwrap_or(center_lng);
+                lat_sum += marker_lat;
+                lng_sum += marker_lng;
+                if let Some(node_id) = marker.get("node_id").and_then(Value::as_str) {
+                    marker_ids.push(node_id.to_string());
+                }
+                if primary_node_kind == "poi" {
+                    if let Some(kind) = marker.get("node_kind").and_then(Value::as_str) {
+                        primary_node_kind = kind.to_string();
+                    }
+                }
+            }
+            marker_ids.sort();
+            marker_ids.truncate(8);
+            let divisor = marker_count.max(1) as f64;
+            json!({
+                "cluster_id": format!("cluster-z{z}-x{x}-y{y}"),
+                "tile_id": format!("osm-z{z}-x{x}-y{y}"),
+                "z": z,
+                "x": x,
+                "y": y,
+                "quadkey": world_map_quadkey(x, y, z),
+                "lod_mode": world_map_lod_mode(zoom),
+                "marker_count": marker_count,
+                "node_ids": marker_ids,
+                "primary_node_kind": primary_node_kind,
+                "center": {
+                    "lat": (lat_sum / divisor * 1_000_000.0).round() / 1_000_000.0,
+                    "lng": (lng_sum / divisor * 1_000_000.0).round() / 1_000_000.0,
+                },
+                "distance_km": (geo_distance_km(center_lat, center_lng, lat_sum / divisor, lng_sum / divisor) * 10.0).round() / 10.0,
+                "render_policy": if marker_count > 1 { "aggregate_marker_cluster" } else { "single_marker_cluster" },
+                "primary_action": if marker_count > 1 { "zoom_or_filter_cluster" } else { "focus_marker" },
+            })
+        })
+        .collect::<Vec<_>>();
+    clusters.sort_by(|left, right| {
+        right
+            .get("marker_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            .cmp(
+                &left
+                    .get("marker_count")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0),
+            )
+            .then_with(|| {
+                left.get("cluster_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .cmp(
+                        right
+                            .get("cluster_id")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default(),
+                    )
+            })
+    });
+    clusters.truncate(8);
+    clusters
+}
+
 pub(super) fn geo_distance_km(from_lat: f64, from_lng: f64, to_lat: f64, to_lng: f64) -> f64 {
     let earth_radius_km = 6371.0;
     let delta_lat = (to_lat - from_lat).to_radians();
@@ -2259,6 +2359,27 @@ fn world_map_entity_group_payloads(viewport: &Value) -> Vec<(&'static str, Value
                 .unwrap_or_else(|| json!([])),
         ),
         (
+            "visible_markers",
+            viewport
+                .get("visible_markers")
+                .cloned()
+                .unwrap_or_else(|| json!([])),
+        ),
+        (
+            "poi_hotspots",
+            viewport
+                .get("poi_hotspots")
+                .cloned()
+                .unwrap_or_else(|| json!([])),
+        ),
+        (
+            "marker_clusters",
+            viewport
+                .get("marker_clusters")
+                .cloned()
+                .unwrap_or_else(|| json!([])),
+        ),
+        (
             "player_avatars",
             viewport
                 .get("player_avatars")
@@ -2480,6 +2601,7 @@ pub(super) fn world_map_delta_json(
         },
         "counts": {
             "marker_count": viewport.get("marker_count").and_then(Value::as_i64).unwrap_or(0),
+            "marker_cluster_count": viewport.get("marker_cluster_count").and_then(Value::as_i64).unwrap_or(0),
             "live_event_count": viewport.get("live_event_count").and_then(Value::as_i64).unwrap_or(0),
             "player_avatar_count": viewport.get("player_avatar_count").and_then(Value::as_i64).unwrap_or(0),
             "avatar_route_runner_count": viewport.get("avatar_route_runner_count").and_then(Value::as_i64).unwrap_or(0),
@@ -2491,6 +2613,8 @@ pub(super) fn world_map_delta_json(
             "cursor_compared_against_server_viewport_state",
             "presence_delta_payload_available",
             "route_runner_delta_payload_available",
+            "visible_marker_delta_payload_available",
+            "marker_cluster_delta_payload_available",
             "snapshot_fallback_path_available",
             "etag_emitted",
             "shadow_parity_attached",
@@ -2630,6 +2754,8 @@ pub(super) fn world_map_viewport_json(
     let tile_center = world_map_tile_json(center_lat, center_lng, zoom, "viewport_center");
     let visible_tile_shards =
         world_map_visible_tile_shards_json(center_lat, center_lng, zoom, &visible_markers);
+    let marker_clusters =
+        world_map_marker_clusters_json(center_lat, center_lng, zoom, &visible_markers);
     let player_density =
         world_map_player_density_summary_json(world, &active_region, &visible_markers, zoom);
     let player_avatars = world_map_player_avatars_json(world, matrix_user_id, &visible_markers);
@@ -2647,6 +2773,7 @@ pub(super) fn world_map_viewport_json(
     );
     let stream_region_count = stream_region_shards.len();
     let tile_shard_count = visible_tile_shards.len();
+    let marker_cluster_count = marker_clusters.len();
     let prefetch_count = prefetch_queue.len();
     let marker_count = visible_markers.len();
     let live_event_count = live_event_stream.len();
@@ -2660,6 +2787,7 @@ pub(super) fn world_map_viewport_json(
     let payload_object_count = marker_count
         + poi_hotspots.len()
         + live_event_count
+        + marker_cluster_count
         + player_avatar_count
         + avatar_task_route_count
         + avatar_route_runner_count
@@ -2724,6 +2852,9 @@ pub(super) fn world_map_viewport_json(
         "stream_region_shards": stream_region_shards.clone(),
         "visible_tile_shards": visible_tile_shards.clone(),
         "prefetch_queue": prefetch_queue.clone(),
+        "visible_markers": visible_markers.clone(),
+        "poi_hotspots": poi_hotspots.clone(),
+        "marker_clusters": marker_clusters.clone(),
         "player_avatars": player_avatars.clone(),
         "avatar_task_routes": avatar_task_routes.clone(),
         "avatar_route_runners": avatar_route_runners.clone(),
@@ -2745,6 +2876,7 @@ pub(super) fn world_map_viewport_json(
     let renderer_shadow_parity = trillionnium_world_map_renderer_shadow_parity_json(&json!({
         "delta_cursor": delta_cursor_preview,
         "visible_markers": visible_markers.clone(),
+        "marker_clusters": marker_clusters.clone(),
         "avatar_task_routes": avatar_task_routes.clone(),
         "avatar_route_runners": avatar_route_runners.clone(),
         "live_event_stream": live_event_stream.clone(),
@@ -2776,6 +2908,8 @@ pub(super) fn world_map_viewport_json(
         "prefetch_count": prefetch_count,
         "visible_markers": visible_markers,
         "marker_count": marker_count,
+        "marker_clusters": marker_clusters,
+        "marker_cluster_count": marker_cluster_count,
         "poi_hotspots": poi_hotspots,
         "player_density": player_density,
         "player_avatars": player_avatars,
@@ -2834,6 +2968,8 @@ pub(super) fn world_map_viewport_json(
             "supports_location_privacy": true,
             "location_privacy_contract_version": TRILLIONNIUM_WORLD_MAP_LOCATION_PRIVACY_CONTRACT_VERSION,
             "supports_entity_group_delta_versions": true,
+            "supports_visible_marker_delta": true,
+            "supports_marker_clusters": true,
             "supports_agent_party_state": true,
             "supports_agent_party_handoff_actions": true,
         }

@@ -922,6 +922,13 @@ fn app_world_map_runtime_safety_gate_json(app: &Value) -> Value {
     let viewport_api = viewport.and_then(|viewport| viewport.get("viewport_api"));
     let transport_delta_contract =
         viewport.and_then(|viewport| viewport.get("transport_delta_contract"));
+    let runtime_performance_budget = viewport
+        .and_then(|viewport| viewport.get("runtime_performance_budget"))
+        .or_else(|| {
+            viewport
+                .and_then(|viewport| viewport.get("map_readability_lod"))
+                .and_then(|lod| lod.get("runtime_performance_budget"))
+        });
     let rum_slo_contract = viewport
         .and_then(|viewport| viewport.get("rum_slo_contract"))
         .or_else(|| mobile_contract.and_then(|contract| contract.get("rum_slo_contract")));
@@ -946,6 +953,12 @@ fn app_world_map_runtime_safety_gate_json(app: &Value) -> Value {
         "personalized_map_cache_private": location_privacy_contract.and_then(|contract| contract.get("rules")).and_then(|rules| rules.get("viewport_cache_control")).and_then(Value::as_str) == Some("private") && location_privacy_contract.and_then(|contract| contract.get("rules")).and_then(|rules| rules.get("delta_cache_control")).and_then(Value::as_str) == Some("private"),
         "viewport_api_304_supported": viewport_api.and_then(|api| api.get("not_modified_304_supported")).and_then(Value::as_bool).or_else(|| transport_delta_contract.and_then(|contract| contract.get("entity_delta_cache")).and_then(|cache| cache.get("not_modified_304_compatible")).and_then(Value::as_bool)).unwrap_or(false),
         "entity_delta_cache_contract": viewport_api.and_then(|api| api.get("entity_delta_cache_contract")).and_then(Value::as_str).or_else(|| transport_delta_contract.and_then(|contract| contract.get("entity_delta_cache")).and_then(|cache| cache.get("mode")).and_then(Value::as_str)),
+        "changed_group_rendering_required": transport_delta_contract.and_then(|contract| contract.get("entity_delta_cache")).and_then(|cache| cache.get("changed_group_rendering_required")).and_then(Value::as_bool).unwrap_or(false),
+        "visible_marker_delta_required": transport_delta_contract.and_then(|contract| contract.get("entity_delta_cache")).and_then(|cache| cache.get("visible_marker_delta_required")).and_then(Value::as_bool).unwrap_or(false),
+        "marker_cluster_delta_required": transport_delta_contract.and_then(|contract| contract.get("entity_delta_cache")).and_then(|cache| cache.get("marker_cluster_delta_required")).and_then(Value::as_bool).unwrap_or(false),
+        "viewport_request_abort_visible": runtime_performance_budget.and_then(|budget| budget.get("degrade_strategy")).and_then(|strategy| strategy.get("abort_previous_viewport_request")).and_then(Value::as_bool).unwrap_or(false),
+        "deferred_card_render_visible": runtime_performance_budget.and_then(|budget| budget.get("degrade_strategy")).and_then(|strategy| strategy.get("defer_noncritical_card_render")).and_then(Value::as_bool).unwrap_or(false),
+        "marker_cluster_policy_visible": runtime_performance_budget.and_then(|budget| budget.get("degrade_strategy")).and_then(|strategy| strategy.get("cluster_markers_before_hiding")).and_then(Value::as_bool).unwrap_or(false),
     })
 }
 
@@ -1002,6 +1015,30 @@ fn is_world_map_runtime_safety_gate_green(gate: &Value) -> bool {
             .get("entity_delta_cache_contract")
             .and_then(Value::as_str)
             == Some("entity_group_versioned_delta_v1")
+        && gate
+            .get("changed_group_rendering_required")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && gate
+            .get("visible_marker_delta_required")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && gate
+            .get("marker_cluster_delta_required")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && gate
+            .get("viewport_request_abort_visible")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && gate
+            .get("deferred_card_render_visible")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && gate
+            .get("marker_cluster_policy_visible")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
 }
 
 fn world_map_rum_slo_gate_from_metrics(metrics_snapshot: &Value) -> Value {

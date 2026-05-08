@@ -373,6 +373,7 @@ pub(super) async fn get_world_map_viewport(
     let limit = query
         .get("limit")
         .and_then(|value| value.parse::<usize>().ok());
+    let started_at = std::time::Instant::now();
     let league = state.inner.league_state.lock().await;
     let viewport = world_map_viewport_json(
         &league.world,
@@ -383,14 +384,16 @@ pub(super) async fn get_world_map_viewport(
         radius_km,
         limit,
     );
-    json_resource_response(
+    let mut response = json_resource_response(
         viewport.clone(),
         "private, max-age=5, stale-while-revalidate=25",
         viewport
             .get("etag")
             .and_then(Value::as_str)
             .map(str::to_string),
-    )
+    );
+    add_world_map_server_timing_headers(&mut response, started_at, "viewport");
+    response
 }
 
 pub(super) async fn get_world_map_delta(
@@ -448,6 +451,7 @@ pub(super) async fn get_world_web_map_viewport(
     let limit = query
         .get("limit")
         .and_then(|value| value.parse::<usize>().ok());
+    let started_at = std::time::Instant::now();
     let league = state.inner.league_state.lock().await;
     let viewport = world_map_viewport_json(
         &league.world,
@@ -458,14 +462,16 @@ pub(super) async fn get_world_web_map_viewport(
         radius_km,
         limit,
     );
-    json_resource_response(
+    let mut response = json_resource_response(
         viewport.clone(),
         "private, max-age=5, stale-while-revalidate=25",
         viewport
             .get("etag")
             .and_then(Value::as_str)
             .map(str::to_string),
-    )
+    );
+    add_world_map_server_timing_headers(&mut response, started_at, "web_viewport");
+    response
 }
 
 pub(super) async fn get_world_web_map_delta(
@@ -502,6 +508,7 @@ async fn world_map_delta_response(
     headers: &HeaderMap,
 ) -> Response {
     state.inner.metrics.inc_world_map_delta_requests();
+    let started_at = std::time::Instant::now();
     let lat = query.get("lat").and_then(|value| value.parse::<f64>().ok());
     let lng = query.get("lng").and_then(|value| value.parse::<f64>().ok());
     let zoom = query
@@ -557,14 +564,38 @@ async fn world_map_delta_response(
                 "private, max-age=3, stale-while-revalidate=15",
                 etag,
             );
+            add_world_map_server_timing_headers(&mut response, started_at, "delta_304");
             return response;
         }
     }
-    json_resource_response(
+    let mut response = json_resource_response(
         delta.clone(),
         "private, max-age=3, stale-while-revalidate=15",
         etag,
-    )
+    );
+    add_world_map_server_timing_headers(&mut response, started_at, "delta");
+    response
+}
+
+fn add_world_map_server_timing_headers(
+    response: &mut Response,
+    started_at: std::time::Instant,
+    phase: &'static str,
+) {
+    let elapsed_ms = started_at.elapsed().as_secs_f64() * 1000.0;
+    if let Ok(value) = HeaderValue::from_str(&format!("{elapsed_ms:.0}")) {
+        response.headers_mut().insert(
+            HeaderName::from_static("x-trillionnium-world-map-server-ms"),
+            value,
+        );
+    }
+    if let Ok(value) = HeaderValue::from_str(&format!(
+        "trillionnium-world-map-{phase};dur={elapsed_ms:.1}"
+    )) {
+        response
+            .headers_mut()
+            .insert(HeaderName::from_static("server-timing"), value);
+    }
 }
 
 pub(super) async fn post_world_map_rum(

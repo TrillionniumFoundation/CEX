@@ -174,12 +174,18 @@ function checkMobile(result, limits) {
     assertMetric(Number(perf.viewportRefreshP95TargetMs || 0) <= 250, `${result.profile}/app viewport refresh budget drifted`, perf);
     assertMetric(Number(perf.focusToActionRailTargetMs || 0) <= 300, `${result.profile}/app focus-to-action budget drifted`, perf);
     assertMetric(String(perf.deltaViewportUpdatesRequired) === 'true', `${result.profile}/app delta viewport requirement missing`, perf);
+    assertMetric(String(perf.abortPreviousViewportRequest) === 'true', `${result.profile}/app stale viewport abort requirement missing`, perf);
+    assertMetric(String(perf.deferNoncriticalCardRender) === 'true', `${result.profile}/app deferred card render requirement missing`, perf);
+    assertMetric(String(perf.clusterMarkersBeforeHiding) === 'true', `${result.profile}/app marker cluster density policy missing`, perf);
     const transport = result.mapTransportDelta || {};
     assertMetric(transport.present === true, `${result.profile}/app map transport delta contract missing`, transport);
     assertMetric(transport.contractVersion === 'trillionnium_world_map_transport_delta_v1', `${result.profile}/app map transport delta version missing`, transport);
     assertMetric(transport.subsystemContract === 'trillionnium_world_map_subsystem_v1', `${result.profile}/app map subsystem contract missing`, transport);
     assertMetric(String(transport.presenceDeltaRequired) === 'true', `${result.profile}/app presence delta requirement missing`, transport);
     assertMetric(String(transport.snapshotFallbackRequired) === 'true', `${result.profile}/app snapshot fallback requirement missing`, transport);
+    assertMetric(String(transport.changedGroupRenderingRequired) === 'true', `${result.profile}/app changed-group rendering requirement missing`, transport);
+    assertMetric(String(transport.visibleMarkerDeltaRequired) === 'true', `${result.profile}/app visible-marker delta requirement missing`, transport);
+    assertMetric(String(transport.markerClusterDeltaRequired) === 'true', `${result.profile}/app marker-cluster delta requirement missing`, transport);
     const rumSlo = result.mapRumSlo || {};
     assertMetric(rumSlo.present === true, `${result.profile}/app map RUM SLO contract missing`, rumSlo);
     assertMetric(rumSlo.contractVersion === 'trillionnium_world_map_rum_slo_v1', `${result.profile}/app map RUM SLO contract version missing`, rumSlo);
@@ -233,11 +239,17 @@ function checkMobile(result, limits) {
     assertMetric(perf.contractVersion === 'trillionnium_world_map_runtime_performance_budget_v1', `${result.profile}/world map performance budget contract missing`, perf);
     assertMetric(Number(perf.focusToActionRailTargetMs || 0) <= 300, `${result.profile}/world focus-to-action budget drifted`, perf);
     assertMetric(String(perf.deltaViewportUpdatesRequired) === 'true', `${result.profile}/world delta viewport requirement missing`, perf);
+    assertMetric(String(perf.abortPreviousViewportRequest) === 'true', `${result.profile}/world stale viewport abort requirement missing`, perf);
+    assertMetric(String(perf.deferNoncriticalCardRender) === 'true', `${result.profile}/world deferred card render requirement missing`, perf);
+    assertMetric(String(perf.clusterMarkersBeforeHiding) === 'true', `${result.profile}/world marker cluster density policy missing`, perf);
     const transport = result.mapTransportDelta || {};
     assertMetric(transport.contractVersion === 'trillionnium_world_map_transport_delta_v1', `${result.profile}/world map transport delta version missing`, transport);
     assertMetric(transport.subsystemContract === 'trillionnium_world_map_subsystem_v1', `${result.profile}/world map subsystem contract missing`, transport);
     assertMetric(transport.paritySource === 'app-map-transport-delta', `${result.profile}/world map transport must declare /app parity`, transport);
     assertMetric(String(transport.presenceDeltaRequired) === 'true', `${result.profile}/world presence delta requirement missing`, transport);
+    assertMetric(String(transport.changedGroupRenderingRequired) === 'true', `${result.profile}/world changed-group rendering requirement missing`, transport);
+    assertMetric(String(transport.visibleMarkerDeltaRequired) === 'true', `${result.profile}/world visible-marker delta requirement missing`, transport);
+    assertMetric(String(transport.markerClusterDeltaRequired) === 'true', `${result.profile}/world marker-cluster delta requirement missing`, transport);
     const rumSlo = result.mapRumSlo || {};
     assertMetric(rumSlo.contractVersion === 'trillionnium_world_map_rum_slo_v1', `${result.profile}/world map RUM SLO contract version missing`, rumSlo);
     assertMetric(rumSlo.paritySource === 'app-map-rum-slo', `${result.profile}/world map RUM SLO must declare /app parity`, rumSlo);
@@ -492,6 +504,9 @@ async function auditPage(page, profile, target) {
       mainThreadLongTaskBudgetMs: mapPerformanceBudgetElement?.dataset.mainThreadLongTaskBudgetMs || null,
       lowEndMobileFpsFloor: mapPerformanceBudgetElement?.dataset.lowEndMobileFpsFloor || null,
       deltaViewportUpdatesRequired: mapPerformanceBudgetElement?.dataset.deltaViewportUpdatesRequired || null,
+      abortPreviousViewportRequest: mapPerformanceBudgetElement?.dataset.abortPreviousViewportRequest || null,
+      deferNoncriticalCardRender: mapPerformanceBudgetElement?.dataset.deferNoncriticalCardRender || null,
+      clusterMarkersBeforeHiding: mapPerformanceBudgetElement?.dataset.clusterMarkersBeforeHiding || null,
       text: text(mapPerformanceBudgetElement).slice(0, 260),
     };
     const mapTransportDelta = {
@@ -500,6 +515,9 @@ async function auditPage(page, profile, target) {
       subsystemContract: mapTransportDeltaElement?.dataset.subsystemContract || null,
       presenceDeltaRequired: mapTransportDeltaElement?.dataset.presenceDeltaRequired || null,
       snapshotFallbackRequired: mapTransportDeltaElement?.dataset.snapshotFallbackRequired || null,
+      changedGroupRenderingRequired: mapTransportDeltaElement?.dataset.changedGroupRenderingRequired || null,
+      visibleMarkerDeltaRequired: mapTransportDeltaElement?.dataset.visibleMarkerDeltaRequired || null,
+      markerClusterDeltaRequired: mapTransportDeltaElement?.dataset.markerClusterDeltaRequired || null,
       paritySource: mapTransportDeltaElement?.dataset.paritySource || null,
       text: text(mapTransportDeltaElement).slice(0, 260),
     };

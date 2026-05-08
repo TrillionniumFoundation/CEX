@@ -97,10 +97,14 @@ pub(super) fn trillionnium_world_map_runtime_performance_budget_json(
         },
         "degrade_strategy": {
             "delta_viewport_updates_required": true,
+            "abort_previous_viewport_request": true,
+            "defer_noncritical_card_render": true,
+            "changed_group_rendering_required": true,
+            "cluster_markers_before_hiding": true,
             "low_end_device_avatar_runner_cap": 3,
             "collapse_non_route_layers_first": true,
             "aggregate_extra_runners_into_pulse": true,
-            "render_order": ["active_route", "current_objective", "reward_checkpoint", "next_route_cta", "live_event_pulses", "secondary_poi"]
+            "render_order": ["active_route", "current_objective", "reward_checkpoint", "next_route_cta", "marker_clusters", "live_event_pulses", "secondary_poi"]
         },
         "readiness_checks": [
             "first_interactive_budget_visible",
@@ -109,6 +113,9 @@ pub(super) fn trillionnium_world_map_runtime_performance_budget_json(
             "long_task_budget_visible",
             "low_end_mobile_floor_visible",
             "delta_update_requirement_visible",
+            "viewport_request_abort_visible",
+            "changed_group_rendering_visible",
+            "marker_cluster_policy_visible",
             "avatar_runner_degrade_strategy_visible",
             "rum_slo_quantiles_required"
         ]
@@ -370,6 +377,7 @@ pub(super) fn trillionnium_world_map_subsystem_contract_json() -> Value {
         ],
         "promotion_rules": [
             "optimize product loop before adding map density",
+            "keep viewport p95 raw split green before raising marker caps",
             "separate raw counts from bounded cohort decision metrics",
             "keep /app and /world map contracts in parity",
             "shadow MapLibre before live migration"
@@ -438,6 +446,9 @@ pub(super) fn trillionnium_world_map_transport_delta_contract_json(
         "entity_delta_cache": {
             "mode": "entity_group_versioned_delta_v1",
             "changed_groups_only": true,
+            "changed_group_rendering_required": true,
+            "visible_marker_delta_required": true,
+            "marker_cluster_delta_required": true,
             "cursor_carries_group_versions": true,
             "noop_keeps_cached_snapshot": true,
             "etag_required": true,
@@ -470,6 +481,8 @@ pub(super) fn trillionnium_world_map_transport_delta_contract_json(
             "payload_budget_visible",
             "transport_boundary_visible",
             "entity_group_versions_visible",
+            "visible_marker_delta_visible",
+            "marker_cluster_delta_visible",
             "etag_304_cache_compatible"
         ]
     })

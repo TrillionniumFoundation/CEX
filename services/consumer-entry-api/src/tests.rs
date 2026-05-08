@@ -3105,6 +3105,9 @@ async fn world_map_runtime_endpoints_expose_rum_delta_cache_and_mobile_ia_gates(
     assert!(app_body.contains("truncated_runtime_bootstrap_with_lazy_delta_hydration"));
     assert!(app_body.contains("buildViewportDeltaUrl"));
     assert!(app_body.contains("postMapRumSample"));
+    assert!(app_body.contains("AbortController"));
+    assert!(app_body.contains("changed_group_deferred_render"));
+    assert!(app_body.contains("focus_to_action_rail"));
     assert!(app_body.contains("trillionnium_world_map_rum_slo_v1"));
     assert!(app_body.contains("trillionnium_world_map_weak_network_resilience_v1"));
     assert!(app_body.contains("trillionnium_world_map_location_privacy_v1"));
@@ -3136,6 +3139,14 @@ async fn world_map_runtime_endpoints_expose_rum_delta_cache_and_mobile_ia_gates(
     assert_eq!(delta_status, StatusCode::OK);
     assert!(delta_headers.get("etag").is_some());
     assert!(delta_headers
+        .get("server-timing")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .contains("trillionnium-world-map-delta"));
+    assert!(delta_headers
+        .get("x-trillionnium-world-map-server-ms")
+        .is_some());
+    assert!(delta_headers
         .get("cache-control")
         .and_then(|value| value.to_str().ok())
         .unwrap_or_default()
@@ -3155,6 +3166,9 @@ async fn world_map_runtime_endpoints_expose_rum_delta_cache_and_mobile_ia_gates(
         .as_u64()
         .is_some_and(|count| count > 0));
     assert!(delta["delta"]["avatar_route_runners"].as_array().is_some());
+    assert!(delta["delta"]["visible_markers"].as_array().is_some());
+    assert!(delta["delta"]["marker_clusters"].as_array().is_some());
+    assert!(delta["counts"]["marker_cluster_count"].as_u64().is_some());
     assert_eq!(
         delta["renderer_shadow_parity"]["shadow_engine_id"],
         "maplibre_gl_v1"
