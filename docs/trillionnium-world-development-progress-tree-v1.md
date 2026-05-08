@@ -1,7 +1,8 @@
 # Trillionnium World Development Progress Tree v1
 
 Generated: 2026-05-08 18:11 CST  
-Current checkpoint: `ea13ae6 feat: anchor trillionnium world osm geodata`  
+Current code checkpoint: `ea13ae6 feat: anchor trillionnium world osm geodata`
+Current progress-tree checkpoint before this expansion: `8fc65f1 docs: add trillionnium world progress tree`
 Repo: `/home/qian/.openclaw/workspace/CEX`
 
 This document is the handoff spine for continuing Trillionnium World development without losing state after chat compaction, runtime restarts, or long task chains.
@@ -43,6 +44,420 @@ OpenStreetMap / cached geodata
 ```
 
 The web frontend is **not** the source of truth. It renders state and sends player intent. Rust owns world state, simulation, tasks, combat, NPCs, economy, ledger, persistence, validation, and production gates.
+
+---
+
+## Canonical Layer Development Spec
+
+The following six layers are mandatory. Every future feature must state which layer owns it, what crosses the boundary, and which tests/gates prove the boundary did not collapse.
+
+### Layer 1 — OSM / OpenStreetMap data
+
+**Role:** real-world skeleton and objective source.
+
+Owned data:
+
+- roads / paths / walkable graph candidates
+- POIs / amenities / shops / landmarks
+- buildings / entrances / indoor-or-nearby anchors
+- areas / parks / campuses / markets / waterways
+- admin boundaries / neighborhoods / city regions
+- OSM tags and identities: `osm_type`, `osm_id`, `lat`, `lng`, `tags`
+
+Must not own:
+
+- player inventory, HP, skills, sect, relationship state
+- rewards, ledger settlement, progression, anti-cheese decisions
+- task completion truth
+- combat truth
+
+Current status:
+
+- `[x]` fixture-first OSM identity projection exists as `openstreetmap_geodata_v1`.
+- `[ ]` stable fixture dataset still needs to replace mostly hash-derived identities.
+- `[ ]` roads/buildings/areas/admin boundary fixture layers are not yet implemented.
+
+Boundary output to Layer 2:
+
+```json
+{
+  "osm_type": "node|way|relation",
+  "osm_id": 1770000000,
+  "lat": 31.230416,
+  "lng": 121.473701,
+  "tags": { "amenity": "marketplace" },
+  "source": "fixture|overpass_bbox_cache|geofabrik_extract_import|vendor"
+}
+```
+
+### Layer 2 — Rust: World geodata provider
+
+**Role:** legal, cached, deterministic bridge from OSM data into Trillionnium world coordinates and game overlay anchors.
+
+Owned responsibilities:
+
+- provider contract: `OpenStreetMapDataProvider`
+- provider modes: fixture first; future cached Overpass / Geofabrik / vendor imports
+- OSM attribution and ODbL metadata
+- derived database tracking
+- stable identity binding: OSM feature -> Trillionnium overlay anchor
+- fail-closed behavior when live data is unavailable or unapproved
+
+Must not own:
+
+- final gameplay rewards
+- quest completion
+- NPC progression truth
+- web-only gameplay state
+
+Current status:
+
+- `[x]` first provider seam exists.
+- `[x]` `/world` displays provider/source/legal metadata.
+- `[ ]` provider implementation should be split into `openstreetmap_geodata.rs`.
+- `[ ]` provider health/readiness metrics still need explicit fixture/live/fail-closed checks.
+
+Boundary output to Layer 3:
+
+```json
+{
+  "game_overlay_id": "trillionnium-world-node:market-gate",
+  "osm_identity": { "osm_type": "way", "osm_id": 123, "lat": 31.23, "lng": 121.47 },
+  "semantic_role": "market|mentor|bandit_camp|delivery_route|sect_hall|arena",
+  "objective_seed": "deterministic seed from provider + world state",
+  "legal": { "attribution": "© OpenStreetMap contributors", "database_license": "ODbL-1.0" }
+}
+```
+
+### Layer 3 — Rust: Trillionnium game state / simulation
+
+**Role:** actual game. This layer owns the Jianghu systems, tactics board, NPCs, tasks, combat, economy, and persistent player/world progression.
+
+Owned responsibilities:
+
+- player character attributes and derived stats
+- skills, sects, mentors, NPC relationships
+- tactics board state, units, turn order, movement, attacks
+- OSM-bound objective generation
+- quest/task lifecycle and anti-cheese
+- combat result and Wuxia battle log generation
+- commerce/contracts/work orders and ledger-facing reward intents
+- persistence and replayable simulation state
+
+Must not own:
+
+- raw public web DOM interactions
+- browser-only hidden state
+- unaudited direct OSM network calls
+
+Current status:
+
+- `[x]` existing World/commerce/route-runner loops are Rust-owned.
+- `[~]` tactics shell exists visually, but tactics state is not yet a Rust game model.
+- `[ ]` Jianghu attribute/skill/sect/NPC/task/combat-log systems need Trillionnium-native Rust models.
+
+Boundary output to Layer 4:
+
+```json
+{
+  "player": { "attributes": {}, "skills": [], "sect": null },
+  "board": { "cells": [], "units": [], "turn": {} },
+  "objectives": [
+    { "objective_id": "obj-1", "source": "osm_feature", "overlay_id": "...", "reward_intent": "..." }
+  ],
+  "combat_log": [],
+  "available_commands": []
+}
+```
+
+### Layer 4 — Rust: projection JSON
+
+**Role:** safe, stable, testable presentation contract from Rust game truth to all clients.
+
+Owned responsibilities:
+
+- `/world` projection JSON
+- `/app` / Matrix-compatible projections
+- map/geodata/tactics/Jianghu contract versions
+- redaction and privacy boundaries
+- client-ready command descriptors
+- deterministic rendering data, not mutable browser state
+
+Must not own:
+
+- hidden state mutations
+- business-rule bypasses
+- client-specific source-of-truth logic
+
+Current status:
+
+- `[x]` map/geodata projection exists.
+- `[x]` web shell consumes projection fields.
+- `[ ]` tactics board and Jianghu mechanics projections need first-class contract versions.
+
+Boundary output to Layer 5:
+
+```json
+{
+  "contract_version": "trillionnium_world_game_projection_v1",
+  "openstreetmap_geodata": {},
+  "jianghu_character": {},
+  "tactics_board": {},
+  "available_commands": [],
+  "legal": { "osm_attribution_visible": true }
+}
+```
+
+### Layer 5 — Web UI: game visualization + input
+
+**Role:** playable visualization and intent capture. The browser may animate, highlight, and assist input, but must not decide truth.
+
+Owned responsibilities:
+
+- tactical board visualization
+- unit selection UX
+- command drafting forms/buttons
+- Wuxia combat/task log display
+- OSM support/diagnostic layer display
+- mobile-first HUD and accessibility
+
+Must not own:
+
+- final movement validity
+- hit chance/damage truth
+- reward settlement
+- quest completion truth
+- NPC relationship mutation
+
+Current status:
+
+- `[x]` `/world` has visible tactics shell and OSM support layer.
+- `[~]` board is still mostly static/CSS scaffold.
+- `[ ]` web must be rewired to render Rust `tactics_board` and `jianghu_character` projections.
+
+Boundary output to Layer 6:
+
+```json
+{
+  "command": "move_unit|attack|train_skill|talk_npc|accept_task|claim_reward",
+  "idempotency_key": "...",
+  "actor_id": "...",
+  "target": { "overlay_id": "...", "cell": "B4", "npc_id": "..." },
+  "client_context": { "projection_version": "..." }
+}
+```
+
+### Layer 6 — Rust: command handler / ledger / progression
+
+**Role:** validate player intent, mutate game state, settle rewards, and emit durable events.
+
+Owned responsibilities:
+
+- command authorization and idempotency
+- movement/path/LOS/range validation
+- task acceptance/completion validation
+- NPC relationship mutation
+- combat resolution
+- ledger settlement / review hold / anti-cheese
+- route-runner mastery/reward history updates
+- event log persistence and projection invalidation
+
+Must not own:
+
+- raw display layout
+- client animation state
+
+Current status:
+
+- `[x]` existing commerce/contract/ledger command handlers are hardened.
+- `[ ]` tactics/Jianghu command handlers need to be introduced and wired to the same ledger/progression discipline.
+
+Command processing rule:
+
+```text
+Web intent -> Rust validate -> Rust mutate -> ledger/progression settle -> Rust event log -> new projection JSON -> Web re-render
+```
+
+---
+
+## Jianghu Mechanics Extraction Spec
+
+The goal is not to port 白金英雄坛说 literally. The goal is to extract proven Jianghu/MUD mechanics from `gmud`, `RMXP-Hero`, and `yxts-llm`, then rebuild them as Trillionnium-native Rust systems bound to OSM objectives and the tactics board.
+
+### Source references and allowed use
+
+| Reference | Use | Do not use directly | Trillionnium extraction target |
+| --- | --- | --- | --- |
+| `mogita/gmud` | Best authentic mechanics reference; MIT repo | Original text/maps/assets/tables without provenance review | skill taxonomy, task/NPC/fight engine shape, MUD-style logs |
+| `qq634488405/RMXP-Hero` | Rich RMXP/Ruby system reference | GPL/custom-license code, extracted assets, original data tables | sect progression, menu/data organization, battle/skill interaction ideas |
+| `coyoteXujie/yxts-llm` | Modern Python/Arcade reference | Code/assets until full LICENSE/provenance clarified | modern NPC/combat/quest/dialogue structure |
+
+### Trillionnium-native mechanics to implement
+
+#### Attributes
+
+Use original-inspired categories only as inspiration; store Trillionnium-native names/fields in Rust.
+
+Initial Rust model target:
+
+```rust
+struct JianghuAttributes {
+    physique: u16,      // body/root durability; inspired by 根骨/体魄
+    force: u16,         // raw power; inspired by 臂力
+    agility: u16,       // movement/evasion; inspired by 身法
+    insight: u16,       // learning/perception; inspired by 悟性
+    resolve: u16,       // morale/internal stability
+    craft: u16,         // production/world-work bridge
+    commerce: u16,      // market/contract bridge
+    reputation: i32,    // public Jianghu standing
+}
+```
+
+Progress tree hooks:
+
+- [ ] TW-3.4a Add `JianghuAttributes` Rust model.
+- [ ] TW-3.4b Add derived stats: max HP, internal energy, move range modifier, learning speed, negotiation bonus.
+- [ ] TW-3.4c Add tests proving derived stats are deterministic and capped.
+
+#### Skills
+
+Reference flavor:
+
+- gmud-style basics: internal practice, fists, sword, lightness, literacy.
+- RMXP/yxts-style explicit skills and combat hooks.
+
+Initial Trillionnium skill families:
+
+- `basic_inner_power`
+- `basic_unarmed`
+- `basic_blade`
+- `basic_sword`
+- `basic_lightness`
+- `reading_and_contracts`
+- `merchant_routecraft`
+- `artifact_crafting`
+- `streetwise_investigation`
+
+Progress tree hooks:
+
+- [ ] TW-3.5a Add skill definition model: id, family, level, xp, unlock conditions, combat/world effects.
+- [ ] TW-3.5b Add training command: mentor/OSM place requirement + cost + cooldown.
+- [ ] TW-3.5c Bind selected skills to tactics actions: move, attack, evade, inspect, negotiate.
+
+#### Sects / factions / mentors
+
+Reference flavor:
+
+- sect identity and mentor progression from GMUD/Hero Tan style.
+- Trillionnium must use native faction names and business/world roles.
+
+Initial Trillionnium sect/faction examples:
+
+- `Cloud Ledger Hall` — contracts, settlement discipline, reputation repair.
+- `Street Compass Society` — OSM route scouting, mobility, POI discovery.
+- `Iron Workshop Gate` — crafting, equipment, delivery defense.
+- `Market Wind Pavilion` — commerce, negotiation, listing quality.
+- `Night Watch Alliance` — risk control, dispute/anti-cheese, escort tasks.
+
+Progress tree hooks:
+
+- [ ] TW-3.5d Add sect/faction model: id, title ladder, mentor NPCs, entry requirements, benefits.
+- [ ] TW-3.5e Bind sect halls to OSM objectives/POIs through `game_overlay_id`.
+- [ ] TW-3.5f Add mentor training task flow and Rust validation.
+
+#### NPC society
+
+NPCs should not be static quest vending machines. They should be Rust-owned world actors with relationship, role, schedule/anchor, and task capability.
+
+Initial NPC fields:
+
+```rust
+struct JianghuNpc {
+    npc_id: String,
+    display_name: String,
+    role: NpcRole,
+    faction_id: Option<String>,
+    osm_overlay_id: Option<String>,
+    relationship: i16,
+    trust: i16,
+    risk_posture: NpcRiskPosture,
+    task_archetypes: Vec<String>,
+}
+```
+
+Progress tree hooks:
+
+- [ ] TW-3.5g Add NPC model and fixture NPCs.
+- [ ] TW-3.5h Bind NPC spawn/anchor to OSM features.
+- [ ] TW-3.5i Add talk/training/task-offer command descriptors in projection JSON.
+
+#### Tasks / quests
+
+Task archetypes should combine Jianghu mechanics with OSM objective sources and existing ledger/progression discipline.
+
+Initial task archetypes:
+
+- `courier_letter` — deliver between two OSM anchors.
+- `find_item` — inspect/search at OSM POI/area.
+- `escort_route` — protect NPC/unit across route cells.
+- `defeat_bandit` — tactics combat at risk-tagged OSM anchor.
+- `market_settlement` — commerce/contract task with ledger hold/release.
+- `sect_training_trial` — skill/mentor progression objective.
+- `seasonal_tournament` — arena/leaderboard-style challenge.
+
+Progress tree hooks:
+
+- [ ] TW-3.6a Add Jianghu task archetype enum.
+- [ ] TW-3.6b Generate task candidates from OSM provider semantic roles.
+- [ ] TW-3.6c Bind task completion to Rust command handlers, not browser state.
+- [ ] TW-3.6d Route eligible rewards through ledger/review-hold/anti-cheese gates.
+
+#### Wuxia combat logs
+
+Combat logs should give flavor without copying original prose. Logs are generated from Trillionnium-native templates keyed by skill family, terrain, NPC role, and outcome.
+
+Example Trillionnium-native log shape:
+
+```json
+{
+  "log_id": "combat-log-...",
+  "style": "trillionnium_wuxia_log_v1",
+  "beats": [
+    { "kind": "stance", "text": "You lower your center of gravity as the market lanterns flicker." },
+    { "kind": "exchange", "skill": "basic_lightness", "delta_hp": -3 },
+    { "kind": "result", "outcome": "objective_secured" }
+  ]
+}
+```
+
+Progress tree hooks:
+
+- [ ] TW-3.6e Add combat log generator with original Trillionnium templates.
+- [ ] TW-3.6f Add tests forbidding source-reference strings from being copied verbatim into production fixtures.
+- [ ] TW-3.6g Render combat/task logs in `/world` and Matrix/app projections.
+
+#### OSM objective source
+
+OSM should seed objectives, not decide task truth.
+
+Mapping examples:
+
+| OSM feature/tag | Trillionnium semantic role | Possible Jianghu objective |
+| --- | --- | --- |
+| `amenity=marketplace` | market hub | negotiate, recover goods, publish quest card |
+| `amenity=bank` / ledger-adjacent fixture | ledger hall | settlement, debt/reputation repair |
+| `tourism=attraction` / landmark | rumor landmark | find clue, meet NPC, seasonal challenge |
+| `building=*` | indoor/nearby anchor | search item, rescue, delivery endpoint |
+| `highway=footway/path` | route segment | escort, patrol, ambush, courier path |
+| `leisure=park` | open encounter area | training, duel, bandit encounter |
+| admin/neighborhood relation | faction territory | sect influence, reputation, patrol risk |
+
+Progress tree hooks:
+
+- [ ] TW-1.8a Add OSM semantic role mapping table in Rust.
+- [ ] TW-3.7a Add objective generator from `OpenStreetMapDataProvider` features.
+- [ ] TW-3.7b Add deterministic seed so the same fixture/world state yields stable objectives.
+- [ ] TW-3.7c Add tests proving OSM can suggest objectives but Rust command handlers decide completion.
 
 ---
 
@@ -228,11 +643,34 @@ git log --oneline -5
 - [x] TW-3.2 Decide no direct fork is legally/product-clean today.
 - [x] TW-3.3 Use GMUD/Hero Tan projects as mechanics references only.
 - [ ] TW-3.4 Define Trillionnium-native character attributes.
-  - Suggested: physique, agility, insight, reputation, craft, commerce, resolve.
+  - Required fields: `physique`, `force`, `agility`, `insight`, `resolve`, `craft`, `commerce`, `reputation`.
+  - Source inspiration: gmud/RMXP-Hero/yxts-llm attribute loops; names/content must be Trillionnium-native.
+- [ ] TW-3.4a Add `JianghuAttributes` Rust model.
+- [ ] TW-3.4b Add deterministic derived stats and caps.
+- [ ] TW-3.4c Add tests for attribute progression and derived stats.
 - [ ] TW-3.5 Define skill/sect/mentor/NPC relationship models in Rust.
+- [ ] TW-3.5a Add skill definition model and fixture skills.
+- [ ] TW-3.5b Add training command with mentor/OSM-place requirement.
+- [ ] TW-3.5c Bind skills to tactics actions and world task effects.
+- [ ] TW-3.5d Add sect/faction model and title ladder.
+- [ ] TW-3.5e Bind sect halls/mentor anchors to OSM `game_overlay_id`.
+- [ ] TW-3.5f Add mentor training task flow.
+- [ ] TW-3.5g Add NPC model and fixture NPCs.
+- [ ] TW-3.5h Bind NPC spawn/anchor to OSM features.
+- [ ] TW-3.5i Add talk/training/task-offer command descriptors in projection JSON.
 - [ ] TW-3.6 Define text battle/task log style without copying original content.
+- [ ] TW-3.6a Add Jianghu task archetype enum.
+- [ ] TW-3.6b Generate task candidates from OSM provider semantic roles.
+- [ ] TW-3.6c Bind task completion to Rust command handlers, not browser state.
+- [ ] TW-3.6d Route eligible rewards through ledger/review-hold/anti-cheese gates.
+- [ ] TW-3.6e Add combat log generator with original Trillionnium templates.
+- [ ] TW-3.6f Add tests forbidding source-reference strings from being copied verbatim into production fixtures.
+- [ ] TW-3.6g Render combat/task logs in `/world` and Matrix/app projections.
 - [ ] TW-3.7 Bind Jianghu mechanics to tactics units and OSM locations.
   - Example: mentor NPC at an OSM POI, training unlocks tactics skill.
+- [ ] TW-3.7a Add objective generator from `OpenStreetMapDataProvider` features.
+- [ ] TW-3.7b Add deterministic seed so fixture/world state yields stable objectives.
+- [ ] TW-3.7c Add tests proving OSM suggests objectives but Rust command handlers decide completion.
 - [!] TW-3.8 Do not import original Hero Tan Shuo text, maps, sprites, or database content.
 
 ### TW-4 — Rust World domain and simulation backbone
@@ -334,22 +772,25 @@ Full product checkpoint gate when touching core world runtime:
 
 ## Recommended Next Development Slice
 
-The safest next slice is **TW-1.6 + TW-1.7 + TW-2.6**:
+The safest next slice is **TW-1.6 + TW-1.7 + TW-2.6 + TW-3.4a**:
 
 1. Move OSM provider implementation out of `world_map_projection.rs` into a dedicated Rust module.
 2. Add an explicit OSM fixture dataset with stable feature identities.
 3. Start a Rust-side tactics board projection model, but do not yet add full combat.
+4. Add the first Rust-native `JianghuAttributes` model so gmud/RMXP-Hero/yxts-llm mechanics begin entering Trillionnium at Layer 3, not in the browser.
 
 Why this order:
 
 - It preserves the user's core architecture requirement: Rust is bottom/source of truth.
 - It prevents `/world` from drifting back into a hard-coded HTML shell.
 - It keeps live OSM ingestion disabled while still making the geodata substrate real.
+- It starts Jianghu mechanics in Rust game state instead of as UI-only flavor text.
 
 Expected first-slice deliverables:
 
 - `services/consumer-entry-api/src/openstreetmap_geodata.rs`
 - optional `services/consumer-entry-api/src/world_tactics.rs`
+- optional `services/consumer-entry-api/src/jianghu_world.rs`
 - tests proving:
   - fixture provider is deterministic
   - OSM identities are stable
@@ -403,6 +844,6 @@ Also append a one-paragraph summary to `/home/qian/.openclaw/workspace/memory/YY
 
 If the next instruction is simply “continue”, start here:
 
-> **TW-1.6 / TW-1.7 / TW-2.6:** split the OSM provider into a dedicated Rust module, add stable fixture identities, then introduce the first Rust-owned tactics board projection.
+> **TW-1.6 / TW-1.7 / TW-2.6 / TW-3.4a:** split the OSM provider into a dedicated Rust module, add stable fixture identities, introduce the first Rust-owned tactics board projection, and add the first `JianghuAttributes` Rust model.
 
 Do not start live Overpass/Geofabrik ingestion yet. Do not promote MapLibre. Do not convert the web shell into a standalone JS source of truth.
