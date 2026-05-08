@@ -24,6 +24,7 @@ const leafletStub = String.raw`
   const layerApi = () => ({
     addTo(target){ if (target && target.__layers) target.__layers.add(this); return this; },
     bindPopup(){ return this; },
+    bindTooltip(){ return this; },
     openPopup(){ return this; },
     closePopup(){ return this; },
     on(){ return this; },
@@ -415,6 +416,57 @@ async function main() {
   assert(browserShadowProbe?.status === 'shadow_only_not_user_facing' && browserShadowProbe?.user_facing === false, 'MapLibre shadow probe must stay browser-exported and not user-facing', browserShadowProbe);
   assert(await page.evaluate(() => window.trillionniumMapWeakNetworkContract) === 'trillionnium_world_map_weak_network_resilience_v1', 'weak-network runtime contract global missing');
   assert(await page.evaluate(() => window.trillionniumMapLocationPrivacyContract) === 'trillionnium_world_map_location_privacy_v1', 'location privacy runtime contract global missing');
+  const forcedViewportRefresh = await page.evaluate(async () => {
+    const viewport = await window.trillionniumRefreshMapViewport?.();
+    return {
+      viewport_cursor: viewport?.delta_cursor || viewport?.viewport_cursor || null,
+      diagnostics: window.trillionniumMapRuntimeDiagnostics,
+      cache: window.trillionniumMapWeakNetworkCacheStatus,
+      rum: window.trillionniumMapRumLastSample,
+      render_error: window.trillionniumMapRenderLastError || null,
+      local_storage_keys: Object.keys(window.localStorage || {}).filter((key) => key.includes('trillionnium-world-map')).map((key) => [key, window.localStorage.getItem(key)?.length || 0]),
+    };
+  });
+  assert(forcedViewportRefresh?.diagnostics?.cached_snapshot_available === true && forcedViewportRefresh?.diagnostics?.refresh_hook_available === true, 'map runtime diagnostics did not observe cached snapshot after forced refresh', forcedViewportRefresh);
+  assert(!forcedViewportRefresh?.render_error, 'map viewport render recovered from an error instead of staying clean', forcedViewportRefresh);
+  const runtimeDiagnostics = await page.evaluate(() => window.trillionniumMapRuntimeDiagnostics);
+  assert(runtimeDiagnostics?.contract_version === 'trillionnium_world_map_runtime_diagnostics_v1', 'map runtime diagnostics contract missing', runtimeDiagnostics);
+  assert(runtimeDiagnostics?.cache_key?.includes('trillionnium-world-map:last-good-viewport:v1'), 'map runtime diagnostics cache key missing', runtimeDiagnostics);
+  assert(runtimeDiagnostics?.cache_shape === 'slim_last_good_viewport_snapshot_v1' && runtimeDiagnostics?.cache_store_ok === true, 'map runtime weak-network cache must store slim last-good snapshot', runtimeDiagnostics);
+  assert(runtimeDiagnostics?.shadow_probe_exported === true, 'map runtime diagnostics shadow probe missing', runtimeDiagnostics);
+  const rumLastSample = await page.evaluate(() => window.trillionniumMapRumLastSample);
+  assert(rumLastSample?.precise_lat_lng_excluded === true && !('lat' in rumLastSample) && !('lng' in rumLastSample), 'browser RUM diagnostic must exclude precise lat/lng', rumLastSample);
+  const deltaTemplate = appViewport?.viewport_api?.web_session_delta_path_template || '/world/web/map-delta?lat={lat}&lng={lng}&zoom={zoom}&radius_km={radius_km}&limit={limit}&cursor={cursor}';
+  const deltaCursor = runtimeDiagnostics?.last_viewport_cursor || appViewport?.delta_cursor || appViewport?.viewport_cursor;
+  const deltaUrl = deltaTemplate
+    .replaceAll('{lat}', '31.230400')
+    .replaceAll('{lng}', '121.473700')
+    .replaceAll('{zoom}', '15')
+    .replaceAll('{radius_km}', '4.5')
+    .replaceAll('{limit}', '6')
+    .replaceAll('{cursor}', encodeURIComponent(deltaCursor || ''));
+  const deltaNotModifiedProbe = await page.evaluate(async ({ deltaUrl }) => {
+    const first = await fetch(deltaUrl, { credentials: 'same-origin', cache: 'no-store' });
+    const etag = first.headers.get('etag');
+    const second = await fetch(deltaUrl, { credentials: 'same-origin', cache: 'no-store', headers: etag ? { 'if-none-match': etag, 'x-trillionnium-map-if-none-match': etag } : {} });
+    return { first_status: first.status, etag, second_status: second.status };
+  }, { deltaUrl });
+  assert(deltaNotModifiedProbe.first_status === 200 && Boolean(deltaNotModifiedProbe.etag) && deltaNotModifiedProbe.second_status === 304, 'browser map delta 304 contract failed', deltaNotModifiedProbe);
+  await page.route('**/world/web/map-delta**', (route) => route.abort('failed'));
+  await page.route('**/world/web/map-viewport**', (route) => route.abort('failed'));
+  const weakNetworkFallback = await page.evaluate(async () => {
+    const viewport = await window.trillionniumRefreshMapViewport?.();
+    return {
+      viewport_cursor: viewport?.delta_cursor || viewport?.viewport_cursor || null,
+      diagnostics: window.trillionniumMapRuntimeDiagnostics,
+      rum: window.trillionniumMapRumLastSample,
+    };
+  });
+  assert(Boolean(weakNetworkFallback?.viewport_cursor), 'weak-network fallback did not reuse cached viewport', weakNetworkFallback);
+  assert(weakNetworkFallback?.diagnostics?.cached_snapshot_available === true, 'weak-network fallback diagnostics lost cached viewport', weakNetworkFallback);
+  assert(weakNetworkFallback?.rum?.sample_kind === 'weak_network_cached_snapshot', 'weak-network fallback RUM sample missing', weakNetworkFallback);
+  await page.unroute('**/world/web/map-delta**');
+  await page.unroute('**/world/web/map-viewport**');
   routeRunnerHandoffCoverage.app_feed_contract = assertRouteRunnerHandoffContract(appJson?.feed?.route_runner_handoff, '/app feed JSON');
   routeRunnerHandoffCoverage.app_map_hub_contract = assertRouteRunnerHandoffContract(appJson?.map_hub?.route_runner_handoff, '/app map_hub JSON');
   routeRunnerHandoffCoverage.app_route_summary_dom = await assertRouteRunnerHandoffDom(page, '#app-route-runner-handoff-summary', '/app route summary');
@@ -577,12 +629,19 @@ async function main() {
   assert(healthJson?.trillionnium_world_map_runtime_safety_gate?.weak_network_cached_snapshot_visible === true, 'health runtime safety weak-network gate missing', healthJson?.trillionnium_world_map_runtime_safety_gate);
   assert(healthJson?.trillionnium_world_map_runtime_safety_gate?.rum_excludes_lat_lng === true, 'health runtime safety location privacy gate missing', healthJson?.trillionnium_world_map_runtime_safety_gate);
   assert(healthJson?.trillionnium_world_map_rum_slo_gate?.contract_version === 'trillionnium_world_map_rum_slo_v1' && healthJson?.trillionnium_world_map_rum_slo_gate?.green === true, 'health RUM SLO metrics gate not green', healthJson?.trillionnium_world_map_rum_slo_gate);
+  assert(typeof healthJson?.trillionnium_world_map_rum_slo_gate?.raw_split_green === 'boolean', 'health RUM SLO raw split verdict must stay visible during warmup', healthJson?.trillionnium_world_map_rum_slo_gate);
+  assert(Number.isFinite(Number(healthJson?.trillionnium_world_map_rum_slo_gate?.sample_count)), 'health RUM SLO sample count missing', healthJson?.trillionnium_world_map_rum_slo_gate);
+  assert(['warming_until_min_samples', 'enforced'].includes(healthJson?.trillionnium_world_map_rum_slo_gate?.enforcement_status), 'health RUM SLO enforcement status missing', healthJson?.trillionnium_world_map_rum_slo_gate);
   assert(healthJson?.trillionnium_world_map_delta_cache_gate?.entity_delta_cache_contract === 'entity_group_versioned_delta_v1' && healthJson?.trillionnium_world_map_delta_cache_gate?.failure_rate_within_target === true, 'health delta cache gate not green', healthJson?.trillionnium_world_map_delta_cache_gate);
   const metrics = await page.request.get(`${baseUrl}/metrics`, { timeout: 20_000 });
   assert(metrics.ok(), `metrics failed after browser flow: ${metrics.status()}`);
   const metricsText = await metrics.text();
   for (const needle of [
     'cex_consumer_entry_trillionnium_world_map_rum_slo_gate_green 1',
+    'cex_consumer_entry_trillionnium_world_map_rum_slo_raw_split_green ',
+    'cex_consumer_entry_trillionnium_world_map_rum_slo_sample_count ',
+    'cex_consumer_entry_trillionnium_world_map_rum_slo_enforcement_active ',
+    'cex_consumer_entry_trillionnium_world_map_rum_slo_warming ',
     'cex_consumer_entry_trillionnium_world_map_delta_cache_gate_green 1',
     'cex_consumer_entry_trillionnium_world_map_runtime_safety_gate_green 1',
     'cex_consumer_entry_trillionnium_world_map_weak_network_resilience_gate_green 1',

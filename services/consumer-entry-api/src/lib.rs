@@ -537,6 +537,7 @@ fn world_map_rum_filtered_summary_json(
 }
 
 fn world_map_rum_distribution_json(observations: &[WorldMapRumObservation]) -> Value {
+    const RUM_SLO_MIN_ENFORCEMENT_SAMPLE_COUNT: usize = 30;
     let global = world_map_rum_filtered_summary_json(observations, "all", "all");
     let app = world_map_rum_filtered_summary_json(observations, "app", "all");
     let world = world_map_rum_filtered_summary_json(observations, "world", "all");
@@ -564,6 +565,7 @@ fn world_map_rum_distribution_json(observations: &[WorldMapRumObservation]) -> V
             .and_then(Value::as_bool)
             .unwrap_or(true)
     });
+    let enforcement_warming = observations.len() < RUM_SLO_MIN_ENFORCEMENT_SAMPLE_COUNT;
     json!({
         "contract_version": TRILLIONNIUM_WORLD_MAP_RUM_SLO_CONTRACT_VERSION,
         "global": global,
@@ -591,7 +593,10 @@ fn world_map_rum_distribution_json(observations: &[WorldMapRumObservation]) -> V
             "focus_to_action_rail_target_ms": 300,
             "main_thread_long_task_budget_ms": 100,
             "tile_error_rate_target_percent": 1,
-            "green": split_green,
+            "green": enforcement_warming || split_green,
+            "raw_split_green": split_green,
+            "min_enforcement_sample_count": RUM_SLO_MIN_ENFORCEMENT_SAMPLE_COUNT,
+            "enforcement_status": if enforcement_warming { "warming_until_min_samples" } else { "enforced" },
             "readiness_checks": [
                 "p50_p95_p99_quantiles_visible",
                 "app_world_surface_split_visible",

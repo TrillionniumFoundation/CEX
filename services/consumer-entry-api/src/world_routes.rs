@@ -546,6 +546,7 @@ async fn world_map_delta_response(
     if let (Some(request_etag), Some(response_etag)) = (
         headers
             .get(header::IF_NONE_MATCH)
+            .or_else(|| headers.get("x-trillionnium-map-if-none-match"))
             .and_then(|value| value.to_str().ok()),
         etag.as_deref(),
     ) {

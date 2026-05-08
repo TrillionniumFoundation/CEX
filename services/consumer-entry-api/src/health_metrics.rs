@@ -3952,6 +3952,14 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
             "cex_consumer_entry_trillionnium_world_map_delta_failures_total {}\n",
             "# TYPE cex_consumer_entry_trillionnium_world_map_rum_slo_gate_green gauge\n",
             "cex_consumer_entry_trillionnium_world_map_rum_slo_gate_green {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_map_rum_slo_raw_split_green gauge\n",
+            "cex_consumer_entry_trillionnium_world_map_rum_slo_raw_split_green {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_map_rum_slo_sample_count gauge\n",
+            "cex_consumer_entry_trillionnium_world_map_rum_slo_sample_count {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_map_rum_slo_enforcement_active gauge\n",
+            "cex_consumer_entry_trillionnium_world_map_rum_slo_enforcement_active {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_map_rum_slo_warming gauge\n",
+            "cex_consumer_entry_trillionnium_world_map_rum_slo_warming {}\n",
             "# TYPE cex_consumer_entry_trillionnium_world_map_rum_first_interactive_p95_ms gauge\n",
             "cex_consumer_entry_trillionnium_world_map_rum_first_interactive_p95_ms {}\n",
             "# TYPE cex_consumer_entry_trillionnium_world_map_rum_viewport_refresh_p95_ms gauge\n",
@@ -4334,6 +4342,28 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
             .world_map_delta_failures
             .load(Ordering::Relaxed),
         gauge_bool(world_map_rum_slo_metrics_gate_green),
+        gauge_bool(
+            world_map_rum_slo_metrics_gate
+                .get("raw_split_green")
+                .and_then(Value::as_bool)
+                .unwrap_or(world_map_rum_slo_metrics_gate_green),
+        ),
+        world_map_rum_slo_metrics_gate
+            .get("sample_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        gauge_bool(
+            world_map_rum_slo_metrics_gate
+                .get("enforcement_status")
+                .and_then(Value::as_str)
+                == Some("enforced"),
+        ),
+        gauge_bool(
+            world_map_rum_slo_metrics_gate
+                .get("enforcement_status")
+                .and_then(Value::as_str)
+                == Some("warming_until_min_samples"),
+        ),
         world_map_rum_snapshot
             .get("first_map_interactive_p95_ms")
             .and_then(Value::as_u64)

@@ -2937,6 +2937,7 @@ pub(super) fn real_world_map_engine_json(
             "web_session_delta_path_template": "/world/web/map-delta?lat={lat}&lng={lng}&zoom={zoom}&radius_km={radius_km}&limit={limit}&cursor={cursor}",
             "rum_web_session_path": "/world/web/map-rum",
             "not_modified_304_supported": true,
+            "browser_conditional_header": "x-trillionnium-map-if-none-match",
             "entity_delta_cache_contract": "entity_group_versioned_delta_v1",
             "weak_network_contract_version": TRILLIONNIUM_WORLD_MAP_WEAK_NETWORK_CONTRACT_VERSION,
             "location_privacy_contract_version": TRILLIONNIUM_WORLD_MAP_LOCATION_PRIVACY_CONTRACT_VERSION,

@@ -2025,20 +2025,62 @@ pub(super) fn real_world_map_viewport_hydration_js() -> &'static str {
       const viewportWeakNetworkCacheKey = 'trillionnium-world-map:last-good-viewport:v1:' + (target.id || 'world-map');
       const viewportWeakNetworkContract = 'trillionnium_world_map_weak_network_resilience_v1';
       const viewportLocationPrivacyContract = 'trillionnium_world_map_location_privacy_v1';
+      const mapRuntimeStartedAt = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
       const safeMapStorage = () => {
         try { return window.localStorage || null; } catch (error) { return null; }
+      };
+      const slimViewportForWeakNetworkCache = (viewport) => {
+        const slim = { ...(viewport || {}) };
+        const limits = {
+          visible_markers: 24,
+          stream_region_shards: 8,
+          visible_tile_shards: 12,
+          prefetch_queue: 12,
+          poi_hotspots: 12,
+          player_avatars: 12,
+          avatar_task_routes: 12,
+          avatar_route_runners: 12,
+          live_event_stream: 12,
+        };
+        Object.entries(limits).forEach(([key, limit]) => {
+          if (Array.isArray(slim[key])) slim[key] = slim[key].slice(0, limit);
+        });
+        slim.weak_network_cache_shape = {
+          contract_version: viewportWeakNetworkContract,
+          mode: 'slim_last_good_viewport_snapshot_v1',
+          array_limits: limits,
+          excludes_precise_user_location: true,
+        };
+        return slim;
       };
       const cacheViewportSnapshot = (viewport) => {
         try {
           const storage = safeMapStorage();
           if (!storage || !viewport) return;
+          const slimViewport = slimViewportForWeakNetworkCache(viewport);
           storage.setItem(viewportWeakNetworkCacheKey, JSON.stringify({
             cached_at: Date.now(),
             contract_version: viewportWeakNetworkContract,
-            viewport_cursor: viewport.delta_cursor || viewport.viewport_cursor || null,
-            viewport,
+            cache_shape: 'slim_last_good_viewport_snapshot_v1',
+            viewport_cursor: slimViewport.delta_cursor || slimViewport.viewport_cursor || null,
+            viewport: slimViewport,
           }));
-        } catch (error) {}
+          window.trillionniumMapWeakNetworkCacheStatus = {
+            contract_version: viewportWeakNetworkContract,
+            stored: true,
+            cache_shape: 'slim_last_good_viewport_snapshot_v1',
+            cache_key: viewportWeakNetworkCacheKey,
+            viewport_cursor: slimViewport.delta_cursor || slimViewport.viewport_cursor || null,
+          };
+        } catch (error) {
+          window.trillionniumMapWeakNetworkCacheStatus = {
+            contract_version: viewportWeakNetworkContract,
+            stored: false,
+            cache_shape: 'slim_last_good_viewport_snapshot_v1',
+            cache_key: viewportWeakNetworkCacheKey,
+            error: String((error && error.message) || error || 'cache_store_failed'),
+          };
+        }
       };
       const loadCachedViewportSnapshot = () => {
         try {
@@ -2075,9 +2117,9 @@ pub(super) fn real_world_map_viewport_hydration_js() -> &'static str {
       };
       const postMapRumSample = (sample) => {
         try {
-          const payload = JSON.stringify({
+          const samplePayload = {
             matrix_user_id: (typeof currentMatrixUserId !== 'undefined' ? currentMatrixUserId : '@alice:local.dev'),
-            surface_id: target.id || 'world-map',
+            surface_id: (typeof mapRumSurfaceId !== 'undefined' ? mapRumSurfaceId : (target.id || 'world-map')),
             session_id: 'web-session-map-runtime',
             viewport_cursor: lastViewportCursor || null,
             sample_kind: sample.sample_kind || 'viewport_refresh',
@@ -2088,13 +2130,40 @@ pub(super) fn real_world_map_viewport_hydration_js() -> &'static str {
             focus_to_action_rail_ms: sample.focus_to_action_rail_ms || null,
             main_thread_long_task_ms: sample.main_thread_long_task_ms || null,
             tile_error_count: sample.tile_error_count || 0,
-          });
+          };
+          window.trillionniumMapRumLastSample = {
+            sample_kind: samplePayload.sample_kind,
+            surface_id: samplePayload.surface_id,
+            viewport_cursor: samplePayload.viewport_cursor,
+            user_agent_class: samplePayload.user_agent_class,
+            location_privacy_contract_version: samplePayload.location_privacy_contract_version,
+            first_map_interactive_ms: samplePayload.first_map_interactive_ms,
+            viewport_refresh_ms: samplePayload.viewport_refresh_ms,
+            focus_to_action_rail_ms: samplePayload.focus_to_action_rail_ms,
+            main_thread_long_task_ms: samplePayload.main_thread_long_task_ms,
+            tile_error_count: samplePayload.tile_error_count,
+            precise_lat_lng_excluded: true,
+          };
+          const payload = JSON.stringify(samplePayload);
           if (navigator.sendBeacon) {
             const ok = navigator.sendBeacon(mapRumPath, new Blob([payload], { type: 'application/json' }));
             if (ok) return;
           }
           fetch(mapRumPath, { method: 'POST', credentials: 'same-origin', keepalive: true, headers: { 'content-type': 'application/json' }, body: payload }).catch(() => {});
         } catch (error) {}
+      };
+      const safeMapRender = (label, renderFn) => {
+        try {
+          return renderFn();
+        } catch (error) {
+          window.trillionniumMapRenderLastError = {
+            label,
+            error: String((error && error.message) || error || 'map_render_failed'),
+            recovered: true,
+          };
+          postMapRumSample({ sample_kind: 'map_render_recovery', tile_error_count: 1 });
+          return null;
+        }
       };
       const applyViewportDelta = (delta) => {
         if (!lastViewport || !delta || delta.changed === false) return lastViewport;
@@ -2125,23 +2194,25 @@ pub(super) fn real_world_map_viewport_hydration_js() -> &'static str {
           cameraSummary.textContent = routePhrase('Camera ' + mapCenter.lat.toFixed(4) + ', ' + mapCenter.lng.toFixed(4) + ' · zoom ' + zoom + ' · ' + mapText(viewport.lod_mode || 'street_nodes') + ' · ' + (viewport.marker_count || 0) + ' visible places · ' + mapText(((viewport.player_density || {}).mode) || 'dense') + ' density · ' + (viewport.live_event_count || 0) + ' live events', '镜头 ' + mapCenter.lat.toFixed(4) + ', ' + mapCenter.lng.toFixed(4) + ' · 缩放 ' + zoom + ' · ' + mapText(viewport.lod_mode || 'street_nodes') + ' · ' + (viewport.marker_count || 0) + ' 个可见地点 · ' + mapText(((viewport.player_density || {}).mode) || 'dense') + ' 密度 · ' + (viewport.live_event_count || 0) + ' 个实时事件');
         }
         if (typeof renderRouteRunnerHandoffSummary === 'function') {
-          renderRouteRunnerHandoffSummary(viewport);
+          safeMapRender('route_runner_handoff_summary', () => renderRouteRunnerHandoffSummary(viewport));
         }
         window.trillionniumMapLibreShadowProbe = buildMapLibreShadowParityProbe(viewport);
         window.trillionniumMapWeakNetworkContract = viewportWeakNetworkContract;
         window.trillionniumMapLocationPrivacyContract = viewportLocationPrivacyContract;
-        renderStreamHud(viewport, lastSelection);
-        renderCards(tileTarget, viewport.visible_tile_shards || [], 'tile');
-        renderCards(regionTarget, viewport.stream_region_shards || [viewport.active_region || {}], 'region');
-        renderCards(poiTarget, viewport.poi_hotspots || [], 'poi');
-        renderCards(prefetchTarget, viewport.prefetch_queue || [], 'prefetch');
-        renderCards(liveEventTarget, filterLiveEventStream(viewport.live_event_stream || [], lastSelection), 'event');
-        renderCards(taskRouteTarget, filterAvatarTaskRoutes(viewport.avatar_task_routes || [], lastSelection), 'taskRoute');
-        renderCards(routeRunnerTarget, filterAvatarRouteRunners(viewport.avatar_route_runners || [], lastSelection), 'routeRunner');
-        renderViewportOverlays(viewport);
-        refreshOverlayControls();
-        renderOverlayStatus();
         cacheViewportSnapshot(viewport);
+        refreshMapRuntimeDiagnostics();
+        safeMapRender('stream_hud', () => renderStreamHud(viewport, lastSelection));
+        safeMapRender('tile_cards', () => renderCards(tileTarget, viewport.visible_tile_shards || [], 'tile'));
+        safeMapRender('region_cards', () => renderCards(regionTarget, viewport.stream_region_shards || [viewport.active_region || {}], 'region'));
+        safeMapRender('poi_cards', () => renderCards(poiTarget, viewport.poi_hotspots || [], 'poi'));
+        safeMapRender('prefetch_cards', () => renderCards(prefetchTarget, viewport.prefetch_queue || [], 'prefetch'));
+        safeMapRender('live_event_cards', () => renderCards(liveEventTarget, filterLiveEventStream(viewport.live_event_stream || [], lastSelection), 'event'));
+        safeMapRender('task_route_cards', () => renderCards(taskRouteTarget, filterAvatarTaskRoutes(viewport.avatar_task_routes || [], lastSelection), 'taskRoute'));
+        safeMapRender('route_runner_cards', () => renderCards(routeRunnerTarget, filterAvatarRouteRunners(viewport.avatar_route_runners || [], lastSelection), 'routeRunner'));
+        safeMapRender('viewport_overlays', () => renderViewportOverlays(viewport));
+        safeMapRender('overlay_controls', () => refreshOverlayControls());
+        safeMapRender('overlay_status', () => renderOverlayStatus());
+        refreshMapRuntimeDiagnostics();
       };
       const fetchViewportSnapshot = async () => {
         const startedAt = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
@@ -2149,7 +2220,8 @@ pub(super) fn real_world_map_viewport_hydration_js() -> &'static str {
         const zoom = mapAdapter.getZoom(mapRuntime);
         if (lastViewportCursor) {
           try {
-            const deltaResponse = await fetch(buildViewportDeltaUrl(mapCenter, zoom, lastViewportCursor), { credentials: 'same-origin', headers: lastViewportCursor ? { 'if-none-match': 'W/"trillionnium-map-' + String(lastViewportCursor).replace(/[^A-Za-z0-9]/g, '-') + '"' } : {} });
+            const conditionalEtag = 'W/"trillionnium-map-' + String(lastViewportCursor).replace(/[^A-Za-z0-9]/g, '-') + '"';
+            const deltaResponse = await fetch(buildViewportDeltaUrl(mapCenter, zoom, lastViewportCursor), { credentials: 'same-origin', cache: 'no-cache', headers: lastViewportCursor ? { 'if-none-match': conditionalEtag, 'x-trillionnium-map-if-none-match': conditionalEtag } : {} });
             if (deltaResponse.status === 304 && lastViewport) {
               applyViewportSnapshot(lastViewport, mapCenter, zoom);
               const elapsed = Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - startedAt);
@@ -2179,7 +2251,8 @@ pub(super) fn real_world_map_viewport_hydration_js() -> &'static str {
           postMapRumSample({ sample_kind: 'snapshot_viewport_refresh', viewport_refresh_ms: elapsed });
           if (!mapRumFirstInteractiveSent) {
             mapRumFirstInteractiveSent = true;
-            postMapRumSample({ sample_kind: 'first_map_interactive', first_map_interactive_ms: Math.round(((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now())) });
+            const nowMs = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+            postMapRumSample({ sample_kind: 'first_map_interactive', first_map_interactive_ms: Math.max(0, Math.round(nowMs - mapRuntimeStartedAt)) });
           }
           return viewport;
         } catch (error) {
@@ -2193,6 +2266,27 @@ pub(super) fn real_world_map_viewport_hydration_js() -> &'static str {
         }
         return null;
       };
+      const refreshMapRuntimeDiagnostics = () => {
+        const cachedViewport = loadCachedViewportSnapshot();
+        const diagnostics = {
+          contract_version: 'trillionnium_world_map_runtime_diagnostics_v1',
+          weak_network_contract_version: viewportWeakNetworkContract,
+          location_privacy_contract_version: viewportLocationPrivacyContract,
+          cache_key: viewportWeakNetworkCacheKey,
+          cached_snapshot_available: Boolean(cachedViewport),
+          cache_shape: window.trillionniumMapWeakNetworkCacheStatus?.cache_shape || null,
+          cache_store_ok: window.trillionniumMapWeakNetworkCacheStatus?.stored === true,
+          last_viewport_cursor: lastViewportCursor || null,
+          refresh_hook_available: typeof fetchViewportSnapshot === 'function',
+          shadow_probe_exported: Boolean(window.trillionniumMapLibreShadowProbe),
+          rum_last_sample_excludes_lat_lng: window.trillionniumMapRumLastSample?.precise_lat_lng_excluded === true,
+          readiness_checks: ['refresh_hook_available', 'slim_cached_snapshot_available_after_first_viewport', 'rum_last_sample_excludes_lat_lng', 'shadow_probe_exported'],
+        };
+        window.trillionniumMapRuntimeDiagnostics = diagnostics;
+        return diagnostics;
+      };
+      window.trillionniumRefreshMapViewport = fetchViewportSnapshot;
+      refreshMapRuntimeDiagnostics();
 "#
 }
 

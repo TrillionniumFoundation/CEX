@@ -3199,6 +3199,15 @@ async fn world_map_runtime_endpoints_expose_rum_delta_cache_and_mobile_ia_gates(
             .and_then(|value| value.to_str().ok()),
         Some("trillionnium_world_map_payload_cache_v1")
     );
+    let (browser_not_modified_status, _, browser_not_modified_body) = send_text_request_with_headers(
+        &app,
+        "GET",
+        &format!("/world/web/map-delta?lat=31.230400&lng=121.473700&zoom=15&radius_km=4.5&limit=6&cursor={encoded_cursor}"),
+        &[("x-trillionnium-map-if-none-match", noop_etag.as_str())],
+    )
+    .await;
+    assert_eq!(browser_not_modified_status, StatusCode::NOT_MODIFIED);
+    assert!(browser_not_modified_body.is_empty());
 
     let (rum_status, rum_body) = send_json_request(
         &app,
@@ -3236,11 +3245,17 @@ async fn world_map_runtime_endpoints_expose_rum_delta_cache_and_mobile_ia_gates(
     assert_eq!(metrics_status, StatusCode::OK);
     assert!(metrics_body.contains("cex_consumer_entry_trillionnium_world_map_rum_samples_total 1"));
     assert!(
-        metrics_body.contains("cex_consumer_entry_trillionnium_world_map_delta_requests_total 3")
+        metrics_body.contains("cex_consumer_entry_trillionnium_world_map_delta_requests_total 4")
     );
     assert!(metrics_body
-        .contains("cex_consumer_entry_trillionnium_world_map_delta_noop_responses_total 2"));
+        .contains("cex_consumer_entry_trillionnium_world_map_delta_noop_responses_total 3"));
     assert!(metrics_body.contains("cex_consumer_entry_trillionnium_world_map_rum_slo_gate_green 1"));
+    assert!(metrics_body
+        .contains("cex_consumer_entry_trillionnium_world_map_rum_slo_raw_split_green 1"));
+    assert!(
+        metrics_body.contains("cex_consumer_entry_trillionnium_world_map_rum_slo_sample_count 1")
+    );
+    assert!(metrics_body.contains("cex_consumer_entry_trillionnium_world_map_rum_slo_warming 1"));
     assert!(
         metrics_body.contains("cex_consumer_entry_trillionnium_world_map_delta_cache_gate_green 1")
     );

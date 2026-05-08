@@ -1355,10 +1355,26 @@ impl<'a> ClientAppProjectionContext<'a> {
         let indexes = build_world_indexes(world);
         let route_artifacts = build_world_route_artifacts(world);
         let map = world_map_json_with_route_artifacts(world, matrix_user_id, &route_artifacts);
-        let real_world_map_engine = map
+        let bootstrap_viewport =
+            world_map_viewport_json(world, matrix_user_id, None, None, None, None, Some(6));
+        let mut real_world_map_engine = map
             .get("real_world_map_engine")
             .cloned()
             .unwrap_or_else(|| real_world_map_engine_json(&[], None));
+        if let Some(engine) = real_world_map_engine.as_object_mut() {
+            if let Some(viewport_api) = bootstrap_viewport.get("viewport_api") {
+                engine.insert("viewport_api".to_string(), viewport_api.clone());
+            }
+            if let Some(delta_cursor) = bootstrap_viewport.get("delta_cursor") {
+                engine.insert("delta_cursor".to_string(), delta_cursor.clone());
+            }
+            if let Some(viewport_cursor) = bootstrap_viewport.get("viewport_cursor") {
+                engine.insert("viewport_cursor".to_string(), viewport_cursor.clone());
+            }
+            if let Some(etag) = bootstrap_viewport.get("etag") {
+                engine.insert("etag".to_string(), etag.clone());
+            }
+        }
         Self {
             league,
             world,

@@ -2116,6 +2116,7 @@ pub(super) async fn get_client_app_web_shell(
         }})();
         return feedRequestInFlight;
       }};
+      const mapRumSurfaceId = 'app';
       {shared_map_viewport_hydration_js}
       let viewportTimer = null;
       const refreshViewport = () => {{

@@ -2324,6 +2324,7 @@ pub(super) async fn get_world_web_shell(
       {shared_map_card_focus_helpers_js}
       {shared_map_click_action_helpers_js}
       {shared_map_render_cards_js}
+      const mapRumSurfaceId = 'world';
       {shared_map_viewport_hydration_js}
       let viewportTimer = null;
       const refreshWorldViewport = () => {{
