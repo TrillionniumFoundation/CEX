@@ -714,8 +714,8 @@ git log --oneline -5
 - [x] TW-6.1 `/world` displays tactics game shell before map support details.
 - [x] TW-6.2 `/world` still exposes OpenClawStreetMap diagnostics under support/advanced layers.
 - [x] TW-6.3 `/world` exposes OSM provider contract and feature cards.
-- [ ] TW-6.4 Make board cells data-driven from Rust projection.
-- [ ] TW-6.5 Add input affordances for unit selection and command drafting.
+- [x] TW-6.4 Make board cells data-driven from Rust projection.
+- [x] TW-6.5 Add input affordances for unit selection and command drafting.
 - [x] TW-6.6 Add clear mobile-first game HUD.
   - active unit
   - current objective
@@ -1007,8 +1007,36 @@ Expected first-slice deliverables:
   - Browser E2E green: `run/league-browser/browser-e2e-summary-1778325493-358222.json`
   - UI audit green: `run/trillionnium-ui-audit/ui-audit-summary-1778326086-367189.json`
 - Remaining next:
-  - [ ] TW-6.4/TW-6.5 deeper board-cell interactions and unit-selection/command-drafting affordances.
+  - [x] TW-6.4/TW-6.5 deeper board-cell interactions and unit-selection/command-drafting affordances.
   - [ ] TW-6.7 accessibility labels, keyboard traversal, and low-motion support for the tactics shell.
+
+#### Update 2026-05-09 20:2x CST
+
+- Commit: this slice (`feat: wire trillionnium tactics intent drafting`).
+- Completed next TW-6 interaction slice:
+  - [x] Added `trillionnium_tactics_board_cell_interaction_v1`, `trillionnium_tactics_unit_selection_v1`, and `trillionnium_tactics_command_intent_draft_v1` to the Rust tactics projection.
+  - [x] `/world` board cells now render as selectable intent-only controls sourced from Rust projection cells, carrying tile id, OSM overlay id, movement cost, draft input name, and Rust validation owner.
+  - [x] `/world` units now render as selectable intent-only controls carrying unit id, side, current tile, selection role, Rust model source, and command-draft contract.
+  - [x] `/world` command buttons now draft command intent without resolving movement/combat/reward in the browser; `#world-tactics-command-draft-form` posts unit/command/target/body to the existing Rust-owned tactics command handler.
+  - [x] `window.trillionniumTacticsIntentDraft` exposes browser draft state only; legality, combat result, objective completion, and rewards remain owned by `rust_world_tactics_command_handler` / `rust_tactics_command_validator`.
+  - [x] `/app` now mirrors the command-draft affordance as a compact intent card so mobile players see the same source-of-truth boundary before opening the full tactics board.
+  - [x] Web E2E, browser E2E, UI audit, and Rust tests now hard-gate the board-cell, unit-selection, and command-intent contracts.
+- Evidence:
+  - `cargo fmt --all -- --check`
+  - `cargo check -p consumer-entry-api`
+  - targeted `cargo test -p consumer-entry-api world_tactics_projection_binds_trillionnium_state_to_osm_objectives -- --nocapture`
+  - targeted `cargo test -p consumer-entry-api web_map_shells_render_live_event_task_focus_metadata -- --nocapture`
+  - `bash -n scripts/check-trillionnium-league-web-e2e.sh`
+  - `node --check scripts/playwright/trillionnium-browser-e2e.mjs`
+  - `node --check scripts/playwright/trillionnium-ui-audit.mjs`
+  - `git diff --check`
+  - `CEX_ENV_FILE=run/local-production/.env scripts/runtime-manager-linux.sh restart/status` green
+  - Web E2E green: `run/league-web/web-e2e-summary-1778329986.json`
+  - Browser E2E green: `run/league-browser/browser-e2e-summary-1778329990-393843.json`
+  - UI audit green: `run/trillionnium-ui-audit/ui-audit-summary-1778330124-394760.json`
+- Remaining next:
+  - [ ] TW-6.7 accessibility labels, keyboard traversal, and low-motion support for the tactics shell.
+  - [ ] TW-6.8 keep old dashboard/detail panels secondary, not the main experience.
 
 ---
 
@@ -1073,6 +1101,6 @@ Also append a one-paragraph summary to `/home/qian/.openclaw/workspace/memory/YY
 
 If the next instruction is simply “continue”, start here:
 
-> **TW-6 continued:** after the `/world` + `/app` player-visible tactics HUD slice, continue with deeper board-cell interaction and command-drafting affordances while preserving Rust as the source of truth and browser intent-only semantics.
+> **TW-6 continued:** after the `/world` + `/app` board-cell/unit/command intent-drafting slice, continue with TW-6.7 accessibility labels, keyboard traversal, and low-motion support for the tactics shell while preserving Rust as the source of truth and browser intent-only semantics.
 
 Do not start live Overpass/Geofabrik ingestion yet. Do not promote MapLibre. Do not convert the web shell into a standalone JS source of truth.

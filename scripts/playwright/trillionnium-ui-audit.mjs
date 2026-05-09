@@ -138,6 +138,13 @@ function checkTacticsPlayerSurface(result) {
   assertMetric(surface.sourceOfTruth === 'rust_world_tactics_sessions', `${result.profile}/${result.name} tactics HUD source-of-truth drifted`, surface);
   assertMetric(surface.webRole === 'visualization_input_only', `${result.profile}/${result.name} tactics HUD must stay visualization/input-only`, surface);
   assertMetric(surface.objectivePresent === true && surface.sessionPresent === true, `${result.profile}/${result.name} tactics objective/session cards missing`, surface);
+  assertMetric(surface.intentDraftPresent === true, `${result.profile}/${result.name} tactics intent draft affordance missing`, surface);
+  assertMetric(surface.intentDraftContract === 'trillionnium_tactics_command_intent_draft_v1', `${result.profile}/${result.name} tactics intent draft contract missing`, surface);
+  assertMetric(surface.boardCellInteractionContract === 'trillionnium_tactics_board_cell_interaction_v1', `${result.profile}/${result.name} board-cell interaction contract missing`, surface);
+  assertMetric(surface.unitSelectionContract === 'trillionnium_tactics_unit_selection_v1', `${result.profile}/${result.name} unit-selection contract missing`, surface);
+  assertMetric(surface.intentDraftWebRole === 'intent_only_visualization_input', `${result.profile}/${result.name} tactics intent draft must remain browser intent-only`, surface);
+  assertMetric(surface.commandHandlerOwner === 'rust_world_tactics_command_handler', `${result.profile}/${result.name} tactics command handler owner must stay Rust`, surface);
+  assertMetric(result.name !== 'world' || (Number(surface.selectableTileCount || 0) >= 64 && Number(surface.selectableUnitCount || 0) >= 2 && Number(surface.draftableCommandCount || 0) >= 3 && surface.intentDraftFormPresent === true), `${result.profile}/${result.name} board/unit/command draft affordances missing`, surface);
   assertMetric(surface.sessionContract === 'trillionnium_tactics_game_session_v1', `${result.profile}/${result.name} tactics game-session contract missing`, surface);
   assertMetric(surface.tickContract === 'trillionnium_tactics_simulation_tick_v1', `${result.profile}/${result.name} tactics simulation-tick contract missing`, surface);
   assertMetric(surface.rewardPresent === true && surface.rewardHistoryContract === 'trillionnium_tactics_reward_history_v1', `${result.profile}/${result.name} tactics reward-history handoff missing`, surface);
@@ -443,6 +450,10 @@ async function auditPage(page, profile, target) {
     const tacticsHud = document.getElementById(`${tacticsPrefix}-tactics-player-hud`);
     const tacticsObjective = document.getElementById(`${tacticsPrefix}-tactics-objective-card`);
     const tacticsSession = document.getElementById(`${tacticsPrefix}-tactics-current-session-card`);
+    const tacticsIntentDraft = targetName === 'world'
+      ? document.getElementById('world-tactics-command-draft-panel')
+      : document.getElementById('app-tactics-intent-draft-card');
+    const tacticsIntentDraftForm = document.getElementById('world-tactics-command-draft-form');
     const tacticsReward = document.getElementById(`${tacticsPrefix}-tactics-reward-history-handoff`);
     const tacticsRepeat = document.getElementById(`${tacticsPrefix}-tactics-repeat-farming-copy`);
     const appMapReadabilityLod = document.getElementById('app-map-readability-lod');
@@ -623,6 +634,20 @@ async function auditPage(page, profile, target) {
       webRole: tacticsHud?.dataset.webRole || null,
       objectivePresent: Boolean(tacticsObjective),
       sessionPresent: Boolean(tacticsSession),
+      intentDraftPresent: Boolean(tacticsIntentDraft),
+      intentDraftFormPresent: Boolean(tacticsIntentDraftForm),
+      intentDraftContract: tacticsIntentDraft?.dataset.contractVersion || null,
+      boardCellInteractionContract: tacticsIntentDraft?.dataset.boardCellInteractionContract || null,
+      unitSelectionContract: tacticsIntentDraft?.dataset.unitSelectionContract || null,
+      intentDraftWebRole: tacticsIntentDraft?.dataset.webRole || null,
+      commandHandlerOwner: tacticsIntentDraft?.dataset.commandHandlerOwner || null,
+      draftOwner: tacticsIntentDraft?.dataset.draftOwner || null,
+      selectedCommand: tacticsIntentDraft?.dataset.selectedCommand || null,
+      selectedUnitId: tacticsIntentDraft?.dataset.selectedUnitId || null,
+      selectedTargetTile: tacticsIntentDraft?.dataset.selectedTargetTile || null,
+      selectableTileCount: document.querySelectorAll('.tactics-tile[data-board-cell-interaction-contract="trillionnium_tactics_board_cell_interaction_v1"][data-draft-input-name="target_tile"]').length,
+      selectableUnitCount: document.querySelectorAll('.tactics-unit[data-unit-selection-contract="trillionnium_tactics_unit_selection_v1"][data-draft-input-name="unit_id"]').length,
+      draftableCommandCount: document.querySelectorAll('.tactics-command[data-command-intent-draft-contract="trillionnium_tactics_command_intent_draft_v1"][data-draft-input-name="command"]').length,
       rewardPresent: Boolean(tacticsReward),
       repeatPresent: Boolean(tacticsRepeat),
       sessionContract: tacticsObjective?.dataset.sessionContract || null,

@@ -492,6 +492,8 @@ async function main() {
   assert(await count(page, '#app-tactics-player-hud[data-contract-version="trillionnium_tactics_player_visible_surface_v1"]') === 1, 'app tactics player HUD contract missing');
   assert(await count(page, '#app-tactics-objective-card[data-session-contract="trillionnium_tactics_game_session_v1"]') === 1, 'app tactics objective card missing');
   assert(await count(page, '#app-tactics-current-session-card[data-tick-contract="trillionnium_tactics_simulation_tick_v1"]') === 1, 'app tactics current session card missing');
+  assert(await count(page, '#app-tactics-intent-draft-card[data-contract-version="trillionnium_tactics_command_intent_draft_v1"][data-board-cell-interaction-contract="trillionnium_tactics_board_cell_interaction_v1"][data-unit-selection-contract="trillionnium_tactics_unit_selection_v1"][data-web-role="intent_only_visualization_input"]') === 1, 'app tactics intent draft card missing');
+  assert(await count(page, '#app-tactics-intent-draft-card[data-command-handler-owner="rust_world_tactics_command_handler"][data-source-of-truth="rust_tactics_command_model"]') === 1, 'app tactics intent draft source contract missing');
   assert(await count(page, '#app-tactics-reward-history-handoff[data-reward-history-contract="trillionnium_tactics_reward_history_v1"]') === 1, 'app tactics reward-history handoff missing');
   assert(await count(page, '#app-tactics-repeat-farming-copy[data-anti-cheese-contract="trillionnium_tactics_repeat_farming_anti_cheese_v1"]') === 1, 'app tactics repeat-farming copy missing');
   assert(await count(page, '#app-mobile-action-sheet[data-contract-version="trillionnium_mobile_single_primary_cta_v1"]') === 1, 'mobile bottom action sheet contract missing');
@@ -590,6 +592,27 @@ async function main() {
   assert(await count(page, '#world-tactics-player-hud[data-contract-version="trillionnium_tactics_player_visible_surface_v1"]') === 1, 'world tactics player HUD contract missing');
   assert(await count(page, '#world-tactics-objective-card[data-session-contract="trillionnium_tactics_game_session_v1"]') === 1, 'world tactics objective card missing');
   assert(await count(page, '#world-tactics-current-session-card[data-tick-contract="trillionnium_tactics_simulation_tick_v1"]') === 1, 'world tactics current session card missing');
+  assert(await count(page, '#world-tactics-command-draft-panel[data-contract-version="trillionnium_tactics_command_intent_draft_v1"][data-board-cell-interaction-contract="trillionnium_tactics_board_cell_interaction_v1"][data-unit-selection-contract="trillionnium_tactics_unit_selection_v1"][data-web-role="intent_only_visualization_input"]') === 1, 'world tactics command draft panel missing');
+  assert(await count(page, '#world-tactics-command-draft-form[data-contract-version="trillionnium_tactics_command_intent_draft_v1"][data-source-of-truth="rust_world_tactics_command_handler"][data-web-role="intent_only_visualization_input"]') === 1, 'world tactics command draft form missing');
+  assert(await count(page, '.tactics-tile[data-board-cell-interaction-contract="trillionnium_tactics_board_cell_interaction_v1"][data-command-intent-draft-contract="trillionnium_tactics_command_intent_draft_v1"][data-draft-input-name="target_tile"]') >= 64, 'world tactics selectable board cells missing');
+  assert(await count(page, '.tactics-unit[data-unit-selection-contract="trillionnium_tactics_unit_selection_v1"][data-command-intent-draft-contract="trillionnium_tactics_command_intent_draft_v1"][data-draft-input-name="unit_id"]') >= 2, 'world tactics selectable units missing');
+  assert(await count(page, '.tactics-command[data-command-intent-draft-contract="trillionnium_tactics_command_intent_draft_v1"][data-draft-input-name="command"]') >= 3, 'world tactics draftable commands missing');
+  assert(await page.evaluate(() => window.trillionniumTacticsIntentDraft?.web_role) === 'intent_only_visualization_input', 'world tactics intent draft runtime missing');
+  await clickOrDomActivate(page.locator('.tactics-unit[data-side="player"]').first());
+  await clickOrDomActivate(page.locator('.tactics-tile[data-tile="C3"]').first());
+  await clickOrDomActivate(page.locator('.tactics-command[data-command="move_unit"]').first());
+  const draftState = await page.evaluate(() => ({
+    runtime: window.trillionniumTacticsIntentDraft?.getState?.(),
+    command: document.querySelector('#world-tactics-command-draft-form [name="command"]')?.value,
+    unitId: document.querySelector('#world-tactics-command-draft-form [name="unit_id"]')?.value,
+    targetTile: document.querySelector('#world-tactics-command-draft-form [name="target_tile"]')?.value,
+    body: document.querySelector('#world-tactics-command-draft-form [name="body"]')?.value,
+  }));
+  assert(draftState.command === 'move_unit' && draftState.targetTile === 'C3' && draftState.unitId, 'world tactics draft form did not track selected intent', draftState);
+  assert(String(draftState.body || '').includes('Rust validates legality and outcome'), 'world tactics draft body must preserve Rust validation copy', draftState);
+  assert(draftState.runtime?.command === 'move_unit' && draftState.runtime?.targetTile === 'C3', 'world tactics draft runtime state mismatch', draftState);
+  assert(await count(page, '.tactics-tile.is-selected[data-tile="C3"]') === 1, 'world tactics selected tile styling missing');
+  assert(await count(page, '.tactics-command.is-selected[data-command="move_unit"]') === 1, 'world tactics selected command styling missing');
   assert(await count(page, '#world-tactics-reward-history-handoff[data-reward-history-contract="trillionnium_tactics_reward_history_v1"]') === 1, 'world tactics reward-history handoff missing');
   assert(await count(page, '#world-tactics-repeat-farming-copy[data-anti-cheese-contract="trillionnium_tactics_repeat_farming_anti_cheese_v1"]') === 1, 'world tactics repeat-farming copy missing');
   assert(await count(page, '#world-pulse-strip .pulse-card') === 5, 'world pulse strip should keep only compact primary counters visible');

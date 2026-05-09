@@ -171,12 +171,15 @@ fn world_tactics_board_cells_html(tactics_board: &Value) -> String {
                 .and_then(Value::as_i64)
                 .unwrap_or(1);
             format!(
-                "<span class=\"tactics-tile terrain-{}\" data-tile=\"{}\" data-terrain=\"{}\" data-osm-game-overlay-id=\"{}\" data-movement-cost=\"{}\" data-source-of-truth=\"rust_tactics_board_projection\" aria-label=\"tactical tile {}\"><small>{}</small></span>",
+                "<button type=\"button\" class=\"tactics-tile terrain-{}\" data-tile=\"{}\" data-draft-target-tile=\"{}\" data-terrain=\"{}\" data-osm-game-overlay-id=\"{}\" data-movement-cost=\"{}\" data-board-cell-interaction-contract=\"{}\" data-command-intent-draft-contract=\"{}\" data-selection-role=\"target_tile\" data-draft-input-name=\"target_tile\" data-validation-owner=\"rust_tactics_command_validator\" data-source-of-truth=\"rust_tactics_board_projection\" data-web-role=\"intent_only_visualization_input\" aria-label=\"Select tactical tile {}\"><small>{}</small></button>",
                 escape_html_text(terrain),
+                escape_html_text(tile_id),
                 escape_html_text(tile_id),
                 escape_html_text(terrain),
                 escape_html_text(overlay_id),
                 movement_cost,
+                escape_html_text(TRILLIONNIUM_TACTICS_BOARD_CELL_INTERACTION_CONTRACT_VERSION),
+                escape_html_text(TRILLIONNIUM_TACTICS_COMMAND_INTENT_DRAFT_CONTRACT_VERSION),
                 escape_html_text(tile_id),
                 escape_html_text(tile_id),
             )
@@ -289,6 +292,11 @@ fn world_tactics_units_html(tactics_board: &Value) -> String {
             let grid_row = unit.get("grid_row").and_then(Value::as_i64).unwrap_or(1);
             let hp = unit.get("hp").and_then(Value::as_i64).unwrap_or(1);
             let unit_move = unit.get("move").and_then(Value::as_i64).unwrap_or(1);
+            let tile_id = unit
+                .get("position")
+                .and_then(|position| position.get("tile_id"))
+                .and_then(Value::as_str)
+                .unwrap_or("A1");
             let overlay_id = unit
                 .get("osm_game_overlay_id")
                 .and_then(Value::as_str)
@@ -299,15 +307,19 @@ fn world_tactics_units_html(tactics_board: &Value) -> String {
                 _ => "ally",
             };
             format!(
-                "<span class=\"tactics-unit {}\" style=\"grid-column:{};grid-row:{}\" data-unit=\"{}\" data-side=\"{}\" data-hp=\"{}\" data-move=\"{}\" data-osm-game-overlay-id=\"{}\" data-source-of-truth=\"rust_trillionnium_game_state\" title=\"{}\" data-i18n-en=\"{}\" data-i18n-zh=\"{}\">{}</span>",
+                "<button type=\"button\" class=\"tactics-unit {}\" style=\"grid-column:{};grid-row:{}\" data-unit=\"{}\" data-draft-unit-id=\"{}\" data-side=\"{}\" data-tile=\"{}\" data-hp=\"{}\" data-move=\"{}\" data-osm-game-overlay-id=\"{}\" data-unit-selection-contract=\"{}\" data-command-intent-draft-contract=\"{}\" data-selection-role=\"active_unit\" data-draft-input-name=\"unit_id\" data-validation-owner=\"rust_tactics_command_validator\" data-source-of-truth=\"rust_tactics_unit_model\" data-web-role=\"intent_only_visualization_input\" title=\"{}\" data-i18n-en=\"{}\" data-i18n-zh=\"{}\">{}</button>",
                 class_name,
                 grid_column,
                 grid_row,
                 escape_html_text(unit_id),
+                escape_html_text(unit_id),
                 escape_html_text(side),
+                escape_html_text(tile_id),
                 hp,
                 unit_move,
                 escape_html_text(overlay_id),
+                escape_html_text(TRILLIONNIUM_TACTICS_UNIT_SELECTION_CONTRACT_VERSION),
+                escape_html_text(TRILLIONNIUM_TACTICS_COMMAND_INTENT_DRAFT_CONTRACT_VERSION),
                 escape_html_text(title),
                 escape_html_text(label_en),
                 escape_html_text(label),
@@ -842,24 +854,115 @@ fn world_tactics_command_grid_html(tactics_board: &Value) -> String {
                 .get("required_skill_id")
                 .and_then(Value::as_str)
                 .unwrap_or("none");
+            let target_tile_required = command
+                .get("target_tile_required")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
             let class_name = if index == 0 {
                 "tactics-command primary"
             } else {
                 "tactics-command"
             };
             format!(
-                "<a class=\"{}\" href='{}' data-command=\"{}\" data-command-contract=\"{}\" data-validation-owner=\"{}\" data-required-skill-id=\"{}\" data-source-of-truth=\"rust_tactics_command_model\">{}</a>",
+                "<a class=\"{}\" href='{}' data-command=\"{}\" data-draft-command=\"{}\" data-command-contract=\"{}\" data-command-intent-draft-contract=\"{}\" data-validation-owner=\"{}\" data-required-skill-id=\"{}\" data-target-tile-required=\"{}\" data-unit-selection-required=\"true\" data-draft-input-name=\"command\" data-draft-owner=\"browser_tactics_intent_builder\" data-source-of-truth=\"rust_tactics_command_model\" data-web-role=\"intent_only_visualization_input\">{}</a>",
                 class_name,
                 escape_html_text(web_target),
                 escape_html_text(command_id),
+                escape_html_text(command_id),
                 escape_html_text(command_contract),
+                escape_html_text(TRILLIONNIUM_TACTICS_COMMAND_INTENT_DRAFT_CONTRACT_VERSION),
                 escape_html_text(validation_owner),
                 escape_html_text(required_skill_id),
+                target_tile_required,
                 escape_world_visible_text(label),
             )
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn world_tactics_first_unit_id_by_side(tactics_board: &Value, side: &str) -> String {
+    tactics_board
+        .get("units")
+        .and_then(Value::as_array)
+        .and_then(|units| {
+            units.iter().find(|unit| {
+                unit.get("side")
+                    .and_then(Value::as_str)
+                    .is_some_and(|candidate| candidate == side)
+            })
+        })
+        .and_then(|unit| unit.get("unit_id"))
+        .and_then(Value::as_str)
+        .unwrap_or(if side == "enemy" {
+            "market-bandit"
+        } else {
+            "lord"
+        })
+        .to_string()
+}
+
+fn world_tactics_first_unit_tile_by_side(tactics_board: &Value, side: &str) -> String {
+    tactics_board
+        .get("units")
+        .and_then(Value::as_array)
+        .and_then(|units| {
+            units.iter().find(|unit| {
+                unit.get("side")
+                    .and_then(Value::as_str)
+                    .is_some_and(|candidate| candidate == side)
+            })
+        })
+        .and_then(|unit| unit.get("position"))
+        .and_then(|position| position.get("tile_id"))
+        .and_then(Value::as_str)
+        .unwrap_or(if side == "enemy" { "F5" } else { "B2" })
+        .to_string()
+}
+
+fn world_tactics_command_draft_panel_html(
+    tactics_board: &Value,
+    current_matrix_user_id: &str,
+    csrf_input: &str,
+) -> String {
+    let default_unit_id = world_tactics_first_unit_id_by_side(tactics_board, "player");
+    let default_target_tile = world_tactics_first_unit_tile_by_side(tactics_board, "enemy");
+    let default_command = tactics_board
+        .get("available_commands")
+        .and_then(Value::as_array)
+        .and_then(|commands| {
+            commands.iter().find(|command| {
+                command
+                    .get("command")
+                    .and_then(Value::as_str)
+                    .is_some_and(|value| value == "attack")
+            })
+        })
+        .and_then(|command| command.get("command"))
+        .and_then(Value::as_str)
+        .unwrap_or("select_unit");
+    let draft_body = format!(
+        "tactics intent draft: command={default_command} unit={default_unit_id} target={default_target_tile}; browser selected only, Rust validates legality and outcome."
+    );
+    format!(
+        "<section id=\"world-tactics-command-draft-panel\" class=\"tactics-command-draft-panel\" data-contract-version=\"{}\" data-board-cell-interaction-contract=\"{}\" data-unit-selection-contract=\"{}\" data-selected-command=\"{}\" data-selected-unit-id=\"{}\" data-selected-target-tile=\"{}\" data-draft-owner=\"browser_tactics_intent_builder\" data-command-handler-owner=\"rust_world_tactics_command_handler\" data-validation-owner=\"rust_tactics_command_validator\" data-source-of-truth=\"rust_tactics_command_model\" data-web-role=\"intent_only_visualization_input\"><h4 data-i18n-en=\"Command draft · intent only\" data-i18n-zh=\"指令草稿 · 仅提交意图\">Command draft · intent only</h4><p id=\"world-tactics-command-draft-status\" data-i18n-en=\"Select a unit, a board cell, then a command. Browser drafts intent only; Rust validates movement, combat, objective, and reward.\" data-i18n-zh=\"选择单位、棋格和指令。浏览器只起草意图；移动、战斗、目标和奖励由 Rust 校验。\">Select a unit, a board cell, then a command. Browser drafts intent only; Rust validates movement, combat, objective, and reward.</p><form id=\"world-tactics-command-draft-form\" method=\"post\" action=\"/world/web/tactics-command\" data-api-command-endpoint=\"/v1/world/tactics/command\" data-contract-version=\"{}\" data-source-of-truth=\"rust_world_tactics_command_handler\" data-web-role=\"intent_only_visualization_input\">{}<input type=\"hidden\" name=\"matrix_user_id\" value=\"{}\"><input type=\"hidden\" name=\"command\" value=\"{}\"><input type=\"hidden\" name=\"unit_id\" value=\"{}\"><input type=\"hidden\" name=\"target_tile\" value=\"{}\"><input type=\"hidden\" name=\"skill_id\" value=\"basic_unarmed\"><input type=\"hidden\" name=\"body\" value=\"{}\"><button type=\"submit\" data-i18n-en=\"Submit drafted intent to Rust\" data-i18n-zh=\"提交草稿意图给 Rust\">Submit drafted intent to Rust</button></form><small id=\"world-tactics-command-draft-preview\" data-preview-format=\"command_unit_tile\">draft: {} · {} → {}</small></section>",
+        escape_html_text(TRILLIONNIUM_TACTICS_COMMAND_INTENT_DRAFT_CONTRACT_VERSION),
+        escape_html_text(TRILLIONNIUM_TACTICS_BOARD_CELL_INTERACTION_CONTRACT_VERSION),
+        escape_html_text(TRILLIONNIUM_TACTICS_UNIT_SELECTION_CONTRACT_VERSION),
+        escape_html_text(default_command),
+        escape_html_text(&default_unit_id),
+        escape_html_text(&default_target_tile),
+        escape_html_text(TRILLIONNIUM_TACTICS_COMMAND_INTENT_DRAFT_CONTRACT_VERSION),
+        csrf_input,
+        escape_html_text(current_matrix_user_id),
+        escape_html_text(default_command),
+        escape_html_text(&default_unit_id),
+        escape_html_text(&default_target_tile),
+        escape_html_text(&draft_body),
+        escape_html_text(default_command),
+        escape_html_text(&default_unit_id),
+        escape_html_text(&default_target_tile),
+    )
 }
 
 fn world_trillionnium_training_forms_html(
@@ -1649,6 +1752,8 @@ pub(super) async fn get_world_web_shell(
     let tactics_player_hud =
         world_tactics_player_hud_html(&tactics_board, world_map.get("route_task_graph"), "world");
     let tactics_command_grid = world_tactics_command_grid_html(&tactics_board);
+    let tactics_command_draft_panel =
+        world_tactics_command_draft_panel_html(&tactics_board, current_matrix_user_id, &csrf_input);
     let trillionnium_training_forms =
         world_trillionnium_training_forms_html(&tactics_board, current_matrix_user_id, &csrf_input);
     let trillionnium_sect_cards = world_trillionnium_sect_cards_html(&tactics_board);
@@ -2601,8 +2706,9 @@ pub(super) async fn get_world_web_shell(
     .tactics-board-title {{ display:flex; justify-content:space-between; gap:10px; align-items:center; color:var(--gold); font-weight:950; letter-spacing:.06em; }}
     .tactics-board-title code,.tactics-base-card code {{ color:var(--cyan); background:rgba(100,227,255,.08); border-radius:999px; padding:3px 8px; }}
     .tactics-board {{ --tile-size:minmax(28px,1fr); position:relative; display:grid; grid-template-columns:repeat(8,var(--tile-size)); grid-template-rows:repeat(8,var(--tile-size)); gap:4px; min-height:clamp(330px,46vw,540px); border:1px solid rgba(248,195,91,.24); border-radius:18px; padding:9px; background:linear-gradient(135deg,rgba(1,4,9,.84),rgba(19,20,26,.94)); box-shadow:inset 0 0 50px rgba(0,0,0,.56); }}
-    .tactics-tile {{ position:relative; min-width:0; min-height:0; border:1px solid rgba(255,255,255,.085); border-radius:10px; background:rgba(255,255,255,.055); }}
+    .tactics-tile {{ position:relative; min-width:0; min-height:0; border:1px solid rgba(255,255,255,.085); border-radius:10px; background:rgba(255,255,255,.055); color:inherit; padding:0; cursor:pointer; appearance:none; font:inherit; }}
     .tactics-tile small {{ position:absolute; left:5px; top:4px; color:rgba(246,247,251,.38); font-size:10px; font-weight:850; }}
+    .tactics-tile:hover,.tactics-tile:focus-visible,.tactics-tile.is-selected {{ border-color:rgba(100,227,255,.72); box-shadow:0 0 0 2px rgba(100,227,255,.18),0 0 18px rgba(100,227,255,.22); outline:none; }}
     .terrain-road {{ background:linear-gradient(135deg,rgba(248,195,91,.24),rgba(255,255,255,.06)); }}
     .terrain-forest {{ background:linear-gradient(135deg,rgba(125,255,155,.22),rgba(26,77,46,.16)); }}
     .terrain-river {{ background:linear-gradient(135deg,rgba(100,227,255,.28),rgba(25,71,96,.18)); }}
@@ -2610,6 +2716,8 @@ pub(super) async fn get_world_web_shell(
     .terrain-market {{ background:linear-gradient(135deg,rgba(248,195,91,.26),rgba(100,227,255,.12)); }}
     .terrain-objective {{ background:linear-gradient(135deg,rgba(255,105,135,.32),rgba(248,195,91,.18)); box-shadow:0 0 0 1px rgba(248,195,91,.26),0 0 18px rgba(248,195,91,.18); }}
     .tactics-unit,.tactics-marker {{ align-self:center; justify-self:center; width:min(78%,50px); aspect-ratio:1; display:grid; place-items:center; border-radius:14px; font-size:clamp(18px,3vw,30px); font-weight:950; box-shadow:0 8px 22px rgba(0,0,0,.44),0 0 0 2px rgba(6,7,17,.76); z-index:3; }}
+    .tactics-unit {{ border:0; cursor:pointer; font:inherit; }}
+    .tactics-unit:focus-visible,.tactics-unit.is-selected {{ outline:2px solid #fff5b8; outline-offset:2px; box-shadow:0 8px 22px rgba(0,0,0,.44),0 0 0 3px rgba(255,245,184,.82),0 0 22px rgba(248,195,91,.45); }}
     .tactics-unit.player {{ background:linear-gradient(135deg,#f8c35b,#7dff9b); color:#071018; }}
     .tactics-unit.ally {{ background:linear-gradient(135deg,#64e3ff,#a78bfa); color:#06101a; }}
     .tactics-unit.enemy {{ background:linear-gradient(135deg,#ff6b8d,#f8c35b); color:#1c050b; }}
@@ -2623,6 +2731,12 @@ pub(super) async fn get_world_web_shell(
     .tactics-command-grid {{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }}
     .tactics-command {{ min-height:44px; display:flex; align-items:center; justify-content:center; text-align:center; text-decoration:none; border-radius:14px; border:1px solid rgba(248,195,91,.24); background:rgba(248,195,91,.095); color:#ffe2a2; font-weight:950; }}
     .tactics-command.primary {{ color:#071018; background:linear-gradient(135deg,#f8c35b,#7dff9b); }}
+    .tactics-command.is-selected {{ border-color:rgba(125,255,155,.72); box-shadow:0 0 0 2px rgba(125,255,155,.16),0 0 18px rgba(125,255,155,.18); }}
+    .tactics-command-draft-panel {{ display:grid; gap:8px; border:1px solid rgba(100,227,255,.22); background:rgba(100,227,255,.07); border-radius:16px; padding:12px; }}
+    .tactics-command-draft-panel h4,.tactics-command-draft-panel p {{ margin:0; }}
+    .tactics-command-draft-panel p,.tactics-command-draft-panel small {{ color:var(--muted); line-height:1.42; }}
+    .tactics-command-draft-panel form {{ display:grid; gap:8px; }}
+    .tactics-command-draft-panel button[type="submit"] {{ min-height:42px; border:0; border-radius:13px; background:linear-gradient(135deg,#64e3ff,#7dff9b); color:#061018; font-weight:950; cursor:pointer; }}
     .tactics-stat-line {{ display:grid; grid-template-columns:88px minmax(0,1fr) auto; gap:8px; align-items:center; color:var(--muted); font-size:13px; }}
     .tactics-meter {{ height:9px; border-radius:999px; overflow:hidden; background:rgba(255,255,255,.08); }}
     .tactics-meter span {{ display:block; height:100%; border-radius:inherit; background:linear-gradient(90deg,#64e3ff,#7dff9b); }}
@@ -2976,6 +3090,7 @@ pub(super) async fn get_world_web_shell(
             <nav class="tactics-command-grid" aria-label="Tactical actions" data-i18n-aria-label-en="Tactical actions" data-i18n-aria-label-zh="战术动作">
               {tactics_command_grid}
             </nav>
+            {tactics_command_draft_panel}
             <section id="trillionnium-training" class="trillionnium-training-panel" data-training-contract="trillionnium_training_command_v1" data-command-endpoint="/world/web/tactics-command" data-api-command-endpoint="/v1/world/tactics/command" data-source-of-truth="rust_mentor_training_validator" aria-label="Trillionnium mentor training" data-i18n-aria-label-en="Trillionnium mentor training" data-i18n-aria-label-zh="Trillionnium导师修炼">
               <h4 data-i18n-en="Mentor training" data-i18n-zh="导师修炼">Mentor training</h4>
               <p data-i18n-en="Web sends intent only; Rust checks mentor, OSM place, cost, cooldown, and skill mutation." data-i18n-zh="网页只提交意图；Rust 校验导师、OSM 地点、消耗、冷却和技能变更。">Web sends intent only; Rust checks mentor, OSM place, cost, cooldown, and skill mutation.</p>
@@ -3307,6 +3422,89 @@ pub(super) async fn get_world_web_shell(
       let mapRumFirstInteractiveSent = false;
       let lastSelection = null;
       let routeFilterMode = 'all';
+      const initializeTacticsIntentDraft = () => {{
+        const shell = document.getElementById('trillionnium-tactics-game-shell');
+        const panel = document.getElementById('world-tactics-command-draft-panel');
+        const form = document.getElementById('world-tactics-command-draft-form');
+        if (!shell || !panel || !form) return;
+        const preview = document.getElementById('world-tactics-command-draft-preview');
+        const status = document.getElementById('world-tactics-command-draft-status');
+        const state = {{
+          command: panel.dataset.selectedCommand || 'attack',
+          unitId: panel.dataset.selectedUnitId || 'lord',
+          targetTile: panel.dataset.selectedTargetTile || 'F5',
+        }};
+        const field = (name) => form.querySelector('[name="' + name + '"]');
+        const setField = (name, value) => {{
+          const input = field(name);
+          if (input) input.value = String(value || '');
+        }};
+        const markSelected = () => {{
+          shell.querySelectorAll('.tactics-tile[data-tile]').forEach((tile) => {{
+            tile.classList.toggle('is-selected', String(tile.dataset.tile || '') === state.targetTile);
+            tile.setAttribute('aria-selected', String(String(tile.dataset.tile || '') === state.targetTile));
+          }});
+          shell.querySelectorAll('.tactics-unit[data-unit]').forEach((unit) => {{
+            const selectedPlayerUnit = String(unit.dataset.side || '') === 'player' && String(unit.dataset.unit || '') === state.unitId;
+            const selectedTargetUnit = String(unit.dataset.side || '') === 'enemy' && String(unit.dataset.tile || '') === state.targetTile;
+            unit.classList.toggle('is-selected', selectedPlayerUnit || selectedTargetUnit);
+            unit.setAttribute('aria-selected', String(selectedPlayerUnit || selectedTargetUnit));
+          }});
+          shell.querySelectorAll('.tactics-command[data-command]').forEach((command) => {{
+            command.classList.toggle('is-selected', String(command.dataset.command || '') === state.command);
+            command.setAttribute('aria-selected', String(String(command.dataset.command || '') === state.command));
+          }});
+        }};
+        const writeDraft = () => {{
+          panel.dataset.selectedCommand = state.command;
+          panel.dataset.selectedUnitId = state.unitId;
+          panel.dataset.selectedTargetTile = state.targetTile;
+          setField('command', state.command);
+          setField('unit_id', state.unitId);
+          setField('target_tile', state.targetTile);
+          const body = 'tactics intent draft: command=' + state.command + ' unit=' + state.unitId + ' target=' + state.targetTile + '; browser selected only, Rust validates legality and outcome.';
+          setField('body', body);
+          if (preview) preview.textContent = 'draft: ' + state.command + ' · ' + state.unitId + ' → ' + state.targetTile;
+          if (status) status.textContent = 'Draft ready: ' + state.command + ' with ' + state.unitId + ' targeting ' + state.targetTile + '. Rust remains source of truth.';
+          markSelected();
+        }};
+        shell.addEventListener('click', (event) => {{
+          const unit = event.target.closest('.tactics-unit[data-unit]');
+          if (unit && shell.contains(unit)) {{
+            event.preventDefault();
+            if (String(unit.dataset.side || '') === 'enemy') {{
+              state.targetTile = unit.dataset.tile || state.targetTile;
+            }} else {{
+              state.unitId = unit.dataset.unit || state.unitId;
+            }}
+            writeDraft();
+            return;
+          }}
+          const tile = event.target.closest('.tactics-tile[data-tile]');
+          if (tile && shell.contains(tile)) {{
+            event.preventDefault();
+            state.targetTile = tile.dataset.tile || state.targetTile;
+            writeDraft();
+            return;
+          }}
+          const command = event.target.closest('.tactics-command[data-command]');
+          if (command && shell.contains(command)) {{
+            event.preventDefault();
+            state.command = command.dataset.command || state.command;
+            writeDraft();
+          }}
+        }});
+        writeDraft();
+        window.trillionniumTacticsIntentDraft = {{
+          contract_version: panel.dataset.contractVersion,
+          board_cell_interaction_contract_version: panel.dataset.boardCellInteractionContract,
+          unit_selection_contract_version: panel.dataset.unitSelectionContract,
+          source_of_truth: panel.dataset.sourceOfTruth,
+          web_role: panel.dataset.webRole,
+          getState: () => ({{ ...state }}),
+        }};
+      }};
+      initializeTacticsIntentDraft();
       {shared_map_runtime_primitives_js}
       const worldHandoffKey = () => routeHandoffStorageKey();
 
@@ -3866,6 +4064,7 @@ pub(super) async fn get_world_web_shell(
         tactics_session_state = tactics_session_state,
         tactics_player_hud = tactics_player_hud,
         tactics_command_grid = tactics_command_grid,
+        tactics_command_draft_panel = tactics_command_draft_panel,
         trillionnium_training_forms = trillionnium_training_forms,
         trillionnium_sect_cards = trillionnium_sect_cards,
         trillionnium_npc_cards = trillionnium_npc_cards,

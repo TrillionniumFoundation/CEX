@@ -2516,6 +2516,30 @@ fn world_tactics_projection_binds_trillionnium_state_to_osm_objectives() {
         "trillionnium_tactics_reward_settlement_v1"
     );
     assert_eq!(
+        tactics["tactics_board_cell_interaction_contract_version"],
+        "trillionnium_tactics_board_cell_interaction_v1"
+    );
+    assert_eq!(
+        tactics["tactics_unit_selection_contract_version"],
+        "trillionnium_tactics_unit_selection_v1"
+    );
+    assert_eq!(
+        tactics["tactics_command_intent_draft_contract_version"],
+        "trillionnium_tactics_command_intent_draft_v1"
+    );
+    assert_eq!(
+        tactics["intent_draft_policy"]["validation_owner"],
+        "rust_tactics_command_validator"
+    );
+    assert_eq!(
+        tactics["intent_draft_policy"]["command_handler_owner"],
+        "rust_world_tactics_command_handler"
+    );
+    assert_eq!(
+        tactics["intent_draft_policy"]["web_role"],
+        "intent_only_visualization_input"
+    );
+    assert_eq!(
         tactics["map_overlay_identity_contract_version"],
         "trillionnium_map_overlay_identity_v1"
     );
@@ -2536,6 +2560,16 @@ fn world_tactics_projection_binds_trillionnium_state_to_osm_objectives() {
         tactics["units"][0]["source_of_truth"],
         "rust_tactics_unit_model"
     );
+    assert_eq!(
+        tactics["units"][0]["unit_selection_contract_version"],
+        "trillionnium_tactics_unit_selection_v1"
+    );
+    assert_eq!(
+        tactics["units"][0]["command_intent_draft_contract_version"],
+        "trillionnium_tactics_command_intent_draft_v1"
+    );
+    assert_eq!(tactics["units"][0]["draft_input_name"], "unit_id");
+    assert_eq!(tactics["units"][0]["selection_role"], "active_unit");
     assert_eq!(tactics["units"][0]["owner"], "player");
     assert!(tactics["units"][0]["max_hp"].as_i64().unwrap_or_default() >= 100);
     assert_eq!(
@@ -2546,6 +2580,34 @@ fn world_tactics_projection_binds_trillionnium_state_to_osm_objectives() {
     assert_eq!(
         tactics["available_commands"][2]["validation_owner"],
         "rust_tactics_combat_handler"
+    );
+    assert_eq!(
+        tactics["available_commands"][2]["command_intent_draft_contract_version"],
+        "trillionnium_tactics_command_intent_draft_v1"
+    );
+    assert_eq!(
+        tactics["available_commands"][2]["draft_owner"],
+        "browser_tactics_intent_builder"
+    );
+    assert_eq!(
+        tactics["available_commands"][2]["target_tile_required"],
+        true
+    );
+    assert_eq!(
+        tactics["board"]["cells"][0]["board_cell_interaction_contract_version"],
+        "trillionnium_tactics_board_cell_interaction_v1"
+    );
+    assert_eq!(
+        tactics["board"]["cells"][0]["command_intent_draft_contract_version"],
+        "trillionnium_tactics_command_intent_draft_v1"
+    );
+    assert_eq!(
+        tactics["board"]["cells"][0]["draft_input_name"],
+        "target_tile"
+    );
+    assert_eq!(
+        tactics["board"]["cells"][0]["validation_owner"],
+        "rust_tactics_command_validator"
     );
     assert!(tactics["available_commands"]
         .as_array()
@@ -4267,10 +4329,23 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(app_html.contains("trillionnium_tactics_player_visible_surface_v1"));
     assert!(app_html.contains("app-tactics-objective-card"));
     assert!(app_html.contains("app-tactics-current-session-card"));
+    assert!(app_html.contains("app-tactics-intent-draft-card"));
     assert!(app_html.contains("app-tactics-reward-history-handoff"));
     assert!(app_html.contains("app-tactics-repeat-farming-copy"));
     assert!(app_html.contains("data-source-of-truth=\"rust_world_tactics_sessions\""));
+    assert!(app_html.contains("data-source-of-truth=\"rust_tactics_command_model\""));
     assert!(app_html.contains("data-web-role=\"visualization_input_only\""));
+    assert!(app_html.contains("data-web-role=\"intent_only_visualization_input\""));
+    assert!(
+        app_html.contains("data-contract-version=\"trillionnium_tactics_command_intent_draft_v1\"")
+    );
+    assert!(app_html.contains(
+        "data-board-cell-interaction-contract=\"trillionnium_tactics_board_cell_interaction_v1\""
+    ));
+    assert!(app_html
+        .contains("data-unit-selection-contract=\"trillionnium_tactics_unit_selection_v1\""));
+    assert!(app_html.contains("data-draft-owner=\"browser_tactics_intent_builder\""));
+    assert!(app_html.contains("data-command-handler-owner=\"rust_world_tactics_command_handler\""));
     assert!(app_html
         .contains("data-reward-history-contract=\"trillionnium_tactics_reward_history_v1\""));
     assert!(app_html.contains(
@@ -4379,10 +4454,25 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(world_html.contains("trillionnium_tactics_player_visible_surface_v1"));
     assert!(world_html.contains("world-tactics-objective-card"));
     assert!(world_html.contains("world-tactics-current-session-card"));
+    assert!(world_html.contains("world-tactics-command-draft-panel"));
+    assert!(world_html.contains("world-tactics-command-draft-form"));
     assert!(world_html.contains("world-tactics-reward-history-handoff"));
     assert!(world_html.contains("world-tactics-repeat-farming-copy"));
     assert!(world_html.contains("data-source-of-truth=\"rust_world_tactics_sessions\""));
+    assert!(world_html.contains("data-source-of-truth=\"rust_tactics_command_model\""));
+    assert!(world_html.contains("data-source-of-truth=\"rust_world_tactics_command_handler\""));
     assert!(world_html.contains("data-web-role=\"visualization_input_only\""));
+    assert!(world_html.contains("data-web-role=\"intent_only_visualization_input\""));
+    assert!(world_html.contains("trillionnium_tactics_board_cell_interaction_v1"));
+    assert!(world_html.contains("trillionnium_tactics_unit_selection_v1"));
+    assert!(world_html.contains("trillionnium_tactics_command_intent_draft_v1"));
+    assert!(world_html.contains("data-draft-target-tile="));
+    assert!(world_html.contains("data-draft-unit-id="));
+    assert!(world_html.contains("data-draft-command="));
+    assert!(world_html.contains("name=\"unit_id\""));
+    assert!(world_html.contains("name=\"target_tile\""));
+    assert!(world_html.contains("initializeTacticsIntentDraft"));
+    assert!(world_html.contains("window.trillionniumTacticsIntentDraft"));
     assert!(world_html
         .contains("data-reward-history-contract=\"trillionnium_tactics_reward_history_v1\""));
     assert!(world_html.contains(

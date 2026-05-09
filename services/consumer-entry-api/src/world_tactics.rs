@@ -42,6 +42,12 @@ pub(super) const TRILLIONNIUM_TACTICS_REWARD_SETTLEMENT_CONTRACT_VERSION: &str =
     "trillionnium_tactics_reward_settlement_v1";
 pub(super) const TRILLIONNIUM_TACTICS_REPEAT_FARMING_ANTI_CHEESE_CONTRACT_VERSION: &str =
     "trillionnium_tactics_repeat_farming_anti_cheese_v1";
+pub(super) const TRILLIONNIUM_TACTICS_BOARD_CELL_INTERACTION_CONTRACT_VERSION: &str =
+    "trillionnium_tactics_board_cell_interaction_v1";
+pub(super) const TRILLIONNIUM_TACTICS_UNIT_SELECTION_CONTRACT_VERSION: &str =
+    "trillionnium_tactics_unit_selection_v1";
+pub(super) const TRILLIONNIUM_TACTICS_COMMAND_INTENT_DRAFT_CONTRACT_VERSION: &str =
+    "trillionnium_tactics_command_intent_draft_v1";
 pub(super) const TRILLIONNIUM_MAP_OVERLAY_IDENTITY_CONTRACT_VERSION: &str =
     "trillionnium_map_overlay_identity_v1";
 
@@ -1983,11 +1989,18 @@ impl TacticsUnit {
             "move": self.move_range,
             "move_range": self.move_range,
             "attack_range": self.attack_range,
-        "status_effects": self.status_effects,
-        "osm_game_overlay_id": self.osm_game_overlay_id,
-        "overlay_identity_ref": self.osm_game_overlay_id,
-        "actor_matrix_user_id": self.actor_matrix_user_id,
+            "status_effects": self.status_effects,
+            "osm_game_overlay_id": self.osm_game_overlay_id,
+            "overlay_identity_ref": self.osm_game_overlay_id,
+            "actor_matrix_user_id": self.actor_matrix_user_id,
             "character_source": self.character_source,
+            "unit_selection_contract_version": TRILLIONNIUM_TACTICS_UNIT_SELECTION_CONTRACT_VERSION,
+            "command_intent_draft_contract_version": TRILLIONNIUM_TACTICS_COMMAND_INTENT_DRAFT_CONTRACT_VERSION,
+            "selectable_unit": true,
+            "selection_role": "active_unit",
+            "draft_input_name": "unit_id",
+            "validation_owner": "rust_tactics_command_validator",
+            "web_role": "intent_only_visualization_input",
             "source_of_truth": "rust_tactics_unit_model",
         })
     }
@@ -2017,6 +2030,11 @@ impl TacticsCommandDescriptor {
             "web_target": self.web_target,
             "required_skill_id": self.required_skill_id,
             "action_cost": self.action_cost,
+            "command_intent_draft_contract_version": TRILLIONNIUM_TACTICS_COMMAND_INTENT_DRAFT_CONTRACT_VERSION,
+            "draft_input_name": "command",
+            "target_tile_required": matches!(self.command, "move_unit" | "attack" | "use_skill" | "interact"),
+            "unit_selection_required": true,
+            "draft_owner": "browser_tactics_intent_builder",
             "source_of_truth": "rust_tactics_command_model",
             "web_role": "intent_only_visualization_input",
         })
@@ -2910,6 +2928,13 @@ pub(super) fn world_tactics_board_projection_json(
                 "source_of_truth": "rust_tactics_board_projection",
                 "osm_game_overlay_id": overlay_id,
                 "overlay_identity_ref": overlay_id,
+                "board_cell_interaction_contract_version": TRILLIONNIUM_TACTICS_BOARD_CELL_INTERACTION_CONTRACT_VERSION,
+                "command_intent_draft_contract_version": TRILLIONNIUM_TACTICS_COMMAND_INTENT_DRAFT_CONTRACT_VERSION,
+                "selectable": true,
+                "selection_role": "target_tile",
+                "draft_input_name": "target_tile",
+                "validation_owner": "rust_tactics_command_validator",
+                "web_role": "intent_only_visualization_input",
                 "movement_cost": match terrain {
                     "road" => 1,
                     "plain" => 1,
@@ -2993,7 +3018,22 @@ pub(super) fn world_tactics_board_projection_json(
         "tactics_simulation_tick_contract_version": TRILLIONNIUM_TACTICS_SIMULATION_TICK_CONTRACT_VERSION,
         "tactics_reward_settlement_contract_version": TRILLIONNIUM_TACTICS_REWARD_SETTLEMENT_CONTRACT_VERSION,
         "tactics_repeat_farming_anti_cheese_contract_version": TRILLIONNIUM_TACTICS_REPEAT_FARMING_ANTI_CHEESE_CONTRACT_VERSION,
+        "tactics_board_cell_interaction_contract_version": TRILLIONNIUM_TACTICS_BOARD_CELL_INTERACTION_CONTRACT_VERSION,
+        "tactics_unit_selection_contract_version": TRILLIONNIUM_TACTICS_UNIT_SELECTION_CONTRACT_VERSION,
+        "tactics_command_intent_draft_contract_version": TRILLIONNIUM_TACTICS_COMMAND_INTENT_DRAFT_CONTRACT_VERSION,
         "map_overlay_identity_contract_version": TRILLIONNIUM_MAP_OVERLAY_IDENTITY_CONTRACT_VERSION,
+        "intent_draft_policy": {
+            "contract_version": TRILLIONNIUM_TACTICS_COMMAND_INTENT_DRAFT_CONTRACT_VERSION,
+            "board_cell_interaction_contract_version": TRILLIONNIUM_TACTICS_BOARD_CELL_INTERACTION_CONTRACT_VERSION,
+            "unit_selection_contract_version": TRILLIONNIUM_TACTICS_UNIT_SELECTION_CONTRACT_VERSION,
+            "draft_owner": "browser_tactics_intent_builder",
+            "validation_owner": "rust_tactics_command_validator",
+            "command_handler_owner": "rust_world_tactics_command_handler",
+            "web_role": "intent_only_visualization_input",
+            "browser_may_select": ["unit_id", "target_tile", "command"],
+            "browser_may_not_resolve": ["movement_legality", "combat_result", "reward_status", "objective_completion"],
+            "source_of_truth": "rust_trillionnium_game_state"
+        },
         "open_source_base": {
             "repo": "tranchikhang/MedievalWar",
             "license": "MIT",

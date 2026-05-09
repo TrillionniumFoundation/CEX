@@ -354,6 +354,20 @@ fn client_app_tactics_player_hud_html(app: &Value) -> String {
         .get("active_unit_id")
         .and_then(Value::as_str)
         .unwrap_or("lord");
+    let default_target_tile = tactics_board
+        .get("units")
+        .and_then(Value::as_array)
+        .and_then(|units| {
+            units.iter().find(|unit| {
+                unit.get("side")
+                    .and_then(Value::as_str)
+                    .is_some_and(|side| side == "enemy")
+            })
+        })
+        .and_then(|unit| unit.get("position"))
+        .and_then(|position| position.get("tile_id"))
+        .and_then(Value::as_str)
+        .unwrap_or("F5");
     let active_overlay = session
         .get("active_overlay_id")
         .and_then(Value::as_str)
@@ -410,7 +424,7 @@ fn client_app_tactics_player_hud_html(app: &Value) -> String {
     let reward_history_cards =
         client_app_tactics_reward_history_cards_html(session, route_task, binding);
     format!(
-        "<section id=\"app-tactics-player-hud\" class=\"module app-tactics-player-hud\" data-contract-version=\"trillionnium_tactics_player_visible_surface_v1\" data-surface=\"app\" data-source-of-truth=\"rust_world_tactics_sessions\" data-web-role=\"visualization_input_only\">\n  <strong data-i18n-en=\"Tactics objective\" data-i18n-zh=\"战棋目标\">Tactics objective</strong>\n  <article id=\"app-tactics-objective-card\" class=\"module tactics-objective-card\" data-session-contract=\"{}\" data-objective-id=\"{}\" data-route-task-id=\"{}\" data-objective-progress=\"{}\" data-objective-goal=\"{}\" data-victory-state=\"{}\" data-reward-status=\"{}\"><strong data-i18n-en=\"Current tactics objective\" data-i18n-zh=\"当前战棋目标\">Current tactics objective</strong><span>{}</span><small>progress {}/{} · command {}</small><code>{}</code></article>\n  <article id=\"app-tactics-current-session-card\" class=\"module tactics-session-card\" data-session-id=\"{}\" data-active-unit-id=\"{}\" data-active-overlay-id=\"{}\" data-current-tick=\"{}\" data-action-points-remaining=\"{}\" data-tick-contract=\"{}\"><strong data-i18n-en=\"Current session state\" data-i18n-zh=\"当前会话状态\">Current session state</strong><span>unit {} · AP {} · tick {}</span><small>{} · reward {}</small></article>\n  <article id=\"app-tactics-reward-history-handoff\" class=\"module tactics-reward-history-card\" data-reward-history-contract=\"{}\" data-reward-contract=\"{}\" data-route-task-id=\"{}\" data-reward-status=\"{}\"><strong data-i18n-en=\"Reward-history handoff\" data-i18n-zh=\"奖励历史交接\">Reward-history handoff</strong><span>{}</span><div class=\"grid\">{}</div></article>\n  <article id=\"app-tactics-repeat-farming-copy\" class=\"module tactics-anti-cheese-card\" data-anti-cheese-contract=\"{}\" data-repeat-farming-block-count=\"{}\" data-result=\"{}\" data-gate-owner=\"rust_tactics_repeat_farming_guard\"><strong data-i18n-en=\"Repeat-farming guard\" data-i18n-zh=\"反刷守卫\">Repeat-farming guard</strong><span data-i18n-en=\"{}\" data-i18n-zh=\"{}\">{}</span><small data-i18n-en=\"Browser submits intent only; Rust blocks settled reward farming.\" data-i18n-zh=\"浏览器只提交意图；Rust 拦截已结算奖励的重复刷取。\">Browser submits intent only; Rust blocks settled reward farming.</small></article>\n</section>",
+        "<section id=\"app-tactics-player-hud\" class=\"module app-tactics-player-hud\" data-contract-version=\"trillionnium_tactics_player_visible_surface_v1\" data-surface=\"app\" data-source-of-truth=\"rust_world_tactics_sessions\" data-web-role=\"visualization_input_only\">\n  <strong data-i18n-en=\"Tactics objective\" data-i18n-zh=\"战棋目标\">Tactics objective</strong>\n  <article id=\"app-tactics-objective-card\" class=\"module tactics-objective-card\" data-session-contract=\"{}\" data-objective-id=\"{}\" data-route-task-id=\"{}\" data-objective-progress=\"{}\" data-objective-goal=\"{}\" data-victory-state=\"{}\" data-reward-status=\"{}\"><strong data-i18n-en=\"Current tactics objective\" data-i18n-zh=\"当前战棋目标\">Current tactics objective</strong><span>{}</span><small>progress {}/{} · command {}</small><code>{}</code></article>\n  <article id=\"app-tactics-current-session-card\" class=\"module tactics-session-card\" data-session-id=\"{}\" data-active-unit-id=\"{}\" data-active-overlay-id=\"{}\" data-current-tick=\"{}\" data-action-points-remaining=\"{}\" data-tick-contract=\"{}\"><strong data-i18n-en=\"Current session state\" data-i18n-zh=\"当前会话状态\">Current session state</strong><span>unit {} · AP {} · tick {}</span><small>{} · reward {}</small></article>\n  <article id=\"app-tactics-intent-draft-card\" class=\"module tactics-intent-draft-card\" data-contract-version=\"{}\" data-board-cell-interaction-contract=\"{}\" data-unit-selection-contract=\"{}\" data-selected-command=\"{}\" data-selected-unit-id=\"{}\" data-selected-target-tile=\"{}\" data-draft-owner=\"browser_tactics_intent_builder\" data-command-handler-owner=\"rust_world_tactics_command_handler\" data-source-of-truth=\"rust_tactics_command_model\" data-web-role=\"intent_only_visualization_input\"><strong data-i18n-en=\"Intent draft\" data-i18n-zh=\"意图草稿\">Intent draft</strong><span>draft {} · {} → {}</span><small data-i18n-en=\"Tap the world tactics board to change unit, tile, and command; Rust validates everything.\" data-i18n-zh=\"在世界战棋棋盘上点选单位、棋格和指令；所有校验都由 Rust 完成。\">Tap the world tactics board to change unit, tile, and command; Rust validates everything.</small></article>\n  <article id=\"app-tactics-reward-history-handoff\" class=\"module tactics-reward-history-card\" data-reward-history-contract=\"{}\" data-reward-contract=\"{}\" data-route-task-id=\"{}\" data-reward-status=\"{}\"><strong data-i18n-en=\"Reward-history handoff\" data-i18n-zh=\"奖励历史交接\">Reward-history handoff</strong><span>{}</span><div class=\"grid\">{}</div></article>\n  <article id=\"app-tactics-repeat-farming-copy\" class=\"module tactics-anti-cheese-card\" data-anti-cheese-contract=\"{}\" data-repeat-farming-block-count=\"{}\" data-result=\"{}\" data-gate-owner=\"rust_tactics_repeat_farming_guard\"><strong data-i18n-en=\"Repeat-farming guard\" data-i18n-zh=\"反刷守卫\">Repeat-farming guard</strong><span data-i18n-en=\"{}\" data-i18n-zh=\"{}\">{}</span><small data-i18n-en=\"Browser submits intent only; Rust blocks settled reward farming.\" data-i18n-zh=\"浏览器只提交意图；Rust 拦截已结算奖励的重复刷取。\">Browser submits intent only; Rust blocks settled reward farming.</small></article>\n</section>",
         escape_html_text(session_contract),
         escape_html_text(objective_id),
         escape_html_text(&route_task_id),
@@ -434,6 +448,15 @@ fn client_app_tactics_player_hud_html(app: &Value) -> String {
         current_tick,
         escape_html_text(victory_state),
         escape_html_text(reward_status),
+        escape_html_text(TRILLIONNIUM_TACTICS_COMMAND_INTENT_DRAFT_CONTRACT_VERSION),
+        escape_html_text(TRILLIONNIUM_TACTICS_BOARD_CELL_INTERACTION_CONTRACT_VERSION),
+        escape_html_text(TRILLIONNIUM_TACTICS_UNIT_SELECTION_CONTRACT_VERSION),
+        escape_html_text(objective_command),
+        escape_html_text(active_unit),
+        escape_html_text(default_target_tile),
+        escape_client_app_visible_text(objective_command),
+        escape_html_text(active_unit),
+        escape_html_text(default_target_tile),
         escape_html_text(reward_history_contract),
         escape_html_text(reward_contract),
         escape_html_text(&route_task_id),
@@ -1423,7 +1446,7 @@ pub(super) async fn get_client_app_web_shell(
     @keyframes trillionnium-route-pulse {{ 0%,100% {{ opacity:.55; transform:scale(1); }} 50% {{ opacity:1; transform:scale(1.08); }} }}
     @keyframes trillionnium-runner-bob {{ 0%,100% {{ transform:translateY(0) scale(1); }} 50% {{ transform:translateY(-5px) scale(1.06); }} }}
     .module p,.subtitle {{ color:var(--muted); }}
-    .app-tactics-player-hud {{ grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:8px; padding:10px; max-height:112px; overflow:auto; scrollbar-width:thin; }}
+    .app-tactics-player-hud {{ grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:8px; padding:10px; max-height:96px; overflow:auto; scrollbar-width:thin; }}
     .app-tactics-player-hud > strong {{ grid-column:1/-1; font-size:14px; }}
     .app-tactics-player-hud article.module {{ gap:4px; padding:10px; border-radius:14px; box-shadow:none; }}
     .app-tactics-player-hud article.module strong {{ font-size:12px; }}
@@ -1433,6 +1456,7 @@ pub(super) async fn get_client_app_web_shell(
     .app-tactics-player-hud article.module small,
     .app-tactics-player-hud article.module code {{ font-size:11px; line-height:1.2; overflow-wrap:anywhere; }}
     .app-tactics-player-hud .tactics-reward-history-card .grid {{ display:none; }}
+    .app-tactics-player-hud .tactics-intent-draft-card small {{ display:none; }}
     .map-panel p {{ color:var(--muted); line-height:1.55; }}
     code {{ color:var(--cyan); background:rgba(100,227,255,.08); padding:3px 7px; border-radius:8px; }}
     a {{ color:var(--gold); }}
