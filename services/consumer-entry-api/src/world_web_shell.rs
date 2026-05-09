@@ -3079,7 +3079,7 @@ pub(super) async fn get_world_web_shell(
       <article class="pulse-card"><span data-i18n-en="Quest Cards" data-i18n-zh="任务牌">Quest Cards</span><b>{listings}</b><small data-i18n-en="Available bounties" data-i18n-zh="可接取悬赏">Available bounties</small></article>
       <article class="pulse-card"><span data-i18n-en="Commissions" data-i18n-zh="委托">Commissions</span><b>{work_orders}</b><small data-i18n-en="Accepted loops" data-i18n-zh="已进入执行循环">Accepted loops</small></article>
       <article class="pulse-card"><span data-i18n-en="Agents" data-i18n-zh="居民">Agents</span><b>{entities}</b><small data-i18n-en="World residents" data-i18n-zh="世界居民">World residents</small></article>
-      <details id="world-stats-compact-more" class="world-stats-more">
+      <details id="world-stats-compact-more" class="world-stats-more" data-secondary-dashboard-contract="trillionnium_secondary_dashboard_panels_v1" data-secondary-dashboard-role="secondary_counter_drawer" data-main-experience="false" data-default-state="collapsed">
         <summary data-i18n-en="More world counters" data-i18n-zh="更多世界统计">More world counters</summary>
         <div class="stats-more-grid">
           <div class="stat"><span data-i18n-en="Zones" data-i18n-zh="区域">Zones</span><b>{zones}</b></div>
@@ -3166,7 +3166,7 @@ pub(super) async fn get_world_web_shell(
             <small data-i18n-en="Next mod path: replace placeholder units with Trillionnium agents, convert POIs into capture points, and use route evidence as battle reports." data-i18n-zh="下一步魔改：把占位单位替换为 Trillionnium Agent，把 POI 转成占领点，把路线证据转成战报。">Next mod path: replace placeholder units with Trillionnium agents, convert POIs into capture points, and use route evidence as battle reports.</small>
           </aside>
         </section>
-        <details class="map-copy trillionnium-engine-drawer" data-default-state="collapsed" data-openclawstreetmap-role="supporting_engine_diagnostics">
+        <details id="world-map-underlay-details" class="map-copy trillionnium-engine-drawer" data-secondary-dashboard-contract="trillionnium_secondary_dashboard_panels_v1" data-secondary-dashboard-role="supporting_engine_diagnostics" data-main-experience="false" data-default-state="collapsed" data-openclawstreetmap-role="supporting_engine_diagnostics">
           <summary data-i18n-en="OpenClawStreetMap underlay / engine details" data-i18n-zh="OpenClawStreetMap 底层引擎 / 技术细节">OpenClawStreetMap underlay / engine details</summary>
           <div class="trillionnium-engine-drawer-body">
           <div class="pill" data-i18n-en="{map_product_name_html}" data-i18n-zh="Trillionnium 世界地图">{map_product_name_html}</div>
@@ -3255,11 +3255,11 @@ pub(super) async fn get_world_web_shell(
         <div id="world-real-map" data-engine="{map_engine_id}" data-provider="{tile_provider}" aria-label="Trillionnium World Map" data-i18n-aria-label-en="Trillionnium World Map" data-i18n-aria-label-zh="Trillionnium 世界地图"></div>
       </div>
     </section>
-    <section class="world-secondary-collapsed" data-mobile-ia="collapsed_secondary_panel">
+    <section class="world-secondary-collapsed world-secondary-detail-panel" data-secondary-dashboard-contract="trillionnium_secondary_dashboard_panels_v1" data-secondary-dashboard-role="secondary_detail_panel" data-main-experience="false" data-default-state="collapsed_on_mobile" data-primary-loop-anchor="trillionnium-tactics-game-shell" data-mobile-ia="collapsed_secondary_panel">
       <h2 data-i18n-en="World Regions" data-i18n-zh="世界区域">World Regions</h2>
       <div class="grid">{zone_cards}</div>
     </section>
-    <section id="world-map-move-panel" class="panel">
+    <section id="world-map-move-panel" class="panel world-secondary-detail-panel" data-secondary-dashboard-contract="trillionnium_secondary_dashboard_panels_v1" data-secondary-dashboard-role="secondary_detail_panel" data-main-experience="false" data-default-state="available_after_core_loop" data-primary-loop-anchor="trillionnium-tactics-game-shell">
       <h2 data-i18n-en="Detailed World Map" data-i18n-zh="详细世界地图">Detailed World Map</h2>
       <p class="subtitle">{current_map_summary}</p>
       <div class="mini-grid">{map_cards}</div>
@@ -3283,20 +3283,20 @@ pub(super) async fn get_world_web_shell(
           <button type="submit" data-i18n-en="Submit World Action" data-i18n-zh="提交世界行动">Submit World Action</button>
         </form>
       </div>
-      <div class="panel world-secondary-collapsed" data-mobile-ia="collapsed_secondary_panel">
+      <div class="panel world-secondary-collapsed world-secondary-detail-panel" data-secondary-dashboard-contract="trillionnium_secondary_dashboard_panels_v1" data-secondary-dashboard-role="secondary_detail_panel" data-main-experience="false" data-default-state="collapsed_on_mobile" data-primary-loop-anchor="trillionnium-tactics-game-shell" data-mobile-ia="collapsed_secondary_panel">
         <h2 data-i18n-en="World Event Timeline" data-i18n-zh="世界事件时间线">World Event Timeline</h2>
         <ul id="world-event-timeline" class="timeline">{event_items}</ul>
       </div>
     </section>
-    <section class="panel world-secondary-collapsed" data-mobile-ia="collapsed_secondary_panel">
+    <section class="panel world-secondary-collapsed world-secondary-detail-panel" data-secondary-dashboard-contract="trillionnium_secondary_dashboard_panels_v1" data-secondary-dashboard-role="secondary_detail_panel" data-main-experience="false" data-default-state="collapsed_on_mobile" data-primary-loop-anchor="trillionnium-tactics-game-shell" data-mobile-ia="collapsed_secondary_panel">
       <h2 data-i18n-en="Places" data-i18n-zh="地点">Places</h2>
       <div class="mini-grid">{location_cards}</div>
     </section>
-    <section class="panel world-secondary-collapsed" data-mobile-ia="collapsed_secondary_panel">
+    <section class="panel world-secondary-collapsed world-secondary-detail-panel" data-secondary-dashboard-contract="trillionnium_secondary_dashboard_panels_v1" data-secondary-dashboard-role="secondary_detail_panel" data-main-experience="false" data-default-state="collapsed_on_mobile" data-primary-loop-anchor="trillionnium-tactics-game-shell" data-mobile-ia="collapsed_secondary_panel">
       <h2 data-i18n-en="Agent Residents · NPC" data-i18n-zh="Agent 居民 · NPC">Agent Residents · NPC</h2>
       <div class="mini-grid">{entity_cards}</div>
     </section>
-    <section id="world-assets-panel" class="panel world-secondary-collapsed" data-mobile-ia="collapsed_secondary_panel">
+    <section id="world-assets-panel" class="panel world-secondary-collapsed world-secondary-detail-panel" data-secondary-dashboard-contract="trillionnium_secondary_dashboard_panels_v1" data-secondary-dashboard-role="secondary_detail_panel" data-main-experience="false" data-default-state="collapsed_on_mobile" data-primary-loop-anchor="trillionnium-tactics-game-shell" data-mobile-ia="collapsed_secondary_panel">
       <h2 data-i18n-en="Character Items" data-i18n-zh="角色道具">Character Items</h2>
       <div class="mini-grid">{asset_cards}</div>
       <form method="post" action="/world/web/asset" style="margin-top:16px">
@@ -3307,7 +3307,7 @@ pub(super) async fn get_world_web_shell(
         <button type="submit" data-i18n-en="Upgrade Item" data-i18n-zh="升级道具">Upgrade Item</button>
       </form>
     </section>
-    <section id="world-companies-panel" class="panel world-secondary-collapsed" data-mobile-ia="collapsed_secondary_panel">
+    <section id="world-companies-panel" class="panel world-secondary-collapsed world-secondary-detail-panel" data-secondary-dashboard-contract="trillionnium_secondary_dashboard_panels_v1" data-secondary-dashboard-role="secondary_detail_panel" data-main-experience="false" data-default-state="collapsed_on_mobile" data-primary-loop-anchor="trillionnium-tactics-game-shell" data-mobile-ia="collapsed_secondary_panel">
       <h2 data-i18n-en="Studios and Hubs" data-i18n-zh="工坊与据点">Studios and Hubs</h2>
       <div class="mini-grid">{company_cards}</div>
       <form method="post" action="/world/web/company" style="margin-top:16px">
@@ -3318,7 +3318,7 @@ pub(super) async fn get_world_web_shell(
         <button type="submit" data-i18n-en="Launch Studio" data-i18n-zh="建立工坊">Launch Studio</button>
       </form>
     </section>
-    <section id="world-listings-panel" class="panel world-secondary-collapsed" data-mobile-ia="collapsed_secondary_panel">
+    <section id="world-listings-panel" class="panel world-secondary-collapsed world-secondary-detail-panel" data-secondary-dashboard-contract="trillionnium_secondary_dashboard_panels_v1" data-secondary-dashboard-role="secondary_detail_panel" data-main-experience="false" data-default-state="collapsed_on_mobile" data-primary-loop-anchor="trillionnium-tactics-game-shell" data-mobile-ia="collapsed_secondary_panel">
       <h2 data-i18n-en="Hubs and Quest Cards" data-i18n-zh="据点与任务牌">Hubs and Quest Cards</h2>
       <div class="mini-grid">{shop_cards}</div>
       <div class="mini-grid" style="margin-top:12px">{listing_cards}</div>
@@ -3390,12 +3390,12 @@ pub(super) async fn get_world_web_shell(
       </form>
       </details>
     </section>
-    <section class="panel world-secondary-collapsed" data-mobile-ia="collapsed_secondary_panel">
+    <section class="panel world-secondary-collapsed world-secondary-detail-panel" data-secondary-dashboard-contract="trillionnium_secondary_dashboard_panels_v1" data-secondary-dashboard-role="secondary_detail_panel" data-main-experience="false" data-default-state="collapsed_on_mobile" data-primary-loop-anchor="trillionnium-tactics-game-shell" data-mobile-ia="collapsed_secondary_panel">
       <h2 data-i18n-en="Faction Reputation Map" data-i18n-zh="阵营声望图">Faction Reputation Map</h2>
       <div class="mini-grid">{faction_cards}</div>
       <div class="mini-grid" style="margin-top:12px">{standing_cards}</div>
     </section>
-    <section id="world-contracts-panel" class="panel world-secondary-collapsed" data-mobile-ia="collapsed_secondary_panel">
+    <section id="world-contracts-panel" class="panel world-secondary-collapsed world-secondary-detail-panel" data-secondary-dashboard-contract="trillionnium_secondary_dashboard_panels_v1" data-secondary-dashboard-role="secondary_detail_panel" data-main-experience="false" data-default-state="collapsed_on_mobile" data-primary-loop-anchor="trillionnium-tactics-game-shell" data-mobile-ia="collapsed_secondary_panel">
       <h2 data-i18n-en="World Contracts" data-i18n-zh="世界契约">World Contracts</h2>
       <div id="world-contract-cards-live" class="mini-grid">{contract_cards}</div>
       <form id="world-contract-completion-form" method="post" action="/world/web/contract" style="margin-top:16px">
@@ -3406,11 +3406,11 @@ pub(super) async fn get_world_web_shell(
         <button type="submit" data-i18n-en="Complete Contract" data-i18n-zh="完成契约">Complete Contract</button>
       </form>
     </section>
-    <section class="panel world-secondary-collapsed" data-mobile-ia="collapsed_secondary_panel">
+    <section class="panel world-secondary-collapsed world-secondary-detail-panel" data-secondary-dashboard-contract="trillionnium_secondary_dashboard_panels_v1" data-secondary-dashboard-role="secondary_detail_panel" data-main-experience="false" data-default-state="collapsed_on_mobile" data-primary-loop-anchor="trillionnium-tactics-game-shell" data-mobile-ia="collapsed_secondary_panel">
       <h2 data-i18n-en="Quest Route Graph" data-i18n-zh="任务路线图">Quest Route Graph</h2>
       <div id="world-route-task-graph-live" class="mini-grid">{world_route_task_graph_cards}</div>
     </section>
-    <section class="panel world-secondary-collapsed" data-mobile-ia="collapsed_secondary_panel">
+    <section class="panel world-secondary-collapsed world-secondary-detail-panel" data-secondary-dashboard-contract="trillionnium_secondary_dashboard_panels_v1" data-secondary-dashboard-role="secondary_detail_panel" data-main-experience="false" data-default-state="collapsed_on_mobile" data-primary-loop-anchor="trillionnium-tactics-game-shell" data-mobile-ia="collapsed_secondary_panel">
       <h2 data-i18n-en="Playable Commands" data-i18n-zh="可玩指令">Playable Commands</h2>
       <p class="subtitle"><code>/world</code> <code data-i18n-en="/world action Launch an AI Design Studio" data-i18n-zh="/world action 我要开一家 AI 设计工坊">/world action Launch an AI Design Studio</code> <code>/league</code> <code>/arena</code> <code>/guild</code> <code>/raid</code></p>
     </section>

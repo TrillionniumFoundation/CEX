@@ -154,6 +154,21 @@ function checkTacticsPlayerSurface(result) {
   assertMetric((surface.repeatText || '').includes('Repeat-farming guard') || (surface.repeatText || '').includes('Repeat farming blocked'), `${result.profile}/${result.name} tactics repeat-farming copy missing`, surface);
 }
 
+function checkWorldSecondaryDashboards(result) {
+  if (result.name !== 'world') return;
+  const secondary = result.worldSecondaryDashboards || {};
+  assertMetric(Number(secondary.contractVersionCount || 0) >= 10, `${result.profile}/world secondary dashboard/detail contract missing`, secondary);
+  assertMetric(Number(secondary.detailPanelCount || 0) >= 9, `${result.profile}/world old dashboard panels must stay marked as secondary detail panels`, secondary);
+  assertMetric(Number(secondary.mainExperienceFalseCount || 0) === Number(secondary.contractVersionCount || 0), `${result.profile}/world secondary panels must not claim main experience`, secondary);
+  assertMetric(Number(secondary.collapsedOnMobileCount || 0) >= 8, `${result.profile}/world dashboard panels must keep collapsed-on-mobile policy`, secondary);
+  assertMetric(secondary.statsCounterRole === 'secondary_counter_drawer', `${result.profile}/world extra counters must stay in secondary drawer`, secondary);
+  assertMetric(secondary.underlayRole === 'supporting_engine_diagnostics', `${result.profile}/world map diagnostics must stay secondary/supporting`, secondary);
+  assertMetric(secondary.mapMoveRole === 'secondary_detail_panel' && secondary.mapMoveDefaultState === 'available_after_core_loop', `${result.profile}/world detailed map panel must stay secondary after core loop`, secondary);
+  if (result.profile === 'mobile' && secondary.minDetailPanelY !== null && secondary.minDetailPanelY !== undefined && yOf(result, 'action') !== undefined) {
+    assertMetric(Number(secondary.minDetailPanelY) > yOf(result, 'action'), `${result.profile}/world secondary dashboard panels must stay after action console`, { secondary, actionY: yOf(result, 'action') });
+  }
+}
+
 function checkMobile(result, limits) {
   assertMetric(result.scrollH <= limits.maxScrollH, `${result.profile}/${result.name} scroll height regressed`, { scrollH: result.scrollH, limit: limits.maxScrollH });
   if (result.name === 'app') {
@@ -299,6 +314,7 @@ function checkMobile(result, limits) {
     assertMetric(shadow.parityContract === 'trillionnium_world_map_maplibre_shadow_parity_v1' && String(shadow.rollbackDrillRequired) === 'true' && Number(shadow.canaryPercent || -1) === 0, `${result.profile}/world MapLibre shadow parity/canary/rollback contract missing`, shadow);
     assertMetric(shadow.activeEngine === 'leaflet_openstreetmap_v1' && shadow.shadowEngine === 'maplibre_gl_v1', `${result.profile}/world shadow renderer engine ids missing`, shadow);
     assertMetric(shadow.status === 'shadow_only_not_user_facing', `${result.profile}/world MapLibre must stay shadow-only`, shadow);
+    checkWorldSecondaryDashboards(result);
     const map = yOf(result, 'map');
     const pulse = yOf(result, 'pulse');
     const action = yOf(result, 'action');
@@ -326,6 +342,7 @@ function checkDesktop(result, limits) {
     const map = yOf(result, 'map');
     const action = yOf(result, 'action');
     const actionH = hOf(result, 'action');
+    checkWorldSecondaryDashboards(result);
     assertMetric(map < action, 'desktop/world must expose map before action console', { map, action });
     assertMetric(map <= limits.maxMapY && action <= limits.maxActionY && actionH <= limits.maxActionH, 'desktop/world action console is too deep or too tall', { map, action, actionH, limits });
   } else if (result.name === 'league') {
@@ -615,6 +632,21 @@ async function auditPage(page, profile, target) {
       rollbackDrillRequired: worldMapShadowRenderer?.dataset.rollbackDrillRequired || null,
       text: text(worldMapShadowRenderer).slice(0, 260),
     };
+    const worldSecondaryDashboardElements = Array.from(document.querySelectorAll('[data-secondary-dashboard-contract="trillionnium_secondary_dashboard_panels_v1"]'));
+    const worldSecondaryDetailElements = worldSecondaryDashboardElements.filter((el) => el.dataset.secondaryDashboardRole === 'secondary_detail_panel');
+    const worldSecondaryDashboards = {
+      contractVersionCount: worldSecondaryDashboardElements.length,
+      detailPanelCount: worldSecondaryDetailElements.length,
+      mainExperienceFalseCount: worldSecondaryDashboardElements.filter((el) => el.dataset.mainExperience === 'false').length,
+      collapsedOnMobileCount: worldSecondaryDashboardElements.filter((el) => el.dataset.defaultState === 'collapsed_on_mobile').length,
+      minDetailPanelY: worldSecondaryDetailElements.length ? Math.min(...worldSecondaryDetailElements.map((el) => Math.round(el.getBoundingClientRect().top))) : null,
+      statsCounterRole: document.getElementById('world-stats-compact-more')?.dataset.secondaryDashboardRole || null,
+      underlayRole: document.getElementById('world-map-underlay-details')?.dataset.secondaryDashboardRole || null,
+      mapMoveRole: document.getElementById('world-map-move-panel')?.dataset.secondaryDashboardRole || null,
+      mapMoveDefaultState: document.getElementById('world-map-move-panel')?.dataset.defaultState || null,
+      primaryLoopAnchors: Array.from(new Set(worldSecondaryDetailElements.map((el) => el.dataset.primaryLoopAnchor).filter(Boolean))),
+      text: worldSecondaryDashboardElements.map((el) => text(el).slice(0, 80)).slice(0, 8),
+    };
     const routeRunnerHandoff = {
       appRouteSummaryPresent: Boolean(appRouteHandoff),
       appFeedSummaryPresent: Boolean(appFeedHandoff),
@@ -693,6 +725,7 @@ async function auditPage(page, profile, target) {
       mapWeakNetwork,
       mapLocationPrivacy,
       shadowRenderer,
+      worldSecondaryDashboards,
       firstViewportButtons,
       firstViewportText: text(document.body).slice(0, 1400),
     };

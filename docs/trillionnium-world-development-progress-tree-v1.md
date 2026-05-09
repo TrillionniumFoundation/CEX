@@ -722,7 +722,7 @@ git log --oneline -5
   - primary action
   - risk/reward
 - [x] TW-6.7 Add accessibility labels and keyboard/low-motion support for the tactics shell.
-- [ ] TW-6.8 Keep old dashboard panels available as secondary/detail panels, not main experience.
+- [x] TW-6.8 Keep old dashboard panels available as secondary/detail panels, not main experience.
 
 ### TW-7 — Map and runtime operations
 
@@ -1036,7 +1036,7 @@ Expected first-slice deliverables:
   - UI audit green: `run/trillionnium-ui-audit/ui-audit-summary-1778330124-394760.json`
 - Remaining next:
   - [x] TW-6.7 accessibility labels, keyboard traversal, and low-motion support for the tactics shell.
-  - [ ] TW-6.8 keep old dashboard/detail panels secondary, not the main experience.
+  - [x] TW-6.8 keep old dashboard/detail panels secondary, not the main experience.
 
 #### Update 2026-05-09 TW-6.7
 
@@ -1067,7 +1067,34 @@ Expected first-slice deliverables:
   - Browser E2E green: `run/league-browser/browser-e2e-summary-1778333088-413874.json`
   - UI audit green: `run/trillionnium-ui-audit/ui-audit-summary-1778333221-414772.json`
 - Remaining next:
-  - [ ] TW-6.8 keep old dashboard/detail panels secondary, not the main experience.
+  - [x] TW-6.8 keep old dashboard/detail panels secondary, not the main experience.
+
+#### Update 2026-05-09 TW-6.8
+
+- Commit: this slice (`fix: keep trillionnium dashboard panels secondary`).
+- Completed secondary/detail panel slice:
+  - [x] Added `trillionnium_secondary_dashboard_panels_v1` metadata to the old `/world` dashboard/detail sections while leaving the primary experience anchored on the tactics/game/action loop.
+  - [x] Marked legacy/dense panels with `data-secondary-dashboard-role="secondary_detail_panel"`, `data-main-experience="false"`, `data-default-state="collapsed_on_mobile"`, and `data-primary-loop-anchor="trillionnium-tactics-game-shell"`.
+  - [x] Kept the extra world counters inside a `secondary_counter_drawer` and the OpenClawStreetMap underlay diagnostics inside collapsed `supporting_engine_diagnostics` details.
+  - [x] Marked the detailed map move panel as `available_after_core_loop`, so it remains accessible for power users without becoming the main first-session route.
+  - [x] Web E2E, browser E2E, UI audit, and Rust shell tests now hard-gate the secondary-dashboard contract and collapsed/mobile-secondary policy.
+- Evidence:
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `bash -n scripts/check-trillionnium-league-web-e2e.sh`
+  - `node --check scripts/playwright/trillionnium-browser-e2e.mjs`
+  - `node --check scripts/playwright/trillionnium-ui-audit.mjs`
+  - `cargo check -p consumer-entry-api`
+  - targeted `cargo test -p consumer-entry-api web_map_shells_render_live_event_task_focus_metadata -- --nocapture`
+  - `cargo test -p consumer-entry-api -- --nocapture` (`133 passed`)
+  - `cargo clippy --workspace -- -D warnings`
+  - `cargo test --workspace`
+  - `CEX_ENV_FILE=run/local-production/.env scripts/runtime-manager-linux.sh restart/status` green
+  - Web E2E green: `run/league-web/web-e2e-summary-1778335844.json`
+  - Browser E2E green: `run/league-browser/browser-e2e-summary-1778335855-432426.json`
+  - UI audit green: `run/trillionnium-ui-audit/ui-audit-summary-1778335990-433359.json`
+- Remaining next:
+  - [ ] TW-7.4 explicit OSM provider health/readiness section, or continue the next TW-6/TW-7 UI-runtime hardening slice if product direction changes.
 
 ---
 
@@ -1132,6 +1159,6 @@ Also append a one-paragraph summary to `/home/qian/.openclaw/workspace/memory/YY
 
 If the next instruction is simply “continue”, start here:
 
-> **TW-6 continued:** after the `/world` + `/app` board-cell/unit/command intent-drafting and TW-6.7 accessibility/keyboard/low-motion slices, continue with TW-6.8 keeping old dashboard/detail panels secondary while preserving Rust as the source of truth and browser intent-only semantics.
+> **Next pointer:** TW-6.8 is complete. If the next instruction is simply “continue”, start with TW-7.4 explicit OSM provider health/readiness section (fixture mode green, live mode disabled/fail-closed), unless product direction shifts to another TW-6/TW-7 UI-runtime hardening slice.
 
 Do not start live Overpass/Geofabrik ingestion yet. Do not promote MapLibre. Do not convert the web shell into a standalone JS source of truth.

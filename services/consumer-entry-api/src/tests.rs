@@ -4440,6 +4440,21 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(world_html.contains("data-cache-contract=\"trillionnium_world_map_payload_cache_v1\""));
     assert!(world_html.contains("world-secondary-collapsed"));
     assert!(world_html.contains("data-mobile-ia=\"collapsed_secondary_panel\""));
+    assert!(world_html.contains("trillionnium_secondary_dashboard_panels_v1"));
+    assert!(world_html.contains("data-secondary-dashboard-role=\"secondary_detail_panel\""));
+    assert!(world_html.contains("data-secondary-dashboard-role=\"secondary_counter_drawer\""));
+    assert!(world_html.contains("data-secondary-dashboard-role=\"supporting_engine_diagnostics\""));
+    assert!(world_html.contains("data-main-experience=\"false\""));
+    assert!(world_html.contains("data-default-state=\"collapsed_on_mobile\""));
+    assert!(world_html.contains("data-primary-loop-anchor=\"trillionnium-tactics-game-shell\""));
+    assert!(
+        world_html
+            .matches(
+                "data-secondary-dashboard-contract=\"trillionnium_secondary_dashboard_panels_v1\""
+            )
+            .count()
+            >= 10
+    );
     assert!(world_html.contains("buildViewportDeltaUrl"));
     assert!(world_html.contains("postMapRumSample"));
     assert!(world_html.contains("/world/web/map-rum"));

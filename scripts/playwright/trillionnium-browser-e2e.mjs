@@ -637,6 +637,11 @@ async function main() {
   assert(await count(page, '#world-tactics-repeat-farming-copy[data-anti-cheese-contract="trillionnium_tactics_repeat_farming_anti_cheese_v1"]') === 1, 'world tactics repeat-farming copy missing');
   assert(await count(page, '#world-pulse-strip .pulse-card') === 5, 'world pulse strip should keep only compact primary counters visible');
   assert(await count(page, '#world-stats-compact-more .stat') >= 12, 'world compact stats drawer missing secondary counters');
+  const secondaryDashboardPanels = await count(page, '[data-secondary-dashboard-contract="trillionnium_secondary_dashboard_panels_v1"][data-main-experience="false"]');
+  assert(secondaryDashboardPanels >= 10, 'world secondary dashboard/detail panels contract missing', { secondaryDashboardPanels });
+  assert(await count(page, '#world-stats-compact-more[data-secondary-dashboard-role="secondary_counter_drawer"][data-default-state="collapsed"]') === 1, 'world secondary counter drawer must stay collapsed');
+  assert(await count(page, '#world-map-underlay-details[data-secondary-dashboard-role="supporting_engine_diagnostics"][data-default-state="collapsed"]') === 1, 'world map diagnostics must remain secondary collapsed details');
+  assert(await count(page, '#world-map-move-panel[data-secondary-dashboard-role="secondary_detail_panel"][data-default-state="available_after_core_loop"]') === 1, 'world detailed map panel must be marked secondary detail');
   const pulseBox = await page.locator('#world-pulse-strip').boundingBox({ timeout: 10_000 });
   assert(pulseBox && pulseBox.height < 360, 'world mobile stats area is too tall', pulseBox);
   await assertNoVisibleBilingualSlashPair(page, '/world English system language');
