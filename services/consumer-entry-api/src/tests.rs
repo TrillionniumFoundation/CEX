@@ -2985,6 +2985,39 @@ async fn world_tactics_command_endpoint_validates_training_place_and_mutates_cha
             > 0
     );
 
+    let (repeat_attack_status, repeat_attack) = send_json_request(
+        &app,
+        "POST",
+        "/v1/world/tactics/command",
+        &[],
+        json!({
+            "matrix_user_id": "@alice:local.dev",
+            "room_id": "!world:local.dev",
+            "command": "attack",
+            "unit_id": "lord",
+            "target_tile": "F5",
+            "skill_id": "basic_unarmed",
+            "body": "try to farm the already settled market bandit reward again"
+        }),
+    )
+    .await;
+    assert_eq!(repeat_attack_status, StatusCode::OK);
+    assert_eq!(repeat_attack["outcome"]["accepted"], false);
+    assert_eq!(repeat_attack["outcome"]["result"], "repeat_farming_blocked");
+    assert_eq!(
+        repeat_attack["outcome"]["anti_cheese_contract_version"],
+        "trillionnium_tactics_repeat_farming_anti_cheese_v1"
+    );
+    assert_eq!(repeat_attack["outcome"]["anti_cheese_gate_enforced"], true);
+    assert_eq!(
+        repeat_attack["simulation_tick"]["outcome_result"],
+        "repeat_farming_blocked"
+    );
+    assert_eq!(
+        repeat_attack["simulation_tick"]["reward_status_after"],
+        "settled"
+    );
+
     let (miss_status, miss) = send_json_request(
         &app,
         "POST",
@@ -3268,6 +3301,65 @@ async fn world_tactics_command_endpoint_validates_training_place_and_mutates_cha
             |event| event.event_kind.as_str() == "tactics_victory_reward"
                 && event.matrix_user_id == "@alice:local.dev"
         ));
+    let app = client_app_json(&guard, "@alice:local.dev");
+    let route_tasks = app["map_hub"]["route_task_graph"]["tasks"]
+        .as_array()
+        .expect("route task graph tasks");
+    let tactics_task = route_tasks
+        .iter()
+        .find(|task| task["latest_bucket"] == "tactics_objective")
+        .expect("tactics objective should bind into route task graph");
+    assert_eq!(
+        tactics_task["tactics_route_task_binding_contract_version"],
+        "trillionnium_tactics_route_task_binding_v1"
+    );
+    assert_eq!(tactics_task["tactics_victory_state"], "victory");
+    assert_eq!(tactics_task["tactics_reward_status"], "settled");
+    assert_eq!(
+        tactics_task["tactics_anti_cheese_contract_version"],
+        "trillionnium_tactics_repeat_farming_anti_cheese_v1"
+    );
+    assert_eq!(
+        tactics_task["tactics_route_task_binding"]["repeat_farming"]["blocked_attempt_count"],
+        1
+    );
+    assert!(tactics_task["tactics_reward_history"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|entry| entry["stage"] == "reward_settlement" && entry["status"] == "settled"));
+    assert_eq!(
+        tactics_task["next_opportunity_kind"],
+        "tactics_next_route_after_reward"
+    );
+    let tactics_task_id = tactics_task["task_id"].as_str().unwrap();
+    let avatar_task_route = app["map_hub"]["viewport"]["avatar_task_routes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|route| route["task_id"] == tactics_task_id)
+        .expect("tactics route should surface in avatar task routes");
+    assert_eq!(avatar_task_route["tactics_reward_status"], "settled");
+    assert_eq!(
+        avatar_task_route["tactics_reward_history_contract_version"],
+        "trillionnium_tactics_reward_history_v1"
+    );
+    let avatar_route_runner = app["map_hub"]["viewport"]["avatar_route_runners"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|runner| runner["task_id"] == tactics_task_id)
+        .expect("tactics route should surface in avatar route runners");
+    assert_eq!(avatar_route_runner["tactics_reward_status"], "settled");
+    assert_eq!(
+        avatar_route_runner["tactics_reward_settled_unlocked_route"],
+        true
+    );
+    assert!(avatar_route_runner["checkpoint_history"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|entry| entry["stage"] == "reward_settlement" && entry["status"] == "settled"));
     let nodes: Vec<WorldMapNode> = guard.world.world_map_nodes.values().cloned().collect();
     let current_node = guard.world.world_map_nodes.get(default_world_node_id());
     let geodata = openstreetmap_geodata_v1_json(&nodes, current_node);

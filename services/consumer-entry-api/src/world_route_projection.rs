@@ -327,6 +327,115 @@ impl<'a> WorldRouteProjectionContext<'a> {
             .unwrap_or_default()
     }
 
+    fn tactics_route_task_id(session: &WorldTacticsGameSession) -> String {
+        format!(
+            "tactics-objective:{}:{}",
+            session.matrix_user_id, session.objective_id
+        )
+    }
+
+    fn tactics_session_for_route_task(&self, task_id: &str) -> Option<&WorldTacticsGameSession> {
+        self.world
+            .world_tactics_sessions
+            .values()
+            .filter(|session| Self::tactics_route_task_id(session) == task_id)
+            .max_by_key(|session| session.updated_at_epoch)
+    }
+
+    fn tactics_reward_event_for_session(
+        &self,
+        session: &WorldTacticsGameSession,
+    ) -> Option<&WorldEconomyEvent> {
+        self.world.world_economy_events.iter().find(|event| {
+            event.event_kind == "tactics_victory_reward"
+                && (event.subject_id == session.session_id
+                    || session
+                        .reward_event_id
+                        .as_deref()
+                        .map(|reward_event_id| event.economy_event_id == reward_event_id)
+                        .unwrap_or(false))
+        })
+    }
+
+    fn tactics_repeat_farm_block_count(&self, session: &WorldTacticsGameSession) -> usize {
+        self.world
+            .world_tactics_simulation_ticks
+            .iter()
+            .filter(|tick| {
+                tick.session_id == session.session_id
+                    && tick.command == "attack"
+                    && !tick.outcome_accepted
+                    && tick.outcome_result == "repeat_farming_blocked"
+            })
+            .count()
+    }
+
+    fn tactics_reward_history_json(&self, session: &WorldTacticsGameSession) -> Value {
+        let reward_event = self.tactics_reward_event_for_session(session);
+        Value::Array(vec![
+            json!({
+                "history_id": format!("tactics-reward-history:{}:objective", session.session_id),
+                "stage": "objective_progress",
+                "status": if session.objective_progress >= session.objective_goal.max(1) { "completed" } else { "in_progress" },
+                "label": "Tactics objective / 战棋目标",
+                "summary": format!("Objective {} progress {}/{}", session.objective_id, session.objective_progress, session.objective_goal.max(1)),
+            }),
+            json!({
+                "history_id": format!("tactics-reward-history:{}:victory", session.session_id),
+                "stage": "victory_state",
+                "status": session.victory_state,
+                "label": "Victory state / 胜负状态",
+                "summary": format!("Rust tactics session state is {}", session.victory_state),
+            }),
+            json!({
+                "history_id": format!("tactics-reward-history:{}:reward", session.session_id),
+                "stage": "reward_settlement",
+                "status": session.reward_status,
+                "label": "Reward settlement / 奖励结算",
+                "summary": if reward_event.is_some() { "Reward event settled into player progression and route history." } else { "Reward waits for victory and server-owned settlement." },
+                "reward_event_id": session.reward_event_id,
+                "credits_delta": session.reward_credits_awarded,
+                "xp_delta": session.reward_xp_awarded,
+                "ledger_release_gate_status": if reward_event.is_some() { "server_settled" } else { "not_released" },
+            }),
+        ])
+    }
+
+    fn tactics_route_task_binding_json(&self, session: &WorldTacticsGameSession) -> Value {
+        let reward_event = self.tactics_reward_event_for_session(session);
+        let repeat_block_count = self.tactics_repeat_farm_block_count(session);
+        json!({
+            "contract_version": "trillionnium_tactics_route_task_binding_v1",
+            "source_of_truth": "rust_world_tactics_sessions",
+            "route_task_id": Self::tactics_route_task_id(session),
+            "session_id": session.session_id,
+            "matrix_user_id": session.matrix_user_id,
+            "active_node_id": session.active_node_id,
+            "active_overlay_id": session.active_overlay_id,
+            "objective_id": session.objective_id,
+            "objective_progress": session.objective_progress,
+            "objective_goal": session.objective_goal,
+            "victory_state": session.victory_state,
+            "reward_status": session.reward_status,
+            "reward_event_id": session.reward_event_id,
+            "reward_credits_awarded": session.reward_credits_awarded,
+            "reward_xp_awarded": session.reward_xp_awarded,
+            "reward_history_contract_version": "trillionnium_tactics_reward_history_v1",
+            "reward_history": self.tactics_reward_history_json(session),
+            "reward_history_summary": if reward_event.is_some() { "Tactics reward settled and visible in route-runner history." } else { "Tactics reward history is waiting for victory settlement." },
+            "ledger_release_gate_status": if reward_event.is_some() { "server_settled" } else { "not_released" },
+            "anti_cheese_contract_version": TRILLIONNIUM_TACTICS_REPEAT_FARMING_ANTI_CHEESE_CONTRACT_VERSION,
+            "repeat_farming": {
+                "policy": "one settled reward per tactics objective/session",
+                "repeat_attack_after_settlement": "blocked",
+                "blocked_attempt_count": repeat_block_count,
+                "gate_enforced": true,
+                "source_of_truth": "rust_tactics_repeat_farming_guard"
+            },
+            "web_role": "visualization_input_only"
+        })
+    }
+
     fn focus_node_id(&self, location_id: &str, panel_id: &str, input_id: &str) -> String {
         let location_id = location_id.trim();
         if location_id.is_empty() {
@@ -403,6 +512,26 @@ impl<'a> WorldRouteProjectionContext<'a> {
             "title": format!("契约战报 {}", completion.completion_id),
             "summary": completion.body,
             "detail": format!("评分 {:.1} · 奖励 {:.2}", completion.score, completion.reward_amount),
+        })
+    }
+
+    fn tactics_session_preview_item(&self, session: &WorldTacticsGameSession) -> Value {
+        let location_id = self
+            .world
+            .world_map_nodes
+            .get(&session.active_node_id)
+            .map(|node| node.location_id.clone())
+            .unwrap_or_else(|| session.active_node_id.clone());
+        json!({
+            "route_bucket": "tactics_objective",
+            "location_id": location_id,
+            "task_id": Self::tactics_route_task_id(session),
+            "route_status": format!("{}_{}", session.victory_state, session.reward_status),
+            "created_at_epoch": session.updated_at_epoch,
+            "event_id": session.reward_event_id,
+            "title": format!("Tactics objective {}", session.objective_id),
+            "summary": format!("objective {}/{} · victory {} · reward {}", session.objective_progress, session.objective_goal.max(1), session.victory_state, session.reward_status),
+            "detail": format!("session {} · overlay {}", session.session_id, session.active_overlay_id),
         })
     }
 
@@ -599,7 +728,7 @@ impl<'a> WorldRouteProjectionContext<'a> {
             &suggested_target.input_id,
         );
 
-        json!({
+        let mut task = json!({
             "task_id": task_id,
             "latest_bucket": latest_bucket,
             "latest_status": latest_status,
@@ -636,7 +765,77 @@ impl<'a> WorldRouteProjectionContext<'a> {
             "suggested_body": suggested_target.body,
             "suggested_matrix_command": suggested_action.matrix_command,
             "suggested_node_id": suggested_node_id,
-        })
+        });
+        if let Some(tactics_session) = task
+            .get("task_id")
+            .and_then(Value::as_str)
+            .and_then(|task_id| self.tactics_session_for_route_task(task_id))
+        {
+            let binding = self.tactics_route_task_binding_json(tactics_session);
+            if let Some(object) = task.as_object_mut() {
+                object.insert("tactics_route_task_binding".to_string(), binding.clone());
+                object.insert(
+                    "tactics_route_task_binding_contract_version".to_string(),
+                    json!("trillionnium_tactics_route_task_binding_v1"),
+                );
+                object.insert(
+                    "tactics_session_id".to_string(),
+                    json!(tactics_session.session_id),
+                );
+                object.insert(
+                    "tactics_objective_id".to_string(),
+                    json!(tactics_session.objective_id),
+                );
+                object.insert(
+                    "tactics_objective_progress".to_string(),
+                    json!(tactics_session.objective_progress),
+                );
+                object.insert(
+                    "tactics_objective_goal".to_string(),
+                    json!(tactics_session.objective_goal),
+                );
+                object.insert(
+                    "tactics_victory_state".to_string(),
+                    json!(tactics_session.victory_state),
+                );
+                object.insert(
+                    "tactics_reward_status".to_string(),
+                    json!(tactics_session.reward_status),
+                );
+                object.insert(
+                    "tactics_reward_history_contract_version".to_string(),
+                    json!("trillionnium_tactics_reward_history_v1"),
+                );
+                object.insert(
+                    "tactics_reward_history".to_string(),
+                    binding
+                        .get("reward_history")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                );
+                object.insert(
+                    "tactics_anti_cheese_contract_version".to_string(),
+                    json!(TRILLIONNIUM_TACTICS_REPEAT_FARMING_ANTI_CHEESE_CONTRACT_VERSION),
+                );
+                object.insert(
+                    "next_opportunity_kind".to_string(),
+                    json!(if tactics_session.reward_status == "settled" {
+                        "tactics_next_route_after_reward"
+                    } else {
+                        "tactics_objective_reward_settlement"
+                    }),
+                );
+                object.insert(
+                    "next_opportunity_hint".to_string(),
+                    json!(if tactics_session.reward_status == "settled" {
+                        "Tactics reward is settled; open the next map route from the completed objective."
+                    } else {
+                        "Finish the tactics objective and settle the reward before opening the next route."
+                    }),
+                );
+            }
+        }
+        task
     }
 
     fn preview_items(&self) -> Vec<Value> {
@@ -645,6 +844,13 @@ impl<'a> WorldRouteProjectionContext<'a> {
 
         for event in indexed_recent(&world.world_events, &self.indexes.recent_event_indices, 12) {
             items.push(self.event_preview_item(event));
+        }
+
+        let mut tactics_sessions: Vec<&WorldTacticsGameSession> =
+            world.world_tactics_sessions.values().collect();
+        tactics_sessions.sort_by(|left, right| right.updated_at_epoch.cmp(&left.updated_at_epoch));
+        for session in tactics_sessions.into_iter().take(8) {
+            items.push(self.tactics_session_preview_item(session));
         }
 
         for contract in indexed_recent(
@@ -787,6 +993,7 @@ impl<'a> WorldRouteProjectionContext<'a> {
             .unwrap_or(false)
             || item.get("work_order_id").and_then(Value::as_str).is_some();
         let active_route_relevance = match bucket {
+            "tactics_objective" => 38,
             "work_order" | "delivery" | "contract" => 35,
             "purchase" | "event" => 28,
             "completion" | "acceptance" => 20,
@@ -817,16 +1024,19 @@ impl<'a> WorldRouteProjectionContext<'a> {
         } else {
             14
         };
-        let reward_to_next_route_lift = if status.contains("reward")
-            || status.contains("claim")
-            || matches!(bucket, "acceptance" | "completion")
-        {
-            15
-        } else if matches!(bucket, "delivery" | "work_order") {
-            11
-        } else {
-            7
-        };
+        let reward_to_next_route_lift =
+            if bucket == "tactics_objective" && status.contains("settled") {
+                18
+            } else if status.contains("reward")
+                || status.contains("claim")
+                || matches!(bucket, "acceptance" | "completion")
+            {
+                15
+            } else if matches!(bucket, "delivery" | "work_order") {
+                11
+            } else {
+                7
+            };
         let geographic_nearness = if has_location { 5 } else { 0 };
         let score = active_route_relevance
             + seller_completion_quality

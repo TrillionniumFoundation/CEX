@@ -685,29 +685,29 @@ git log --oneline -5
   - Avoid duplicating identity in ad-hoc JSON.
 - [x] TW-4.6 Add deterministic simulation tick / encounter generation hooks.
 - [x] TW-4.7 Add Rust tests for turn resolution and invalid command rejection.
-- [~] TW-4.8 Prepare repository/storage boundary for game session persistence.
-  - Game sessions and simulation ticks now persist through serde-compatible `WorldState` fields; a dedicated normalized repository table remains a later storage cutover.
+- [x] TW-4.8 Prepare repository/storage boundary for game session persistence.
+  - Game sessions, characters, and simulation ticks persist through serde-compatible `WorldState` and mirror into normalized SQL tables via `0021_add_trillionnium_tactics_storage_tables.sql`; command-source-of-truth remains Rust `WorldState` while typed SQL read models/direct-write parity are covered by runtime/snapshot gates.
 
 ### TW-5 — Gameplay loops
 
 - [x] TW-5.1 Existing world commerce loop works: company -> shop/listing -> purchase -> work order -> delivery -> accept/reject/reopen/cancel.
 - [x] TW-5.2 Existing route-runner handoff/reward/mastery gates are green.
-- [~] TW-5.3 Current `/world` visible game loop is still mostly presentation + forms.
-- [ ] TW-5.4 Implement first tactics loop:
+- [~] TW-5.3 Current `/world` visible game loop is still mostly presentation + Rust-owned intent forms.
+- [x] TW-5.4 Implement first tactics loop:
   - spawn player unit
   - spawn one objective
-  - allow move
-  - allow interact/claim
-  - write event log
+  - allow move/command intent through Rust validators
+  - allow interact/task claim through NPC/task descriptors
+  - write event log and persisted simulation ticks
   - reward through existing ledger/progression path
-- [ ] TW-5.5 Implement combat loop:
+- [x] TW-5.5 Implement combat loop:
   - enemy unit
   - attack action
   - damage resolution
   - victory/failure state
-- [ ] TW-5.6 Bind tactics objective to existing route task graph.
-- [ ] TW-5.7 Bind rewards to route-runner reward history and ledger settlement.
-- [ ] TW-5.8 Add anti-cheese checks for repeatable encounter farming.
+- [x] TW-5.6 Bind tactics objective to existing route task graph.
+- [x] TW-5.7 Bind rewards to route-runner reward history and ledger settlement.
+- [x] TW-5.8 Add anti-cheese checks for repeatable encounter farming.
 
 ### TW-6 — Web visualization/input shell
 
@@ -979,8 +979,9 @@ Expected first-slice deliverables:
   - Public-commercial green: `run/public-commercial/public-commercial-summary-1778302096.json` (100%, no failures)
   - `CEX_ENV_FILE=run/local-production/.env scripts/check-production-readiness.sh` green (`READY production readiness smoke passed`)
 - Remaining next:
-  - [ ] TW-4.8+ decide whether game sessions/ticks need a dedicated normalized repository table or whether the current serde-compatible `WorldState` persistence is enough for first playable.
-  - [ ] TW-5.4/TW-5.5 continue from persistent sessions into a tighter first tactics loop and combat loop: objective progress, victory/failure state, and reward settlement.
+  - [x] TW-4.8+ storage-boundary decision: keep Rust `WorldState` as command source of truth, mirror tactics characters/sessions/ticks into normalized SQL tables for parity/direct-write coverage.
+  - [x] TW-5.4/TW-5.5 first tactics/combat loop: objective progress, victory state, deterministic reward settlement, persisted tick/session state.
+  - [x] TW-5.6/TW-5.7/TW-5.8 route/reward/anti-cheese slice: tactics objective sessions bind into route task graph, settled rewards feed route-runner reward history, and repeat farming after settled tactics rewards is blocked server-side.
 
 ---
 
@@ -1045,6 +1046,6 @@ Also append a one-paragraph summary to `/home/qian/.openclaw/workspace/memory/YY
 
 If the next instruction is simply “continue”, start here:
 
-> **TW-5+:** build on the persisted tactics sessions/ticks and normalized overlay identity by tightening the first tactics loop and combat loop: objective progress, victory/failure state, reward settlement, and the TW-4.8 storage-boundary decision.
+> **TW-6:** build on the completed tactics storage/route/reward/anti-cheese slice by making the Rust-owned tactics state more visible in the `/world` and `/app` player surfaces: objective card, current session state, reward-history handoff, and repeat-farming blocked-state copy.
 
 Do not start live Overpass/Geofabrik ingestion yet. Do not promote MapLibre. Do not convert the web shell into a standalone JS source of truth.

@@ -978,12 +978,36 @@ pub(super) fn world_map_avatar_task_routes_json(
     let (from_lat, from_lng) = real_world_node_coordinates(current_node);
     let mut seen_task_ids = HashSet::new();
     let mut routes = Vec::new();
-    let tasks = route_artifacts
+    let mut tasks = route_artifacts
         .task_graph
         .get("tasks")
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
+    tasks.sort_by(|left, right| {
+        let priority = |task: &Value| {
+            let is_tactics = task
+                .get("tactics_route_task_binding_contract_version")
+                .and_then(Value::as_str)
+                .is_some();
+            let tactics_settled =
+                task.get("tactics_reward_status").and_then(Value::as_str) == Some("settled");
+            let reward_claimable = task
+                .get("latest_status")
+                .and_then(Value::as_str)
+                .map(|status| status.contains("reward") || status.contains("settled"))
+                .unwrap_or(false);
+            (is_tactics as i64) * 100
+                + (tactics_settled as i64) * 50
+                + (reward_claimable as i64) * 10
+        };
+        priority(right).cmp(&priority(left)).then_with(|| {
+            right
+                .get("latest_created_at_epoch")
+                .and_then(Value::as_i64)
+                .cmp(&left.get("latest_created_at_epoch").and_then(Value::as_i64))
+        })
+    });
 
     for task in tasks {
         if routes.len() >= limit {
@@ -1071,6 +1095,13 @@ pub(super) fn world_map_avatar_task_routes_json(
             "next_action_label": next_action_label,
             "command": command,
             "reward_loop": "move avatar → complete task → submit evidence → rating/reward → next route",
+            "tactics_route_task_binding_contract_version": task.get("tactics_route_task_binding_contract_version").cloned().unwrap_or(Value::Null),
+            "tactics_route_task_binding": task.get("tactics_route_task_binding").cloned().unwrap_or(Value::Null),
+            "tactics_reward_history_contract_version": task.get("tactics_reward_history_contract_version").cloned().unwrap_or(Value::Null),
+            "tactics_reward_history": task.get("tactics_reward_history").cloned().unwrap_or_else(|| json!([])),
+            "tactics_reward_status": task.get("tactics_reward_status").cloned().unwrap_or(Value::Null),
+            "tactics_victory_state": task.get("tactics_victory_state").cloned().unwrap_or(Value::Null),
+            "tactics_anti_cheese_contract_version": task.get("tactics_anti_cheese_contract_version").cloned().unwrap_or(Value::Null),
             "agent_party": world_map_agent_party_members_json(matrix_user_id, task_id),
             "agent_party_summary": "Agent party: scout route → build deliverable → audit risk → close reward",
             "agent_party_handoff_hint": "Assign scout/build/audit/close roles before submitting deliverable, evidence, risk controls, next action, and self-review.",
@@ -1141,7 +1172,13 @@ pub(super) fn world_map_avatar_route_runners_json(
             let eta_seconds = ((remaining_distance_meters / 18.0).round() as i64).clamp(0, 900);
             let eta_minutes = ((eta_seconds as f64) / 60.0).ceil() as i64;
             let progress_percent = (progress_ratio * 100.0).round() as i64;
-            let completion_ready = progress_percent >= 80 || lifecycle_status == "reward_claimable";
+            let tactics_reward_status = route
+                .get("tactics_reward_status")
+                .and_then(Value::as_str);
+            let tactics_reward_settled = tactics_reward_status == Some("settled");
+            let completion_ready = progress_percent >= 80
+                || lifecycle_status == "reward_claimable"
+                || tactics_reward_settled;
             let lifecycle = route_runner_lifecycle_snapshot_json(
                 task_id,
                 latest_bucket,
@@ -1219,7 +1256,7 @@ pub(super) fn world_map_avatar_route_runners_json(
                     "Preview next route after task {task_id}: inspect candidate map nodes, evidence needs, risk controls, next action, and self-review before the reward claim unlocks."
                 )
             };
-            let checkpoint_history = vec![
+            let mut checkpoint_history = vec![
                 json!({
                     "history_id": format!("reward-history:{}:{}:route-started", matrix_user_id, task_id),
                     "stage": "route_started",
@@ -1249,6 +1286,12 @@ pub(super) fn world_map_avatar_route_runners_json(
                     "summary": "After rating/reward settlement, carry deliverable, evidence package, risk controls, next action, and self-review into the next map route.",
                 }),
             ];
+            if let Some(tactics_history) = route
+                .get("tactics_reward_history")
+                .and_then(Value::as_array)
+            {
+                checkpoint_history.extend(tactics_history.iter().cloned());
+            }
             let checkpoint_id = format!("reward-checkpoint:{}:{}", matrix_user_id, task_id);
             let agent_party = route.get("agent_party").cloned().unwrap_or_else(|| {
                 Value::Array(world_map_agent_party_members_json(matrix_user_id, task_id))
@@ -1290,6 +1333,14 @@ pub(super) fn world_map_avatar_route_runners_json(
                 "lifecycle": lifecycle,
                 "next_action_label": route.get("next_action_label").cloned().unwrap_or_else(|| json!("Run to task / 跑向任务")),
                 "reward_loop": route.get("reward_loop").cloned().unwrap_or_else(|| json!("move avatar → complete task → submit evidence → rating/reward → next route")),
+                "tactics_route_task_binding_contract_version": route.get("tactics_route_task_binding_contract_version").cloned().unwrap_or(Value::Null),
+                "tactics_route_task_binding": route.get("tactics_route_task_binding").cloned().unwrap_or(Value::Null),
+                "tactics_reward_history_contract_version": route.get("tactics_reward_history_contract_version").cloned().unwrap_or(Value::Null),
+                "tactics_reward_history": route.get("tactics_reward_history").cloned().unwrap_or_else(|| json!([])),
+                "tactics_reward_status": tactics_reward_status,
+                "tactics_victory_state": route.get("tactics_victory_state").cloned().unwrap_or(Value::Null),
+                "tactics_anti_cheese_contract_version": route.get("tactics_anti_cheese_contract_version").cloned().unwrap_or(Value::Null),
+                "tactics_reward_settled_unlocked_route": tactics_reward_settled,
                 "movement_state": "en_route_to_task_reward",
                 "movement_label": "Avatar running to task / 角色正在跑向任务",
                 "arrival_label": "Reward checkpoint / 奖励检查点",

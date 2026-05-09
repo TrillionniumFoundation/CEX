@@ -40,6 +40,8 @@ pub(super) const TRILLIONNIUM_TACTICS_SIMULATION_TICK_CONTRACT_VERSION: &str =
     "trillionnium_tactics_simulation_tick_v1";
 pub(super) const TRILLIONNIUM_TACTICS_REWARD_SETTLEMENT_CONTRACT_VERSION: &str =
     "trillionnium_tactics_reward_settlement_v1";
+pub(super) const TRILLIONNIUM_TACTICS_REPEAT_FARMING_ANTI_CHEESE_CONTRACT_VERSION: &str =
+    "trillionnium_tactics_repeat_farming_anti_cheese_v1";
 pub(super) const TRILLIONNIUM_MAP_OVERLAY_IDENTITY_CONTRACT_VERSION: &str =
     "trillionnium_map_overlay_identity_v1";
 
@@ -2717,6 +2719,30 @@ pub(super) fn apply_world_tactics_command(
                     "no_target_unit_at_tile",
                 );
             };
+            if let Some(session) = latest_world_tactics_session_for_user(world, matrix_user_id) {
+                if session.victory_state == "victory" && session.reward_status == "settled" {
+                    return json!({
+                        "contract_version": TRILLIONNIUM_TACTICS_COMMAND_OUTCOME_CONTRACT_VERSION,
+                        "accepted": false,
+                        "command": command,
+                        "unit_id": unit_id,
+                        "target_tile": target_tile,
+                        "required_skill_id": required_skill_id,
+                        "combat_resolution_contract_version": TRILLIONNIUM_TACTICS_COMBAT_RESOLUTION_CONTRACT_VERSION,
+                        "combat_resolution": combat_resolution,
+                        "result": "repeat_farming_blocked",
+                        "rejection_reason": "tactics_objective_reward_already_settled",
+                        "anti_cheese_contract_version": TRILLIONNIUM_TACTICS_REPEAT_FARMING_ANTI_CHEESE_CONTRACT_VERSION,
+                        "anti_cheese_gate_enforced": true,
+                        "session_id": session.session_id,
+                        "objective_id": session.objective_id,
+                        "victory_state": session.victory_state,
+                        "reward_status": session.reward_status,
+                        "source_of_truth": "rust_tactics_repeat_farming_guard",
+                        "web_role": "intent_only_visualization_input",
+                    });
+                }
+            }
             return json!({
                 "contract_version": TRILLIONNIUM_TACTICS_COMMAND_OUTCOME_CONTRACT_VERSION,
                 "accepted": true,
@@ -2966,6 +2992,7 @@ pub(super) fn world_tactics_board_projection_json(
         "tactics_game_session_contract_version": TRILLIONNIUM_TACTICS_GAME_SESSION_CONTRACT_VERSION,
         "tactics_simulation_tick_contract_version": TRILLIONNIUM_TACTICS_SIMULATION_TICK_CONTRACT_VERSION,
         "tactics_reward_settlement_contract_version": TRILLIONNIUM_TACTICS_REWARD_SETTLEMENT_CONTRACT_VERSION,
+        "tactics_repeat_farming_anti_cheese_contract_version": TRILLIONNIUM_TACTICS_REPEAT_FARMING_ANTI_CHEESE_CONTRACT_VERSION,
         "map_overlay_identity_contract_version": TRILLIONNIUM_MAP_OVERLAY_IDENTITY_CONTRACT_VERSION,
         "open_source_base": {
             "repo": "tranchikhang/MedievalWar",
@@ -3034,6 +3061,14 @@ pub(super) fn world_tactics_board_projection_json(
             "tick_count": simulation_tick_count,
             "source_of_truth": "rust_tactics_simulation_tick",
             "persistence_owner": "world_state.world_tactics_simulation_ticks"
+        },
+        "repeat_farming_anti_cheese_policy": {
+            "contract_version": TRILLIONNIUM_TACTICS_REPEAT_FARMING_ANTI_CHEESE_CONTRACT_VERSION,
+            "gate_owner": "rust_tactics_repeat_farming_guard",
+            "policy": "one objective reward per settled tactics session until a new route/objective is issued",
+            "repeat_attack_after_settlement": "blocked",
+            "reward_history_owner": "route_task_graph_and_route_runner_history",
+            "web_role": "visualization_input_only"
         }
     })
 }
