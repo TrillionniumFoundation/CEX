@@ -40,6 +40,331 @@ pub(super) const TRILLIONNIUM_JIANGHU_OSM_OBJECTIVE_CONTRACT_VERSION: &str =
     "trillionnium_jianghu_osm_objective_v1";
 pub(super) const TRILLIONNIUM_TACTICS_COMBAT_RESOLUTION_CONTRACT_VERSION: &str =
     "trillionnium_tactics_combat_resolution_v1";
+pub(super) const TRILLIONNIUM_TACTICS_GAME_SESSION_CONTRACT_VERSION: &str =
+    "trillionnium_tactics_game_session_v1";
+pub(super) const TRILLIONNIUM_TACTICS_SIMULATION_TICK_CONTRACT_VERSION: &str =
+    "trillionnium_tactics_simulation_tick_v1";
+pub(super) const TRILLIONNIUM_MAP_OVERLAY_IDENTITY_CONTRACT_VERSION: &str =
+    "trillionnium_map_overlay_identity_v1";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct WorldTacticsGameSession {
+    contract_version: String,
+    session_id: String,
+    matrix_user_id: String,
+    room_id: Option<String>,
+    board_id: String,
+    active_node_id: String,
+    active_overlay_id: String,
+    active_unit_id: String,
+    active_side: String,
+    status: String,
+    round: i64,
+    action_points_remaining: i64,
+    current_tick: i64,
+    created_at_epoch: i64,
+    updated_at_epoch: i64,
+    source_of_truth: String,
+    persistence_owner: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct WorldTacticsSimulationTick {
+    contract_version: String,
+    tick_id: String,
+    session_id: String,
+    matrix_user_id: String,
+    room_id: Option<String>,
+    tick_index: i64,
+    command: String,
+    unit_id: String,
+    target_tile: Option<String>,
+    outcome_result: String,
+    outcome_accepted: bool,
+    simulation_effect: String,
+    round_before: i64,
+    round_after: i64,
+    action_points_before: i64,
+    action_points_after: i64,
+    active_unit_after: String,
+    generated_encounter_id: Option<String>,
+    osm_game_overlay_id: Option<String>,
+    created_at_epoch: i64,
+    source_of_truth: String,
+}
+
+fn world_tactics_session_id(matrix_user_id: &str, room_id: Option<&str>) -> String {
+    league_hash_id(
+        "world-tactics-session",
+        &format!("{}:{}", matrix_user_id, room_id.unwrap_or("world-web")),
+    )
+}
+
+fn world_tactics_active_node_id(world: &WorldState, matrix_user_id: &str) -> String {
+    world
+        .world_player_positions
+        .get(matrix_user_id)
+        .map(|position| position.node_id.clone())
+        .unwrap_or_else(|| default_world_node_id().to_string())
+}
+
+fn world_tactics_active_overlay_id(world: &WorldState, matrix_user_id: &str) -> String {
+    format!(
+        "trillionnium-world-node:{}",
+        world_tactics_active_node_id(world, matrix_user_id)
+    )
+}
+
+fn world_tactics_command_action_cost(command: &str) -> i64 {
+    match command {
+        "talk_npc" | "select_unit" | "inspect_osm_underlay" | "end_turn" => 0,
+        _ => 1,
+    }
+}
+
+fn world_tactics_simulation_effect(command: &str, accepted: bool) -> &'static str {
+    if !accepted {
+        "rejected_no_state_advance"
+    } else if command == "end_turn" {
+        "round_advanced"
+    } else if command == "attack" {
+        "deterministic_combat_resolved"
+    } else {
+        "command_resolved_state_advanced"
+    }
+}
+
+fn world_tactics_default_session(
+    world: &WorldState,
+    matrix_user_id: &str,
+    room_id: Option<&str>,
+    now_epoch: i64,
+) -> WorldTacticsGameSession {
+    WorldTacticsGameSession {
+        contract_version: TRILLIONNIUM_TACTICS_GAME_SESSION_CONTRACT_VERSION.to_string(),
+        session_id: world_tactics_session_id(matrix_user_id, room_id),
+        matrix_user_id: matrix_user_id.to_string(),
+        room_id: room_id.map(ToString::to_string),
+        board_id: "mirror-street-tactics-board-v1".to_string(),
+        active_node_id: world_tactics_active_node_id(world, matrix_user_id),
+        active_overlay_id: world_tactics_active_overlay_id(world, matrix_user_id),
+        active_unit_id: "lord".to_string(),
+        active_side: "player".to_string(),
+        status: "active".to_string(),
+        round: 1,
+        action_points_remaining: 2,
+        current_tick: 0,
+        created_at_epoch: now_epoch,
+        updated_at_epoch: now_epoch,
+        source_of_truth: "rust_world_tactics_game_session".to_string(),
+        persistence_owner: "world_state.world_tactics_sessions".to_string(),
+    }
+}
+
+pub(super) fn record_world_tactics_simulation_tick(
+    world: &mut WorldState,
+    matrix_user_id: &str,
+    room_id: Option<&str>,
+    command: &str,
+    unit_id: Option<&str>,
+    target_tile: Option<&str>,
+    osm_game_overlay_id: Option<&str>,
+    outcome: &Value,
+    now_epoch: i64,
+) -> (Value, Value) {
+    let session_id = world_tactics_session_id(matrix_user_id, room_id);
+    let current_node_id = world_tactics_active_node_id(world, matrix_user_id);
+    let current_overlay_id = format!("trillionnium-world-node:{current_node_id}");
+    let default_session = world_tactics_default_session(world, matrix_user_id, room_id, now_epoch);
+    let session = world
+        .world_tactics_sessions
+        .entry(session_id.clone())
+        .or_insert(default_session);
+    let round_before = session.round;
+    let ap_before = session.action_points_remaining;
+    let accepted = outcome
+        .get("accepted")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let result = outcome
+        .get("result")
+        .and_then(Value::as_str)
+        .unwrap_or(if accepted {
+            "tactics_command_accepted"
+        } else {
+            "tactics_command_rejected"
+        })
+        .to_string();
+    let tick_index = session.current_tick + 1;
+    let action_cost = world_tactics_command_action_cost(command);
+    if accepted && command == "end_turn" {
+        session.round += 1;
+        session.action_points_remaining = 2;
+        session.active_side = "player".to_string();
+        session.active_unit_id = "lord".to_string();
+    } else if accepted {
+        session.action_points_remaining =
+            session.action_points_remaining.saturating_sub(action_cost);
+        session.active_unit_id = unit_id.unwrap_or("lord").to_string();
+        session.active_side = if session.action_points_remaining == 0 {
+            "enemy_pending".to_string()
+        } else {
+            "player".to_string()
+        };
+    }
+    session.current_tick = tick_index;
+    session.updated_at_epoch = now_epoch;
+    session.active_node_id = current_node_id;
+    session.active_overlay_id = osm_game_overlay_id
+        .map(ToString::to_string)
+        .or_else(|| {
+            outcome
+                .get("combat_resolution")
+                .and_then(|combat| combat.get("osm_game_overlay_id"))
+                .and_then(Value::as_str)
+                .map(ToString::to_string)
+        })
+        .unwrap_or(current_overlay_id);
+    let generated_encounter_id = outcome
+        .get("combat_resolution")
+        .and_then(|combat| combat.get("combat_resolution_id"))
+        .and_then(Value::as_str)
+        .map(ToString::to_string);
+    let tick = WorldTacticsSimulationTick {
+        contract_version: TRILLIONNIUM_TACTICS_SIMULATION_TICK_CONTRACT_VERSION.to_string(),
+        tick_id: league_hash_id(
+            "world-tactics-tick",
+            &format!("{}:{}:{}:{}", session_id, tick_index, command, now_epoch),
+        ),
+        session_id: session_id.clone(),
+        matrix_user_id: matrix_user_id.to_string(),
+        room_id: room_id.map(ToString::to_string),
+        tick_index,
+        command: command.to_string(),
+        unit_id: unit_id.unwrap_or("lord").to_string(),
+        target_tile: target_tile.map(ToString::to_string),
+        outcome_result: result,
+        outcome_accepted: accepted,
+        simulation_effect: world_tactics_simulation_effect(command, accepted).to_string(),
+        round_before,
+        round_after: session.round,
+        action_points_before: ap_before,
+        action_points_after: session.action_points_remaining,
+        active_unit_after: session.active_unit_id.clone(),
+        generated_encounter_id,
+        osm_game_overlay_id: Some(session.active_overlay_id.clone()),
+        created_at_epoch: now_epoch,
+        source_of_truth: "rust_tactics_simulation_tick".to_string(),
+    };
+    world.world_tactics_simulation_ticks.push(tick.clone());
+    if world.world_tactics_simulation_ticks.len() > 512 {
+        let overflow = world.world_tactics_simulation_ticks.len() - 512;
+        world.world_tactics_simulation_ticks.drain(0..overflow);
+    }
+    (json!(session), json!(tick))
+}
+
+fn latest_world_tactics_session_for_user<'a>(
+    world: &'a WorldState,
+    matrix_user_id: &str,
+) -> Option<&'a WorldTacticsGameSession> {
+    world
+        .world_tactics_sessions
+        .values()
+        .filter(|session| session.matrix_user_id == matrix_user_id)
+        .max_by_key(|session| session.updated_at_epoch)
+}
+
+fn world_tactics_game_session_projection_json(
+    world: &WorldState,
+    matrix_user_id: &str,
+    current_node: Option<&WorldMapNode>,
+) -> Value {
+    if let Some(session) = latest_world_tactics_session_for_user(world, matrix_user_id) {
+        let mut value = json!(session);
+        value["persistence_status"] = json!("persisted");
+        value["repository_boundary"] = json!("world_state.world_tactics_sessions");
+        return value;
+    }
+    let now_epoch = 0;
+    let mut session = world_tactics_default_session(world, matrix_user_id, None, now_epoch);
+    if let Some(node) = current_node {
+        session.active_node_id = node.node_id.clone();
+        session.active_overlay_id = openstreetmap_game_overlay_id(node);
+    }
+    let mut value = json!(session);
+    value["persistence_status"] = json!("projected_default_until_first_command");
+    value["repository_boundary"] = json!("world_state.world_tactics_sessions");
+    value
+}
+
+fn world_tactics_simulation_tick_log_json(world: &WorldState, matrix_user_id: &str) -> Value {
+    let latest_session_id = latest_world_tactics_session_for_user(world, matrix_user_id)
+        .map(|session| session.session_id.as_str());
+    Value::Array(
+        world
+            .world_tactics_simulation_ticks
+            .iter()
+            .filter(|tick| {
+                tick.matrix_user_id == matrix_user_id
+                    && latest_session_id
+                        .map(|session_id| tick.session_id == session_id)
+                        .unwrap_or(true)
+            })
+            .rev()
+            .take(8)
+            .cloned()
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .map(|tick| json!(tick))
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn world_map_overlay_identity_index_json(openstreetmap_geodata: &Value) -> Value {
+    let mut identities = Vec::new();
+    for feature in openstreetmap_geodata
+        .get("features")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+    {
+        let game_overlay_id = feature
+            .get("game_overlay_id")
+            .and_then(Value::as_str)
+            .unwrap_or("trillionnium-world-node:unknown");
+        let game_binding = feature.get("game_binding").cloned().unwrap_or(Value::Null);
+        identities.push(json!({
+            "contract_version": TRILLIONNIUM_MAP_OVERLAY_IDENTITY_CONTRACT_VERSION,
+            "overlay_identity_id": game_overlay_id,
+            "game_overlay_id": game_overlay_id,
+            "feature_id": feature.get("feature_id").cloned().unwrap_or(Value::Null),
+            "osm_type": feature.get("osm_type").cloned().unwrap_or(Value::Null),
+            "osm_id": feature.get("osm_id").cloned().unwrap_or(Value::Null),
+            "semantic_role": feature.get("semantic_role").cloned().unwrap_or(Value::Null),
+            "objective_seed": feature.get("objective_seed").cloned().unwrap_or(Value::Null),
+            "node_id": game_binding.get("node_id").cloned().unwrap_or(Value::Null),
+            "location_id": game_binding.get("location_id").cloned().unwrap_or(Value::Null),
+            "zone_id": game_binding.get("zone_id").cloned().unwrap_or(Value::Null),
+            "source_of_truth": "rust_openstreetmap_data_provider",
+            "normalization_owner": "rust_map_overlay_identity_index",
+            "web_role": "visualization_input_only",
+        }));
+    }
+    identities.sort_by(|left, right| {
+        left.get("game_overlay_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .cmp(
+                right
+                    .get("game_overlay_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+            )
+    });
+    Value::Array(identities)
+}
 
 #[derive(Debug, Clone)]
 pub(super) struct JianghuSkillDefinition {
@@ -988,6 +1313,7 @@ fn jianghu_osm_objectives_json(
                 "source_semantic_role": role,
                 "task_archetype_id": task_archetype_id,
                 "osm_game_overlay_id": overlay_id,
+                "overlay_identity_ref": overlay_id,
                 "objective_kind": objective_kind,
                 "objective_seed": deterministic_seed,
                 "seed_inputs": {
@@ -1540,9 +1866,10 @@ impl TacticsUnit {
             "move": self.move_range,
             "move_range": self.move_range,
             "attack_range": self.attack_range,
-            "status_effects": self.status_effects,
-            "osm_game_overlay_id": self.osm_game_overlay_id,
-            "actor_matrix_user_id": self.actor_matrix_user_id,
+        "status_effects": self.status_effects,
+        "osm_game_overlay_id": self.osm_game_overlay_id,
+        "overlay_identity_ref": self.osm_game_overlay_id,
+        "actor_matrix_user_id": self.actor_matrix_user_id,
             "character_source": self.character_source,
             "source_of_truth": "rust_tactics_unit_model",
         })
@@ -2440,6 +2767,7 @@ pub(super) fn world_tactics_board_projection_json(
                 "terrain": terrain,
                 "source_of_truth": "rust_tactics_board_projection",
                 "osm_game_overlay_id": overlay_id,
+                "overlay_identity_ref": overlay_id,
                 "movement_cost": match terrain {
                     "road" => 1,
                     "plain" => 1,
@@ -2475,6 +2803,18 @@ pub(super) fn world_tactics_board_projection_json(
         .as_array()
         .map(|objectives| objectives.len())
         .unwrap_or(0);
+    let map_overlay_identity_index = world_map_overlay_identity_index_json(openstreetmap_geodata);
+    let map_overlay_identity_count = map_overlay_identity_index
+        .as_array()
+        .map(|identities| identities.len())
+        .unwrap_or(0);
+    let game_session =
+        world_tactics_game_session_projection_json(world, matrix_user_id, current_node);
+    let simulation_ticks = world_tactics_simulation_tick_log_json(world, matrix_user_id);
+    let simulation_tick_count = simulation_ticks
+        .as_array()
+        .map(|ticks| ticks.len())
+        .unwrap_or(0);
     let combat_log =
         jianghu_combat_log_json(&objective_overlay_id, &jianghu_character, &task_candidates);
     let battle_log = jianghu_battle_log_lines_json(&combat_log);
@@ -2501,6 +2841,9 @@ pub(super) fn world_tactics_board_projection_json(
         "jianghu_npc_relationship_contract_version": TRILLIONNIUM_JIANGHU_NPC_RELATIONSHIP_CONTRACT_VERSION,
         "jianghu_osm_objective_contract_version": TRILLIONNIUM_JIANGHU_OSM_OBJECTIVE_CONTRACT_VERSION,
         "tactics_combat_resolution_contract_version": TRILLIONNIUM_TACTICS_COMBAT_RESOLUTION_CONTRACT_VERSION,
+        "tactics_game_session_contract_version": TRILLIONNIUM_TACTICS_GAME_SESSION_CONTRACT_VERSION,
+        "tactics_simulation_tick_contract_version": TRILLIONNIUM_TACTICS_SIMULATION_TICK_CONTRACT_VERSION,
+        "map_overlay_identity_contract_version": TRILLIONNIUM_MAP_OVERLAY_IDENTITY_CONTRACT_VERSION,
         "open_source_base": {
             "repo": "tranchikhang/MedievalWar",
             "license": "MIT",
@@ -2526,6 +2869,9 @@ pub(super) fn world_tactics_board_projection_json(
         "task_archetypes": task_archetypes,
         "task_candidates": task_candidates,
         "osm_objectives": osm_objectives.clone(),
+        "map_overlay_identity_index": map_overlay_identity_index,
+        "game_session": game_session,
+        "simulation_ticks": simulation_ticks,
         "battle_log_style": jianghu_battle_log_style_json(),
         "combat_log": combat_log,
         "npc_relationship_model": {
@@ -2554,8 +2900,17 @@ pub(super) fn world_tactics_board_projection_json(
             "objective_overlay_id": objective_overlay_id,
             "objective_contract_version": TRILLIONNIUM_JIANGHU_OSM_OBJECTIVE_CONTRACT_VERSION,
             "objective_count": osm_objective_count,
+            "map_overlay_identity_contract_version": TRILLIONNIUM_MAP_OVERLAY_IDENTITY_CONTRACT_VERSION,
+            "map_overlay_identity_count": map_overlay_identity_count,
             "osm_can_suggest_objectives": true,
             "rust_command_handler_decides_completion": true
+        },
+        "simulation_tick_source": {
+            "session_contract_version": TRILLIONNIUM_TACTICS_GAME_SESSION_CONTRACT_VERSION,
+            "tick_contract_version": TRILLIONNIUM_TACTICS_SIMULATION_TICK_CONTRACT_VERSION,
+            "tick_count": simulation_tick_count,
+            "source_of_truth": "rust_tactics_simulation_tick",
+            "persistence_owner": "world_state.world_tactics_simulation_ticks"
         }
     })
 }

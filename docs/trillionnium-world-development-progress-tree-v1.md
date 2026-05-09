@@ -679,13 +679,14 @@ git log --oneline -5
 - [x] TW-4.1 `WorldState` already separates world fields inside League state.
 - [x] TW-4.2 Existing indexes support commerce/workflow hot paths.
 - [x] TW-4.3 Existing route artifacts feed route cockpit/task graph.
-- [ ] TW-4.4 Introduce explicit game-session state for `/world`.
+- [x] TW-4.4 Introduce explicit game-session state for `/world`.
   - Player position, party, board encounter, current turn, active objective.
-- [ ] TW-4.5 Normalize map node / OSM feature / game overlay relationship.
+- [x] TW-4.5 Normalize map node / OSM feature / game overlay relationship.
   - Avoid duplicating identity in ad-hoc JSON.
-- [ ] TW-4.6 Add deterministic simulation tick / encounter generation hooks.
-- [ ] TW-4.7 Add Rust tests for turn resolution and invalid command rejection.
-- [ ] TW-4.8 Prepare repository/storage boundary for game session persistence.
+- [x] TW-4.6 Add deterministic simulation tick / encounter generation hooks.
+- [x] TW-4.7 Add Rust tests for turn resolution and invalid command rejection.
+- [~] TW-4.8 Prepare repository/storage boundary for game session persistence.
+  - Game sessions and simulation ticks now persist through serde-compatible `WorldState` fields; a dedicated normalized repository table remains a later storage cutover.
 
 ### TW-5 — Gameplay loops
 
@@ -955,6 +956,32 @@ Expected first-slice deliverables:
   - [ ] TW-4.4/TW-4.6 persist full tactics game sessions and simulation ticks beyond projected fixture encounters.
   - [ ] TW-4.5 normalize map node / OSM feature / game overlay relationships instead of repeating identity in ad-hoc JSON.
 
+#### Update 2026-05-09 11:4x CST
+
+- Commit: this checkpoint (`feat: persist trillionnium tactics sessions`).
+- Completed next TW-4 backbone slice:
+  - [x] Added `trillionnium_tactics_game_session_v1`: `/world` tactics commands now project a Rust-owned game session with deterministic session id, active objective, current tick, action points, party/unit state, and persistence metadata under `world_state.world_tactics_sessions`.
+  - [x] Added `trillionnium_tactics_simulation_tick_v1`: accepted and rejected tactics commands now record deterministic ticks with before/after tile, action cost, simulation effect, accepted flag, and session linkage under `world_state.world_tactics_simulation_ticks`.
+  - [x] Added `trillionnium_map_overlay_identity_v1`: map node, OSM feature, and game overlay identity are normalized into a single projection index and referenced by OSM objectives, tactics tiles, and units instead of repeating ad-hoc identity fragments.
+  - [x] Surfaced game-session, simulation-tick, and overlay-identity contracts in `/world` HTML, `world-openstreetmap-geodata`, tactics session cards, Matrix `/map` cards, and web/Matrix E2E gates.
+  - [x] Cleaned `/world` English-mode visible defaults for the new tactics/Jianghu shell while preserving Chinese through `data-i18n-zh`; UI audit now reports CJK=0 and overflow=0 for mobile/tablet/desktop, with the map staying in the first-screen contract.
+- Evidence:
+  - `cargo fmt --all` and `cargo check -p consumer-entry-api -p matrix-entry-adapter`
+  - `cargo test -p consumer-entry-api -p matrix-entry-adapter -p ledger-service -- --nocapture` green (`132 + 36 + 11 passed`)
+  - `cargo clippy --workspace -- -D warnings`
+  - `bash -n scripts/check-trillionnium-ui-audit.sh`, `bash -n scripts/check-trillionnium-league-web-e2e.sh`, `bash -n scripts/check-matrix-live-room-e2e.sh`, and `git diff --check`
+  - `CEX_ENV_FILE=run/local-production/.env scripts/runtime-manager-linux.sh restart` green
+  - UI audit green: `run/trillionnium-ui-audit/ui-audit-summary-1778301010-182172.json` (`/world` mobile/tablet/desktop CJK=0, overflow=0)
+  - Web E2E green: `run/league-web/web-e2e-summary-1778301381.json`
+  - Browser E2E green: `run/league-browser/browser-e2e-summary-1778301403-185329.json`
+  - Matrix live E2E green: `run/matrix-live/e2e-summary-1778302023.json` (session/tick/overlay contracts present)
+  - Real-user beta green: `run/real-user-beta/real-user-beta-summary-1778302057.json` (100%, no failures)
+  - Public-commercial green: `run/public-commercial/public-commercial-summary-1778302096.json` (100%, no failures)
+  - `CEX_ENV_FILE=run/local-production/.env scripts/check-production-readiness.sh` green (`READY production readiness smoke passed`)
+- Remaining next:
+  - [ ] TW-4.8+ decide whether game sessions/ticks need a dedicated normalized repository table or whether the current serde-compatible `WorldState` persistence is enough for first playable.
+  - [ ] TW-5.4/TW-5.5 continue from persistent sessions into a tighter first tactics loop and combat loop: objective progress, victory/failure state, and reward settlement.
+
 ---
 
 #### Update 2026-05-08 19:1x CST
@@ -1018,6 +1045,6 @@ Also append a one-paragraph summary to `/home/qian/.openclaw/workspace/memory/YY
 
 If the next instruction is simply “continue”, start here:
 
-> **TW-4+:** persist full tactics game sessions and normalize map-node / OSM-feature / game-overlay relationships after the TW-3.7 OSM objective + deterministic combat + NPC relationship slice.
+> **TW-5+:** build on the persisted tactics sessions/ticks and normalized overlay identity by tightening the first tactics loop and combat loop: objective progress, victory/failure state, reward settlement, and the TW-4.8 storage-boundary decision.
 
 Do not start live Overpass/Geofabrik ingestion yet. Do not promote MapLibre. Do not convert the web shell into a standalone JS source of truth.

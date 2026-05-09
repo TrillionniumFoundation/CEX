@@ -277,6 +277,8 @@ pub(super) fn default_league_state() -> LeagueState {
             world_contracts: Vec::new(),
             world_contract_completions: Vec::new(),
             world_relationships: Vec::new(),
+            world_tactics_sessions: HashMap::new(),
+            world_tactics_simulation_ticks: Vec::new(),
         },
     }
 }

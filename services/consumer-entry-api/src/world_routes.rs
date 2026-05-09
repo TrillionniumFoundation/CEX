@@ -1402,6 +1402,8 @@ async fn record_world_tactics_command(
         Value,
         Option<WorldContract>,
         Option<WorldContractCompletion>,
+        Value,
+        Value,
     ),
     Response,
 > {
@@ -1663,6 +1665,23 @@ async fn record_world_tactics_command(
                 updated_at_epoch: now,
             });
         }
+        let (tactics_session, simulation_tick) = record_world_tactics_simulation_tick(
+            &mut league.world,
+            &matrix_user_id,
+            payload.room_id.as_deref(),
+            &command,
+            payload.unit_id.as_deref(),
+            payload.target_tile.as_deref(),
+            payload.osm_game_overlay_id.as_deref(),
+            &outcome,
+            now,
+        );
+        outcome["tactics_game_session_contract_version"] =
+            json!(TRILLIONNIUM_TACTICS_GAME_SESSION_CONTRACT_VERSION);
+        outcome["tactics_simulation_tick_contract_version"] =
+            json!(TRILLIONNIUM_TACTICS_SIMULATION_TICK_CONTRACT_VERSION);
+        outcome["tactics_session_id"] = tactics_session["session_id"].clone();
+        outcome["tactics_tick_id"] = simulation_tick["tick_id"].clone();
         let home = world_home_json(&league);
         (
             (
@@ -1672,6 +1691,8 @@ async fn record_world_tactics_command(
                 home,
                 created_contract,
                 created_completion,
+                tactics_session,
+                simulation_tick,
             ),
             completion_contract_for_settlement,
         )
@@ -1758,6 +1779,8 @@ async fn record_world_tactics_command(
                 home,
                 updated_contract,
                 Some(completion.clone()),
+                snapshot.6.clone(),
+                snapshot.7.clone(),
             )
         };
         final_snapshot.2["ledger_status"] = json!(settlement.status);
@@ -1796,6 +1819,8 @@ pub(super) async fn post_world_tactics_command(
             "home": snapshot.3,
             "jianghu_task_contract": snapshot.4,
             "jianghu_task_completion": snapshot.5,
+            "tactics_session": snapshot.6,
+            "simulation_tick": snapshot.7,
         })),
     )
         .into_response()

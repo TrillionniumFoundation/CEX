@@ -1775,6 +1775,10 @@ struct WorldState {
     world_contract_completions: Vec<WorldContractCompletion>,
     #[serde(default)]
     world_relationships: Vec<WorldRelationship>,
+    #[serde(default)]
+    world_tactics_sessions: HashMap<String, WorldTacticsGameSession>,
+    #[serde(default)]
+    world_tactics_simulation_ticks: Vec<WorldTacticsSimulationTick>,
 }
 
 #[derive(Debug, Deserialize)]

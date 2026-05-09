@@ -2393,6 +2393,18 @@ fn world_tactics_projection_binds_jianghu_state_to_osm_objectives() {
         "trillionnium_tactics_combat_resolution_v1"
     );
     assert_eq!(
+        tactics["tactics_game_session_contract_version"],
+        "trillionnium_tactics_game_session_v1"
+    );
+    assert_eq!(
+        tactics["tactics_simulation_tick_contract_version"],
+        "trillionnium_tactics_simulation_tick_v1"
+    );
+    assert_eq!(
+        tactics["map_overlay_identity_contract_version"],
+        "trillionnium_map_overlay_identity_v1"
+    );
+    assert_eq!(
         tactics["open_source_base"]["repo"],
         "tranchikhang/MedievalWar"
     );
@@ -2600,6 +2612,43 @@ fn world_tactics_projection_binds_jianghu_state_to_osm_objectives() {
                     .starts_with("jianghu-objective-seed-")
         ));
     assert_eq!(tactics["objectives"], tactics["osm_objectives"]);
+    assert!(tactics["map_overlay_identity_index"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(
+            |identity| identity["contract_version"] == "trillionnium_map_overlay_identity_v1"
+                && identity["game_overlay_id"] == objective_overlay
+                && identity["source_of_truth"] == "rust_openstreetmap_data_provider"
+        ));
+    assert_eq!(
+        tactics["osm_objective_source"]["map_overlay_identity_contract_version"],
+        "trillionnium_map_overlay_identity_v1"
+    );
+    assert!(
+        tactics["osm_objective_source"]["map_overlay_identity_count"]
+            .as_i64()
+            .unwrap_or_default()
+            >= tactics["osm_objective_source"]["objective_count"]
+                .as_i64()
+                .unwrap_or_default()
+    );
+    assert_eq!(
+        tactics["game_session"]["contract_version"],
+        "trillionnium_tactics_game_session_v1"
+    );
+    assert_eq!(
+        tactics["game_session"]["persistence_status"],
+        "projected_default_until_first_command"
+    );
+    assert_eq!(
+        tactics["simulation_tick_source"]["tick_contract_version"],
+        "trillionnium_tactics_simulation_tick_v1"
+    );
+    assert_eq!(
+        tactics["simulation_tick_source"]["persistence_owner"],
+        "world_state.world_tactics_simulation_ticks"
+    );
     let tactics_again = world_tactics_board_projection_json(
         &league.world,
         "@alice:local.dev",
@@ -2760,6 +2809,32 @@ async fn world_tactics_command_endpoint_validates_training_place_and_mutates_cha
         attack["outcome"]["combat_resolution"]["defender_unit_id"],
         "market-bandit"
     );
+    assert_eq!(
+        attack["outcome"]["tactics_game_session_contract_version"],
+        "trillionnium_tactics_game_session_v1"
+    );
+    assert_eq!(
+        attack["outcome"]["tactics_simulation_tick_contract_version"],
+        "trillionnium_tactics_simulation_tick_v1"
+    );
+    assert_eq!(
+        attack["tactics_session"]["contract_version"],
+        "trillionnium_tactics_game_session_v1"
+    );
+    assert_eq!(
+        attack["tactics_session"]["persistence_owner"],
+        "world_state.world_tactics_sessions"
+    );
+    assert_eq!(
+        attack["simulation_tick"]["contract_version"],
+        "trillionnium_tactics_simulation_tick_v1"
+    );
+    assert_eq!(
+        attack["simulation_tick"]["simulation_effect"],
+        "deterministic_combat_resolved"
+    );
+    assert_eq!(attack["simulation_tick"]["outcome_accepted"], true);
+    assert_eq!(attack["simulation_tick"]["action_points_after"], 0);
     assert!(
         attack["outcome"]["combat_resolution"]["damage"]
             .as_i64()
@@ -2789,6 +2864,11 @@ async fn world_tactics_command_endpoint_validates_training_place_and_mutates_cha
         miss["outcome"]["rejection_reason"],
         "no_target_unit_at_tile"
     );
+    assert_eq!(
+        miss["simulation_tick"]["simulation_effect"],
+        "rejected_no_state_advance"
+    );
+    assert_eq!(miss["simulation_tick"]["outcome_accepted"], false);
 
     let (wrong_npc_status, wrong_npc) = send_json_request(
         &app,
@@ -3040,6 +3120,26 @@ async fn world_tactics_command_endpoint_validates_training_place_and_mutates_cha
         current_node,
         &geodata,
     );
+    assert_eq!(
+        tactics["game_session"]["contract_version"],
+        "trillionnium_tactics_game_session_v1"
+    );
+    assert_eq!(tactics["game_session"]["persistence_status"], "persisted");
+    assert!(
+        tactics["game_session"]["current_tick"]
+            .as_i64()
+            .unwrap_or_default()
+            >= 8
+    );
+    assert!(tactics["simulation_ticks"].as_array().unwrap().len() >= 8);
+    assert!(tactics["simulation_ticks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(
+            |tick| tick["contract_version"] == "trillionnium_tactics_simulation_tick_v1"
+                && tick["simulation_effect"] == "rejected_no_state_advance"
+        ));
     let street_compass = tactics["npcs"]
         .as_array()
         .unwrap()
@@ -3959,6 +4059,12 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(world_html.contains("trillionnium_jianghu_npc_relationship_v1"));
     assert!(world_html.contains("trillionnium_jianghu_osm_objective_v1"));
     assert!(world_html.contains("trillionnium_tactics_combat_resolution_v1"));
+    assert!(world_html.contains("trillionnium_tactics_game_session_v1"));
+    assert!(world_html.contains("trillionnium_tactics_simulation_tick_v1"));
+    assert!(world_html.contains("trillionnium_map_overlay_identity_v1"));
+    assert!(world_html.contains("trillionnium-tactics-session-state"));
+    assert!(world_html
+        .contains("data-map-overlay-identity-contract=\"trillionnium_map_overlay_identity_v1\""));
     assert!(
         world_html.contains("data-objective-contract=\"trillionnium_jianghu_osm_objective_v1\"")
     );

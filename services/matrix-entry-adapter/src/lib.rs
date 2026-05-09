@@ -6456,6 +6456,38 @@ fn build_trillionnium_world_map_matrix_reply(value: &Value) -> Value {
         .and_then(|board| board.get("tactics_combat_resolution_contract_version"))
         .and_then(Value::as_str)
         .unwrap_or("trillionnium_tactics_combat_resolution_v1");
+    let tactics_game_session_contract = tactics_board
+        .and_then(|board| board.get("tactics_game_session_contract_version"))
+        .and_then(Value::as_str)
+        .unwrap_or("trillionnium_tactics_game_session_v1");
+    let tactics_session_id = tactics_board
+        .and_then(|board| board.get("game_session"))
+        .and_then(|session| session.get("session_id"))
+        .and_then(Value::as_str)
+        .unwrap_or("world-tactics-session:projected");
+    let tactics_session_persistence_status = tactics_board
+        .and_then(|board| board.get("game_session"))
+        .and_then(|session| session.get("persistence_status"))
+        .and_then(Value::as_str)
+        .unwrap_or("projected_default_until_first_command");
+    let tactics_simulation_tick_contract = tactics_board
+        .and_then(|board| board.get("tactics_simulation_tick_contract_version"))
+        .and_then(Value::as_str)
+        .unwrap_or("trillionnium_tactics_simulation_tick_v1");
+    let tactics_simulation_tick_count = tactics_board
+        .and_then(|board| board.get("simulation_ticks"))
+        .and_then(Value::as_array)
+        .map(|ticks| ticks.len())
+        .unwrap_or(0);
+    let map_overlay_identity_contract = tactics_board
+        .and_then(|board| board.get("map_overlay_identity_contract_version"))
+        .and_then(Value::as_str)
+        .unwrap_or("trillionnium_map_overlay_identity_v1");
+    let map_overlay_identity_count = tactics_board
+        .and_then(|board| board.get("map_overlay_identity_index"))
+        .and_then(Value::as_array)
+        .map(|identities| identities.len())
+        .unwrap_or(0);
     let combat_log_preview = combat_log_beats
         .iter()
         .take(2)
@@ -6512,7 +6544,7 @@ fn build_trillionnium_world_map_matrix_reply(value: &Value) -> Value {
             "<blockquote><h3>🗺️ Trillionnium World Map</h3><p><strong>当前位置</strong>: {} (<code>{}</code>)</p><p><strong>坐标</strong>: {},{} · <strong>节点</strong>: {}</p><p><strong>Map Engine</strong>: <code>{}</code> · {} · <code>{}</code></p><p><strong>Renderer Adapter</strong>: <code>{}</code> v{} · <code>{}</code> · future <code>{}</code></p>{}{}{}<p><strong>出口</strong>: {}</p><p>{}</p><p><code>/go &lt;direction|node-id&gt;</code></p></blockquote>",
             escape_html(current_name), escape_html(current_node_id), x, y, node_count, escape_html(map_engine_id), escape_html(tile_provider), escape_html(active_region_id), escape_html(&renderer_adapter.adapter_id), renderer_adapter.adapter_contract_version, escape_html(&renderer_adapter.runtime_handle_name), escape_html(&renderer_adapter.future_engine_candidate), route_html_block, route_runner_html_block, combat_log_html_block, escape_html(&exits), escape_html(description),
         ),
-        "cex_card": route_runner.card_json(route_story_card_json(json!({"type": "trillionnium_world_map", "version": 1, "world": "trillionnium_world", "current_node_id": current_node_id, "current_name": current_name, "node_count": node_count, "x": x, "y": y, "exits": exits, "has_real_world_map_engine": true, "map_engine_id": map_engine_id, "tile_provider": tile_provider, "mirror_scope": mirror_scope, "active_region_id": active_region_id, "map_renderer_adapter_id": renderer_adapter.adapter_id, "map_renderer_adapter_version": renderer_adapter.adapter_contract_version, "map_runtime_handle_name": renderer_adapter.runtime_handle_name, "map_renderer_future_engine_candidate": renderer_adapter.future_engine_candidate, "map_renderer_supports_future_engine_swap": renderer_adapter.supports_future_engine_swap, "map_planned_upgrade_engine_id": renderer_adapter.planned_upgrade_engine_id, "map_planned_upgrade_gating_contract": renderer_adapter.planned_upgrade_gating_contract, "has_jianghu_combat_log": combat_log_beat_count > 0, "jianghu_combat_log_contract": combat_log_contract, "jianghu_combat_log_style": combat_log_style, "jianghu_combat_log_beat_count": combat_log_beat_count, "jianghu_combat_log_matrix_projection": true, "jianghu_osm_objective_contract": osm_objective_contract, "jianghu_osm_objective_count": osm_objective_count, "jianghu_npc_relationship_contract": npc_relationship_contract, "tactics_combat_resolution_contract": tactics_combat_resolution_contract}), &route, false))
+        "cex_card": route_runner.card_json(route_story_card_json(json!({"type": "trillionnium_world_map", "version": 1, "world": "trillionnium_world", "current_node_id": current_node_id, "current_name": current_name, "node_count": node_count, "x": x, "y": y, "exits": exits, "has_real_world_map_engine": true, "map_engine_id": map_engine_id, "tile_provider": tile_provider, "mirror_scope": mirror_scope, "active_region_id": active_region_id, "map_renderer_adapter_id": renderer_adapter.adapter_id, "map_renderer_adapter_version": renderer_adapter.adapter_contract_version, "map_runtime_handle_name": renderer_adapter.runtime_handle_name, "map_renderer_future_engine_candidate": renderer_adapter.future_engine_candidate, "map_renderer_supports_future_engine_swap": renderer_adapter.supports_future_engine_swap, "map_planned_upgrade_engine_id": renderer_adapter.planned_upgrade_engine_id, "map_planned_upgrade_gating_contract": renderer_adapter.planned_upgrade_gating_contract, "has_jianghu_combat_log": combat_log_beat_count > 0, "jianghu_combat_log_contract": combat_log_contract, "jianghu_combat_log_style": combat_log_style, "jianghu_combat_log_beat_count": combat_log_beat_count, "jianghu_combat_log_matrix_projection": true, "jianghu_osm_objective_contract": osm_objective_contract, "jianghu_osm_objective_count": osm_objective_count, "jianghu_npc_relationship_contract": npc_relationship_contract, "tactics_combat_resolution_contract": tactics_combat_resolution_contract, "tactics_game_session_contract": tactics_game_session_contract, "tactics_session_id": tactics_session_id, "tactics_session_persistence_status": tactics_session_persistence_status, "tactics_simulation_tick_contract": tactics_simulation_tick_contract, "tactics_simulation_tick_count": tactics_simulation_tick_count, "map_overlay_identity_contract": map_overlay_identity_contract, "map_overlay_identity_count": map_overlay_identity_count}), &route, false))
     })
 }
 
@@ -9690,8 +9722,22 @@ mod tests {
                 "jianghu_osm_objective_contract_version": "trillionnium_jianghu_osm_objective_v1",
                 "jianghu_npc_relationship_contract_version": "trillionnium_jianghu_npc_relationship_v1",
                 "tactics_combat_resolution_contract_version": "trillionnium_tactics_combat_resolution_v1",
+                "tactics_game_session_contract_version": "trillionnium_tactics_game_session_v1",
+                "tactics_simulation_tick_contract_version": "trillionnium_tactics_simulation_tick_v1",
+                "map_overlay_identity_contract_version": "trillionnium_map_overlay_identity_v1",
                 "osm_objectives": [
                     {"contract_version": "trillionnium_jianghu_osm_objective_v1", "objective_id": "jianghu-osm-objective-test"}
+                ],
+                "map_overlay_identity_index": [
+                    {"contract_version": "trillionnium_map_overlay_identity_v1", "game_overlay_id": "trillionnium-world-node:mirror-city-square"}
+                ],
+                "game_session": {
+                    "contract_version": "trillionnium_tactics_game_session_v1",
+                    "session_id": "world-tactics-session-test",
+                    "persistence_status": "persisted"
+                },
+                "simulation_ticks": [
+                    {"contract_version": "trillionnium_tactics_simulation_tick_v1", "tick_id": "world-tactics-tick-test"}
                 ],
                 "combat_log": {
                     "contract_version": "trillionnium_jianghu_combat_log_v1",
@@ -9745,6 +9791,40 @@ mod tests {
                 .get("tactics_combat_resolution_contract")
                 .and_then(Value::as_str),
             Some("trillionnium_tactics_combat_resolution_v1")
+        );
+        assert_eq!(
+            map_card
+                .get("tactics_game_session_contract")
+                .and_then(Value::as_str),
+            Some("trillionnium_tactics_game_session_v1")
+        );
+        assert_eq!(
+            map_card.get("tactics_session_id").and_then(Value::as_str),
+            Some("world-tactics-session-test")
+        );
+        assert_eq!(
+            map_card
+                .get("tactics_simulation_tick_contract")
+                .and_then(Value::as_str),
+            Some("trillionnium_tactics_simulation_tick_v1")
+        );
+        assert_eq!(
+            map_card
+                .get("tactics_simulation_tick_count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            map_card
+                .get("map_overlay_identity_contract")
+                .and_then(Value::as_str),
+            Some("trillionnium_map_overlay_identity_v1")
+        );
+        assert_eq!(
+            map_card
+                .get("map_overlay_identity_count")
+                .and_then(Value::as_u64),
+            Some(1)
         );
 
         for reply in [&world_reply, &map_reply] {
