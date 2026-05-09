@@ -262,6 +262,38 @@ else
         and $gate.maplibre_canary_rollback_drill_visible == true
         and ($gate.promotion_blocker_count | type) == "number"
         and $gate.promotion_blocker_count >= 3;
+      def openstreetmap_provider_readiness_gate_green($gate):
+        $gate.contract_version == "trillionnium_openstreetmap_provider_readiness_gate_v1"
+        and $gate.geodata_contract_version == "openstreetmap_geodata_v1"
+        and $gate.provider_contract == "OpenStreetMapDataProvider"
+        and $gate.provider_mode == "fixture"
+        and $gate.provider_mode_contract_version == "openstreetmap_provider_mode_v1"
+        and $gate.readiness_contract_version == "openstreetmap_provider_readiness_v1"
+        and $gate.readiness_status == "fixture_ready_live_fail_closed"
+        and $gate.fixture_mode_green == true
+        and $gate.fixture_provider_enabled == true
+        and $gate.fixture_network_ingestion_enabled == false
+        and $gate.stable_fixture_identity_coverage_complete == true
+        and ($gate.fixture_node_count | type) == "number"
+        and $gate.fixture_node_count > 0
+        and ($gate.fixture_layer_feature_count | type) == "number"
+        and $gate.fixture_layer_feature_count > 0
+        and $gate.live_modes_fail_closed == true
+        and $gate.network_ingestion_disabled == true
+        and $gate.production_ingestion_disabled == true
+        and $gate.provider_modes_observable == true
+        and ($gate.fail_closed_mode_count | type) == "number"
+        and ($gate.expected_fail_closed_mode_count | type) == "number"
+        and $gate.fail_closed_mode_count >= $gate.expected_fail_closed_mode_count
+        and $gate.expected_fail_closed_mode_count >= 4
+        and $gate.overpass_bbox_cache_fail_closed == true
+        and $gate.geofabrik_extract_import_fail_closed == true
+        and $gate.vendor_tile_cache_fail_closed == true
+        and $gate.unknown_mode_fail_closed == true
+        and $gate.public_tile_server_production_traffic_allowed == false
+        and $gate.odbl_tracking_required_before_live == true
+        and $gate.derived_database_metadata_required_before_live == true
+        and $gate.readiness_green == true;
       def world_map_runtime_safety_gate_green($gate):
         $gate.contract_version == "trillionnium_world_map_runtime_safety_gate_v1"
         and $gate.rum_slo_contract_version == "trillionnium_world_map_rum_slo_v1"
@@ -345,11 +377,12 @@ else
       and route_runner_funnel_telemetry_gate_green(.trillionnium_world_playability_scorecard.route_runner_funnel_telemetry_gate)
       and commercial_operating_dashboard_gate_green(.trillionnium_world_playability_scorecard.commercial_operating_dashboard_gate)
       and future_engine_readiness_gate_green(.trillionnium_world_playability_scorecard.future_engine_readiness_gate)
+      and openstreetmap_provider_readiness_gate_green(.trillionnium_openstreetmap_provider_readiness_gate)
       and world_map_runtime_safety_gate_green(.trillionnium_world_map_runtime_safety_gate)
       and world_map_rum_slo_gate_observable(.trillionnium_world_map_rum_slo_gate)
       and world_map_delta_cache_gate_green(.trillionnium_world_map_delta_cache_gate)
     ' "$consumer_health_file" >/dev/null; then
-      fail 'production runtime requires route-runner handoff/mastery plus map readability LOD, funnel telemetry, route recommendation quality, future-engine MapLibre shadow readiness, map runtime safety, RUM SLO/matrix, offline queue, density, gameplay accessibility, and delta-cache gates'
+      fail 'production runtime requires route-runner handoff/mastery plus map readability LOD, funnel telemetry, route recommendation quality, future-engine MapLibre shadow readiness, OSM provider fixture/live fail-closed readiness, map runtime safety, RUM SLO/matrix, offline queue, density, gameplay accessibility, and delta-cache gates'
     fi
   fi
 
@@ -421,7 +454,10 @@ fi
 section 'operator signals'
 operator_json_file="$(mktemp)"
 operator_status=0
-bash "$SCRIPT_DIR/check-operator-signals.sh" --compact >"$operator_json_file" || operator_status=$?
+# Production /health includes full Trillionnium playability and map-readiness evidence;
+# keep the operator probe bounded, but do not inherit the shorter ad-hoc 5s default here.
+TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-${CEX_OPERATOR_SIGNAL_TIMEOUT_SECONDS:-15}}" \
+  bash "$SCRIPT_DIR/check-operator-signals.sh" --compact >"$operator_json_file" || operator_status=$?
 operator_overall="$(jq -r '.overall // "unknown"' "$operator_json_file")"
 operator_warns="$(jq -r '.summary.warn_count // 0' "$operator_json_file")"
 operator_criticals="$(jq -r '.summary.critical_count // 0' "$operator_json_file")"

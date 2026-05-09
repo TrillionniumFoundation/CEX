@@ -314,6 +314,12 @@ function checkMobile(result, limits) {
     assertMetric(shadow.parityContract === 'trillionnium_world_map_maplibre_shadow_parity_v1' && String(shadow.rollbackDrillRequired) === 'true' && Number(shadow.canaryPercent || -1) === 0, `${result.profile}/world MapLibre shadow parity/canary/rollback contract missing`, shadow);
     assertMetric(shadow.activeEngine === 'leaflet_openstreetmap_v1' && shadow.shadowEngine === 'maplibre_gl_v1', `${result.profile}/world shadow renderer engine ids missing`, shadow);
     assertMetric(shadow.status === 'shadow_only_not_user_facing', `${result.profile}/world MapLibre must stay shadow-only`, shadow);
+    const osmProvider = result.openStreetMapProviderReadiness || {};
+    assertMetric(osmProvider.contractVersion === 'openstreetmap_provider_readiness_v1', `${result.profile}/world OSM provider readiness contract missing`, osmProvider);
+    assertMetric(osmProvider.readinessStatus === 'fixture_ready_live_fail_closed', `${result.profile}/world OSM readiness status drifted`, osmProvider);
+    assertMetric(String(osmProvider.fixtureModeGreen) === 'true' && String(osmProvider.liveModesFailClosed) === 'true', `${result.profile}/world OSM fixture/live fail-closed readiness missing`, osmProvider);
+    assertMetric(String(osmProvider.liveNetworkIngestionEnabled) === 'false' && String(osmProvider.productionIngestionEnabled) === 'false', `${result.profile}/world OSM live ingestion must stay disabled`, osmProvider);
+    assertMetric(Number(osmProvider.failClosedModeCount || 0) >= Number(osmProvider.expectedFailClosedModeCount || 4), `${result.profile}/world OSM fail-closed mode count missing`, osmProvider);
     checkWorldSecondaryDashboards(result);
     const map = yOf(result, 'map');
     const pulse = yOf(result, 'pulse');
@@ -483,6 +489,7 @@ async function auditPage(page, profile, target) {
     const mapWeakNetworkElement = document.getElementById(targetName === 'world' ? 'world-map-weak-network' : 'app-map-weak-network');
     const mapLocationPrivacyElement = document.getElementById(targetName === 'world' ? 'world-map-location-privacy' : 'app-map-location-privacy');
     const worldMapShadowRenderer = document.getElementById('world-map-shadow-renderer');
+    const openStreetMapProviderReadinessElement = document.getElementById('world-openstreetmap-provider-readiness');
     const handoffElements = [appRouteHandoff, appFeedHandoff, worldRouteHandoff].filter(Boolean);
     const handoffText = handoffElements.map((el) => text(el)).join(' · ');
     const mobileSheet = document.getElementById('app-mobile-action-sheet');
@@ -632,6 +639,20 @@ async function auditPage(page, profile, target) {
       rollbackDrillRequired: worldMapShadowRenderer?.dataset.rollbackDrillRequired || null,
       text: text(worldMapShadowRenderer).slice(0, 260),
     };
+    const openStreetMapProviderReadiness = {
+      present: Boolean(openStreetMapProviderReadinessElement),
+      contractVersion: openStreetMapProviderReadinessElement?.dataset.contractVersion || null,
+      readinessStatus: openStreetMapProviderReadinessElement?.dataset.readinessStatus || null,
+      fixtureModeGreen: openStreetMapProviderReadinessElement?.dataset.fixtureModeGreen || null,
+      liveModesFailClosed: openStreetMapProviderReadinessElement?.dataset.liveModesFailClosed || null,
+      liveNetworkIngestionEnabled: openStreetMapProviderReadinessElement?.dataset.liveNetworkIngestionEnabled || null,
+      productionIngestionEnabled: openStreetMapProviderReadinessElement?.dataset.productionIngestionEnabled || null,
+      failClosedModeCount: openStreetMapProviderReadinessElement?.dataset.failClosedModeCount || null,
+      expectedFailClosedModeCount: openStreetMapProviderReadinessElement?.dataset.expectedFailClosedModeCount || null,
+      stableFixtureIdentityCoverageComplete: openStreetMapProviderReadinessElement?.dataset.stableFixtureIdentityCoverageComplete || null,
+      fixtureLayerFeatureCount: openStreetMapProviderReadinessElement?.dataset.fixtureLayerFeatureCount || null,
+      text: text(openStreetMapProviderReadinessElement).slice(0, 260),
+    };
     const worldSecondaryDashboardElements = Array.from(document.querySelectorAll('[data-secondary-dashboard-contract="trillionnium_secondary_dashboard_panels_v1"]'));
     const worldSecondaryDetailElements = worldSecondaryDashboardElements.filter((el) => el.dataset.secondaryDashboardRole === 'secondary_detail_panel');
     const worldSecondaryDashboards = {
@@ -725,6 +746,7 @@ async function auditPage(page, profile, target) {
       mapWeakNetwork,
       mapLocationPrivacy,
       shadowRenderer,
+      openStreetMapProviderReadiness,
       worldSecondaryDashboards,
       firstViewportButtons,
       firstViewportText: text(document.body).slice(0, 1400),

@@ -729,9 +729,9 @@ git log --oneline -5
 - [x] TW-7.1 Map readability, runtime budget, delta/cache, RUM, weak-network, privacy gates exist.
 - [x] TW-7.2 Monitoring/readiness covers MapLibre shadow canary safety.
 - [x] TW-7.3 OSM production traffic policy visible.
-- [ ] TW-7.4 Add explicit OSM provider health/readiness section.
-  - fixture mode should be green
-  - live mode should be disabled/fail-closed
+- [x] TW-7.4 Add explicit OSM provider health/readiness section.
+  - fixture mode is green through `openstreetmap_provider_readiness_v1`
+  - live/network/production ingestion remains disabled and Overpass/Geofabrik/vendor/unknown modes fail closed
 - [ ] TW-7.5 Add geodata freshness/staleness metrics.
 - [ ] TW-7.6 Add OSM attribution presence check to web E2E and UI audit if not already hard-gated.
 - [!] TW-7.7 Do not increase MapLibre canary above 0 without fresh production signoff.
@@ -1094,7 +1094,41 @@ Expected first-slice deliverables:
   - Browser E2E green: `run/league-browser/browser-e2e-summary-1778335855-432426.json`
   - UI audit green: `run/trillionnium-ui-audit/ui-audit-summary-1778335990-433359.json`
 - Remaining next:
-  - [ ] TW-7.4 explicit OSM provider health/readiness section, or continue the next TW-6/TW-7 UI-runtime hardening slice if product direction changes.
+  - [x] TW-7.4 explicit OSM provider health/readiness section.
+
+---
+
+#### Update 2026-05-09 23:3x CST
+
+- Commit: pending until final commit.
+- Completed:
+  - [x] TW-7.4 explicit OSM provider health/readiness section.
+  - [x] Added `openstreetmap_provider_readiness_v1` to Rust geodata projection with fixture-green status, stable fixture identity/layer counts, and fail-closed mode coverage for Overpass bbox cache, Geofabrik extract import, vendor tile cache, and unknown modes.
+  - [x] Surfaced `/world` readiness card `#world-openstreetmap-provider-readiness` while keeping the web role visualization/input-only and live/network/production ingestion disabled.
+  - [x] Added health/playability gate `trillionnium_openstreetmap_provider_readiness_gate_v1` plus Prometheus gauges for readiness and fail-closed mode count.
+  - [x] Hard-gated readiness in Rust tests, Web E2E, Browser E2E, UI audit, and production readiness. Production readiness now gives operator-signal health fetches a 15s default timeout because the production `/health` payload is intentionally large after full world/playability evidence is present.
+- Evidence:
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `bash -n scripts/check-production-readiness.sh scripts/check-trillionnium-league-web-e2e.sh`
+  - `node --check scripts/playwright/trillionnium-browser-e2e.mjs`
+  - `node --check scripts/playwright/trillionnium-ui-audit.mjs`
+  - `cargo check -p consumer-entry-api`
+  - targeted `cargo test -p consumer-entry-api openstreetmap_geodata_provider_uses_stable_fixture_identities -- --nocapture`
+  - targeted `cargo test -p consumer-entry-api web_map_shells_render_live_event_task_focus_metadata -- --nocapture`
+  - targeted `cargo test -p consumer-entry-api health_endpoint_exposes_identity_governance_overview -- --nocapture`
+  - `cargo test -p consumer-entry-api -- --nocapture` (`133 passed`)
+  - `cargo clippy --workspace -- -D warnings`
+  - `cargo test --workspace`
+  - `CEX_ENV_FILE=run/local-production/.env scripts/runtime-manager-linux.sh restart/status` green
+  - Web E2E green: `run/league-web/web-e2e-summary-1778338491.json`
+  - Browser E2E green: `run/league-browser/browser-e2e-summary-1778338505-450398.json`
+  - UI audit green: `run/trillionnium-ui-audit/ui-audit-summary-1778338649-451357.json`
+  - Fresh monitoring deploy metadata: `run/monitoring-live-target/metadata/monitoring-deploy-metadata.yml`
+  - Fresh DB drill: `run/drills/db-backup-restore-20260509T150657Z-455243.summary.json`
+  - Production readiness green: `CEX_ENV_FILE=run/local-production/.env scripts/check-production-readiness.sh` → `READY production readiness smoke passed`
+- Remaining next:
+  - [ ] TW-7.5 add geodata freshness/staleness metrics.
 
 ---
 
@@ -1159,6 +1193,6 @@ Also append a one-paragraph summary to `/home/qian/.openclaw/workspace/memory/YY
 
 If the next instruction is simply “continue”, start here:
 
-> **Next pointer:** TW-6.8 is complete. If the next instruction is simply “continue”, start with TW-7.4 explicit OSM provider health/readiness section (fixture mode green, live mode disabled/fail-closed), unless product direction shifts to another TW-6/TW-7 UI-runtime hardening slice.
+> **Next pointer:** TW-7.4 is complete. If the next instruction is simply “continue”, start with TW-7.5 geodata freshness/staleness metrics, unless product direction shifts to another TW-6/TW-7 UI-runtime hardening slice.
 
 Do not start live Overpass/Geofabrik ingestion yet. Do not promote MapLibre. Do not convert the web shell into a standalone JS source of truth.

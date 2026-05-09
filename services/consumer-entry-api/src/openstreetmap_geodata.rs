@@ -7,6 +7,8 @@ pub(super) const OPENSTREETMAP_DERIVED_DATABASE_METADATA_CONTRACT_VERSION: &str 
     "openstreetmap_derived_database_metadata_v1";
 pub(super) const OPENSTREETMAP_PROVIDER_MODE_CONTRACT_VERSION: &str =
     "openstreetmap_provider_mode_v1";
+pub(super) const OPENSTREETMAP_PROVIDER_READINESS_CONTRACT_VERSION: &str =
+    "openstreetmap_provider_readiness_v1";
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub(super) enum OpenStreetMapProviderMode {
@@ -86,6 +88,112 @@ fn openstreetmap_provider_modes_json() -> Value {
         .map(openstreetmap_provider_mode_status_json)
         .collect::<Vec<_>>(),
     )
+}
+
+fn openstreetmap_layer_feature_count(fixture_layers: &Value) -> u64 {
+    fixture_layers
+        .get("layer_feature_counts")
+        .and_then(Value::as_object)
+        .map(|counts| counts.values().filter_map(Value::as_u64).sum::<u64>())
+        .unwrap_or(0)
+}
+
+fn openstreetmap_provider_readiness_json(
+    nodes: &[WorldMapNode],
+    fixture_layers: &Value,
+    stable_fixture_count: usize,
+) -> Value {
+    let fixture_status = openstreetmap_provider_mode_status_json("fixture");
+    let live_mode_statuses = [
+        "overpass_bbox_cache",
+        "geofabrik_extract_import",
+        "vendor_tile_cache",
+        "unknown",
+    ]
+    .into_iter()
+    .map(openstreetmap_provider_mode_status_json)
+    .collect::<Vec<_>>();
+    let live_modes_fail_closed = live_mode_statuses.iter().all(|status| {
+        status
+            .get("fail_closed")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+            && !status
+                .get("network_ingestion_enabled")
+                .and_then(Value::as_bool)
+                .unwrap_or(true)
+    });
+    let fail_closed_mode_count = live_mode_statuses
+        .iter()
+        .filter(|status| {
+            status
+                .get("fail_closed")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        })
+        .count();
+    let fixture_layer_feature_count = openstreetmap_layer_feature_count(fixture_layers);
+    let stable_fixture_identity_coverage_complete = stable_fixture_count == nodes.len();
+    let fixture_mode_green = fixture_status
+        .get("enabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        && !fixture_status
+            .get("network_ingestion_enabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(true)
+        && stable_fixture_identity_coverage_complete
+        && fixture_layer_feature_count > 0;
+    json!({
+        "contract_version": OPENSTREETMAP_PROVIDER_READINESS_CONTRACT_VERSION,
+        "provider_contract": "OpenStreetMapDataProvider",
+        "provider_id": "fixture_openstreetmap_data_provider_v1",
+        "provider_mode_contract_version": OPENSTREETMAP_PROVIDER_MODE_CONTRACT_VERSION,
+        "mode": "fixture",
+        "readiness_status": "fixture_ready_live_fail_closed",
+        "green": fixture_mode_green && live_modes_fail_closed,
+        "source_of_truth": "rust_openstreetmap_data_provider",
+        "web_role": "visualization_input_only",
+        "fixture_mode_green": fixture_mode_green,
+        "fixture_provider_enabled": fixture_status.get("enabled").and_then(Value::as_bool).unwrap_or(false),
+        "fixture_provider_fail_closed": fixture_status.get("fail_closed").and_then(Value::as_bool).unwrap_or(true),
+        "fixture_network_ingestion_enabled": fixture_status.get("network_ingestion_enabled").and_then(Value::as_bool).unwrap_or(true),
+        "fixture_node_count": nodes.len(),
+        "fixture_layer_feature_count": fixture_layer_feature_count,
+        "stable_fixture_identity_count": stable_fixture_count,
+        "stable_fixture_identity_coverage_complete": stable_fixture_identity_coverage_complete,
+        "live_modes_fail_closed": live_modes_fail_closed,
+        "live_network_ingestion_enabled": false,
+        "production_ingestion_enabled": false,
+        "provider_modes_observable": true,
+        "fail_closed_mode_count": fail_closed_mode_count,
+        "expected_fail_closed_mode_count": live_mode_statuses.len(),
+        "overpass_bbox_cache_fail_closed": live_mode_statuses.iter().any(|status| status.get("mode").and_then(Value::as_str) == Some("overpass_bbox_cache") && status.get("fail_closed").and_then(Value::as_bool).unwrap_or(false)),
+        "geofabrik_extract_import_fail_closed": live_mode_statuses.iter().any(|status| status.get("mode").and_then(Value::as_str) == Some("geofabrik_extract_import") && status.get("fail_closed").and_then(Value::as_bool).unwrap_or(false)),
+        "vendor_tile_cache_fail_closed": live_mode_statuses.iter().any(|status| status.get("mode").and_then(Value::as_str) == Some("vendor_tile_cache") && status.get("fail_closed").and_then(Value::as_bool).unwrap_or(false)),
+        "unknown_mode_fail_closed": live_mode_statuses.iter().any(|status| status.get("mode").and_then(Value::as_str) == Some("unknown") && status.get("fail_closed").and_then(Value::as_bool).unwrap_or(false)),
+        "public_tile_server_production_traffic_allowed": false,
+        "public_tile_server_policy": "do_not_use_public_osm_tile_servers_for_production_traffic",
+        "odbl_tracking_required_before_live": true,
+        "derived_database_metadata_required_before_live": true,
+        "live_provider_preconditions": [
+            "bbox_cache_rate_limit_and_retry_budget",
+            "geofabrik_extract_import_pipeline",
+            "derived_database_manifest_and_odbl_tracking",
+            "self_hosted_or_vendor_tile_cache_contract",
+            "fresh_production_signoff_before_live_ingestion"
+        ],
+        "fixture_readiness_checks": [
+            "fixture_provider_enabled",
+            "stable_fixture_identity_coverage_complete",
+            "fixture_layers_non_empty",
+            "live_modes_fail_closed",
+            "network_ingestion_disabled",
+            "odbl_tracking_required_before_live"
+        ],
+        "fixture_status": fixture_status,
+        "live_mode_statuses": live_mode_statuses,
+    })
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -842,6 +950,8 @@ pub(super) fn openstreetmap_geodata_v1_json(
     let fixture_layers = openstreetmap_fixture_layers_json(nodes);
     let derived_database_metadata =
         openstreetmap_derived_database_metadata_json(nodes, &fixture_layers);
+    let provider_readiness =
+        openstreetmap_provider_readiness_json(nodes, &fixture_layers, stable_fixture_count);
     json!({
         "kind": OPENSTREETMAP_GEODATA_CONTRACT_VERSION,
         "contract_version": OPENSTREETMAP_GEODATA_CONTRACT_VERSION,
@@ -851,6 +961,8 @@ pub(super) fn openstreetmap_geodata_v1_json(
         "provider_mode_contract_version": OPENSTREETMAP_PROVIDER_MODE_CONTRACT_VERSION,
         "provider_mode_status": openstreetmap_provider_mode_status_json("fixture"),
         "provider_modes": openstreetmap_provider_modes_json(),
+        "provider_readiness_contract_version": OPENSTREETMAP_PROVIDER_READINESS_CONTRACT_VERSION,
+        "provider_readiness": provider_readiness,
         "source_mode": provider.source_mode(),
         "source_of_truth": "rust_openstreetmap_data_provider",
         "web_role": "visualization_input_only",

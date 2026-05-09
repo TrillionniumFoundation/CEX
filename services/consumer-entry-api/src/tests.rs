@@ -2308,6 +2308,51 @@ fn openstreetmap_geodata_provider_uses_stable_fixture_identities() {
     assert_eq!(geodata["provider_mode_status"]["enabled"], true);
     assert_eq!(geodata["provider_mode_status"]["fail_closed"], false);
     assert_eq!(
+        geodata["provider_readiness_contract_version"],
+        "openstreetmap_provider_readiness_v1"
+    );
+    assert_eq!(
+        geodata["provider_readiness"]["contract_version"],
+        "openstreetmap_provider_readiness_v1"
+    );
+    assert_eq!(
+        geodata["provider_readiness"]["readiness_status"],
+        "fixture_ready_live_fail_closed"
+    );
+    assert_eq!(geodata["provider_readiness"]["fixture_mode_green"], true);
+    assert_eq!(
+        geodata["provider_readiness"]["live_modes_fail_closed"],
+        true
+    );
+    assert_eq!(
+        geodata["provider_readiness"]["live_network_ingestion_enabled"],
+        false
+    );
+    assert_eq!(
+        geodata["provider_readiness"]["production_ingestion_enabled"],
+        false
+    );
+    assert_eq!(
+        geodata["provider_readiness"]["stable_fixture_identity_coverage_complete"],
+        true
+    );
+    assert_eq!(
+        geodata["provider_readiness"]["overpass_bbox_cache_fail_closed"],
+        true
+    );
+    assert_eq!(
+        geodata["provider_readiness"]["geofabrik_extract_import_fail_closed"],
+        true
+    );
+    assert_eq!(
+        geodata["provider_readiness"]["vendor_tile_cache_fail_closed"],
+        true
+    );
+    assert_eq!(
+        geodata["provider_readiness"]["unknown_mode_fail_closed"],
+        true
+    );
+    assert_eq!(
         geodata["derived_database_metadata_contract_version"],
         "openstreetmap_derived_database_metadata_v1"
     );
@@ -4606,6 +4651,16 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(world_html.contains("game_overlay_id"));
     assert!(world_html.contains("odbl_database_obligations"));
     assert!(world_html.contains("no_live_overpass"));
+    assert!(world_html.contains("world-openstreetmap-provider-readiness"));
+    assert!(world_html.contains("openstreetmap_provider_readiness_v1"));
+    assert!(world_html.contains("fixture_ready_live_fail_closed"));
+    assert!(world_html.contains("data-fixture-mode-green=\"true\""));
+    assert!(world_html.contains("data-live-modes-fail-closed=\"true\""));
+    assert!(world_html.contains("data-live-network-ingestion-enabled=\"false\""));
+    assert!(world_html.contains("data-production-ingestion-enabled=\"false\""));
+    assert!(world_html.contains("overpass_bbox_cache"));
+    assert!(world_html.contains("geofabrik_extract_import"));
+    assert!(world_html.contains("vendor_tile_cache"));
     assert!(world_html.contains("Trillionnium World Map"));
     assert!(world_html.contains("OpenStreetMap upgraded into a playable world"));
     assert!(world_html.contains("Player avatars / 跑图角色"));
@@ -13407,6 +13462,44 @@ async fn health_endpoint_exposes_identity_governance_overview() {
         true
     );
     assert_eq!(
+        body["trillionnium_openstreetmap_provider_readiness_gate"]["contract_version"],
+        "trillionnium_openstreetmap_provider_readiness_gate_v1"
+    );
+    assert_eq!(
+        body["trillionnium_openstreetmap_provider_readiness_gate"]["readiness_contract_version"],
+        "openstreetmap_provider_readiness_v1"
+    );
+    assert_eq!(
+        body["trillionnium_openstreetmap_provider_readiness_gate"]["provider_mode"],
+        "fixture"
+    );
+    assert_eq!(
+        body["trillionnium_openstreetmap_provider_readiness_gate"]["fixture_mode_green"],
+        true
+    );
+    assert_eq!(
+        body["trillionnium_openstreetmap_provider_readiness_gate"]["live_modes_fail_closed"],
+        true
+    );
+    assert_eq!(
+        body["trillionnium_openstreetmap_provider_readiness_gate"]["network_ingestion_disabled"],
+        true
+    );
+    assert_eq!(
+        body["trillionnium_openstreetmap_provider_readiness_gate"]["production_ingestion_disabled"],
+        true
+    );
+    assert_eq!(
+        body["trillionnium_openstreetmap_provider_readiness_gate"]
+            ["overpass_bbox_cache_fail_closed"],
+        true
+    );
+    assert_eq!(
+        body["trillionnium_world_playability_scorecard"]["openstreetmap_provider_readiness_gate"]
+            ["readiness_status"],
+        "fixture_ready_live_fail_closed"
+    );
+    assert_eq!(
         body["trillionnium_world_playability_scorecard"]["world_map_runtime_safety_gate"]
             ["contract_version"],
         "trillionnium_world_map_runtime_safety_gate_v1"
@@ -13482,6 +13575,20 @@ async fn health_endpoint_exposes_identity_governance_overview() {
             .unwrap()
             .iter()
             .any(|check| check["check_id"] == "future_engine_readiness_contract_visible")
+    );
+    assert!(
+        body["trillionnium_world_playability_scorecard"]["axes"]["observability_gates"]["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|check| check["check_id"] == "openstreetmap_provider_readiness_gate_green")
+    );
+    assert!(
+        body["trillionnium_world_playability_scorecard"]["axes"]["surface_feedback"]["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|check| check["check_id"] == "openstreetmap_provider_readiness_section_visible")
     );
     assert!(
         body["trillionnium_world_playability_scorecard"]["axes"]["observability_gates"]["checks"]
@@ -13720,6 +13827,10 @@ async fn metrics_endpoint_exposes_identity_governance_gauges() {
     );
     assert!(body
         .contains("cex_consumer_entry_trillionnium_world_future_engine_promotion_blocker_count"));
+    assert!(body
+        .contains("cex_consumer_entry_trillionnium_openstreetmap_provider_readiness_gate_green"));
+    assert!(body
+        .contains("cex_consumer_entry_trillionnium_openstreetmap_provider_fail_closed_mode_count"));
     assert!(
         body.contains("cex_consumer_entry_trillionnium_world_playability_scorecard_overall_score")
     );
