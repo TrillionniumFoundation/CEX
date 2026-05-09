@@ -320,6 +320,12 @@ function checkMobile(result, limits) {
     assertMetric(String(osmProvider.fixtureModeGreen) === 'true' && String(osmProvider.liveModesFailClosed) === 'true', `${result.profile}/world OSM fixture/live fail-closed readiness missing`, osmProvider);
     assertMetric(String(osmProvider.liveNetworkIngestionEnabled) === 'false' && String(osmProvider.productionIngestionEnabled) === 'false', `${result.profile}/world OSM live ingestion must stay disabled`, osmProvider);
     assertMetric(Number(osmProvider.failClosedModeCount || 0) >= Number(osmProvider.expectedFailClosedModeCount || 4), `${result.profile}/world OSM fail-closed mode count missing`, osmProvider);
+    const osmFreshness = result.openStreetMapGeodataFreshness || {};
+    assertMetric(osmFreshness.contractVersion === 'openstreetmap_geodata_freshness_v1', `${result.profile}/world OSM geodata freshness contract missing`, osmFreshness);
+    assertMetric(osmFreshness.freshnessStatus === 'fixture_static_fresh_live_stale_blocked', `${result.profile}/world OSM freshness status drifted`, osmFreshness);
+    assertMetric(String(osmFreshness.fixtureStaticSnapshot) === 'true' && String(osmFreshness.stalenessGateGreen) === 'true', `${result.profile}/world OSM fixture freshness gate missing`, osmFreshness);
+    assertMetric(String(osmFreshness.wallClockFreshnessApplies) === 'false' && String(osmFreshness.liveDataFreshnessApplies) === 'false', `${result.profile}/world OSM fixture freshness must not imply live wall-clock freshness`, osmFreshness);
+    assertMetric(Number(osmFreshness.fixtureSnapshotAgeSeconds || -1) === 0 && String(osmFreshness.staleLiveIngestionBlocked) === 'true', `${result.profile}/world OSM staleness fail-closed evidence missing`, osmFreshness);
     checkWorldSecondaryDashboards(result);
     const map = yOf(result, 'map');
     const pulse = yOf(result, 'pulse');
@@ -490,6 +496,7 @@ async function auditPage(page, profile, target) {
     const mapLocationPrivacyElement = document.getElementById(targetName === 'world' ? 'world-map-location-privacy' : 'app-map-location-privacy');
     const worldMapShadowRenderer = document.getElementById('world-map-shadow-renderer');
     const openStreetMapProviderReadinessElement = document.getElementById('world-openstreetmap-provider-readiness');
+    const openStreetMapGeodataFreshnessElement = document.getElementById('world-openstreetmap-geodata-freshness');
     const handoffElements = [appRouteHandoff, appFeedHandoff, worldRouteHandoff].filter(Boolean);
     const handoffText = handoffElements.map((el) => text(el)).join(' · ');
     const mobileSheet = document.getElementById('app-mobile-action-sheet');
@@ -653,6 +660,19 @@ async function auditPage(page, profile, target) {
       fixtureLayerFeatureCount: openStreetMapProviderReadinessElement?.dataset.fixtureLayerFeatureCount || null,
       text: text(openStreetMapProviderReadinessElement).slice(0, 260),
     };
+    const openStreetMapGeodataFreshness = {
+      present: Boolean(openStreetMapGeodataFreshnessElement),
+      contractVersion: openStreetMapGeodataFreshnessElement?.dataset.contractVersion || null,
+      freshnessStatus: openStreetMapGeodataFreshnessElement?.dataset.freshnessStatus || null,
+      fixtureStaticSnapshot: openStreetMapGeodataFreshnessElement?.dataset.fixtureStaticSnapshot || null,
+      wallClockFreshnessApplies: openStreetMapGeodataFreshnessElement?.dataset.wallClockFreshnessApplies || null,
+      liveDataFreshnessApplies: openStreetMapGeodataFreshnessElement?.dataset.liveDataFreshnessApplies || null,
+      stalenessGateGreen: openStreetMapGeodataFreshnessElement?.dataset.stalenessGateGreen || null,
+      staleLiveIngestionBlocked: openStreetMapGeodataFreshnessElement?.dataset.staleLiveIngestionBlocked || null,
+      fixtureSnapshotAgeSeconds: openStreetMapGeodataFreshnessElement?.dataset.fixtureSnapshotAgeSeconds || null,
+      layerFeatureCount: openStreetMapGeodataFreshnessElement?.dataset.layerFeatureCount || null,
+      text: text(openStreetMapGeodataFreshnessElement).slice(0, 260),
+    };
     const worldSecondaryDashboardElements = Array.from(document.querySelectorAll('[data-secondary-dashboard-contract="trillionnium_secondary_dashboard_panels_v1"]'));
     const worldSecondaryDetailElements = worldSecondaryDashboardElements.filter((el) => el.dataset.secondaryDashboardRole === 'secondary_detail_panel');
     const worldSecondaryDashboards = {
@@ -747,6 +767,7 @@ async function auditPage(page, profile, target) {
       mapLocationPrivacy,
       shadowRenderer,
       openStreetMapProviderReadiness,
+      openStreetMapGeodataFreshness,
       worldSecondaryDashboards,
       firstViewportButtons,
       firstViewportText: text(document.body).slice(0, 1400),

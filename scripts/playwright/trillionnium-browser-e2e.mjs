@@ -597,6 +597,7 @@ async function main() {
   assert(await count(page, '#world-mobile-primary-cta.cta') === 1, 'world mobile primary CTA missing');
   assert(await count(page, '#world-mobile-route-first-sheet .world-route-stepper span') === 3, 'world mobile route-first stepper missing');
   assert(await count(page, '#world-openstreetmap-provider-readiness[data-contract-version="openstreetmap_provider_readiness_v1"][data-fixture-mode-green="true"][data-live-modes-fail-closed="true"][data-live-network-ingestion-enabled="false"][data-production-ingestion-enabled="false"]') === 1, 'world OSM provider readiness/fail-closed contract missing');
+  assert(await count(page, '#world-openstreetmap-geodata-freshness[data-contract-version="openstreetmap_geodata_freshness_v1"][data-fixture-static-snapshot="true"][data-wall-clock-freshness-applies="false"][data-live-data-freshness-applies="false"][data-staleness-gate-green="true"][data-stale-live-ingestion-blocked="true"][data-fixture-snapshot-age-seconds="0"]') === 1, 'world OSM geodata freshness/staleness contract missing');
   assert(await count(page, '#world-tactics-player-hud[data-contract-version="trillionnium_tactics_player_visible_surface_v1"]') === 1, 'world tactics player HUD contract missing');
   assert(await count(page, '#world-tactics-objective-card[data-session-contract="trillionnium_tactics_game_session_v1"]') === 1, 'world tactics objective card missing');
   assert(await count(page, '#world-tactics-current-session-card[data-tick-contract="trillionnium_tactics_simulation_tick_v1"]') === 1, 'world tactics current session card missing');
@@ -746,6 +747,11 @@ async function main() {
   assert(healthJson?.trillionnium_openstreetmap_provider_readiness_gate?.fixture_mode_green === true, 'health OSM fixture mode must be green', healthJson?.trillionnium_openstreetmap_provider_readiness_gate);
   assert(healthJson?.trillionnium_openstreetmap_provider_readiness_gate?.live_modes_fail_closed === true, 'health OSM live modes must fail closed', healthJson?.trillionnium_openstreetmap_provider_readiness_gate);
   assert(healthJson?.trillionnium_openstreetmap_provider_readiness_gate?.network_ingestion_disabled === true, 'health OSM network ingestion must stay disabled', healthJson?.trillionnium_openstreetmap_provider_readiness_gate);
+  assert(healthJson?.trillionnium_openstreetmap_geodata_freshness_gate?.contract_version === 'trillionnium_openstreetmap_geodata_freshness_gate_v1', 'health OSM geodata freshness gate contract missing', healthJson?.trillionnium_openstreetmap_geodata_freshness_gate);
+  assert(healthJson?.trillionnium_openstreetmap_geodata_freshness_gate?.freshness_contract_version === 'openstreetmap_geodata_freshness_v1', 'health OSM geodata freshness contract missing', healthJson?.trillionnium_openstreetmap_geodata_freshness_gate);
+  assert(healthJson?.trillionnium_openstreetmap_geodata_freshness_gate?.freshness_status === 'fixture_static_fresh_live_stale_blocked', 'health OSM freshness status drifted', healthJson?.trillionnium_openstreetmap_geodata_freshness_gate);
+  assert(healthJson?.trillionnium_openstreetmap_geodata_freshness_gate?.fixture_snapshot_age_seconds === 0, 'health OSM fixture age sentinel must stay zero', healthJson?.trillionnium_openstreetmap_geodata_freshness_gate);
+  assert(healthJson?.trillionnium_openstreetmap_geodata_freshness_gate?.stale_live_ingestion_blocked === true, 'health OSM stale live ingestion must fail closed', healthJson?.trillionnium_openstreetmap_geodata_freshness_gate);
   assert(healthJson?.trillionnium_world_map_rum_slo_gate?.contract_version === 'trillionnium_world_map_rum_slo_v1' && healthJson?.trillionnium_world_map_rum_slo_gate?.green === true, 'health RUM SLO metrics gate not green', healthJson?.trillionnium_world_map_rum_slo_gate);
   assert(typeof healthJson?.trillionnium_world_map_rum_slo_gate?.raw_split_green === 'boolean', 'health RUM SLO raw split verdict must stay visible during warmup', healthJson?.trillionnium_world_map_rum_slo_gate);
   assert(Number.isFinite(Number(healthJson?.trillionnium_world_map_rum_slo_gate?.sample_count)), 'health RUM SLO sample count missing', healthJson?.trillionnium_world_map_rum_slo_gate);
@@ -766,6 +772,9 @@ async function main() {
     'cex_consumer_entry_trillionnium_world_map_location_privacy_gate_green 1',
     'cex_consumer_entry_trillionnium_openstreetmap_provider_readiness_gate_green 1',
     'cex_consumer_entry_trillionnium_openstreetmap_provider_fail_closed_mode_count ',
+    'cex_consumer_entry_trillionnium_openstreetmap_geodata_freshness_gate_green 1',
+    'cex_consumer_entry_trillionnium_openstreetmap_geodata_fixture_snapshot_age_seconds 0',
+    'cex_consumer_entry_trillionnium_openstreetmap_geodata_staleness_alarm_active 0',
   ]) {
     assert(metricsText.includes(needle), `metrics runtime safety gauge missing: ${needle}`);
   }

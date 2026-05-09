@@ -9,6 +9,8 @@ pub(super) const OPENSTREETMAP_PROVIDER_MODE_CONTRACT_VERSION: &str =
     "openstreetmap_provider_mode_v1";
 pub(super) const OPENSTREETMAP_PROVIDER_READINESS_CONTRACT_VERSION: &str =
     "openstreetmap_provider_readiness_v1";
+pub(super) const OPENSTREETMAP_GEODATA_FRESHNESS_CONTRACT_VERSION: &str =
+    "openstreetmap_geodata_freshness_v1";
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub(super) enum OpenStreetMapProviderMode {
@@ -193,6 +195,91 @@ fn openstreetmap_provider_readiness_json(
         ],
         "fixture_status": fixture_status,
         "live_mode_statuses": live_mode_statuses,
+    })
+}
+
+fn openstreetmap_geodata_freshness_json(
+    nodes: &[WorldMapNode],
+    fixture_layers: &Value,
+    derived_database_metadata: &Value,
+) -> Value {
+    let fixture_layer_feature_count = openstreetmap_layer_feature_count(fixture_layers);
+    let derived_database_snapshot_id = derived_database_metadata
+        .get("derived_database_snapshot_id")
+        .and_then(Value::as_str)
+        .unwrap_or("osm-fixture-v1-unknown");
+    let imported_at_epoch = derived_database_metadata
+        .get("imported_at_epoch")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let live_ingestion_enabled = false;
+    let fixture_static_snapshot = true;
+    let wall_clock_freshness_applies = false;
+    let live_data_freshness_applies = false;
+    let fixture_snapshot_age_seconds = 0_u64;
+    let staleness_alarm_active = false;
+    let stale_live_ingestion_blocked = true;
+    let freshness_green = fixture_static_snapshot
+        && !wall_clock_freshness_applies
+        && !live_data_freshness_applies
+        && !live_ingestion_enabled
+        && stale_live_ingestion_blocked
+        && !staleness_alarm_active
+        && !nodes.is_empty()
+        && fixture_layer_feature_count > 0;
+    json!({
+        "contract_version": OPENSTREETMAP_GEODATA_FRESHNESS_CONTRACT_VERSION,
+        "provider_contract": "OpenStreetMapDataProvider",
+        "provider_id": "fixture_openstreetmap_data_provider_v1",
+        "provider_mode": "fixture",
+        "freshness_status": "fixture_static_fresh_live_stale_blocked",
+        "green": freshness_green,
+        "source_of_truth": "rust_openstreetmap_data_provider",
+        "web_role": "visualization_input_only",
+        "freshness_metric_mode": "static_fixture_no_wall_clock_decay",
+        "fixture_static_snapshot": fixture_static_snapshot,
+        "wall_clock_freshness_applies": wall_clock_freshness_applies,
+        "live_data_freshness_applies": live_data_freshness_applies,
+        "fixture_snapshot_age_seconds": fixture_snapshot_age_seconds,
+        "fixture_snapshot_max_age_seconds": 0,
+        "fixture_snapshot_age_within_policy": true,
+        "live_ingestion_enabled": live_ingestion_enabled,
+        "live_snapshot_age_seconds": 0,
+        "live_snapshot_max_age_seconds": 0,
+        "live_snapshot_age_unknown_blocked": true,
+        "staleness_alarm_active": staleness_alarm_active,
+        "stale_live_ingestion_blocked": stale_live_ingestion_blocked,
+        "requires_fresh_import_before_live": true,
+        "freshness_tracking_required_before_live": true,
+        "overpass_cache_freshness_tracking_present": false,
+        "geofabrik_extract_freshness_tracking_present": false,
+        "vendor_tile_cache_freshness_tracking_present": false,
+        "derived_database_metadata_contract_version": OPENSTREETMAP_DERIVED_DATABASE_METADATA_CONTRACT_VERSION,
+        "derived_database_snapshot_id": derived_database_snapshot_id,
+        "fixture_source_revision": "openstreetmap_fixture_layers_v1",
+        "imported_at_epoch": imported_at_epoch,
+        "last_successful_import_epoch": imported_at_epoch,
+        "last_live_ingestion_epoch": 0,
+        "node_feature_count": nodes.len(),
+        "layer_feature_count": fixture_layer_feature_count,
+        "minimum_required_node_feature_count": 1,
+        "minimum_required_layer_feature_count": 1,
+        "odbl_tracking_visible": true,
+        "public_tile_server_production_traffic_allowed": false,
+        "staleness_policy": {
+            "fixture_static_exempt_from_wall_clock_decay": true,
+            "live_data_requires_import_timestamp_and_max_age": true,
+            "stale_or_unknown_live_data_must_fail_closed": true,
+            "production_live_ingestion_requires_freshness_tracking": true
+        },
+        "freshness_checks": [
+            "fixture_static_snapshot_declared",
+            "wall_clock_freshness_disabled_for_fixture",
+            "live_data_freshness_disabled_until_import_pipeline",
+            "stale_or_unknown_live_ingestion_fail_closed",
+            "derived_database_snapshot_id_visible",
+            "odbl_tracking_required_before_live"
+        ],
     })
 }
 
@@ -952,6 +1039,8 @@ pub(super) fn openstreetmap_geodata_v1_json(
         openstreetmap_derived_database_metadata_json(nodes, &fixture_layers);
     let provider_readiness =
         openstreetmap_provider_readiness_json(nodes, &fixture_layers, stable_fixture_count);
+    let freshness =
+        openstreetmap_geodata_freshness_json(nodes, &fixture_layers, &derived_database_metadata);
     json!({
         "kind": OPENSTREETMAP_GEODATA_CONTRACT_VERSION,
         "contract_version": OPENSTREETMAP_GEODATA_CONTRACT_VERSION,
@@ -963,6 +1052,8 @@ pub(super) fn openstreetmap_geodata_v1_json(
         "provider_modes": openstreetmap_provider_modes_json(),
         "provider_readiness_contract_version": OPENSTREETMAP_PROVIDER_READINESS_CONTRACT_VERSION,
         "provider_readiness": provider_readiness,
+        "freshness_contract_version": OPENSTREETMAP_GEODATA_FRESHNESS_CONTRACT_VERSION,
+        "freshness": freshness,
         "source_mode": provider.source_mode(),
         "source_of_truth": "rust_openstreetmap_data_provider",
         "web_role": "visualization_input_only",

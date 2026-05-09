@@ -732,7 +732,11 @@ git log --oneline -5
 - [x] TW-7.4 Add explicit OSM provider health/readiness section.
   - fixture mode is green through `openstreetmap_provider_readiness_v1`
   - live/network/production ingestion remains disabled and Overpass/Geofabrik/vendor/unknown modes fail closed
-- [ ] TW-7.5 Add geodata freshness/staleness metrics.
+- [x] TW-7.5 Add geodata freshness/staleness metrics.
+  - fixture freshness is explicit through `openstreetmap_geodata_freshness_v1`
+  - static fixture snapshots declare no wall-clock decay (`fixture_snapshot_age_seconds=0`)
+  - stale/unknown live ingestion remains blocked until import timestamps, max-age policy, and ODbL tracking exist
+  - health/playability/Prometheus/Web/Browser/UI/production readiness gates cover the freshness contract
 - [ ] TW-7.6 Add OSM attribution presence check to web E2E and UI audit if not already hard-gated.
 - [!] TW-7.7 Do not increase MapLibre canary above 0 without fresh production signoff.
 
@@ -1128,7 +1132,39 @@ Expected first-slice deliverables:
   - Fresh DB drill: `run/drills/db-backup-restore-20260509T150657Z-455243.summary.json`
   - Production readiness green: `CEX_ENV_FILE=run/local-production/.env scripts/check-production-readiness.sh` → `READY production readiness smoke passed`
 - Remaining next:
-  - [ ] TW-7.5 add geodata freshness/staleness metrics.
+  - [x] TW-7.5 add geodata freshness/staleness metrics.
+
+---
+
+#### Update 2026-05-10 01:1x CST
+
+- Completed:
+  - [x] TW-7.5 geodata freshness/staleness metrics.
+  - [x] Added `openstreetmap_geodata_freshness_v1` to Rust OSM geodata projection. Fixture mode now reports `fixture_static_fresh_live_stale_blocked`, `fixture_snapshot_age_seconds=0`, `wall_clock_freshness_applies=false`, `live_data_freshness_applies=false`, `stale_live_ingestion_blocked=true`, ODbL/derived-database metadata visibility, and live import tracking requirements before any production ingestion can open.
+  - [x] Surfaced `/world` freshness card `#world-openstreetmap-geodata-freshness` while keeping Rust as source of truth and the web role visualization/input-only.
+  - [x] Added health/playability gate `trillionnium_openstreetmap_geodata_freshness_gate_v1` plus Prometheus gauges for freshness-green, fixture snapshot age, and staleness alarm state.
+  - [x] Hard-gated freshness/staleness in Rust tests, Web E2E, Browser E2E, UI audit, and production readiness without enabling Overpass/Geofabrik/vendor/live ingestion.
+- Evidence:
+  - `cargo check -p consumer-entry-api`
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `bash -n scripts/check-production-readiness.sh scripts/check-trillionnium-league-web-e2e.sh`
+  - `node --check scripts/playwright/trillionnium-browser-e2e.mjs`
+  - `node --check scripts/playwright/trillionnium-ui-audit.mjs`
+  - targeted OSM/world/health/metrics Rust tests green
+  - `cargo test -p consumer-entry-api -- --nocapture` (`133 passed`)
+  - `cargo clippy --workspace -- -D warnings`
+  - `cargo test --workspace`
+  - `CEX_ENV_FILE=run/local-production/.env scripts/runtime-manager-linux.sh restart/status` green
+  - Web E2E green: `run/league-web/web-e2e-summary-1778346448.json`
+  - Browser E2E green: `run/league-browser/browser-e2e-summary-1778346195-501871.json`
+  - UI audit green: `run/trillionnium-ui-audit/ui-audit-summary-1778346195-501855.json`
+  - Playability scorecard green: `run/playability-scorecard/playability-scorecard-summary-1778346464.json`
+  - Real-user beta green: `run/real-user-beta/real-user-beta-summary-1778346703.json`
+  - Public commercial green: `run/public-commercial/public-commercial-summary-1778346759.json`
+  - Production readiness green: `CEX_ENV_FILE=run/local-production/.env scripts/check-production-readiness.sh` → `READY production readiness smoke passed`
+- Remaining next:
+  - [ ] TW-7.6 OSM attribution presence check to web E2E and UI audit if not already hard-gated.
 
 ---
 
@@ -1193,6 +1229,6 @@ Also append a one-paragraph summary to `/home/qian/.openclaw/workspace/memory/YY
 
 If the next instruction is simply “continue”, start here:
 
-> **Next pointer:** TW-7.4 is complete. If the next instruction is simply “continue”, start with TW-7.5 geodata freshness/staleness metrics, unless product direction shifts to another TW-6/TW-7 UI-runtime hardening slice.
+> **Next pointer:** TW-7.5 is complete. If the next instruction is simply “continue”, start with TW-7.6 OSM attribution presence check in web E2E/UI audit, unless product direction shifts to another TW-6/TW-7 UI-runtime hardening slice.
 
 Do not start live Overpass/Geofabrik ingestion yet. Do not promote MapLibre. Do not convert the web shell into a standalone JS source of truth.

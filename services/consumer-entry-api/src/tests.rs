@@ -2353,6 +2353,41 @@ fn openstreetmap_geodata_provider_uses_stable_fixture_identities() {
         true
     );
     assert_eq!(
+        geodata["freshness_contract_version"],
+        "openstreetmap_geodata_freshness_v1"
+    );
+    assert_eq!(
+        geodata["freshness"]["contract_version"],
+        "openstreetmap_geodata_freshness_v1"
+    );
+    assert_eq!(
+        geodata["freshness"]["freshness_status"],
+        "fixture_static_fresh_live_stale_blocked"
+    );
+    assert_eq!(geodata["freshness"]["fixture_static_snapshot"], true);
+    assert_eq!(geodata["freshness"]["wall_clock_freshness_applies"], false);
+    assert_eq!(geodata["freshness"]["live_data_freshness_applies"], false);
+    assert_eq!(geodata["freshness"]["fixture_snapshot_age_seconds"], 0);
+    assert_eq!(
+        geodata["freshness"]["fixture_snapshot_age_within_policy"],
+        true
+    );
+    assert_eq!(geodata["freshness"]["live_ingestion_enabled"], false);
+    assert_eq!(
+        geodata["freshness"]["live_snapshot_age_unknown_blocked"],
+        true
+    );
+    assert_eq!(geodata["freshness"]["staleness_alarm_active"], false);
+    assert_eq!(geodata["freshness"]["stale_live_ingestion_blocked"], true);
+    assert_eq!(
+        geodata["freshness"]["requires_fresh_import_before_live"],
+        true
+    );
+    assert_eq!(
+        geodata["freshness"]["derived_database_metadata_contract_version"],
+        "openstreetmap_derived_database_metadata_v1"
+    );
+    assert_eq!(
         geodata["derived_database_metadata_contract_version"],
         "openstreetmap_derived_database_metadata_v1"
     );
@@ -4661,6 +4696,15 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(world_html.contains("overpass_bbox_cache"));
     assert!(world_html.contains("geofabrik_extract_import"));
     assert!(world_html.contains("vendor_tile_cache"));
+    assert!(world_html.contains("world-openstreetmap-geodata-freshness"));
+    assert!(world_html.contains("openstreetmap_geodata_freshness_v1"));
+    assert!(world_html.contains("fixture_static_fresh_live_stale_blocked"));
+    assert!(world_html.contains("data-fixture-static-snapshot=\"true\""));
+    assert!(world_html.contains("data-wall-clock-freshness-applies=\"false\""));
+    assert!(world_html.contains("data-live-data-freshness-applies=\"false\""));
+    assert!(world_html.contains("data-staleness-gate-green=\"true\""));
+    assert!(world_html.contains("data-stale-live-ingestion-blocked=\"true\""));
+    assert!(world_html.contains("data-fixture-snapshot-age-seconds=\"0\""));
     assert!(world_html.contains("Trillionnium World Map"));
     assert!(world_html.contains("OpenStreetMap upgraded into a playable world"));
     assert!(world_html.contains("Player avatars / 跑图角色"));
@@ -13500,6 +13544,47 @@ async fn health_endpoint_exposes_identity_governance_overview() {
         "fixture_ready_live_fail_closed"
     );
     assert_eq!(
+        body["trillionnium_openstreetmap_geodata_freshness_gate"]["contract_version"],
+        "trillionnium_openstreetmap_geodata_freshness_gate_v1"
+    );
+    assert_eq!(
+        body["trillionnium_openstreetmap_geodata_freshness_gate"]["freshness_contract_version"],
+        "openstreetmap_geodata_freshness_v1"
+    );
+    assert_eq!(
+        body["trillionnium_openstreetmap_geodata_freshness_gate"]["freshness_status"],
+        "fixture_static_fresh_live_stale_blocked"
+    );
+    assert_eq!(
+        body["trillionnium_openstreetmap_geodata_freshness_gate"]["fixture_static_snapshot"],
+        true
+    );
+    assert_eq!(
+        body["trillionnium_openstreetmap_geodata_freshness_gate"]["wall_clock_freshness_applies"],
+        false
+    );
+    assert_eq!(
+        body["trillionnium_openstreetmap_geodata_freshness_gate"]["live_data_freshness_applies"],
+        false
+    );
+    assert_eq!(
+        body["trillionnium_openstreetmap_geodata_freshness_gate"]["fixture_snapshot_age_seconds"],
+        0
+    );
+    assert_eq!(
+        body["trillionnium_openstreetmap_geodata_freshness_gate"]["live_ingestion_disabled"],
+        true
+    );
+    assert_eq!(
+        body["trillionnium_openstreetmap_geodata_freshness_gate"]["stale_live_ingestion_blocked"],
+        true
+    );
+    assert_eq!(
+        body["trillionnium_world_playability_scorecard"]["openstreetmap_geodata_freshness_gate"]
+            ["freshness_green"],
+        true
+    );
+    assert_eq!(
         body["trillionnium_world_playability_scorecard"]["world_map_runtime_safety_gate"]
             ["contract_version"],
         "trillionnium_world_map_runtime_safety_gate_v1"
@@ -13584,11 +13669,25 @@ async fn health_endpoint_exposes_identity_governance_overview() {
             .any(|check| check["check_id"] == "openstreetmap_provider_readiness_gate_green")
     );
     assert!(
+        body["trillionnium_world_playability_scorecard"]["axes"]["observability_gates"]["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|check| check["check_id"] == "openstreetmap_geodata_freshness_gate_green")
+    );
+    assert!(
         body["trillionnium_world_playability_scorecard"]["axes"]["surface_feedback"]["checks"]
             .as_array()
             .unwrap()
             .iter()
             .any(|check| check["check_id"] == "openstreetmap_provider_readiness_section_visible")
+    );
+    assert!(
+        body["trillionnium_world_playability_scorecard"]["axes"]["surface_feedback"]["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|check| check["check_id"] == "openstreetmap_geodata_freshness_section_visible")
     );
     assert!(
         body["trillionnium_world_playability_scorecard"]["axes"]["observability_gates"]["checks"]
@@ -13831,6 +13930,15 @@ async fn metrics_endpoint_exposes_identity_governance_gauges() {
         .contains("cex_consumer_entry_trillionnium_openstreetmap_provider_readiness_gate_green"));
     assert!(body
         .contains("cex_consumer_entry_trillionnium_openstreetmap_provider_fail_closed_mode_count"));
+    assert!(
+        body.contains("cex_consumer_entry_trillionnium_openstreetmap_geodata_freshness_gate_green")
+    );
+    assert!(body.contains(
+        "cex_consumer_entry_trillionnium_openstreetmap_geodata_fixture_snapshot_age_seconds 0"
+    ));
+    assert!(body.contains(
+        "cex_consumer_entry_trillionnium_openstreetmap_geodata_staleness_alarm_active 0"
+    ));
     assert!(
         body.contains("cex_consumer_entry_trillionnium_world_playability_scorecard_overall_score")
     );

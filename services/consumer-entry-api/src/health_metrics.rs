@@ -1170,6 +1170,145 @@ fn is_openstreetmap_provider_readiness_gate_green(gate: &Value) -> bool {
             .unwrap_or(false)
 }
 
+fn app_openstreetmap_geodata_freshness_gate_json(app: &Value) -> Value {
+    let geodata = app
+        .get("map")
+        .and_then(|map| map.get("openstreetmap_geodata"));
+    let freshness = geodata.and_then(|geodata| geodata.get("freshness"));
+    let live_ingestion_enabled = freshness
+        .and_then(|freshness| freshness.get("live_ingestion_enabled"))
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    json!({
+        "contract_version": "trillionnium_openstreetmap_geodata_freshness_gate_v1",
+        "geodata_contract_version": geodata.and_then(|geodata| geodata.get("contract_version")).and_then(Value::as_str),
+        "freshness_contract_version": freshness.and_then(|freshness| freshness.get("contract_version")).and_then(Value::as_str),
+        "provider_contract": geodata.and_then(|geodata| geodata.get("provider_contract")).and_then(Value::as_str),
+        "provider_mode": geodata.and_then(|geodata| geodata.get("provider_mode")).and_then(Value::as_str),
+        "freshness_status": freshness.and_then(|freshness| freshness.get("freshness_status")).and_then(Value::as_str),
+        "source_of_truth": freshness.and_then(|freshness| freshness.get("source_of_truth")).and_then(Value::as_str).or_else(|| geodata.and_then(|geodata| geodata.get("source_of_truth")).and_then(Value::as_str)),
+        "web_role": freshness.and_then(|freshness| freshness.get("web_role")).and_then(Value::as_str).or_else(|| geodata.and_then(|geodata| geodata.get("web_role")).and_then(Value::as_str)),
+        "freshness_metric_mode": freshness.and_then(|freshness| freshness.get("freshness_metric_mode")).and_then(Value::as_str),
+        "fixture_static_snapshot": freshness.and_then(|freshness| freshness.get("fixture_static_snapshot")).and_then(Value::as_bool).unwrap_or(false),
+        "wall_clock_freshness_applies": freshness.and_then(|freshness| freshness.get("wall_clock_freshness_applies")).and_then(Value::as_bool).unwrap_or(true),
+        "live_data_freshness_applies": freshness.and_then(|freshness| freshness.get("live_data_freshness_applies")).and_then(Value::as_bool).unwrap_or(true),
+        "fixture_snapshot_age_seconds": freshness.and_then(|freshness| freshness.get("fixture_snapshot_age_seconds")).and_then(Value::as_u64).unwrap_or(u64::MAX),
+        "fixture_snapshot_max_age_seconds": freshness.and_then(|freshness| freshness.get("fixture_snapshot_max_age_seconds")).and_then(Value::as_u64).unwrap_or(0),
+        "fixture_snapshot_age_within_policy": freshness.and_then(|freshness| freshness.get("fixture_snapshot_age_within_policy")).and_then(Value::as_bool).unwrap_or(false),
+        "live_ingestion_enabled": live_ingestion_enabled,
+        "live_ingestion_disabled": !live_ingestion_enabled,
+        "live_snapshot_age_unknown_blocked": freshness.and_then(|freshness| freshness.get("live_snapshot_age_unknown_blocked")).and_then(Value::as_bool).unwrap_or(false),
+        "staleness_alarm_active": freshness.and_then(|freshness| freshness.get("staleness_alarm_active")).and_then(Value::as_bool).unwrap_or(true),
+        "stale_live_ingestion_blocked": freshness.and_then(|freshness| freshness.get("stale_live_ingestion_blocked")).and_then(Value::as_bool).unwrap_or(false),
+        "requires_fresh_import_before_live": freshness.and_then(|freshness| freshness.get("requires_fresh_import_before_live")).and_then(Value::as_bool).unwrap_or(false),
+        "freshness_tracking_required_before_live": freshness.and_then(|freshness| freshness.get("freshness_tracking_required_before_live")).and_then(Value::as_bool).unwrap_or(false),
+        "derived_database_metadata_contract_version": freshness.and_then(|freshness| freshness.get("derived_database_metadata_contract_version")).and_then(Value::as_str),
+        "derived_database_snapshot_id": freshness.and_then(|freshness| freshness.get("derived_database_snapshot_id")).and_then(Value::as_str),
+        "node_feature_count": freshness.and_then(|freshness| freshness.get("node_feature_count")).and_then(Value::as_u64).unwrap_or(0),
+        "layer_feature_count": freshness.and_then(|freshness| freshness.get("layer_feature_count")).and_then(Value::as_u64).unwrap_or(0),
+        "odbl_tracking_visible": freshness.and_then(|freshness| freshness.get("odbl_tracking_visible")).and_then(Value::as_bool).unwrap_or(false),
+        "public_tile_server_production_traffic_allowed": freshness.and_then(|freshness| freshness.get("public_tile_server_production_traffic_allowed")).and_then(Value::as_bool).unwrap_or(true),
+        "freshness_green": freshness.and_then(|freshness| freshness.get("green")).and_then(Value::as_bool).unwrap_or(false),
+    })
+}
+
+fn is_openstreetmap_geodata_freshness_gate_green(gate: &Value) -> bool {
+    gate.get("contract_version").and_then(Value::as_str)
+        == Some("trillionnium_openstreetmap_geodata_freshness_gate_v1")
+        && gate.get("geodata_contract_version").and_then(Value::as_str)
+            == Some("openstreetmap_geodata_v1")
+        && gate
+            .get("freshness_contract_version")
+            .and_then(Value::as_str)
+            == Some("openstreetmap_geodata_freshness_v1")
+        && gate.get("provider_contract").and_then(Value::as_str)
+            == Some("OpenStreetMapDataProvider")
+        && gate.get("provider_mode").and_then(Value::as_str) == Some("fixture")
+        && gate.get("freshness_status").and_then(Value::as_str)
+            == Some("fixture_static_fresh_live_stale_blocked")
+        && gate.get("source_of_truth").and_then(Value::as_str)
+            == Some("rust_openstreetmap_data_provider")
+        && gate.get("web_role").and_then(Value::as_str) == Some("visualization_input_only")
+        && gate.get("freshness_metric_mode").and_then(Value::as_str)
+            == Some("static_fixture_no_wall_clock_decay")
+        && gate
+            .get("fixture_static_snapshot")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && !gate
+            .get("wall_clock_freshness_applies")
+            .and_then(Value::as_bool)
+            .unwrap_or(true)
+        && !gate
+            .get("live_data_freshness_applies")
+            .and_then(Value::as_bool)
+            .unwrap_or(true)
+        && gate
+            .get("fixture_snapshot_age_seconds")
+            .and_then(Value::as_u64)
+            .unwrap_or(u64::MAX)
+            == 0
+        && gate
+            .get("fixture_snapshot_age_within_policy")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && gate
+            .get("live_ingestion_disabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && gate
+            .get("live_snapshot_age_unknown_blocked")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && !gate
+            .get("staleness_alarm_active")
+            .and_then(Value::as_bool)
+            .unwrap_or(true)
+        && gate
+            .get("stale_live_ingestion_blocked")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && gate
+            .get("requires_fresh_import_before_live")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && gate
+            .get("freshness_tracking_required_before_live")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && gate
+            .get("derived_database_metadata_contract_version")
+            .and_then(Value::as_str)
+            == Some("openstreetmap_derived_database_metadata_v1")
+        && gate
+            .get("derived_database_snapshot_id")
+            .and_then(Value::as_str)
+            .map(|id| id.starts_with("osm-fixture-v1-"))
+            .unwrap_or(false)
+        && gate
+            .get("node_feature_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            > 0
+        && gate
+            .get("layer_feature_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            > 0
+        && gate
+            .get("odbl_tracking_visible")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        && !gate
+            .get("public_tile_server_production_traffic_allowed")
+            .and_then(Value::as_bool)
+            .unwrap_or(true)
+        && gate
+            .get("freshness_green")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+}
+
 fn app_world_map_runtime_safety_gate_json(app: &Value) -> Value {
     let mobile_contract = app.get("mobile_shell_contract");
     let viewport = app.get("map_hub").and_then(|hub| hub.get("viewport"));
@@ -1999,6 +2138,9 @@ fn trillionnium_world_playability_scorecard_json(
         app_openstreetmap_provider_readiness_gate_json(&app);
     let openstreetmap_provider_readiness_gate_green =
         is_openstreetmap_provider_readiness_gate_green(&openstreetmap_provider_readiness_gate);
+    let openstreetmap_geodata_freshness_gate = app_openstreetmap_geodata_freshness_gate_json(&app);
+    let openstreetmap_geodata_freshness_gate_green =
+        is_openstreetmap_geodata_freshness_gate_green(&openstreetmap_geodata_freshness_gate);
     let world_map_runtime_safety_gate = app_world_map_runtime_safety_gate_json(&app);
     let world_map_runtime_safety_gate_green =
         is_world_map_runtime_safety_gate_green(&world_map_runtime_safety_gate);
@@ -2400,6 +2542,7 @@ fn trillionnium_world_playability_scorecard_json(
             ("mobile_shell_contract_green", mobile_shell_ux_green),
             ("map_readability_lod_contract_green", map_readability_lod_gate_green),
             ("openstreetmap_provider_readiness_section_visible", openstreetmap_provider_readiness_gate_green),
+            ("openstreetmap_geodata_freshness_section_visible", openstreetmap_geodata_freshness_gate_green),
             ("feed_api_hydration_visible", mobile_readiness_checks.iter().any(|check| check == "feed_api_hydration_visible")),
             ("web_session_feed_hydration_visible", mobile_readiness_checks.iter().any(|check| check == "web_session_feed_hydration_visible")),
             ("playability_coach_visible", mobile_readiness_checks.iter().any(|check| check == "next_action_rail_visible") && mobile_readiness_checks.iter().any(|check| check == "playability_coach_visible") && coach_p0_p1_p2_green),
@@ -2422,11 +2565,12 @@ fn trillionnium_world_playability_scorecard_json(
             ("real_user_beta_overall_100", trillionnium_world_real_user_beta.get("overall_percent").and_then(Value::as_u64) == Some(100)),
             ("public_commercial_overall_100", trillionnium_world_public_commercial_product.get("overall_percent").and_then(Value::as_u64) == Some(100)),
             ("feed_api_path_configured", feed_api_path_configured && feed_route_runner_handoff_green),
-            ("playability_runtime_contracts_exposed", route_contract_version_present && route_runner_handoff_gate_green && coach_p0_p1_p2_green && world_home_playability_runtime_green && ops_contract_v1 && ops_engine_contracts_green && ops_balance_config_green && map_readability_lod_gate_green && route_runner_funnel_telemetry_gate_green && commercial_operating_dashboard_gate_green && future_engine_readiness_gate_green && openstreetmap_provider_readiness_gate_green && world_map_runtime_safety_gate_green),
+            ("playability_runtime_contracts_exposed", route_contract_version_present && route_runner_handoff_gate_green && coach_p0_p1_p2_green && world_home_playability_runtime_green && ops_contract_v1 && ops_engine_contracts_green && ops_balance_config_green && map_readability_lod_gate_green && route_runner_funnel_telemetry_gate_green && commercial_operating_dashboard_gate_green && future_engine_readiness_gate_green && openstreetmap_provider_readiness_gate_green && openstreetmap_geodata_freshness_gate_green && world_map_runtime_safety_gate_green),
             ("mobile_contract_readiness_dense", mobile_readiness_checks.len() >= 10),
             ("scorecard_has_runtime_funnel_data", feed_item_count >= 20 && route_task_graph_count >= 10 && route_runner_handoff_gate_green && ops_funnel_green && ops_persistent_telemetry_green && route_runner_funnel_telemetry_gate_green && commercial_operating_dashboard_gate_green),
             ("future_engine_readiness_contract_visible", future_engine_readiness_gate_green),
             ("openstreetmap_provider_readiness_gate_green", openstreetmap_provider_readiness_gate_green),
+            ("openstreetmap_geodata_freshness_gate_green", openstreetmap_geodata_freshness_gate_green),
             ("world_map_rum_delta_weak_privacy_gates_visible", world_map_runtime_safety_gate_green),
             ("repository_backed_world_state_dense", world.world_economy_events.len() >= 20 && !world.world_contract_completions.is_empty()),
         ],
@@ -2444,7 +2588,7 @@ fn trillionnium_world_playability_scorecard_json(
             ("public_commercial_gate_100", trillionnium_world_public_commercial_product.get("overall_percent").and_then(Value::as_u64) == Some(100)),
             ("mobile_shell_contract_green", mobile_shell_ux_green),
             ("feed_api_path_configured", feed_api_path_configured && feed_route_runner_handoff_green),
-            ("playability_runtime_contracts_present", route_contract_version_present && route_runner_handoff_gate_green && coach_p0_p1_p2_green && world_home_playability_runtime_green && ops_contract_v1 && ops_engine_contracts_green && ops_balance_config_green && map_readability_lod_gate_green && route_runner_funnel_telemetry_gate_green && commercial_operating_dashboard_gate_green && future_engine_readiness_gate_green && openstreetmap_provider_readiness_gate_green && world_map_runtime_safety_gate_green),
+            ("playability_runtime_contracts_present", route_contract_version_present && route_runner_handoff_gate_green && coach_p0_p1_p2_green && world_home_playability_runtime_green && ops_contract_v1 && ops_engine_contracts_green && ops_balance_config_green && map_readability_lod_gate_green && route_runner_funnel_telemetry_gate_green && commercial_operating_dashboard_gate_green && future_engine_readiness_gate_green && openstreetmap_provider_readiness_gate_green && openstreetmap_geodata_freshness_gate_green && world_map_runtime_safety_gate_green),
             ("score_events_runtime_present", score_event_count >= 6),
             ("world_state_dense_enough_for_smoke", feed_item_count >= 20 && route_runner_handoff_gate_green && world.world_economy_events.len() >= 20),
         ],
@@ -2612,6 +2756,7 @@ fn trillionnium_world_playability_scorecard_json(
         "commercial_operating_dashboard_gate": commercial_operating_dashboard_gate,
         "future_engine_readiness_gate": future_engine_readiness_gate,
         "openstreetmap_provider_readiness_gate": openstreetmap_provider_readiness_gate,
+        "openstreetmap_geodata_freshness_gate": openstreetmap_geodata_freshness_gate,
         "world_map_runtime_safety_gate": world_map_runtime_safety_gate,
         "axes": axes,
         "user_metric_axes": user_metric_axes,
@@ -3932,6 +4077,10 @@ pub(super) async fn health(State(state): State<AppState>) -> Json<Value> {
         .get("openstreetmap_provider_readiness_gate")
         .unwrap_or(&empty_scorecard_gate)
         .clone();
+    let openstreetmap_geodata_freshness_gate = trillionnium_world_playability_scorecard
+        .get("openstreetmap_geodata_freshness_gate")
+        .unwrap_or(&empty_scorecard_gate)
+        .clone();
     Json(json!({
         "status": "ok",
         "service": "consumer-entry-api",
@@ -3990,6 +4139,7 @@ pub(super) async fn health(State(state): State<AppState>) -> Json<Value> {
         "trillionnium_world_public_commercial_product": trillionnium_world_public_commercial_product,
         "trillionnium_world_playability_scorecard": trillionnium_world_playability_scorecard,
         "trillionnium_openstreetmap_provider_readiness_gate": openstreetmap_provider_readiness_gate,
+        "trillionnium_openstreetmap_geodata_freshness_gate": openstreetmap_geodata_freshness_gate,
         "trillionnium_world_map_runtime_safety_gate": world_map_runtime_safety_gate,
         "trillionnium_world_map_rum_slo_gate": world_map_rum_slo_metrics_gate,
         "trillionnium_world_map_delta_cache_gate": world_map_delta_cache_gate,
@@ -4293,6 +4443,9 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
     let openstreetmap_provider_readiness_gate = trillionnium_world_playability_scorecard
         .get("openstreetmap_provider_readiness_gate")
         .unwrap_or(&empty_scorecard_gate);
+    let openstreetmap_geodata_freshness_gate = trillionnium_world_playability_scorecard
+        .get("openstreetmap_geodata_freshness_gate")
+        .unwrap_or(&empty_scorecard_gate);
     let world_map_runtime_safety_gate = trillionnium_world_playability_scorecard
         .get("world_map_runtime_safety_gate")
         .unwrap_or(&empty_scorecard_gate);
@@ -4306,6 +4459,8 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
         is_future_engine_readiness_gate_green(future_engine_readiness_gate);
     let openstreetmap_provider_readiness_gate_green =
         is_openstreetmap_provider_readiness_gate_green(openstreetmap_provider_readiness_gate);
+    let openstreetmap_geodata_freshness_gate_green =
+        is_openstreetmap_geodata_freshness_gate_green(openstreetmap_geodata_freshness_gate);
     let world_map_runtime_safety_gate_green =
         is_world_map_runtime_safety_gate_green(world_map_runtime_safety_gate);
     let metrics_snapshot = state.inner.metrics.snapshot();
@@ -4779,6 +4934,12 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
             "cex_consumer_entry_trillionnium_openstreetmap_provider_readiness_gate_green {}\n",
             "# TYPE cex_consumer_entry_trillionnium_openstreetmap_provider_fail_closed_mode_count gauge\n",
             "cex_consumer_entry_trillionnium_openstreetmap_provider_fail_closed_mode_count {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_openstreetmap_geodata_freshness_gate_green gauge\n",
+            "cex_consumer_entry_trillionnium_openstreetmap_geodata_freshness_gate_green {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_openstreetmap_geodata_fixture_snapshot_age_seconds gauge\n",
+            "cex_consumer_entry_trillionnium_openstreetmap_geodata_fixture_snapshot_age_seconds {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_openstreetmap_geodata_staleness_alarm_active gauge\n",
+            "cex_consumer_entry_trillionnium_openstreetmap_geodata_staleness_alarm_active {}\n",
             "# TYPE cex_consumer_entry_trillionnium_world_playability_scorecard_overall_score gauge\n",
             "cex_consumer_entry_trillionnium_world_playability_scorecard_overall_score {}\n",
             "# TYPE cex_consumer_entry_trillionnium_world_playability_scorecard_overall_percent gauge\n",
@@ -5405,6 +5566,17 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
         route_runner_handoff_gate_u64(
             openstreetmap_provider_readiness_gate,
             "fail_closed_mode_count",
+        ),
+        gauge_bool(openstreetmap_geodata_freshness_gate_green),
+        route_runner_handoff_gate_u64(
+            openstreetmap_geodata_freshness_gate,
+            "fixture_snapshot_age_seconds",
+        ),
+        gauge_bool(
+            openstreetmap_geodata_freshness_gate
+                .get("staleness_alarm_active")
+                .and_then(Value::as_bool)
+                .unwrap_or(true),
         ),
         trillionnium_world_playability_scorecard
             .get("overall_score")

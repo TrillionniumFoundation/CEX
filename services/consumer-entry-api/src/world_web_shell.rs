@@ -1679,6 +1679,46 @@ pub(super) async fn get_world_web_shell(
         .get("fixture_layer_feature_count")
         .and_then(Value::as_u64)
         .unwrap_or(0);
+    let osm_geodata_freshness = openstreetmap_geodata
+        .get("freshness")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let osm_geodata_freshness_contract = osm_geodata_freshness
+        .get("contract_version")
+        .and_then(Value::as_str)
+        .unwrap_or("openstreetmap_geodata_freshness_v1");
+    let osm_geodata_freshness_status = osm_geodata_freshness
+        .get("freshness_status")
+        .and_then(Value::as_str)
+        .unwrap_or("fixture_static_fresh_live_stale_blocked");
+    let osm_fixture_static_snapshot = osm_geodata_freshness
+        .get("fixture_static_snapshot")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let osm_wall_clock_freshness_applies = osm_geodata_freshness
+        .get("wall_clock_freshness_applies")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let osm_live_data_freshness_applies = osm_geodata_freshness
+        .get("live_data_freshness_applies")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let osm_staleness_gate_green = osm_geodata_freshness
+        .get("green")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let osm_stale_live_ingestion_blocked = osm_geodata_freshness
+        .get("stale_live_ingestion_blocked")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let osm_fixture_snapshot_age_seconds = osm_geodata_freshness
+        .get("fixture_snapshot_age_seconds")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let osm_freshness_layer_feature_count = osm_geodata_freshness
+        .get("layer_feature_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
     let osm_geodata_feature_cards = openstreetmap_geodata
         .get("features")
         .and_then(Value::as_array)
@@ -3263,6 +3303,7 @@ pub(super) async fn get_world_web_shell(
             <section id="world-openstreetmap-geodata" class="mini-grid" data-contract-version="{osm_geodata_contract}" data-fixture-layers-contract="{osm_fixture_layers_contract}" data-map-overlay-identity-contract="{map_overlay_identity_contract}" data-semantic-role-example="mentor_training_anchor" data-provider-contract="{osm_geodata_provider_contract}" data-provider-id="{osm_geodata_provider_id}" data-source-mode="{osm_geodata_source_mode}" data-source-of-truth="rust_openstreetmap_data_provider" data-web-role="visualization_input_only" data-feature-count="{osm_geodata_feature_count}" data-legal-obligation="odbl_database_obligations" aria-label="OpenStreetMap geodata substrate" data-i18n-aria-label-en="OpenStreetMap geodata substrate" data-i18n-aria-label-zh="OpenStreetMap 地理数据底座">
               <article class="mini osm-contract"><strong>OpenStreetMapDataProvider</strong><span>openstreetmap_geodata_v1 · openstreetmap_fixture_layers_v1 · Rust source of truth · fixture first before Overpass/Geofabrik</span><code>osm_id · osm_type · lat/lng · tags · game_overlay_id · mentor_training_anchor</code><small>Do not use public OSM tile servers for production traffic; cache/self-host/vendor first.</small></article>
               <article id="world-openstreetmap-provider-readiness" class="mini osm-provider-readiness" data-contract-version="{osm_provider_readiness_contract}" data-readiness-status="{osm_provider_readiness_status}" data-fixture-mode-green="{osm_fixture_mode_green}" data-live-modes-fail-closed="{osm_live_modes_fail_closed}" data-live-network-ingestion-enabled="{osm_live_network_ingestion_enabled}" data-production-ingestion-enabled="{osm_production_ingestion_enabled}" data-fail-closed-mode-count="{osm_fail_closed_mode_count}" data-expected-fail-closed-mode-count="{osm_expected_fail_closed_mode_count}" data-stable-fixture-identity-coverage-complete="{osm_stable_fixture_identity_coverage_complete}" data-fixture-layer-feature-count="{osm_fixture_layer_feature_count}" data-source-of-truth="rust_openstreetmap_data_provider" data-web-role="visualization_input_only"><strong>OSM provider readiness</strong><span>fixture_ready_live_fail_closed · fixture green · Overpass/Geofabrik/vendor live modes fail closed</span><code>openstreetmap_provider_readiness_v1 · overpass_bbox_cache · geofabrik_extract_import · vendor_tile_cache</code><small>Live network ingestion stays disabled until cache/rate-limit, ODbL derived-database tracking, and fresh production signoff exist.</small></article>
+              <article id="world-openstreetmap-geodata-freshness" class="mini osm-geodata-freshness" data-contract-version="{osm_geodata_freshness_contract}" data-freshness-status="{osm_geodata_freshness_status}" data-fixture-static-snapshot="{osm_fixture_static_snapshot}" data-wall-clock-freshness-applies="{osm_wall_clock_freshness_applies}" data-live-data-freshness-applies="{osm_live_data_freshness_applies}" data-staleness-gate-green="{osm_staleness_gate_green}" data-stale-live-ingestion-blocked="{osm_stale_live_ingestion_blocked}" data-fixture-snapshot-age-seconds="{osm_fixture_snapshot_age_seconds}" data-layer-feature-count="{osm_freshness_layer_feature_count}" data-source-of-truth="rust_openstreetmap_data_provider" data-web-role="visualization_input_only"><strong>OSM geodata freshness</strong><span>fixture_static_fresh_live_stale_blocked · static fixture has no wall-clock decay · stale live data fails closed</span><code>openstreetmap_geodata_freshness_v1 · derived_database_snapshot_id · fixture_snapshot_age_seconds=0</code><small>Freshness metrics are explicit now; real live data must provide import timestamps, max-age policy, and ODbL tracking before production ingestion can open.</small></article>
               {osm_geodata_feature_cards}
             </section>
             <div id="world-tile-shards-live" class="mini-grid">{tile_shard_cards}</div>
