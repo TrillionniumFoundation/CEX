@@ -409,8 +409,8 @@ Progress tree hooks:
 
 - [x] TW-3.6a Add Jianghu task archetype enum.
 - [x] TW-3.6b Generate task candidates from OSM provider semantic roles.
-- [ ] TW-3.6c Bind task completion to Rust command handlers, not browser state.
-- [ ] TW-3.6d Route eligible rewards through ledger/review-hold/anti-cheese gates.
+- [x] TW-3.6c Bind task completion to Rust command handlers, not browser state.
+- [x] TW-3.6d Route eligible rewards through ledger/review-hold/anti-cheese gates.
 
 #### Wuxia combat logs
 
@@ -662,8 +662,8 @@ git log --oneline -5
 - [x] TW-3.6 Define text battle/task log style without copying original content.
 - [x] TW-3.6a Add Jianghu task archetype enum.
 - [x] TW-3.6b Generate task candidates from OSM provider semantic roles.
-- [ ] TW-3.6c Bind task completion to Rust command handlers, not browser state.
-- [ ] TW-3.6d Route eligible rewards through ledger/review-hold/anti-cheese gates.
+- [x] TW-3.6c Bind task completion to Rust command handlers, not browser state.
+- [x] TW-3.6d Route eligible rewards through ledger/review-hold/anti-cheese gates.
 - [ ] TW-3.6e Add combat log generator with original Trillionnium templates.
 - [ ] TW-3.6f Add tests forbidding source-reference strings from being copied verbatim into production fixtures.
 - [ ] TW-3.6g Render combat/task logs in `/world` and Matrix/app projections.
@@ -873,8 +873,34 @@ Expected first-slice deliverables:
   - Web E2E green at `run/league-web/web-e2e-summary-1778260813.json`.
   - `CEX_ENV_FILE=run/local-production/.env scripts/check-production-readiness.sh` green: `READY production readiness smoke passed`.
 - Remaining next:
-  - [ ] TW-3.6c/d bind task completion/rewards to Rust command handlers and ledger/review-hold gates.
+  - [x] TW-3.6c/d bind task completion/rewards to Rust command handlers and ledger/review-hold gates.
   - [ ] TW-3.7+ deepen deterministic tactics combat resolution and NPC relationship persistence.
+
+#### Update 2026-05-09 09:53 CST
+
+- Commit: this checkpoint (`feat: gate jianghu task completion rewards`).
+- Completed next TW-3.6c/d slice:
+  - [x] `complete_task` is now a Rust-owned tactics command (`rust_jianghu_task_completion_handler`), not browser state. It validates known Jianghu skill, selected task archetype, OSM-generated task candidate/overlay, and records durable events.
+  - [x] `offer_task` now creates a durable `WorldContract` (`jianghu-task:<archetype>`) so completion has a server-side task to close.
+  - [x] Jianghu task completion creates `WorldContractCompletion`, runs deterministic quality / review-hold / anti-cheese checks, and routes eligible rewards through `settle_world_contract_completion_with_ledger(...)`; player/reputation/economy rewards only release on `settled` / `duplicate` ledger status.
+  - [x] `/world` now renders OSM-generated task completion candidates with `trillionnium_jianghu_task_completion_v1`, `trillionnium_jianghu_reward_gate_v1`, ledger-settlement, review-hold, and anti-cheese contract attributes.
+- Evidence:
+  - `cargo check -p consumer-entry-api`
+  - `cargo fmt --all -- --check`
+  - `bash -n scripts/check-trillionnium-league-web-e2e.sh`
+  - `git diff --check`
+  - `cargo test -p consumer-entry-api world_tactics -- --nocapture` green (`2 passed`)
+  - `cargo test -p consumer-entry-api web_map_shells_render_live_event_task_focus_metadata -- --nocapture` green (`1 passed`)
+  - `cargo test -p consumer-entry-api -- --nocapture` green (`132 passed`; includes OSM-candidate mismatch, open-offer requirement, ledger-settlement skip, and review-hold/anti-cheese coverage)
+  - `cargo test -p matrix-entry-adapter -p ledger-service -- --nocapture` green
+  - `cargo clippy --workspace -- -D warnings` green
+  - local-production runtime restarted with `CEX_ENV_FILE=run/local-production/.env scripts/runtime-manager-linux.sh restart`
+  - Web E2E green at `run/league-web/web-e2e-summary-1778292121.json`
+  - Browser E2E green at `run/league-browser/browser-e2e-summary-1778292160-123302.json`
+  - `CEX_ENV_FILE=run/local-production/.env scripts/check-production-readiness.sh` green: `READY production readiness smoke passed`
+- Remaining next:
+  - [ ] TW-3.6e/f/g combat/task log hardening and Matrix/app projection follow-through.
+  - [ ] TW-3.7+ deterministic tactics combat resolution and NPC relationship persistence.
 
 ---
 
@@ -939,6 +965,6 @@ Also append a one-paragraph summary to `/home/qian/.openclaw/workspace/memory/YY
 
 If the next instruction is simply “continue”, start here:
 
-> **TW-3.6c/d + TW-3.7+:** bind generated Jianghu task completion and rewards to Rust command handlers / ledger / review-hold gates, then deepen deterministic tactics combat resolution and NPC relationship persistence.
+> **TW-3.6e/f/g + TW-3.7+:** harden native combat/task log generation and source-reference safety, render logs through `/world` + Matrix/app projections, then deepen deterministic tactics combat resolution and NPC relationship persistence.
 
 Do not start live Overpass/Geofabrik ingestion yet. Do not promote MapLibre. Do not convert the web shell into a standalone JS source of truth.

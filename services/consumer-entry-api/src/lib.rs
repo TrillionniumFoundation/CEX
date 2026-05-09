@@ -445,8 +445,6 @@ fn normalize_world_map_rum_surface(surface_id: Option<&str>) -> String {
     let normalized = surface_id.unwrap_or("world").trim().to_ascii_lowercase();
     if normalized.contains("app") {
         "app".to_string()
-    } else if normalized.contains("world") {
-        "world".to_string()
     } else {
         "world".to_string()
     }
@@ -473,7 +471,7 @@ fn percentile_from_sorted(values: &[u64], percentile: u64) -> u64 {
         return 0;
     }
     let last = values.len() - 1;
-    let index = ((last as u64 * percentile) + 99) / 100;
+    let index = (last as u64 * percentile).div_ceil(100);
     values[index.min(last as u64) as usize]
 }
 

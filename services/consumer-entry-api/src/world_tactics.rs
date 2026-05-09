@@ -26,6 +26,10 @@ pub(super) const TRILLIONNIUM_JIANGHU_MENTOR_TRAINING_TASK_CONTRACT_VERSION: &st
     "trillionnium_jianghu_mentor_training_task_v1";
 pub(super) const TRILLIONNIUM_JIANGHU_TASK_ARCHETYPE_CONTRACT_VERSION: &str =
     "trillionnium_jianghu_task_archetype_v1";
+pub(super) const TRILLIONNIUM_JIANGHU_TASK_COMPLETION_CONTRACT_VERSION: &str =
+    "trillionnium_jianghu_task_completion_v1";
+pub(super) const TRILLIONNIUM_JIANGHU_REWARD_GATE_CONTRACT_VERSION: &str =
+    "trillionnium_jianghu_reward_gate_v1";
 pub(super) const TRILLIONNIUM_JIANGHU_BATTLE_LOG_STYLE_CONTRACT_VERSION: &str =
     "trillionnium_jianghu_battle_log_style_v1";
 
@@ -665,6 +669,13 @@ impl JianghuTaskArchetypeFixture {
                     "feature_id": feature.get("feature_id").cloned().unwrap_or(Value::Null),
                     "objective_seed": feature.get("objective_seed").cloned().unwrap_or(Value::Null),
                     "completion_owner": self.completion_owner,
+                    "completion_contract_version": TRILLIONNIUM_JIANGHU_TASK_COMPLETION_CONTRACT_VERSION,
+                    "completion_command": "complete_task",
+                    "reward_gate": self.reward_gate,
+                    "reward_gate_contract_version": TRILLIONNIUM_JIANGHU_REWARD_GATE_CONTRACT_VERSION,
+                    "ledger_reward_requires_settlement": true,
+                    "review_hold_gate_enforced": true,
+                    "anti_cheese_gate_enforced": true,
                     "source_of_truth": "rust_openstreetmap_data_provider",
                 })
             })
@@ -677,6 +688,10 @@ impl JianghuTaskArchetypeFixture {
             "command": self.command,
             "completion_owner": self.completion_owner,
             "reward_gate": self.reward_gate,
+            "reward_gate_contract_version": TRILLIONNIUM_JIANGHU_REWARD_GATE_CONTRACT_VERSION,
+            "completion_contract_version": TRILLIONNIUM_JIANGHU_TASK_COMPLETION_CONTRACT_VERSION,
+            "completion_command": "complete_task",
+            "rust_command_handler_decides_completion": true,
             "log_style_key": self.log_style_key,
             "candidate_generation_owner": "rust_openstreetmap_data_provider",
             "web_role": "visualization_input_only",
@@ -777,6 +792,35 @@ fn jianghu_task_candidates_json(task_archetypes: &Value) -> Value {
             })
             .collect::<Vec<_>>(),
     )
+}
+
+fn jianghu_task_candidate_for(
+    world: &WorldState,
+    task_archetype_id: &str,
+    osm_game_overlay_id: Option<&str>,
+) -> Option<Value> {
+    let nodes: Vec<WorldMapNode> = world.world_map_nodes.values().cloned().collect();
+    let geodata = openstreetmap_geodata_v1_json(&nodes, None);
+    let task_archetypes = jianghu_task_archetypes_json(&geodata);
+    let candidates = jianghu_task_candidates_json(&task_archetypes);
+    candidates
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .find(|candidate| {
+            candidate
+                .get("task_archetype_id")
+                .and_then(Value::as_str)
+                .is_some_and(|value| value == task_archetype_id)
+                && match osm_game_overlay_id {
+                    Some(overlay_id) => candidate
+                        .get("osm_game_overlay_id")
+                        .and_then(Value::as_str)
+                        .is_some_and(|value| value == overlay_id),
+                    None => true,
+                }
+        })
 }
 
 fn jianghu_task_archetype_ids_for_capability(capability: &str) -> Vec<&'static str> {
@@ -1352,6 +1396,16 @@ fn tactics_available_commands_json() -> Value {
                 action_cost: 1,
             },
             TacticsCommandDescriptor {
+                command_id: "complete_task",
+                command: "complete_task",
+                label: "提交任务战报",
+                command_family: "jianghu_task_completion",
+                validation_owner: "rust_jianghu_task_completion_handler",
+                web_target: "#trillionnium-jianghu-task-candidates",
+                required_skill_id: Some("reading_and_contracts"),
+                action_cost: 1,
+            },
+            TacticsCommandDescriptor {
                 command_id: "interact",
                 command: "interact",
                 label: "接取悬赏",
@@ -1454,6 +1508,96 @@ pub(super) fn apply_world_tactics_command(
         .get("required_skill_id")
         .and_then(Value::as_str)
         .map(ToString::to_string);
+
+    if command == "complete_task" {
+        let known_skills: HashSet<String> = world
+            .world_jianghu_characters
+            .entry(matrix_user_id.to_string())
+            .or_insert_with(|| WorldJianghuCharacter::default_for(matrix_user_id))
+            .skill_ids
+            .iter()
+            .cloned()
+            .collect();
+        if let Some(required_skill_id) = required_skill_id.as_deref() {
+            if !known_skills.contains(required_skill_id) {
+                return json!({
+                    "contract_version": TRILLIONNIUM_TACTICS_COMMAND_OUTCOME_CONTRACT_VERSION,
+                    "accepted": false,
+                    "command": command,
+                    "unit_id": unit_id,
+                    "target_tile": target_tile,
+                    "required_skill_id": required_skill_id,
+                    "result": "skill_locked",
+                    "rejection_reason": "required_skill_not_known",
+                    "source_of_truth": "rust_jianghu_task_completion_handler",
+                    "web_role": "intent_only_visualization_input",
+                });
+            }
+        }
+        let selected_task_archetype_id = task_archetype_id
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("courier_letter");
+        let Some(task_archetype) = jianghu_task_archetype_by_id(selected_task_archetype_id) else {
+            return tactics_command_rejection_json(
+                command,
+                unit_id,
+                target_tile,
+                "unknown_task_archetype_id",
+            );
+        };
+        let provided_overlay_id = osm_game_overlay_id
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let Some(candidate) =
+            jianghu_task_candidate_for(world, selected_task_archetype_id, provided_overlay_id)
+        else {
+            return json!({
+                "contract_version": TRILLIONNIUM_TACTICS_COMMAND_OUTCOME_CONTRACT_VERSION,
+                "accepted": false,
+                "command": command,
+                "unit_id": unit_id,
+                "target_tile": target_tile,
+                "task_archetype_id": selected_task_archetype_id,
+                "provided_osm_game_overlay_id": provided_overlay_id,
+                "result": "task_objective_mismatch",
+                "rejection_reason": "task_completion_requires_osm_generated_candidate",
+                "source_of_truth": "rust_jianghu_task_completion_handler",
+                "web_role": "intent_only_visualization_input",
+            });
+        };
+        let character = world
+            .world_jianghu_characters
+            .entry(matrix_user_id.to_string())
+            .or_insert_with(|| WorldJianghuCharacter::default_for(matrix_user_id));
+        character.title = "提交江湖战报".to_string();
+        character.updated_at_epoch = now_epoch;
+        return json!({
+            "contract_version": TRILLIONNIUM_TACTICS_COMMAND_OUTCOME_CONTRACT_VERSION,
+            "accepted": true,
+            "command": command,
+            "unit_id": unit_id,
+            "target_tile": target_tile,
+            "task_archetype_id": selected_task_archetype_id,
+            "task_archetype_contract_version": TRILLIONNIUM_JIANGHU_TASK_ARCHETYPE_CONTRACT_VERSION,
+            "completion_contract_version": TRILLIONNIUM_JIANGHU_TASK_COMPLETION_CONTRACT_VERSION,
+            "reward_gate_contract_version": TRILLIONNIUM_JIANGHU_REWARD_GATE_CONTRACT_VERSION,
+            "reward_gate": task_archetype.reward_gate,
+            "completion_owner": task_archetype.completion_owner,
+            "required_osm_game_overlay_id": candidate.get("osm_game_overlay_id").cloned().unwrap_or(Value::Null),
+            "task_candidate_id": candidate.get("candidate_id").cloned().unwrap_or(Value::Null),
+            "validation_owner": descriptor.get("validation_owner").cloned().unwrap_or_else(|| json!("rust_jianghu_task_completion_handler")),
+            "result": "task_completion_validated",
+            "state_mutation": "world_jianghu_task_completion_pending_ledger_settlement",
+            "ledger_reward_requires_settlement": true,
+            "review_hold_gate_enforced": true,
+            "anti_cheese_gate_enforced": true,
+            "source_of_truth": "rust_jianghu_task_completion_handler",
+            "web_role": "intent_only_visualization_input",
+            "updated_at_epoch": now_epoch,
+        });
+    }
+
     let character = world
         .world_jianghu_characters
         .entry(matrix_user_id.to_string())
@@ -1801,6 +1945,8 @@ pub(super) fn world_tactics_board_projection_json(
         "jianghu_npc_command_descriptor_contract_version": TRILLIONNIUM_JIANGHU_NPC_COMMAND_DESCRIPTOR_CONTRACT_VERSION,
         "mentor_training_task_contract_version": TRILLIONNIUM_JIANGHU_MENTOR_TRAINING_TASK_CONTRACT_VERSION,
         "jianghu_task_archetype_contract_version": TRILLIONNIUM_JIANGHU_TASK_ARCHETYPE_CONTRACT_VERSION,
+        "jianghu_task_completion_contract_version": TRILLIONNIUM_JIANGHU_TASK_COMPLETION_CONTRACT_VERSION,
+        "jianghu_reward_gate_contract_version": TRILLIONNIUM_JIANGHU_REWARD_GATE_CONTRACT_VERSION,
         "jianghu_battle_log_style_contract_version": TRILLIONNIUM_JIANGHU_BATTLE_LOG_STYLE_CONTRACT_VERSION,
         "open_source_base": {
             "repo": "tranchikhang/MedievalWar",
@@ -1845,7 +1991,7 @@ pub(super) fn world_tactics_board_projection_json(
             "round": 1,
             "action_points_remaining": 2,
             "source_of_truth": "rust_tactics_turn_handler",
-            "allowed_commands": ["select_unit", "move_unit", "attack", "use_skill", "train_skill", "talk_npc", "offer_task", "interact", "end_turn"],
+            "allowed_commands": ["select_unit", "move_unit", "attack", "use_skill", "train_skill", "talk_npc", "offer_task", "complete_task", "interact", "end_turn"],
         },
         "battle_log": battle_log,
         "osm_objective_source": {

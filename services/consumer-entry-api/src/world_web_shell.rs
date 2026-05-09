@@ -555,6 +555,65 @@ fn world_jianghu_npc_cards_html(
         .join("\n")
 }
 
+fn world_jianghu_task_candidate_forms_html(
+    tactics_board: &Value,
+    current_matrix_user_id: &str,
+    csrf_input: &str,
+) -> String {
+    tactics_board
+        .get("task_candidates")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|candidate| {
+            let candidate_id = candidate
+                .get("candidate_id")
+                .and_then(Value::as_str)
+                .unwrap_or("jianghu-task:courier_letter");
+            let task_archetype_id = candidate
+                .get("task_archetype_id")
+                .and_then(Value::as_str)
+                .unwrap_or("courier_letter");
+            let overlay_id = candidate
+                .get("osm_game_overlay_id")
+                .and_then(Value::as_str)
+                .unwrap_or("trillionnium-world-node:mirror-city-square");
+            let role = candidate
+                .get("source_semantic_role")
+                .and_then(Value::as_str)
+                .unwrap_or("objective");
+            let reward_gate = candidate
+                .get("reward_gate")
+                .and_then(Value::as_str)
+                .unwrap_or("ledger_settlement_review_hold_anti_cheese");
+            let completion_contract = candidate
+                .get("completion_contract_version")
+                .and_then(Value::as_str)
+                .unwrap_or("trillionnium_jianghu_task_completion_v1");
+            let reward_gate_contract = candidate
+                .get("reward_gate_contract_version")
+                .and_then(Value::as_str)
+                .unwrap_or("trillionnium_jianghu_reward_gate_v1");
+            format!(
+                "<form class=\"jianghu-task-completion-form\" method=\"post\" action=\"/world/web/tactics-command\" data-candidate-id=\"{}\" data-command=\"complete_task\" data-completion-contract=\"{}\" data-reward-gate-contract=\"{}\" data-reward-gate=\"{}\" data-ledger-reward-requires-settlement=\"true\" data-review-hold-gate-enforced=\"true\" data-anti-cheese-gate-enforced=\"true\" data-source-of-truth=\"rust_jianghu_task_completion_handler\" data-web-role=\"intent_only_visualization_input\">{}<input type=\"hidden\" name=\"matrix_user_id\" value=\"{}\"><input type=\"hidden\" name=\"command\" value=\"complete_task\"><input type=\"hidden\" name=\"unit_id\" value=\"lord\"><input type=\"hidden\" name=\"target_tile\" value=\"G8\"><input type=\"hidden\" name=\"task_archetype_id\" value=\"{}\"><input type=\"hidden\" name=\"osm_game_overlay_id\" value=\"{}\"><input type=\"hidden\" name=\"body\" value=\"Jianghu task report: deliverable captured, evidence package attached, risk controls checked, next action queued, self-review complete.\"><button type=\"submit\">提交战报 · {}</button><small>{} · {}</small></form>",
+                escape_html_text(candidate_id),
+                escape_html_text(completion_contract),
+                escape_html_text(reward_gate_contract),
+                escape_html_text(reward_gate),
+                csrf_input,
+                escape_html_text(current_matrix_user_id),
+                escape_html_text(task_archetype_id),
+                escape_html_text(overlay_id),
+                escape_world_visible_text(task_archetype_id),
+                escape_html_text(role),
+                escape_html_text(overlay_id),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn world_jianghu_status_html(jianghu_character: &Value) -> String {
     let attributes = jianghu_character.get("attributes").unwrap_or(&Value::Null);
     [
@@ -982,6 +1041,14 @@ pub(super) async fn get_world_web_shell(
         .get("jianghu_task_archetype_contract_version")
         .and_then(Value::as_str)
         .unwrap_or("trillionnium_jianghu_task_archetype_v1");
+    let jianghu_task_completion_contract = tactics_board
+        .get("jianghu_task_completion_contract_version")
+        .and_then(Value::as_str)
+        .unwrap_or("trillionnium_jianghu_task_completion_v1");
+    let jianghu_reward_gate_contract = tactics_board
+        .get("jianghu_reward_gate_contract_version")
+        .and_then(Value::as_str)
+        .unwrap_or("trillionnium_jianghu_reward_gate_v1");
     let jianghu_battle_log_style_contract = tactics_board
         .get("jianghu_battle_log_style_contract_version")
         .and_then(Value::as_str)
@@ -996,6 +1063,11 @@ pub(super) async fn get_world_web_shell(
     let jianghu_sect_cards = world_jianghu_sect_cards_html(&tactics_board);
     let jianghu_npc_cards =
         world_jianghu_npc_cards_html(&tactics_board, current_matrix_user_id, &csrf_input);
+    let jianghu_task_completion_forms = world_jianghu_task_candidate_forms_html(
+        &tactics_board,
+        current_matrix_user_id,
+        &csrf_input,
+    );
     let jianghu_status_lines = world_jianghu_status_html(&jianghu_character);
     let jianghu_character_contract = jianghu_character
         .get("contract_version")
@@ -2281,7 +2353,7 @@ pub(super) async fn get_world_web_shell(
     </section>
     <section id="world-map-shell-panel" class="panel" data-bootstrap-mode="truncated_runtime_bootstrap_with_lazy_delta_hydration" data-bootstrap-payload-bytes="{world_map_bootstrap_bytes}" data-cache-contract="trillionnium_world_map_payload_cache_v1">
       <div class="map-shell">
-        <section id="trillionnium-tactics-game-shell" class="tactics-game-shell" data-contract-version="trillionnium_open_source_tactics_world_shell_v1" data-tactics-board-contract="{tactics_board_contract}" data-tactics-unit-contract="{tactics_unit_contract}" data-tactics-command-contract="{tactics_command_contract}" data-jianghu-character-contract="{jianghu_character_contract}" data-jianghu-skill-contract="{jianghu_skill_contract}" data-jianghu-npc-command-descriptor-contract="{jianghu_npc_command_descriptor_contract}" data-mentor-training-task-contract="{jianghu_mentor_training_task_contract}" data-jianghu-task-archetype-contract="{jianghu_task_archetype_contract}" data-jianghu-battle-log-style-contract="{jianghu_battle_log_style_contract}" data-interface-style="turn_based_strategy_rpg" data-open-source-base="tranchikhang/MedievalWar" data-base-license="MIT" data-base-url="https://github.com/tranchikhang/MedievalWar" data-base-engine="Phaser 3" data-base-patterns="map,cursor,control,turn_system,pathfinding,context_menu,objectives,ai" data-asset-policy="no_proprietary_assets_css_tokens_first" data-map-engine-role="openclawstreetmap_underlay" data-underlay-engine="{map_engine_id}" data-underlay-provider="{tile_provider}" data-source-of-truth="rust_trillionnium_game_state" aria-label="Open-source tactics Trillionnium game shell" data-i18n-aria-label-en="Open-source tactics Trillionnium game shell" data-i18n-aria-label-zh="开源战棋 Trillionnium 游戏界面">
+        <section id="trillionnium-tactics-game-shell" class="tactics-game-shell" data-contract-version="trillionnium_open_source_tactics_world_shell_v1" data-tactics-board-contract="{tactics_board_contract}" data-tactics-unit-contract="{tactics_unit_contract}" data-tactics-command-contract="{tactics_command_contract}" data-jianghu-character-contract="{jianghu_character_contract}" data-jianghu-skill-contract="{jianghu_skill_contract}" data-jianghu-npc-command-descriptor-contract="{jianghu_npc_command_descriptor_contract}" data-mentor-training-task-contract="{jianghu_mentor_training_task_contract}" data-jianghu-task-archetype-contract="{jianghu_task_archetype_contract}" data-jianghu-task-completion-contract="{jianghu_task_completion_contract}" data-jianghu-reward-gate-contract="{jianghu_reward_gate_contract}" data-jianghu-battle-log-style-contract="{jianghu_battle_log_style_contract}" data-interface-style="turn_based_strategy_rpg" data-open-source-base="tranchikhang/MedievalWar" data-base-license="MIT" data-base-url="https://github.com/tranchikhang/MedievalWar" data-base-engine="Phaser 3" data-base-patterns="map,cursor,control,turn_system,pathfinding,context_menu,objectives,ai" data-asset-policy="no_proprietary_assets_css_tokens_first" data-map-engine-role="openclawstreetmap_underlay" data-underlay-engine="{map_engine_id}" data-underlay-provider="{tile_provider}" data-source-of-truth="rust_trillionnium_game_state" aria-label="Open-source tactics Trillionnium game shell" data-i18n-aria-label-en="Open-source tactics Trillionnium game shell" data-i18n-aria-label-zh="开源战棋 Trillionnium 游戏界面">
           <article class="tactics-board-card">
             <div class="tactics-board-title"><span data-i18n-en="【Three Kingdoms Tactics】Mirror Street Battle" data-i18n-zh="【三国战棋】镜像街巷战役">【三国战棋】镜像街巷战役</span><code data-engine-role="underlay" data-underlay-name="OpenClawStreetMap" data-i18n-en="real street engine" data-i18n-zh="真实街巷引擎">真实街巷引擎</code></div>
             <div class="tactics-board" role="grid" aria-label="Trillionnium turn based tactics board" data-i18n-aria-label-en="Trillionnium turn based tactics board" data-i18n-aria-label-zh="Trillionnium 回合制战棋棋盘">
@@ -2334,6 +2406,11 @@ pub(super) async fn get_world_web_shell(
               <h4 data-i18n-en="Sects / mentors / NPCs" data-i18n-zh="门派 / 导师 / NPC">门派 / 导师 / NPC</h4>
               <div class="mini-grid">{jianghu_sect_cards}</div>
               <div class="mini-grid">{jianghu_npc_cards}</div>
+            </section>
+            <section id="trillionnium-jianghu-task-candidates" class="jianghu-task-candidate-grid" data-completion-contract="{jianghu_task_completion_contract}" data-reward-gate-contract="{jianghu_reward_gate_contract}" data-ledger-reward-requires-settlement="true" data-review-hold-gate-enforced="true" data-anti-cheese-gate-enforced="true" data-source-of-truth="rust_jianghu_task_completion_handler" data-web-role="intent_only_visualization_input" aria-label="Jianghu task completion candidates" data-i18n-aria-label-en="Jianghu task completion candidates" data-i18n-aria-label-zh="江湖任务提交候选">
+              <h4 data-i18n-en="Task reports / reward gate" data-i18n-zh="任务战报 / 奖励门禁">任务战报 / 奖励门禁</h4>
+              <p data-i18n-en="Submit task reports from OSM-generated candidates; Rust validates completion, review hold, anti-cheese, and ledger settlement before rewards release." data-i18n-zh="从 OSM 生成的候选任务提交战报；Rust 校验完成、复核暂挂、反刷和账本结算后才释放奖励。">从 OSM 生成的候选任务提交战报；Rust 校验完成、复核暂挂、反刷和账本结算后才释放奖励。</p>
+              <div class="mini-grid">{jianghu_task_completion_forms}</div>
             </section>
             <small data-i18n-en="Next mod path: replace placeholder units with Trillionnium agents, convert POIs into capture points, and use route evidence as battle reports." data-i18n-zh="下一步魔改：把占位单位替换为 Trillionnium Agent，把 POI 转成占领点，把路线证据转成战报。">下一步魔改：把占位单位替换为 Trillionnium Agent，把 POI 转成占领点，把路线证据转成战报。</small>
           </aside>
@@ -3164,6 +3241,14 @@ pub(super) async fn get_world_web_shell(
         tactics_command_contract = escape_html_text(tactics_command_contract),
         jianghu_character_contract = escape_html_text(jianghu_character_contract),
         jianghu_skill_contract = escape_html_text(jianghu_skill_contract),
+        jianghu_npc_command_descriptor_contract =
+            escape_html_text(jianghu_npc_command_descriptor_contract),
+        jianghu_mentor_training_task_contract =
+            escape_html_text(jianghu_mentor_training_task_contract),
+        jianghu_task_archetype_contract = escape_html_text(jianghu_task_archetype_contract),
+        jianghu_task_completion_contract = escape_html_text(jianghu_task_completion_contract),
+        jianghu_reward_gate_contract = escape_html_text(jianghu_reward_gate_contract),
+        jianghu_battle_log_style_contract = escape_html_text(jianghu_battle_log_style_contract),
         tactics_board_cells = tactics_board_cells,
         tactics_board_units = tactics_board_units,
         tactics_objective_markers = tactics_objective_markers,
@@ -3172,6 +3257,7 @@ pub(super) async fn get_world_web_shell(
         jianghu_training_forms = jianghu_training_forms,
         jianghu_sect_cards = jianghu_sect_cards,
         jianghu_npc_cards = jianghu_npc_cards,
+        jianghu_task_completion_forms = jianghu_task_completion_forms,
         jianghu_status_lines = jianghu_status_lines,
         jianghu_display_name = escape_world_visible_text(jianghu_display_name),
         jianghu_title = escape_world_visible_text(jianghu_title),

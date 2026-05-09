@@ -1272,10 +1272,139 @@ pub(super) async fn post_world_action(
         .into_response()
 }
 
+fn world_jianghu_task_id(task_archetype_id: &str) -> String {
+    format!("jianghu-task:{task_archetype_id}")
+}
+
+fn world_tactics_contract_completion_released(completion: &WorldContractCompletion) -> bool {
+    matches!(
+        completion.ledger_status.as_deref(),
+        Some("settled") | Some("duplicate")
+    )
+}
+
+fn latest_open_jianghu_task_contract_index(
+    world: &WorldState,
+    matrix_user_id: &str,
+    task_archetype_id: &str,
+) -> Option<usize> {
+    let task_id = world_jianghu_task_id(task_archetype_id);
+    world
+        .world_contracts
+        .iter()
+        .enumerate()
+        .rev()
+        .find_map(|(index, contract)| {
+            let released_completion_exists =
+                world.world_contract_completions.iter().any(|completion| {
+                    completion.contract_id == contract.contract_id
+                        && world_tactics_contract_completion_released(completion)
+                });
+            if contract.actor_matrix_user_id == matrix_user_id
+                && contract.task_id == task_id
+                && !released_completion_exists
+                && !contract.status.starts_with("completed_")
+                && contract.status != "review_hold"
+            {
+                Some(index)
+            } else {
+                None
+            }
+        })
+}
+
+fn judge_jianghu_task_completion(
+    world: &WorldState,
+    matrix_user_id: &str,
+    contract_id: &str,
+    task_archetype_id: &str,
+    body: &str,
+    now: i64,
+) -> LeagueJudgement {
+    let (quality_score, missing_signals) = world_action_quality_signal(body);
+    let normalized_body = body.trim().to_ascii_lowercase();
+    let duplicate_count = world
+        .world_contract_completions
+        .iter()
+        .filter(|completion| {
+            completion.contract_id == contract_id
+                && completion.matrix_user_id == matrix_user_id
+                && completion.body.trim().to_ascii_lowercase() == normalized_body
+                && now.saturating_sub(completion.created_at_epoch) <= 300
+        })
+        .count();
+    let mut anti_cheat_flags = missing_signals
+        .iter()
+        .map(|signal| format!("missing_{signal}"))
+        .collect::<Vec<_>>();
+    if duplicate_count > 0 {
+        anti_cheat_flags.push("duplicate_jianghu_task_completion".to_string());
+    }
+    if body.chars().count() < 64 {
+        anti_cheat_flags.push("task_report_too_short".to_string());
+    }
+    anti_cheat_flags.sort();
+    anti_cheat_flags.dedup();
+    let score =
+        (58.0 + quality_score as f64 * 7.0 - duplicate_count as f64 * 30.0).clamp(0.0, 96.0);
+    let grade = if score >= 90.0 {
+        "S"
+    } else if score >= 82.0 {
+        "A"
+    } else if score >= 70.0 {
+        "B"
+    } else if score >= 55.0 {
+        "C"
+    } else {
+        "D"
+    }
+    .to_string();
+    let payout_status = if anti_cheat_flags.is_empty() {
+        "eligible"
+    } else {
+        "review_hold"
+    }
+    .to_string();
+    let reward_amount = (score / 10.0).max(1.0);
+    LeagueJudgement {
+        score,
+        grade,
+        reward_amount,
+        judge_status: "deterministic_jianghu_task_completion_judge_v1".to_string(),
+        payout_status,
+        anti_cheat_flags,
+        score_events: vec![LeagueScoreEvent {
+            dimension: "jianghu_task_completion_quality".to_string(),
+            score,
+            weight: 1.0,
+            judge_kind: "rust_deterministic_quality_gate".to_string(),
+            evidence: json!({
+                "task_archetype_id": task_archetype_id,
+                "quality_score": quality_score,
+                "missing_signals": missing_signals,
+                "duplicate_count": duplicate_count,
+                "ledger_reward_requires_settlement": true,
+                "review_hold_gate_enforced": true,
+                "anti_cheese_gate_enforced": true,
+            }),
+        }],
+    }
+}
+
 async fn record_world_tactics_command(
     state: &AppState,
     payload: WorldTacticsCommandRequest,
-) -> Result<(LeagueState, WorldEvent, Value, Value), Response> {
+) -> Result<
+    (
+        LeagueState,
+        WorldEvent,
+        Value,
+        Value,
+        Option<WorldContract>,
+        Option<WorldContractCompletion>,
+    ),
+    Response,
+> {
     let matrix_user_id = match normalize_league_matrix_user(&payload.matrix_user_id) {
         Some(value) => value,
         None => {
@@ -1294,10 +1423,10 @@ async fn record_world_tactics_command(
         .filter(|value| !value.is_empty())
         .map(|value| validate_text_payload(value, state.config().max_text_chars))
         .transpose()?;
-    let snapshot = {
+    let (mut snapshot, pending_settlement) = {
         let mut league = state.inner.league_state.lock().await;
         let now = Utc::now().timestamp();
-        let outcome = apply_world_tactics_command(
+        let mut outcome = apply_world_tactics_command(
             &mut league.world,
             &matrix_user_id,
             &command,
@@ -1309,7 +1438,7 @@ async fn record_world_tactics_command(
             payload.osm_game_overlay_id.as_deref(),
             now,
         );
-        let accepted = outcome
+        let mut accepted = outcome
             .get("accepted")
             .and_then(Value::as_bool)
             .unwrap_or(false);
@@ -1319,15 +1448,6 @@ async fn record_world_tactics_command(
             .and_then(|overlay| overlay.strip_prefix("trillionnium-world-node:"))
             .filter(|node_id| league.world.world_locations.contains_key(*node_id))
             .unwrap_or_else(|| world_default_location_for_kind("tactics"))
-            .to_string();
-        let result = outcome
-            .get("result")
-            .and_then(Value::as_str)
-            .unwrap_or(if accepted {
-                "tactics_command_accepted"
-            } else {
-                "tactics_command_rejected"
-            })
             .to_string();
         let event_body = body.unwrap_or_else(|| {
             format!(
@@ -1343,11 +1463,155 @@ async fn record_world_tactics_command(
                     .unwrap_or("none")
             )
         });
+        let event_id = league_hash_id(
+            "world-tactics-event",
+            &format!("{}:{}:{}:{}", matrix_user_id, command, now, event_body),
+        );
+        let mut created_contract = None;
+        let mut created_completion = None;
+        let mut completion_contract_for_settlement = None;
+
+        if accepted && command == "offer_task" {
+            let task_archetype_id = outcome
+                .get("task_archetype_id")
+                .and_then(Value::as_str)
+                .or(payload.task_archetype_id.as_deref())
+                .unwrap_or("courier_letter");
+            let contract = WorldContract {
+                contract_id: league_hash_id(
+                    "world-jianghu-task-contract",
+                    &format!("{}:{}:{}", matrix_user_id, task_archetype_id, event_id),
+                ),
+                event_id: event_id.clone(),
+                actor_matrix_user_id: matrix_user_id.clone(),
+                location_id: location_id.clone(),
+                task_id: world_jianghu_task_id(task_archetype_id),
+                title: format!("Jianghu Task · {task_archetype_id}"),
+                body: format!(
+                    "Trillionnium Jianghu task offer: archetype={task_archetype_id}; npc={}; objective={}; source=rust_jianghu_task_offer_validator.",
+                    payload.npc_id.as_deref().unwrap_or("unknown_npc"),
+                    payload
+                        .osm_game_overlay_id
+                        .as_deref()
+                        .unwrap_or("rust_generated_objective")
+                ),
+                status: "jianghu_task_offered".to_string(),
+                cex_status: Some("jianghu_task_pending_completion".to_string()),
+                value_score: 8,
+                created_at_epoch: now,
+            };
+            outcome["jianghu_task_contract_id"] = json!(contract.contract_id.clone());
+            outcome["jianghu_task_contract_status"] = json!(contract.status.clone());
+            outcome["completion_command"] = json!("complete_task");
+            outcome["ledger_reward_requires_settlement"] = json!(true);
+            league.world.world_contracts.push(contract.clone());
+            created_contract = Some(contract);
+        }
+
+        if accepted && command == "complete_task" {
+            let task_archetype_id = outcome
+                .get("task_archetype_id")
+                .and_then(Value::as_str)
+                .or(payload.task_archetype_id.as_deref())
+                .unwrap_or("courier_letter")
+                .to_string();
+            match latest_open_jianghu_task_contract_index(
+                &league.world,
+                &matrix_user_id,
+                &task_archetype_id,
+            ) {
+                Some(contract_index) => {
+                    let contract = league.world.world_contracts[contract_index].clone();
+                    let judgement = judge_jianghu_task_completion(
+                        &league.world,
+                        &matrix_user_id,
+                        &contract.contract_id,
+                        &task_archetype_id,
+                        &event_body,
+                        now,
+                    );
+                    let completion = WorldContractCompletion {
+                        completion_id: league_hash_id(
+                            "world-jianghu-task-completion",
+                            &format!("{}:{}:{}", contract.contract_id, now, event_body),
+                        ),
+                        contract_id: contract.contract_id.clone(),
+                        matrix_user_id: matrix_user_id.clone(),
+                        body: event_body.clone(),
+                        score: judgement.score,
+                        grade: judgement.grade.clone(),
+                        reward_amount: judgement.reward_amount,
+                        judge_status: judgement.judge_status.clone(),
+                        payout_status: judgement.payout_status.clone(),
+                        anti_cheat_flags: judgement.anti_cheat_flags.clone(),
+                        score_events: judgement.score_events.clone(),
+                        ledger_status: Some("pending".to_string()),
+                        ledger_account_id: None,
+                        ledger_entry_id: None,
+                        ledger_balance_after: None,
+                        ledger_error: None,
+                        created_at_epoch: now,
+                    };
+                    let pending_release = completion.payout_status == "eligible";
+                    let stored_contract = &mut league.world.world_contracts[contract_index];
+                    stored_contract.status = if pending_release {
+                        "jianghu_task_completion_pending_settlement".to_string()
+                    } else {
+                        "review_hold".to_string()
+                    };
+                    stored_contract.cex_status = Some(if pending_release {
+                        "settlement_pending".to_string()
+                    } else {
+                        "review_hold".to_string()
+                    });
+                    outcome["jianghu_task_contract_id"] = json!(contract.contract_id.clone());
+                    outcome["jianghu_task_completion_id"] = json!(completion.completion_id.clone());
+                    outcome["completion_contract_version"] =
+                        json!(TRILLIONNIUM_JIANGHU_TASK_COMPLETION_CONTRACT_VERSION);
+                    outcome["reward_gate_contract_version"] =
+                        json!(TRILLIONNIUM_JIANGHU_REWARD_GATE_CONTRACT_VERSION);
+                    outcome["payout_status"] = json!(completion.payout_status.clone());
+                    outcome["anti_cheat_flags"] = json!(completion.anti_cheat_flags.clone());
+                    outcome["ledger_status"] = json!("pending");
+                    outcome["ledger_reward_requires_settlement"] = json!(true);
+                    outcome["review_hold_gate_enforced"] = json!(true);
+                    outcome["anti_cheese_gate_enforced"] = json!(true);
+                    league
+                        .world
+                        .world_contract_completions
+                        .push(completion.clone());
+                    completion_contract_for_settlement = Some((contract, completion.clone()));
+                    created_completion = Some(completion);
+                }
+                None => {
+                    accepted = false;
+                    outcome = json!({
+                        "contract_version": TRILLIONNIUM_TACTICS_COMMAND_OUTCOME_CONTRACT_VERSION,
+                        "accepted": false,
+                        "command": command,
+                        "unit_id": payload.unit_id.as_deref().unwrap_or("lord"),
+                        "target_tile": payload.target_tile.as_deref(),
+                        "task_archetype_id": task_archetype_id,
+                        "result": "task_completion_requires_offer",
+                        "rejection_reason": "complete_task_requires_open_jianghu_task_contract",
+                        "source_of_truth": "rust_jianghu_task_completion_handler",
+                        "web_role": "intent_only_visualization_input",
+                    });
+                }
+            }
+        }
+
+        let result = outcome
+            .get("result")
+            .and_then(Value::as_str)
+            .unwrap_or(if accepted {
+                "tactics_command_accepted"
+            } else {
+                "tactics_command_rejected"
+            })
+            .to_string();
         let event = WorldEvent {
-            event_id: league_hash_id(
-                "world-tactics-event",
-                &format!("{}:{}:{}:{}", matrix_user_id, command, now, event_body),
-            ),
+            event_id,
             actor_matrix_user_id: matrix_user_id.clone(),
             room_id: payload.room_id.clone(),
             location_id: location_id.clone(),
@@ -1380,8 +1644,108 @@ async fn record_world_tactics_command(
             });
         }
         let home = world_home_json(&league);
-        (league.clone(), event, outcome, home)
+        (
+            (
+                league.clone(),
+                event,
+                outcome,
+                home,
+                created_contract,
+                created_completion,
+            ),
+            completion_contract_for_settlement,
+        )
     };
+    if let Some((contract, mut completion)) = pending_settlement {
+        let settlement_payload = WorldContractCompleteRequest {
+            matrix_user_id: matrix_user_id.clone(),
+            room_id: payload.room_id.clone(),
+            body: completion.body.clone(),
+        };
+        let settlement = settle_world_contract_completion_with_ledger(
+            state,
+            &settlement_payload,
+            &matrix_user_id,
+            &contract,
+            &completion,
+        )
+        .await;
+        completion.ledger_status = Some(settlement.status.clone());
+        completion.ledger_account_id = settlement.account_id;
+        completion.ledger_entry_id = settlement.entry_id;
+        completion.ledger_balance_after = settlement.balance_after;
+        completion.ledger_error = settlement.error;
+        let mut final_snapshot = {
+            let mut league = state.inner.league_state.lock().await;
+            let indexes = build_world_indexes(&league.world);
+            let settlement_completed = matches!(
+                completion.ledger_status.as_deref(),
+                Some("settled") | Some("duplicate")
+            );
+            let mut updated_contract = snapshot.4.clone();
+            indexes.replace_contract_completion_by_id(&mut league.world, &completion);
+            if settlement_completed {
+                let mut player = ensure_league_player(&mut league, &matrix_user_id, None);
+                player.earned_credits += completion.reward_amount;
+                player.xp += completion.score.round() as i64;
+                player.reputation += (completion.score / 12.0).round() as i64;
+                player.rating += ((completion.score - 50.0) / 4.0).round() as i64;
+                league
+                    .players_by_matrix_user
+                    .insert(matrix_user_id.clone(), player);
+                league.world.world_economy_events.push(WorldEconomyEvent {
+                    economy_event_id: league_hash_id(
+                        "world-jianghu-task-reward",
+                        &completion.completion_id,
+                    ),
+                    matrix_user_id: matrix_user_id.clone(),
+                    event_kind: "jianghu_task_reward".to_string(),
+                    subject_id: contract.contract_id.clone(),
+                    credits_delta: completion.reward_amount.round() as i64,
+                    reputation_delta: (completion.score / 12.0).round() as i64,
+                    created_at_epoch: completion.created_at_epoch,
+                });
+            }
+            if let Some(contract_index) = indexes.contract_index(&contract.contract_id) {
+                let mut stored_contract = league.world.world_contracts[contract_index].clone();
+                stored_contract.status = match completion.ledger_status.as_deref() {
+                    Some("settled") | Some("duplicate") => "completed_settled".to_string(),
+                    Some("held_review") => "review_hold".to_string(),
+                    Some(status) => format!("completed_{status}"),
+                    None => stored_contract.status.clone(),
+                };
+                stored_contract.cex_status = Some(match completion.ledger_status.as_deref() {
+                    Some("settled") | Some("duplicate") => "completed".to_string(),
+                    Some("held_review") => "review_hold".to_string(),
+                    Some("skipped_zero_reward") => "completed_no_reward".to_string(),
+                    Some(_) => "settlement_blocked".to_string(),
+                    None => stored_contract
+                        .cex_status
+                        .clone()
+                        .unwrap_or_else(|| "settlement_pending".to_string()),
+                });
+                if settlement_completed {
+                    stored_contract.value_score += (completion.score / 10.0).round() as i64;
+                }
+                indexes.replace_contract_by_id(&mut league.world, &stored_contract);
+                updated_contract = Some(stored_contract);
+            }
+            let home = world_home_json(&league);
+            (
+                league.clone(),
+                snapshot.1.clone(),
+                snapshot.2.clone(),
+                home,
+                updated_contract,
+                Some(completion.clone()),
+            )
+        };
+        final_snapshot.2["ledger_status"] = json!(settlement.status);
+        final_snapshot.2["ledger_entry_id"] = json!(completion.ledger_entry_id.clone());
+        final_snapshot.2["ledger_error"] = json!(completion.ledger_error.clone());
+        final_snapshot.2["jianghu_task_completion"] = json!(completion);
+        snapshot = final_snapshot;
+    }
     Ok(snapshot)
 }
 
@@ -1410,6 +1774,8 @@ pub(super) async fn post_world_tactics_command(
             "event": snapshot.1,
             "outcome": snapshot.2,
             "home": snapshot.3,
+            "jianghu_task_contract": snapshot.4,
+            "jianghu_task_completion": snapshot.5,
         })),
     )
         .into_response()
