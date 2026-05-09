@@ -170,17 +170,34 @@ fn world_tactics_board_cells_html(tactics_board: &Value) -> String {
                 .get("movement_cost")
                 .and_then(Value::as_i64)
                 .unwrap_or(1);
+            let grid_row = cell
+                .get("grid_row")
+                .and_then(Value::as_i64)
+                .unwrap_or(1);
+            let grid_col = cell
+                .get("grid_column")
+                .and_then(Value::as_i64)
+                .unwrap_or(1);
             format!(
-                "<button type=\"button\" class=\"tactics-tile terrain-{}\" data-tile=\"{}\" data-draft-target-tile=\"{}\" data-terrain=\"{}\" data-osm-game-overlay-id=\"{}\" data-movement-cost=\"{}\" data-board-cell-interaction-contract=\"{}\" data-command-intent-draft-contract=\"{}\" data-selection-role=\"target_tile\" data-draft-input-name=\"target_tile\" data-validation-owner=\"rust_tactics_command_validator\" data-source-of-truth=\"rust_tactics_board_projection\" data-web-role=\"intent_only_visualization_input\" aria-label=\"Select tactical tile {}\"><small>{}</small></button>",
+                "<button type=\"button\" role=\"gridcell\" class=\"tactics-tile terrain-{}\" data-tile=\"{}\" data-draft-target-tile=\"{}\" data-terrain=\"{}\" data-grid-row=\"{}\" data-grid-col=\"{}\" data-osm-game-overlay-id=\"{}\" data-movement-cost=\"{}\" data-board-cell-interaction-contract=\"{}\" data-command-intent-draft-contract=\"{}\" data-accessibility-contract=\"{}\" data-selection-role=\"target_tile\" data-keyboard-focus-role=\"target_tile_gridcell\" data-roving-tabindex=\"tactics_board\" data-draft-input-name=\"target_tile\" data-validation-owner=\"rust_tactics_command_validator\" data-source-of-truth=\"rust_tactics_board_projection\" data-web-role=\"intent_only_visualization_input\" aria-rowindex=\"{}\" aria-colindex=\"{}\" aria-selected=\"false\" aria-describedby=\"world-tactics-keyboard-help world-tactics-command-draft-status\" aria-label=\"Select tactical tile {} row {} column {}, terrain {}, movement cost {}\" tabindex=\"-1\"><small>{}</small></button>",
                 escape_html_text(terrain),
                 escape_html_text(tile_id),
                 escape_html_text(tile_id),
                 escape_html_text(terrain),
+                grid_row,
+                grid_col,
                 escape_html_text(overlay_id),
                 movement_cost,
                 escape_html_text(TRILLIONNIUM_TACTICS_BOARD_CELL_INTERACTION_CONTRACT_VERSION),
                 escape_html_text(TRILLIONNIUM_TACTICS_COMMAND_INTENT_DRAFT_CONTRACT_VERSION),
+                escape_html_text(TRILLIONNIUM_TACTICS_ACCESSIBILITY_CONTRACT_VERSION),
+                grid_row,
+                grid_col,
                 escape_html_text(tile_id),
+                grid_row,
+                grid_col,
+                escape_html_text(terrain),
+                movement_cost,
                 escape_html_text(tile_id),
             )
         })
@@ -307,7 +324,7 @@ fn world_tactics_units_html(tactics_board: &Value) -> String {
                 _ => "ally",
             };
             format!(
-                "<button type=\"button\" class=\"tactics-unit {}\" style=\"grid-column:{};grid-row:{}\" data-unit=\"{}\" data-draft-unit-id=\"{}\" data-side=\"{}\" data-tile=\"{}\" data-hp=\"{}\" data-move=\"{}\" data-osm-game-overlay-id=\"{}\" data-unit-selection-contract=\"{}\" data-command-intent-draft-contract=\"{}\" data-selection-role=\"active_unit\" data-draft-input-name=\"unit_id\" data-validation-owner=\"rust_tactics_command_validator\" data-source-of-truth=\"rust_tactics_unit_model\" data-web-role=\"intent_only_visualization_input\" title=\"{}\" data-i18n-en=\"{}\" data-i18n-zh=\"{}\">{}</button>",
+                "<button type=\"button\" class=\"tactics-unit {}\" style=\"grid-column:{};grid-row:{}\" data-unit=\"{}\" data-draft-unit-id=\"{}\" data-side=\"{}\" data-tile=\"{}\" data-hp=\"{}\" data-move=\"{}\" data-osm-game-overlay-id=\"{}\" data-unit-selection-contract=\"{}\" data-command-intent-draft-contract=\"{}\" data-accessibility-contract=\"{}\" data-selection-role=\"active_unit\" data-keyboard-focus-role=\"active_unit_button\" data-draft-input-name=\"unit_id\" data-validation-owner=\"rust_tactics_command_validator\" data-source-of-truth=\"rust_tactics_unit_model\" data-web-role=\"intent_only_visualization_input\" aria-selected=\"false\" aria-describedby=\"world-tactics-keyboard-help world-tactics-command-draft-status\" aria-label=\"Select {} unit {} at tile {}, HP {}, movement {}\" title=\"{}\" data-i18n-en=\"{}\" data-i18n-zh=\"{}\">{}</button>",
                 class_name,
                 grid_column,
                 grid_row,
@@ -320,6 +337,12 @@ fn world_tactics_units_html(tactics_board: &Value) -> String {
                 escape_html_text(overlay_id),
                 escape_html_text(TRILLIONNIUM_TACTICS_UNIT_SELECTION_CONTRACT_VERSION),
                 escape_html_text(TRILLIONNIUM_TACTICS_COMMAND_INTENT_DRAFT_CONTRACT_VERSION),
+                escape_html_text(TRILLIONNIUM_TACTICS_ACCESSIBILITY_CONTRACT_VERSION),
+                escape_html_text(label_en),
+                escape_html_text(unit_id),
+                escape_html_text(tile_id),
+                hp,
+                unit_move,
                 escape_html_text(title),
                 escape_html_text(label_en),
                 escape_html_text(label),
@@ -864,16 +887,18 @@ fn world_tactics_command_grid_html(tactics_board: &Value) -> String {
                 "tactics-command"
             };
             format!(
-                "<a class=\"{}\" href='{}' data-command=\"{}\" data-draft-command=\"{}\" data-command-contract=\"{}\" data-command-intent-draft-contract=\"{}\" data-validation-owner=\"{}\" data-required-skill-id=\"{}\" data-target-tile-required=\"{}\" data-unit-selection-required=\"true\" data-draft-input-name=\"command\" data-draft-owner=\"browser_tactics_intent_builder\" data-source-of-truth=\"rust_tactics_command_model\" data-web-role=\"intent_only_visualization_input\">{}</a>",
+                "<a class=\"{}\" role=\"button\" href='{}' data-command=\"{}\" data-draft-command=\"{}\" data-command-contract=\"{}\" data-command-intent-draft-contract=\"{}\" data-accessibility-contract=\"{}\" data-keyboard-focus-role=\"command_button\" data-validation-owner=\"{}\" data-required-skill-id=\"{}\" data-target-tile-required=\"{}\" data-unit-selection-required=\"true\" data-draft-input-name=\"command\" data-draft-owner=\"browser_tactics_intent_builder\" data-source-of-truth=\"rust_tactics_command_model\" data-web-role=\"intent_only_visualization_input\" aria-controls=\"world-tactics-command-draft-form\" aria-label=\"Draft tactics command {}\">{}</a>",
                 class_name,
                 escape_html_text(web_target),
                 escape_html_text(command_id),
                 escape_html_text(command_id),
                 escape_html_text(command_contract),
                 escape_html_text(TRILLIONNIUM_TACTICS_COMMAND_INTENT_DRAFT_CONTRACT_VERSION),
+                escape_html_text(TRILLIONNIUM_TACTICS_ACCESSIBILITY_CONTRACT_VERSION),
                 escape_html_text(validation_owner),
                 escape_html_text(required_skill_id),
                 target_tile_required,
+                escape_html_text(label),
                 escape_world_visible_text(label),
             )
         })
@@ -945,14 +970,17 @@ fn world_tactics_command_draft_panel_html(
         "tactics intent draft: command={default_command} unit={default_unit_id} target={default_target_tile}; browser selected only, Rust validates legality and outcome."
     );
     format!(
-        "<section id=\"world-tactics-command-draft-panel\" class=\"tactics-command-draft-panel\" data-contract-version=\"{}\" data-board-cell-interaction-contract=\"{}\" data-unit-selection-contract=\"{}\" data-selected-command=\"{}\" data-selected-unit-id=\"{}\" data-selected-target-tile=\"{}\" data-draft-owner=\"browser_tactics_intent_builder\" data-command-handler-owner=\"rust_world_tactics_command_handler\" data-validation-owner=\"rust_tactics_command_validator\" data-source-of-truth=\"rust_tactics_command_model\" data-web-role=\"intent_only_visualization_input\"><h4 data-i18n-en=\"Command draft · intent only\" data-i18n-zh=\"指令草稿 · 仅提交意图\">Command draft · intent only</h4><p id=\"world-tactics-command-draft-status\" data-i18n-en=\"Select a unit, a board cell, then a command. Browser drafts intent only; Rust validates movement, combat, objective, and reward.\" data-i18n-zh=\"选择单位、棋格和指令。浏览器只起草意图；移动、战斗、目标和奖励由 Rust 校验。\">Select a unit, a board cell, then a command. Browser drafts intent only; Rust validates movement, combat, objective, and reward.</p><form id=\"world-tactics-command-draft-form\" method=\"post\" action=\"/world/web/tactics-command\" data-api-command-endpoint=\"/v1/world/tactics/command\" data-contract-version=\"{}\" data-source-of-truth=\"rust_world_tactics_command_handler\" data-web-role=\"intent_only_visualization_input\">{}<input type=\"hidden\" name=\"matrix_user_id\" value=\"{}\"><input type=\"hidden\" name=\"command\" value=\"{}\"><input type=\"hidden\" name=\"unit_id\" value=\"{}\"><input type=\"hidden\" name=\"target_tile\" value=\"{}\"><input type=\"hidden\" name=\"skill_id\" value=\"basic_unarmed\"><input type=\"hidden\" name=\"body\" value=\"{}\"><button type=\"submit\" data-i18n-en=\"Submit drafted intent to Rust\" data-i18n-zh=\"提交草稿意图给 Rust\">Submit drafted intent to Rust</button></form><small id=\"world-tactics-command-draft-preview\" data-preview-format=\"command_unit_tile\">draft: {} · {} → {}</small></section>",
+        "<section id=\"world-tactics-command-draft-panel\" class=\"tactics-command-draft-panel\" data-contract-version=\"{}\" data-board-cell-interaction-contract=\"{}\" data-unit-selection-contract=\"{}\" data-accessibility-contract=\"{}\" data-keyboard-traversal=\"roving_grid_focus\" data-low-motion-support=\"prefers_reduced_motion\" data-selected-command=\"{}\" data-selected-unit-id=\"{}\" data-selected-target-tile=\"{}\" data-draft-owner=\"browser_tactics_intent_builder\" data-command-handler-owner=\"rust_world_tactics_command_handler\" data-validation-owner=\"rust_tactics_command_validator\" data-source-of-truth=\"rust_tactics_command_model\" data-web-role=\"intent_only_visualization_input\" aria-describedby=\"world-tactics-command-draft-status world-tactics-keyboard-help\"><h4 data-i18n-en=\"Command draft · intent only\" data-i18n-zh=\"指令草稿 · 仅提交意图\">Command draft · intent only</h4><p id=\"world-tactics-command-draft-status\" role=\"status\" aria-live=\"polite\" data-i18n-en=\"Select a unit, a board cell, then a command. Browser drafts intent only; Rust validates movement, combat, objective, and reward.\" data-i18n-zh=\"选择单位、棋格和指令。浏览器只起草意图；移动、战斗、目标和奖励由 Rust 校验。\">Select a unit, a board cell, then a command. Browser drafts intent only; Rust validates movement, combat, objective, and reward.</p><small id=\"world-tactics-keyboard-help\" data-accessibility-contract=\"{}\" data-i18n-en=\"Keyboard: arrow keys move across board cells, Home/End jump across a row, Enter/Space select the focused tile or command. Reduced-motion follows system preference.\" data-i18n-zh=\"键盘：方向键在棋格间移动，Home/End 跳到行首/行尾，Enter/Space 选择焦点棋格或指令。低动效跟随系统设置。\">Keyboard: arrow keys move across board cells, Home/End jump across a row, Enter/Space select the focused tile or command. Reduced-motion follows system preference.</small><form id=\"world-tactics-command-draft-form\" method=\"post\" action=\"/world/web/tactics-command\" data-api-command-endpoint=\"/v1/world/tactics/command\" data-contract-version=\"{}\" data-accessibility-contract=\"{}\" data-source-of-truth=\"rust_world_tactics_command_handler\" data-web-role=\"intent_only_visualization_input\" aria-label=\"Submit tactics intent draft to Rust\">{}<input type=\"hidden\" name=\"matrix_user_id\" value=\"{}\"><input type=\"hidden\" name=\"command\" value=\"{}\"><input type=\"hidden\" name=\"unit_id\" value=\"{}\"><input type=\"hidden\" name=\"target_tile\" value=\"{}\"><input type=\"hidden\" name=\"skill_id\" value=\"basic_unarmed\"><input type=\"hidden\" name=\"body\" value=\"{}\"><button type=\"submit\" data-i18n-en=\"Submit drafted intent to Rust\" data-i18n-zh=\"提交草稿意图给 Rust\">Submit drafted intent to Rust</button></form><small id=\"world-tactics-command-draft-preview\" data-preview-format=\"command_unit_tile\" aria-live=\"polite\">draft: {} · {} → {}</small></section>",
         escape_html_text(TRILLIONNIUM_TACTICS_COMMAND_INTENT_DRAFT_CONTRACT_VERSION),
         escape_html_text(TRILLIONNIUM_TACTICS_BOARD_CELL_INTERACTION_CONTRACT_VERSION),
         escape_html_text(TRILLIONNIUM_TACTICS_UNIT_SELECTION_CONTRACT_VERSION),
+        escape_html_text(TRILLIONNIUM_TACTICS_ACCESSIBILITY_CONTRACT_VERSION),
         escape_html_text(default_command),
         escape_html_text(&default_unit_id),
         escape_html_text(&default_target_tile),
+        escape_html_text(TRILLIONNIUM_TACTICS_ACCESSIBILITY_CONTRACT_VERSION),
         escape_html_text(TRILLIONNIUM_TACTICS_COMMAND_INTENT_DRAFT_CONTRACT_VERSION),
+        escape_html_text(TRILLIONNIUM_TACTICS_ACCESSIBILITY_CONTRACT_VERSION),
         csrf_input,
         escape_html_text(current_matrix_user_id),
         escape_html_text(default_command),
@@ -1740,6 +1768,10 @@ pub(super) async fn get_world_web_shell(
         .get("tactics_reward_settlement_contract_version")
         .and_then(Value::as_str)
         .unwrap_or("trillionnium_tactics_reward_settlement_v1");
+    let tactics_accessibility_contract = tactics_board
+        .get("tactics_accessibility_contract_version")
+        .and_then(Value::as_str)
+        .unwrap_or("trillionnium_tactics_accessibility_v1");
     let map_overlay_identity_contract = tactics_board
         .get("map_overlay_identity_contract_version")
         .and_then(Value::as_str)
@@ -2709,6 +2741,7 @@ pub(super) async fn get_world_web_shell(
     .tactics-tile {{ position:relative; min-width:0; min-height:0; border:1px solid rgba(255,255,255,.085); border-radius:10px; background:rgba(255,255,255,.055); color:inherit; padding:0; cursor:pointer; appearance:none; font:inherit; }}
     .tactics-tile small {{ position:absolute; left:5px; top:4px; color:rgba(246,247,251,.38); font-size:10px; font-weight:850; }}
     .tactics-tile:hover,.tactics-tile:focus-visible,.tactics-tile.is-selected {{ border-color:rgba(100,227,255,.72); box-shadow:0 0 0 2px rgba(100,227,255,.18),0 0 18px rgba(100,227,255,.22); outline:none; }}
+    .tactics-tile[tabindex="0"] {{ outline:1px solid rgba(100,227,255,.42); outline-offset:1px; }}
     .terrain-road {{ background:linear-gradient(135deg,rgba(248,195,91,.24),rgba(255,255,255,.06)); }}
     .terrain-forest {{ background:linear-gradient(135deg,rgba(125,255,155,.22),rgba(26,77,46,.16)); }}
     .terrain-river {{ background:linear-gradient(135deg,rgba(100,227,255,.28),rgba(25,71,96,.18)); }}
@@ -2731,7 +2764,7 @@ pub(super) async fn get_world_web_shell(
     .tactics-command-grid {{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }}
     .tactics-command {{ min-height:44px; display:flex; align-items:center; justify-content:center; text-align:center; text-decoration:none; border-radius:14px; border:1px solid rgba(248,195,91,.24); background:rgba(248,195,91,.095); color:#ffe2a2; font-weight:950; }}
     .tactics-command.primary {{ color:#071018; background:linear-gradient(135deg,#f8c35b,#7dff9b); }}
-    .tactics-command.is-selected {{ border-color:rgba(125,255,155,.72); box-shadow:0 0 0 2px rgba(125,255,155,.16),0 0 18px rgba(125,255,155,.18); }}
+    .tactics-command:focus-visible,.tactics-command.is-selected {{ border-color:rgba(125,255,155,.72); box-shadow:0 0 0 2px rgba(125,255,155,.16),0 0 18px rgba(125,255,155,.18); outline:none; }}
     .tactics-command-draft-panel {{ display:grid; gap:8px; border:1px solid rgba(100,227,255,.22); background:rgba(100,227,255,.07); border-radius:16px; padding:12px; }}
     .tactics-command-draft-panel h4,.tactics-command-draft-panel p {{ margin:0; }}
     .tactics-command-draft-panel p,.tactics-command-draft-panel small {{ color:var(--muted); line-height:1.42; }}
@@ -2745,6 +2778,11 @@ pub(super) async fn get_world_web_shell(
     .tactics-base-note {{ border:1px dashed rgba(248,195,91,.25); background:rgba(248,195,91,.06); border-radius:16px; padding:12px; color:#f7e7bd; line-height:1.5; }}
     .tactics-battle-list {{ display:grid; gap:7px; margin:0; padding:0; list-style:none; }}
     .tactics-battle-list li {{ border:1px solid rgba(255,255,255,.1); background:rgba(255,255,255,.05); border-radius:14px; padding:9px 10px; color:#f7e7bd; font-size:13px; }}
+    .tactics-game-shell[data-reduced-motion="true"] .tactics-selection-ring {{ animation:none; opacity:.82; transform:none; }}
+    @media (prefers-reduced-motion: reduce) {{
+      .tactics-game-shell *,.tactics-game-shell::before,.tactics-selection-ring {{ animation-duration:.001ms!important; animation-iteration-count:1!important; transition-duration:.001ms!important; scroll-behavior:auto!important; }}
+      .tactics-selection-ring {{ animation:none; opacity:.82; transform:none; }}
+    }}
     .world-mobile-action-sheet {{ display:grid; gap:9px; border:1px solid rgba(248,195,91,.24); background:linear-gradient(145deg,rgba(248,195,91,.13),rgba(100,227,255,.07)); border-radius:20px; padding:14px; }}
     .world-mobile-action-sheet p {{ margin:0; color:var(--muted); line-height:1.38; }}
     .world-mobile-action-sheet .world-route-stepper {{ display:flex; flex-wrap:wrap; gap:7px; }}
@@ -3063,10 +3101,10 @@ pub(super) async fn get_world_web_shell(
     </section>
     <section id="world-map-shell-panel" class="panel" data-bootstrap-mode="truncated_runtime_bootstrap_with_lazy_delta_hydration" data-bootstrap-payload-bytes="{world_map_bootstrap_bytes}" data-cache-contract="trillionnium_world_map_payload_cache_v1">
       <div class="map-shell">
-        <section id="trillionnium-tactics-game-shell" class="tactics-game-shell" data-contract-version="trillionnium_open_source_tactics_world_shell_v1" data-tactics-board-contract="{tactics_board_contract}" data-tactics-unit-contract="{tactics_unit_contract}" data-tactics-command-contract="{tactics_command_contract}" data-trillionnium-character-contract="{trillionnium_character_contract}" data-trillionnium-skill-contract="{trillionnium_skill_contract}" data-trillionnium-npc-command-descriptor-contract="{trillionnium_npc_command_descriptor_contract}" data-mentor-training-task-contract="{trillionnium_mentor_training_task_contract}" data-trillionnium-task-archetype-contract="{trillionnium_task_archetype_contract}" data-trillionnium-task-completion-contract="{trillionnium_task_completion_contract}" data-trillionnium-reward-gate-contract="{trillionnium_reward_gate_contract}" data-trillionnium-battle-log-style-contract="{trillionnium_battle_log_style_contract}" data-trillionnium-combat-log-contract="{trillionnium_combat_log_contract}" data-trillionnium-npc-relationship-contract="{trillionnium_npc_relationship_contract}" data-trillionnium-osm-objective-contract="{trillionnium_osm_objective_contract}" data-tactics-combat-resolution-contract="{tactics_combat_resolution_contract}" data-tactics-game-session-contract="{tactics_game_session_contract}" data-tactics-simulation-tick-contract="{tactics_simulation_tick_contract}" data-tactics-reward-settlement-contract="{tactics_reward_settlement_contract}" data-map-overlay-identity-contract="{map_overlay_identity_contract}" data-interface-style="turn_based_strategy_rpg" data-open-source-base="tranchikhang/MedievalWar" data-base-license="MIT" data-base-url="https://github.com/tranchikhang/MedievalWar" data-base-engine="Phaser 3" data-base-patterns="map,cursor,control,turn_system,pathfinding,context_menu,objectives,ai" data-asset-policy="no_proprietary_assets_css_tokens_first" data-map-engine-role="openclawstreetmap_underlay" data-underlay-engine="{map_engine_id}" data-underlay-provider="{tile_provider}" data-source-of-truth="rust_trillionnium_game_state" aria-label="Open-source tactics Trillionnium game shell" data-i18n-aria-label-en="Open-source tactics Trillionnium game shell" data-i18n-aria-label-zh="开源战棋 Trillionnium 游戏界面">
+        <section id="trillionnium-tactics-game-shell" class="tactics-game-shell" data-contract-version="trillionnium_open_source_tactics_world_shell_v1" data-tactics-board-contract="{tactics_board_contract}" data-tactics-unit-contract="{tactics_unit_contract}" data-tactics-command-contract="{tactics_command_contract}" data-trillionnium-character-contract="{trillionnium_character_contract}" data-trillionnium-skill-contract="{trillionnium_skill_contract}" data-trillionnium-npc-command-descriptor-contract="{trillionnium_npc_command_descriptor_contract}" data-mentor-training-task-contract="{trillionnium_mentor_training_task_contract}" data-trillionnium-task-archetype-contract="{trillionnium_task_archetype_contract}" data-trillionnium-task-completion-contract="{trillionnium_task_completion_contract}" data-trillionnium-reward-gate-contract="{trillionnium_reward_gate_contract}" data-trillionnium-battle-log-style-contract="{trillionnium_battle_log_style_contract}" data-trillionnium-combat-log-contract="{trillionnium_combat_log_contract}" data-trillionnium-npc-relationship-contract="{trillionnium_npc_relationship_contract}" data-trillionnium-osm-objective-contract="{trillionnium_osm_objective_contract}" data-tactics-combat-resolution-contract="{tactics_combat_resolution_contract}" data-tactics-game-session-contract="{tactics_game_session_contract}" data-tactics-simulation-tick-contract="{tactics_simulation_tick_contract}" data-tactics-reward-settlement-contract="{tactics_reward_settlement_contract}" data-tactics-accessibility-contract="{tactics_accessibility_contract}" data-keyboard-traversal="roving_grid_focus" data-low-motion-support="prefers_reduced_motion" data-map-overlay-identity-contract="{map_overlay_identity_contract}" data-interface-style="turn_based_strategy_rpg" data-open-source-base="tranchikhang/MedievalWar" data-base-license="MIT" data-base-url="https://github.com/tranchikhang/MedievalWar" data-base-engine="Phaser 3" data-base-patterns="map,cursor,control,turn_system,pathfinding,context_menu,objectives,ai" data-asset-policy="no_proprietary_assets_css_tokens_first" data-map-engine-role="openclawstreetmap_underlay" data-underlay-engine="{map_engine_id}" data-underlay-provider="{tile_provider}" data-source-of-truth="rust_trillionnium_game_state" aria-label="Open-source tactics Trillionnium game shell" data-i18n-aria-label-en="Open-source tactics Trillionnium game shell" data-i18n-aria-label-zh="开源战棋 Trillionnium 游戏界面">
           <article class="tactics-board-card">
             <div class="tactics-board-title"><span data-i18n-en="Three Kingdoms Tactics · Mirror Street Battle" data-i18n-zh="【三国战棋】镜像街巷战役">Three Kingdoms Tactics · Mirror Street Battle</span><code data-engine-role="underlay" data-underlay-name="OpenClawStreetMap" data-i18n-en="real street engine" data-i18n-zh="真实街巷引擎">real street engine</code></div>
-            <div class="tactics-board" role="grid" aria-label="Trillionnium turn based tactics board" data-i18n-aria-label-en="Trillionnium turn based tactics board" data-i18n-aria-label-zh="Trillionnium 回合制战棋棋盘">
+            <div class="tactics-board" role="grid" aria-label="Trillionnium turn based tactics board" data-i18n-aria-label-en="Trillionnium turn based tactics board" data-i18n-aria-label-zh="Trillionnium 回合制战棋棋盘" aria-describedby="world-tactics-keyboard-help" data-accessibility-contract="{tactics_accessibility_contract}" data-keyboard-traversal="roving_grid_focus">
               {tactics_board_cells}
               <span class="tactics-selection-ring" aria-hidden="true"></span>
               {tactics_board_units}
@@ -3429,11 +3467,22 @@ pub(super) async fn get_world_web_shell(
         if (!shell || !panel || !form) return;
         const preview = document.getElementById('world-tactics-command-draft-preview');
         const status = document.getElementById('world-tactics-command-draft-status');
+        const board = shell.querySelector('.tactics-board[role="grid"]');
+        const prefersReducedMotion = Boolean(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+        shell.dataset.reducedMotion = prefersReducedMotion ? 'true' : 'false';
+        panel.dataset.reducedMotion = prefersReducedMotion ? 'true' : 'false';
         const state = {{
           command: panel.dataset.selectedCommand || 'attack',
           unitId: panel.dataset.selectedUnitId || 'lord',
           targetTile: panel.dataset.selectedTargetTile || 'F5',
         }};
+        const focusElement = (element) => {{
+          if (!element) return;
+          try {{ element.focus({{ preventScroll: prefersReducedMotion }}); }} catch (_) {{ element.focus(); }}
+        }};
+        const boardTiles = () => Array.from(shell.querySelectorAll('.tactics-tile[data-tile]'));
+        const tileByCoord = (row, col) => boardTiles().find((tile) => Number(tile.dataset.gridRow || 0) === row && Number(tile.dataset.gridCol || 0) === col);
+        const tileById = (tileId) => boardTiles().find((tile) => String(tile.dataset.tile || '') === String(tileId || ''));
         const field = (name) => form.querySelector('[name="' + name + '"]');
         const setField = (name, value) => {{
           const input = field(name);
@@ -3441,8 +3490,10 @@ pub(super) async fn get_world_web_shell(
         }};
         const markSelected = () => {{
           shell.querySelectorAll('.tactics-tile[data-tile]').forEach((tile) => {{
-            tile.classList.toggle('is-selected', String(tile.dataset.tile || '') === state.targetTile);
-            tile.setAttribute('aria-selected', String(String(tile.dataset.tile || '') === state.targetTile));
+            const selected = String(tile.dataset.tile || '') === state.targetTile;
+            tile.classList.toggle('is-selected', selected);
+            tile.setAttribute('aria-selected', String(selected));
+            tile.tabIndex = selected ? 0 : -1;
           }});
           shell.querySelectorAll('.tactics-unit[data-unit]').forEach((unit) => {{
             const selectedPlayerUnit = String(unit.dataset.side || '') === 'player' && String(unit.dataset.unit || '') === state.unitId;
@@ -3468,6 +3519,41 @@ pub(super) async fn get_world_web_shell(
           if (status) status.textContent = 'Draft ready: ' + state.command + ' with ' + state.unitId + ' targeting ' + state.targetTile + '. Rust remains source of truth.';
           markSelected();
         }};
+        const selectTargetTile = (tile, shouldFocus = false) => {{
+          if (!tile) return;
+          state.targetTile = tile.dataset.tile || state.targetTile;
+          writeDraft();
+          if (shouldFocus) focusElement(tile);
+        }};
+        const focusAdjacentTile = (origin, deltaRow, deltaCol) => {{
+          const row = Number(origin.dataset.gridRow || origin.getAttribute('aria-rowindex') || 1);
+          const col = Number(origin.dataset.gridCol || origin.getAttribute('aria-colindex') || 1);
+          const nextRow = Math.min(8, Math.max(1, row + deltaRow));
+          const nextCol = Math.min(8, Math.max(1, col + deltaCol));
+          selectTargetTile(tileByCoord(nextRow, nextCol) || origin, true);
+        }};
+        if (board) {{
+          board.addEventListener('keydown', (event) => {{
+            const activeTile = event.target.closest('.tactics-tile[data-tile]');
+            if (!activeTile || !board.contains(activeTile)) return;
+            const key = event.key;
+            if (key === 'ArrowUp') {{ event.preventDefault(); focusAdjacentTile(activeTile, -1, 0); }}
+            else if (key === 'ArrowDown') {{ event.preventDefault(); focusAdjacentTile(activeTile, 1, 0); }}
+            else if (key === 'ArrowLeft') {{ event.preventDefault(); focusAdjacentTile(activeTile, 0, -1); }}
+            else if (key === 'ArrowRight') {{ event.preventDefault(); focusAdjacentTile(activeTile, 0, 1); }}
+            else if (key === 'Home') {{ event.preventDefault(); selectTargetTile(tileByCoord(Number(activeTile.dataset.gridRow || 1), 1) || activeTile, true); }}
+            else if (key === 'End') {{ event.preventDefault(); selectTargetTile(tileByCoord(Number(activeTile.dataset.gridRow || 1), 8) || activeTile, true); }}
+            else if (key === 'Enter' || key === ' ') {{ event.preventDefault(); activeTile.click(); }}
+          }});
+        }}
+        shell.addEventListener('keydown', (event) => {{
+          const command = event.target.closest('.tactics-command[data-command]');
+          if (!command || !shell.contains(command)) return;
+          if (event.key === ' ' || event.key === 'Enter') {{
+            event.preventDefault();
+            command.click();
+          }}
+        }});
         shell.addEventListener('click', (event) => {{
           const unit = event.target.closest('.tactics-unit[data-unit]');
           if (unit && shell.contains(unit)) {{
@@ -3483,8 +3569,7 @@ pub(super) async fn get_world_web_shell(
           const tile = event.target.closest('.tactics-tile[data-tile]');
           if (tile && shell.contains(tile)) {{
             event.preventDefault();
-            state.targetTile = tile.dataset.tile || state.targetTile;
-            writeDraft();
+            selectTargetTile(tile, false);
             return;
           }}
           const command = event.target.closest('.tactics-command[data-command]');
@@ -3495,10 +3580,15 @@ pub(super) async fn get_world_web_shell(
           }}
         }});
         writeDraft();
+        const initialTile = tileById(state.targetTile);
+        if (initialTile) initialTile.tabIndex = 0;
         window.trillionniumTacticsIntentDraft = {{
           contract_version: panel.dataset.contractVersion,
           board_cell_interaction_contract_version: panel.dataset.boardCellInteractionContract,
           unit_selection_contract_version: panel.dataset.unitSelectionContract,
+          accessibility_contract_version: panel.dataset.accessibilityContract,
+          keyboard_traversal: panel.dataset.keyboardTraversal,
+          low_motion_support: panel.dataset.lowMotionSupport,
           source_of_truth: panel.dataset.sourceOfTruth,
           web_role: panel.dataset.webRole,
           getState: () => ({{ ...state }}),

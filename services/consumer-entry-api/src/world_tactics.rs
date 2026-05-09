@@ -48,6 +48,8 @@ pub(super) const TRILLIONNIUM_TACTICS_UNIT_SELECTION_CONTRACT_VERSION: &str =
     "trillionnium_tactics_unit_selection_v1";
 pub(super) const TRILLIONNIUM_TACTICS_COMMAND_INTENT_DRAFT_CONTRACT_VERSION: &str =
     "trillionnium_tactics_command_intent_draft_v1";
+pub(super) const TRILLIONNIUM_TACTICS_ACCESSIBILITY_CONTRACT_VERSION: &str =
+    "trillionnium_tactics_accessibility_v1";
 pub(super) const TRILLIONNIUM_MAP_OVERLAY_IDENTITY_CONTRACT_VERSION: &str =
     "trillionnium_map_overlay_identity_v1";
 
@@ -1996,9 +1998,12 @@ impl TacticsUnit {
             "character_source": self.character_source,
             "unit_selection_contract_version": TRILLIONNIUM_TACTICS_UNIT_SELECTION_CONTRACT_VERSION,
             "command_intent_draft_contract_version": TRILLIONNIUM_TACTICS_COMMAND_INTENT_DRAFT_CONTRACT_VERSION,
+            "accessibility_contract_version": TRILLIONNIUM_TACTICS_ACCESSIBILITY_CONTRACT_VERSION,
             "selectable_unit": true,
             "selection_role": "active_unit",
+            "keyboard_focus_role": "active_unit_button",
             "draft_input_name": "unit_id",
+            "aria_role": "button",
             "validation_owner": "rust_tactics_command_validator",
             "web_role": "intent_only_visualization_input",
             "source_of_truth": "rust_tactics_unit_model",
@@ -2031,7 +2036,10 @@ impl TacticsCommandDescriptor {
             "required_skill_id": self.required_skill_id,
             "action_cost": self.action_cost,
             "command_intent_draft_contract_version": TRILLIONNIUM_TACTICS_COMMAND_INTENT_DRAFT_CONTRACT_VERSION,
+            "accessibility_contract_version": TRILLIONNIUM_TACTICS_ACCESSIBILITY_CONTRACT_VERSION,
             "draft_input_name": "command",
+            "keyboard_focus_role": "command_button",
+            "aria_role": "button",
             "target_tile_required": matches!(self.command, "move_unit" | "attack" | "use_skill" | "interact"),
             "unit_selection_required": true,
             "draft_owner": "browser_tactics_intent_builder",
@@ -2930,9 +2938,12 @@ pub(super) fn world_tactics_board_projection_json(
                 "overlay_identity_ref": overlay_id,
                 "board_cell_interaction_contract_version": TRILLIONNIUM_TACTICS_BOARD_CELL_INTERACTION_CONTRACT_VERSION,
                 "command_intent_draft_contract_version": TRILLIONNIUM_TACTICS_COMMAND_INTENT_DRAFT_CONTRACT_VERSION,
+                "accessibility_contract_version": TRILLIONNIUM_TACTICS_ACCESSIBILITY_CONTRACT_VERSION,
                 "selectable": true,
                 "selection_role": "target_tile",
+                "keyboard_focus_role": "target_tile_gridcell",
                 "draft_input_name": "target_tile",
+                "aria_role": "gridcell",
                 "validation_owner": "rust_tactics_command_validator",
                 "web_role": "intent_only_visualization_input",
                 "movement_cost": match terrain {
@@ -3021,6 +3032,7 @@ pub(super) fn world_tactics_board_projection_json(
         "tactics_board_cell_interaction_contract_version": TRILLIONNIUM_TACTICS_BOARD_CELL_INTERACTION_CONTRACT_VERSION,
         "tactics_unit_selection_contract_version": TRILLIONNIUM_TACTICS_UNIT_SELECTION_CONTRACT_VERSION,
         "tactics_command_intent_draft_contract_version": TRILLIONNIUM_TACTICS_COMMAND_INTENT_DRAFT_CONTRACT_VERSION,
+        "tactics_accessibility_contract_version": TRILLIONNIUM_TACTICS_ACCESSIBILITY_CONTRACT_VERSION,
         "map_overlay_identity_contract_version": TRILLIONNIUM_MAP_OVERLAY_IDENTITY_CONTRACT_VERSION,
         "intent_draft_policy": {
             "contract_version": TRILLIONNIUM_TACTICS_COMMAND_INTENT_DRAFT_CONTRACT_VERSION,
@@ -3033,6 +3045,16 @@ pub(super) fn world_tactics_board_projection_json(
             "browser_may_select": ["unit_id", "target_tile", "command"],
             "browser_may_not_resolve": ["movement_legality", "combat_result", "reward_status", "objective_completion"],
             "source_of_truth": "rust_trillionnium_game_state"
+        },
+        "accessibility_policy": {
+            "contract_version": TRILLIONNIUM_TACTICS_ACCESSIBILITY_CONTRACT_VERSION,
+            "keyboard_traversal": "roving_grid_focus",
+            "keyboard_keys": ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End", "Enter", "Space"],
+            "low_motion_support": "prefers_reduced_motion",
+            "live_region_owner": "world_tactics_command_draft_status",
+            "focus_owner": "browser_tactics_keyboard_controller",
+            "source_of_truth": "rust_trillionnium_game_state",
+            "web_role": "accessibility_view_contract_only"
         },
         "open_source_base": {
             "repo": "tranchikhang/MedievalWar",

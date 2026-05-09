@@ -2528,6 +2528,10 @@ fn world_tactics_projection_binds_trillionnium_state_to_osm_objectives() {
         "trillionnium_tactics_command_intent_draft_v1"
     );
     assert_eq!(
+        tactics["tactics_accessibility_contract_version"],
+        "trillionnium_tactics_accessibility_v1"
+    );
+    assert_eq!(
         tactics["intent_draft_policy"]["validation_owner"],
         "rust_tactics_command_validator"
     );
@@ -2538,6 +2542,18 @@ fn world_tactics_projection_binds_trillionnium_state_to_osm_objectives() {
     assert_eq!(
         tactics["intent_draft_policy"]["web_role"],
         "intent_only_visualization_input"
+    );
+    assert_eq!(
+        tactics["accessibility_policy"]["contract_version"],
+        "trillionnium_tactics_accessibility_v1"
+    );
+    assert_eq!(
+        tactics["accessibility_policy"]["keyboard_traversal"],
+        "roving_grid_focus"
+    );
+    assert_eq!(
+        tactics["accessibility_policy"]["low_motion_support"],
+        "prefers_reduced_motion"
     );
     assert_eq!(
         tactics["map_overlay_identity_contract_version"],
@@ -2568,8 +2584,16 @@ fn world_tactics_projection_binds_trillionnium_state_to_osm_objectives() {
         tactics["units"][0]["command_intent_draft_contract_version"],
         "trillionnium_tactics_command_intent_draft_v1"
     );
+    assert_eq!(
+        tactics["units"][0]["accessibility_contract_version"],
+        "trillionnium_tactics_accessibility_v1"
+    );
     assert_eq!(tactics["units"][0]["draft_input_name"], "unit_id");
     assert_eq!(tactics["units"][0]["selection_role"], "active_unit");
+    assert_eq!(
+        tactics["units"][0]["keyboard_focus_role"],
+        "active_unit_button"
+    );
     assert_eq!(tactics["units"][0]["owner"], "player");
     assert!(tactics["units"][0]["max_hp"].as_i64().unwrap_or_default() >= 100);
     assert_eq!(
@@ -2584,6 +2608,10 @@ fn world_tactics_projection_binds_trillionnium_state_to_osm_objectives() {
     assert_eq!(
         tactics["available_commands"][2]["command_intent_draft_contract_version"],
         "trillionnium_tactics_command_intent_draft_v1"
+    );
+    assert_eq!(
+        tactics["available_commands"][2]["accessibility_contract_version"],
+        "trillionnium_tactics_accessibility_v1"
     );
     assert_eq!(
         tactics["available_commands"][2]["draft_owner"],
@@ -2602,8 +2630,16 @@ fn world_tactics_projection_binds_trillionnium_state_to_osm_objectives() {
         "trillionnium_tactics_command_intent_draft_v1"
     );
     assert_eq!(
+        tactics["board"]["cells"][0]["accessibility_contract_version"],
+        "trillionnium_tactics_accessibility_v1"
+    );
+    assert_eq!(
         tactics["board"]["cells"][0]["draft_input_name"],
         "target_tile"
+    );
+    assert_eq!(
+        tactics["board"]["cells"][0]["keyboard_focus_role"],
+        "target_tile_gridcell"
     );
     assert_eq!(
         tactics["board"]["cells"][0]["validation_owner"],
@@ -4344,6 +4380,10 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     ));
     assert!(app_html
         .contains("data-unit-selection-contract=\"trillionnium_tactics_unit_selection_v1\""));
+    assert!(
+        app_html.contains("data-accessibility-contract=\"trillionnium_tactics_accessibility_v1\"")
+    );
+    assert!(app_html.contains("data-low-motion-support=\"prefers_reduced_motion\""));
     assert!(app_html.contains("data-draft-owner=\"browser_tactics_intent_builder\""));
     assert!(app_html.contains("data-command-handler-owner=\"rust_world_tactics_command_handler\""));
     assert!(app_html
@@ -4466,6 +4506,16 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(world_html.contains("trillionnium_tactics_board_cell_interaction_v1"));
     assert!(world_html.contains("trillionnium_tactics_unit_selection_v1"));
     assert!(world_html.contains("trillionnium_tactics_command_intent_draft_v1"));
+    assert!(world_html.contains("trillionnium_tactics_accessibility_v1"));
+    assert!(world_html.contains("data-keyboard-traversal=\"roving_grid_focus\""));
+    assert!(world_html.contains("data-low-motion-support=\"prefers_reduced_motion\""));
+    assert!(world_html.contains("world-tactics-keyboard-help"));
+    assert!(world_html.contains("aria-live=\"polite\""));
+    assert!(world_html.contains("role=\"gridcell\""));
+    assert!(world_html.contains("data-roving-tabindex=\"tactics_board\""));
+    assert!(world_html.contains("aria-rowindex=\"1\""));
+    assert!(world_html.contains("aria-colindex=\"1\""));
+    assert!(world_html.contains("focusAdjacentTile"));
     assert!(world_html.contains("data-draft-target-tile="));
     assert!(world_html.contains("data-draft-unit-id="));
     assert!(world_html.contains("data-draft-command="));

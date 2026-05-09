@@ -721,7 +721,7 @@ git log --oneline -5
   - current objective
   - primary action
   - risk/reward
-- [ ] TW-6.7 Add accessibility labels and keyboard/low-motion support for the tactics shell.
+- [x] TW-6.7 Add accessibility labels and keyboard/low-motion support for the tactics shell.
 - [ ] TW-6.8 Keep old dashboard panels available as secondary/detail panels, not main experience.
 
 ### TW-7 — Map and runtime operations
@@ -1008,7 +1008,7 @@ Expected first-slice deliverables:
   - UI audit green: `run/trillionnium-ui-audit/ui-audit-summary-1778326086-367189.json`
 - Remaining next:
   - [x] TW-6.4/TW-6.5 deeper board-cell interactions and unit-selection/command-drafting affordances.
-  - [ ] TW-6.7 accessibility labels, keyboard traversal, and low-motion support for the tactics shell.
+  - [x] TW-6.7 accessibility labels, keyboard traversal, and low-motion support for the tactics shell.
 
 #### Update 2026-05-09 20:2x CST
 
@@ -1035,7 +1035,38 @@ Expected first-slice deliverables:
   - Browser E2E green: `run/league-browser/browser-e2e-summary-1778329990-393843.json`
   - UI audit green: `run/trillionnium-ui-audit/ui-audit-summary-1778330124-394760.json`
 - Remaining next:
-  - [ ] TW-6.7 accessibility labels, keyboard traversal, and low-motion support for the tactics shell.
+  - [x] TW-6.7 accessibility labels, keyboard traversal, and low-motion support for the tactics shell.
+  - [ ] TW-6.8 keep old dashboard/detail panels secondary, not the main experience.
+
+#### Update 2026-05-09 TW-6.7
+
+- Commit: this slice (`feat: make trillionnium tactics shell accessible`).
+- Completed accessibility/keyboard/low-motion tactics shell slice:
+  - [x] Added `trillionnium_tactics_accessibility_v1` to Rust-owned tactics projection, board cells, units, commands, and surface policy metadata.
+  - [x] `/world` board cells now render as real `role="gridcell"` controls with row/column indexes, ARIA labels/descriptions, selected state, roving tabindex metadata, and Rust validation/source-of-truth tokens.
+  - [x] `/world` units and command controls now expose ARIA selection/description/controls metadata while staying intent-only; browser still drafts only, Rust validates legality/combat/reward.
+  - [x] `initializeTacticsIntentDraft` now owns keyboard traversal for board cells (`Arrow` keys, `Home`/`End`, `Enter`/`Space`) and updates hidden draft fields, live status, and roving focus without resolving game state in the browser.
+  - [x] The tactics shell and command draft panel expose low-motion support through `prefers-reduced-motion` datasets and CSS that suppresses selection animation when requested.
+  - [x] `/app` mirrors the accessibility contract on the compact intent-draft card so mobile players see keyboard/low-motion/source-of-truth affordance metadata before opening `/world`.
+  - [x] Browser E2E now verifies reduced-motion mode, keyboard traversal from `C3` to `D3`, accessibility runtime export, and keeps the map RUM matrix warmup explicit before enforcing health metrics.
+  - [x] Web E2E and UI audit hard-gate accessibility contract tokens, keyboard help/live regions, roving grid cells, accessible units/commands, and low-motion support.
+- Evidence:
+  - `cargo fmt --all -- --check`
+  - `cargo check -p consumer-entry-api`
+  - targeted `cargo test -p consumer-entry-api world_tactics_projection_binds_trillionnium_state_to_osm_objectives -- --nocapture`
+  - targeted `cargo test -p consumer-entry-api web_map_shells_render_live_event_task_focus_metadata -- --nocapture`
+  - `cargo test -p consumer-entry-api -- --nocapture` (`133 passed`; one transient viewport delta assertion did not reproduce on focused/full rerun)
+  - `cargo clippy --workspace -- -D warnings`
+  - `cargo test --workspace`
+  - `bash -n scripts/check-trillionnium-league-web-e2e.sh`
+  - `node --check scripts/playwright/trillionnium-browser-e2e.mjs`
+  - `node --check scripts/playwright/trillionnium-ui-audit.mjs`
+  - `git diff --check`
+  - `CEX_ENV_FILE=run/local-production/.env scripts/runtime-manager-linux.sh restart/status` green
+  - Web E2E green: `run/league-web/web-e2e-summary-1778332210.json`
+  - Browser E2E green: `run/league-browser/browser-e2e-summary-1778333088-413874.json`
+  - UI audit green: `run/trillionnium-ui-audit/ui-audit-summary-1778333221-414772.json`
+- Remaining next:
   - [ ] TW-6.8 keep old dashboard/detail panels secondary, not the main experience.
 
 ---
@@ -1101,6 +1132,6 @@ Also append a one-paragraph summary to `/home/qian/.openclaw/workspace/memory/YY
 
 If the next instruction is simply “continue”, start here:
 
-> **TW-6 continued:** after the `/world` + `/app` board-cell/unit/command intent-drafting slice, continue with TW-6.7 accessibility labels, keyboard traversal, and low-motion support for the tactics shell while preserving Rust as the source of truth and browser intent-only semantics.
+> **TW-6 continued:** after the `/world` + `/app` board-cell/unit/command intent-drafting and TW-6.7 accessibility/keyboard/low-motion slices, continue with TW-6.8 keeping old dashboard/detail panels secondary while preserving Rust as the source of truth and browser intent-only semantics.
 
 Do not start live Overpass/Geofabrik ingestion yet. Do not promote MapLibre. Do not convert the web shell into a standalone JS source of truth.

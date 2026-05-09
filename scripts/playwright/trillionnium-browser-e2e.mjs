@@ -466,11 +466,17 @@ async function main() {
     .replaceAll('{cursor}', encodeURIComponent(deltaCursor || ''));
   const deltaNotModifiedProbe = await page.evaluate(async ({ deltaUrl }) => {
     const first = await fetch(deltaUrl, { credentials: 'same-origin', cache: 'no-store' });
-    const etag = first.headers.get('etag');
-    const second = await fetch(deltaUrl, { credentials: 'same-origin', cache: 'no-store', headers: etag ? { 'if-none-match': etag, 'x-trillionnium-map-if-none-match': etag } : {} });
-    return { first_status: first.status, etag, server_timing: first.headers.get('server-timing'), server_ms: first.headers.get('x-trillionnium-world-map-server-ms'), second_status: second.status };
+    const firstJson = await first.clone().json().catch(() => ({}));
+    const currentCursor = firstJson?.next_cursor || firstJson?.delta_cursor || '';
+    const noopUrl = new URL(deltaUrl, window.location.origin);
+    if (currentCursor) noopUrl.searchParams.set('cursor', currentCursor);
+    const noop = await fetch(noopUrl.toString(), { credentials: 'same-origin', cache: 'no-store' });
+    const noopJson = await noop.clone().json().catch(() => ({}));
+    const etag = noop.headers.get('etag');
+    const second = await fetch(noopUrl.toString(), { credentials: 'same-origin', cache: 'no-store', headers: etag ? { 'if-none-match': etag, 'x-trillionnium-map-if-none-match': etag } : {} });
+    return { first_status: first.status, first_changed: firstJson?.changed, noop_status: noop.status, noop_changed: noopJson?.changed, etag, server_timing: noop.headers.get('server-timing'), server_ms: noop.headers.get('x-trillionnium-world-map-server-ms'), second_status: second.status };
   }, { deltaUrl });
-  assert(deltaNotModifiedProbe.first_status === 200 && Boolean(deltaNotModifiedProbe.etag) && Boolean(deltaNotModifiedProbe.server_timing) && Boolean(deltaNotModifiedProbe.server_ms) && deltaNotModifiedProbe.second_status === 304, 'browser map delta 304/server timing contract failed', deltaNotModifiedProbe);
+  assert(deltaNotModifiedProbe.first_status === 200 && deltaNotModifiedProbe.noop_status === 200 && Boolean(deltaNotModifiedProbe.etag) && Boolean(deltaNotModifiedProbe.server_timing) && Boolean(deltaNotModifiedProbe.server_ms) && deltaNotModifiedProbe.second_status === 304, 'browser map delta 304/server timing contract failed', deltaNotModifiedProbe);
   await page.route('**/world/web/map-delta**', (route) => route.abort('failed'));
   await page.route('**/world/web/map-viewport**', (route) => route.abort('failed'));
   const weakNetworkFallback = await page.evaluate(async () => {
@@ -576,6 +582,7 @@ async function main() {
   await assertNoVisibleBilingualSlashPair(page, '/league Chinese system language');
   steps.push({ name: 'league_global_language_switcher_runtime', ok: true });
 
+  await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.goto('/world?lang=en', { waitUntil: 'domcontentloaded', timeout: 30_000 });
   await page.waitForSelector('#world-real-map', { timeout: 15_000 });
   assert((await page.title()).includes('Trillionnium World'), 'world title missing');
@@ -592,12 +599,15 @@ async function main() {
   assert(await count(page, '#world-tactics-player-hud[data-contract-version="trillionnium_tactics_player_visible_surface_v1"]') === 1, 'world tactics player HUD contract missing');
   assert(await count(page, '#world-tactics-objective-card[data-session-contract="trillionnium_tactics_game_session_v1"]') === 1, 'world tactics objective card missing');
   assert(await count(page, '#world-tactics-current-session-card[data-tick-contract="trillionnium_tactics_simulation_tick_v1"]') === 1, 'world tactics current session card missing');
+  assert(await count(page, '#trillionnium-tactics-game-shell[data-tactics-accessibility-contract="trillionnium_tactics_accessibility_v1"][data-keyboard-traversal="roving_grid_focus"][data-low-motion-support="prefers_reduced_motion"][data-reduced-motion="true"]') === 1, 'world tactics accessibility/low-motion shell contract missing');
+  assert(await count(page, '#world-tactics-keyboard-help[data-accessibility-contract="trillionnium_tactics_accessibility_v1"]') === 1, 'world tactics keyboard help missing');
   assert(await count(page, '#world-tactics-command-draft-panel[data-contract-version="trillionnium_tactics_command_intent_draft_v1"][data-board-cell-interaction-contract="trillionnium_tactics_board_cell_interaction_v1"][data-unit-selection-contract="trillionnium_tactics_unit_selection_v1"][data-web-role="intent_only_visualization_input"]') === 1, 'world tactics command draft panel missing');
   assert(await count(page, '#world-tactics-command-draft-form[data-contract-version="trillionnium_tactics_command_intent_draft_v1"][data-source-of-truth="rust_world_tactics_command_handler"][data-web-role="intent_only_visualization_input"]') === 1, 'world tactics command draft form missing');
-  assert(await count(page, '.tactics-tile[data-board-cell-interaction-contract="trillionnium_tactics_board_cell_interaction_v1"][data-command-intent-draft-contract="trillionnium_tactics_command_intent_draft_v1"][data-draft-input-name="target_tile"]') >= 64, 'world tactics selectable board cells missing');
+  assert(await count(page, '.tactics-tile[role="gridcell"][data-board-cell-interaction-contract="trillionnium_tactics_board_cell_interaction_v1"][data-command-intent-draft-contract="trillionnium_tactics_command_intent_draft_v1"][data-accessibility-contract="trillionnium_tactics_accessibility_v1"][data-draft-input-name="target_tile"][data-roving-tabindex="tactics_board"]') >= 64, 'world tactics selectable/a11y board cells missing');
   assert(await count(page, '.tactics-unit[data-unit-selection-contract="trillionnium_tactics_unit_selection_v1"][data-command-intent-draft-contract="trillionnium_tactics_command_intent_draft_v1"][data-draft-input-name="unit_id"]') >= 2, 'world tactics selectable units missing');
-  assert(await count(page, '.tactics-command[data-command-intent-draft-contract="trillionnium_tactics_command_intent_draft_v1"][data-draft-input-name="command"]') >= 3, 'world tactics draftable commands missing');
+  assert(await count(page, '.tactics-command[role="button"][data-command-intent-draft-contract="trillionnium_tactics_command_intent_draft_v1"][data-accessibility-contract="trillionnium_tactics_accessibility_v1"][data-draft-input-name="command"]') >= 3, 'world tactics draftable/a11y commands missing');
   assert(await page.evaluate(() => window.trillionniumTacticsIntentDraft?.web_role) === 'intent_only_visualization_input', 'world tactics intent draft runtime missing');
+  assert(await page.evaluate(() => window.trillionniumTacticsIntentDraft?.accessibility_contract_version) === 'trillionnium_tactics_accessibility_v1', 'world tactics accessibility runtime missing');
   await clickOrDomActivate(page.locator('.tactics-unit[data-side="player"]').first());
   await clickOrDomActivate(page.locator('.tactics-tile[data-tile="C3"]').first());
   await clickOrDomActivate(page.locator('.tactics-command[data-command="move_unit"]').first());
@@ -613,6 +623,16 @@ async function main() {
   assert(draftState.runtime?.command === 'move_unit' && draftState.runtime?.targetTile === 'C3', 'world tactics draft runtime state mismatch', draftState);
   assert(await count(page, '.tactics-tile.is-selected[data-tile="C3"]') === 1, 'world tactics selected tile styling missing');
   assert(await count(page, '.tactics-command.is-selected[data-command="move_unit"]') === 1, 'world tactics selected command styling missing');
+  await page.locator('.tactics-tile[data-tile="C3"]').focus();
+  await page.keyboard.press('ArrowRight');
+  const keyboardDraftState = await page.evaluate(() => ({
+    activeTile: document.activeElement?.dataset?.tile,
+    runtime: window.trillionniumTacticsIntentDraft?.getState?.(),
+    targetTile: document.querySelector('#world-tactics-command-draft-form [name="target_tile"]')?.value,
+    status: document.querySelector('#world-tactics-command-draft-status')?.textContent,
+  }));
+  assert(keyboardDraftState.activeTile === 'D3' && keyboardDraftState.targetTile === 'D3' && keyboardDraftState.runtime?.targetTile === 'D3', 'world tactics keyboard traversal did not move draft target right from C3', keyboardDraftState);
+  assert(String(keyboardDraftState.status || '').includes('Rust remains source of truth'), 'world tactics keyboard traversal must update live status', keyboardDraftState);
   assert(await count(page, '#world-tactics-reward-history-handoff[data-reward-history-contract="trillionnium_tactics_reward_history_v1"]') === 1, 'world tactics reward-history handoff missing');
   assert(await count(page, '#world-tactics-repeat-farming-copy[data-anti-cheese-contract="trillionnium_tactics_repeat_farming_anti_cheese_v1"]') === 1, 'world tactics repeat-farming copy missing');
   assert(await count(page, '#world-pulse-strip .pulse-card') === 5, 'world pulse strip should keep only compact primary counters visible');
@@ -672,6 +692,41 @@ async function main() {
   const acceptanceCards = await count(page, '#world-work-acceptances-live article, #world-work-acceptances-live .mini');
   assert(acceptanceCards >= 1, 'quest rating card missing after rating');
   steps.push({ name: 'world_quest_rating_browser_submit', ok: true, acceptance_cards: acceptanceCards });
+
+  const rumMatrixWarmup = await page.evaluate(async ({ marker, deltaCursor }) => {
+    const results = [];
+    const rumMatrixSurfaces = ['app', 'world'];
+    const rumMatrixDevices = ['mobile', 'desktop'];
+    const rumMatrixSampleKinds = ['first_map_interactive_runtime_ready', 'delta_not_modified_304_fast_path', 'weak_network_cached_snapshot'];
+    for (const surfaceId of rumMatrixSurfaces) {
+      for (const userAgentClass of rumMatrixDevices) {
+        for (const sampleKind of rumMatrixSampleKinds) {
+          const response = await fetch('/world/web/map-rum', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              matrix_user_id: '@alice:local.dev',
+              surface_id: surfaceId,
+              session_id: `browser-e2e-rum-${marker}`,
+              viewport_cursor: deltaCursor || 'browser-e2e-current-cursor',
+              sample_kind: sampleKind,
+              user_agent_class: userAgentClass,
+              first_map_interactive_ms: sampleKind.startsWith('first_map_interactive') ? 140 : 0,
+              viewport_refresh_ms: sampleKind.startsWith('first_map_interactive') ? 0 : 24,
+              focus_to_action_rail_ms: 18,
+              main_thread_long_task_ms: 0,
+              tile_error_count: 0,
+            }),
+          });
+          results.push({ surfaceId, userAgentClass, sampleKind, status: response.status, ok: response.ok });
+        }
+      }
+    }
+    return results;
+  }, { marker, deltaCursor });
+  assert(rumMatrixWarmup.every((result) => result.ok), 'RUM matrix warmup failed', rumMatrixWarmup);
+  steps.push({ name: 'world_map_rum_matrix_browser_warmup', ok: true, samples: 12 });
 
   const health = await page.request.get(`${baseUrl}/health`, { timeout: 20_000 });
   assert(health.ok(), `health failed after browser flow: ${health.status()}`);
