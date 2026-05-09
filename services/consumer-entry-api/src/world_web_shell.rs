@@ -1053,6 +1053,10 @@ pub(super) async fn get_world_web_shell(
         .get("jianghu_battle_log_style_contract_version")
         .and_then(Value::as_str)
         .unwrap_or("trillionnium_jianghu_battle_log_style_v1");
+    let jianghu_combat_log_contract = tactics_board
+        .get("jianghu_combat_log_contract_version")
+        .and_then(Value::as_str)
+        .unwrap_or("trillionnium_jianghu_combat_log_v1");
     let tactics_board_cells = world_tactics_board_cells_html(&tactics_board);
     let tactics_board_units = world_tactics_units_html(&tactics_board);
     let tactics_objective_markers = world_tactics_objectives_html(&tactics_board);
@@ -2353,7 +2357,7 @@ pub(super) async fn get_world_web_shell(
     </section>
     <section id="world-map-shell-panel" class="panel" data-bootstrap-mode="truncated_runtime_bootstrap_with_lazy_delta_hydration" data-bootstrap-payload-bytes="{world_map_bootstrap_bytes}" data-cache-contract="trillionnium_world_map_payload_cache_v1">
       <div class="map-shell">
-        <section id="trillionnium-tactics-game-shell" class="tactics-game-shell" data-contract-version="trillionnium_open_source_tactics_world_shell_v1" data-tactics-board-contract="{tactics_board_contract}" data-tactics-unit-contract="{tactics_unit_contract}" data-tactics-command-contract="{tactics_command_contract}" data-jianghu-character-contract="{jianghu_character_contract}" data-jianghu-skill-contract="{jianghu_skill_contract}" data-jianghu-npc-command-descriptor-contract="{jianghu_npc_command_descriptor_contract}" data-mentor-training-task-contract="{jianghu_mentor_training_task_contract}" data-jianghu-task-archetype-contract="{jianghu_task_archetype_contract}" data-jianghu-task-completion-contract="{jianghu_task_completion_contract}" data-jianghu-reward-gate-contract="{jianghu_reward_gate_contract}" data-jianghu-battle-log-style-contract="{jianghu_battle_log_style_contract}" data-interface-style="turn_based_strategy_rpg" data-open-source-base="tranchikhang/MedievalWar" data-base-license="MIT" data-base-url="https://github.com/tranchikhang/MedievalWar" data-base-engine="Phaser 3" data-base-patterns="map,cursor,control,turn_system,pathfinding,context_menu,objectives,ai" data-asset-policy="no_proprietary_assets_css_tokens_first" data-map-engine-role="openclawstreetmap_underlay" data-underlay-engine="{map_engine_id}" data-underlay-provider="{tile_provider}" data-source-of-truth="rust_trillionnium_game_state" aria-label="Open-source tactics Trillionnium game shell" data-i18n-aria-label-en="Open-source tactics Trillionnium game shell" data-i18n-aria-label-zh="开源战棋 Trillionnium 游戏界面">
+        <section id="trillionnium-tactics-game-shell" class="tactics-game-shell" data-contract-version="trillionnium_open_source_tactics_world_shell_v1" data-tactics-board-contract="{tactics_board_contract}" data-tactics-unit-contract="{tactics_unit_contract}" data-tactics-command-contract="{tactics_command_contract}" data-jianghu-character-contract="{jianghu_character_contract}" data-jianghu-skill-contract="{jianghu_skill_contract}" data-jianghu-npc-command-descriptor-contract="{jianghu_npc_command_descriptor_contract}" data-mentor-training-task-contract="{jianghu_mentor_training_task_contract}" data-jianghu-task-archetype-contract="{jianghu_task_archetype_contract}" data-jianghu-task-completion-contract="{jianghu_task_completion_contract}" data-jianghu-reward-gate-contract="{jianghu_reward_gate_contract}" data-jianghu-battle-log-style-contract="{jianghu_battle_log_style_contract}" data-jianghu-combat-log-contract="{jianghu_combat_log_contract}" data-interface-style="turn_based_strategy_rpg" data-open-source-base="tranchikhang/MedievalWar" data-base-license="MIT" data-base-url="https://github.com/tranchikhang/MedievalWar" data-base-engine="Phaser 3" data-base-patterns="map,cursor,control,turn_system,pathfinding,context_menu,objectives,ai" data-asset-policy="no_proprietary_assets_css_tokens_first" data-map-engine-role="openclawstreetmap_underlay" data-underlay-engine="{map_engine_id}" data-underlay-provider="{tile_provider}" data-source-of-truth="rust_trillionnium_game_state" aria-label="Open-source tactics Trillionnium game shell" data-i18n-aria-label-en="Open-source tactics Trillionnium game shell" data-i18n-aria-label-zh="开源战棋 Trillionnium 游戏界面">
           <article class="tactics-board-card">
             <div class="tactics-board-title"><span data-i18n-en="【Three Kingdoms Tactics】Mirror Street Battle" data-i18n-zh="【三国战棋】镜像街巷战役">【三国战棋】镜像街巷战役</span><code data-engine-role="underlay" data-underlay-name="OpenClawStreetMap" data-i18n-en="real street engine" data-i18n-zh="真实街巷引擎">真实街巷引擎</code></div>
             <div class="tactics-board" role="grid" aria-label="Trillionnium turn based tactics board" data-i18n-aria-label-en="Trillionnium turn based tactics board" data-i18n-aria-label-zh="Trillionnium 回合制战棋棋盘">
@@ -3249,6 +3253,7 @@ pub(super) async fn get_world_web_shell(
         jianghu_task_completion_contract = escape_html_text(jianghu_task_completion_contract),
         jianghu_reward_gate_contract = escape_html_text(jianghu_reward_gate_contract),
         jianghu_battle_log_style_contract = escape_html_text(jianghu_battle_log_style_contract),
+        jianghu_combat_log_contract = escape_html_text(jianghu_combat_log_contract),
         tactics_board_cells = tactics_board_cells,
         tactics_board_units = tactics_board_units,
         tactics_objective_markers = tactics_objective_markers,

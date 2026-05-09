@@ -32,6 +32,8 @@ pub(super) const TRILLIONNIUM_JIANGHU_REWARD_GATE_CONTRACT_VERSION: &str =
     "trillionnium_jianghu_reward_gate_v1";
 pub(super) const TRILLIONNIUM_JIANGHU_BATTLE_LOG_STYLE_CONTRACT_VERSION: &str =
     "trillionnium_jianghu_battle_log_style_v1";
+pub(super) const TRILLIONNIUM_JIANGHU_COMBAT_LOG_CONTRACT_VERSION: &str =
+    "trillionnium_jianghu_combat_log_v1";
 
 #[derive(Debug, Clone)]
 pub(super) struct JianghuSkillDefinition {
@@ -1110,13 +1112,113 @@ fn jianghu_battle_log_style_json() -> Value {
     })
 }
 
-fn jianghu_battle_log_lines_json(objective_overlay_id: &str) -> Value {
-    json!([
-        {"kind": "base", "text": "> 底座：tranchikhang/MedievalWar MIT · Phaser 3 地图/光标/回合/寻路/目标循环。"},
-        {"kind": "map", "text": "> map: OpenClawStreetMap provides terrain, distance, events, and objectives."},
-        {"kind": "jianghu", "style_contract": TRILLIONNIUM_JIANGHU_BATTLE_LOG_STYLE_CONTRACT_VERSION, "text": "> jianghu: gmud/RMXP-Hero/yxts-llm inspire mechanics only; Rust generates Trillionnium-native battle/task prose without copied Hero Tan text."},
-        {"kind": "objective", "style_key": "mentor_trial", "osm_game_overlay_id": objective_overlay_id, "text": format!("> 目标锚点：{} · 完成权归 Rust command handler / ledger / progression。", objective_overlay_id)}
-    ])
+fn jianghu_combat_log_json(
+    objective_overlay_id: &str,
+    jianghu_character: &Value,
+    task_candidates: &Value,
+) -> Value {
+    let display_name = jianghu_character
+        .get("display_name")
+        .and_then(Value::as_str)
+        .unwrap_or("镜城游侠");
+    let skill_family = jianghu_character
+        .get("known_skills")
+        .and_then(Value::as_array)
+        .and_then(|skills| skills.first())
+        .and_then(|skill| skill.get("family"))
+        .and_then(Value::as_str)
+        .unwrap_or("inner_power");
+    let task_archetype_id = task_candidates
+        .as_array()
+        .and_then(|candidates| candidates.first())
+        .and_then(|candidate| candidate.get("task_archetype_id"))
+        .and_then(Value::as_str)
+        .unwrap_or("courier_letter");
+    let log_id = league_hash_id(
+        "jianghu-combat-log",
+        &format!("{display_name}:{skill_family}:{task_archetype_id}:{objective_overlay_id}"),
+    );
+    let beats = vec![
+        json!({
+            "kind": "stance",
+            "text": format!("镜城风从巷口压低，{display_name}稳住气息，把任务封签收进袖中。"),
+            "skill_family": skill_family,
+            "delta_hp": 0,
+        }),
+        json!({
+            "kind": "exchange",
+            "text": "青石路面映出一瞬虚影，夜巡步斜切半格，证据袋没有离手。",
+            "skill_family": "basic_lightness",
+            "delta_hp": -3,
+        }),
+        json!({
+            "kind": "task_gate",
+            "text": format!("真实街格只提供锚点 {objective_overlay_id}；任务真相、复核和奖励门禁由 Rust 判定。"),
+            "task_archetype_id": task_archetype_id,
+            "osm_game_overlay_id": objective_overlay_id,
+        }),
+        json!({
+            "kind": "result",
+            "text": "战报封存：先验 deliverable，再查 evidence、risk controls、next action 与 self-review；账本结算通过后才释放奖励。",
+            "outcome": "objective_secured_pending_reward_gate",
+        }),
+    ];
+    json!({
+        "contract_version": TRILLIONNIUM_JIANGHU_COMBAT_LOG_CONTRACT_VERSION,
+        "log_id": log_id,
+        "style": "trillionnium_wuxia_log_v1",
+        "style_contract": TRILLIONNIUM_JIANGHU_BATTLE_LOG_STYLE_CONTRACT_VERSION,
+        "template_pack": "trillionnium_native_combat_task_templates_v1",
+        "source_of_truth": "rust_jianghu_combat_log_generator",
+        "content_policy": "trillionnium_native_no_copied_reference_text_assets_or_tables",
+        "source_reference_safety": {
+            "mechanics_reference_only": true,
+            "generated_text_policy": "native_templates_only_no_verbatim_source_reference_strings",
+            "test_gate": "forbid_source_reference_strings_in_generated_beats"
+        },
+        "inputs": {
+            "skill_family": skill_family,
+            "terrain": "market_street",
+            "npc_role": "street_compass_mentor",
+            "task_archetype": task_archetype_id,
+            "outcome": "objective_secured_pending_reward_gate"
+        },
+        "beats": beats,
+        "matrix_projection": {
+            "enabled": true,
+            "card_field": "jianghu_combat_log",
+            "summary_line": "native_wuxia_task_log_visible"
+        },
+        "app_projection": {
+            "enabled": true,
+            "json_field": "jianghu_combat_log",
+            "surface": "client_app.map.tactics_board.combat_log"
+        }
+    })
+}
+
+fn jianghu_battle_log_lines_json(combat_log: &Value) -> Value {
+    let style_contract = combat_log
+        .get("style_contract")
+        .and_then(Value::as_str)
+        .unwrap_or(TRILLIONNIUM_JIANGHU_BATTLE_LOG_STYLE_CONTRACT_VERSION);
+    Value::Array(
+        combat_log
+            .get("beats")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|beat| {
+                json!({
+                    "kind": beat.get("kind").and_then(Value::as_str).unwrap_or("log"),
+                    "style_contract": style_contract,
+                    "text": beat.get("text").and_then(Value::as_str).unwrap_or(""),
+                    "source_of_truth": "rust_jianghu_combat_log_generator",
+                })
+            })
+            .collect::<Vec<_>>(),
+    )
 }
 
 #[derive(Debug, Clone)]
@@ -1928,7 +2030,9 @@ pub(super) fn world_tactics_board_projection_json(
     let mentor_training_task_flows = jianghu_mentor_training_task_flows_json(openstreetmap_geodata);
     let task_archetypes = jianghu_task_archetypes_json(openstreetmap_geodata);
     let task_candidates = jianghu_task_candidates_json(&task_archetypes);
-    let battle_log = jianghu_battle_log_lines_json(&objective_overlay_id);
+    let combat_log =
+        jianghu_combat_log_json(&objective_overlay_id, &jianghu_character, &task_candidates);
+    let battle_log = jianghu_battle_log_lines_json(&combat_log);
     json!({
         "contract_version": TRILLIONNIUM_TACTICS_BOARD_CONTRACT_VERSION,
         "source_of_truth": "rust_trillionnium_game_state",
@@ -1948,6 +2052,7 @@ pub(super) fn world_tactics_board_projection_json(
         "jianghu_task_completion_contract_version": TRILLIONNIUM_JIANGHU_TASK_COMPLETION_CONTRACT_VERSION,
         "jianghu_reward_gate_contract_version": TRILLIONNIUM_JIANGHU_REWARD_GATE_CONTRACT_VERSION,
         "jianghu_battle_log_style_contract_version": TRILLIONNIUM_JIANGHU_BATTLE_LOG_STYLE_CONTRACT_VERSION,
+        "jianghu_combat_log_contract_version": TRILLIONNIUM_JIANGHU_COMBAT_LOG_CONTRACT_VERSION,
         "open_source_base": {
             "repo": "tranchikhang/MedievalWar",
             "license": "MIT",
@@ -1973,6 +2078,7 @@ pub(super) fn world_tactics_board_projection_json(
         "task_archetypes": task_archetypes,
         "task_candidates": task_candidates,
         "battle_log_style": jianghu_battle_log_style_json(),
+        "combat_log": combat_log,
         "npc_relationship_model": {
             "contract_version": "trillionnium_jianghu_npc_relationship_v1",
             "source_of_truth": "rust_jianghu_npc_model",

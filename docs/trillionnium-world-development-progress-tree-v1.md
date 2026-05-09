@@ -432,9 +432,9 @@ Example Trillionnium-native log shape:
 
 Progress tree hooks:
 
-- [ ] TW-3.6e Add combat log generator with original Trillionnium templates.
-- [ ] TW-3.6f Add tests forbidding source-reference strings from being copied verbatim into production fixtures.
-- [ ] TW-3.6g Render combat/task logs in `/world` and Matrix/app projections.
+- [x] TW-3.6e Add combat log generator with original Trillionnium templates.
+- [x] TW-3.6f Add tests forbidding source-reference strings from being copied verbatim into production fixtures.
+- [x] TW-3.6g Render combat/task logs in `/world` and Matrix/app projections.
 
 #### OSM objective source
 
@@ -664,9 +664,9 @@ git log --oneline -5
 - [x] TW-3.6b Generate task candidates from OSM provider semantic roles.
 - [x] TW-3.6c Bind task completion to Rust command handlers, not browser state.
 - [x] TW-3.6d Route eligible rewards through ledger/review-hold/anti-cheese gates.
-- [ ] TW-3.6e Add combat log generator with original Trillionnium templates.
-- [ ] TW-3.6f Add tests forbidding source-reference strings from being copied verbatim into production fixtures.
-- [ ] TW-3.6g Render combat/task logs in `/world` and Matrix/app projections.
+- [x] TW-3.6e Add combat log generator with original Trillionnium templates.
+- [x] TW-3.6f Add tests forbidding source-reference strings from being copied verbatim into production fixtures.
+- [x] TW-3.6g Render combat/task logs in `/world` and Matrix/app projections.
 - [ ] TW-3.7 Bind Jianghu mechanics to tactics units and OSM locations.
   - Example: mentor NPC at an OSM POI, training unlocks tactics skill.
 - [ ] TW-3.7a Add objective generator from `OpenStreetMapDataProvider` features.
@@ -899,7 +899,36 @@ Expected first-slice deliverables:
   - Browser E2E green at `run/league-browser/browser-e2e-summary-1778292160-123302.json`
   - `CEX_ENV_FILE=run/local-production/.env scripts/check-production-readiness.sh` green: `READY production readiness smoke passed`
 - Remaining next:
-  - [ ] TW-3.6e/f/g combat/task log hardening and Matrix/app projection follow-through.
+  - [x] TW-3.6e/f/g combat/task log hardening and Matrix/app projection follow-through.
+  - [ ] TW-3.7+ deterministic tactics combat resolution and NPC relationship persistence.
+
+#### Update 2026-05-09 10:25 CST
+
+- Commit: this checkpoint (`feat: project jianghu combat logs`).
+- Completed next TW-3.6e/f/g slice:
+  - [x] Added `trillionnium_jianghu_combat_log_v1`, a Rust-generated `jianghu_combat_log` payload with native Wuxia/task beats, deterministic log id, style contract, and explicit source-reference safety metadata.
+  - [x] Replaced generated `battle_log` prose that previously mentioned source-reference repo names with Trillionnium-native beats derived from the combat log.
+  - [x] Added tests forbidding copied source-reference strings (`gmud`, `RMXP-Hero`, `yxts-llm`, `Hero Tan`, `tranchikhang/MedievalWar`, `Phaser 3`) inside generated combat-log beat text.
+  - [x] Surfaced the combat/task log through `/world` HTML, `/app` `client_app_json` (`jianghu_combat_log`), and Matrix `/map` card/body fields.
+- Evidence so far:
+  - `cargo fmt --all -- --check`
+  - `cargo check -p consumer-entry-api -p matrix-entry-adapter`
+  - `bash -n scripts/check-trillionnium-league-web-e2e.sh`
+  - `git diff --check`
+  - `cargo test -p consumer-entry-api world_tactics_projection_binds_jianghu_state_to_osm_objectives -- --nocapture` green
+  - `cargo test -p consumer-entry-api web_map_shells_render_live_event_task_focus_metadata -- --nocapture` green
+  - `cargo test -p matrix-entry-adapter route_cards_preserve_focus_node_fields -- --nocapture` green
+  - `cargo test -p consumer-entry-api -- --nocapture` green (`132 passed`)
+  - `cargo test -p matrix-entry-adapter -- --nocapture` green (`36 passed`)
+  - `cargo clippy --workspace -- -D warnings` green
+  - `CEX_ENV_FILE=run/local-production/.env scripts/runtime-manager-linux.sh restart` green
+  - `CEX_ENV_FILE=run/local-production/.env scripts/check-trillionnium-league-web-e2e.sh` green (`run/league-web/web-e2e-summary-1778293829.json`)
+  - `CEX_ENV_FILE=run/local-production/.env scripts/check-trillionnium-league-browser-e2e.sh` green (`run/league-browser/browser-e2e-summary-1778294220-134947.json`)
+  - `CEX_ENV_FILE=run/local-production/.env scripts/check-production-readiness.sh` green (`READY production readiness smoke passed`)
+  - `bash -n scripts/check-matrix-live-room-e2e.sh` green
+  - `CEX_ENV_FILE=run/local-production/.env scripts/check-matrix-live-room-e2e.sh` green (`run/matrix-live/e2e-summary-1778295483.json`, including `world_map_jianghu_combat_log_contract=trillionnium_jianghu_combat_log_v1` and `world_map_jianghu_combat_log_beat_count=4`)
+- Remaining next:
+  - [x] Run production-like runtime/web gates, commit this slice, and append memory.
   - [ ] TW-3.7+ deterministic tactics combat resolution and NPC relationship persistence.
 
 ---
@@ -965,6 +994,6 @@ Also append a one-paragraph summary to `/home/qian/.openclaw/workspace/memory/YY
 
 If the next instruction is simply “continue”, start here:
 
-> **TW-3.6e/f/g + TW-3.7+:** harden native combat/task log generation and source-reference safety, render logs through `/world` + Matrix/app projections, then deepen deterministic tactics combat resolution and NPC relationship persistence.
+> **TW-3.7+:** deepen deterministic tactics combat resolution and NPC relationship persistence after the native combat/task log projection slice.
 
 Do not start live Overpass/Geofabrik ingestion yet. Do not promote MapLibre. Do not convert the web shell into a standalone JS source of truth.

@@ -6421,6 +6421,46 @@ fn build_trillionnium_world_map_matrix_reply(value: &Value) -> Value {
     let route_runner = RouteRunnerHandoffCardContext::from_map_hub(Some(value));
     let route_runner_text_block = route_runner.text_block();
     let route_runner_html_block = route_runner.html_block();
+    let combat_log = value
+        .get("tactics_board")
+        .and_then(|board| board.get("combat_log"));
+    let combat_log_contract = combat_log
+        .and_then(|log| log.get("contract_version"))
+        .and_then(Value::as_str)
+        .unwrap_or("trillionnium_jianghu_combat_log_v1");
+    let combat_log_style = combat_log
+        .and_then(|log| log.get("style"))
+        .and_then(Value::as_str)
+        .unwrap_or("trillionnium_wuxia_log_v1");
+    let combat_log_beats = combat_log
+        .and_then(|log| log.get("beats"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let combat_log_beat_count = combat_log_beats.len();
+    let combat_log_preview = combat_log_beats
+        .iter()
+        .take(2)
+        .filter_map(|beat| beat.get("text").and_then(Value::as_str))
+        .collect::<Vec<_>>()
+        .join(" / ");
+    let combat_log_text_block = if combat_log_preview.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "江湖战报: {combat_log_style} · {combat_log_beat_count} beats · {combat_log_preview}\n"
+        )
+    };
+    let combat_log_html_block = if combat_log_preview.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "<p><strong>江湖战报</strong>: <code>{}</code> · {} beats · {}</p>",
+            escape_html(combat_log_style),
+            combat_log_beat_count,
+            escape_html(&combat_log_preview)
+        )
+    };
     let exits = value
         .get("exits")
         .and_then(Value::as_object)
@@ -6437,23 +6477,24 @@ fn build_trillionnium_world_map_matrix_reply(value: &Value) -> Value {
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "none".to_string());
     let body = format!(
-        "🗺️ Trillionnium World Map\n当前位置：{current_name} ({current_node_id})\n坐标：{x},{y}\n节点：{node_count}\nMap Engine: {map_engine_id} ({tile_provider})\nMirror: {mirror_scope} · Region: {active_region_id}\nRenderer Adapter: {adapter_id} v{adapter_version} · handle {runtime_handle} · future {future_engine}\n{route_text_block}\n{route_runner_text_block}\n出口：{exits}\n{description}\n移动：/go <direction|node-id>",
+        "🗺️ Trillionnium World Map\n当前位置：{current_name} ({current_node_id})\n坐标：{x},{y}\n节点：{node_count}\nMap Engine: {map_engine_id} ({tile_provider})\nMirror: {mirror_scope} · Region: {active_region_id}\nRenderer Adapter: {adapter_id} v{adapter_version} · handle {runtime_handle} · future {future_engine}\n{route_text_block}\n{route_runner_text_block}{combat_log_text_block}出口：{exits}\n{description}\n移动：/go <direction|node-id>",
         adapter_id = &renderer_adapter.adapter_id,
         adapter_version = renderer_adapter.adapter_contract_version,
         runtime_handle = &renderer_adapter.runtime_handle_name,
         future_engine = &renderer_adapter.future_engine_candidate,
         route_text_block = route_text_block,
         route_runner_text_block = route_runner_text_block,
+        combat_log_text_block = combat_log_text_block,
     );
     json!({
         "msgtype": "m.text",
         "body": body,
         "format": "org.matrix.custom.html",
         "formatted_body": format!(
-            "<blockquote><h3>🗺️ Trillionnium World Map</h3><p><strong>当前位置</strong>: {} (<code>{}</code>)</p><p><strong>坐标</strong>: {},{} · <strong>节点</strong>: {}</p><p><strong>Map Engine</strong>: <code>{}</code> · {} · <code>{}</code></p><p><strong>Renderer Adapter</strong>: <code>{}</code> v{} · <code>{}</code> · future <code>{}</code></p>{}{}<p><strong>出口</strong>: {}</p><p>{}</p><p><code>/go &lt;direction|node-id&gt;</code></p></blockquote>",
-            escape_html(current_name), escape_html(current_node_id), x, y, node_count, escape_html(map_engine_id), escape_html(tile_provider), escape_html(active_region_id), escape_html(&renderer_adapter.adapter_id), renderer_adapter.adapter_contract_version, escape_html(&renderer_adapter.runtime_handle_name), escape_html(&renderer_adapter.future_engine_candidate), route_html_block, route_runner_html_block, escape_html(&exits), escape_html(description),
+            "<blockquote><h3>🗺️ Trillionnium World Map</h3><p><strong>当前位置</strong>: {} (<code>{}</code>)</p><p><strong>坐标</strong>: {},{} · <strong>节点</strong>: {}</p><p><strong>Map Engine</strong>: <code>{}</code> · {} · <code>{}</code></p><p><strong>Renderer Adapter</strong>: <code>{}</code> v{} · <code>{}</code> · future <code>{}</code></p>{}{}{}<p><strong>出口</strong>: {}</p><p>{}</p><p><code>/go &lt;direction|node-id&gt;</code></p></blockquote>",
+            escape_html(current_name), escape_html(current_node_id), x, y, node_count, escape_html(map_engine_id), escape_html(tile_provider), escape_html(active_region_id), escape_html(&renderer_adapter.adapter_id), renderer_adapter.adapter_contract_version, escape_html(&renderer_adapter.runtime_handle_name), escape_html(&renderer_adapter.future_engine_candidate), route_html_block, route_runner_html_block, combat_log_html_block, escape_html(&exits), escape_html(description),
         ),
-        "cex_card": route_runner.card_json(route_story_card_json(json!({"type": "trillionnium_world_map", "version": 1, "world": "trillionnium_world", "current_node_id": current_node_id, "current_name": current_name, "node_count": node_count, "x": x, "y": y, "exits": exits, "has_real_world_map_engine": true, "map_engine_id": map_engine_id, "tile_provider": tile_provider, "mirror_scope": mirror_scope, "active_region_id": active_region_id, "map_renderer_adapter_id": renderer_adapter.adapter_id, "map_renderer_adapter_version": renderer_adapter.adapter_contract_version, "map_runtime_handle_name": renderer_adapter.runtime_handle_name, "map_renderer_future_engine_candidate": renderer_adapter.future_engine_candidate, "map_renderer_supports_future_engine_swap": renderer_adapter.supports_future_engine_swap, "map_planned_upgrade_engine_id": renderer_adapter.planned_upgrade_engine_id, "map_planned_upgrade_gating_contract": renderer_adapter.planned_upgrade_gating_contract}), &route, false))
+        "cex_card": route_runner.card_json(route_story_card_json(json!({"type": "trillionnium_world_map", "version": 1, "world": "trillionnium_world", "current_node_id": current_node_id, "current_name": current_name, "node_count": node_count, "x": x, "y": y, "exits": exits, "has_real_world_map_engine": true, "map_engine_id": map_engine_id, "tile_provider": tile_provider, "mirror_scope": mirror_scope, "active_region_id": active_region_id, "map_renderer_adapter_id": renderer_adapter.adapter_id, "map_renderer_adapter_version": renderer_adapter.adapter_contract_version, "map_runtime_handle_name": renderer_adapter.runtime_handle_name, "map_renderer_future_engine_candidate": renderer_adapter.future_engine_candidate, "map_renderer_supports_future_engine_swap": renderer_adapter.supports_future_engine_swap, "map_planned_upgrade_engine_id": renderer_adapter.planned_upgrade_engine_id, "map_planned_upgrade_gating_contract": renderer_adapter.planned_upgrade_gating_contract, "has_jianghu_combat_log": combat_log_beat_count > 0, "jianghu_combat_log_contract": combat_log_contract, "jianghu_combat_log_style": combat_log_style, "jianghu_combat_log_beat_count": combat_log_beat_count, "jianghu_combat_log_matrix_projection": true}), &route, false))
     })
 }
 
@@ -9626,8 +9667,37 @@ mod tests {
             },
             "route_preview": {"item_count": 1, "task_linked_count": 1},
             "route_task_graph": route_task_graph,
-            "route_runner_handoff": route_runner_handoff
+            "route_runner_handoff": route_runner_handoff,
+            "tactics_board": {
+                "combat_log": {
+                    "contract_version": "trillionnium_jianghu_combat_log_v1",
+                    "style": "trillionnium_wuxia_log_v1",
+                    "beats": [
+                        {"kind": "stance", "text": "镜城风从巷口压低，游侠稳住气息。"},
+                        {"kind": "result", "text": "战报封存，账本结算后才释放奖励。"}
+                    ]
+                }
+            }
         }));
+
+        assert!(map_reply
+            .get("body")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .contains("江湖战报:"));
+        let map_card = map_reply.get("cex_card").unwrap();
+        assert_eq!(
+            map_card
+                .get("jianghu_combat_log_contract")
+                .and_then(Value::as_str),
+            Some("trillionnium_jianghu_combat_log_v1")
+        );
+        assert_eq!(
+            map_card
+                .get("jianghu_combat_log_beat_count")
+                .and_then(Value::as_u64),
+            Some(2)
+        );
 
         for reply in [&world_reply, &map_reply] {
             let body = reply.get("body").and_then(Value::as_str).unwrap_or("");

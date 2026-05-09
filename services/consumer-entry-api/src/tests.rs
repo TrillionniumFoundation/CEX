@@ -2377,6 +2377,10 @@ fn world_tactics_projection_binds_jianghu_state_to_osm_objectives() {
         "trillionnium_jianghu_battle_log_style_v1"
     );
     assert_eq!(
+        tactics["jianghu_combat_log_contract_version"],
+        "trillionnium_jianghu_combat_log_v1"
+    );
+    assert_eq!(
         tactics["open_source_base"]["repo"],
         "tranchikhang/MedievalWar"
     );
@@ -2572,11 +2576,56 @@ fn world_tactics_projection_binds_jianghu_state_to_osm_objectives() {
         tactics["battle_log_style"]["contract_version"],
         "trillionnium_jianghu_battle_log_style_v1"
     );
+    assert_eq!(
+        tactics["combat_log"]["contract_version"],
+        "trillionnium_jianghu_combat_log_v1"
+    );
+    assert_eq!(
+        tactics["combat_log"]["template_pack"],
+        "trillionnium_native_combat_task_templates_v1"
+    );
+    assert_eq!(
+        tactics["combat_log"]["source_reference_safety"]["test_gate"],
+        "forbid_source_reference_strings_in_generated_beats"
+    );
+    let combat_log_text = tactics["combat_log"]["beats"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|beat| beat["text"].as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(combat_log_text.contains("镜城风从巷口压低"));
+    for forbidden in [
+        "gmud",
+        "RMXP-Hero",
+        "yxts-llm",
+        "Hero Tan",
+        "tranchikhang/MedievalWar",
+        "Phaser 3",
+    ] {
+        assert!(
+            !combat_log_text.contains(forbidden),
+            "generated combat log copied forbidden source reference string: {forbidden}"
+        );
+    }
     assert!(tactics["battle_log"]
         .as_array()
         .unwrap()
         .iter()
-        .any(|entry| entry["style_contract"] == "trillionnium_jianghu_battle_log_style_v1"));
+        .any(
+            |entry| entry["style_contract"] == "trillionnium_jianghu_battle_log_style_v1"
+                && entry["source_of_truth"] == "rust_jianghu_combat_log_generator"
+        ));
+    let app = client_app_json(&league, "@alice:local.dev");
+    assert_eq!(
+        app["jianghu_combat_log"]["contract_version"],
+        "trillionnium_jianghu_combat_log_v1"
+    );
+    assert_eq!(
+        app["map"]["tactics_board"]["combat_log"]["app_projection"]["json_field"],
+        "jianghu_combat_log"
+    );
     assert_eq!(
         tactics["npc_relationship_model"]["source_of_truth"],
         "rust_jianghu_npc_model"
@@ -3771,6 +3820,10 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(world_html.contains("data-anti-cheese-gate-enforced=\"true\""));
     assert!(world_html.contains("rust_jianghu_task_completion_handler"));
     assert!(world_html.contains("trillionnium_jianghu_battle_log_style_v1"));
+    assert!(world_html.contains("trillionnium_jianghu_combat_log_v1"));
+    assert!(world_html.contains("trillionnium_native_combat_task_templates_v1"));
+    assert!(world_html.contains("native_templates_only_no_verbatim_source_reference_strings"));
+    assert!(world_html.contains("镜城风从巷口压低"));
     assert!(world_html.contains("/world/web/tactics-command"));
     assert!(world_html.contains("/v1/world/tactics/command"));
     assert!(world_html.contains("rust_mentor_training_validator"));
@@ -3807,8 +3860,8 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(
         world_html.contains("data-completion-owner=\"rust_command_handler_ledger_progression\"")
     );
-    assert!(world_html.contains("gmud/RMXP-Hero/yxts-llm"));
-    assert!(world_html.contains("Phaser 3 地图/光标/回合/寻路/目标循环"));
+    assert!(world_html.contains("rust_jianghu_combat_log_generator"));
+    assert!(world_html.contains("真实街格只提供锚点"));
     assert!(world_html.contains("data-openclawstreetmap-role=\"supporting_engine_diagnostics\""));
     assert!(world_html.contains("支撑层，不是主界面"));
     assert!(world_html.contains("world-openstreetmap-geodata"));
