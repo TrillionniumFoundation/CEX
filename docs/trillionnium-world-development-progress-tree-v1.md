@@ -716,7 +716,7 @@ git log --oneline -5
 - [x] TW-6.3 `/world` exposes OSM provider contract and feature cards.
 - [ ] TW-6.4 Make board cells data-driven from Rust projection.
 - [ ] TW-6.5 Add input affordances for unit selection and command drafting.
-- [ ] TW-6.6 Add clear mobile-first game HUD.
+- [x] TW-6.6 Add clear mobile-first game HUD.
   - active unit
   - current objective
   - primary action
@@ -983,6 +983,33 @@ Expected first-slice deliverables:
   - [x] TW-5.4/TW-5.5 first tactics/combat loop: objective progress, victory state, deterministic reward settlement, persisted tick/session state.
   - [x] TW-5.6/TW-5.7/TW-5.8 route/reward/anti-cheese slice: tactics objective sessions bind into route task graph, settled rewards feed route-runner reward history, and repeat farming after settled tactics rewards is blocked server-side.
 
+#### Update 2026-05-09 18:3x CST
+
+- Commit: `feat: expose trillionnium tactics player surfaces` (this slice).
+- Completed next TW-6 player-visible tactics surface slice:
+  - [x] `/world` and `/app` now render `trillionnium_tactics_player_visible_surface_v1` from Rust-owned tactics projection, not browser-owned state.
+  - [x] Both surfaces expose a current tactics objective card with objective id, route task id, progress/goal, victory state, and reward status.
+  - [x] Both surfaces expose current session state with session id, active unit, active overlay, action points, current tick, and simulation tick contract.
+  - [x] Both surfaces expose reward-history handoff with `trillionnium_tactics_reward_history_v1` / reward settlement contracts and route-runner handoff copy.
+  - [x] Both surfaces expose repeat-farming blocked/armed copy under `trillionnium_tactics_repeat_farming_anti_cheese_v1`, keeping browser role as `visualization_input_only`.
+  - [x] Web/browser/UI audit gates now hard-check the `/world` + `/app` tactics player HUD contracts, and `/app` keeps the HUD compact so map/action/onboarding ordering does not regress.
+- Evidence:
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - legacy/double-rename grep guard no output
+  - `cargo test -p consumer-entry-api -- --nocapture` (`133 passed`)
+  - `cargo clippy --workspace -- -D warnings`
+  - `cargo test --workspace`
+  - `CEX_ENV_FILE=run/local-production/.env scripts/runtime-manager-linux.sh restart/status` green
+  - normalized runtime dual-write green (`0021`, write-set audit rows `247`)
+  - SQL snapshot green: `sha256:7f11ddaf957010810c1c0966c68dddf565b78952ef4014c285d4422bd0e5b0d1`
+  - Web E2E green: `run/league-web/web-e2e-summary-1778325490.json`
+  - Browser E2E green: `run/league-browser/browser-e2e-summary-1778325493-358222.json`
+  - UI audit green: `run/trillionnium-ui-audit/ui-audit-summary-1778326086-367189.json`
+- Remaining next:
+  - [ ] TW-6.4/TW-6.5 deeper board-cell interactions and unit-selection/command-drafting affordances.
+  - [ ] TW-6.7 accessibility labels, keyboard traversal, and low-motion support for the tactics shell.
+
 ---
 
 #### Update 2026-05-08 19:1x CST
@@ -1046,6 +1073,6 @@ Also append a one-paragraph summary to `/home/qian/.openclaw/workspace/memory/YY
 
 If the next instruction is simply “continue”, start here:
 
-> **TW-6:** build on the completed tactics storage/route/reward/anti-cheese slice by making the Rust-owned tactics state more visible in the `/world` and `/app` player surfaces: objective card, current session state, reward-history handoff, and repeat-farming blocked-state copy.
+> **TW-6 continued:** after the `/world` + `/app` player-visible tactics HUD slice, continue with deeper board-cell interaction and command-drafting affordances while preserving Rust as the source of truth and browser intent-only semantics.
 
 Do not start live Overpass/Geofabrik ingestion yet. Do not promote MapLibre. Do not convert the web shell into a standalone JS source of truth.

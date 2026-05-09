@@ -489,6 +489,11 @@ async function main() {
   routeRunnerHandoffCoverage.app_feed_contract = assertRouteRunnerHandoffContract(appJson?.feed?.route_runner_handoff, '/app feed JSON');
   routeRunnerHandoffCoverage.app_map_hub_contract = assertRouteRunnerHandoffContract(appJson?.map_hub?.route_runner_handoff, '/app map_hub JSON');
   routeRunnerHandoffCoverage.app_route_summary_dom = await assertRouteRunnerHandoffDom(page, '#app-route-runner-handoff-summary', '/app route summary');
+  assert(await count(page, '#app-tactics-player-hud[data-contract-version="trillionnium_tactics_player_visible_surface_v1"]') === 1, 'app tactics player HUD contract missing');
+  assert(await count(page, '#app-tactics-objective-card[data-session-contract="trillionnium_tactics_game_session_v1"]') === 1, 'app tactics objective card missing');
+  assert(await count(page, '#app-tactics-current-session-card[data-tick-contract="trillionnium_tactics_simulation_tick_v1"]') === 1, 'app tactics current session card missing');
+  assert(await count(page, '#app-tactics-reward-history-handoff[data-reward-history-contract="trillionnium_tactics_reward_history_v1"]') === 1, 'app tactics reward-history handoff missing');
+  assert(await count(page, '#app-tactics-repeat-farming-copy[data-anti-cheese-contract="trillionnium_tactics_repeat_farming_anti_cheese_v1"]') === 1, 'app tactics repeat-farming copy missing');
   assert(await count(page, '#app-mobile-action-sheet[data-contract-version="trillionnium_mobile_single_primary_cta_v1"]') === 1, 'mobile bottom action sheet contract missing');
   assert(await count(page, '#app-mobile-action-sheet [data-primary-cta]') === 1, 'mobile bottom action sheet must expose exactly one primary CTA');
   assert(await page.locator('#app-mobile-primary-cta').first().getAttribute('data-primary-cta-target') === 'app-map-action-rail', 'mobile primary CTA target mismatch');
@@ -582,6 +587,11 @@ async function main() {
   assert(await count(page, '#world-hero-mobile-actions[data-contract-version="trillionnium_mobile_single_primary_cta_v1"][data-primary-cta-count="1"]') === 1, 'world mobile single-primary CTA contract missing');
   assert(await count(page, '#world-mobile-primary-cta.cta') === 1, 'world mobile primary CTA missing');
   assert(await count(page, '#world-mobile-route-first-sheet .world-route-stepper span') === 3, 'world mobile route-first stepper missing');
+  assert(await count(page, '#world-tactics-player-hud[data-contract-version="trillionnium_tactics_player_visible_surface_v1"]') === 1, 'world tactics player HUD contract missing');
+  assert(await count(page, '#world-tactics-objective-card[data-session-contract="trillionnium_tactics_game_session_v1"]') === 1, 'world tactics objective card missing');
+  assert(await count(page, '#world-tactics-current-session-card[data-tick-contract="trillionnium_tactics_simulation_tick_v1"]') === 1, 'world tactics current session card missing');
+  assert(await count(page, '#world-tactics-reward-history-handoff[data-reward-history-contract="trillionnium_tactics_reward_history_v1"]') === 1, 'world tactics reward-history handoff missing');
+  assert(await count(page, '#world-tactics-repeat-farming-copy[data-anti-cheese-contract="trillionnium_tactics_repeat_farming_anti_cheese_v1"]') === 1, 'world tactics repeat-farming copy missing');
   assert(await count(page, '#world-pulse-strip .pulse-card') === 5, 'world pulse strip should keep only compact primary counters visible');
   assert(await count(page, '#world-stats-compact-more .stat') >= 12, 'world compact stats drawer missing secondary counters');
   const pulseBox = await page.locator('#world-pulse-strip').boundingBox({ timeout: 10_000 });

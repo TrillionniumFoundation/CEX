@@ -150,6 +150,305 @@ fn client_app_readiness_label(value: &str) -> String {
     }
 }
 
+fn client_app_first_tactics_route_task(app: &Value) -> Option<&Value> {
+    app.get("map_hub")
+        .and_then(|hub| hub.get("route_task_graph"))
+        .and_then(|graph| graph.get("tasks"))
+        .and_then(Value::as_array)
+        .and_then(|tasks| {
+            tasks.iter().find(|task| {
+                task.get("latest_bucket").and_then(Value::as_str) == Some("tactics_objective")
+                    || task
+                        .get("task_id")
+                        .and_then(Value::as_str)
+                        .map(|task_id| task_id.starts_with("tactics-objective:"))
+                        .unwrap_or(false)
+                    || task.get("tactics_route_task_binding").is_some()
+            })
+        })
+}
+
+fn client_app_tactics_repeat_block_count(tactics_board: &Value, binding: Option<&Value>) -> u64 {
+    binding
+        .and_then(|binding| binding.get("repeat_farming"))
+        .and_then(|repeat| repeat.get("blocked_attempt_count"))
+        .and_then(Value::as_u64)
+        .unwrap_or_else(|| {
+            tactics_board
+                .get("simulation_ticks")
+                .and_then(Value::as_array)
+                .map(|ticks| {
+                    ticks
+                        .iter()
+                        .filter(|tick| {
+                            tick.get("command").and_then(Value::as_str) == Some("attack")
+                                && tick.get("outcome_accepted").and_then(Value::as_bool)
+                                    == Some(false)
+                                && tick.get("outcome_result").and_then(Value::as_str)
+                                    == Some("repeat_farming_blocked")
+                        })
+                        .count() as u64
+                })
+                .unwrap_or(0)
+        })
+}
+
+fn client_app_tactics_reward_history_cards_html(
+    session: &Value,
+    route_task: Option<&Value>,
+    binding: Option<&Value>,
+) -> String {
+    let reward_history = route_task
+        .and_then(|task| task.get("tactics_reward_history"))
+        .and_then(Value::as_array)
+        .or_else(|| {
+            binding
+                .and_then(|binding| binding.get("reward_history"))
+                .and_then(Value::as_array)
+        });
+    if let Some(history) = reward_history {
+        let cards = history
+            .iter()
+            .take(4)
+            .map(|entry| {
+                let stage = entry
+                    .get("stage")
+                    .and_then(Value::as_str)
+                    .unwrap_or("reward_stage");
+                let status = entry
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .unwrap_or("pending");
+                let label = entry
+                    .get("label")
+                    .and_then(Value::as_str)
+                    .unwrap_or(stage);
+                let summary = entry
+                    .get("summary")
+                    .and_then(Value::as_str)
+                    .unwrap_or("Reward history waits for server settlement.");
+                format!(
+                    "<article class=\"module tactics-reward-history-stage\" data-history-stage=\"{}\" data-history-status=\"{}\"><strong>{}</strong><span>{}</span><small>{}</small></article>",
+                    escape_html_text(stage),
+                    escape_html_text(status),
+                    escape_client_app_visible_text(label),
+                    escape_client_app_visible_text(status),
+                    escape_client_app_visible_text(summary),
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        if !cards.trim().is_empty() {
+            return cards;
+        }
+    }
+    let objective_progress = session
+        .get("objective_progress")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let objective_goal = session
+        .get("objective_goal")
+        .and_then(Value::as_i64)
+        .unwrap_or(1)
+        .max(1);
+    let victory_state = session
+        .get("victory_state")
+        .and_then(Value::as_str)
+        .unwrap_or("active");
+    let reward_status = session
+        .get("reward_status")
+        .and_then(Value::as_str)
+        .unwrap_or("not_eligible");
+    format!(
+        "<article class=\"module tactics-reward-history-stage\" data-history-stage=\"objective_progress\" data-history-status=\"{}\"><strong data-i18n-en=\"Tactics objective\" data-i18n-zh=\"战棋目标\">Tactics objective</strong><span>Progress {}/{}</span><small data-i18n-en=\"Rust session owns objective progress.\" data-i18n-zh=\"Rust 会话拥有目标进度。\">Rust session owns objective progress.</small></article>\n<article class=\"module tactics-reward-history-stage\" data-history-stage=\"victory_state\" data-history-status=\"{}\"><strong data-i18n-en=\"Victory state\" data-i18n-zh=\"胜负状态\">Victory state</strong><span>{}</span><small data-i18n-en=\"Browser only shows the result; Rust resolves combat.\" data-i18n-zh=\"浏览器只展示结果；Rust 结算战斗。\">Browser only shows the result; Rust resolves combat.</small></article>\n<article class=\"module tactics-reward-history-stage\" data-history-stage=\"reward_settlement\" data-history-status=\"{}\"><strong data-i18n-en=\"Reward settlement\" data-i18n-zh=\"奖励结算\">Reward settlement</strong><span>{}</span><small data-i18n-en=\"Route-runner history unlocks after server settlement.\" data-i18n-zh=\"服务器结算后解锁路线角色历史。\">Route-runner history unlocks after server settlement.</small></article>",
+        if objective_progress >= objective_goal { "completed" } else { "in_progress" },
+        objective_progress,
+        objective_goal,
+        escape_html_text(victory_state),
+        escape_client_app_visible_text(victory_state),
+        escape_html_text(reward_status),
+        escape_client_app_visible_text(reward_status),
+    )
+}
+
+fn client_app_tactics_player_hud_html(app: &Value) -> String {
+    let null_value = Value::Null;
+    let tactics_board = app
+        .get("map")
+        .and_then(|map| map.get("tactics_board"))
+        .unwrap_or(&null_value);
+    let session = tactics_board.get("game_session").unwrap_or(&Value::Null);
+    let route_task = client_app_first_tactics_route_task(app);
+    let binding = route_task.and_then(|task| task.get("tactics_route_task_binding"));
+    let session_contract = tactics_board
+        .get("tactics_game_session_contract_version")
+        .and_then(Value::as_str)
+        .unwrap_or("trillionnium_tactics_game_session_v1");
+    let tick_contract = tactics_board
+        .get("tactics_simulation_tick_contract_version")
+        .and_then(Value::as_str)
+        .unwrap_or("trillionnium_tactics_simulation_tick_v1");
+    let reward_contract = tactics_board
+        .get("tactics_reward_settlement_contract_version")
+        .and_then(Value::as_str)
+        .unwrap_or("trillionnium_tactics_reward_settlement_v1");
+    let anti_cheese_contract = tactics_board
+        .get("tactics_repeat_farming_anti_cheese_contract_version")
+        .and_then(Value::as_str)
+        .unwrap_or("trillionnium_tactics_repeat_farming_anti_cheese_v1");
+    let reward_history_contract = route_task
+        .and_then(|task| task.get("tactics_reward_history_contract_version"))
+        .and_then(Value::as_str)
+        .or_else(|| {
+            binding
+                .and_then(|binding| binding.get("reward_history_contract_version"))
+                .and_then(Value::as_str)
+        })
+        .unwrap_or("trillionnium_tactics_reward_history_v1");
+    let session_id = session
+        .get("session_id")
+        .and_then(Value::as_str)
+        .unwrap_or("world-tactics-session:projected");
+    let matrix_user_id = session
+        .get("matrix_user_id")
+        .and_then(Value::as_str)
+        .unwrap_or("@alice:local.dev");
+    let objective_id = session
+        .get("objective_id")
+        .and_then(Value::as_str)
+        .unwrap_or("objective:projected");
+    let objective = tactics_board
+        .get("objectives")
+        .and_then(Value::as_array)
+        .and_then(|objectives| {
+            objectives.iter().find(|objective| {
+                objective.get("objective_id").and_then(Value::as_str) == Some(objective_id)
+            })
+        });
+    let objective_label = objective
+        .and_then(|objective| objective.get("label"))
+        .and_then(Value::as_str)
+        .unwrap_or("Real-street objective");
+    let objective_command = objective
+        .and_then(|objective| objective.get("suggested_command"))
+        .and_then(Value::as_str)
+        .unwrap_or("attack");
+    let objective_progress = session
+        .get("objective_progress")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let objective_goal = session
+        .get("objective_goal")
+        .and_then(Value::as_i64)
+        .unwrap_or(1)
+        .max(1);
+    let victory_state = session
+        .get("victory_state")
+        .and_then(Value::as_str)
+        .unwrap_or("active");
+    let reward_status = session
+        .get("reward_status")
+        .and_then(Value::as_str)
+        .unwrap_or("not_eligible");
+    let active_unit = session
+        .get("active_unit_id")
+        .and_then(Value::as_str)
+        .unwrap_or("lord");
+    let active_overlay = session
+        .get("active_overlay_id")
+        .and_then(Value::as_str)
+        .unwrap_or("trillionnium-world-node:mirror-city-square");
+    let action_points = session
+        .get("action_points_remaining")
+        .and_then(Value::as_i64)
+        .unwrap_or(2);
+    let current_tick = session
+        .get("current_tick")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let route_task_id = route_task
+        .and_then(|task| task.get("task_id"))
+        .and_then(Value::as_str)
+        .or_else(|| {
+            binding
+                .and_then(|binding| binding.get("route_task_id"))
+                .and_then(Value::as_str)
+        })
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("tactics-objective:{matrix_user_id}:{objective_id}"));
+    let reward_history_summary = binding
+        .and_then(|binding| binding.get("reward_history_summary"))
+        .and_then(Value::as_str)
+        .or_else(|| {
+            route_task
+                .and_then(|task| task.get("reward_history_summary"))
+                .and_then(Value::as_str)
+        })
+        .unwrap_or(if reward_status == "settled" {
+            "Tactics reward settled and visible in route-runner history."
+        } else {
+            "Tactics reward history is waiting for victory settlement."
+        });
+    let repeat_block_count = client_app_tactics_repeat_block_count(tactics_board, binding);
+    let repeat_copy_en = if repeat_block_count > 0 {
+        format!(
+            "Repeat farming blocked: {repeat_block_count} extra attack intent(s) were rejected after the settled reward."
+        )
+    } else if victory_state == "victory" && reward_status == "settled" {
+        "Repeat farming guard armed: further attacks on this settled objective will be blocked."
+            .to_string()
+    } else {
+        "Repeat farming guard watches settlement; one tactics objective/session can release reward once.".to_string()
+    };
+    let repeat_copy_zh = if repeat_block_count > 0 {
+        format!("反刷已拦截：奖励结算后又拒绝了 {repeat_block_count} 次攻击意图。")
+    } else if victory_state == "victory" && reward_status == "settled" {
+        "反刷守卫已开启：这个已结算目标上的后续攻击会被拦截。".to_string()
+    } else {
+        "反刷守卫等待结算：每个战棋目标/会话只释放一次奖励。".to_string()
+    };
+    let reward_history_cards =
+        client_app_tactics_reward_history_cards_html(session, route_task, binding);
+    format!(
+        "<section id=\"app-tactics-player-hud\" class=\"module app-tactics-player-hud\" data-contract-version=\"trillionnium_tactics_player_visible_surface_v1\" data-surface=\"app\" data-source-of-truth=\"rust_world_tactics_sessions\" data-web-role=\"visualization_input_only\">\n  <strong data-i18n-en=\"Tactics objective\" data-i18n-zh=\"战棋目标\">Tactics objective</strong>\n  <article id=\"app-tactics-objective-card\" class=\"module tactics-objective-card\" data-session-contract=\"{}\" data-objective-id=\"{}\" data-route-task-id=\"{}\" data-objective-progress=\"{}\" data-objective-goal=\"{}\" data-victory-state=\"{}\" data-reward-status=\"{}\"><strong data-i18n-en=\"Current tactics objective\" data-i18n-zh=\"当前战棋目标\">Current tactics objective</strong><span>{}</span><small>progress {}/{} · command {}</small><code>{}</code></article>\n  <article id=\"app-tactics-current-session-card\" class=\"module tactics-session-card\" data-session-id=\"{}\" data-active-unit-id=\"{}\" data-active-overlay-id=\"{}\" data-current-tick=\"{}\" data-action-points-remaining=\"{}\" data-tick-contract=\"{}\"><strong data-i18n-en=\"Current session state\" data-i18n-zh=\"当前会话状态\">Current session state</strong><span>unit {} · AP {} · tick {}</span><small>{} · reward {}</small></article>\n  <article id=\"app-tactics-reward-history-handoff\" class=\"module tactics-reward-history-card\" data-reward-history-contract=\"{}\" data-reward-contract=\"{}\" data-route-task-id=\"{}\" data-reward-status=\"{}\"><strong data-i18n-en=\"Reward-history handoff\" data-i18n-zh=\"奖励历史交接\">Reward-history handoff</strong><span>{}</span><div class=\"grid\">{}</div></article>\n  <article id=\"app-tactics-repeat-farming-copy\" class=\"module tactics-anti-cheese-card\" data-anti-cheese-contract=\"{}\" data-repeat-farming-block-count=\"{}\" data-result=\"{}\" data-gate-owner=\"rust_tactics_repeat_farming_guard\"><strong data-i18n-en=\"Repeat-farming guard\" data-i18n-zh=\"反刷守卫\">Repeat-farming guard</strong><span data-i18n-en=\"{}\" data-i18n-zh=\"{}\">{}</span><small data-i18n-en=\"Browser submits intent only; Rust blocks settled reward farming.\" data-i18n-zh=\"浏览器只提交意图；Rust 拦截已结算奖励的重复刷取。\">Browser submits intent only; Rust blocks settled reward farming.</small></article>\n</section>",
+        escape_html_text(session_contract),
+        escape_html_text(objective_id),
+        escape_html_text(&route_task_id),
+        objective_progress,
+        objective_goal,
+        escape_html_text(victory_state),
+        escape_html_text(reward_status),
+        escape_client_app_visible_text(objective_label),
+        objective_progress,
+        objective_goal,
+        escape_client_app_visible_text(objective_command),
+        escape_html_text(&route_task_id),
+        escape_html_text(session_id),
+        escape_html_text(active_unit),
+        escape_html_text(active_overlay),
+        current_tick,
+        action_points,
+        escape_html_text(tick_contract),
+        escape_html_text(active_unit),
+        action_points,
+        current_tick,
+        escape_html_text(victory_state),
+        escape_html_text(reward_status),
+        escape_html_text(reward_history_contract),
+        escape_html_text(reward_contract),
+        escape_html_text(&route_task_id),
+        escape_html_text(reward_status),
+        escape_client_app_visible_text(reward_history_summary),
+        reward_history_cards,
+        escape_html_text(anti_cheese_contract),
+        repeat_block_count,
+        if repeat_block_count > 0 { "repeat_farming_blocked" } else { "repeat_farming_watch" },
+        escape_html_text(&repeat_copy_en),
+        escape_html_text(&repeat_copy_zh),
+        escape_html_text(&repeat_copy_en),
+    )
+}
+
 pub(super) async fn get_client_app_web_shell(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1025,6 +1324,7 @@ pub(super) async fn get_client_app_web_shell(
         .and_then(|calendar| calendar.get("return_reason"))
         .and_then(Value::as_str)
         .unwrap_or("Queued route payoff, market movement, raid window, and next unlock.");
+    let app_tactics_player_hud = client_app_tactics_player_hud_html(&app);
     let app_bootstrap = trillionnium_slim_map_bootstrap_json(&app, "client_app_web_shell");
     let app_bootstrap_bytes = serde_json::to_string(&app_bootstrap)
         .map(|value| value.len())
@@ -1123,6 +1423,16 @@ pub(super) async fn get_client_app_web_shell(
     @keyframes trillionnium-route-pulse {{ 0%,100% {{ opacity:.55; transform:scale(1); }} 50% {{ opacity:1; transform:scale(1.08); }} }}
     @keyframes trillionnium-runner-bob {{ 0%,100% {{ transform:translateY(0) scale(1); }} 50% {{ transform:translateY(-5px) scale(1.06); }} }}
     .module p,.subtitle {{ color:var(--muted); }}
+    .app-tactics-player-hud {{ grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:8px; padding:10px; max-height:112px; overflow:auto; scrollbar-width:thin; }}
+    .app-tactics-player-hud > strong {{ grid-column:1/-1; font-size:14px; }}
+    .app-tactics-player-hud article.module {{ gap:4px; padding:10px; border-radius:14px; box-shadow:none; }}
+    .app-tactics-player-hud article.module strong {{ font-size:12px; }}
+    .app-tactics-player-hud,
+    .app-tactics-player-hud * {{ min-width:0; max-width:100%; box-sizing:border-box; }}
+    .app-tactics-player-hud article.module span,
+    .app-tactics-player-hud article.module small,
+    .app-tactics-player-hud article.module code {{ font-size:11px; line-height:1.2; overflow-wrap:anywhere; }}
+    .app-tactics-player-hud .tactics-reward-history-card .grid {{ display:none; }}
     .map-panel p {{ color:var(--muted); line-height:1.55; }}
     code {{ color:var(--cyan); background:rgba(100,227,255,.08); padding:3px 7px; border-radius:8px; }}
     a {{ color:var(--gold); }}
@@ -1394,6 +1704,7 @@ pub(super) async fn get_client_app_web_shell(
           </div>
           <a id="app-mobile-primary-cta" class="quest-cta app-mobile-primary-cta" href='#app-map-action-rail' data-primary-cta="world-route-focus" data-primary-cta-target="app-map-action-rail" data-i18n-en="Continue Route" data-i18n-zh="继续路线">Continue Route</a>
         </div>
+        {}
         <div id="app-map-camera-actions" class="overlay-toggle-bar">
 {shared_map_camera_actions_html}
         </div>
@@ -2211,6 +2522,7 @@ pub(super) async fn get_client_app_web_shell(
         map_route_runner_reward_claim_count,
         map_route_runner_next_route_count,
         escape_html_text(map_route_runner_handoff_summary),
+        app_tactics_player_hud,
         escape_html_text(map_engine_name),
         escape_html_text(tile_provider),
         escape_html_text(mirror_scope),

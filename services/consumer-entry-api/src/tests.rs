@@ -3018,6 +3018,45 @@ async fn world_tactics_command_endpoint_validates_training_place_and_mutates_cha
         "settled"
     );
 
+    let app_tactics_html =
+        get_client_app_web_shell(axum::extract::State(state.clone()), HeaderMap::new())
+            .await
+            .0;
+    assert!(app_tactics_html.contains("app-tactics-player-hud"));
+    assert!(app_tactics_html.contains("app-tactics-objective-card"));
+    assert!(app_tactics_html.contains("app-tactics-current-session-card"));
+    assert!(app_tactics_html.contains("app-tactics-reward-history-handoff"));
+    assert!(app_tactics_html.contains("app-tactics-repeat-farming-copy"));
+    assert!(app_tactics_html.contains("data-victory-state=\"victory\""));
+    assert!(app_tactics_html.contains("data-reward-status=\"settled\""));
+    assert!(app_tactics_html.contains("data-repeat-farming-block-count=\"1\""));
+    assert!(app_tactics_html.contains("data-result=\"repeat_farming_blocked\""));
+    assert!(app_tactics_html.contains(
+        "Repeat farming blocked: 1 extra attack intent(s) were rejected after the settled reward."
+    ));
+    assert!(app_tactics_html.contains("trillionnium_tactics_reward_history_v1"));
+
+    let world_tactics_html = get_world_web_shell(
+        axum::extract::State(state.clone()),
+        HeaderMap::new(),
+        axum::extract::Query(HashMap::new()),
+    )
+    .await
+    .0;
+    assert!(world_tactics_html.contains("world-tactics-player-hud"));
+    assert!(world_tactics_html.contains("world-tactics-objective-card"));
+    assert!(world_tactics_html.contains("world-tactics-current-session-card"));
+    assert!(world_tactics_html.contains("world-tactics-reward-history-handoff"));
+    assert!(world_tactics_html.contains("world-tactics-repeat-farming-copy"));
+    assert!(world_tactics_html.contains("data-victory-state=\"victory\""));
+    assert!(world_tactics_html.contains("data-reward-status=\"settled\""));
+    assert!(world_tactics_html.contains("data-repeat-farming-block-count=\"1\""));
+    assert!(world_tactics_html.contains("data-result=\"repeat_farming_blocked\""));
+    assert!(world_tactics_html.contains(
+        "Repeat farming blocked: 1 extra attack intent(s) were rejected after the settled reward."
+    ));
+    assert!(world_tactics_html.contains("trillionnium_tactics_reward_history_v1"));
+
     let (miss_status, miss) = send_json_request(
         &app,
         "POST",
@@ -4224,6 +4263,20 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(app_html.contains("routePlayabilityBody"));
     assert!(app_html.contains("return routeFlowActionButtonHtml(opportunityAction, className) + routeFlowActionButtonHtml(suggestedAction, className);"));
     assert!(app_html.contains("\"contract_version\":1"));
+    assert!(app_html.contains("app-tactics-player-hud"));
+    assert!(app_html.contains("trillionnium_tactics_player_visible_surface_v1"));
+    assert!(app_html.contains("app-tactics-objective-card"));
+    assert!(app_html.contains("app-tactics-current-session-card"));
+    assert!(app_html.contains("app-tactics-reward-history-handoff"));
+    assert!(app_html.contains("app-tactics-repeat-farming-copy"));
+    assert!(app_html.contains("data-source-of-truth=\"rust_world_tactics_sessions\""));
+    assert!(app_html.contains("data-web-role=\"visualization_input_only\""));
+    assert!(app_html
+        .contains("data-reward-history-contract=\"trillionnium_tactics_reward_history_v1\""));
+    assert!(app_html.contains(
+        "data-anti-cheese-contract=\"trillionnium_tactics_repeat_farming_anti_cheese_v1\""
+    ));
+    assert!(app_html.contains("Repeat-farming guard"));
 
     let world_html = get_world_web_shell(
         axum::extract::State(state.clone()),
@@ -4322,6 +4375,20 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(world_html.contains("data-objective-progress=\"0\""));
     assert!(world_html.contains("data-victory-state=\"active\""));
     assert!(world_html.contains("data-reward-status=\"not_eligible\""));
+    assert!(world_html.contains("world-tactics-player-hud"));
+    assert!(world_html.contains("trillionnium_tactics_player_visible_surface_v1"));
+    assert!(world_html.contains("world-tactics-objective-card"));
+    assert!(world_html.contains("world-tactics-current-session-card"));
+    assert!(world_html.contains("world-tactics-reward-history-handoff"));
+    assert!(world_html.contains("world-tactics-repeat-farming-copy"));
+    assert!(world_html.contains("data-source-of-truth=\"rust_world_tactics_sessions\""));
+    assert!(world_html.contains("data-web-role=\"visualization_input_only\""));
+    assert!(world_html
+        .contains("data-reward-history-contract=\"trillionnium_tactics_reward_history_v1\""));
+    assert!(world_html.contains(
+        "data-anti-cheese-contract=\"trillionnium_tactics_repeat_farming_anti_cheese_v1\""
+    ));
+    assert!(world_html.contains("Repeat-farming guard"));
     assert!(world_html
         .contains("data-map-overlay-identity-contract=\"trillionnium_map_overlay_identity_v1\""));
     assert!(world_html.contains("data-objective-contract=\"trillionnium_osm_objective_v1\""));

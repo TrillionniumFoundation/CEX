@@ -130,6 +130,21 @@ function checkRouteRunnerHandoff(result) {
   assertMetric(handoff.hasRewardCopy === true && handoff.hasNextRouteCopy === true, `${result.profile}/${result.name} route-runner handoff copy missing`, handoff);
 }
 
+function checkTacticsPlayerSurface(result) {
+  if (!['app', 'world'].includes(result.name)) return;
+  const surface = result.tacticsPlayerSurface || {};
+  assertMetric(surface.hudPresent === true, `${result.profile}/${result.name} tactics player HUD missing`, surface);
+  assertMetric(surface.contractVersion === 'trillionnium_tactics_player_visible_surface_v1', `${result.profile}/${result.name} tactics player HUD contract missing`, surface);
+  assertMetric(surface.sourceOfTruth === 'rust_world_tactics_sessions', `${result.profile}/${result.name} tactics HUD source-of-truth drifted`, surface);
+  assertMetric(surface.webRole === 'visualization_input_only', `${result.profile}/${result.name} tactics HUD must stay visualization/input-only`, surface);
+  assertMetric(surface.objectivePresent === true && surface.sessionPresent === true, `${result.profile}/${result.name} tactics objective/session cards missing`, surface);
+  assertMetric(surface.sessionContract === 'trillionnium_tactics_game_session_v1', `${result.profile}/${result.name} tactics game-session contract missing`, surface);
+  assertMetric(surface.tickContract === 'trillionnium_tactics_simulation_tick_v1', `${result.profile}/${result.name} tactics simulation-tick contract missing`, surface);
+  assertMetric(surface.rewardPresent === true && surface.rewardHistoryContract === 'trillionnium_tactics_reward_history_v1', `${result.profile}/${result.name} tactics reward-history handoff missing`, surface);
+  assertMetric(surface.repeatPresent === true && surface.antiCheeseContract === 'trillionnium_tactics_repeat_farming_anti_cheese_v1', `${result.profile}/${result.name} tactics repeat-farming contract missing`, surface);
+  assertMetric((surface.repeatText || '').includes('Repeat-farming guard') || (surface.repeatText || '').includes('Repeat farming blocked'), `${result.profile}/${result.name} tactics repeat-farming copy missing`, surface);
+}
+
 function checkMobile(result, limits) {
   assertMetric(result.scrollH <= limits.maxScrollH, `${result.profile}/${result.name} scroll height regressed`, { scrollH: result.scrollH, limit: limits.maxScrollH });
   if (result.name === 'app') {
@@ -424,6 +439,12 @@ async function auditPage(page, profile, target) {
     const appRouteHandoff = document.getElementById('app-route-runner-handoff-summary');
     const appFeedHandoff = document.getElementById('app-feed-route-runner-handoff');
     const worldRouteHandoff = document.getElementById('world-route-runner-handoff-summary');
+    const tacticsPrefix = targetName === 'world' ? 'world' : 'app';
+    const tacticsHud = document.getElementById(`${tacticsPrefix}-tactics-player-hud`);
+    const tacticsObjective = document.getElementById(`${tacticsPrefix}-tactics-objective-card`);
+    const tacticsSession = document.getElementById(`${tacticsPrefix}-tactics-current-session-card`);
+    const tacticsReward = document.getElementById(`${tacticsPrefix}-tactics-reward-history-handoff`);
+    const tacticsRepeat = document.getElementById(`${tacticsPrefix}-tactics-repeat-farming-copy`);
     const appMapReadabilityLod = document.getElementById('app-map-readability-lod');
     const worldMapReadabilityLod = document.getElementById('world-map-readability-lod');
     const mapPerformanceBudgetElement = document.getElementById(targetName === 'world' ? 'world-map-performance-budget' : 'app-map-performance-budget');
@@ -595,6 +616,25 @@ async function auditPage(page, profile, target) {
       hasNextRouteCopy: /next[- ]route/i.test(handoffText),
       text: handoffText.slice(0, 320),
     };
+    const tacticsPlayerSurface = {
+      hudPresent: Boolean(tacticsHud),
+      contractVersion: tacticsHud?.dataset.contractVersion || null,
+      sourceOfTruth: tacticsHud?.dataset.sourceOfTruth || null,
+      webRole: tacticsHud?.dataset.webRole || null,
+      objectivePresent: Boolean(tacticsObjective),
+      sessionPresent: Boolean(tacticsSession),
+      rewardPresent: Boolean(tacticsReward),
+      repeatPresent: Boolean(tacticsRepeat),
+      sessionContract: tacticsObjective?.dataset.sessionContract || null,
+      tickContract: tacticsSession?.dataset.tickContract || null,
+      rewardHistoryContract: tacticsReward?.dataset.rewardHistoryContract || null,
+      antiCheeseContract: tacticsRepeat?.dataset.antiCheeseContract || null,
+      victoryState: tacticsObjective?.dataset.victoryState || null,
+      rewardStatus: tacticsObjective?.dataset.rewardStatus || null,
+      repeatBlockCount: tacticsRepeat?.dataset.repeatFarmingBlockCount || null,
+      repeatText: text(tacticsRepeat).slice(0, 260),
+      text: text(tacticsHud).slice(0, 420),
+    };
     return {
       profile: profileName,
       name: targetName,
@@ -607,6 +647,7 @@ async function auditPage(page, profile, target) {
       smallTouchTargets,
       key,
       routeRunnerHandoff,
+      tacticsPlayerSurface,
       mobilePrimaryCta,
       worldMobilePrimaryCta,
       mobileCopyLayering,
@@ -639,6 +680,7 @@ try {
         result = await auditPage(page, profile, target);
         checkCommon(result);
         checkRouteRunnerHandoff(result);
+        checkTacticsPlayerSurface(result);
         if (profile.name === 'desktop') checkDesktop(result, profile.limits[target.name]);
         else checkMobile(result, profile.limits[target.name]);
         result.ok = true;
