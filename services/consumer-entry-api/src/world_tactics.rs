@@ -34,6 +34,12 @@ pub(super) const TRILLIONNIUM_JIANGHU_BATTLE_LOG_STYLE_CONTRACT_VERSION: &str =
     "trillionnium_jianghu_battle_log_style_v1";
 pub(super) const TRILLIONNIUM_JIANGHU_COMBAT_LOG_CONTRACT_VERSION: &str =
     "trillionnium_jianghu_combat_log_v1";
+pub(super) const TRILLIONNIUM_JIANGHU_NPC_RELATIONSHIP_CONTRACT_VERSION: &str =
+    "trillionnium_jianghu_npc_relationship_v1";
+pub(super) const TRILLIONNIUM_JIANGHU_OSM_OBJECTIVE_CONTRACT_VERSION: &str =
+    "trillionnium_jianghu_osm_objective_v1";
+pub(super) const TRILLIONNIUM_TACTICS_COMBAT_RESOLUTION_CONTRACT_VERSION: &str =
+    "trillionnium_tactics_combat_resolution_v1";
 
 #[derive(Debug, Clone)]
 pub(super) struct JianghuSkillDefinition {
@@ -741,6 +747,15 @@ fn jianghu_task_archetype_fixtures() -> Vec<JianghuTaskArchetypeFixture> {
             log_style_key: "market_parley",
         },
         JianghuTaskArchetypeFixture {
+            task_archetype_id: "defeat_bandit",
+            display_name: "Defeat Bandit / 平定流寇",
+            source_semantic_roles: vec!["arena", "market"],
+            command: "attack",
+            completion_owner: "rust_tactics_combat_handler",
+            reward_gate: "combat_resolution_then_ledger_review_gate",
+            log_style_key: "escort_clash",
+        },
+        JianghuTaskArchetypeFixture {
             task_archetype_id: "sect_training_trial",
             display_name: "Sect Training Trial / 门内试炼",
             source_semantic_roles: vec![
@@ -825,6 +840,182 @@ fn jianghu_task_candidate_for(
         })
 }
 
+fn jianghu_objective_task_for_semantic_role(role: &str) -> Option<&'static str> {
+    match role {
+        "civic_square" | "mentor_home" | "sect_hall" => Some("sect_training_trial"),
+        "ledger_hall" | "market" => Some("market_settlement"),
+        "quest_board" | "workshop" | "arbitration_desk" => Some("find_item"),
+        "delivery_route" => Some("courier_letter"),
+        "arena" => Some("defeat_bandit"),
+        "raid_hall" => Some("escort_route"),
+        _ => None,
+    }
+}
+
+fn jianghu_objective_label_for_role(role: &str) -> &'static str {
+    match role {
+        "civic_square" => "集",
+        "mentor_home" => "师",
+        "ledger_hall" => "账",
+        "sect_hall" => "门",
+        "workshop" => "器",
+        "market" => "市",
+        "quest_board" => "榜",
+        "delivery_route" => "路",
+        "arbitration_desk" => "判",
+        "arena" => "战",
+        "raid_hall" => "盟",
+        _ => "遇",
+    }
+}
+
+fn jianghu_objective_priority_for_role(role: &str) -> i64 {
+    match role {
+        "market" => 100,
+        "arena" => 96,
+        "delivery_route" => 92,
+        "quest_board" => 88,
+        "civic_square" => 84,
+        "mentor_home" => 80,
+        "ledger_hall" => 76,
+        "workshop" => 72,
+        "arbitration_desk" => 68,
+        "sect_hall" => 64,
+        "raid_hall" => 60,
+        _ => 10,
+    }
+}
+
+fn jianghu_osm_objectives_json(
+    world: &WorldState,
+    matrix_user_id: &str,
+    openstreetmap_geodata: &Value,
+) -> Value {
+    let features = openstreetmap_geodata
+        .get("features")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let user_contract_count = world
+        .world_contracts
+        .iter()
+        .filter(|contract| contract.actor_matrix_user_id == matrix_user_id)
+        .count();
+    let user_relationship_count = world
+        .world_relationships
+        .iter()
+        .filter(|relationship| relationship.from_id == matrix_user_id)
+        .count();
+    let mut objectives = Vec::new();
+    for feature in features {
+        let role = feature
+            .get("semantic_role")
+            .and_then(Value::as_str)
+            .unwrap_or("street_encounter");
+        let Some(task_archetype_id) = jianghu_objective_task_for_semantic_role(role) else {
+            continue;
+        };
+        let overlay_id = feature
+            .get("game_overlay_id")
+            .and_then(Value::as_str)
+            .unwrap_or("trillionnium-world-node:unknown");
+        let feature_id = feature
+            .get("feature_id")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown-feature");
+        let objective_kind = feature
+            .get("objective_kind")
+            .and_then(Value::as_str)
+            .unwrap_or("free_roam_encounter");
+        let completion_owner = feature
+            .get("completion_owner")
+            .and_then(Value::as_str)
+            .unwrap_or("rust_world_action_handler");
+        let task_completion_owner = jianghu_task_archetype_by_id(task_archetype_id)
+            .map(|task| task.completion_owner)
+            .unwrap_or(completion_owner);
+        let objective_seed_input = format!(
+            "{}:{}:{}:{}:{}:{}",
+            feature
+                .get("objective_seed")
+                .and_then(Value::as_str)
+                .unwrap_or(feature_id),
+            task_archetype_id,
+            matrix_user_id,
+            user_contract_count,
+            user_relationship_count,
+            OPENSTREETMAP_GEODATA_CONTRACT_VERSION,
+        );
+        let deterministic_seed = league_hash_id("jianghu-objective-seed", &objective_seed_input);
+        let objective_id = league_hash_id(
+            "jianghu-osm-objective",
+            &format!("{feature_id}:{task_archetype_id}:{deterministic_seed}"),
+        );
+        let grid_column = feature
+            .get("game_binding")
+            .and_then(|binding| binding.get("x"))
+            .and_then(Value::as_i64)
+            .unwrap_or(0)
+            .saturating_add(1)
+            .clamp(1, 8);
+        let grid_row = feature
+            .get("game_binding")
+            .and_then(|binding| binding.get("y"))
+            .and_then(Value::as_i64)
+            .unwrap_or(0)
+            .saturating_add(1)
+            .clamp(1, 8);
+        let priority = jianghu_objective_priority_for_role(role);
+        let suggested_command = if task_archetype_id == "defeat_bandit" {
+            "attack"
+        } else if task_archetype_id == "sect_training_trial" {
+            "train_skill"
+        } else {
+            "complete_task"
+        };
+        objectives.push((
+            priority,
+            objective_id.clone(),
+            json!({
+                "contract_version": TRILLIONNIUM_JIANGHU_OSM_OBJECTIVE_CONTRACT_VERSION,
+                "objective_id": objective_id,
+                "label": jianghu_objective_label_for_role(role),
+                "title": format!("{} · {}", objective_kind, task_archetype_id),
+                "grid_column": grid_column,
+                "grid_row": grid_row,
+                "source": "osm_feature",
+                "source_feature_id": feature_id,
+                "source_semantic_role": role,
+                "task_archetype_id": task_archetype_id,
+                "osm_game_overlay_id": overlay_id,
+                "objective_kind": objective_kind,
+                "objective_seed": deterministic_seed,
+                "seed_inputs": {
+                    "provider_objective_seed": feature.get("objective_seed").cloned().unwrap_or(Value::Null),
+                    "matrix_user_id": matrix_user_id,
+                    "user_contract_count": user_contract_count,
+                    "user_relationship_count": user_relationship_count,
+                },
+                "suggested_command": suggested_command,
+                "osm_feature_completion_owner": completion_owner,
+                "completion_owner": task_completion_owner,
+                "osm_can_suggest_objectives": true,
+                "rust_command_handler_decides_completion": true,
+                "requires_open_task_contract": suggested_command == "complete_task",
+                "source_of_truth": "rust_jianghu_osm_objective_generator",
+                "web_role": "visualization_input_only",
+            }),
+        ));
+    }
+    objectives.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(&right.1)));
+    Value::Array(
+        objectives
+            .into_iter()
+            .map(|(_, _, objective)| objective)
+            .collect::<Vec<_>>(),
+    )
+}
+
 fn jianghu_task_archetype_ids_for_capability(capability: &str) -> Vec<&'static str> {
     match capability {
         "offer_patrol_task" => vec!["courier_letter", "escort_route"],
@@ -844,6 +1035,63 @@ fn jianghu_task_archetype_ids_for_capability(capability: &str) -> Vec<&'static s
     }
 }
 
+fn jianghu_npc_relationship_delta(relation_kind: &str, strength: i64) -> i64 {
+    match relation_kind {
+        "jianghu_npc_talk_npc" | "tactics_talk_npc" => 3,
+        "jianghu_npc_offer_task" | "tactics_offer_task" => 5,
+        "jianghu_npc_train_skill" | "tactics_train_skill" => 4,
+        "jianghu_npc_complete_task" | "tactics_complete_task" => 2,
+        _ => strength.clamp(-3, 3),
+    }
+}
+
+fn jianghu_npc_relationship_projection_json(
+    world: &WorldState,
+    matrix_user_id: &str,
+    npc: &JianghuNpcFixture,
+) -> Value {
+    let mut event_count = 0_i64;
+    let mut relationship_delta = 0_i64;
+    let mut last_relation_kind: Option<String> = None;
+    let mut last_updated_at_epoch = 0_i64;
+    for relationship in world.world_relationships.iter().filter(|relationship| {
+        relationship.from_id == matrix_user_id && relationship.to_id == npc.npc_id
+    }) {
+        event_count += 1;
+        relationship_delta +=
+            jianghu_npc_relationship_delta(&relationship.relation_kind, relationship.strength);
+        if relationship.updated_at_epoch >= last_updated_at_epoch {
+            last_updated_at_epoch = relationship.updated_at_epoch;
+            last_relation_kind = Some(relationship.relation_kind.clone());
+        }
+    }
+    let relationship_score = (npc.relationship_seed + relationship_delta).clamp(-100, 100);
+    let trust = (relationship_score / 2 + event_count * 2).clamp(0, 100);
+    let risk_posture = if relationship_score >= 24 {
+        "trusted"
+    } else if relationship_score <= -20 {
+        "hostile"
+    } else {
+        "watchful"
+    };
+    json!({
+        "contract_version": TRILLIONNIUM_JIANGHU_NPC_RELATIONSHIP_CONTRACT_VERSION,
+        "source_of_truth": "rust_world_relationships_persistent_state",
+        "relationship_owner": "rust_jianghu_npc_model",
+        "matrix_user_id": matrix_user_id,
+        "npc_id": npc.npc_id,
+        "seed_relationship": npc.relationship_seed,
+        "relationship_delta": relationship_delta,
+        "relationship_score": relationship_score,
+        "trust": trust,
+        "risk_posture": risk_posture,
+        "event_count": event_count,
+        "last_relation_kind": last_relation_kind,
+        "last_updated_at_epoch": last_updated_at_epoch,
+        "web_role": "visualization_input_only",
+    })
+}
+
 #[derive(Debug, Clone)]
 struct JianghuNpcFixture {
     npc_id: &'static str,
@@ -857,14 +1105,28 @@ struct JianghuNpcFixture {
 }
 
 impl JianghuNpcFixture {
-    fn to_value(&self, features: &[Value]) -> Value {
+    fn to_value(&self, features: &[Value], relationship_state: Value) -> Value {
         let spawn_anchor = osm_anchor_binding_json(features, self.anchor_role, "npc_spawn");
         let command_descriptors = jianghu_npc_command_descriptors_json(self, &spawn_anchor);
         let task_archetype_ids = jianghu_npc_task_archetype_ids(self);
+        let relationship_score = relationship_state
+            .get("relationship_score")
+            .and_then(Value::as_i64)
+            .unwrap_or(self.relationship_seed);
+        let trust = relationship_state
+            .get("trust")
+            .and_then(Value::as_i64)
+            .unwrap_or(0);
+        let risk_posture = relationship_state
+            .get("risk_posture")
+            .and_then(Value::as_str)
+            .unwrap_or("watchful")
+            .to_string();
         json!({
             "contract_version": TRILLIONNIUM_JIANGHU_NPC_CONTRACT_VERSION,
             "spawn_contract_version": TRILLIONNIUM_JIANGHU_NPC_SPAWN_CONTRACT_VERSION,
             "command_descriptor_contract_version": TRILLIONNIUM_JIANGHU_NPC_COMMAND_DESCRIPTOR_CONTRACT_VERSION,
+            "relationship_contract_version": TRILLIONNIUM_JIANGHU_NPC_RELATIONSHIP_CONTRACT_VERSION,
             "npc_id": self.npc_id,
             "display_name": self.display_name,
             "role": self.role,
@@ -874,6 +1136,10 @@ impl JianghuNpcFixture {
             "spawn_anchor": spawn_anchor,
             "npc_spawn_owner": "rust_jianghu_npc_model",
             "relationship_seed": self.relationship_seed,
+            "relationship": relationship_score,
+            "trust": trust,
+            "risk_posture": risk_posture,
+            "relationship_state": relationship_state,
             "schedule": self.schedule,
             "task_capabilities": self.task_capabilities,
             "task_archetype_ids": task_archetype_ids,
@@ -1009,7 +1275,11 @@ fn jianghu_npc_fixtures() -> Vec<JianghuNpcFixture> {
     ]
 }
 
-pub(super) fn jianghu_npc_fixtures_json(openstreetmap_geodata: &Value) -> Value {
+pub(super) fn jianghu_npc_fixtures_json(
+    world: &WorldState,
+    matrix_user_id: &str,
+    openstreetmap_geodata: &Value,
+) -> Value {
     let features = openstreetmap_geodata
         .get("features")
         .and_then(Value::as_array)
@@ -1018,7 +1288,11 @@ pub(super) fn jianghu_npc_fixtures_json(openstreetmap_geodata: &Value) -> Value 
     Value::Array(
         jianghu_npc_fixtures()
             .into_iter()
-            .map(|npc| npc.to_value(&features))
+            .map(|npc| {
+                let relationship_state =
+                    jianghu_npc_relationship_projection_json(world, matrix_user_id, &npc);
+                npc.to_value(&features, relationship_state)
+            })
             .collect::<Vec<_>>(),
     )
 }
@@ -1577,6 +1851,130 @@ fn tactics_command_rejection_json(
     })
 }
 
+#[derive(Debug, Clone)]
+struct TacticsCombatTarget {
+    unit_id: &'static str,
+    title: &'static str,
+    tile_id: &'static str,
+    hp_before: i64,
+    guard: i64,
+    terrain: &'static str,
+    osm_game_overlay_id: Option<String>,
+}
+
+fn tactics_combat_target_for_tile(
+    target_tile: Option<&str>,
+    arena_overlay_id: Option<String>,
+    market_overlay_id: Option<String>,
+) -> Option<TacticsCombatTarget> {
+    match target_tile.unwrap_or("F5") {
+        "F5" => Some(TacticsCombatTarget {
+            unit_id: "market-bandit",
+            title: "流寇 / Bandit",
+            tile_id: "F5",
+            hp_before: 18,
+            guard: 3,
+            terrain: "market",
+            osm_game_overlay_id: market_overlay_id,
+        }),
+        "G7" => Some(TacticsCombatTarget {
+            unit_id: "rival-warlord",
+            title: "敌将 / Rival",
+            tile_id: "G7",
+            hp_before: 30,
+            guard: 7,
+            terrain: "objective",
+            osm_game_overlay_id: arena_overlay_id,
+        }),
+        _ => None,
+    }
+}
+
+fn deterministic_tactics_damage(
+    seed: &str,
+    attributes: &JianghuAttributes,
+    skill_id: &str,
+    guard: i64,
+) -> i64 {
+    let seed_roll = seed.bytes().fold(0_u64, |acc, byte| {
+        acc.wrapping_mul(1_099_511_628_211)
+            .wrapping_add(byte as u64)
+    });
+    let skill_bonus = match skill_id {
+        "basic_unarmed" => 7,
+        "basic_blade" | "basic_sword" => 9,
+        "basic_inner_power" => 5,
+        _ => 3,
+    };
+    let base =
+        attributes.force as i64 + attributes.agility as i64 / 2 + attributes.resolve as i64 / 3;
+    (base + skill_bonus + (seed_roll % 8) as i64 - guard).clamp(3, 64)
+}
+
+fn tactics_combat_resolution_json(
+    world: &WorldState,
+    matrix_user_id: &str,
+    attacker_unit_id: &str,
+    target_tile: Option<&str>,
+    skill_id: &str,
+    attributes: &JianghuAttributes,
+    now_epoch: i64,
+) -> Option<Value> {
+    let nodes: Vec<WorldMapNode> = world.world_map_nodes.values().cloned().collect();
+    let geodata = openstreetmap_geodata_v1_json(&nodes, None);
+    let features = geodata
+        .get("features")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let arena_overlay_id = feature_overlay_id(feature_for_role(&features, "arena"));
+    let market_overlay_id = feature_overlay_id(feature_for_role(&features, "market"));
+    let target = tactics_combat_target_for_tile(target_tile, arena_overlay_id, market_overlay_id)?;
+    let seed = league_hash_id(
+        "tactics-combat-seed",
+        &format!(
+            "{}:{}:{}:{}:{}:{}",
+            matrix_user_id,
+            attacker_unit_id,
+            target.unit_id,
+            target.tile_id,
+            skill_id,
+            target
+                .osm_game_overlay_id
+                .as_deref()
+                .unwrap_or("no-osm-overlay")
+        ),
+    );
+    let damage = deterministic_tactics_damage(&seed, attributes, skill_id, target.guard);
+    let hp_after = target.hp_before.saturating_sub(damage).max(0);
+    let result = if hp_after == 0 {
+        "defender_routed"
+    } else {
+        "hit_landed"
+    };
+    Some(json!({
+        "contract_version": TRILLIONNIUM_TACTICS_COMBAT_RESOLUTION_CONTRACT_VERSION,
+        "combat_resolution_id": league_hash_id("tactics-combat-resolution", &format!("{seed}:{now_epoch}")),
+        "deterministic_seed": seed,
+        "attacker_unit_id": attacker_unit_id,
+        "defender_unit_id": target.unit_id,
+        "defender_title": target.title,
+        "target_tile": target.tile_id,
+        "terrain": target.terrain,
+        "skill_id": skill_id,
+        "damage": damage,
+        "defender_hp_before": target.hp_before,
+        "defender_hp_after": hp_after,
+        "result": result,
+        "osm_game_overlay_id": target.osm_game_overlay_id,
+        "source_of_truth": "rust_tactics_combat_handler",
+        "state_persistence": "world_event_log_now_game_session_hp_state_in_tw4_4",
+        "osm_can_place_encounter": true,
+        "rust_combat_handler_decides_resolution": true,
+        "web_role": "intent_only_visualization_input",
+    }))
+}
+
 pub(super) fn apply_world_tactics_command(
     world: &mut WorldState,
     matrix_user_id: &str,
@@ -1851,6 +2249,48 @@ pub(super) fn apply_world_tactics_command(
                 });
             }
         }
+        if command == "attack" {
+            let attack_skill_id = skill_id
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .or(required_skill_id.as_deref())
+                .unwrap_or("basic_unarmed");
+            let character_attributes = character.attributes.clone();
+            character.title = "街巷交锋".to_string();
+            character.updated_at_epoch = now_epoch;
+            let Some(combat_resolution) = tactics_combat_resolution_json(
+                world,
+                matrix_user_id,
+                unit_id,
+                target_tile,
+                attack_skill_id,
+                &character_attributes,
+                now_epoch,
+            ) else {
+                return tactics_command_rejection_json(
+                    command,
+                    unit_id,
+                    target_tile,
+                    "no_target_unit_at_tile",
+                );
+            };
+            return json!({
+                "contract_version": TRILLIONNIUM_TACTICS_COMMAND_OUTCOME_CONTRACT_VERSION,
+                "accepted": true,
+                "command": command,
+                "unit_id": unit_id,
+                "target_tile": target_tile,
+                "required_skill_id": required_skill_id,
+                "combat_resolution_contract_version": TRILLIONNIUM_TACTICS_COMBAT_RESOLUTION_CONTRACT_VERSION,
+                "combat_resolution": combat_resolution,
+                "validation_owner": descriptor.get("validation_owner").cloned().unwrap_or_else(|| json!("rust_tactics_combat_handler")),
+                "result": "tactics_combat_resolved",
+                "state_mutation": "world_tactics_combat_event_recorded",
+                "source_of_truth": "rust_tactics_combat_handler",
+                "web_role": "intent_only_visualization_input",
+                "updated_at_epoch": now_epoch,
+            });
+        }
         character.updated_at_epoch = now_epoch;
         return json!({
             "contract_version": TRILLIONNIUM_TACTICS_COMMAND_OUTCOME_CONTRACT_VERSION,
@@ -2024,12 +2464,17 @@ pub(super) fn world_tactics_board_projection_json(
     let available_commands = tactics_available_commands_json();
     let training_commands = jianghu_training_commands_json(openstreetmap_geodata);
     let sects = jianghu_sect_fixtures_json(openstreetmap_geodata);
-    let npcs = jianghu_npc_fixtures_json(openstreetmap_geodata);
+    let npcs = jianghu_npc_fixtures_json(world, matrix_user_id, openstreetmap_geodata);
     let npc_spawn_anchors = jianghu_npc_spawn_anchors_json(&npcs);
     let npc_command_descriptors = jianghu_npc_command_descriptors_from_npcs_json(&npcs);
     let mentor_training_task_flows = jianghu_mentor_training_task_flows_json(openstreetmap_geodata);
     let task_archetypes = jianghu_task_archetypes_json(openstreetmap_geodata);
     let task_candidates = jianghu_task_candidates_json(&task_archetypes);
+    let osm_objectives = jianghu_osm_objectives_json(world, matrix_user_id, openstreetmap_geodata);
+    let osm_objective_count = osm_objectives
+        .as_array()
+        .map(|objectives| objectives.len())
+        .unwrap_or(0);
     let combat_log =
         jianghu_combat_log_json(&objective_overlay_id, &jianghu_character, &task_candidates);
     let battle_log = jianghu_battle_log_lines_json(&combat_log);
@@ -2053,6 +2498,9 @@ pub(super) fn world_tactics_board_projection_json(
         "jianghu_reward_gate_contract_version": TRILLIONNIUM_JIANGHU_REWARD_GATE_CONTRACT_VERSION,
         "jianghu_battle_log_style_contract_version": TRILLIONNIUM_JIANGHU_BATTLE_LOG_STYLE_CONTRACT_VERSION,
         "jianghu_combat_log_contract_version": TRILLIONNIUM_JIANGHU_COMBAT_LOG_CONTRACT_VERSION,
+        "jianghu_npc_relationship_contract_version": TRILLIONNIUM_JIANGHU_NPC_RELATIONSHIP_CONTRACT_VERSION,
+        "jianghu_osm_objective_contract_version": TRILLIONNIUM_JIANGHU_OSM_OBJECTIVE_CONTRACT_VERSION,
+        "tactics_combat_resolution_contract_version": TRILLIONNIUM_TACTICS_COMBAT_RESOLUTION_CONTRACT_VERSION,
         "open_source_base": {
             "repo": "tranchikhang/MedievalWar",
             "license": "MIT",
@@ -2077,18 +2525,18 @@ pub(super) fn world_tactics_board_projection_json(
         "mentor_training_task_flows": mentor_training_task_flows,
         "task_archetypes": task_archetypes,
         "task_candidates": task_candidates,
+        "osm_objectives": osm_objectives.clone(),
         "battle_log_style": jianghu_battle_log_style_json(),
         "combat_log": combat_log,
         "npc_relationship_model": {
-            "contract_version": "trillionnium_jianghu_npc_relationship_v1",
-            "source_of_truth": "rust_jianghu_npc_model",
+            "contract_version": TRILLIONNIUM_JIANGHU_NPC_RELATIONSHIP_CONTRACT_VERSION,
+            "source_of_truth": "rust_world_relationships_persistent_state",
             "relationship_seed_owner": "rust_trillionnium_game_state",
+            "relationship_event_owner": "world_relationships",
             "web_role": "visualization_input_only"
         },
         "units": units,
-        "objectives": [
-            {"objective_id": "bounty-gate", "label": "赏", "title": "占领目标 / Objective", "grid_column": 7, "grid_row": 1, "source": "osm_feature", "osm_game_overlay_id": objective_overlay_id, "completion_owner": "rust_command_handler_ledger_progression"}
-        ],
+        "objectives": osm_objectives,
         "available_commands": available_commands,
         "turn_state": {
             "contract_version": "trillionnium_world_tactics_turn_state_v1",
@@ -2104,6 +2552,8 @@ pub(super) fn world_tactics_board_projection_json(
             "provider_contract": "OpenStreetMapDataProvider",
             "geodata_contract_version": OPENSTREETMAP_GEODATA_CONTRACT_VERSION,
             "objective_overlay_id": objective_overlay_id,
+            "objective_contract_version": TRILLIONNIUM_JIANGHU_OSM_OBJECTIVE_CONTRACT_VERSION,
+            "objective_count": osm_objective_count,
             "osm_can_suggest_objectives": true,
             "rust_command_handler_decides_completion": true
         }

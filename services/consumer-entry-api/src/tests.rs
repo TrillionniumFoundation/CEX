@@ -2381,6 +2381,18 @@ fn world_tactics_projection_binds_jianghu_state_to_osm_objectives() {
         "trillionnium_jianghu_combat_log_v1"
     );
     assert_eq!(
+        tactics["jianghu_npc_relationship_contract_version"],
+        "trillionnium_jianghu_npc_relationship_v1"
+    );
+    assert_eq!(
+        tactics["jianghu_osm_objective_contract_version"],
+        "trillionnium_jianghu_osm_objective_v1"
+    );
+    assert_eq!(
+        tactics["tactics_combat_resolution_contract_version"],
+        "trillionnium_tactics_combat_resolution_v1"
+    );
+    assert_eq!(
         tactics["open_source_base"]["repo"],
         "tranchikhang/MedievalWar"
     );
@@ -2572,6 +2584,29 @@ fn world_tactics_projection_binds_jianghu_state_to_osm_objectives() {
                 && candidate["review_hold_gate_enforced"] == true
                 && candidate["anti_cheese_gate_enforced"] == true
         ));
+    assert!(tactics["osm_objectives"].as_array().unwrap().len() >= 5);
+    assert!(tactics["osm_objectives"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(
+            |objective| objective["contract_version"] == "trillionnium_jianghu_osm_objective_v1"
+                && objective["source_of_truth"] == "rust_jianghu_osm_objective_generator"
+                && objective["osm_can_suggest_objectives"] == true
+                && objective["rust_command_handler_decides_completion"] == true
+                && objective["objective_seed"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .starts_with("jianghu-objective-seed-")
+        ));
+    assert_eq!(tactics["objectives"], tactics["osm_objectives"]);
+    let tactics_again = world_tactics_board_projection_json(
+        &league.world,
+        "@alice:local.dev",
+        current_node,
+        &geodata,
+    );
+    assert_eq!(tactics["osm_objectives"], tactics_again["osm_objectives"]);
     assert_eq!(
         tactics["battle_log_style"]["contract_version"],
         "trillionnium_jianghu_battle_log_style_v1"
@@ -2628,7 +2663,11 @@ fn world_tactics_projection_binds_jianghu_state_to_osm_objectives() {
     );
     assert_eq!(
         tactics["npc_relationship_model"]["source_of_truth"],
-        "rust_jianghu_npc_model"
+        "rust_world_relationships_persistent_state"
+    );
+    assert_eq!(
+        tactics["npc_relationship_model"]["contract_version"],
+        "trillionnium_jianghu_npc_relationship_v1"
     );
 }
 
@@ -2688,6 +2727,67 @@ async fn world_tactics_command_endpoint_validates_training_place_and_mutates_cha
     assert_eq!(
         trained["outcome"]["source_of_truth"],
         "rust_mentor_training_validator"
+    );
+
+    let (attack_status, attack) = send_json_request(
+        &app,
+        "POST",
+        "/v1/world/tactics/command",
+        &[],
+        json!({
+            "matrix_user_id": "@alice:local.dev",
+            "room_id": "!world:local.dev",
+            "command": "attack",
+            "unit_id": "lord",
+            "target_tile": "F5",
+            "skill_id": "basic_unarmed",
+            "body": "resolve a deterministic street duel against the market bandit"
+        }),
+    )
+    .await;
+    assert_eq!(attack_status, StatusCode::OK);
+    assert_eq!(attack["outcome"]["accepted"], true);
+    assert_eq!(attack["outcome"]["result"], "tactics_combat_resolved");
+    assert_eq!(
+        attack["outcome"]["combat_resolution_contract_version"],
+        "trillionnium_tactics_combat_resolution_v1"
+    );
+    assert_eq!(
+        attack["outcome"]["combat_resolution"]["source_of_truth"],
+        "rust_tactics_combat_handler"
+    );
+    assert_eq!(
+        attack["outcome"]["combat_resolution"]["defender_unit_id"],
+        "market-bandit"
+    );
+    assert!(
+        attack["outcome"]["combat_resolution"]["damage"]
+            .as_i64()
+            .unwrap_or_default()
+            > 0
+    );
+
+    let (miss_status, miss) = send_json_request(
+        &app,
+        "POST",
+        "/v1/world/tactics/command",
+        &[],
+        json!({
+            "matrix_user_id": "@alice:local.dev",
+            "room_id": "!world:local.dev",
+            "command": "attack",
+            "unit_id": "lord",
+            "target_tile": "A1",
+            "skill_id": "basic_unarmed",
+            "body": "try attacking an empty tile"
+        }),
+    )
+    .await;
+    assert_eq!(miss_status, StatusCode::OK);
+    assert_eq!(miss["outcome"]["accepted"], false);
+    assert_eq!(
+        miss["outcome"]["rejection_reason"],
+        "no_target_unit_at_tile"
     );
 
     let (wrong_npc_status, wrong_npc) = send_json_request(
@@ -2931,6 +3031,41 @@ async fn world_tactics_command_endpoint_validates_training_place_and_mutates_cha
             .ledger_status
             .as_deref()
             .is_some_and(|status| status == "skipped_missing_account")));
+    let nodes: Vec<WorldMapNode> = guard.world.world_map_nodes.values().cloned().collect();
+    let current_node = guard.world.world_map_nodes.get(default_world_node_id());
+    let geodata = openstreetmap_geodata_v1_json(&nodes, current_node);
+    let tactics = world_tactics_board_projection_json(
+        &guard.world,
+        "@alice:local.dev",
+        current_node,
+        &geodata,
+    );
+    let street_compass = tactics["npcs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|npc| npc["npc_id"] == "npc-street-compass-sifu")
+        .unwrap();
+    assert_eq!(
+        street_compass["relationship_contract_version"],
+        "trillionnium_jianghu_npc_relationship_v1"
+    );
+    assert_eq!(
+        street_compass["relationship_state"]["source_of_truth"],
+        "rust_world_relationships_persistent_state"
+    );
+    assert!(
+        street_compass["relationship"].as_i64().unwrap_or_default()
+            > street_compass["relationship_seed"]
+                .as_i64()
+                .unwrap_or_default()
+    );
+    assert!(
+        street_compass["relationship_state"]["event_count"]
+            .as_i64()
+            .unwrap_or_default()
+            >= 1
+    );
 }
 
 #[test]
@@ -3821,6 +3956,15 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(world_html.contains("rust_jianghu_task_completion_handler"));
     assert!(world_html.contains("trillionnium_jianghu_battle_log_style_v1"));
     assert!(world_html.contains("trillionnium_jianghu_combat_log_v1"));
+    assert!(world_html.contains("trillionnium_jianghu_npc_relationship_v1"));
+    assert!(world_html.contains("trillionnium_jianghu_osm_objective_v1"));
+    assert!(world_html.contains("trillionnium_tactics_combat_resolution_v1"));
+    assert!(
+        world_html.contains("data-objective-contract=\"trillionnium_jianghu_osm_objective_v1\"")
+    );
+    assert!(world_html
+        .contains("data-npc-relationship-contract=\"trillionnium_jianghu_npc_relationship_v1\""));
+    assert!(world_html.contains("rust_jianghu_osm_objective_generator"));
     assert!(world_html.contains("trillionnium_native_combat_task_templates_v1"));
     assert!(world_html.contains("native_templates_only_no_verbatim_source_reference_strings"));
     assert!(world_html.contains("镜城风从巷口压低"));

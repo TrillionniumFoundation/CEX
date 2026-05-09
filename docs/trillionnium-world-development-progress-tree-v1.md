@@ -455,9 +455,9 @@ Mapping examples:
 Progress tree hooks:
 
 - [x] TW-1.8a Add OSM semantic role mapping table in Rust.
-- [ ] TW-3.7a Add objective generator from `OpenStreetMapDataProvider` features.
-- [ ] TW-3.7b Add deterministic seed so the same fixture/world state yields stable objectives.
-- [ ] TW-3.7c Add tests proving OSM can suggest objectives but Rust command handlers decide completion.
+- [x] TW-3.7a Add objective generator from `OpenStreetMapDataProvider` features.
+- [x] TW-3.7b Add deterministic seed so the same fixture/world state yields stable objectives.
+- [x] TW-3.7c Add tests proving OSM can suggest objectives but Rust command handlers decide completion.
 
 ---
 
@@ -667,11 +667,11 @@ git log --oneline -5
 - [x] TW-3.6e Add combat log generator with original Trillionnium templates.
 - [x] TW-3.6f Add tests forbidding source-reference strings from being copied verbatim into production fixtures.
 - [x] TW-3.6g Render combat/task logs in `/world` and Matrix/app projections.
-- [ ] TW-3.7 Bind Jianghu mechanics to tactics units and OSM locations.
+- [x] TW-3.7 Bind Jianghu mechanics to tactics units and OSM locations.
   - Example: mentor NPC at an OSM POI, training unlocks tactics skill.
-- [ ] TW-3.7a Add objective generator from `OpenStreetMapDataProvider` features.
-- [ ] TW-3.7b Add deterministic seed so fixture/world state yields stable objectives.
-- [ ] TW-3.7c Add tests proving OSM suggests objectives but Rust command handlers decide completion.
+- [x] TW-3.7a Add objective generator from `OpenStreetMapDataProvider` features.
+- [x] TW-3.7b Add deterministic seed so fixture/world state yields stable objectives.
+- [x] TW-3.7c Add tests proving OSM suggests objectives but Rust command handlers decide completion.
 - [!] TW-3.8 Do not import original Hero Tan Shuo text, maps, sprites, or database content.
 
 ### TW-4 — Rust World domain and simulation backbone
@@ -931,6 +931,30 @@ Expected first-slice deliverables:
   - [x] Run production-like runtime/web gates, commit this slice, and append memory.
   - [ ] TW-3.7+ deterministic tactics combat resolution and NPC relationship persistence.
 
+#### Update 2026-05-09 11:37 CST
+
+- Commit: this checkpoint (`feat: bind jianghu tactics to osm objectives`).
+- Completed next TW-3.7 slice:
+  - [x] Added `trillionnium_jianghu_osm_objective_v1`: `/world` tactics objectives now come from `OpenStreetMapDataProvider` features through a Rust objective generator, not static browser placeholders.
+  - [x] Added deterministic objective seeds from fixture/provider seed + world state + matrix user, and tests proving repeated projection yields stable OSM objectives.
+  - [x] Added `trillionnium_tactics_combat_resolution_v1`: `attack` is now resolved by the Rust tactics combat handler with deterministic target lookup/damage/result metadata; invalid target tiles are rejected server-side.
+  - [x] Added `trillionnium_jianghu_npc_relationship_v1`: NPC cards now project persisted `world_relationships` into relationship/trust/risk state, and accepted talk/training/task/combat commands append relationship events with typed relation kinds.
+  - [x] Surfaced the new OSM-objective / NPC-relationship / combat-resolution contracts in `/world` HTML and Matrix `/map` cards, and hardened web + Matrix E2E gates around those fields.
+- Evidence:
+  - `cargo fmt --all -- --check`
+  - `cargo check -p consumer-entry-api -p matrix-entry-adapter`
+  - `cargo test -p consumer-entry-api -p matrix-entry-adapter -- --nocapture` green (`132 + 36 passed`)
+  - `bash -n scripts/check-trillionnium-league-web-e2e.sh` and `bash -n scripts/check-matrix-live-room-e2e.sh`
+  - `git diff --check`
+  - `CEX_ENV_FILE=run/local-production/.env scripts/runtime-manager-linux.sh restart` green
+  - `CEX_ENV_FILE=run/local-production/.env scripts/check-trillionnium-league-web-e2e.sh` green (`run/league-web/web-e2e-summary-1778297208.json`)
+  - `CEX_ENV_FILE=run/local-production/.env scripts/check-trillionnium-league-browser-e2e.sh` green (`run/league-browser/browser-e2e-summary-1778297217-154346.json`)
+  - `CEX_ENV_FILE=run/local-production/.env scripts/check-matrix-live-room-e2e.sh` green (`run/matrix-live/e2e-summary-1778297800.json`, including `world_map_jianghu_osm_objective_contract`, objective count `11`, NPC relationship contract, and combat resolution contract)
+  - `CEX_ENV_FILE=run/local-production/.env scripts/check-production-readiness.sh` green (`READY production readiness smoke passed`)
+- Remaining next:
+  - [ ] TW-4.4/TW-4.6 persist full tactics game sessions and simulation ticks beyond projected fixture encounters.
+  - [ ] TW-4.5 normalize map node / OSM feature / game overlay relationships instead of repeating identity in ad-hoc JSON.
+
 ---
 
 #### Update 2026-05-08 19:1x CST
@@ -994,6 +1018,6 @@ Also append a one-paragraph summary to `/home/qian/.openclaw/workspace/memory/YY
 
 If the next instruction is simply “continue”, start here:
 
-> **TW-3.7+:** deepen deterministic tactics combat resolution and NPC relationship persistence after the native combat/task log projection slice.
+> **TW-4+:** persist full tactics game sessions and normalize map-node / OSM-feature / game-overlay relationships after the TW-3.7 OSM objective + deterministic combat + NPC relationship slice.
 
 Do not start live Overpass/Geofabrik ingestion yet. Do not promote MapLibre. Do not convert the web shell into a standalone JS source of truth.

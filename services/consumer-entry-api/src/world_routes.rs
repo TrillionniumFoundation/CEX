@@ -1625,21 +1625,41 @@ async fn record_world_tactics_command(
         };
         league.world.world_events.push(event.clone());
         if accepted {
+            let relationship_target = outcome
+                .get("npc_id")
+                .and_then(Value::as_str)
+                .or_else(|| outcome.get("mentor_npc_id").and_then(Value::as_str))
+                .map(ToString::to_string)
+                .or_else(|| payload.npc_id.clone())
+                .or_else(|| payload.skill_id.clone())
+                .or_else(|| payload.task_archetype_id.clone())
+                .or_else(|| payload.unit_id.clone())
+                .unwrap_or_else(|| "lord".to_string());
+            let relationship_kind = if relationship_target.starts_with("npc-") {
+                format!("jianghu_npc_{command}")
+            } else {
+                format!("tactics_{command}")
+            };
+            let relationship_strength = match command.as_str() {
+                "talk_npc" => 3,
+                "train_skill" => 4,
+                "offer_task" => 5,
+                "complete_task" => 2,
+                "attack" => 2,
+                _ => 8,
+            };
             league.world.world_relationships.push(WorldRelationship {
                 relationship_id: league_hash_id(
                     "world-tactics-rel",
-                    &format!("{}:{}:{}", matrix_user_id, command, now),
+                    &format!(
+                        "{}:{}:{}:{}",
+                        matrix_user_id, relationship_target, command, now
+                    ),
                 ),
                 from_id: matrix_user_id.clone(),
-                to_id: payload
-                    .skill_id
-                    .clone()
-                    .or_else(|| payload.npc_id.clone())
-                    .or_else(|| payload.task_archetype_id.clone())
-                    .or_else(|| payload.unit_id.clone())
-                    .unwrap_or_else(|| "lord".to_string()),
-                relation_kind: format!("tactics_{command}"),
-                strength: 8,
+                to_id: relationship_target,
+                relation_kind: relationship_kind,
+                strength: relationship_strength,
                 updated_at_epoch: now,
             });
         }

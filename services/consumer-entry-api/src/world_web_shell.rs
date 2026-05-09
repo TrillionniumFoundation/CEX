@@ -248,12 +248,27 @@ fn world_tactics_objectives_html(tactics_board: &Value) -> String {
                 .get("osm_game_overlay_id")
                 .and_then(Value::as_str)
                 .unwrap_or("none");
+            let contract = objective
+                .get("contract_version")
+                .and_then(Value::as_str)
+                .unwrap_or("trillionnium_jianghu_osm_objective_v1");
+            let completion_owner = objective
+                .get("completion_owner")
+                .and_then(Value::as_str)
+                .unwrap_or("rust_command_handler_ledger_progression");
+            let source_of_truth = objective
+                .get("source_of_truth")
+                .and_then(Value::as_str)
+                .unwrap_or("rust_jianghu_osm_objective_generator");
             format!(
-                "<span class=\"tactics-marker objective\" style=\"grid-column:{};grid-row:{}\" data-objective=\"{}\" data-osm-game-overlay-id=\"{}\" data-completion-owner=\"rust_command_handler_ledger_progression\" title=\"{}\">{}</span>",
+                "<span class=\"tactics-marker objective\" style=\"grid-column:{};grid-row:{}\" data-objective=\"{}\" data-objective-contract=\"{}\" data-osm-game-overlay-id=\"{}\" data-completion-owner=\"{}\" data-source-of-truth=\"{}\" title=\"{}\">{}</span>",
                 grid_column,
                 grid_row,
                 escape_html_text(objective_id),
+                escape_html_text(contract),
                 escape_html_text(overlay_id),
+                escape_html_text(completion_owner),
+                escape_html_text(source_of_truth),
                 escape_html_text(title),
                 escape_world_visible_text(label),
             )
@@ -484,6 +499,19 @@ fn world_jianghu_npc_cards_html(
                 .get("spawn_contract_version")
                 .and_then(Value::as_str)
                 .unwrap_or("trillionnium_jianghu_npc_spawn_anchor_v1");
+            let relationship_contract = npc
+                .get("relationship_contract_version")
+                .and_then(Value::as_str)
+                .unwrap_or("trillionnium_jianghu_npc_relationship_v1");
+            let relationship_score = npc
+                .get("relationship")
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
+            let trust = npc.get("trust").and_then(Value::as_i64).unwrap_or(0);
+            let risk_posture = npc
+                .get("risk_posture")
+                .and_then(Value::as_str)
+                .unwrap_or("watchful");
             let command_forms = npc
                 .get("command_descriptors")
                 .and_then(Value::as_array)
@@ -539,15 +567,21 @@ fn world_jianghu_npc_cards_html(
                 .collect::<Vec<_>>()
                 .join("");
             format!(
-                "<article class=\"mini jianghu-npc-card\" data-npc-id=\"{}\" data-npc-contract=\"{}\" data-npc-spawn-contract=\"{}\" data-sect-id=\"{}\" data-osm-game-overlay-id=\"{}\" data-source-of-truth=\"rust_jianghu_npc_model\"><strong>{}</strong><span>{}</span><small>{}</small><div class=\"jianghu-npc-command-stack\">{}</div></article>",
+                "<article class=\"mini jianghu-npc-card\" data-npc-id=\"{}\" data-npc-contract=\"{}\" data-npc-spawn-contract=\"{}\" data-npc-relationship-contract=\"{}\" data-relationship-score=\"{}\" data-trust=\"{}\" data-risk-posture=\"{}\" data-sect-id=\"{}\" data-osm-game-overlay-id=\"{}\" data-source-of-truth=\"rust_jianghu_npc_model\"><strong>{}</strong><span>{}</span><small>{} · relationship {} · trust {}</small><div class=\"jianghu-npc-command-stack\">{}</div></article>",
                 escape_html_text(npc_id),
                 escape_html_text(contract_version),
                 escape_html_text(spawn_contract_version),
+                escape_html_text(relationship_contract),
+                relationship_score,
+                trust,
+                escape_html_text(risk_posture),
                 escape_html_text(sect_id),
                 escape_html_text(overlay_id),
                 escape_world_visible_text(display_name),
                 escape_world_visible_text(role),
                 escape_html_text(sect_id),
+                relationship_score,
+                trust,
                 command_forms,
             )
         })
@@ -1057,6 +1091,18 @@ pub(super) async fn get_world_web_shell(
         .get("jianghu_combat_log_contract_version")
         .and_then(Value::as_str)
         .unwrap_or("trillionnium_jianghu_combat_log_v1");
+    let jianghu_npc_relationship_contract = tactics_board
+        .get("jianghu_npc_relationship_contract_version")
+        .and_then(Value::as_str)
+        .unwrap_or("trillionnium_jianghu_npc_relationship_v1");
+    let jianghu_osm_objective_contract = tactics_board
+        .get("jianghu_osm_objective_contract_version")
+        .and_then(Value::as_str)
+        .unwrap_or("trillionnium_jianghu_osm_objective_v1");
+    let tactics_combat_resolution_contract = tactics_board
+        .get("tactics_combat_resolution_contract_version")
+        .and_then(Value::as_str)
+        .unwrap_or("trillionnium_tactics_combat_resolution_v1");
     let tactics_board_cells = world_tactics_board_cells_html(&tactics_board);
     let tactics_board_units = world_tactics_units_html(&tactics_board);
     let tactics_objective_markers = world_tactics_objectives_html(&tactics_board);
@@ -2357,7 +2403,7 @@ pub(super) async fn get_world_web_shell(
     </section>
     <section id="world-map-shell-panel" class="panel" data-bootstrap-mode="truncated_runtime_bootstrap_with_lazy_delta_hydration" data-bootstrap-payload-bytes="{world_map_bootstrap_bytes}" data-cache-contract="trillionnium_world_map_payload_cache_v1">
       <div class="map-shell">
-        <section id="trillionnium-tactics-game-shell" class="tactics-game-shell" data-contract-version="trillionnium_open_source_tactics_world_shell_v1" data-tactics-board-contract="{tactics_board_contract}" data-tactics-unit-contract="{tactics_unit_contract}" data-tactics-command-contract="{tactics_command_contract}" data-jianghu-character-contract="{jianghu_character_contract}" data-jianghu-skill-contract="{jianghu_skill_contract}" data-jianghu-npc-command-descriptor-contract="{jianghu_npc_command_descriptor_contract}" data-mentor-training-task-contract="{jianghu_mentor_training_task_contract}" data-jianghu-task-archetype-contract="{jianghu_task_archetype_contract}" data-jianghu-task-completion-contract="{jianghu_task_completion_contract}" data-jianghu-reward-gate-contract="{jianghu_reward_gate_contract}" data-jianghu-battle-log-style-contract="{jianghu_battle_log_style_contract}" data-jianghu-combat-log-contract="{jianghu_combat_log_contract}" data-interface-style="turn_based_strategy_rpg" data-open-source-base="tranchikhang/MedievalWar" data-base-license="MIT" data-base-url="https://github.com/tranchikhang/MedievalWar" data-base-engine="Phaser 3" data-base-patterns="map,cursor,control,turn_system,pathfinding,context_menu,objectives,ai" data-asset-policy="no_proprietary_assets_css_tokens_first" data-map-engine-role="openclawstreetmap_underlay" data-underlay-engine="{map_engine_id}" data-underlay-provider="{tile_provider}" data-source-of-truth="rust_trillionnium_game_state" aria-label="Open-source tactics Trillionnium game shell" data-i18n-aria-label-en="Open-source tactics Trillionnium game shell" data-i18n-aria-label-zh="开源战棋 Trillionnium 游戏界面">
+        <section id="trillionnium-tactics-game-shell" class="tactics-game-shell" data-contract-version="trillionnium_open_source_tactics_world_shell_v1" data-tactics-board-contract="{tactics_board_contract}" data-tactics-unit-contract="{tactics_unit_contract}" data-tactics-command-contract="{tactics_command_contract}" data-jianghu-character-contract="{jianghu_character_contract}" data-jianghu-skill-contract="{jianghu_skill_contract}" data-jianghu-npc-command-descriptor-contract="{jianghu_npc_command_descriptor_contract}" data-mentor-training-task-contract="{jianghu_mentor_training_task_contract}" data-jianghu-task-archetype-contract="{jianghu_task_archetype_contract}" data-jianghu-task-completion-contract="{jianghu_task_completion_contract}" data-jianghu-reward-gate-contract="{jianghu_reward_gate_contract}" data-jianghu-battle-log-style-contract="{jianghu_battle_log_style_contract}" data-jianghu-combat-log-contract="{jianghu_combat_log_contract}" data-jianghu-npc-relationship-contract="{jianghu_npc_relationship_contract}" data-jianghu-osm-objective-contract="{jianghu_osm_objective_contract}" data-tactics-combat-resolution-contract="{tactics_combat_resolution_contract}" data-interface-style="turn_based_strategy_rpg" data-open-source-base="tranchikhang/MedievalWar" data-base-license="MIT" data-base-url="https://github.com/tranchikhang/MedievalWar" data-base-engine="Phaser 3" data-base-patterns="map,cursor,control,turn_system,pathfinding,context_menu,objectives,ai" data-asset-policy="no_proprietary_assets_css_tokens_first" data-map-engine-role="openclawstreetmap_underlay" data-underlay-engine="{map_engine_id}" data-underlay-provider="{tile_provider}" data-source-of-truth="rust_trillionnium_game_state" aria-label="Open-source tactics Trillionnium game shell" data-i18n-aria-label-en="Open-source tactics Trillionnium game shell" data-i18n-aria-label-zh="开源战棋 Trillionnium 游戏界面">
           <article class="tactics-board-card">
             <div class="tactics-board-title"><span data-i18n-en="【Three Kingdoms Tactics】Mirror Street Battle" data-i18n-zh="【三国战棋】镜像街巷战役">【三国战棋】镜像街巷战役</span><code data-engine-role="underlay" data-underlay-name="OpenClawStreetMap" data-i18n-en="real street engine" data-i18n-zh="真实街巷引擎">真实街巷引擎</code></div>
             <div class="tactics-board" role="grid" aria-label="Trillionnium turn based tactics board" data-i18n-aria-label-en="Trillionnium turn based tactics board" data-i18n-aria-label-zh="Trillionnium 回合制战棋棋盘">
@@ -3254,6 +3300,9 @@ pub(super) async fn get_world_web_shell(
         jianghu_reward_gate_contract = escape_html_text(jianghu_reward_gate_contract),
         jianghu_battle_log_style_contract = escape_html_text(jianghu_battle_log_style_contract),
         jianghu_combat_log_contract = escape_html_text(jianghu_combat_log_contract),
+        jianghu_npc_relationship_contract = escape_html_text(jianghu_npc_relationship_contract),
+        jianghu_osm_objective_contract = escape_html_text(jianghu_osm_objective_contract),
+        tactics_combat_resolution_contract = escape_html_text(tactics_combat_resolution_contract),
         tactics_board_cells = tactics_board_cells,
         tactics_board_units = tactics_board_units,
         tactics_objective_markers = tactics_objective_markers,
