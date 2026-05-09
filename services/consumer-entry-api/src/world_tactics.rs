@@ -6,91 +6,133 @@ pub(super) const TRILLIONNIUM_TACTICS_UNIT_CONTRACT_VERSION: &str =
     "trillionnium_world_tactics_unit_v1";
 pub(super) const TRILLIONNIUM_TACTICS_COMMAND_CONTRACT_VERSION: &str =
     "trillionnium_world_tactics_command_v1";
-pub(super) const TRILLIONNIUM_JIANGHU_CHARACTER_CONTRACT_VERSION: &str =
-    "trillionnium_jianghu_character_v1";
-pub(super) const TRILLIONNIUM_JIANGHU_SKILL_CONTRACT_VERSION: &str =
-    "trillionnium_jianghu_skill_v1";
-pub(super) const TRILLIONNIUM_JIANGHU_TRAINING_CONTRACT_VERSION: &str =
-    "trillionnium_jianghu_training_command_v1";
-pub(super) const TRILLIONNIUM_JIANGHU_SECT_CONTRACT_VERSION: &str = "trillionnium_jianghu_sect_v1";
-pub(super) const TRILLIONNIUM_JIANGHU_NPC_CONTRACT_VERSION: &str = "trillionnium_jianghu_npc_v1";
+pub(super) const TRILLIONNIUM_CHARACTER_CONTRACT_VERSION: &str = "trillionnium_character_v1";
+pub(super) const TRILLIONNIUM_SKILL_CONTRACT_VERSION: &str = "trillionnium_skill_v1";
+pub(super) const TRILLIONNIUM_TRAINING_CONTRACT_VERSION: &str = "trillionnium_training_command_v1";
+pub(super) const TRILLIONNIUM_SECT_CONTRACT_VERSION: &str = "trillionnium_sect_v1";
+pub(super) const TRILLIONNIUM_NPC_CONTRACT_VERSION: &str = "trillionnium_npc_v1";
 pub(super) const TRILLIONNIUM_TACTICS_COMMAND_OUTCOME_CONTRACT_VERSION: &str =
     "trillionnium_world_tactics_command_outcome_v1";
-pub(super) const TRILLIONNIUM_JIANGHU_SECT_OSM_BINDING_CONTRACT_VERSION: &str =
-    "trillionnium_jianghu_sect_osm_binding_v1";
-pub(super) const TRILLIONNIUM_JIANGHU_NPC_SPAWN_CONTRACT_VERSION: &str =
-    "trillionnium_jianghu_npc_spawn_anchor_v1";
-pub(super) const TRILLIONNIUM_JIANGHU_NPC_COMMAND_DESCRIPTOR_CONTRACT_VERSION: &str =
-    "trillionnium_jianghu_npc_command_descriptor_v1";
-pub(super) const TRILLIONNIUM_JIANGHU_MENTOR_TRAINING_TASK_CONTRACT_VERSION: &str =
-    "trillionnium_jianghu_mentor_training_task_v1";
-pub(super) const TRILLIONNIUM_JIANGHU_TASK_ARCHETYPE_CONTRACT_VERSION: &str =
-    "trillionnium_jianghu_task_archetype_v1";
-pub(super) const TRILLIONNIUM_JIANGHU_TASK_COMPLETION_CONTRACT_VERSION: &str =
-    "trillionnium_jianghu_task_completion_v1";
-pub(super) const TRILLIONNIUM_JIANGHU_REWARD_GATE_CONTRACT_VERSION: &str =
-    "trillionnium_jianghu_reward_gate_v1";
-pub(super) const TRILLIONNIUM_JIANGHU_BATTLE_LOG_STYLE_CONTRACT_VERSION: &str =
-    "trillionnium_jianghu_battle_log_style_v1";
-pub(super) const TRILLIONNIUM_JIANGHU_COMBAT_LOG_CONTRACT_VERSION: &str =
-    "trillionnium_jianghu_combat_log_v1";
-pub(super) const TRILLIONNIUM_JIANGHU_NPC_RELATIONSHIP_CONTRACT_VERSION: &str =
-    "trillionnium_jianghu_npc_relationship_v1";
-pub(super) const TRILLIONNIUM_JIANGHU_OSM_OBJECTIVE_CONTRACT_VERSION: &str =
-    "trillionnium_jianghu_osm_objective_v1";
+pub(super) const TRILLIONNIUM_SECT_OSM_BINDING_CONTRACT_VERSION: &str =
+    "trillionnium_sect_osm_binding_v1";
+pub(super) const TRILLIONNIUM_NPC_SPAWN_CONTRACT_VERSION: &str = "trillionnium_npc_spawn_anchor_v1";
+pub(super) const TRILLIONNIUM_NPC_COMMAND_DESCRIPTOR_CONTRACT_VERSION: &str =
+    "trillionnium_npc_command_descriptor_v1";
+pub(super) const TRILLIONNIUM_MENTOR_TRAINING_TASK_CONTRACT_VERSION: &str =
+    "trillionnium_mentor_training_task_v1";
+pub(super) const TRILLIONNIUM_TASK_ARCHETYPE_CONTRACT_VERSION: &str =
+    "trillionnium_task_archetype_v1";
+pub(super) const TRILLIONNIUM_TASK_COMPLETION_CONTRACT_VERSION: &str =
+    "trillionnium_task_completion_v1";
+pub(super) const TRILLIONNIUM_REWARD_GATE_CONTRACT_VERSION: &str = "trillionnium_reward_gate_v1";
+pub(super) const TRILLIONNIUM_BATTLE_LOG_STYLE_CONTRACT_VERSION: &str =
+    "trillionnium_battle_log_style_v1";
+pub(super) const TRILLIONNIUM_COMBAT_LOG_CONTRACT_VERSION: &str = "trillionnium_combat_log_v1";
+pub(super) const TRILLIONNIUM_NPC_RELATIONSHIP_CONTRACT_VERSION: &str =
+    "trillionnium_npc_relationship_v1";
+pub(super) const TRILLIONNIUM_OSM_OBJECTIVE_CONTRACT_VERSION: &str =
+    "trillionnium_osm_objective_v1";
 pub(super) const TRILLIONNIUM_TACTICS_COMBAT_RESOLUTION_CONTRACT_VERSION: &str =
     "trillionnium_tactics_combat_resolution_v1";
 pub(super) const TRILLIONNIUM_TACTICS_GAME_SESSION_CONTRACT_VERSION: &str =
     "trillionnium_tactics_game_session_v1";
 pub(super) const TRILLIONNIUM_TACTICS_SIMULATION_TICK_CONTRACT_VERSION: &str =
     "trillionnium_tactics_simulation_tick_v1";
+pub(super) const TRILLIONNIUM_TACTICS_REWARD_SETTLEMENT_CONTRACT_VERSION: &str =
+    "trillionnium_tactics_reward_settlement_v1";
 pub(super) const TRILLIONNIUM_MAP_OVERLAY_IDENTITY_CONTRACT_VERSION: &str =
     "trillionnium_map_overlay_identity_v1";
 
+fn default_tactics_objective_id() -> String {
+    "defeat_market_bandit".to_string()
+}
+
+fn default_tactics_objective_goal() -> i64 {
+    1
+}
+
+fn default_tactics_victory_state() -> String {
+    "active".to_string()
+}
+
+fn default_tactics_reward_status() -> String {
+    "not_eligible".to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct WorldTacticsGameSession {
-    contract_version: String,
-    session_id: String,
-    matrix_user_id: String,
-    room_id: Option<String>,
-    board_id: String,
-    active_node_id: String,
-    active_overlay_id: String,
-    active_unit_id: String,
-    active_side: String,
-    status: String,
-    round: i64,
-    action_points_remaining: i64,
-    current_tick: i64,
-    created_at_epoch: i64,
-    updated_at_epoch: i64,
-    source_of_truth: String,
-    persistence_owner: String,
+    pub(super) contract_version: String,
+    pub(super) session_id: String,
+    pub(super) matrix_user_id: String,
+    pub(super) room_id: Option<String>,
+    pub(super) board_id: String,
+    pub(super) active_node_id: String,
+    pub(super) active_overlay_id: String,
+    pub(super) active_unit_id: String,
+    pub(super) active_side: String,
+    pub(super) status: String,
+    pub(super) round: i64,
+    pub(super) action_points_remaining: i64,
+    pub(super) current_tick: i64,
+    #[serde(default = "default_tactics_objective_id")]
+    pub(super) objective_id: String,
+    #[serde(default)]
+    pub(super) objective_progress: i64,
+    #[serde(default = "default_tactics_objective_goal")]
+    pub(super) objective_goal: i64,
+    #[serde(default = "default_tactics_victory_state")]
+    pub(super) victory_state: String,
+    #[serde(default = "default_tactics_reward_status")]
+    pub(super) reward_status: String,
+    #[serde(default)]
+    pub(super) reward_event_id: Option<String>,
+    #[serde(default)]
+    pub(super) reward_credits_awarded: i64,
+    #[serde(default)]
+    pub(super) reward_xp_awarded: i64,
+    pub(super) created_at_epoch: i64,
+    pub(super) updated_at_epoch: i64,
+    pub(super) source_of_truth: String,
+    pub(super) persistence_owner: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct WorldTacticsSimulationTick {
-    contract_version: String,
-    tick_id: String,
-    session_id: String,
-    matrix_user_id: String,
-    room_id: Option<String>,
-    tick_index: i64,
-    command: String,
-    unit_id: String,
-    target_tile: Option<String>,
-    outcome_result: String,
-    outcome_accepted: bool,
-    simulation_effect: String,
-    round_before: i64,
-    round_after: i64,
-    action_points_before: i64,
-    action_points_after: i64,
-    active_unit_after: String,
-    generated_encounter_id: Option<String>,
-    osm_game_overlay_id: Option<String>,
-    created_at_epoch: i64,
-    source_of_truth: String,
+    pub(super) contract_version: String,
+    pub(super) tick_id: String,
+    pub(super) session_id: String,
+    pub(super) matrix_user_id: String,
+    pub(super) room_id: Option<String>,
+    pub(super) tick_index: i64,
+    pub(super) command: String,
+    pub(super) unit_id: String,
+    pub(super) target_tile: Option<String>,
+    pub(super) outcome_result: String,
+    pub(super) outcome_accepted: bool,
+    pub(super) simulation_effect: String,
+    pub(super) round_before: i64,
+    pub(super) round_after: i64,
+    pub(super) action_points_before: i64,
+    pub(super) action_points_after: i64,
+    #[serde(default = "default_tactics_objective_id")]
+    pub(super) objective_id: String,
+    #[serde(default)]
+    pub(super) objective_progress_before: i64,
+    #[serde(default)]
+    pub(super) objective_progress_after: i64,
+    #[serde(default)]
+    pub(super) objective_delta: i64,
+    #[serde(default = "default_tactics_victory_state")]
+    pub(super) victory_state_before: String,
+    #[serde(default = "default_tactics_victory_state")]
+    pub(super) victory_state_after: String,
+    #[serde(default = "default_tactics_reward_status")]
+    pub(super) reward_status_after: String,
+    pub(super) active_unit_after: String,
+    pub(super) generated_encounter_id: Option<String>,
+    pub(super) osm_game_overlay_id: Option<String>,
+    pub(super) created_at_epoch: i64,
+    pub(super) source_of_truth: String,
 }
 
 fn world_tactics_session_id(matrix_user_id: &str, room_id: Option<&str>) -> String {
@@ -154,6 +196,14 @@ fn world_tactics_default_session(
         round: 1,
         action_points_remaining: 2,
         current_tick: 0,
+        objective_id: default_tactics_objective_id(),
+        objective_progress: 0,
+        objective_goal: default_tactics_objective_goal(),
+        victory_state: default_tactics_victory_state(),
+        reward_status: default_tactics_reward_status(),
+        reward_event_id: None,
+        reward_credits_awarded: 0,
+        reward_xp_awarded: 0,
         created_at_epoch: now_epoch,
         updated_at_epoch: now_epoch,
         source_of_truth: "rust_world_tactics_game_session".to_string(),
@@ -197,6 +247,8 @@ pub(super) fn record_world_tactics_simulation_tick(
         .to_string();
     let tick_index = session.current_tick + 1;
     let action_cost = world_tactics_command_action_cost(command);
+    let objective_progress_before = session.objective_progress;
+    let victory_state_before = session.victory_state.clone();
     if accepted && command == "end_turn" {
         session.round += 1;
         session.action_points_remaining = 2;
@@ -211,6 +263,38 @@ pub(super) fn record_world_tactics_simulation_tick(
         } else {
             "player".to_string()
         };
+    }
+    let objective_delta = if accepted
+        && command == "attack"
+        && outcome
+            .get("combat_resolution")
+            .and_then(|combat| combat.get("result"))
+            .and_then(Value::as_str)
+            == Some("defender_routed")
+        && session.victory_state == "active"
+    {
+        1
+    } else {
+        0
+    };
+    if objective_delta > 0 {
+        session.objective_progress =
+            (session.objective_progress + objective_delta).clamp(0, session.objective_goal.max(1));
+        if session.objective_progress >= session.objective_goal.max(1) {
+            session.victory_state = "victory".to_string();
+            session.status = "victory_pending_reward".to_string();
+            if session.reward_status != "settled" {
+                session.reward_status = "pending_settlement".to_string();
+            }
+        }
+    } else if accepted
+        && command == "end_turn"
+        && session.round > 6
+        && session.victory_state == "active"
+    {
+        session.victory_state = "failure".to_string();
+        session.status = "failed_objective_timeout".to_string();
+        session.reward_status = "not_eligible".to_string();
     }
     session.current_tick = tick_index;
     session.updated_at_epoch = now_epoch;
@@ -250,6 +334,13 @@ pub(super) fn record_world_tactics_simulation_tick(
         round_after: session.round,
         action_points_before: ap_before,
         action_points_after: session.action_points_remaining,
+        objective_id: session.objective_id.clone(),
+        objective_progress_before,
+        objective_progress_after: session.objective_progress,
+        objective_delta,
+        victory_state_before,
+        victory_state_after: session.victory_state.clone(),
+        reward_status_after: session.reward_status.clone(),
         active_unit_after: session.active_unit_id.clone(),
         generated_encounter_id,
         osm_game_overlay_id: Some(session.active_overlay_id.clone()),
@@ -262,6 +353,24 @@ pub(super) fn record_world_tactics_simulation_tick(
         world.world_tactics_simulation_ticks.drain(0..overflow);
     }
     (json!(session), json!(tick))
+}
+
+pub(super) fn mark_world_tactics_reward_settled(
+    world: &mut WorldState,
+    session_id: &str,
+    reward_event_id: &str,
+    reward_credits: i64,
+    reward_xp: i64,
+    now_epoch: i64,
+) -> Option<Value> {
+    let session = world.world_tactics_sessions.get_mut(session_id)?;
+    session.reward_status = "settled".to_string();
+    session.status = "completed".to_string();
+    session.reward_event_id = Some(reward_event_id.to_string());
+    session.reward_credits_awarded = reward_credits;
+    session.reward_xp_awarded = reward_xp;
+    session.updated_at_epoch = now_epoch;
+    Some(json!(session))
 }
 
 fn latest_world_tactics_session_for_user<'a>(
@@ -367,7 +476,7 @@ fn world_map_overlay_identity_index_json(openstreetmap_geodata: &Value) -> Value
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct JianghuSkillDefinition {
+pub(super) struct TrillionniumSkillDefinition {
     skill_id: &'static str,
     family: &'static str,
     name: &'static str,
@@ -379,10 +488,10 @@ pub(super) struct JianghuSkillDefinition {
     training_anchor_role: &'static str,
 }
 
-impl JianghuSkillDefinition {
+impl TrillionniumSkillDefinition {
     fn to_value(&self) -> Value {
         json!({
-            "contract_version": TRILLIONNIUM_JIANGHU_SKILL_CONTRACT_VERSION,
+            "contract_version": TRILLIONNIUM_SKILL_CONTRACT_VERSION,
             "skill_id": self.skill_id,
             "family": self.family,
             "name": self.name,
@@ -392,15 +501,15 @@ impl JianghuSkillDefinition {
             "combat_effect": self.combat_effect,
             "world_effect": self.world_effect,
             "training_anchor_role": self.training_anchor_role,
-            "source_of_truth": "rust_jianghu_skill_definition",
+            "source_of_truth": "rust_trillionnium_skill_definition",
             "content_policy": "trillionnium_native_no_copied_hero_tan_text_assets_or_tables",
         })
     }
 }
 
-fn jianghu_fixture_skill_definitions() -> Vec<JianghuSkillDefinition> {
+fn trillionnium_fixture_skill_definitions() -> Vec<TrillionniumSkillDefinition> {
     vec![
-        JianghuSkillDefinition {
+        TrillionniumSkillDefinition {
             skill_id: "basic_inner_power",
             family: "inner_power",
             name: "Cloud Ledger Breathing / 云账吐纳",
@@ -411,7 +520,7 @@ fn jianghu_fixture_skill_definitions() -> Vec<JianghuSkillDefinition> {
             world_effect: "improve_settlement_recovery_focus",
             training_anchor_role: "mentor_home",
         },
-        JianghuSkillDefinition {
+        TrillionniumSkillDefinition {
             skill_id: "basic_unarmed",
             family: "unarmed",
             name: "Street Compass Palm / 街指南掌",
@@ -422,7 +531,7 @@ fn jianghu_fixture_skill_definitions() -> Vec<JianghuSkillDefinition> {
             world_effect: "resolve_minor_street_encounters",
             training_anchor_role: "civic_square",
         },
-        JianghuSkillDefinition {
+        TrillionniumSkillDefinition {
             skill_id: "basic_blade",
             family: "blade",
             name: "Iron Workshop Blade / 铁坊刀法",
@@ -433,7 +542,7 @@ fn jianghu_fixture_skill_definitions() -> Vec<JianghuSkillDefinition> {
             world_effect: "improve_artifact_repair_tasks",
             training_anchor_role: "workshop",
         },
-        JianghuSkillDefinition {
+        TrillionniumSkillDefinition {
             skill_id: "basic_sword",
             family: "sword",
             name: "Market Wind Sword / 集风剑式",
@@ -444,7 +553,7 @@ fn jianghu_fixture_skill_definitions() -> Vec<JianghuSkillDefinition> {
             world_effect: "improve_negotiation_opening_move",
             training_anchor_role: "market",
         },
-        JianghuSkillDefinition {
+        TrillionniumSkillDefinition {
             skill_id: "basic_lightness",
             family: "lightness",
             name: "Night Watch Steps / 夜巡步",
@@ -455,7 +564,7 @@ fn jianghu_fixture_skill_definitions() -> Vec<JianghuSkillDefinition> {
             world_effect: "reduce_route_travel_friction",
             training_anchor_role: "delivery_route",
         },
-        JianghuSkillDefinition {
+        TrillionniumSkillDefinition {
             skill_id: "reading_and_contracts",
             family: "civil",
             name: "Contract Reading / 契约读法",
@@ -466,7 +575,7 @@ fn jianghu_fixture_skill_definitions() -> Vec<JianghuSkillDefinition> {
             world_effect: "improve_contract_capture_and_review_hold_recovery",
             training_anchor_role: "ledger_hall",
         },
-        JianghuSkillDefinition {
+        TrillionniumSkillDefinition {
             skill_id: "merchant_routecraft",
             family: "commerce",
             name: "Merchant Routecraft / 商路术",
@@ -477,7 +586,7 @@ fn jianghu_fixture_skill_definitions() -> Vec<JianghuSkillDefinition> {
             world_effect: "improve_bounty_pricing_and_route_choice",
             training_anchor_role: "market",
         },
-        JianghuSkillDefinition {
+        TrillionniumSkillDefinition {
             skill_id: "artifact_crafting",
             family: "craft",
             name: "Artifact Crafting / 器作法",
@@ -488,7 +597,7 @@ fn jianghu_fixture_skill_definitions() -> Vec<JianghuSkillDefinition> {
             world_effect: "increase_asset_upgrade_quality_bonus",
             training_anchor_role: "workshop",
         },
-        JianghuSkillDefinition {
+        TrillionniumSkillDefinition {
             skill_id: "streetwise_investigation",
             family: "investigation",
             name: "Streetwise Investigation / 街察术",
@@ -502,24 +611,24 @@ fn jianghu_fixture_skill_definitions() -> Vec<JianghuSkillDefinition> {
     ]
 }
 
-fn jianghu_skill_definition_by_id(skill_id: &str) -> Option<JianghuSkillDefinition> {
-    jianghu_fixture_skill_definitions()
+fn trillionnium_skill_definition_by_id(skill_id: &str) -> Option<TrillionniumSkillDefinition> {
+    trillionnium_fixture_skill_definitions()
         .into_iter()
         .find(|skill| skill.skill_id == skill_id)
 }
 
-pub(super) fn jianghu_skill_definitions_json() -> Value {
+pub(super) fn trillionnium_skill_definitions_json() -> Value {
     Value::Array(
-        jianghu_fixture_skill_definitions()
+        trillionnium_fixture_skill_definitions()
             .into_iter()
             .map(|skill| skill.to_value())
             .collect::<Vec<_>>(),
     )
 }
 
-fn jianghu_known_skill_definitions_json(skill_ids: &[String]) -> Value {
+fn trillionnium_known_skill_definitions_json(skill_ids: &[String]) -> Value {
     Value::Array(
-        jianghu_fixture_skill_definitions()
+        trillionnium_fixture_skill_definitions()
             .into_iter()
             .filter(|skill| skill_ids.iter().any(|skill_id| skill_id == skill.skill_id))
             .map(|skill| skill.to_value())
@@ -528,18 +637,18 @@ fn jianghu_known_skill_definitions_json(skill_ids: &[String]) -> Value {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(super) struct JianghuAttributes {
-    physique: u16,
-    force: u16,
-    agility: u16,
-    insight: u16,
-    resolve: u16,
-    craft: u16,
-    commerce: u16,
-    reputation: i32,
+pub(super) struct TrillionniumAttributes {
+    pub(super) physique: u16,
+    pub(super) force: u16,
+    pub(super) agility: u16,
+    pub(super) insight: u16,
+    pub(super) resolve: u16,
+    pub(super) craft: u16,
+    pub(super) commerce: u16,
+    pub(super) reputation: i32,
 }
 
-impl Default for JianghuAttributes {
+impl Default for TrillionniumAttributes {
     fn default() -> Self {
         Self {
             physique: 12,
@@ -554,7 +663,7 @@ impl Default for JianghuAttributes {
     }
 }
 
-impl JianghuAttributes {
+impl TrillionniumAttributes {
     fn derived_stats_json(&self) -> Value {
         let max_hp = 80 + self.physique as i64 * 6 + self.resolve as i64 * 2;
         let inner_energy = 40 + self.resolve as i64 * 5 + self.insight as i64 * 2;
@@ -588,26 +697,26 @@ impl JianghuAttributes {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(super) struct WorldJianghuCharacter {
-    matrix_user_id: String,
-    character_id: String,
-    display_name: String,
-    attributes: JianghuAttributes,
-    sect_id: Option<String>,
-    title: String,
-    skill_ids: Vec<String>,
-    updated_at_epoch: i64,
+pub(super) struct WorldTrillionniumCharacter {
+    pub(super) matrix_user_id: String,
+    pub(super) character_id: String,
+    pub(super) display_name: String,
+    pub(super) attributes: TrillionniumAttributes,
+    pub(super) sect_id: Option<String>,
+    pub(super) title: String,
+    pub(super) skill_ids: Vec<String>,
+    pub(super) updated_at_epoch: i64,
 }
 
-impl WorldJianghuCharacter {
+impl WorldTrillionniumCharacter {
     fn default_for(matrix_user_id: &str) -> Self {
         Self {
             matrix_user_id: matrix_user_id.to_string(),
-            character_id: league_hash_id("jianghu-character", matrix_user_id),
+            character_id: league_hash_id("trillionnium-character", matrix_user_id),
             display_name: "镜城游侠".to_string(),
-            attributes: JianghuAttributes::default(),
+            attributes: TrillionniumAttributes::default(),
             sect_id: None,
-            title: "初入江湖".to_string(),
+            title: "初入Trillionnium".to_string(),
             skill_ids: vec![
                 "basic_inner_power".to_string(),
                 "basic_lightness".to_string(),
@@ -619,7 +728,7 @@ impl WorldJianghuCharacter {
 
     fn to_projection_json(&self) -> Value {
         json!({
-            "contract_version": TRILLIONNIUM_JIANGHU_CHARACTER_CONTRACT_VERSION,
+            "contract_version": TRILLIONNIUM_CHARACTER_CONTRACT_VERSION,
             "source_of_truth": "rust_trillionnium_game_state",
             "mechanics_reference_layer": "gmud_rmxp_hero_yxts_llm_reference_only",
             "content_policy": "trillionnium_native_no_copied_hero_tan_text_assets_or_tables",
@@ -630,8 +739,8 @@ impl WorldJianghuCharacter {
             "sect_id": &self.sect_id,
             "attributes": self.attributes.to_value(),
             "skill_ids": &self.skill_ids,
-            "known_skills": jianghu_known_skill_definitions_json(&self.skill_ids),
-            "skill_definition_contract": TRILLIONNIUM_JIANGHU_SKILL_CONTRACT_VERSION,
+            "known_skills": trillionnium_known_skill_definitions_json(&self.skill_ids),
+            "skill_definition_contract": TRILLIONNIUM_SKILL_CONTRACT_VERSION,
             "skill_families": [
                 "basic_inner_power",
                 "basic_unarmed",
@@ -654,15 +763,15 @@ impl WorldJianghuCharacter {
     }
 }
 
-pub(super) fn world_jianghu_character_projection_json(
+pub(super) fn world_trillionnium_character_projection_json(
     world: &WorldState,
     matrix_user_id: &str,
 ) -> Value {
     world
-        .world_jianghu_characters
+        .world_trillionnium_characters
         .get(matrix_user_id)
         .cloned()
-        .unwrap_or_else(|| WorldJianghuCharacter::default_for(matrix_user_id))
+        .unwrap_or_else(|| WorldTrillionniumCharacter::default_for(matrix_user_id))
         .to_projection_json()
 }
 
@@ -728,9 +837,9 @@ fn osm_anchor_binding_json(features: &[Value], role: &str, binding_kind: &str) -
         .map(ToString::to_string);
     json!({
         "contract_version": match binding_kind {
-            "sect_hall" => TRILLIONNIUM_JIANGHU_SECT_OSM_BINDING_CONTRACT_VERSION,
-            "npc_spawn" => TRILLIONNIUM_JIANGHU_NPC_SPAWN_CONTRACT_VERSION,
-            _ => "trillionnium_jianghu_osm_anchor_binding_v1",
+            "sect_hall" => TRILLIONNIUM_SECT_OSM_BINDING_CONTRACT_VERSION,
+            "npc_spawn" => TRILLIONNIUM_NPC_SPAWN_CONTRACT_VERSION,
+            _ => "trillionnium_osm_anchor_binding_v1",
         },
         "binding_kind": binding_kind,
         "semantic_role": role,
@@ -760,7 +869,7 @@ fn osm_anchor_overlay_id(anchor: &Value) -> Option<String> {
 }
 
 #[derive(Debug, Clone)]
-struct JianghuTrainingCommand {
+struct TrillionniumTrainingCommand {
     skill_id: &'static str,
     mentor_npc_id: &'static str,
     required_semantic_role: &'static str,
@@ -768,17 +877,17 @@ struct JianghuTrainingCommand {
     cooldown_seconds: i64,
 }
 
-impl JianghuTrainingCommand {
+impl TrillionniumTrainingCommand {
     fn to_value(&self, features: &[Value]) -> Value {
         let anchor_overlay_id = feature_overlay_id_for_role(features, self.required_semantic_role)
             .unwrap_or_else(|| "trillionnium-world-node:mirror-city-square".to_string());
         json!({
-            "contract_version": TRILLIONNIUM_JIANGHU_TRAINING_CONTRACT_VERSION,
+            "contract_version": TRILLIONNIUM_TRAINING_CONTRACT_VERSION,
             "command": "train_skill",
             "skill_id": self.skill_id,
             "mentor_npc_id": self.mentor_npc_id,
             "mentor_training_task_flow_id": format!("mentor-training:{}", self.skill_id),
-            "mentor_training_task_contract_version": TRILLIONNIUM_JIANGHU_MENTOR_TRAINING_TASK_CONTRACT_VERSION,
+            "mentor_training_task_contract_version": TRILLIONNIUM_MENTOR_TRAINING_TASK_CONTRACT_VERSION,
             "required_semantic_role": self.required_semantic_role,
             "required_osm_game_overlay_id": anchor_overlay_id,
             "cost_xp": self.cost_xp,
@@ -790,51 +899,51 @@ impl JianghuTrainingCommand {
     }
 }
 
-fn jianghu_training_command_fixtures() -> Vec<JianghuTrainingCommand> {
+fn trillionnium_training_command_fixtures() -> Vec<TrillionniumTrainingCommand> {
     vec![
-        JianghuTrainingCommand {
+        TrillionniumTrainingCommand {
             skill_id: "basic_inner_power",
             mentor_npc_id: "npc-cloud-ledger-mentor",
             required_semantic_role: "mentor_home",
             cost_xp: 12,
             cooldown_seconds: 600,
         },
-        JianghuTrainingCommand {
+        TrillionniumTrainingCommand {
             skill_id: "basic_unarmed",
             mentor_npc_id: "npc-street-compass-sifu",
             required_semantic_role: "civic_square",
             cost_xp: 8,
             cooldown_seconds: 420,
         },
-        JianghuTrainingCommand {
+        TrillionniumTrainingCommand {
             skill_id: "basic_blade",
             mentor_npc_id: "npc-iron-workshop-smith",
             required_semantic_role: "workshop",
             cost_xp: 10,
             cooldown_seconds: 480,
         },
-        JianghuTrainingCommand {
+        TrillionniumTrainingCommand {
             skill_id: "basic_sword",
             mentor_npc_id: "npc-market-wind-adviser",
             required_semantic_role: "market",
             cost_xp: 10,
             cooldown_seconds: 480,
         },
-        JianghuTrainingCommand {
+        TrillionniumTrainingCommand {
             skill_id: "merchant_routecraft",
             mentor_npc_id: "npc-market-wind-adviser",
             required_semantic_role: "market",
             cost_xp: 16,
             cooldown_seconds: 900,
         },
-        JianghuTrainingCommand {
+        TrillionniumTrainingCommand {
             skill_id: "artifact_crafting",
             mentor_npc_id: "npc-iron-workshop-smith",
             required_semantic_role: "workshop",
             cost_xp: 16,
             cooldown_seconds: 900,
         },
-        JianghuTrainingCommand {
+        TrillionniumTrainingCommand {
             skill_id: "streetwise_investigation",
             mentor_npc_id: "npc-night-watch-arbiter",
             required_semantic_role: "arbitration_desk",
@@ -844,28 +953,28 @@ fn jianghu_training_command_fixtures() -> Vec<JianghuTrainingCommand> {
     ]
 }
 
-pub(super) fn jianghu_training_commands_json(openstreetmap_geodata: &Value) -> Value {
+pub(super) fn trillionnium_training_commands_json(openstreetmap_geodata: &Value) -> Value {
     let features = openstreetmap_geodata
         .get("features")
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
     Value::Array(
-        jianghu_training_command_fixtures()
+        trillionnium_training_command_fixtures()
             .into_iter()
             .map(|command| command.to_value(&features))
             .collect::<Vec<_>>(),
     )
 }
 
-fn jianghu_training_command_for_skill(skill_id: &str) -> Option<JianghuTrainingCommand> {
-    jianghu_training_command_fixtures()
+fn trillionnium_training_command_for_skill(skill_id: &str) -> Option<TrillionniumTrainingCommand> {
+    trillionnium_training_command_fixtures()
         .into_iter()
         .find(|command| command.skill_id == skill_id)
 }
 
 #[derive(Debug, Clone)]
-struct JianghuSectFixture {
+struct TrillionniumSectFixture {
     sect_id: &'static str,
     display_name: &'static str,
     specialization: &'static str,
@@ -876,12 +985,12 @@ struct JianghuSectFixture {
     title_ladder: Vec<&'static str>,
 }
 
-impl JianghuSectFixture {
+impl TrillionniumSectFixture {
     fn to_value(&self, features: &[Value]) -> Value {
         let anchor_binding = osm_anchor_binding_json(features, self.anchor_role, "sect_hall");
         json!({
-            "contract_version": TRILLIONNIUM_JIANGHU_SECT_CONTRACT_VERSION,
-            "osm_binding_contract_version": TRILLIONNIUM_JIANGHU_SECT_OSM_BINDING_CONTRACT_VERSION,
+            "contract_version": TRILLIONNIUM_SECT_CONTRACT_VERSION,
+            "osm_binding_contract_version": TRILLIONNIUM_SECT_OSM_BINDING_CONTRACT_VERSION,
             "sect_id": self.sect_id,
             "display_name": self.display_name,
             "specialization": self.specialization,
@@ -894,15 +1003,15 @@ impl JianghuSectFixture {
             "entry_requirement": self.entry_requirement,
             "benefits": self.benefits,
             "title_ladder": self.title_ladder,
-            "source_of_truth": "rust_jianghu_sect_model",
+            "source_of_truth": "rust_trillionnium_sect_model",
             "content_policy": "trillionnium_native_no_copied_hero_tan_text_assets_or_tables",
         })
     }
 }
 
-fn jianghu_sect_fixtures() -> Vec<JianghuSectFixture> {
+fn trillionnium_sect_fixtures() -> Vec<TrillionniumSectFixture> {
     vec![
-        JianghuSectFixture {
+        TrillionniumSectFixture {
             sect_id: "cloud-ledger-hall",
             display_name: "Cloud Ledger Hall / 云账堂",
             specialization: "inner_power_contracts_and_settlement",
@@ -912,7 +1021,7 @@ fn jianghu_sect_fixtures() -> Vec<JianghuSectFixture> {
             benefits: vec!["settlement_recovery_bonus", "contract_risk_preview"],
             title_ladder: vec!["outer_clerk", "ledger_runner", "cloud_ledger_keeper"],
         },
-        JianghuSectFixture {
+        TrillionniumSectFixture {
             sect_id: "street-compass-society",
             display_name: "Street Compass Society / 街指南社",
             specialization: "movement_investigation_and_routecraft",
@@ -922,7 +1031,7 @@ fn jianghu_sect_fixtures() -> Vec<JianghuSectFixture> {
             benefits: vec!["movement_range_hint", "street_event_preview"],
             title_ladder: vec!["street_walker", "route_scout", "compass_pathfinder"],
         },
-        JianghuSectFixture {
+        TrillionniumSectFixture {
             sect_id: "iron-workshop-gate",
             display_name: "Iron Workshop Gate / 铁坊门",
             specialization: "craft_blade_and_artifact_repair",
@@ -932,7 +1041,7 @@ fn jianghu_sect_fixtures() -> Vec<JianghuSectFixture> {
             benefits: vec!["craft_quality_bonus", "item_repair_discount"],
             title_ladder: vec!["apprentice_smith", "artifact_mender", "iron_gate_master"],
         },
-        JianghuSectFixture {
+        TrillionniumSectFixture {
             sect_id: "market-wind-pavilion",
             display_name: "Market Wind Pavilion / 集风阁",
             specialization: "commerce_negotiation_and_bounty_quality",
@@ -942,7 +1051,7 @@ fn jianghu_sect_fixtures() -> Vec<JianghuSectFixture> {
             benefits: vec!["listing_quality_hint", "negotiation_bonus"],
             title_ladder: vec!["stall_runner", "wind_broker", "market_pavilion_master"],
         },
-        JianghuSectFixture {
+        TrillionniumSectFixture {
             sect_id: "night-watch-alliance",
             display_name: "Night Watch Alliance / 夜巡盟",
             specialization: "risk_control_disputes_and_escort_tasks",
@@ -955,14 +1064,14 @@ fn jianghu_sect_fixtures() -> Vec<JianghuSectFixture> {
     ]
 }
 
-pub(super) fn jianghu_sect_fixtures_json(openstreetmap_geodata: &Value) -> Value {
+pub(super) fn trillionnium_sect_fixtures_json(openstreetmap_geodata: &Value) -> Value {
     let features = openstreetmap_geodata
         .get("features")
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
     Value::Array(
-        jianghu_sect_fixtures()
+        trillionnium_sect_fixtures()
             .into_iter()
             .map(|sect| sect.to_value(&features))
             .collect::<Vec<_>>(),
@@ -970,7 +1079,7 @@ pub(super) fn jianghu_sect_fixtures_json(openstreetmap_geodata: &Value) -> Value
 }
 
 #[derive(Debug, Clone)]
-struct JianghuTaskArchetypeFixture {
+struct TrillionniumTaskArchetypeFixture {
     task_archetype_id: &'static str,
     display_name: &'static str,
     source_semantic_roles: Vec<&'static str>,
@@ -980,7 +1089,7 @@ struct JianghuTaskArchetypeFixture {
     log_style_key: &'static str,
 }
 
-impl JianghuTaskArchetypeFixture {
+impl TrillionniumTaskArchetypeFixture {
     fn to_value(&self, features: &[Value]) -> Value {
         let candidates = self
             .source_semantic_roles
@@ -989,7 +1098,7 @@ impl JianghuTaskArchetypeFixture {
             .map(|(role, feature)| {
                 json!({
                     "candidate_id": format!(
-                        "jianghu-task:{}:{}",
+                        "trillionnium-task:{}:{}",
                         self.task_archetype_id,
                         feature
                             .get("game_overlay_id")
@@ -1002,10 +1111,10 @@ impl JianghuTaskArchetypeFixture {
                     "feature_id": feature.get("feature_id").cloned().unwrap_or(Value::Null),
                     "objective_seed": feature.get("objective_seed").cloned().unwrap_or(Value::Null),
                     "completion_owner": self.completion_owner,
-                    "completion_contract_version": TRILLIONNIUM_JIANGHU_TASK_COMPLETION_CONTRACT_VERSION,
+                    "completion_contract_version": TRILLIONNIUM_TASK_COMPLETION_CONTRACT_VERSION,
                     "completion_command": "complete_task",
                     "reward_gate": self.reward_gate,
-                    "reward_gate_contract_version": TRILLIONNIUM_JIANGHU_REWARD_GATE_CONTRACT_VERSION,
+                    "reward_gate_contract_version": TRILLIONNIUM_REWARD_GATE_CONTRACT_VERSION,
                     "ledger_reward_requires_settlement": true,
                     "review_hold_gate_enforced": true,
                     "anti_cheese_gate_enforced": true,
@@ -1014,15 +1123,15 @@ impl JianghuTaskArchetypeFixture {
             })
             .collect::<Vec<_>>();
         json!({
-            "contract_version": TRILLIONNIUM_JIANGHU_TASK_ARCHETYPE_CONTRACT_VERSION,
+            "contract_version": TRILLIONNIUM_TASK_ARCHETYPE_CONTRACT_VERSION,
             "task_archetype_id": self.task_archetype_id,
             "display_name": self.display_name,
             "source_semantic_roles": self.source_semantic_roles,
             "command": self.command,
             "completion_owner": self.completion_owner,
             "reward_gate": self.reward_gate,
-            "reward_gate_contract_version": TRILLIONNIUM_JIANGHU_REWARD_GATE_CONTRACT_VERSION,
-            "completion_contract_version": TRILLIONNIUM_JIANGHU_TASK_COMPLETION_CONTRACT_VERSION,
+            "reward_gate_contract_version": TRILLIONNIUM_REWARD_GATE_CONTRACT_VERSION,
+            "completion_contract_version": TRILLIONNIUM_TASK_COMPLETION_CONTRACT_VERSION,
             "completion_command": "complete_task",
             "rust_command_handler_decides_completion": true,
             "log_style_key": self.log_style_key,
@@ -1033,9 +1142,9 @@ impl JianghuTaskArchetypeFixture {
     }
 }
 
-fn jianghu_task_archetype_fixtures() -> Vec<JianghuTaskArchetypeFixture> {
+fn trillionnium_task_archetype_fixtures() -> Vec<TrillionniumTaskArchetypeFixture> {
     vec![
-        JianghuTaskArchetypeFixture {
+        TrillionniumTaskArchetypeFixture {
             task_archetype_id: "courier_letter",
             display_name: "Courier Letter / 飞笺传书",
             source_semantic_roles: vec!["delivery_route", "civic_square"],
@@ -1044,7 +1153,7 @@ fn jianghu_task_archetype_fixtures() -> Vec<JianghuTaskArchetypeFixture> {
             reward_gate: "ledger_settlement_review_hold_anti_cheese",
             log_style_key: "street_courier",
         },
-        JianghuTaskArchetypeFixture {
+        TrillionniumTaskArchetypeFixture {
             task_archetype_id: "find_item",
             display_name: "Find Item / 寻物探查",
             source_semantic_roles: vec!["workshop", "market"],
@@ -1053,7 +1162,7 @@ fn jianghu_task_archetype_fixtures() -> Vec<JianghuTaskArchetypeFixture> {
             reward_gate: "evidence_required_before_reward",
             log_style_key: "street_investigation",
         },
-        JianghuTaskArchetypeFixture {
+        TrillionniumTaskArchetypeFixture {
             task_archetype_id: "escort_route",
             display_name: "Escort Route / 护送路线",
             source_semantic_roles: vec!["delivery_route", "arbitration_desk"],
@@ -1062,7 +1171,7 @@ fn jianghu_task_archetype_fixtures() -> Vec<JianghuTaskArchetypeFixture> {
             reward_gate: "proof_gated_route_completion",
             log_style_key: "escort_clash",
         },
-        JianghuTaskArchetypeFixture {
+        TrillionniumTaskArchetypeFixture {
             task_archetype_id: "market_settlement",
             display_name: "Market Settlement / 市集结算",
             source_semantic_roles: vec!["market", "ledger_hall"],
@@ -1071,7 +1180,7 @@ fn jianghu_task_archetype_fixtures() -> Vec<JianghuTaskArchetypeFixture> {
             reward_gate: "ledger_release_required",
             log_style_key: "market_parley",
         },
-        JianghuTaskArchetypeFixture {
+        TrillionniumTaskArchetypeFixture {
             task_archetype_id: "defeat_bandit",
             display_name: "Defeat Bandit / 平定流寇",
             source_semantic_roles: vec!["arena", "market"],
@@ -1080,7 +1189,7 @@ fn jianghu_task_archetype_fixtures() -> Vec<JianghuTaskArchetypeFixture> {
             reward_gate: "combat_resolution_then_ledger_review_gate",
             log_style_key: "escort_clash",
         },
-        JianghuTaskArchetypeFixture {
+        TrillionniumTaskArchetypeFixture {
             task_archetype_id: "sect_training_trial",
             display_name: "Sect Training Trial / 门内试炼",
             source_semantic_roles: vec![
@@ -1098,27 +1207,29 @@ fn jianghu_task_archetype_fixtures() -> Vec<JianghuTaskArchetypeFixture> {
     ]
 }
 
-fn jianghu_task_archetype_by_id(task_archetype_id: &str) -> Option<JianghuTaskArchetypeFixture> {
-    jianghu_task_archetype_fixtures()
+fn trillionnium_task_archetype_by_id(
+    task_archetype_id: &str,
+) -> Option<TrillionniumTaskArchetypeFixture> {
+    trillionnium_task_archetype_fixtures()
         .into_iter()
         .find(|task| task.task_archetype_id == task_archetype_id)
 }
 
-fn jianghu_task_archetypes_json(openstreetmap_geodata: &Value) -> Value {
+fn trillionnium_task_archetypes_json(openstreetmap_geodata: &Value) -> Value {
     let features = openstreetmap_geodata
         .get("features")
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
     Value::Array(
-        jianghu_task_archetype_fixtures()
+        trillionnium_task_archetype_fixtures()
             .into_iter()
             .map(|task| task.to_value(&features))
             .collect::<Vec<_>>(),
     )
 }
 
-fn jianghu_task_candidates_json(task_archetypes: &Value) -> Value {
+fn trillionnium_task_candidates_json(task_archetypes: &Value) -> Value {
     Value::Array(
         task_archetypes
             .as_array()
@@ -1136,15 +1247,15 @@ fn jianghu_task_candidates_json(task_archetypes: &Value) -> Value {
     )
 }
 
-fn jianghu_task_candidate_for(
+fn trillionnium_task_candidate_for(
     world: &WorldState,
     task_archetype_id: &str,
     osm_game_overlay_id: Option<&str>,
 ) -> Option<Value> {
     let nodes: Vec<WorldMapNode> = world.world_map_nodes.values().cloned().collect();
     let geodata = openstreetmap_geodata_v1_json(&nodes, None);
-    let task_archetypes = jianghu_task_archetypes_json(&geodata);
-    let candidates = jianghu_task_candidates_json(&task_archetypes);
+    let task_archetypes = trillionnium_task_archetypes_json(&geodata);
+    let candidates = trillionnium_task_candidates_json(&task_archetypes);
     candidates
         .as_array()
         .cloned()
@@ -1165,7 +1276,7 @@ fn jianghu_task_candidate_for(
         })
 }
 
-fn jianghu_objective_task_for_semantic_role(role: &str) -> Option<&'static str> {
+fn trillionnium_objective_task_for_semantic_role(role: &str) -> Option<&'static str> {
     match role {
         "civic_square" | "mentor_home" | "sect_hall" => Some("sect_training_trial"),
         "ledger_hall" | "market" => Some("market_settlement"),
@@ -1177,7 +1288,7 @@ fn jianghu_objective_task_for_semantic_role(role: &str) -> Option<&'static str> 
     }
 }
 
-fn jianghu_objective_label_for_role(role: &str) -> &'static str {
+fn trillionnium_objective_label_for_role(role: &str) -> &'static str {
     match role {
         "civic_square" => "集",
         "mentor_home" => "师",
@@ -1194,7 +1305,7 @@ fn jianghu_objective_label_for_role(role: &str) -> &'static str {
     }
 }
 
-fn jianghu_objective_priority_for_role(role: &str) -> i64 {
+fn trillionnium_objective_priority_for_role(role: &str) -> i64 {
     match role {
         "market" => 100,
         "arena" => 96,
@@ -1211,7 +1322,7 @@ fn jianghu_objective_priority_for_role(role: &str) -> i64 {
     }
 }
 
-fn jianghu_osm_objectives_json(
+fn trillionnium_osm_objectives_json(
     world: &WorldState,
     matrix_user_id: &str,
     openstreetmap_geodata: &Value,
@@ -1237,7 +1348,7 @@ fn jianghu_osm_objectives_json(
             .get("semantic_role")
             .and_then(Value::as_str)
             .unwrap_or("street_encounter");
-        let Some(task_archetype_id) = jianghu_objective_task_for_semantic_role(role) else {
+        let Some(task_archetype_id) = trillionnium_objective_task_for_semantic_role(role) else {
             continue;
         };
         let overlay_id = feature
@@ -1256,7 +1367,7 @@ fn jianghu_osm_objectives_json(
             .get("completion_owner")
             .and_then(Value::as_str)
             .unwrap_or("rust_world_action_handler");
-        let task_completion_owner = jianghu_task_archetype_by_id(task_archetype_id)
+        let task_completion_owner = trillionnium_task_archetype_by_id(task_archetype_id)
             .map(|task| task.completion_owner)
             .unwrap_or(completion_owner);
         let objective_seed_input = format!(
@@ -1271,9 +1382,10 @@ fn jianghu_osm_objectives_json(
             user_relationship_count,
             OPENSTREETMAP_GEODATA_CONTRACT_VERSION,
         );
-        let deterministic_seed = league_hash_id("jianghu-objective-seed", &objective_seed_input);
+        let deterministic_seed =
+            league_hash_id("trillionnium-objective-seed", &objective_seed_input);
         let objective_id = league_hash_id(
-            "jianghu-osm-objective",
+            "trillionnium-osm-objective",
             &format!("{feature_id}:{task_archetype_id}:{deterministic_seed}"),
         );
         let grid_column = feature
@@ -1290,7 +1402,7 @@ fn jianghu_osm_objectives_json(
             .unwrap_or(0)
             .saturating_add(1)
             .clamp(1, 8);
-        let priority = jianghu_objective_priority_for_role(role);
+        let priority = trillionnium_objective_priority_for_role(role);
         let suggested_command = if task_archetype_id == "defeat_bandit" {
             "attack"
         } else if task_archetype_id == "sect_training_trial" {
@@ -1302,9 +1414,9 @@ fn jianghu_osm_objectives_json(
             priority,
             objective_id.clone(),
             json!({
-                "contract_version": TRILLIONNIUM_JIANGHU_OSM_OBJECTIVE_CONTRACT_VERSION,
+                "contract_version": TRILLIONNIUM_OSM_OBJECTIVE_CONTRACT_VERSION,
                 "objective_id": objective_id,
-                "label": jianghu_objective_label_for_role(role),
+                "label": trillionnium_objective_label_for_role(role),
                 "title": format!("{} · {}", objective_kind, task_archetype_id),
                 "grid_column": grid_column,
                 "grid_row": grid_row,
@@ -1328,7 +1440,7 @@ fn jianghu_osm_objectives_json(
                 "osm_can_suggest_objectives": true,
                 "rust_command_handler_decides_completion": true,
                 "requires_open_task_contract": suggested_command == "complete_task",
-                "source_of_truth": "rust_jianghu_osm_objective_generator",
+                "source_of_truth": "rust_trillionnium_osm_objective_generator",
                 "web_role": "visualization_input_only",
             }),
         ));
@@ -1342,7 +1454,7 @@ fn jianghu_osm_objectives_json(
     )
 }
 
-fn jianghu_task_archetype_ids_for_capability(capability: &str) -> Vec<&'static str> {
+fn trillionnium_task_archetype_ids_for_capability(capability: &str) -> Vec<&'static str> {
     match capability {
         "offer_patrol_task" => vec!["courier_letter", "escort_route"],
         "train_unarmed"
@@ -1361,20 +1473,20 @@ fn jianghu_task_archetype_ids_for_capability(capability: &str) -> Vec<&'static s
     }
 }
 
-fn jianghu_npc_relationship_delta(relation_kind: &str, strength: i64) -> i64 {
+fn trillionnium_npc_relationship_delta(relation_kind: &str, strength: i64) -> i64 {
     match relation_kind {
-        "jianghu_npc_talk_npc" | "tactics_talk_npc" => 3,
-        "jianghu_npc_offer_task" | "tactics_offer_task" => 5,
-        "jianghu_npc_train_skill" | "tactics_train_skill" => 4,
-        "jianghu_npc_complete_task" | "tactics_complete_task" => 2,
+        "trillionnium_npc_talk_npc" | "tactics_talk_npc" => 3,
+        "trillionnium_npc_offer_task" | "tactics_offer_task" => 5,
+        "trillionnium_npc_train_skill" | "tactics_train_skill" => 4,
+        "trillionnium_npc_complete_task" | "tactics_complete_task" => 2,
         _ => strength.clamp(-3, 3),
     }
 }
 
-fn jianghu_npc_relationship_projection_json(
+fn trillionnium_npc_relationship_projection_json(
     world: &WorldState,
     matrix_user_id: &str,
-    npc: &JianghuNpcFixture,
+    npc: &TrillionniumNpcFixture,
 ) -> Value {
     let mut event_count = 0_i64;
     let mut relationship_delta = 0_i64;
@@ -1385,7 +1497,7 @@ fn jianghu_npc_relationship_projection_json(
     }) {
         event_count += 1;
         relationship_delta +=
-            jianghu_npc_relationship_delta(&relationship.relation_kind, relationship.strength);
+            trillionnium_npc_relationship_delta(&relationship.relation_kind, relationship.strength);
         if relationship.updated_at_epoch >= last_updated_at_epoch {
             last_updated_at_epoch = relationship.updated_at_epoch;
             last_relation_kind = Some(relationship.relation_kind.clone());
@@ -1401,9 +1513,9 @@ fn jianghu_npc_relationship_projection_json(
         "watchful"
     };
     json!({
-        "contract_version": TRILLIONNIUM_JIANGHU_NPC_RELATIONSHIP_CONTRACT_VERSION,
+        "contract_version": TRILLIONNIUM_NPC_RELATIONSHIP_CONTRACT_VERSION,
         "source_of_truth": "rust_world_relationships_persistent_state",
-        "relationship_owner": "rust_jianghu_npc_model",
+        "relationship_owner": "rust_trillionnium_npc_model",
         "matrix_user_id": matrix_user_id,
         "npc_id": npc.npc_id,
         "seed_relationship": npc.relationship_seed,
@@ -1419,7 +1531,7 @@ fn jianghu_npc_relationship_projection_json(
 }
 
 #[derive(Debug, Clone)]
-struct JianghuNpcFixture {
+struct TrillionniumNpcFixture {
     npc_id: &'static str,
     display_name: &'static str,
     role: &'static str,
@@ -1430,11 +1542,11 @@ struct JianghuNpcFixture {
     task_capabilities: Vec<&'static str>,
 }
 
-impl JianghuNpcFixture {
+impl TrillionniumNpcFixture {
     fn to_value(&self, features: &[Value], relationship_state: Value) -> Value {
         let spawn_anchor = osm_anchor_binding_json(features, self.anchor_role, "npc_spawn");
-        let command_descriptors = jianghu_npc_command_descriptors_json(self, &spawn_anchor);
-        let task_archetype_ids = jianghu_npc_task_archetype_ids(self);
+        let command_descriptors = trillionnium_npc_command_descriptors_json(self, &spawn_anchor);
+        let task_archetype_ids = trillionnium_npc_task_archetype_ids(self);
         let relationship_score = relationship_state
             .get("relationship_score")
             .and_then(Value::as_i64)
@@ -1449,10 +1561,10 @@ impl JianghuNpcFixture {
             .unwrap_or("watchful")
             .to_string();
         json!({
-            "contract_version": TRILLIONNIUM_JIANGHU_NPC_CONTRACT_VERSION,
-            "spawn_contract_version": TRILLIONNIUM_JIANGHU_NPC_SPAWN_CONTRACT_VERSION,
-            "command_descriptor_contract_version": TRILLIONNIUM_JIANGHU_NPC_COMMAND_DESCRIPTOR_CONTRACT_VERSION,
-            "relationship_contract_version": TRILLIONNIUM_JIANGHU_NPC_RELATIONSHIP_CONTRACT_VERSION,
+            "contract_version": TRILLIONNIUM_NPC_CONTRACT_VERSION,
+            "spawn_contract_version": TRILLIONNIUM_NPC_SPAWN_CONTRACT_VERSION,
+            "command_descriptor_contract_version": TRILLIONNIUM_NPC_COMMAND_DESCRIPTOR_CONTRACT_VERSION,
+            "relationship_contract_version": TRILLIONNIUM_NPC_RELATIONSHIP_CONTRACT_VERSION,
             "npc_id": self.npc_id,
             "display_name": self.display_name,
             "role": self.role,
@@ -1460,7 +1572,7 @@ impl JianghuNpcFixture {
             "anchor_semantic_role": self.anchor_role,
             "osm_game_overlay_id": osm_anchor_overlay_id(&spawn_anchor),
             "spawn_anchor": spawn_anchor,
-            "npc_spawn_owner": "rust_jianghu_npc_model",
+            "npc_spawn_owner": "rust_trillionnium_npc_model",
             "relationship_seed": self.relationship_seed,
             "relationship": relationship_score,
             "trust": trust,
@@ -1471,51 +1583,54 @@ impl JianghuNpcFixture {
             "task_archetype_ids": task_archetype_ids,
             "command_ids": ["talk_npc", "train_skill", "offer_task"],
             "command_descriptors": command_descriptors,
-            "source_of_truth": "rust_jianghu_npc_model",
+            "source_of_truth": "rust_trillionnium_npc_model",
             "content_policy": "trillionnium_native_no_copied_hero_tan_text_assets_or_tables",
         })
     }
 }
 
-fn jianghu_npc_training_skill_ids(npc_id: &str) -> Vec<&'static str> {
-    jianghu_training_command_fixtures()
+fn trillionnium_npc_training_skill_ids(npc_id: &str) -> Vec<&'static str> {
+    trillionnium_training_command_fixtures()
         .into_iter()
         .filter(|command| command.mentor_npc_id == npc_id)
         .map(|command| command.skill_id)
         .collect::<Vec<_>>()
 }
 
-fn jianghu_npc_task_archetype_ids(npc: &JianghuNpcFixture) -> Vec<&'static str> {
+fn trillionnium_npc_task_archetype_ids(npc: &TrillionniumNpcFixture) -> Vec<&'static str> {
     let mut ids = npc
         .task_capabilities
         .iter()
-        .flat_map(|capability| jianghu_task_archetype_ids_for_capability(capability))
+        .flat_map(|capability| trillionnium_task_archetype_ids_for_capability(capability))
         .collect::<Vec<_>>();
     ids.sort_unstable();
     ids.dedup();
     ids
 }
 
-fn jianghu_npc_command_descriptors_json(npc: &JianghuNpcFixture, spawn_anchor: &Value) -> Value {
+fn trillionnium_npc_command_descriptors_json(
+    npc: &TrillionniumNpcFixture,
+    spawn_anchor: &Value,
+) -> Value {
     let overlay_id = osm_anchor_overlay_id(spawn_anchor)
         .unwrap_or_else(|| "trillionnium-world-node:mirror-city-square".to_string());
-    let training_skill_ids = jianghu_npc_training_skill_ids(npc.npc_id);
-    let task_archetype_ids = jianghu_npc_task_archetype_ids(npc);
+    let training_skill_ids = trillionnium_npc_training_skill_ids(npc.npc_id);
+    let task_archetype_ids = trillionnium_npc_task_archetype_ids(npc);
     json!([
         {
-            "contract_version": TRILLIONNIUM_JIANGHU_NPC_COMMAND_DESCRIPTOR_CONTRACT_VERSION,
+            "contract_version": TRILLIONNIUM_NPC_COMMAND_DESCRIPTOR_CONTRACT_VERSION,
             "command_id": format!("talk:{}", npc.npc_id),
             "command": "talk_npc",
             "label": "交谈 / Talk",
             "npc_id": npc.npc_id,
             "required_osm_game_overlay_id": overlay_id,
-            "validation_owner": "rust_jianghu_npc_interaction_validator",
+            "validation_owner": "rust_trillionnium_npc_interaction_validator",
             "state_mutation_owner": "rust_trillionnium_game_state",
             "body_template": format!("talk to {} about current route evidence", npc.display_name),
             "web_role": "intent_only_visualization_input",
         },
         {
-            "contract_version": TRILLIONNIUM_JIANGHU_NPC_COMMAND_DESCRIPTOR_CONTRACT_VERSION,
+            "contract_version": TRILLIONNIUM_NPC_COMMAND_DESCRIPTOR_CONTRACT_VERSION,
             "command_id": format!("train:{}", npc.npc_id),
             "command": "train_skill",
             "label": "拜师修炼 / Train",
@@ -1527,24 +1642,24 @@ fn jianghu_npc_command_descriptors_json(npc: &JianghuNpcFixture, spawn_anchor: &
             "web_role": "intent_only_visualization_input",
         },
         {
-            "contract_version": TRILLIONNIUM_JIANGHU_NPC_COMMAND_DESCRIPTOR_CONTRACT_VERSION,
+            "contract_version": TRILLIONNIUM_NPC_COMMAND_DESCRIPTOR_CONTRACT_VERSION,
             "command_id": format!("offer-task:{}", npc.npc_id),
             "command": "offer_task",
             "label": "接任务 / Offer task",
             "npc_id": npc.npc_id,
             "task_archetype_ids": task_archetype_ids,
             "required_osm_game_overlay_id": overlay_id,
-            "validation_owner": "rust_jianghu_task_offer_validator",
+            "validation_owner": "rust_trillionnium_task_offer_validator",
             "state_mutation_owner": "rust_command_handler_ledger_progression",
-            "body_template": format!("ask {} for a local Jianghu task", npc.display_name),
+            "body_template": format!("ask {} for a local Trillionnium task", npc.display_name),
             "web_role": "intent_only_visualization_input",
         }
     ])
 }
 
-fn jianghu_npc_fixtures() -> Vec<JianghuNpcFixture> {
+fn trillionnium_npc_fixtures() -> Vec<TrillionniumNpcFixture> {
     vec![
-        JianghuNpcFixture {
+        TrillionniumNpcFixture {
             npc_id: "npc-cloud-ledger-mentor",
             display_name: "Ledger Mentor Wen / 温账师",
             role: "mentor_contracts_inner_power",
@@ -1554,7 +1669,7 @@ fn jianghu_npc_fixtures() -> Vec<JianghuNpcFixture> {
             schedule: "morning_ledger_evening_training",
             task_capabilities: vec!["train_inner_power", "review_contract_risk"],
         },
-        JianghuNpcFixture {
+        TrillionniumNpcFixture {
             npc_id: "npc-street-compass-sifu",
             display_name: "Compass Sifu Luo / 罗街师",
             role: "mentor_movement_unarmed",
@@ -1564,7 +1679,7 @@ fn jianghu_npc_fixtures() -> Vec<JianghuNpcFixture> {
             schedule: "daytime_square_patrol",
             task_capabilities: vec!["train_unarmed", "train_lightness", "offer_patrol_task"],
         },
-        JianghuNpcFixture {
+        TrillionniumNpcFixture {
             npc_id: "npc-iron-workshop-smith",
             display_name: "Iron Smith Qiao / 乔铁匠",
             role: "mentor_blade_crafting",
@@ -1574,7 +1689,7 @@ fn jianghu_npc_fixtures() -> Vec<JianghuNpcFixture> {
             schedule: "workshop_day_shift",
             task_capabilities: vec!["train_blade", "train_artifact_crafting", "repair_item"],
         },
-        JianghuNpcFixture {
+        TrillionniumNpcFixture {
             npc_id: "npc-market-wind-adviser",
             display_name: "Market Adviser Lin / 林集风",
             role: "mentor_commerce_sword",
@@ -1584,7 +1699,7 @@ fn jianghu_npc_fixtures() -> Vec<JianghuNpcFixture> {
             schedule: "market_open_hours",
             task_capabilities: vec!["train_sword", "train_routecraft", "price_bounty"],
         },
-        JianghuNpcFixture {
+        TrillionniumNpcFixture {
             npc_id: "npc-night-watch-arbiter",
             display_name: "Night Arbiter Shen / 沈夜判",
             role: "mentor_investigation_disputes",
@@ -1601,7 +1716,7 @@ fn jianghu_npc_fixtures() -> Vec<JianghuNpcFixture> {
     ]
 }
 
-pub(super) fn jianghu_npc_fixtures_json(
+pub(super) fn trillionnium_npc_fixtures_json(
     world: &WorldState,
     matrix_user_id: &str,
     openstreetmap_geodata: &Value,
@@ -1612,18 +1727,18 @@ pub(super) fn jianghu_npc_fixtures_json(
         .cloned()
         .unwrap_or_default();
     Value::Array(
-        jianghu_npc_fixtures()
+        trillionnium_npc_fixtures()
             .into_iter()
             .map(|npc| {
                 let relationship_state =
-                    jianghu_npc_relationship_projection_json(world, matrix_user_id, &npc);
+                    trillionnium_npc_relationship_projection_json(world, matrix_user_id, &npc);
                 npc.to_value(&features, relationship_state)
             })
             .collect::<Vec<_>>(),
     )
 }
 
-fn jianghu_npc_spawn_anchors_json(npcs: &Value) -> Value {
+fn trillionnium_npc_spawn_anchors_json(npcs: &Value) -> Value {
     Value::Array(
         npcs.as_array()
             .cloned()
@@ -1634,7 +1749,7 @@ fn jianghu_npc_spawn_anchors_json(npcs: &Value) -> Value {
     )
 }
 
-fn jianghu_npc_command_descriptors_from_npcs_json(npcs: &Value) -> Value {
+fn trillionnium_npc_command_descriptors_from_npcs_json(npcs: &Value) -> Value {
     Value::Array(
         npcs.as_array()
             .cloned()
@@ -1651,14 +1766,14 @@ fn jianghu_npc_command_descriptors_from_npcs_json(npcs: &Value) -> Value {
     )
 }
 
-fn jianghu_mentor_training_task_flows_json(openstreetmap_geodata: &Value) -> Value {
+fn trillionnium_mentor_training_task_flows_json(openstreetmap_geodata: &Value) -> Value {
     let features = openstreetmap_geodata
         .get("features")
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
     Value::Array(
-        jianghu_training_command_fixtures()
+        trillionnium_training_command_fixtures()
             .into_iter()
             .map(|command| {
                 let anchor = osm_anchor_binding_json(
@@ -1667,7 +1782,7 @@ fn jianghu_mentor_training_task_flows_json(openstreetmap_geodata: &Value) -> Val
                     "mentor_training",
                 );
                 json!({
-                    "contract_version": TRILLIONNIUM_JIANGHU_MENTOR_TRAINING_TASK_CONTRACT_VERSION,
+                    "contract_version": TRILLIONNIUM_MENTOR_TRAINING_TASK_CONTRACT_VERSION,
                     "task_flow_id": format!("mentor-training:{}", command.skill_id),
                     "task_archetype_id": "sect_training_trial",
                     "skill_id": command.skill_id,
@@ -1682,7 +1797,7 @@ fn jianghu_mentor_training_task_flows_json(openstreetmap_geodata: &Value) -> Val
                         "talk_to_mentor_npc",
                         "submit_train_skill_intent",
                         "rust_validate_skill_mentor_place_cost_cooldown",
-                        "mutate_world_jianghu_character",
+                        "mutate_world_trillionnium_character",
                         "record_world_event_and_relationship"
                     ],
                     "validation_owner": "rust_mentor_training_validator",
@@ -1694,11 +1809,11 @@ fn jianghu_mentor_training_task_flows_json(openstreetmap_geodata: &Value) -> Val
     )
 }
 
-fn jianghu_battle_log_style_json() -> Value {
+fn trillionnium_battle_log_style_json() -> Value {
     json!({
-        "contract_version": TRILLIONNIUM_JIANGHU_BATTLE_LOG_STYLE_CONTRACT_VERSION,
+        "contract_version": TRILLIONNIUM_BATTLE_LOG_STYLE_CONTRACT_VERSION,
         "style_id": "trillionnium_native_street_wuxia_log_v1",
-        "source_of_truth": "rust_jianghu_battle_log_generator",
+        "source_of_truth": "rust_trillionnium_battle_log_generator",
         "content_policy": "trillionnium_native_no_copied_hero_tan_text_assets_or_tables",
         "template_keys": [
             "street_courier",
@@ -1712,16 +1827,16 @@ fn jianghu_battle_log_style_json() -> Value {
     })
 }
 
-fn jianghu_combat_log_json(
+fn trillionnium_combat_log_json(
     objective_overlay_id: &str,
-    jianghu_character: &Value,
+    trillionnium_character: &Value,
     task_candidates: &Value,
 ) -> Value {
-    let display_name = jianghu_character
+    let display_name = trillionnium_character
         .get("display_name")
         .and_then(Value::as_str)
         .unwrap_or("镜城游侠");
-    let skill_family = jianghu_character
+    let skill_family = trillionnium_character
         .get("known_skills")
         .and_then(Value::as_array)
         .and_then(|skills| skills.first())
@@ -1735,7 +1850,7 @@ fn jianghu_combat_log_json(
         .and_then(Value::as_str)
         .unwrap_or("courier_letter");
     let log_id = league_hash_id(
-        "jianghu-combat-log",
+        "trillionnium-combat-log",
         &format!("{display_name}:{skill_family}:{task_archetype_id}:{objective_overlay_id}"),
     );
     let beats = vec![
@@ -1764,12 +1879,12 @@ fn jianghu_combat_log_json(
         }),
     ];
     json!({
-        "contract_version": TRILLIONNIUM_JIANGHU_COMBAT_LOG_CONTRACT_VERSION,
+        "contract_version": TRILLIONNIUM_COMBAT_LOG_CONTRACT_VERSION,
         "log_id": log_id,
         "style": "trillionnium_wuxia_log_v1",
-        "style_contract": TRILLIONNIUM_JIANGHU_BATTLE_LOG_STYLE_CONTRACT_VERSION,
+        "style_contract": TRILLIONNIUM_BATTLE_LOG_STYLE_CONTRACT_VERSION,
         "template_pack": "trillionnium_native_combat_task_templates_v1",
-        "source_of_truth": "rust_jianghu_combat_log_generator",
+        "source_of_truth": "rust_trillionnium_combat_log_generator",
         "content_policy": "trillionnium_native_no_copied_reference_text_assets_or_tables",
         "source_reference_safety": {
             "mechanics_reference_only": true,
@@ -1786,22 +1901,22 @@ fn jianghu_combat_log_json(
         "beats": beats,
         "matrix_projection": {
             "enabled": true,
-            "card_field": "jianghu_combat_log",
+            "card_field": "trillionnium_combat_log",
             "summary_line": "native_wuxia_task_log_visible"
         },
         "app_projection": {
             "enabled": true,
-            "json_field": "jianghu_combat_log",
+            "json_field": "trillionnium_combat_log",
             "surface": "client_app.map.tactics_board.combat_log"
         }
     })
 }
 
-fn jianghu_battle_log_lines_json(combat_log: &Value) -> Value {
+fn trillionnium_battle_log_lines_json(combat_log: &Value) -> Value {
     let style_contract = combat_log
         .get("style_contract")
         .and_then(Value::as_str)
-        .unwrap_or(TRILLIONNIUM_JIANGHU_BATTLE_LOG_STYLE_CONTRACT_VERSION);
+        .unwrap_or(TRILLIONNIUM_BATTLE_LOG_STYLE_CONTRACT_VERSION);
     Value::Array(
         combat_log
             .get("beats")
@@ -1814,7 +1929,7 @@ fn jianghu_battle_log_lines_json(combat_log: &Value) -> Value {
                     "kind": beat.get("kind").and_then(Value::as_str).unwrap_or("log"),
                     "style_contract": style_contract,
                     "text": beat.get("text").and_then(Value::as_str).unwrap_or(""),
-                    "source_of_truth": "rust_jianghu_combat_log_generator",
+                    "source_of_truth": "rust_trillionnium_combat_log_generator",
                 })
             })
             .collect::<Vec<_>>(),
@@ -1908,17 +2023,17 @@ impl TacticsCommandDescriptor {
 
 fn tactics_units_json(
     matrix_user_id: &str,
-    jianghu_character: &Value,
+    trillionnium_character: &Value,
     arena_overlay_id: Option<String>,
     market_overlay_id: Option<String>,
 ) -> Value {
-    let max_hp = jianghu_character["attributes"]["derived_stats"]["max_hp"]
+    let max_hp = trillionnium_character["attributes"]["derived_stats"]["max_hp"]
         .as_i64()
         .unwrap_or(160);
-    let energy = jianghu_character["attributes"]["derived_stats"]["inner_energy"]
+    let energy = trillionnium_character["attributes"]["derived_stats"]["inner_energy"]
         .as_i64()
         .unwrap_or(100);
-    let move_range = jianghu_character["attributes"]["derived_stats"]["move_range"]
+    let move_range = trillionnium_character["attributes"]["derived_stats"]["move_range"]
         .as_i64()
         .unwrap_or(4);
     Value::Array(
@@ -1927,7 +2042,7 @@ fn tactics_units_json(
                 unit_id: "lord",
                 owner: "player",
                 side: "player",
-                archetype: "jianghu_lord",
+                archetype: "trillionnium_lord",
                 label: "主",
                 title: "主公 / Lord",
                 grid_column: 2,
@@ -1940,7 +2055,7 @@ fn tactics_units_json(
                 status_effects: vec!["ready", "player_controlled"],
                 osm_game_overlay_id: None,
                 actor_matrix_user_id: Some(matrix_user_id.to_string()),
-                character_source: "jianghu_character",
+                character_source: "trillionnium_character",
             },
             TacticsUnit {
                 unit_id: "strategist",
@@ -2062,9 +2177,9 @@ fn tactics_available_commands_json() -> Value {
                 command_id: "use_skill",
                 command: "use_skill",
                 label: "施展技能",
-                command_family: "jianghu_skill",
-                validation_owner: "rust_jianghu_skill_validator",
-                web_target: "#trillionnium-jianghu-status",
+                command_family: "trillionnium_skill",
+                validation_owner: "rust_trillionnium_skill_validator",
+                web_target: "#trillionnium-status",
                 required_skill_id: Some("basic_inner_power"),
                 action_cost: 1,
             },
@@ -2074,7 +2189,7 @@ fn tactics_available_commands_json() -> Value {
                 label: "导师修炼",
                 command_family: "mentor_training",
                 validation_owner: "rust_mentor_training_validator",
-                web_target: "#trillionnium-jianghu-training",
+                web_target: "#trillionnium-training",
                 required_skill_id: None,
                 action_cost: 1,
             },
@@ -2083,18 +2198,18 @@ fn tactics_available_commands_json() -> Value {
                 command: "talk_npc",
                 label: "交谈问路",
                 command_family: "npc_society",
-                validation_owner: "rust_jianghu_npc_interaction_validator",
-                web_target: "#trillionnium-jianghu-npcs",
+                validation_owner: "rust_trillionnium_npc_interaction_validator",
+                web_target: "#trillionnium-npcs",
                 required_skill_id: None,
                 action_cost: 0,
             },
             TacticsCommandDescriptor {
                 command_id: "offer_task",
                 command: "offer_task",
-                label: "接取江湖任务",
-                command_family: "jianghu_task_offer",
-                validation_owner: "rust_jianghu_task_offer_validator",
-                web_target: "#trillionnium-jianghu-npcs",
+                label: "接取Trillionnium任务",
+                command_family: "trillionnium_task_offer",
+                validation_owner: "rust_trillionnium_task_offer_validator",
+                web_target: "#trillionnium-npcs",
                 required_skill_id: Some("reading_and_contracts"),
                 action_cost: 1,
             },
@@ -2102,9 +2217,9 @@ fn tactics_available_commands_json() -> Value {
                 command_id: "complete_task",
                 command: "complete_task",
                 label: "提交任务战报",
-                command_family: "jianghu_task_completion",
-                validation_owner: "rust_jianghu_task_completion_handler",
-                web_target: "#trillionnium-jianghu-task-candidates",
+                command_family: "trillionnium_task_completion",
+                validation_owner: "rust_trillionnium_task_completion_handler",
+                web_target: "#trillionnium-task-candidates",
                 required_skill_id: Some("reading_and_contracts"),
                 action_cost: 1,
             },
@@ -2219,7 +2334,7 @@ fn tactics_combat_target_for_tile(
 
 fn deterministic_tactics_damage(
     seed: &str,
-    attributes: &JianghuAttributes,
+    attributes: &TrillionniumAttributes,
     skill_id: &str,
     guard: i64,
 ) -> i64 {
@@ -2244,7 +2359,7 @@ fn tactics_combat_resolution_json(
     attacker_unit_id: &str,
     target_tile: Option<&str>,
     skill_id: &str,
-    attributes: &JianghuAttributes,
+    attributes: &TrillionniumAttributes,
     now_epoch: i64,
 ) -> Option<Value> {
     let nodes: Vec<WorldMapNode> = world.world_map_nodes.values().cloned().collect();
@@ -2338,9 +2453,9 @@ pub(super) fn apply_world_tactics_command(
 
     if command == "complete_task" {
         let known_skills: HashSet<String> = world
-            .world_jianghu_characters
+            .world_trillionnium_characters
             .entry(matrix_user_id.to_string())
-            .or_insert_with(|| WorldJianghuCharacter::default_for(matrix_user_id))
+            .or_insert_with(|| WorldTrillionniumCharacter::default_for(matrix_user_id))
             .skill_ids
             .iter()
             .cloned()
@@ -2356,7 +2471,7 @@ pub(super) fn apply_world_tactics_command(
                     "required_skill_id": required_skill_id,
                     "result": "skill_locked",
                     "rejection_reason": "required_skill_not_known",
-                    "source_of_truth": "rust_jianghu_task_completion_handler",
+                    "source_of_truth": "rust_trillionnium_task_completion_handler",
                     "web_role": "intent_only_visualization_input",
                 });
             }
@@ -2365,7 +2480,8 @@ pub(super) fn apply_world_tactics_command(
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .unwrap_or("courier_letter");
-        let Some(task_archetype) = jianghu_task_archetype_by_id(selected_task_archetype_id) else {
+        let Some(task_archetype) = trillionnium_task_archetype_by_id(selected_task_archetype_id)
+        else {
             return tactics_command_rejection_json(
                 command,
                 unit_id,
@@ -2377,7 +2493,7 @@ pub(super) fn apply_world_tactics_command(
             .map(str::trim)
             .filter(|value| !value.is_empty());
         let Some(candidate) =
-            jianghu_task_candidate_for(world, selected_task_archetype_id, provided_overlay_id)
+            trillionnium_task_candidate_for(world, selected_task_archetype_id, provided_overlay_id)
         else {
             return json!({
                 "contract_version": TRILLIONNIUM_TACTICS_COMMAND_OUTCOME_CONTRACT_VERSION,
@@ -2389,15 +2505,15 @@ pub(super) fn apply_world_tactics_command(
                 "provided_osm_game_overlay_id": provided_overlay_id,
                 "result": "task_objective_mismatch",
                 "rejection_reason": "task_completion_requires_osm_generated_candidate",
-                "source_of_truth": "rust_jianghu_task_completion_handler",
+                "source_of_truth": "rust_trillionnium_task_completion_handler",
                 "web_role": "intent_only_visualization_input",
             });
         };
         let character = world
-            .world_jianghu_characters
+            .world_trillionnium_characters
             .entry(matrix_user_id.to_string())
-            .or_insert_with(|| WorldJianghuCharacter::default_for(matrix_user_id));
-        character.title = "提交江湖战报".to_string();
+            .or_insert_with(|| WorldTrillionniumCharacter::default_for(matrix_user_id));
+        character.title = "提交Trillionnium战报".to_string();
         character.updated_at_epoch = now_epoch;
         return json!({
             "contract_version": TRILLIONNIUM_TACTICS_COMMAND_OUTCOME_CONTRACT_VERSION,
@@ -2406,29 +2522,29 @@ pub(super) fn apply_world_tactics_command(
             "unit_id": unit_id,
             "target_tile": target_tile,
             "task_archetype_id": selected_task_archetype_id,
-            "task_archetype_contract_version": TRILLIONNIUM_JIANGHU_TASK_ARCHETYPE_CONTRACT_VERSION,
-            "completion_contract_version": TRILLIONNIUM_JIANGHU_TASK_COMPLETION_CONTRACT_VERSION,
-            "reward_gate_contract_version": TRILLIONNIUM_JIANGHU_REWARD_GATE_CONTRACT_VERSION,
+            "task_archetype_contract_version": TRILLIONNIUM_TASK_ARCHETYPE_CONTRACT_VERSION,
+            "completion_contract_version": TRILLIONNIUM_TASK_COMPLETION_CONTRACT_VERSION,
+            "reward_gate_contract_version": TRILLIONNIUM_REWARD_GATE_CONTRACT_VERSION,
             "reward_gate": task_archetype.reward_gate,
             "completion_owner": task_archetype.completion_owner,
             "required_osm_game_overlay_id": candidate.get("osm_game_overlay_id").cloned().unwrap_or(Value::Null),
             "task_candidate_id": candidate.get("candidate_id").cloned().unwrap_or(Value::Null),
-            "validation_owner": descriptor.get("validation_owner").cloned().unwrap_or_else(|| json!("rust_jianghu_task_completion_handler")),
+            "validation_owner": descriptor.get("validation_owner").cloned().unwrap_or_else(|| json!("rust_trillionnium_task_completion_handler")),
             "result": "task_completion_validated",
-            "state_mutation": "world_jianghu_task_completion_pending_ledger_settlement",
+            "state_mutation": "world_trillionnium_task_completion_pending_ledger_settlement",
             "ledger_reward_requires_settlement": true,
             "review_hold_gate_enforced": true,
             "anti_cheese_gate_enforced": true,
-            "source_of_truth": "rust_jianghu_task_completion_handler",
+            "source_of_truth": "rust_trillionnium_task_completion_handler",
             "web_role": "intent_only_visualization_input",
             "updated_at_epoch": now_epoch,
         });
     }
 
     let character = world
-        .world_jianghu_characters
+        .world_trillionnium_characters
         .entry(matrix_user_id.to_string())
-        .or_insert_with(|| WorldJianghuCharacter::default_for(matrix_user_id));
+        .or_insert_with(|| WorldTrillionniumCharacter::default_for(matrix_user_id));
     let known_skills: HashSet<String> = character.skill_ids.iter().cloned().collect();
 
     if matches!(command, "talk_npc" | "offer_task") {
@@ -2444,7 +2560,7 @@ pub(super) fn apply_world_tactics_command(
                         "required_skill_id": required_skill_id,
                         "result": "skill_locked",
                         "rejection_reason": "required_skill_not_known",
-                        "source_of_truth": "rust_jianghu_task_offer_validator",
+                        "source_of_truth": "rust_trillionnium_task_offer_validator",
                         "web_role": "intent_only_visualization_input",
                     });
                 }
@@ -2454,7 +2570,7 @@ pub(super) fn apply_world_tactics_command(
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .unwrap_or("npc-street-compass-sifu");
-        let Some(npc) = jianghu_npc_fixtures()
+        let Some(npc) = trillionnium_npc_fixtures()
             .into_iter()
             .find(|candidate| candidate.npc_id == requested_npc_id)
         else {
@@ -2485,12 +2601,12 @@ pub(super) fn apply_world_tactics_command(
                     "provided_osm_game_overlay_id": provided_overlay_id,
                     "result": "npc_place_mismatch",
                     "rejection_reason": "npc_interaction_requires_matching_osm_spawn_anchor",
-                    "source_of_truth": "rust_jianghu_npc_interaction_validator",
+                    "source_of_truth": "rust_trillionnium_npc_interaction_validator",
                     "web_role": "intent_only_visualization_input",
                 });
             }
         }
-        let allowed_task_archetype_ids = jianghu_npc_task_archetype_ids(&npc);
+        let allowed_task_archetype_ids = trillionnium_npc_task_archetype_ids(&npc);
         let selected_task_archetype_id = task_archetype_id
             .map(str::trim)
             .filter(|value| !value.is_empty())
@@ -2504,7 +2620,7 @@ pub(super) fn apply_world_tactics_command(
                     "npc_has_no_task_archetype",
                 );
             };
-            if jianghu_task_archetype_by_id(selected_task_archetype_id).is_none() {
+            if trillionnium_task_archetype_by_id(selected_task_archetype_id).is_none() {
                 return tactics_command_rejection_json(
                     command,
                     unit_id,
@@ -2526,15 +2642,15 @@ pub(super) fn apply_world_tactics_command(
                     "allowed_task_archetype_ids": allowed_task_archetype_ids,
                     "result": "task_not_offered_by_npc",
                     "rejection_reason": "npc_task_capability_mismatch",
-                    "source_of_truth": "rust_jianghu_task_offer_validator",
+                    "source_of_truth": "rust_trillionnium_task_offer_validator",
                     "web_role": "intent_only_visualization_input",
                 });
             }
         }
         character.title = if command == "offer_task" {
-            "受领江湖任务".to_string()
+            "受领Trillionnium任务".to_string()
         } else {
-            "江湖有约".to_string()
+            "Trillionnium有约".to_string()
         };
         character.updated_at_epoch = now_epoch;
         return json!({
@@ -2544,16 +2660,16 @@ pub(super) fn apply_world_tactics_command(
             "unit_id": unit_id,
             "target_tile": target_tile,
             "npc_id": requested_npc_id,
-            "npc_contract_version": TRILLIONNIUM_JIANGHU_NPC_CONTRACT_VERSION,
-            "npc_spawn_contract_version": TRILLIONNIUM_JIANGHU_NPC_SPAWN_CONTRACT_VERSION,
-            "npc_command_descriptor_contract_version": TRILLIONNIUM_JIANGHU_NPC_COMMAND_DESCRIPTOR_CONTRACT_VERSION,
+            "npc_contract_version": TRILLIONNIUM_NPC_CONTRACT_VERSION,
+            "npc_spawn_contract_version": TRILLIONNIUM_NPC_SPAWN_CONTRACT_VERSION,
+            "npc_command_descriptor_contract_version": TRILLIONNIUM_NPC_COMMAND_DESCRIPTOR_CONTRACT_VERSION,
             "task_archetype_id": selected_task_archetype_id,
-            "task_archetype_contract_version": TRILLIONNIUM_JIANGHU_TASK_ARCHETYPE_CONTRACT_VERSION,
+            "task_archetype_contract_version": TRILLIONNIUM_TASK_ARCHETYPE_CONTRACT_VERSION,
             "required_osm_game_overlay_id": required_overlay_id,
-            "validation_owner": descriptor.get("validation_owner").cloned().unwrap_or_else(|| json!("rust_jianghu_npc_interaction_validator")),
+            "validation_owner": descriptor.get("validation_owner").cloned().unwrap_or_else(|| json!("rust_trillionnium_npc_interaction_validator")),
             "result": if command == "offer_task" { "task_offer_recorded" } else { "npc_talk_recorded" },
             "state_mutation": if command == "offer_task" { "world_task_offer_event_recorded" } else { "npc_relationship_event_recorded" },
-            "source_of_truth": if command == "offer_task" { "rust_jianghu_task_offer_validator" } else { "rust_jianghu_npc_interaction_validator" },
+            "source_of_truth": if command == "offer_task" { "rust_trillionnium_task_offer_validator" } else { "rust_trillionnium_npc_interaction_validator" },
             "web_role": "intent_only_visualization_input",
             "updated_at_epoch": now_epoch,
         });
@@ -2639,10 +2755,10 @@ pub(super) fn apply_world_tactics_command(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or("basic_unarmed");
-    let Some(skill) = jianghu_skill_definition_by_id(requested_skill_id) else {
+    let Some(skill) = trillionnium_skill_definition_by_id(requested_skill_id) else {
         return tactics_command_rejection_json(command, unit_id, target_tile, "unknown_skill_id");
     };
-    let Some(training_command) = jianghu_training_command_for_skill(requested_skill_id) else {
+    let Some(training_command) = trillionnium_training_command_for_skill(requested_skill_id) else {
         return tactics_command_rejection_json(
             command,
             unit_id,
@@ -2652,7 +2768,7 @@ pub(super) fn apply_world_tactics_command(
     };
     let nodes: Vec<WorldMapNode> = world.world_map_nodes.values().cloned().collect();
     let geodata = openstreetmap_geodata_v1_json(&nodes, None);
-    let training_commands = jianghu_training_commands_json(&geodata);
+    let training_commands = trillionnium_training_commands_json(&geodata);
     let training_descriptor = training_commands
         .as_array()
         .and_then(|commands| {
@@ -2710,11 +2826,11 @@ pub(super) fn apply_world_tactics_command(
         "unit_id": unit_id,
         "target_tile": target_tile,
         "skill_id": requested_skill_id,
-        "skill_contract_version": TRILLIONNIUM_JIANGHU_SKILL_CONTRACT_VERSION,
+        "skill_contract_version": TRILLIONNIUM_SKILL_CONTRACT_VERSION,
         "skill_family": skill.family,
         "mentor_npc_id": training_command.mentor_npc_id,
         "mentor_training_task_flow_id": format!("mentor-training:{}", requested_skill_id),
-        "mentor_training_task_contract_version": TRILLIONNIUM_JIANGHU_MENTOR_TRAINING_TASK_CONTRACT_VERSION,
+        "mentor_training_task_contract_version": TRILLIONNIUM_MENTOR_TRAINING_TASK_CONTRACT_VERSION,
         "required_semantic_role": training_command.required_semantic_role,
         "required_osm_game_overlay_id": required_overlay_id,
         "cost_xp": training_command.cost_xp,
@@ -2782,23 +2898,26 @@ pub(super) fn world_tactics_board_projection_json(
             }));
         }
     }
-    let jianghu_character = world_jianghu_character_projection_json(world, matrix_user_id);
+    let trillionnium_character =
+        world_trillionnium_character_projection_json(world, matrix_user_id);
     let units = tactics_units_json(
         matrix_user_id,
-        &jianghu_character,
+        &trillionnium_character,
         arena_overlay_id.clone(),
         market_overlay_id.clone(),
     );
     let available_commands = tactics_available_commands_json();
-    let training_commands = jianghu_training_commands_json(openstreetmap_geodata);
-    let sects = jianghu_sect_fixtures_json(openstreetmap_geodata);
-    let npcs = jianghu_npc_fixtures_json(world, matrix_user_id, openstreetmap_geodata);
-    let npc_spawn_anchors = jianghu_npc_spawn_anchors_json(&npcs);
-    let npc_command_descriptors = jianghu_npc_command_descriptors_from_npcs_json(&npcs);
-    let mentor_training_task_flows = jianghu_mentor_training_task_flows_json(openstreetmap_geodata);
-    let task_archetypes = jianghu_task_archetypes_json(openstreetmap_geodata);
-    let task_candidates = jianghu_task_candidates_json(&task_archetypes);
-    let osm_objectives = jianghu_osm_objectives_json(world, matrix_user_id, openstreetmap_geodata);
+    let training_commands = trillionnium_training_commands_json(openstreetmap_geodata);
+    let sects = trillionnium_sect_fixtures_json(openstreetmap_geodata);
+    let npcs = trillionnium_npc_fixtures_json(world, matrix_user_id, openstreetmap_geodata);
+    let npc_spawn_anchors = trillionnium_npc_spawn_anchors_json(&npcs);
+    let npc_command_descriptors = trillionnium_npc_command_descriptors_from_npcs_json(&npcs);
+    let mentor_training_task_flows =
+        trillionnium_mentor_training_task_flows_json(openstreetmap_geodata);
+    let task_archetypes = trillionnium_task_archetypes_json(openstreetmap_geodata);
+    let task_candidates = trillionnium_task_candidates_json(&task_archetypes);
+    let osm_objectives =
+        trillionnium_osm_objectives_json(world, matrix_user_id, openstreetmap_geodata);
     let osm_objective_count = osm_objectives
         .as_array()
         .map(|objectives| objectives.len())
@@ -2815,9 +2934,12 @@ pub(super) fn world_tactics_board_projection_json(
         .as_array()
         .map(|ticks| ticks.len())
         .unwrap_or(0);
-    let combat_log =
-        jianghu_combat_log_json(&objective_overlay_id, &jianghu_character, &task_candidates);
-    let battle_log = jianghu_battle_log_lines_json(&combat_log);
+    let combat_log = trillionnium_combat_log_json(
+        &objective_overlay_id,
+        &trillionnium_character,
+        &task_candidates,
+    );
+    let battle_log = trillionnium_battle_log_lines_json(&combat_log);
     json!({
         "contract_version": TRILLIONNIUM_TACTICS_BOARD_CONTRACT_VERSION,
         "source_of_truth": "rust_trillionnium_game_state",
@@ -2825,24 +2947,25 @@ pub(super) fn world_tactics_board_projection_json(
         "unit_contract_version": TRILLIONNIUM_TACTICS_UNIT_CONTRACT_VERSION,
         "command_contract_version": TRILLIONNIUM_TACTICS_COMMAND_CONTRACT_VERSION,
         "command_outcome_contract_version": TRILLIONNIUM_TACTICS_COMMAND_OUTCOME_CONTRACT_VERSION,
-        "jianghu_skill_contract_version": TRILLIONNIUM_JIANGHU_SKILL_CONTRACT_VERSION,
-        "jianghu_training_contract_version": TRILLIONNIUM_JIANGHU_TRAINING_CONTRACT_VERSION,
-        "jianghu_sect_contract_version": TRILLIONNIUM_JIANGHU_SECT_CONTRACT_VERSION,
-        "jianghu_npc_contract_version": TRILLIONNIUM_JIANGHU_NPC_CONTRACT_VERSION,
-        "jianghu_sect_osm_binding_contract_version": TRILLIONNIUM_JIANGHU_SECT_OSM_BINDING_CONTRACT_VERSION,
-        "jianghu_npc_spawn_contract_version": TRILLIONNIUM_JIANGHU_NPC_SPAWN_CONTRACT_VERSION,
-        "jianghu_npc_command_descriptor_contract_version": TRILLIONNIUM_JIANGHU_NPC_COMMAND_DESCRIPTOR_CONTRACT_VERSION,
-        "mentor_training_task_contract_version": TRILLIONNIUM_JIANGHU_MENTOR_TRAINING_TASK_CONTRACT_VERSION,
-        "jianghu_task_archetype_contract_version": TRILLIONNIUM_JIANGHU_TASK_ARCHETYPE_CONTRACT_VERSION,
-        "jianghu_task_completion_contract_version": TRILLIONNIUM_JIANGHU_TASK_COMPLETION_CONTRACT_VERSION,
-        "jianghu_reward_gate_contract_version": TRILLIONNIUM_JIANGHU_REWARD_GATE_CONTRACT_VERSION,
-        "jianghu_battle_log_style_contract_version": TRILLIONNIUM_JIANGHU_BATTLE_LOG_STYLE_CONTRACT_VERSION,
-        "jianghu_combat_log_contract_version": TRILLIONNIUM_JIANGHU_COMBAT_LOG_CONTRACT_VERSION,
-        "jianghu_npc_relationship_contract_version": TRILLIONNIUM_JIANGHU_NPC_RELATIONSHIP_CONTRACT_VERSION,
-        "jianghu_osm_objective_contract_version": TRILLIONNIUM_JIANGHU_OSM_OBJECTIVE_CONTRACT_VERSION,
+        "trillionnium_skill_contract_version": TRILLIONNIUM_SKILL_CONTRACT_VERSION,
+        "trillionnium_training_contract_version": TRILLIONNIUM_TRAINING_CONTRACT_VERSION,
+        "trillionnium_sect_contract_version": TRILLIONNIUM_SECT_CONTRACT_VERSION,
+        "trillionnium_npc_contract_version": TRILLIONNIUM_NPC_CONTRACT_VERSION,
+        "trillionnium_sect_osm_binding_contract_version": TRILLIONNIUM_SECT_OSM_BINDING_CONTRACT_VERSION,
+        "trillionnium_npc_spawn_contract_version": TRILLIONNIUM_NPC_SPAWN_CONTRACT_VERSION,
+        "trillionnium_npc_command_descriptor_contract_version": TRILLIONNIUM_NPC_COMMAND_DESCRIPTOR_CONTRACT_VERSION,
+        "mentor_training_task_contract_version": TRILLIONNIUM_MENTOR_TRAINING_TASK_CONTRACT_VERSION,
+        "trillionnium_task_archetype_contract_version": TRILLIONNIUM_TASK_ARCHETYPE_CONTRACT_VERSION,
+        "trillionnium_task_completion_contract_version": TRILLIONNIUM_TASK_COMPLETION_CONTRACT_VERSION,
+        "trillionnium_reward_gate_contract_version": TRILLIONNIUM_REWARD_GATE_CONTRACT_VERSION,
+        "trillionnium_battle_log_style_contract_version": TRILLIONNIUM_BATTLE_LOG_STYLE_CONTRACT_VERSION,
+        "trillionnium_combat_log_contract_version": TRILLIONNIUM_COMBAT_LOG_CONTRACT_VERSION,
+        "trillionnium_npc_relationship_contract_version": TRILLIONNIUM_NPC_RELATIONSHIP_CONTRACT_VERSION,
+        "trillionnium_osm_objective_contract_version": TRILLIONNIUM_OSM_OBJECTIVE_CONTRACT_VERSION,
         "tactics_combat_resolution_contract_version": TRILLIONNIUM_TACTICS_COMBAT_RESOLUTION_CONTRACT_VERSION,
         "tactics_game_session_contract_version": TRILLIONNIUM_TACTICS_GAME_SESSION_CONTRACT_VERSION,
         "tactics_simulation_tick_contract_version": TRILLIONNIUM_TACTICS_SIMULATION_TICK_CONTRACT_VERSION,
+        "tactics_reward_settlement_contract_version": TRILLIONNIUM_TACTICS_REWARD_SETTLEMENT_CONTRACT_VERSION,
         "map_overlay_identity_contract_version": TRILLIONNIUM_MAP_OVERLAY_IDENTITY_CONTRACT_VERSION,
         "open_source_base": {
             "repo": "tranchikhang/MedievalWar",
@@ -2858,8 +2981,8 @@ pub(super) fn world_tactics_board_projection_json(
             "coordinate_system": "A1_to_H8",
             "cells": cells,
         },
-        "jianghu_character": jianghu_character,
-        "skill_definitions": jianghu_skill_definitions_json(),
+        "trillionnium_character": trillionnium_character,
+        "skill_definitions": trillionnium_skill_definitions_json(),
         "training_commands": training_commands,
         "sects": sects,
         "npcs": npcs,
@@ -2872,10 +2995,10 @@ pub(super) fn world_tactics_board_projection_json(
         "map_overlay_identity_index": map_overlay_identity_index,
         "game_session": game_session,
         "simulation_ticks": simulation_ticks,
-        "battle_log_style": jianghu_battle_log_style_json(),
+        "battle_log_style": trillionnium_battle_log_style_json(),
         "combat_log": combat_log,
         "npc_relationship_model": {
-            "contract_version": TRILLIONNIUM_JIANGHU_NPC_RELATIONSHIP_CONTRACT_VERSION,
+            "contract_version": TRILLIONNIUM_NPC_RELATIONSHIP_CONTRACT_VERSION,
             "source_of_truth": "rust_world_relationships_persistent_state",
             "relationship_seed_owner": "rust_trillionnium_game_state",
             "relationship_event_owner": "world_relationships",
@@ -2898,7 +3021,7 @@ pub(super) fn world_tactics_board_projection_json(
             "provider_contract": "OpenStreetMapDataProvider",
             "geodata_contract_version": OPENSTREETMAP_GEODATA_CONTRACT_VERSION,
             "objective_overlay_id": objective_overlay_id,
-            "objective_contract_version": TRILLIONNIUM_JIANGHU_OSM_OBJECTIVE_CONTRACT_VERSION,
+            "objective_contract_version": TRILLIONNIUM_OSM_OBJECTIVE_CONTRACT_VERSION,
             "objective_count": osm_objective_count,
             "map_overlay_identity_contract_version": TRILLIONNIUM_MAP_OVERLAY_IDENTITY_CONTRACT_VERSION,
             "map_overlay_identity_count": map_overlay_identity_count,

@@ -1736,7 +1736,7 @@ struct WorldState {
     #[serde(default)]
     world_player_positions: HashMap<String, WorldPlayerPosition>,
     #[serde(default)]
-    world_jianghu_characters: HashMap<String, WorldJianghuCharacter>,
+    world_trillionnium_characters: HashMap<String, WorldTrillionniumCharacter>,
     #[serde(default)]
     world_assets: Vec<WorldAsset>,
     #[serde(default)]

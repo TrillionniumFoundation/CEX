@@ -4,11 +4,11 @@
 
 No legally clean, browser-ready, permissive **白金英雄坛说 / 英雄坛说** direct base was found.
 
-Use the Hero Tan Shuo search as a **mechanics / Jianghu-system reference layer**, not as the immediate `/world` UI shell fork. The safest near-term plan remains:
+Use the Hero Tan Shuo search as a **mechanics / Trillionnium-system reference layer**, not as the immediate `/world` UI shell fork. The safest near-term plan remains:
 
 1. Keep `tranchikhang/MedievalWar` as the browser tactics/game-shell base.
 2. Use `OpenClawStreetMap` as the real-world underlay and objective/event source.
-3. Use the 白金英雄坛说-like projects below to inform Jianghu mechanics: attributes, skills, sects, NPC dialogue, training, tasks, survival loops, and text-battle flavor.
+3. Use the 白金英雄坛说-like projects below to inform Trillionnium mechanics: attributes, skills, sects, NPC dialogue, training, tasks, survival loops, and text-battle flavor.
 4. Do not copy original proprietary names/assets/text wholesale unless the rights are explicit.
 
 ## Search scope
@@ -74,7 +74,7 @@ MIT is promising, but because the repo is an organized copy of an older game sou
 
 ### Fit
 
-Mechanically rich and close to the desired Jianghu feeling. It is also not browser-native and is tightly bound to RMXP/RGSS conventions.
+Mechanically rich and close to the desired Trillionnium feeling. It is also not browser-native and is tightly bound to RMXP/RGSS conventions.
 
 ### Legal stance
 
@@ -162,7 +162,7 @@ Interesting as an archive/reference, but too large, asset-heavy, and unlicensed 
 Build a **hybrid game shell**:
 
 - **Outer UI / playfield:** keep the open-source browser tactics direction from `MedievalWar` so `/world` feels like a real game rather than a dashboard.
-- **Inner Jianghu loop:** borrow system concepts from `gmud`, `RMXP-Hero`, and `yxts-llm`:
+- **Inner Trillionnium loop:** borrow system concepts from `gmud`, `RMXP-Hero`, and `yxts-llm`:
   - attributes: 臂力 / 身法 / 悟性 / 根骨
   - skills: 基本内功 / 基本拳脚 / 基本剑法 / 基本轻功 / 读书识字
   - sect / mentor / title progression
@@ -170,7 +170,7 @@ Build a **hybrid game shell**:
   - survival/time/resource pressure
   - text battle log flavor
   - task types: 送信 / 找物 / 杀恶人 / 送镖 / 武林大会-like seasonal challenge
-- **Real-world bridge:** OpenClawStreetMap provides terrain, events, route objectives, and local POIs beneath the Jianghu shell.
+- **Real-world bridge:** OpenClawStreetMap provides terrain, events, route objectives, and local POIs beneath the Trillionnium shell.
 
 ### Legal rule
 
@@ -185,9 +185,9 @@ Safe implementation posture:
 
 ## Immediate next implementation target
 
-Do not pivot the `/world` shell into a direct 白金英雄坛说 clone. Instead, layer a **Jianghu RPG panel** onto the current tactics shell:
+Do not pivot the `/world` shell into a direct 白金英雄坛说 clone. Instead, layer a **Trillionnium RPG panel** onto the current tactics shell:
 
-- `data-jianghu-reference="gmud_mit_mechanics_reference"`
+- `data-trillionnium-reference="gmud_mit_mechanics_reference"`
 - player attributes panel
 - skill/training panel
 - sect/NPC/task panel

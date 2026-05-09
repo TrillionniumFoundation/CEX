@@ -2629,7 +2629,7 @@ impl<'a> ClientAppProjectionContext<'a> {
 
     fn json(&self) -> Value {
         let map = self.map.clone();
-        let jianghu_combat_log = map
+        let trillionnium_combat_log = map
             .get("tactics_board")
             .and_then(|board| board.get("combat_log"))
             .cloned()
@@ -2713,7 +2713,7 @@ impl<'a> ClientAppProjectionContext<'a> {
             "route_runner_funnel_telemetry": route_runner_funnel_telemetry,
             "route_archetypes": route_archetypes,
             "commercial_operating_dashboard": commercial_operating_dashboard,
-            "jianghu_combat_log": jianghu_combat_log,
+            "trillionnium_combat_log": trillionnium_combat_log,
             "map": map,
             "feed": feed,
             "map_hub": map_hub,

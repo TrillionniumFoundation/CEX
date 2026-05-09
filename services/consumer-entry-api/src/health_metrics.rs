@@ -1337,19 +1337,34 @@ fn gauge_bool(value: bool) -> u64 {
 }
 
 fn first_maturity_matrix_user_id(league: &LeagueState) -> String {
-    league
+    let mut candidates = league
         .players_by_matrix_user
         .keys()
-        .next()
         .cloned()
-        .or_else(|| {
+        .chain(
             league
                 .world
                 .world_player_positions
                 .values()
-                .next()
-                .map(|position| position.matrix_user_id.clone())
-        })
+                .map(|position| position.matrix_user_id.clone()),
+        )
+        .collect::<Vec<_>>();
+    candidates.sort();
+    candidates.dedup();
+    candidates.sort_by(|left, right| {
+        let left_score = (
+            league_successful_task_count(league, left),
+            league_experience_data_points(league, left),
+        );
+        let right_score = (
+            league_successful_task_count(league, right),
+            league_experience_data_points(league, right),
+        );
+        right_score.cmp(&left_score).then_with(|| left.cmp(right))
+    });
+    candidates
+        .into_iter()
+        .next()
         .unwrap_or_else(|| "@alice:local.dev".to_string())
 }
 

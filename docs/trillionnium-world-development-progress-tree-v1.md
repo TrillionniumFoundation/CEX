@@ -131,7 +131,7 @@ Boundary output to Layer 3:
 
 ### Layer 3 — Rust: Trillionnium game state / simulation
 
-**Role:** actual game. This layer owns the Jianghu systems, tactics board, NPCs, tasks, combat, economy, and persistent player/world progression.
+**Role:** actual game. This layer owns the Trillionnium systems, tactics board, NPCs, tasks, combat, economy, and persistent player/world progression.
 
 Owned responsibilities:
 
@@ -154,7 +154,7 @@ Current status:
 
 - `[x]` existing World/commerce/route-runner loops are Rust-owned.
 - `[~]` tactics shell exists visually, but tactics state is not yet a Rust game model.
-- `[ ]` Jianghu attribute/skill/sect/NPC/task/combat-log systems need Trillionnium-native Rust models.
+- `[ ]` Trillionnium attribute/skill/sect/NPC/task/combat-log systems need Trillionnium-native Rust models.
 
 Boundary output to Layer 4:
 
@@ -178,7 +178,7 @@ Owned responsibilities:
 
 - `/world` projection JSON
 - `/app` / Matrix-compatible projections
-- map/geodata/tactics/Jianghu contract versions
+- map/geodata/tactics/Trillionnium contract versions
 - redaction and privacy boundaries
 - client-ready command descriptors
 - deterministic rendering data, not mutable browser state
@@ -193,7 +193,7 @@ Current status:
 
 - `[x]` map/geodata projection exists.
 - `[x]` web shell consumes projection fields.
-- `[ ]` tactics board and Jianghu mechanics projections need first-class contract versions.
+- `[ ]` tactics board and Trillionnium mechanics projections need first-class contract versions.
 
 Boundary output to Layer 5:
 
@@ -201,7 +201,7 @@ Boundary output to Layer 5:
 {
   "contract_version": "trillionnium_world_game_projection_v1",
   "openstreetmap_geodata": {},
-  "jianghu_character": {},
+  "trillionnium_character": {},
   "tactics_board": {},
   "available_commands": [],
   "legal": { "osm_attribution_visible": true }
@@ -233,7 +233,7 @@ Current status:
 
 - `[x]` `/world` has visible tactics shell and OSM support layer.
 - `[~]` board is still mostly static/CSS scaffold.
-- `[ ]` web must be rewired to render Rust `tactics_board` and `jianghu_character` projections.
+- `[ ]` web must be rewired to render Rust `tactics_board` and `trillionnium_character` projections.
 
 Boundary output to Layer 6:
 
@@ -270,7 +270,7 @@ Must not own:
 Current status:
 
 - `[x]` existing commerce/contract/ledger command handlers are hardened.
-- `[ ]` tactics/Jianghu command handlers need to be introduced and wired to the same ledger/progression discipline.
+- `[ ]` tactics/Trillionnium command handlers need to be introduced and wired to the same ledger/progression discipline.
 
 Command processing rule:
 
@@ -280,9 +280,9 @@ Web intent -> Rust validate -> Rust mutate -> ledger/progression settle -> Rust 
 
 ---
 
-## Jianghu Mechanics Extraction Spec
+## Trillionnium Mechanics Extraction Spec
 
-The goal is not to port 白金英雄坛说 literally. The goal is to extract proven Jianghu/MUD mechanics from `gmud`, `RMXP-Hero`, and `yxts-llm`, then rebuild them as Trillionnium-native Rust systems bound to OSM objectives and the tactics board.
+The goal is not to port 白金英雄坛说 literally. The goal is to extract proven Trillionnium/MUD mechanics from `gmud`, `RMXP-Hero`, and `yxts-llm`, then rebuild them as Trillionnium-native Rust systems bound to OSM objectives and the tactics board.
 
 ### Source references and allowed use
 
@@ -301,7 +301,7 @@ Use original-inspired categories only as inspiration; store Trillionnium-native 
 Initial Rust model target:
 
 ```rust
-struct JianghuAttributes {
+struct TrillionniumAttributes {
     physique: u16,      // body/root durability; inspired by 根骨/体魄
     force: u16,         // raw power; inspired by 臂力
     agility: u16,       // movement/evasion; inspired by 身法
@@ -309,13 +309,13 @@ struct JianghuAttributes {
     resolve: u16,       // morale/internal stability
     craft: u16,         // production/world-work bridge
     commerce: u16,      // market/contract bridge
-    reputation: i32,    // public Jianghu standing
+    reputation: i32,    // public Trillionnium standing
 }
 ```
 
 Progress tree hooks:
 
-- [x] TW-3.4a Add `JianghuAttributes` Rust model.
+- [x] TW-3.4a Add `TrillionniumAttributes` Rust model.
 - [ ] TW-3.4b Add derived stats: max HP, internal energy, move range modifier, learning speed, negotiation bonus.
 - [ ] TW-3.4c Add tests proving derived stats are deterministic and capped.
 
@@ -372,7 +372,7 @@ NPCs should not be static quest vending machines. They should be Rust-owned worl
 Initial NPC fields:
 
 ```rust
-struct JianghuNpc {
+struct TrillionniumNpc {
     npc_id: String,
     display_name: String,
     role: NpcRole,
@@ -393,7 +393,7 @@ Progress tree hooks:
 
 #### Tasks / quests
 
-Task archetypes should combine Jianghu mechanics with OSM objective sources and existing ledger/progression discipline.
+Task archetypes should combine Trillionnium mechanics with OSM objective sources and existing ledger/progression discipline.
 
 Initial task archetypes:
 
@@ -407,7 +407,7 @@ Initial task archetypes:
 
 Progress tree hooks:
 
-- [x] TW-3.6a Add Jianghu task archetype enum.
+- [x] TW-3.6a Add Trillionnium task archetype enum.
 - [x] TW-3.6b Generate task candidates from OSM provider semantic roles.
 - [x] TW-3.6c Bind task completion to Rust command handlers, not browser state.
 - [x] TW-3.6d Route eligible rewards through ledger/review-hold/anti-cheese gates.
@@ -442,7 +442,7 @@ OSM should seed objectives, not decide task truth.
 
 Mapping examples:
 
-| OSM feature/tag | Trillionnium semantic role | Possible Jianghu objective |
+| OSM feature/tag | Trillionnium semantic role | Possible Trillionnium objective |
 | --- | --- | --- |
 | `amenity=marketplace` | market hub | negotiate, recover goods, publish quest card |
 | `amenity=bank` / ledger-adjacent fixture | ledger hall | settlement, debt/reputation repair |
@@ -637,7 +637,7 @@ git log --oneline -5
   - Recommendation: start with patterns only; vendor only when the Rust game-state contract stabilizes.
 - [!] TW-2.12 Do not copy MedievalWar art assets unless license/attribution is tracked.
 
-### TW-3 — Jianghu / Hero Tan Shuo mechanics reference layer
+### TW-3 — Trillionnium / Hero Tan Shuo mechanics reference layer
 
 - [x] TW-3.1 Search and classify 白金英雄坛说 / 英雄坛说 OSS candidates.
 - [x] TW-3.2 Decide no direct fork is legally/product-clean today.
@@ -645,7 +645,7 @@ git log --oneline -5
 - [ ] TW-3.4 Define Trillionnium-native character attributes.
   - Required fields: `physique`, `force`, `agility`, `insight`, `resolve`, `craft`, `commerce`, `reputation`.
   - Source inspiration: gmud/RMXP-Hero/yxts-llm attribute loops; names/content must be Trillionnium-native.
-- [x] TW-3.4a Add `JianghuAttributes` Rust model.
+- [x] TW-3.4a Add `TrillionniumAttributes` Rust model.
 - [x] TW-3.4b Add deterministic derived stats and caps.
 - [x] TW-3.4c Add tests for attribute projection and derived stats.
 - [ ] TW-3.5 Define skill/sect/mentor/NPC relationship models in Rust.
@@ -660,14 +660,14 @@ git log --oneline -5
 - [x] TW-3.5h Bind NPC spawn/anchor to OSM features.
 - [x] TW-3.5i Add talk/training/task-offer command descriptors in projection JSON.
 - [x] TW-3.6 Define text battle/task log style without copying original content.
-- [x] TW-3.6a Add Jianghu task archetype enum.
+- [x] TW-3.6a Add Trillionnium task archetype enum.
 - [x] TW-3.6b Generate task candidates from OSM provider semantic roles.
 - [x] TW-3.6c Bind task completion to Rust command handlers, not browser state.
 - [x] TW-3.6d Route eligible rewards through ledger/review-hold/anti-cheese gates.
 - [x] TW-3.6e Add combat log generator with original Trillionnium templates.
 - [x] TW-3.6f Add tests forbidding source-reference strings from being copied verbatim into production fixtures.
 - [x] TW-3.6g Render combat/task logs in `/world` and Matrix/app projections.
-- [x] TW-3.7 Bind Jianghu mechanics to tactics units and OSM locations.
+- [x] TW-3.7 Bind Trillionnium mechanics to tactics units and OSM locations.
   - Example: mentor NPC at an OSM POI, training unlocks tactics skill.
 - [x] TW-3.7a Add objective generator from `OpenStreetMapDataProvider` features.
 - [x] TW-3.7b Add deterministic seed so fixture/world state yields stable objectives.
@@ -788,13 +788,13 @@ Why this order:
 - It preserves the user's core architecture requirement: Rust is bottom/source of truth.
 - It prevents `/world` from drifting back into a hard-coded HTML shell.
 - It keeps live OSM ingestion disabled while still making the geodata substrate real.
-- It starts Jianghu mechanics in Rust game state instead of as UI-only flavor text.
+- It starts Trillionnium mechanics in Rust game state instead of as UI-only flavor text.
 
 Expected first-slice deliverables:
 
 - `services/consumer-entry-api/src/openstreetmap_geodata.rs`
 - optional `services/consumer-entry-api/src/world_tactics.rs`
-- optional `services/consumer-entry-api/src/jianghu_world.rs`
+- optional `services/consumer-entry-api/src/trillionnium_world.rs`
 - tests proving:
   - fixture provider is deterministic
   - OSM identities are stable
@@ -825,12 +825,12 @@ Expected first-slice deliverables:
   - [x] TW-1.6 OSM provider split into dedicated Rust module.
   - [x] TW-1.7 stable fixture OSM identities added for default world nodes.
   - [x] TW-2.6 Rust-owned tactics board projection added.
-  - [x] TW-3.4a/b/c first Jianghu attributes model, derived stats, and tests added.
+  - [x] TW-3.4a/b/c first Trillionnium attributes model, derived stats, and tests added.
 - Remaining next:
   - [x] TW-1.8 OSM roads/buildings/areas/admin-boundary fixture layers.
   - [x] TW-2.7 Rust-side tactics unit model.
   - [x] TW-2.8 Rust-side tactics command model.
-  - [x] TW-3.5a Jianghu skill definition model.
+  - [x] TW-3.5a Trillionnium skill definition model.
   - [x] TW-3.5c First skill-to-tactics command bindings.
 - Remaining next:
   - [x] TW-1.9 derived geodata database tracking metadata.
@@ -845,9 +845,9 @@ Expected first-slice deliverables:
   - [x] TW-1.9 `openstreetmap_derived_database_metadata_v1`: fixture source, stable import epoch, transform version, derived snapshot id, feature counts, and ODbL/share-alike tracking note.
   - [x] TW-1.10 `openstreetmap_provider_mode_v1`: `fixture` enabled; `overpass_bbox_cache`, `geofabrik_extract_import`, `vendor_tile_cache`, and unknown modes fail closed with network ingestion disabled.
   - [x] TW-2.9 tactics command intents: `/v1/world/tactics/command` JSON route and `/world/web/tactics-command` form route; Web submits intent, Rust validates and records outcome/event.
-  - [x] TW-3.5b `trillionnium_jianghu_training_command_v1`: mentor/OSM-place/cost/cooldown training descriptors plus Rust validator.
-  - [x] TW-3.5d `trillionnium_jianghu_sect_v1`: sect/faction fixture model with OSM anchors, mentor NPCs, requirements, benefits, title ladders.
-  - [x] TW-3.5g `trillionnium_jianghu_npc_v1`: fixture NPCs with OSM anchors, schedules, task capabilities, and training/talk/task command descriptors.
+  - [x] TW-3.5b `trillionnium_training_command_v1`: mentor/OSM-place/cost/cooldown training descriptors plus Rust validator.
+  - [x] TW-3.5d `trillionnium_sect_v1`: sect/faction fixture model with OSM anchors, mentor NPCs, requirements, benefits, title ladders.
+  - [x] TW-3.5g `trillionnium_npc_v1`: fixture NPCs with OSM anchors, schedules, task capabilities, and training/talk/task command descriptors.
 - Validation so far:
   - `cargo test -p consumer-entry-api -- --nocapture` green (`132 passed`).
   - `cargo fmt --all -- --check`, `git diff --check`, `bash -n scripts/check-trillionnium-league-web-e2e.sh`, `cargo test -p matrix-entry-adapter -p ledger-service -- --nocapture` green.
@@ -855,17 +855,17 @@ Expected first-slice deliverables:
   - `CEX_ENV_FILE=run/local-production/.env scripts/check-production-readiness.sh` green: `READY production readiness smoke passed`.
 - Remaining next:
   - [x] TW-3.5e/f/h/i bind sect halls, mentor training task flow, NPC anchors, and talk/training/task-offer descriptors more deeply.
-  - [x] TW-3.6+ Jianghu task archetypes and native battle/task log style.
+  - [x] TW-3.6+ Trillionnium task archetypes and native battle/task log style.
 
 #### Update 2026-05-09 01:2x CST
 
-- Commit: this checkpoint (`feat: bind jianghu npc tasks to osm`).
+- Commit: this checkpoint (`feat: bind trillionnium npc tasks to osm`).
 - Completed next full-dev slice:
-  - [x] TW-3.5e `trillionnium_jianghu_sect_osm_binding_v1`: sect halls now carry explicit OSM anchor bindings, overlay IDs, feature IDs, OSM IDs/types, and fail-closed missing-anchor metadata.
-  - [x] TW-3.5f `trillionnium_jianghu_mentor_training_task_v1`: mentor training now projects task flows with travel/talk/submit/Rust-validate/mutate/record steps, and `train_skill` outcomes include task-flow evidence.
-  - [x] TW-3.5h `trillionnium_jianghu_npc_spawn_anchor_v1`: NPC fixtures now expose spawn anchors tied to OSM semantic-role features.
-  - [x] TW-3.5i `trillionnium_jianghu_npc_command_descriptor_v1`: NPC talk/train/task-offer command descriptors are projected, and `/v1/world/tactics/command` validates `talk_npc` / `offer_task` intents in Rust.
-  - [x] TW-3.6 / TW-3.6a / TW-3.6b: added Trillionnium-native Jianghu task archetypes, OSM-generated task candidates, and `trillionnium_jianghu_battle_log_style_v1` for native battle/task log text.
+  - [x] TW-3.5e `trillionnium_sect_osm_binding_v1`: sect halls now carry explicit OSM anchor bindings, overlay IDs, feature IDs, OSM IDs/types, and fail-closed missing-anchor metadata.
+  - [x] TW-3.5f `trillionnium_mentor_training_task_v1`: mentor training now projects task flows with travel/talk/submit/Rust-validate/mutate/record steps, and `train_skill` outcomes include task-flow evidence.
+  - [x] TW-3.5h `trillionnium_npc_spawn_anchor_v1`: NPC fixtures now expose spawn anchors tied to OSM semantic-role features.
+  - [x] TW-3.5i `trillionnium_npc_command_descriptor_v1`: NPC talk/train/task-offer command descriptors are projected, and `/v1/world/tactics/command` validates `talk_npc` / `offer_task` intents in Rust.
+  - [x] TW-3.6 / TW-3.6a / TW-3.6b: added Trillionnium-native task archetypes, OSM-generated task candidates, and `trillionnium_battle_log_style_v1` for native battle/task log text.
 - Validation so far:
   - `cargo fmt --all -- --check`, `git diff --check`, and `bash -n scripts/check-trillionnium-league-web-e2e.sh` green.
   - `cargo test -p consumer-entry-api world_tactics -- --nocapture` green (`2 passed`).
@@ -879,12 +879,12 @@ Expected first-slice deliverables:
 
 #### Update 2026-05-09 09:53 CST
 
-- Commit: this checkpoint (`feat: gate jianghu task completion rewards`).
+- Commit: this checkpoint (`feat: gate trillionnium task completion rewards`).
 - Completed next TW-3.6c/d slice:
-  - [x] `complete_task` is now a Rust-owned tactics command (`rust_jianghu_task_completion_handler`), not browser state. It validates known Jianghu skill, selected task archetype, OSM-generated task candidate/overlay, and records durable events.
-  - [x] `offer_task` now creates a durable `WorldContract` (`jianghu-task:<archetype>`) so completion has a server-side task to close.
-  - [x] Jianghu task completion creates `WorldContractCompletion`, runs deterministic quality / review-hold / anti-cheese checks, and routes eligible rewards through `settle_world_contract_completion_with_ledger(...)`; player/reputation/economy rewards only release on `settled` / `duplicate` ledger status.
-  - [x] `/world` now renders OSM-generated task completion candidates with `trillionnium_jianghu_task_completion_v1`, `trillionnium_jianghu_reward_gate_v1`, ledger-settlement, review-hold, and anti-cheese contract attributes.
+  - [x] `complete_task` is now a Rust-owned tactics command (`rust_trillionnium_task_completion_handler`), not browser state. It validates known Trillionnium skill, selected task archetype, OSM-generated task candidate/overlay, and records durable events.
+  - [x] `offer_task` now creates a durable `WorldContract` (`trillionnium-task:<archetype>`) so completion has a server-side task to close.
+  - [x] Trillionnium task completion creates `WorldContractCompletion`, runs deterministic quality / review-hold / anti-cheese checks, and routes eligible rewards through `settle_world_contract_completion_with_ledger(...)`; player/reputation/economy rewards only release on `settled` / `duplicate` ledger status.
+  - [x] `/world` now renders OSM-generated task completion candidates with `trillionnium_task_completion_v1`, `trillionnium_reward_gate_v1`, ledger-settlement, review-hold, and anti-cheese contract attributes.
 - Evidence:
   - `cargo check -p consumer-entry-api`
   - `cargo fmt --all -- --check`
@@ -905,18 +905,18 @@ Expected first-slice deliverables:
 
 #### Update 2026-05-09 10:25 CST
 
-- Commit: this checkpoint (`feat: project jianghu combat logs`).
+- Commit: this checkpoint (`feat: project trillionnium combat logs`).
 - Completed next TW-3.6e/f/g slice:
-  - [x] Added `trillionnium_jianghu_combat_log_v1`, a Rust-generated `jianghu_combat_log` payload with native Wuxia/task beats, deterministic log id, style contract, and explicit source-reference safety metadata.
+  - [x] Added `trillionnium_combat_log_v1`, a Rust-generated `trillionnium_combat_log` payload with native Wuxia/task beats, deterministic log id, style contract, and explicit source-reference safety metadata.
   - [x] Replaced generated `battle_log` prose that previously mentioned source-reference repo names with Trillionnium-native beats derived from the combat log.
   - [x] Added tests forbidding copied source-reference strings (`gmud`, `RMXP-Hero`, `yxts-llm`, `Hero Tan`, `tranchikhang/MedievalWar`, `Phaser 3`) inside generated combat-log beat text.
-  - [x] Surfaced the combat/task log through `/world` HTML, `/app` `client_app_json` (`jianghu_combat_log`), and Matrix `/map` card/body fields.
+  - [x] Surfaced the combat/task log through `/world` HTML, `/app` `client_app_json` (`trillionnium_combat_log`), and Matrix `/map` card/body fields.
 - Evidence so far:
   - `cargo fmt --all -- --check`
   - `cargo check -p consumer-entry-api -p matrix-entry-adapter`
   - `bash -n scripts/check-trillionnium-league-web-e2e.sh`
   - `git diff --check`
-  - `cargo test -p consumer-entry-api world_tactics_projection_binds_jianghu_state_to_osm_objectives -- --nocapture` green
+  - `cargo test -p consumer-entry-api world_tactics_projection_binds_trillionnium_state_to_osm_objectives -- --nocapture` green
   - `cargo test -p consumer-entry-api web_map_shells_render_live_event_task_focus_metadata -- --nocapture` green
   - `cargo test -p matrix-entry-adapter route_cards_preserve_focus_node_fields -- --nocapture` green
   - `cargo test -p consumer-entry-api -- --nocapture` green (`132 passed`)
@@ -927,19 +927,19 @@ Expected first-slice deliverables:
   - `CEX_ENV_FILE=run/local-production/.env scripts/check-trillionnium-league-browser-e2e.sh` green (`run/league-browser/browser-e2e-summary-1778294220-134947.json`)
   - `CEX_ENV_FILE=run/local-production/.env scripts/check-production-readiness.sh` green (`READY production readiness smoke passed`)
   - `bash -n scripts/check-matrix-live-room-e2e.sh` green
-  - `CEX_ENV_FILE=run/local-production/.env scripts/check-matrix-live-room-e2e.sh` green (`run/matrix-live/e2e-summary-1778295483.json`, including `world_map_jianghu_combat_log_contract=trillionnium_jianghu_combat_log_v1` and `world_map_jianghu_combat_log_beat_count=4`)
+  - `CEX_ENV_FILE=run/local-production/.env scripts/check-matrix-live-room-e2e.sh` green (`run/matrix-live/e2e-summary-1778295483.json`, including `world_map_trillionnium_combat_log_contract=trillionnium_combat_log_v1` and `world_map_trillionnium_combat_log_beat_count=4`)
 - Remaining next:
   - [x] Run production-like runtime/web gates, commit this slice, and append memory.
   - [ ] TW-3.7+ deterministic tactics combat resolution and NPC relationship persistence.
 
 #### Update 2026-05-09 11:37 CST
 
-- Commit: this checkpoint (`feat: bind jianghu tactics to osm objectives`).
+- Commit: this checkpoint (`feat: bind trillionnium tactics to osm objectives`).
 - Completed next TW-3.7 slice:
-  - [x] Added `trillionnium_jianghu_osm_objective_v1`: `/world` tactics objectives now come from `OpenStreetMapDataProvider` features through a Rust objective generator, not static browser placeholders.
+  - [x] Added `trillionnium_osm_objective_v1`: `/world` tactics objectives now come from `OpenStreetMapDataProvider` features through a Rust objective generator, not static browser placeholders.
   - [x] Added deterministic objective seeds from fixture/provider seed + world state + matrix user, and tests proving repeated projection yields stable OSM objectives.
   - [x] Added `trillionnium_tactics_combat_resolution_v1`: `attack` is now resolved by the Rust tactics combat handler with deterministic target lookup/damage/result metadata; invalid target tiles are rejected server-side.
-  - [x] Added `trillionnium_jianghu_npc_relationship_v1`: NPC cards now project persisted `world_relationships` into relationship/trust/risk state, and accepted talk/training/task/combat commands append relationship events with typed relation kinds.
+  - [x] Added `trillionnium_npc_relationship_v1`: NPC cards now project persisted `world_relationships` into relationship/trust/risk state, and accepted talk/training/task/combat commands append relationship events with typed relation kinds.
   - [x] Surfaced the new OSM-objective / NPC-relationship / combat-resolution contracts in `/world` HTML and Matrix `/map` cards, and hardened web + Matrix E2E gates around those fields.
 - Evidence:
   - `cargo fmt --all -- --check`
@@ -950,7 +950,7 @@ Expected first-slice deliverables:
   - `CEX_ENV_FILE=run/local-production/.env scripts/runtime-manager-linux.sh restart` green
   - `CEX_ENV_FILE=run/local-production/.env scripts/check-trillionnium-league-web-e2e.sh` green (`run/league-web/web-e2e-summary-1778297208.json`)
   - `CEX_ENV_FILE=run/local-production/.env scripts/check-trillionnium-league-browser-e2e.sh` green (`run/league-browser/browser-e2e-summary-1778297217-154346.json`)
-  - `CEX_ENV_FILE=run/local-production/.env scripts/check-matrix-live-room-e2e.sh` green (`run/matrix-live/e2e-summary-1778297800.json`, including `world_map_jianghu_osm_objective_contract`, objective count `11`, NPC relationship contract, and combat resolution contract)
+  - `CEX_ENV_FILE=run/local-production/.env scripts/check-matrix-live-room-e2e.sh` green (`run/matrix-live/e2e-summary-1778297800.json`, including `world_map_trillionnium_osm_objective_contract`, objective count `11`, NPC relationship contract, and combat resolution contract)
   - `CEX_ENV_FILE=run/local-production/.env scripts/check-production-readiness.sh` green (`READY production readiness smoke passed`)
 - Remaining next:
   - [ ] TW-4.4/TW-4.6 persist full tactics game sessions and simulation ticks beyond projected fixture encounters.
@@ -964,7 +964,7 @@ Expected first-slice deliverables:
   - [x] Added `trillionnium_tactics_simulation_tick_v1`: accepted and rejected tactics commands now record deterministic ticks with before/after tile, action cost, simulation effect, accepted flag, and session linkage under `world_state.world_tactics_simulation_ticks`.
   - [x] Added `trillionnium_map_overlay_identity_v1`: map node, OSM feature, and game overlay identity are normalized into a single projection index and referenced by OSM objectives, tactics tiles, and units instead of repeating ad-hoc identity fragments.
   - [x] Surfaced game-session, simulation-tick, and overlay-identity contracts in `/world` HTML, `world-openstreetmap-geodata`, tactics session cards, Matrix `/map` cards, and web/Matrix E2E gates.
-  - [x] Cleaned `/world` English-mode visible defaults for the new tactics/Jianghu shell while preserving Chinese through `data-i18n-zh`; UI audit now reports CJK=0 and overflow=0 for mobile/tablet/desktop, with the map staying in the first-screen contract.
+  - [x] Cleaned `/world` English-mode visible defaults for the new tactics/Trillionnium shell while preserving Chinese through `data-i18n-zh`; UI audit now reports CJK=0 and overflow=0 for mobile/tablet/desktop, with the map staying in the first-screen contract.
 - Evidence:
   - `cargo fmt --all` and `cargo check -p consumer-entry-api -p matrix-entry-adapter`
   - `cargo test -p consumer-entry-api -p matrix-entry-adapter -p ledger-service -- --nocapture` green (`132 + 36 + 11 passed`)
@@ -991,11 +991,11 @@ Expected first-slice deliverables:
   - [x] TW-1.8 `openstreetmap_fixture_layers_v1`: roads, buildings, areas, admin-boundaries, semantic-role mapping, no live Overpass/Geofabrik.
   - [x] TW-2.7 `trillionnium_world_tactics_unit_v1`: Rust-owned unit model with owner/class/hp/energy/position/move/attack/status effects.
   - [x] TW-2.8 `trillionnium_world_tactics_command_v1`: Rust-owned command descriptor model with validation owner, required skill, cost, and web intent target.
-  - [x] TW-3.5a `trillionnium_jianghu_skill_v1`: Trillionnium-native fixture skill definitions.
+  - [x] TW-3.5a `trillionnium_skill_v1`: Trillionnium-native fixture skill definitions.
   - [x] TW-3.5c first skill-to-command bindings via `required_skill_id`.
 - Validation so far:
   - targeted OSM fixture identity/layer test green.
-  - targeted tactics/Jianghu projection test green.
+  - targeted tactics/Trillionnium projection test green.
   - targeted `/world` HTML contract test green.
 - Next recommended slice:
   - [x] TW-1.9 / TW-1.10 derived geodata metadata and provider-mode fail-closed enum.

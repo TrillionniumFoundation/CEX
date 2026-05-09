@@ -118,7 +118,7 @@ fn world_user_visible_copy(value: &str) -> String {
         ("施展技能", "Use skill / 施展技能"),
         ("导师修炼", "Mentor training / 导师修炼"),
         ("交谈问路", "Talk to NPC / 交谈问路"),
-        ("接取江湖任务", "Accept Jianghu task / 接取江湖任务"),
+        ("接取Trillionnium任务", "Accept Trillionnium task / 接取Trillionnium任务"),
         ("提交任务战报", "Submit task report / 提交任务战报"),
         ("接取悬赏", "Accept bounty / 接取悬赏"),
         ("查看底图", "Inspect underlay / 查看底图"),
@@ -227,16 +227,16 @@ fn world_tactics_battle_log_english(kind: &str) -> &'static str {
     }
 }
 
-fn world_jianghu_visible_english(value: &str) -> &'static str {
+fn world_trillionnium_visible_english(value: &str) -> &'static str {
     match value {
         "镜城游侠" => "Mirror City Ranger",
-        "初入江湖" => "New Jianghu Adventurer",
+        "初入Trillionnium" => "New Trillionnium Adventurer",
         "街巷游侠" => "Street Ranger",
         "镜城夜巡" => "Mirror City Night Watch",
         "玄门导师" => "Mystic Mentor",
         "市集掌柜" => "Market Keeper",
         "镖局总管" => "Escort Chief",
-        "江湖说书人" => "Jianghu Storyteller",
+        "Trillionnium说书人" => "Trillionnium Storyteller",
         "青石街导师" => "Bluestone Street Mentor",
         "桥边账房" => "Bridge Ledger Clerk",
         "夜巡步" => "Night Patrol Step",
@@ -247,11 +247,11 @@ fn world_jianghu_visible_english(value: &str) -> &'static str {
         "青石门" => "Bluestone Sect",
         "市井盟" => "Market Alliance",
         "镖局会" => "Escort Guild",
-        _ => "Jianghu state",
+        _ => "Trillionnium state",
     }
 }
 
-fn world_jianghu_skill_english_label(skill_id: &str) -> &'static str {
+fn world_trillionnium_skill_english_label(skill_id: &str) -> &'static str {
     match skill_id {
         "basic_inner_power" => "Inner Power",
         "basic_unarmed" => "Unarmed Form",
@@ -262,7 +262,7 @@ fn world_jianghu_skill_english_label(skill_id: &str) -> &'static str {
         "merchant_routecraft" => "Merchant Routecraft",
         "artifact_crafting" => "Artifact Crafting",
         "streetwise_investigation" => "Streetwise Investigation",
-        _ => "Jianghu Skill",
+        _ => "Trillionnium Skill",
     }
 }
 
@@ -354,7 +354,7 @@ fn world_tactics_objectives_html(tactics_board: &Value) -> String {
             let contract = objective
                 .get("contract_version")
                 .and_then(Value::as_str)
-                .unwrap_or("trillionnium_jianghu_osm_objective_v1");
+                .unwrap_or("trillionnium_osm_objective_v1");
             let completion_owner = objective
                 .get("completion_owner")
                 .and_then(Value::as_str)
@@ -362,7 +362,7 @@ fn world_tactics_objectives_html(tactics_board: &Value) -> String {
             let source_of_truth = objective
                 .get("source_of_truth")
                 .and_then(Value::as_str)
-                .unwrap_or("rust_jianghu_osm_objective_generator");
+                .unwrap_or("rust_trillionnium_osm_objective_generator");
             format!(
                 "<span class=\"tactics-marker objective\" style=\"grid-column:{};grid-row:{}\" data-objective=\"{}\" data-objective-contract=\"{}\" data-osm-game-overlay-id=\"{}\" data-completion-owner=\"{}\" data-source-of-truth=\"{}\" title=\"{}\" data-i18n-en=\"{}\" data-i18n-zh=\"{}\">{}</span>",
                 grid_column,
@@ -415,6 +415,10 @@ fn world_tactics_session_html(tactics_board: &Value) -> String {
         .get("tactics_simulation_tick_contract_version")
         .and_then(Value::as_str)
         .unwrap_or("trillionnium_tactics_simulation_tick_v1");
+    let reward_contract = tactics_board
+        .get("tactics_reward_settlement_contract_version")
+        .and_then(Value::as_str)
+        .unwrap_or("trillionnium_tactics_reward_settlement_v1");
     let overlay_contract = tactics_board
         .get("map_overlay_identity_contract_version")
         .and_then(Value::as_str)
@@ -444,6 +448,22 @@ fn world_tactics_session_html(tactics_board: &Value) -> String {
         .get("current_tick")
         .and_then(Value::as_i64)
         .unwrap_or(0);
+    let objective_progress = session
+        .get("objective_progress")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let objective_goal = session
+        .get("objective_goal")
+        .and_then(Value::as_i64)
+        .unwrap_or(1);
+    let victory_state = session
+        .get("victory_state")
+        .and_then(Value::as_str)
+        .unwrap_or("active");
+    let reward_status = session
+        .get("reward_status")
+        .and_then(Value::as_str)
+        .unwrap_or("not_eligible");
     let tick_count = tactics_board
         .get("simulation_ticks")
         .and_then(Value::as_array)
@@ -455,19 +475,27 @@ fn world_tactics_session_html(tactics_board: &Value) -> String {
         .map(|identities| identities.len())
         .unwrap_or(0);
     format!(
-        "<article id=\"trillionnium-tactics-session-state\" class=\"tactics-base-note\" data-session-contract=\"{}\" data-tick-contract=\"{}\" data-map-overlay-identity-contract=\"{}\" data-session-id=\"{}\" data-persistence-status=\"{}\" data-current-tick=\"{}\" data-tick-count=\"{}\" data-overlay-identity-count=\"{}\" data-source-of-truth=\"rust_world_tactics_game_session\"><strong data-i18n-en=\"Tactics session\" data-i18n-zh=\"战棋会话\">Tactics session</strong><span>round {} · AP {} · unit {} · tick {}</span><small>overlay {} · identities {}</small></article>",
+        "<article id=\"trillionnium-tactics-session-state\" class=\"tactics-base-note\" data-session-contract=\"{}\" data-tick-contract=\"{}\" data-tactics-reward-settlement-contract=\"{}\" data-map-overlay-identity-contract=\"{}\" data-session-id=\"{}\" data-persistence-status=\"{}\" data-current-tick=\"{}\" data-objective-progress=\"{}\" data-objective-goal=\"{}\" data-victory-state=\"{}\" data-reward-status=\"{}\" data-tick-count=\"{}\" data-overlay-identity-count=\"{}\" data-source-of-truth=\"rust_world_tactics_game_session\"><strong data-i18n-en=\"Tactics session\" data-i18n-zh=\"战棋会话\">Tactics session</strong><span>round {} · AP {} · unit {} · objective {}/{} · {}</span><small>reward {} · overlay {} · identities {}</small></article>",
         escape_html_text(session_contract),
         escape_html_text(tick_contract),
+        escape_html_text(reward_contract),
         escape_html_text(overlay_contract),
         escape_html_text(session_id),
         escape_html_text(persistence_status),
         current_tick,
+        objective_progress,
+        objective_goal,
+        escape_html_text(victory_state),
+        escape_html_text(reward_status),
         tick_count,
         overlay_count,
         round,
         action_points,
         escape_html_text(active_unit),
-        current_tick,
+        objective_progress,
+        objective_goal,
+        escape_html_text(victory_state),
+        escape_html_text(reward_status),
         escape_html_text(active_overlay),
         overlay_count,
     )
@@ -526,7 +554,7 @@ fn world_tactics_command_grid_html(tactics_board: &Value) -> String {
         .join("\n")
 }
 
-fn world_jianghu_training_forms_html(
+fn world_trillionnium_training_forms_html(
     tactics_board: &Value,
     current_matrix_user_id: &str,
     csrf_input: &str,
@@ -565,10 +593,10 @@ fn world_jianghu_training_forms_html(
             let contract_version = command
                 .get("contract_version")
                 .and_then(Value::as_str)
-                .unwrap_or("trillionnium_jianghu_training_command_v1");
-            let skill_label_en = world_jianghu_skill_english_label(skill_id);
+                .unwrap_or("trillionnium_training_command_v1");
+            let skill_label_en = world_trillionnium_skill_english_label(skill_id);
             format!(
-                "<form class=\"jianghu-training-form\" method=\"post\" action=\"/world/web/tactics-command\" data-training-contract=\"{}\" data-command=\"train_skill\" data-validation-owner=\"rust_mentor_training_validator\" data-source-of-truth=\"rust_mentor_training_command_model\" data-web-role=\"intent_only_visualization_input\">{}<input type=\"hidden\" name=\"matrix_user_id\" value=\"{}\"><input type=\"hidden\" name=\"command\" value=\"train_skill\"><input type=\"hidden\" name=\"unit_id\" value=\"lord\"><input type=\"hidden\" name=\"target_tile\" value=\"G8\"><input type=\"hidden\" name=\"skill_id\" value=\"{}\"><input type=\"hidden\" name=\"osm_game_overlay_id\" value=\"{}\"><input type=\"hidden\" name=\"body\" value=\"mentor training: {} at {}\"><button type=\"submit\" data-i18n-en=\"Train {}\" data-i18n-zh=\"修炼 {}\">Train {}</button><small>mentor={} · place={} · cost={}xp · cooldown={}s</small></form>",
+                "<form class=\"trillionnium-training-form\" method=\"post\" action=\"/world/web/tactics-command\" data-training-contract=\"{}\" data-command=\"train_skill\" data-validation-owner=\"rust_mentor_training_validator\" data-source-of-truth=\"rust_mentor_training_command_model\" data-web-role=\"intent_only_visualization_input\">{}<input type=\"hidden\" name=\"matrix_user_id\" value=\"{}\"><input type=\"hidden\" name=\"command\" value=\"train_skill\"><input type=\"hidden\" name=\"unit_id\" value=\"lord\"><input type=\"hidden\" name=\"target_tile\" value=\"G8\"><input type=\"hidden\" name=\"skill_id\" value=\"{}\"><input type=\"hidden\" name=\"osm_game_overlay_id\" value=\"{}\"><input type=\"hidden\" name=\"body\" value=\"mentor training: {} at {}\"><button type=\"submit\" data-i18n-en=\"Train {}\" data-i18n-zh=\"修炼 {}\">Train {}</button><small>mentor={} · place={} · cost={}xp · cooldown={}s</small></form>",
                 escape_html_text(contract_version),
                 csrf_input,
                 escape_html_text(current_matrix_user_id),
@@ -589,7 +617,7 @@ fn world_jianghu_training_forms_html(
         .join("\n")
 }
 
-fn world_jianghu_sect_cards_html(tactics_board: &Value) -> String {
+fn world_trillionnium_sect_cards_html(tactics_board: &Value) -> String {
     tactics_board
         .get("sects")
         .and_then(Value::as_array)
@@ -617,7 +645,7 @@ fn world_jianghu_sect_cards_html(tactics_board: &Value) -> String {
             let contract_version = sect
                 .get("contract_version")
                 .and_then(Value::as_str)
-                .unwrap_or("trillionnium_jianghu_sect_v1");
+                .unwrap_or("trillionnium_sect_v1");
             let titles = sect
                 .get("title_ladder")
                 .and_then(Value::as_array)
@@ -630,7 +658,7 @@ fn world_jianghu_sect_cards_html(tactics_board: &Value) -> String {
                 })
                 .unwrap_or_default();
             format!(
-                "<article class=\"mini jianghu-sect-card\" data-sect-id=\"{}\" data-sect-contract=\"{}\" data-osm-game-overlay-id=\"{}\" data-source-of-truth=\"rust_jianghu_sect_model\"><strong>{}</strong><span>{}</span><code>{}</code><small>{}</small></article>",
+                "<article class=\"mini trillionnium-sect-card\" data-sect-id=\"{}\" data-sect-contract=\"{}\" data-osm-game-overlay-id=\"{}\" data-source-of-truth=\"rust_trillionnium_sect_model\"><strong>{}</strong><span>{}</span><code>{}</code><small>{}</small></article>",
                 escape_html_text(sect_id),
                 escape_html_text(contract_version),
                 escape_html_text(overlay_id),
@@ -644,7 +672,7 @@ fn world_jianghu_sect_cards_html(tactics_board: &Value) -> String {
         .join("\n")
 }
 
-fn world_jianghu_npc_cards_html(
+fn world_trillionnium_npc_cards_html(
     tactics_board: &Value,
     current_matrix_user_id: &str,
     csrf_input: &str,
@@ -673,15 +701,15 @@ fn world_jianghu_npc_cards_html(
             let contract_version = npc
                 .get("contract_version")
                 .and_then(Value::as_str)
-                .unwrap_or("trillionnium_jianghu_npc_v1");
+                .unwrap_or("trillionnium_npc_v1");
             let spawn_contract_version = npc
                 .get("spawn_contract_version")
                 .and_then(Value::as_str)
-                .unwrap_or("trillionnium_jianghu_npc_spawn_anchor_v1");
+                .unwrap_or("trillionnium_npc_spawn_anchor_v1");
             let relationship_contract = npc
                 .get("relationship_contract_version")
                 .and_then(Value::as_str)
-                .unwrap_or("trillionnium_jianghu_npc_relationship_v1");
+                .unwrap_or("trillionnium_npc_relationship_v1");
             let relationship_score = npc
                 .get("relationship")
                 .and_then(Value::as_i64)
@@ -709,11 +737,11 @@ fn world_jianghu_npc_cards_html(
                     let descriptor_contract = descriptor
                         .get("contract_version")
                         .and_then(Value::as_str)
-                        .unwrap_or("trillionnium_jianghu_npc_command_descriptor_v1");
+                        .unwrap_or("trillionnium_npc_command_descriptor_v1");
                     let validation_owner = descriptor
                         .get("validation_owner")
                         .and_then(Value::as_str)
-                        .unwrap_or("rust_jianghu_npc_interaction_validator");
+                        .unwrap_or("rust_trillionnium_npc_interaction_validator");
                     let descriptor_overlay_id = descriptor
                         .get("required_osm_game_overlay_id")
                         .and_then(Value::as_str)
@@ -726,9 +754,9 @@ fn world_jianghu_npc_cards_html(
                     let body_template = descriptor
                         .get("body_template")
                         .and_then(Value::as_str)
-                        .unwrap_or("talk to Jianghu NPC");
+                        .unwrap_or("talk to Trillionnium NPC");
                     format!(
-                        "<form class=\"jianghu-npc-command-form\" method=\"post\" action=\"/world/web/tactics-command\" data-npc-command-contract=\"{}\" data-command=\"{}\" data-npc-id=\"{}\" data-validation-owner=\"{}\" data-source-of-truth=\"rust_jianghu_npc_model\" data-web-role=\"intent_only_visualization_input\">{}<input type=\"hidden\" name=\"matrix_user_id\" value=\"{}\"><input type=\"hidden\" name=\"command\" value=\"{}\"><input type=\"hidden\" name=\"unit_id\" value=\"lord\"><input type=\"hidden\" name=\"target_tile\" value=\"G8\"><input type=\"hidden\" name=\"npc_id\" value=\"{}\"><input type=\"hidden\" name=\"task_archetype_id\" value=\"{}\"><input type=\"hidden\" name=\"osm_game_overlay_id\" value=\"{}\"><input type=\"hidden\" name=\"body\" value=\"{}\"><button type=\"submit\">{}</button></form>",
+                        "<form class=\"trillionnium-npc-command-form\" method=\"post\" action=\"/world/web/tactics-command\" data-npc-command-contract=\"{}\" data-command=\"{}\" data-npc-id=\"{}\" data-validation-owner=\"{}\" data-source-of-truth=\"rust_trillionnium_npc_model\" data-web-role=\"intent_only_visualization_input\">{}<input type=\"hidden\" name=\"matrix_user_id\" value=\"{}\"><input type=\"hidden\" name=\"command\" value=\"{}\"><input type=\"hidden\" name=\"unit_id\" value=\"lord\"><input type=\"hidden\" name=\"target_tile\" value=\"G8\"><input type=\"hidden\" name=\"npc_id\" value=\"{}\"><input type=\"hidden\" name=\"task_archetype_id\" value=\"{}\"><input type=\"hidden\" name=\"osm_game_overlay_id\" value=\"{}\"><input type=\"hidden\" name=\"body\" value=\"{}\"><button type=\"submit\">{}</button></form>",
                         escape_html_text(descriptor_contract),
                         escape_html_text(command),
                         escape_html_text(npc_id),
@@ -746,7 +774,7 @@ fn world_jianghu_npc_cards_html(
                 .collect::<Vec<_>>()
                 .join("");
             format!(
-                "<article class=\"mini jianghu-npc-card\" data-npc-id=\"{}\" data-npc-contract=\"{}\" data-npc-spawn-contract=\"{}\" data-npc-relationship-contract=\"{}\" data-relationship-score=\"{}\" data-trust=\"{}\" data-risk-posture=\"{}\" data-sect-id=\"{}\" data-osm-game-overlay-id=\"{}\" data-source-of-truth=\"rust_jianghu_npc_model\"><strong>{}</strong><span>{}</span><small>{} · relationship {} · trust {}</small><div class=\"jianghu-npc-command-stack\">{}</div></article>",
+                "<article class=\"mini trillionnium-npc-card\" data-npc-id=\"{}\" data-npc-contract=\"{}\" data-npc-spawn-contract=\"{}\" data-npc-relationship-contract=\"{}\" data-relationship-score=\"{}\" data-trust=\"{}\" data-risk-posture=\"{}\" data-sect-id=\"{}\" data-osm-game-overlay-id=\"{}\" data-source-of-truth=\"rust_trillionnium_npc_model\"><strong>{}</strong><span>{}</span><small>{} · relationship {} · trust {}</small><div class=\"trillionnium-npc-command-stack\">{}</div></article>",
                 escape_html_text(npc_id),
                 escape_html_text(contract_version),
                 escape_html_text(spawn_contract_version),
@@ -768,7 +796,7 @@ fn world_jianghu_npc_cards_html(
         .join("\n")
 }
 
-fn world_jianghu_task_candidate_forms_html(
+fn world_trillionnium_task_candidate_forms_html(
     tactics_board: &Value,
     current_matrix_user_id: &str,
     csrf_input: &str,
@@ -783,7 +811,7 @@ fn world_jianghu_task_candidate_forms_html(
             let candidate_id = candidate
                 .get("candidate_id")
                 .and_then(Value::as_str)
-                .unwrap_or("jianghu-task:courier_letter");
+                .unwrap_or("trillionnium-task:courier_letter");
             let task_archetype_id = candidate
                 .get("task_archetype_id")
                 .and_then(Value::as_str)
@@ -803,14 +831,14 @@ fn world_jianghu_task_candidate_forms_html(
             let completion_contract = candidate
                 .get("completion_contract_version")
                 .and_then(Value::as_str)
-                .unwrap_or("trillionnium_jianghu_task_completion_v1");
+                .unwrap_or("trillionnium_task_completion_v1");
             let reward_gate_contract = candidate
                 .get("reward_gate_contract_version")
                 .and_then(Value::as_str)
-                .unwrap_or("trillionnium_jianghu_reward_gate_v1");
+                .unwrap_or("trillionnium_reward_gate_v1");
             let task_label = world_user_visible_copy(task_archetype_id);
             format!(
-                "<form class=\"jianghu-task-completion-form\" method=\"post\" action=\"/world/web/tactics-command\" data-candidate-id=\"{}\" data-command=\"complete_task\" data-completion-contract=\"{}\" data-reward-gate-contract=\"{}\" data-reward-gate=\"{}\" data-ledger-reward-requires-settlement=\"true\" data-review-hold-gate-enforced=\"true\" data-anti-cheese-gate-enforced=\"true\" data-source-of-truth=\"rust_jianghu_task_completion_handler\" data-web-role=\"intent_only_visualization_input\">{}<input type=\"hidden\" name=\"matrix_user_id\" value=\"{}\"><input type=\"hidden\" name=\"command\" value=\"complete_task\"><input type=\"hidden\" name=\"unit_id\" value=\"lord\"><input type=\"hidden\" name=\"target_tile\" value=\"G8\"><input type=\"hidden\" name=\"task_archetype_id\" value=\"{}\"><input type=\"hidden\" name=\"osm_game_overlay_id\" value=\"{}\"><input type=\"hidden\" name=\"body\" value=\"Jianghu task report: deliverable captured, evidence package attached, risk controls checked, next action queued, self-review complete.\"><button type=\"submit\" data-i18n-en=\"Submit report · {}\" data-i18n-zh=\"提交战报 · {}\">Submit report · {}</button><small>{} · {}</small></form>",
+                "<form class=\"trillionnium-task-completion-form\" method=\"post\" action=\"/world/web/tactics-command\" data-candidate-id=\"{}\" data-command=\"complete_task\" data-completion-contract=\"{}\" data-reward-gate-contract=\"{}\" data-reward-gate=\"{}\" data-ledger-reward-requires-settlement=\"true\" data-review-hold-gate-enforced=\"true\" data-anti-cheese-gate-enforced=\"true\" data-source-of-truth=\"rust_trillionnium_task_completion_handler\" data-web-role=\"intent_only_visualization_input\">{}<input type=\"hidden\" name=\"matrix_user_id\" value=\"{}\"><input type=\"hidden\" name=\"command\" value=\"complete_task\"><input type=\"hidden\" name=\"unit_id\" value=\"lord\"><input type=\"hidden\" name=\"target_tile\" value=\"G8\"><input type=\"hidden\" name=\"task_archetype_id\" value=\"{}\"><input type=\"hidden\" name=\"osm_game_overlay_id\" value=\"{}\"><input type=\"hidden\" name=\"body\" value=\"Trillionnium task report: deliverable captured, evidence package attached, risk controls checked, next action queued, self-review complete.\"><button type=\"submit\" data-i18n-en=\"Submit report · {}\" data-i18n-zh=\"提交战报 · {}\">Submit report · {}</button><small>{} · {}</small></form>",
                 escape_html_text(candidate_id),
                 escape_html_text(completion_contract),
                 escape_html_text(reward_gate_contract),
@@ -830,8 +858,10 @@ fn world_jianghu_task_candidate_forms_html(
         .join("\n")
 }
 
-fn world_jianghu_status_html(jianghu_character: &Value) -> String {
-    let attributes = jianghu_character.get("attributes").unwrap_or(&Value::Null);
+fn world_trillionnium_status_html(trillionnium_character: &Value) -> String {
+    let attributes = trillionnium_character
+        .get("attributes")
+        .unwrap_or(&Value::Null);
     [
         ("Physique", "体魄", "physique"),
         ("Force", "臂力", "force"),
@@ -849,7 +879,7 @@ fn world_jianghu_status_html(jianghu_character: &Value) -> String {
             (value * 6).clamp(5, 100)
         };
         format!(
-            "<div class=\"tactics-stat-line jianghu-stat\" data-attribute=\"{}\" data-source-of-truth=\"rust_jianghu_character\"><span data-i18n-en=\"{}\" data-i18n-zh=\"{}\">{}</span><div class=\"tactics-meter\"><span style=\"width:{}%\"></span></div><b>{}</b></div>",
+            "<div class=\"tactics-stat-line trillionnium-stat\" data-attribute=\"{}\" data-source-of-truth=\"rust_trillionnium_character\"><span data-i18n-en=\"{}\" data-i18n-zh=\"{}\">{}</span><div class=\"tactics-meter\"><span style=\"width:{}%\"></span></div><b>{}</b></div>",
             escape_html_text(key),
             escape_html_text(label_en),
             escape_html_text(label_zh),
@@ -1225,11 +1255,11 @@ pub(super) async fn get_world_web_shell(
             &openstreetmap_geodata,
         )
     });
-    let jianghu_character = world_map
-        .get("jianghu_character")
+    let trillionnium_character = world_map
+        .get("trillionnium_character")
         .cloned()
         .unwrap_or_else(|| {
-            world_jianghu_character_projection_json(&league.world, current_matrix_user_id)
+            world_trillionnium_character_projection_json(&league.world, current_matrix_user_id)
         });
     let tactics_board_contract = tactics_board
         .get("contract_version")
@@ -1243,46 +1273,46 @@ pub(super) async fn get_world_web_shell(
         .get("command_contract_version")
         .and_then(Value::as_str)
         .unwrap_or("trillionnium_world_tactics_command_v1");
-    let jianghu_skill_contract = tactics_board
-        .get("jianghu_skill_contract_version")
+    let trillionnium_skill_contract = tactics_board
+        .get("trillionnium_skill_contract_version")
         .and_then(Value::as_str)
-        .unwrap_or("trillionnium_jianghu_skill_v1");
-    let jianghu_npc_command_descriptor_contract = tactics_board
-        .get("jianghu_npc_command_descriptor_contract_version")
+        .unwrap_or("trillionnium_skill_v1");
+    let trillionnium_npc_command_descriptor_contract = tactics_board
+        .get("trillionnium_npc_command_descriptor_contract_version")
         .and_then(Value::as_str)
-        .unwrap_or("trillionnium_jianghu_npc_command_descriptor_v1");
-    let jianghu_mentor_training_task_contract = tactics_board
+        .unwrap_or("trillionnium_npc_command_descriptor_v1");
+    let trillionnium_mentor_training_task_contract = tactics_board
         .get("mentor_training_task_contract_version")
         .and_then(Value::as_str)
-        .unwrap_or("trillionnium_jianghu_mentor_training_task_v1");
-    let jianghu_task_archetype_contract = tactics_board
-        .get("jianghu_task_archetype_contract_version")
+        .unwrap_or("trillionnium_mentor_training_task_v1");
+    let trillionnium_task_archetype_contract = tactics_board
+        .get("trillionnium_task_archetype_contract_version")
         .and_then(Value::as_str)
-        .unwrap_or("trillionnium_jianghu_task_archetype_v1");
-    let jianghu_task_completion_contract = tactics_board
-        .get("jianghu_task_completion_contract_version")
+        .unwrap_or("trillionnium_task_archetype_v1");
+    let trillionnium_task_completion_contract = tactics_board
+        .get("trillionnium_task_completion_contract_version")
         .and_then(Value::as_str)
-        .unwrap_or("trillionnium_jianghu_task_completion_v1");
-    let jianghu_reward_gate_contract = tactics_board
-        .get("jianghu_reward_gate_contract_version")
+        .unwrap_or("trillionnium_task_completion_v1");
+    let trillionnium_reward_gate_contract = tactics_board
+        .get("trillionnium_reward_gate_contract_version")
         .and_then(Value::as_str)
-        .unwrap_or("trillionnium_jianghu_reward_gate_v1");
-    let jianghu_battle_log_style_contract = tactics_board
-        .get("jianghu_battle_log_style_contract_version")
+        .unwrap_or("trillionnium_reward_gate_v1");
+    let trillionnium_battle_log_style_contract = tactics_board
+        .get("trillionnium_battle_log_style_contract_version")
         .and_then(Value::as_str)
-        .unwrap_or("trillionnium_jianghu_battle_log_style_v1");
-    let jianghu_combat_log_contract = tactics_board
-        .get("jianghu_combat_log_contract_version")
+        .unwrap_or("trillionnium_battle_log_style_v1");
+    let trillionnium_combat_log_contract = tactics_board
+        .get("trillionnium_combat_log_contract_version")
         .and_then(Value::as_str)
-        .unwrap_or("trillionnium_jianghu_combat_log_v1");
-    let jianghu_npc_relationship_contract = tactics_board
-        .get("jianghu_npc_relationship_contract_version")
+        .unwrap_or("trillionnium_combat_log_v1");
+    let trillionnium_npc_relationship_contract = tactics_board
+        .get("trillionnium_npc_relationship_contract_version")
         .and_then(Value::as_str)
-        .unwrap_or("trillionnium_jianghu_npc_relationship_v1");
-    let jianghu_osm_objective_contract = tactics_board
-        .get("jianghu_osm_objective_contract_version")
+        .unwrap_or("trillionnium_npc_relationship_v1");
+    let trillionnium_osm_objective_contract = tactics_board
+        .get("trillionnium_osm_objective_contract_version")
         .and_then(Value::as_str)
-        .unwrap_or("trillionnium_jianghu_osm_objective_v1");
+        .unwrap_or("trillionnium_osm_objective_v1");
     let tactics_combat_resolution_contract = tactics_board
         .get("tactics_combat_resolution_contract_version")
         .and_then(Value::as_str)
@@ -1295,6 +1325,10 @@ pub(super) async fn get_world_web_shell(
         .get("tactics_simulation_tick_contract_version")
         .and_then(Value::as_str)
         .unwrap_or("trillionnium_tactics_simulation_tick_v1");
+    let tactics_reward_settlement_contract = tactics_board
+        .get("tactics_reward_settlement_contract_version")
+        .and_then(Value::as_str)
+        .unwrap_or("trillionnium_tactics_reward_settlement_v1");
     let map_overlay_identity_contract = tactics_board
         .get("map_overlay_identity_contract_version")
         .and_then(Value::as_str)
@@ -1305,26 +1339,26 @@ pub(super) async fn get_world_web_shell(
     let tactics_battle_log = world_tactics_battle_log_html(&tactics_board);
     let tactics_session_state = world_tactics_session_html(&tactics_board);
     let tactics_command_grid = world_tactics_command_grid_html(&tactics_board);
-    let jianghu_training_forms =
-        world_jianghu_training_forms_html(&tactics_board, current_matrix_user_id, &csrf_input);
-    let jianghu_sect_cards = world_jianghu_sect_cards_html(&tactics_board);
-    let jianghu_npc_cards =
-        world_jianghu_npc_cards_html(&tactics_board, current_matrix_user_id, &csrf_input);
-    let jianghu_task_completion_forms = world_jianghu_task_candidate_forms_html(
+    let trillionnium_training_forms =
+        world_trillionnium_training_forms_html(&tactics_board, current_matrix_user_id, &csrf_input);
+    let trillionnium_sect_cards = world_trillionnium_sect_cards_html(&tactics_board);
+    let trillionnium_npc_cards =
+        world_trillionnium_npc_cards_html(&tactics_board, current_matrix_user_id, &csrf_input);
+    let trillionnium_task_completion_forms = world_trillionnium_task_candidate_forms_html(
         &tactics_board,
         current_matrix_user_id,
         &csrf_input,
     );
-    let jianghu_status_lines = world_jianghu_status_html(&jianghu_character);
-    let jianghu_character_contract = jianghu_character
+    let trillionnium_status_lines = world_trillionnium_status_html(&trillionnium_character);
+    let trillionnium_character_contract = trillionnium_character
         .get("contract_version")
         .and_then(Value::as_str)
-        .unwrap_or("trillionnium_jianghu_character_v1");
-    let jianghu_title = jianghu_character
+        .unwrap_or("trillionnium_character_v1");
+    let trillionnium_title = trillionnium_character
         .get("title")
         .and_then(Value::as_str)
-        .unwrap_or("初入江湖");
-    let jianghu_display_name = jianghu_character
+        .unwrap_or("初入Trillionnium");
+    let trillionnium_display_name = trillionnium_character
         .get("display_name")
         .and_then(Value::as_str)
         .unwrap_or("镜城游侠");
@@ -2205,50 +2239,50 @@ pub(super) async fn get_world_web_shell(
     .world-hero-kicker {{ display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }}
     .world-hero-title {{ display:grid; gap:10px; }}
     .world-hero-actions {{ display:flex; flex-wrap:wrap; gap:10px; margin-top:2px; }}
-    .jianghu-game-shell {{ position:relative; grid-column:1 / -1; display:grid; grid-template-columns:minmax(340px,1.05fr) minmax(280px,.7fr) minmax(280px,.75fr); gap:14px; align-items:stretch; border:1px solid rgba(248,195,91,.32); background:radial-gradient(circle at 18% 0%,rgba(248,195,91,.16),transparent 28rem),linear-gradient(145deg,rgba(19,17,10,.94),rgba(8,10,18,.92)); box-shadow:0 26px 90px rgba(0,0,0,.48), inset 0 0 0 1px rgba(255,255,255,.045); border-radius:26px; padding:16px; margin-bottom:16px; overflow:hidden; }}
-    .jianghu-game-shell::before {{ content:""; position:absolute; inset:0; pointer-events:none; opacity:.13; background-image:linear-gradient(90deg,rgba(100,227,255,.42) 1px,transparent 1px),linear-gradient(0deg,rgba(100,227,255,.32) 1px,transparent 1px),radial-gradient(circle at 68% 34%,rgba(125,255,155,.7),transparent 0.35rem); background-size:54px 54px,54px 54px,100% 100%; mask-image:linear-gradient(180deg,rgba(0,0,0,.75),transparent 72%); }}
-    .jianghu-game-shell > * {{ position:relative; z-index:1; }}
-    .jianghu-room,.jianghu-status,.jianghu-engine-card {{ min-width:0; border:1px solid rgba(248,195,91,.2); background:linear-gradient(180deg,rgba(255,245,205,.08),rgba(255,255,255,.035)); border-radius:20px; padding:16px; }}
-    .jianghu-room {{ display:grid; gap:12px; font-family:"Noto Serif SC", "Songti SC", ui-serif, Georgia, serif; }}
-    .jianghu-room-title {{ display:flex; justify-content:space-between; gap:10px; align-items:center; color:var(--gold); font-weight:950; letter-spacing:.08em; }}
-    .jianghu-log {{ display:grid; gap:7px; border:1px solid rgba(125,255,155,.16); background:rgba(0,0,0,.28); border-radius:16px; padding:12px; color:#d6ffd8; font-size:13px; line-height:1.45; }}
-    .jianghu-log p {{ margin:0; }}
-    .jianghu-prompt {{ display:flex; gap:8px; align-items:center; border-top:1px dashed rgba(248,195,91,.18); padding-top:9px; color:var(--gold); font-weight:950; }}
-    .jianghu-prompt code {{ color:#071018; background:linear-gradient(135deg,#f8c35b,#7dff9b); border-radius:999px; padding:4px 8px; }}
-    .jianghu-scene-text {{ min-height:178px; border-radius:16px; padding:16px; color:#f7e7bd; background:linear-gradient(180deg,rgba(2,5,8,.86),rgba(8,10,15,.92)); border:1px solid rgba(248,195,91,.18); box-shadow:inset 0 0 34px rgba(0,0,0,.54); line-height:1.7; }}
-    .jianghu-scene-text p {{ margin:0 0 10px; }}
-    .jianghu-scene-text code {{ color:#7dff9b; background:rgba(125,255,155,.08); }}
-    .jianghu-exits {{ display:flex; flex-wrap:wrap; gap:8px; margin:0; padding:0; list-style:none; }}
-    .jianghu-exits li {{ border:1px solid rgba(100,227,255,.2); background:rgba(100,227,255,.07); color:var(--cyan); border-radius:999px; padding:6px 10px; font-size:12px; font-weight:900; }}
-    .jianghu-command-grid {{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }}
-    .jianghu-command {{ min-height:44px; display:flex; align-items:center; justify-content:center; text-align:center; text-decoration:none; border-radius:14px; border:1px solid rgba(248,195,91,.24); background:rgba(248,195,91,.095); color:#ffe2a2; font-weight:950; }}
-    .jianghu-command.primary {{ color:#071018; background:linear-gradient(135deg,#f8c35b,#7dff9b); }}
-    .jianghu-status {{ display:grid; gap:10px; }}
-    .jianghu-status h3,.jianghu-engine-card h3 {{ margin:0; color:var(--gold); }}
-    .jianghu-stat-line {{ display:grid; grid-template-columns:78px minmax(0,1fr) auto; gap:8px; align-items:center; color:var(--muted); font-size:13px; }}
-    .jianghu-meter {{ height:9px; border-radius:999px; overflow:hidden; background:rgba(255,255,255,.08); }}
-    .jianghu-meter span {{ display:block; height:100%; border-radius:inherit; background:linear-gradient(90deg,#64e3ff,#7dff9b); }}
-    .jianghu-inventory {{ display:flex; flex-wrap:wrap; gap:7px; }}
-    .jianghu-inventory span {{ border:1px solid rgba(255,255,255,.12); background:rgba(255,255,255,.055); color:var(--text); border-radius:999px; padding:6px 9px; font-size:12px; }}
-    .jianghu-engine-card {{ display:grid; gap:10px; }}
-    .jianghu-engine-rune {{ border:1px dashed rgba(248,195,91,.24); background:rgba(248,195,91,.055); border-radius:16px; padding:12px; }}
-    .jianghu-engine-rune b {{ display:block; color:#ffe2a2; font-size:20px; margin:2px 0; letter-spacing:-.02em; }}
-    .jianghu-engine-rune code {{ color:var(--cyan); background:rgba(100,227,255,.08); border-radius:999px; padding:2px 7px; }}
-    .jianghu-engine-card small {{ color:var(--muted); line-height:1.45; }}
-    .jianghu-npc-command-stack {{ display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }}
-    .jianghu-npc-command-form {{ margin:0; }}
-    .jianghu-npc-command-form button {{ border:1px solid rgba(100,227,255,.22); background:rgba(100,227,255,.08); color:var(--cyan); border-radius:999px; padding:5px 8px; font-size:11px; font-weight:900; cursor:pointer; }}
-    .jianghu-bounty-list {{ display:grid; gap:7px; margin:0; padding:0; list-style:none; }}
-    .jianghu-bounty-list li {{ border:1px solid rgba(255,255,255,.1); background:rgba(255,255,255,.05); border-radius:14px; padding:9px 10px; color:#f7e7bd; font-size:13px; }}
-    .jianghu-game-shell [data-engine-role=underlay] {{ color:var(--cyan); font-weight:900; }}
-    .jianghu-engine-drawer {{ grid-column:1 / -1; border:1px solid rgba(100,227,255,.18); background:rgba(100,227,255,.045); border-radius:18px; overflow:hidden; }}
-    .jianghu-engine-drawer > summary {{ cursor:pointer; list-style:none; display:flex; justify-content:space-between; gap:10px; align-items:center; padding:13px 15px; color:var(--cyan); font-weight:950; }}
-    .jianghu-engine-drawer > summary::-webkit-details-marker {{ display:none; }}
-    .jianghu-engine-drawer > summary::after {{ content:"+"; color:var(--gold); font-size:20px; }}
-    .jianghu-engine-drawer[open] > summary::after {{ content:"–"; }}
-    .jianghu-engine-drawer-body {{ max-height:360px; overflow:auto; padding:0 15px 15px; }}
-    .jianghu-underlay-label {{ grid-column:1 / -1; display:flex; justify-content:space-between; gap:10px; align-items:center; border:1px solid rgba(248,195,91,.18); background:rgba(248,195,91,.06); border-radius:16px; padding:10px 12px; color:var(--muted); font-size:12px; font-weight:850; }}
-    .jianghu-underlay-label strong {{ color:var(--gold); }}
+    .trillionnium-game-shell {{ position:relative; grid-column:1 / -1; display:grid; grid-template-columns:minmax(340px,1.05fr) minmax(280px,.7fr) minmax(280px,.75fr); gap:14px; align-items:stretch; border:1px solid rgba(248,195,91,.32); background:radial-gradient(circle at 18% 0%,rgba(248,195,91,.16),transparent 28rem),linear-gradient(145deg,rgba(19,17,10,.94),rgba(8,10,18,.92)); box-shadow:0 26px 90px rgba(0,0,0,.48), inset 0 0 0 1px rgba(255,255,255,.045); border-radius:26px; padding:16px; margin-bottom:16px; overflow:hidden; }}
+    .trillionnium-game-shell::before {{ content:""; position:absolute; inset:0; pointer-events:none; opacity:.13; background-image:linear-gradient(90deg,rgba(100,227,255,.42) 1px,transparent 1px),linear-gradient(0deg,rgba(100,227,255,.32) 1px,transparent 1px),radial-gradient(circle at 68% 34%,rgba(125,255,155,.7),transparent 0.35rem); background-size:54px 54px,54px 54px,100% 100%; mask-image:linear-gradient(180deg,rgba(0,0,0,.75),transparent 72%); }}
+    .trillionnium-game-shell > * {{ position:relative; z-index:1; }}
+    .trillionnium-room,.trillionnium-status,.trillionnium-engine-card {{ min-width:0; border:1px solid rgba(248,195,91,.2); background:linear-gradient(180deg,rgba(255,245,205,.08),rgba(255,255,255,.035)); border-radius:20px; padding:16px; }}
+    .trillionnium-room {{ display:grid; gap:12px; font-family:"Noto Serif SC", "Songti SC", ui-serif, Georgia, serif; }}
+    .trillionnium-room-title {{ display:flex; justify-content:space-between; gap:10px; align-items:center; color:var(--gold); font-weight:950; letter-spacing:.08em; }}
+    .trillionnium-log {{ display:grid; gap:7px; border:1px solid rgba(125,255,155,.16); background:rgba(0,0,0,.28); border-radius:16px; padding:12px; color:#d6ffd8; font-size:13px; line-height:1.45; }}
+    .trillionnium-log p {{ margin:0; }}
+    .trillionnium-prompt {{ display:flex; gap:8px; align-items:center; border-top:1px dashed rgba(248,195,91,.18); padding-top:9px; color:var(--gold); font-weight:950; }}
+    .trillionnium-prompt code {{ color:#071018; background:linear-gradient(135deg,#f8c35b,#7dff9b); border-radius:999px; padding:4px 8px; }}
+    .trillionnium-scene-text {{ min-height:178px; border-radius:16px; padding:16px; color:#f7e7bd; background:linear-gradient(180deg,rgba(2,5,8,.86),rgba(8,10,15,.92)); border:1px solid rgba(248,195,91,.18); box-shadow:inset 0 0 34px rgba(0,0,0,.54); line-height:1.7; }}
+    .trillionnium-scene-text p {{ margin:0 0 10px; }}
+    .trillionnium-scene-text code {{ color:#7dff9b; background:rgba(125,255,155,.08); }}
+    .trillionnium-exits {{ display:flex; flex-wrap:wrap; gap:8px; margin:0; padding:0; list-style:none; }}
+    .trillionnium-exits li {{ border:1px solid rgba(100,227,255,.2); background:rgba(100,227,255,.07); color:var(--cyan); border-radius:999px; padding:6px 10px; font-size:12px; font-weight:900; }}
+    .trillionnium-command-grid {{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }}
+    .trillionnium-command {{ min-height:44px; display:flex; align-items:center; justify-content:center; text-align:center; text-decoration:none; border-radius:14px; border:1px solid rgba(248,195,91,.24); background:rgba(248,195,91,.095); color:#ffe2a2; font-weight:950; }}
+    .trillionnium-command.primary {{ color:#071018; background:linear-gradient(135deg,#f8c35b,#7dff9b); }}
+    .trillionnium-status {{ display:grid; gap:10px; }}
+    .trillionnium-status h3,.trillionnium-engine-card h3 {{ margin:0; color:var(--gold); }}
+    .trillionnium-stat-line {{ display:grid; grid-template-columns:78px minmax(0,1fr) auto; gap:8px; align-items:center; color:var(--muted); font-size:13px; }}
+    .trillionnium-meter {{ height:9px; border-radius:999px; overflow:hidden; background:rgba(255,255,255,.08); }}
+    .trillionnium-meter span {{ display:block; height:100%; border-radius:inherit; background:linear-gradient(90deg,#64e3ff,#7dff9b); }}
+    .trillionnium-inventory {{ display:flex; flex-wrap:wrap; gap:7px; }}
+    .trillionnium-inventory span {{ border:1px solid rgba(255,255,255,.12); background:rgba(255,255,255,.055); color:var(--text); border-radius:999px; padding:6px 9px; font-size:12px; }}
+    .trillionnium-engine-card {{ display:grid; gap:10px; }}
+    .trillionnium-engine-rune {{ border:1px dashed rgba(248,195,91,.24); background:rgba(248,195,91,.055); border-radius:16px; padding:12px; }}
+    .trillionnium-engine-rune b {{ display:block; color:#ffe2a2; font-size:20px; margin:2px 0; letter-spacing:-.02em; }}
+    .trillionnium-engine-rune code {{ color:var(--cyan); background:rgba(100,227,255,.08); border-radius:999px; padding:2px 7px; }}
+    .trillionnium-engine-card small {{ color:var(--muted); line-height:1.45; }}
+    .trillionnium-npc-command-stack {{ display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }}
+    .trillionnium-npc-command-form {{ margin:0; }}
+    .trillionnium-npc-command-form button {{ border:1px solid rgba(100,227,255,.22); background:rgba(100,227,255,.08); color:var(--cyan); border-radius:999px; padding:5px 8px; font-size:11px; font-weight:900; cursor:pointer; }}
+    .trillionnium-bounty-list {{ display:grid; gap:7px; margin:0; padding:0; list-style:none; }}
+    .trillionnium-bounty-list li {{ border:1px solid rgba(255,255,255,.1); background:rgba(255,255,255,.05); border-radius:14px; padding:9px 10px; color:#f7e7bd; font-size:13px; }}
+    .trillionnium-game-shell [data-engine-role=underlay] {{ color:var(--cyan); font-weight:900; }}
+    .trillionnium-engine-drawer {{ grid-column:1 / -1; border:1px solid rgba(100,227,255,.18); background:rgba(100,227,255,.045); border-radius:18px; overflow:hidden; }}
+    .trillionnium-engine-drawer > summary {{ cursor:pointer; list-style:none; display:flex; justify-content:space-between; gap:10px; align-items:center; padding:13px 15px; color:var(--cyan); font-weight:950; }}
+    .trillionnium-engine-drawer > summary::-webkit-details-marker {{ display:none; }}
+    .trillionnium-engine-drawer > summary::after {{ content:"+"; color:var(--gold); font-size:20px; }}
+    .trillionnium-engine-drawer[open] > summary::after {{ content:"–"; }}
+    .trillionnium-engine-drawer-body {{ max-height:360px; overflow:auto; padding:0 15px 15px; }}
+    .trillionnium-underlay-label {{ grid-column:1 / -1; display:flex; justify-content:space-between; gap:10px; align-items:center; border:1px solid rgba(248,195,91,.18); background:rgba(248,195,91,.06); border-radius:16px; padding:10px 12px; color:var(--muted); font-size:12px; font-weight:850; }}
+    .trillionnium-underlay-label strong {{ color:var(--gold); }}
     .tactics-game-shell {{ position:relative; grid-column:1 / -1; order:4; display:grid; grid-template-columns:minmax(360px,1.15fr) minmax(280px,.72fr) minmax(280px,.76fr); gap:14px; align-items:stretch; border:1px solid rgba(248,195,91,.34); background:radial-gradient(circle at 18% 0%,rgba(248,195,91,.18),transparent 26rem),radial-gradient(circle at 78% 26%,rgba(100,227,255,.14),transparent 22rem),linear-gradient(145deg,rgba(16,18,26,.96),rgba(6,8,15,.94)); box-shadow:0 26px 90px rgba(0,0,0,.52), inset 0 0 0 1px rgba(255,255,255,.045); border-radius:26px; padding:16px; margin-bottom:16px; max-height:1900px; overflow:auto; }}
     .tactics-game-shell::before {{ content:""; position:absolute; inset:0; pointer-events:none; opacity:.16; background-image:linear-gradient(90deg,rgba(248,195,91,.42) 1px,transparent 1px),linear-gradient(0deg,rgba(248,195,91,.32) 1px,transparent 1px); background-size:56px 56px; mask-image:linear-gradient(180deg,rgba(0,0,0,.75),transparent 80%); }}
     .tactics-game-shell > * {{ position:relative; z-index:1; }}
@@ -2383,7 +2417,7 @@ pub(super) async fn get_world_web_shell(
     .mini > * {{ min-width:0; max-width:100%; overflow-wrap:anywhere; word-break:break-word; }}
     #world-real-map {{ order:1; min-height:min(28vh,260px); border-radius:20px; overflow:hidden; border:1px solid rgba(100,227,255,.24); box-shadow:0 18px 60px rgba(0,0,0,.34); background:#0b1220; opacity:.72; }}
     #world-map-shell-panel .map-copy {{ order:3; }}
-    .jianghu-underlay-label {{ order:2; }}
+    .trillionnium-underlay-label {{ order:2; }}
     #world-real-map .leaflet-tile-pane {{ filter:saturate(.72) contrast(.88) brightness(.82); }}
     #world-real-map .trillionnium-active-route-line {{ filter:drop-shadow(0 0 8px rgba(100,227,255,.58)); }}
     #world-real-map .leaflet-control-zoom a {{ width:40px; height:40px; line-height:40px; font-size:20px; }}
@@ -2397,8 +2431,8 @@ pub(super) async fn get_world_web_shell(
     .cta.secondary {{ color:var(--text); background:rgba(255,255,255,.07); border:1px solid rgba(100,227,255,.24); }}
     .secondary-link {{ color:var(--cyan); font-weight:850; text-decoration:none; border-bottom:1px solid rgba(100,227,255,.42); width:max-content; min-height:44px; display:inline-flex; align-items:center; }}
     @media (max-width:1180px) {{
-      .jianghu-game-shell {{ grid-template-columns:1fr; }}
-      .jianghu-command-grid {{ grid-template-columns:repeat(3,minmax(0,1fr)); }}
+      .trillionnium-game-shell {{ grid-template-columns:1fr; }}
+      .trillionnium-command-grid {{ grid-template-columns:repeat(3,minmax(0,1fr)); }}
       .tactics-game-shell {{ grid-template-columns:1fr; }}
       .tactics-command-grid {{ grid-template-columns:repeat(3,minmax(0,1fr)); }}
     }}
@@ -2419,9 +2453,9 @@ pub(super) async fn get_world_web_shell(
       #world-commerce-panel {{ order:4; }}
       #world-map-move-panel {{ order:5; }}
       #world-map-shell-panel .map-shell {{ display:contents; }}
-      .jianghu-game-shell {{ order:4; }}
+      .trillionnium-game-shell {{ order:4; }}
       .tactics-game-shell {{ order:4; max-height:2400px; }}
-      .jianghu-underlay-label {{ order:2; }}
+      .trillionnium-underlay-label {{ order:2; }}
       #world-real-map {{ order:1; min-height:min(28svh,240px); }}
       #world-map-shell-panel .map-copy {{ order:3; max-height:none; overflow:hidden; border:1px solid rgba(100,227,255,.18); background:rgba(100,227,255,.045); border-radius:22px; padding:0; }}
       #world-map-move-panel .mini-grid,
@@ -2462,11 +2496,11 @@ pub(super) async fn get_world_web_shell(
       .language-switcher {{ padding:5px 6px 5px 8px; font-size:11px; }}
       .language-switcher select {{ min-height:40px; min-width:82px; max-width:112px; padding:6px 22px 6px 8px; font-size:11px; }}
       .world-hero-actions {{ display:grid; grid-template-columns:1fr; gap:8px; }}
-      .jianghu-game-shell {{ padding:10px; border-radius:20px; gap:10px; }}
-      .jianghu-room,.jianghu-status,.jianghu-engine-card {{ padding:12px; border-radius:16px; }}
-      .jianghu-scene-text {{ min-height:150px; padding:12px; font-size:13px; line-height:1.58; }}
-      .jianghu-command-grid {{ grid-template-columns:repeat(2,minmax(0,1fr)); }}
-      .jianghu-command {{ font-size:12px; padding:8px; }}
+      .trillionnium-game-shell {{ padding:10px; border-radius:20px; gap:10px; }}
+      .trillionnium-room,.trillionnium-status,.trillionnium-engine-card {{ padding:12px; border-radius:16px; }}
+      .trillionnium-scene-text {{ min-height:150px; padding:12px; font-size:13px; line-height:1.58; }}
+      .trillionnium-command-grid {{ grid-template-columns:repeat(2,minmax(0,1fr)); }}
+      .trillionnium-command {{ font-size:12px; padding:8px; }}
       .tactics-game-shell {{ padding:10px; border-radius:20px; gap:10px; }}
       .tactics-board-card,.tactics-command-card,.tactics-base-card {{ padding:12px; border-radius:16px; }}
       .tactics-board {{ min-height:min(88vw,430px); gap:3px; padding:6px; border-radius:15px; }}
@@ -2508,7 +2542,7 @@ pub(super) async fn get_world_web_shell(
       #world-map-shell-panel .map-shell {{ display:contents; }}
       #world-map-shell-panel .map-copy {{ order:3; border:1px solid rgba(100,227,255,.18); background:rgba(100,227,255,.045); border-radius:20px; padding:0; }}
       .map-shell {{ gap:12px; }}
-      .jianghu-underlay-label {{ order:2; }}
+      .trillionnium-underlay-label {{ order:2; }}
       .tactics-game-shell {{ order:4; max-height:2200px; }}
       #world-real-map {{ order:1; min-height:min(28svh,220px); border-radius:18px; }}
       .map-stream-hud,.overlay-toggle-bar,.focus-stack {{ gap:6px; }}
@@ -2605,7 +2639,7 @@ pub(super) async fn get_world_web_shell(
     </section>
     <section id="world-map-shell-panel" class="panel" data-bootstrap-mode="truncated_runtime_bootstrap_with_lazy_delta_hydration" data-bootstrap-payload-bytes="{world_map_bootstrap_bytes}" data-cache-contract="trillionnium_world_map_payload_cache_v1">
       <div class="map-shell">
-        <section id="trillionnium-tactics-game-shell" class="tactics-game-shell" data-contract-version="trillionnium_open_source_tactics_world_shell_v1" data-tactics-board-contract="{tactics_board_contract}" data-tactics-unit-contract="{tactics_unit_contract}" data-tactics-command-contract="{tactics_command_contract}" data-jianghu-character-contract="{jianghu_character_contract}" data-jianghu-skill-contract="{jianghu_skill_contract}" data-jianghu-npc-command-descriptor-contract="{jianghu_npc_command_descriptor_contract}" data-mentor-training-task-contract="{jianghu_mentor_training_task_contract}" data-jianghu-task-archetype-contract="{jianghu_task_archetype_contract}" data-jianghu-task-completion-contract="{jianghu_task_completion_contract}" data-jianghu-reward-gate-contract="{jianghu_reward_gate_contract}" data-jianghu-battle-log-style-contract="{jianghu_battle_log_style_contract}" data-jianghu-combat-log-contract="{jianghu_combat_log_contract}" data-jianghu-npc-relationship-contract="{jianghu_npc_relationship_contract}" data-jianghu-osm-objective-contract="{jianghu_osm_objective_contract}" data-tactics-combat-resolution-contract="{tactics_combat_resolution_contract}" data-tactics-game-session-contract="{tactics_game_session_contract}" data-tactics-simulation-tick-contract="{tactics_simulation_tick_contract}" data-map-overlay-identity-contract="{map_overlay_identity_contract}" data-interface-style="turn_based_strategy_rpg" data-open-source-base="tranchikhang/MedievalWar" data-base-license="MIT" data-base-url="https://github.com/tranchikhang/MedievalWar" data-base-engine="Phaser 3" data-base-patterns="map,cursor,control,turn_system,pathfinding,context_menu,objectives,ai" data-asset-policy="no_proprietary_assets_css_tokens_first" data-map-engine-role="openclawstreetmap_underlay" data-underlay-engine="{map_engine_id}" data-underlay-provider="{tile_provider}" data-source-of-truth="rust_trillionnium_game_state" aria-label="Open-source tactics Trillionnium game shell" data-i18n-aria-label-en="Open-source tactics Trillionnium game shell" data-i18n-aria-label-zh="开源战棋 Trillionnium 游戏界面">
+        <section id="trillionnium-tactics-game-shell" class="tactics-game-shell" data-contract-version="trillionnium_open_source_tactics_world_shell_v1" data-tactics-board-contract="{tactics_board_contract}" data-tactics-unit-contract="{tactics_unit_contract}" data-tactics-command-contract="{tactics_command_contract}" data-trillionnium-character-contract="{trillionnium_character_contract}" data-trillionnium-skill-contract="{trillionnium_skill_contract}" data-trillionnium-npc-command-descriptor-contract="{trillionnium_npc_command_descriptor_contract}" data-mentor-training-task-contract="{trillionnium_mentor_training_task_contract}" data-trillionnium-task-archetype-contract="{trillionnium_task_archetype_contract}" data-trillionnium-task-completion-contract="{trillionnium_task_completion_contract}" data-trillionnium-reward-gate-contract="{trillionnium_reward_gate_contract}" data-trillionnium-battle-log-style-contract="{trillionnium_battle_log_style_contract}" data-trillionnium-combat-log-contract="{trillionnium_combat_log_contract}" data-trillionnium-npc-relationship-contract="{trillionnium_npc_relationship_contract}" data-trillionnium-osm-objective-contract="{trillionnium_osm_objective_contract}" data-tactics-combat-resolution-contract="{tactics_combat_resolution_contract}" data-tactics-game-session-contract="{tactics_game_session_contract}" data-tactics-simulation-tick-contract="{tactics_simulation_tick_contract}" data-tactics-reward-settlement-contract="{tactics_reward_settlement_contract}" data-map-overlay-identity-contract="{map_overlay_identity_contract}" data-interface-style="turn_based_strategy_rpg" data-open-source-base="tranchikhang/MedievalWar" data-base-license="MIT" data-base-url="https://github.com/tranchikhang/MedievalWar" data-base-engine="Phaser 3" data-base-patterns="map,cursor,control,turn_system,pathfinding,context_menu,objectives,ai" data-asset-policy="no_proprietary_assets_css_tokens_first" data-map-engine-role="openclawstreetmap_underlay" data-underlay-engine="{map_engine_id}" data-underlay-provider="{tile_provider}" data-source-of-truth="rust_trillionnium_game_state" aria-label="Open-source tactics Trillionnium game shell" data-i18n-aria-label-en="Open-source tactics Trillionnium game shell" data-i18n-aria-label-zh="开源战棋 Trillionnium 游戏界面">
           <article class="tactics-board-card">
             <div class="tactics-board-title"><span data-i18n-en="Three Kingdoms Tactics · Mirror Street Battle" data-i18n-zh="【三国战棋】镜像街巷战役">Three Kingdoms Tactics · Mirror Street Battle</span><code data-engine-role="underlay" data-underlay-name="OpenClawStreetMap" data-i18n-en="real street engine" data-i18n-zh="真实街巷引擎">real street engine</code></div>
             <div class="tactics-board" role="grid" aria-label="Trillionnium turn based tactics board" data-i18n-aria-label-en="Trillionnium turn based tactics board" data-i18n-aria-label-zh="Trillionnium 回合制战棋棋盘">
@@ -2621,8 +2655,8 @@ pub(super) async fn get_world_web_shell(
           </article>
           <aside class="tactics-command-card" aria-label="Tactics command menu" data-i18n-aria-label-en="Tactics command menu" data-i18n-aria-label-zh="战棋指令菜单">
             <h3 data-i18n-en="Tactics command menu" data-i18n-zh="战棋指令菜单">Tactics command menu</h3>
-            <div class="tactics-base-note" data-source-of-truth="rust_jianghu_character"><strong data-i18n-en="{jianghu_display_name_en}" data-i18n-zh="{jianghu_display_name_zh}">{jianghu_display_name_en}</strong><span data-i18n-en="{jianghu_title_en}" data-i18n-zh="{jianghu_title_zh}">{jianghu_title_en}</span></div>
-            {jianghu_status_lines}
+            <div class="tactics-base-note" data-source-of-truth="rust_trillionnium_character"><strong data-i18n-en="{trillionnium_display_name_en}" data-i18n-zh="{trillionnium_display_name_zh}">{trillionnium_display_name_en}</strong><span data-i18n-en="{trillionnium_title_en}" data-i18n-zh="{trillionnium_title_zh}">{trillionnium_title_en}</span></div>
+            {trillionnium_status_lines}
             {tactics_session_state}
             <div class="tactics-stat-line"><span data-i18n-en="Orders" data-i18n-zh="军令">Orders</span><div class="tactics-meter"><span style="width:86%"></span></div><b>{map_avatar_route_runner_count}</b></div>
             <div class="tactics-stat-line"><span data-i18n-en="Reputation" data-i18n-zh="声望">Reputation</span><div class="tactics-meter"><span style="width:72%"></span></div><b>{map_route_runner_mastery_xp}</b></div>
@@ -2631,10 +2665,10 @@ pub(super) async fn get_world_web_shell(
             <nav class="tactics-command-grid" aria-label="Tactical actions" data-i18n-aria-label-en="Tactical actions" data-i18n-aria-label-zh="战术动作">
               {tactics_command_grid}
             </nav>
-            <section id="trillionnium-jianghu-training" class="jianghu-training-panel" data-training-contract="trillionnium_jianghu_training_command_v1" data-command-endpoint="/world/web/tactics-command" data-api-command-endpoint="/v1/world/tactics/command" data-source-of-truth="rust_mentor_training_validator" aria-label="Jianghu mentor training" data-i18n-aria-label-en="Jianghu mentor training" data-i18n-aria-label-zh="江湖导师修炼">
+            <section id="trillionnium-training" class="trillionnium-training-panel" data-training-contract="trillionnium_training_command_v1" data-command-endpoint="/world/web/tactics-command" data-api-command-endpoint="/v1/world/tactics/command" data-source-of-truth="rust_mentor_training_validator" aria-label="Trillionnium mentor training" data-i18n-aria-label-en="Trillionnium mentor training" data-i18n-aria-label-zh="Trillionnium导师修炼">
               <h4 data-i18n-en="Mentor training" data-i18n-zh="导师修炼">Mentor training</h4>
               <p data-i18n-en="Web sends intent only; Rust checks mentor, OSM place, cost, cooldown, and skill mutation." data-i18n-zh="网页只提交意图；Rust 校验导师、OSM 地点、消耗、冷却和技能变更。">Web sends intent only; Rust checks mentor, OSM place, cost, cooldown, and skill mutation.</p>
-              {jianghu_training_forms}
+              {trillionnium_training_forms}
             </section>
             <div class="tactics-chip-row" aria-label="Tactics rules" data-i18n-aria-label-en="Tactics rules" data-i18n-aria-label-zh="战棋规则">
               <span data-i18n-en="deterministic combat" data-i18n-zh="确定性战斗">deterministic combat</span>
@@ -2655,22 +2689,22 @@ pub(super) async fn get_world_web_shell(
               <li data-i18n-en="Resources: bounty cards become orders, and reward pools become loot." data-i18n-zh="资源：悬赏牌变成军令，奖励池变成战利品。">Resources: bounty cards become orders, and reward pools become loot.</li>
               <li data-i18n-en="Underlay: OpenClawStreetMap only feeds terrain and encounters; it does not own the main UI." data-i18n-zh="底图：OpenClawStreetMap 只做地形和遭遇输入，不抢主界面。">Underlay: OpenClawStreetMap only feeds terrain and encounters; it does not own the main UI.</li>
             </ul>
-            <section id="trillionnium-jianghu-npcs" class="jianghu-social-grid" data-sect-contract="trillionnium_jianghu_sect_v1" data-sect-osm-binding-contract="trillionnium_jianghu_sect_osm_binding_v1" data-npc-contract="trillionnium_jianghu_npc_v1" data-npc-spawn-contract="trillionnium_jianghu_npc_spawn_anchor_v1" data-npc-command-descriptor-contract="trillionnium_jianghu_npc_command_descriptor_v1" data-source-of-truth="rust_jianghu_npc_model" aria-label="Jianghu sects and NPCs" data-i18n-aria-label-en="Jianghu sects and NPCs" data-i18n-aria-label-zh="江湖门派与 NPC">
+            <section id="trillionnium-npcs" class="trillionnium-social-grid" data-sect-contract="trillionnium_sect_v1" data-sect-osm-binding-contract="trillionnium_sect_osm_binding_v1" data-npc-contract="trillionnium_npc_v1" data-npc-spawn-contract="trillionnium_npc_spawn_anchor_v1" data-npc-command-descriptor-contract="trillionnium_npc_command_descriptor_v1" data-source-of-truth="rust_trillionnium_npc_model" aria-label="Trillionnium sects and NPCs" data-i18n-aria-label-en="Trillionnium sects and NPCs" data-i18n-aria-label-zh="Trillionnium门派与 NPC">
               <h4 data-i18n-en="Sects / mentors / NPCs" data-i18n-zh="门派 / 导师 / NPC">Sects / mentors / NPCs</h4>
-              <div class="mini-grid">{jianghu_sect_cards}</div>
-              <div class="mini-grid">{jianghu_npc_cards}</div>
+              <div class="mini-grid">{trillionnium_sect_cards}</div>
+              <div class="mini-grid">{trillionnium_npc_cards}</div>
             </section>
-            <section id="trillionnium-jianghu-task-candidates" class="jianghu-task-candidate-grid" data-completion-contract="{jianghu_task_completion_contract}" data-reward-gate-contract="{jianghu_reward_gate_contract}" data-ledger-reward-requires-settlement="true" data-review-hold-gate-enforced="true" data-anti-cheese-gate-enforced="true" data-source-of-truth="rust_jianghu_task_completion_handler" data-web-role="intent_only_visualization_input" aria-label="Jianghu task completion candidates" data-i18n-aria-label-en="Jianghu task completion candidates" data-i18n-aria-label-zh="江湖任务提交候选">
+            <section id="trillionnium-task-candidates" class="trillionnium-task-candidate-grid" data-completion-contract="{trillionnium_task_completion_contract}" data-reward-gate-contract="{trillionnium_reward_gate_contract}" data-ledger-reward-requires-settlement="true" data-review-hold-gate-enforced="true" data-anti-cheese-gate-enforced="true" data-source-of-truth="rust_trillionnium_task_completion_handler" data-web-role="intent_only_visualization_input" aria-label="Trillionnium task completion candidates" data-i18n-aria-label-en="Trillionnium task completion candidates" data-i18n-aria-label-zh="Trillionnium任务提交候选">
               <h4 data-i18n-en="Task reports / reward gate" data-i18n-zh="任务战报 / 奖励门禁">Task reports / reward gate</h4>
               <p data-i18n-en="Submit task reports from OSM-generated candidates; Rust validates completion, review hold, anti-cheese, and ledger settlement before rewards release." data-i18n-zh="从 OSM 生成的候选任务提交战报；Rust 校验完成、复核暂挂、反刷和账本结算后才释放奖励。">Submit task reports from OSM-generated candidates; Rust validates completion, review hold, anti-cheese, and ledger settlement before rewards release.</p>
-              <div class="mini-grid">{jianghu_task_completion_forms}</div>
+              <div class="mini-grid">{trillionnium_task_completion_forms}</div>
             </section>
             <small data-i18n-en="Next mod path: replace placeholder units with Trillionnium agents, convert POIs into capture points, and use route evidence as battle reports." data-i18n-zh="下一步魔改：把占位单位替换为 Trillionnium Agent，把 POI 转成占领点，把路线证据转成战报。">Next mod path: replace placeholder units with Trillionnium agents, convert POIs into capture points, and use route evidence as battle reports.</small>
           </aside>
         </section>
-        <details class="map-copy jianghu-engine-drawer" data-default-state="collapsed" data-openclawstreetmap-role="supporting_engine_diagnostics">
+        <details class="map-copy trillionnium-engine-drawer" data-default-state="collapsed" data-openclawstreetmap-role="supporting_engine_diagnostics">
           <summary data-i18n-en="OpenClawStreetMap underlay / engine details" data-i18n-zh="OpenClawStreetMap 底层引擎 / 技术细节">OpenClawStreetMap underlay / engine details</summary>
-          <div class="jianghu-engine-drawer-body">
+          <div class="trillionnium-engine-drawer-body">
           <div class="pill" data-i18n-en="{map_product_name_html}" data-i18n-zh="Trillionnium 世界地图">{map_product_name_html}</div>
           <h2 data-i18n-en="OpenStreetMap upgraded into a playable world" data-i18n-zh="把 OpenStreetMap 升级成可玩的世界地图">OpenStreetMap upgraded into a playable world</h2>
           <p class="subtitle" data-i18n-en="{map_upgrade_model_html}" data-i18n-zh="Trillionnium World Map 不是普通地图工具，而是在 OpenStreetMap 真实地理底座上叠加游戏人物、路线节点、任务牌、实时事件和交付闭环。角色会在地图上跑来跑去，接任务、提交证据、拿评级和奖励。">{map_upgrade_model_html}</p>
@@ -2753,7 +2787,7 @@ pub(super) async fn get_world_web_shell(
           </details>
           </div>
         </details>
-        <div class="jianghu-underlay-label" data-i18n-en="OpenClawStreetMap engine viewport · supporting layer, not the main UI" data-i18n-zh="OpenClawStreetMap 引擎视口 · 支撑层，不是主界面"><strong>OpenClawStreetMap</strong><span data-i18n-en="supporting real-world engine viewport" data-i18n-zh="底层真实世界引擎视口">supporting real-world engine viewport</span></div>
+        <div class="trillionnium-underlay-label" data-i18n-en="OpenClawStreetMap engine viewport · supporting layer, not the main UI" data-i18n-zh="OpenClawStreetMap 引擎视口 · 支撑层，不是主界面"><strong>OpenClawStreetMap</strong><span data-i18n-en="supporting real-world engine viewport" data-i18n-zh="底层真实世界引擎视口">supporting real-world engine viewport</span></div>
         <div id="world-real-map" data-engine="{map_engine_id}" data-provider="{tile_provider}" aria-label="Trillionnium World Map" data-i18n-aria-label-en="Trillionnium World Map" data-i18n-aria-label-zh="Trillionnium 世界地图"></div>
       </div>
     </section>
@@ -3492,22 +3526,27 @@ pub(super) async fn get_world_web_shell(
         tactics_board_contract = escape_html_text(tactics_board_contract),
         tactics_unit_contract = escape_html_text(tactics_unit_contract),
         tactics_command_contract = escape_html_text(tactics_command_contract),
-        jianghu_character_contract = escape_html_text(jianghu_character_contract),
-        jianghu_skill_contract = escape_html_text(jianghu_skill_contract),
-        jianghu_npc_command_descriptor_contract =
-            escape_html_text(jianghu_npc_command_descriptor_contract),
-        jianghu_mentor_training_task_contract =
-            escape_html_text(jianghu_mentor_training_task_contract),
-        jianghu_task_archetype_contract = escape_html_text(jianghu_task_archetype_contract),
-        jianghu_task_completion_contract = escape_html_text(jianghu_task_completion_contract),
-        jianghu_reward_gate_contract = escape_html_text(jianghu_reward_gate_contract),
-        jianghu_battle_log_style_contract = escape_html_text(jianghu_battle_log_style_contract),
-        jianghu_combat_log_contract = escape_html_text(jianghu_combat_log_contract),
-        jianghu_npc_relationship_contract = escape_html_text(jianghu_npc_relationship_contract),
-        jianghu_osm_objective_contract = escape_html_text(jianghu_osm_objective_contract),
+        trillionnium_character_contract = escape_html_text(trillionnium_character_contract),
+        trillionnium_skill_contract = escape_html_text(trillionnium_skill_contract),
+        trillionnium_npc_command_descriptor_contract =
+            escape_html_text(trillionnium_npc_command_descriptor_contract),
+        trillionnium_mentor_training_task_contract =
+            escape_html_text(trillionnium_mentor_training_task_contract),
+        trillionnium_task_archetype_contract =
+            escape_html_text(trillionnium_task_archetype_contract),
+        trillionnium_task_completion_contract =
+            escape_html_text(trillionnium_task_completion_contract),
+        trillionnium_reward_gate_contract = escape_html_text(trillionnium_reward_gate_contract),
+        trillionnium_battle_log_style_contract =
+            escape_html_text(trillionnium_battle_log_style_contract),
+        trillionnium_combat_log_contract = escape_html_text(trillionnium_combat_log_contract),
+        trillionnium_npc_relationship_contract =
+            escape_html_text(trillionnium_npc_relationship_contract),
+        trillionnium_osm_objective_contract = escape_html_text(trillionnium_osm_objective_contract),
         tactics_combat_resolution_contract = escape_html_text(tactics_combat_resolution_contract),
         tactics_game_session_contract = escape_html_text(tactics_game_session_contract),
         tactics_simulation_tick_contract = escape_html_text(tactics_simulation_tick_contract),
+        tactics_reward_settlement_contract = escape_html_text(tactics_reward_settlement_contract),
         map_overlay_identity_contract = escape_html_text(map_overlay_identity_contract),
         tactics_board_cells = tactics_board_cells,
         tactics_board_units = tactics_board_units,
@@ -3515,16 +3554,18 @@ pub(super) async fn get_world_web_shell(
         tactics_battle_log = tactics_battle_log,
         tactics_session_state = tactics_session_state,
         tactics_command_grid = tactics_command_grid,
-        jianghu_training_forms = jianghu_training_forms,
-        jianghu_sect_cards = jianghu_sect_cards,
-        jianghu_npc_cards = jianghu_npc_cards,
-        jianghu_task_completion_forms = jianghu_task_completion_forms,
-        jianghu_status_lines = jianghu_status_lines,
-        jianghu_display_name_en =
-            escape_html_text(world_jianghu_visible_english(jianghu_display_name)),
-        jianghu_display_name_zh = escape_html_text(jianghu_display_name),
-        jianghu_title_en = escape_html_text(world_jianghu_visible_english(jianghu_title)),
-        jianghu_title_zh = escape_html_text(jianghu_title),
+        trillionnium_training_forms = trillionnium_training_forms,
+        trillionnium_sect_cards = trillionnium_sect_cards,
+        trillionnium_npc_cards = trillionnium_npc_cards,
+        trillionnium_task_completion_forms = trillionnium_task_completion_forms,
+        trillionnium_status_lines = trillionnium_status_lines,
+        trillionnium_display_name_en = escape_html_text(world_trillionnium_visible_english(
+            trillionnium_display_name
+        )),
+        trillionnium_display_name_zh = escape_html_text(trillionnium_display_name),
+        trillionnium_title_en =
+            escape_html_text(world_trillionnium_visible_english(trillionnium_title)),
+        trillionnium_title_zh = escape_html_text(trillionnium_title),
         tile_shard_cards = tile_shard_cards,
         region_shard_cards = region_shard_cards,
         lod_layer_cards = lod_layer_cards,

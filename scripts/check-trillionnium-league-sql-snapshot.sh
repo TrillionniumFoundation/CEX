@@ -49,7 +49,7 @@ raw_normalized_world_shadow_checked = all(marker in raw for marker in [
 ])
 assert 'consumer_entry_json_v1' in raw, 'snapshot kind missing'
 assert 'sha256:' in raw, 'state hash missing'
-assert '0020_add_trillionnium_repository_write_set_audit.sql' in raw, 'repository migration floor missing'
+assert '0021_add_trillionnium_tactics_storage_tables.sql' in raw, 'repository migration floor missing'
 assert 'trillionnium_repository_cutover_v1' in raw, 'repository cutover contract missing'
 assert 'trillionnium_sql_shadow_validation_v1' in raw, 'sql shadow validation contract missing'
 assert 'on conflict (state_hash)' in raw, 'snapshot upsert clause missing'
@@ -78,7 +78,7 @@ repo_match = re.search(
 assert repo_match, 'repository audit insert format changed'
 repo_state_hash, migration_floor, cutover_plan_sql, shadow_validation_sql = repo_match.groups()
 assert repo_state_hash == state_hash, 'repository audit state_hash mismatch'
-assert migration_floor == '0020_add_trillionnium_repository_write_set_audit.sql', migration_floor
+assert migration_floor == '0021_add_trillionnium_tactics_storage_tables.sql', migration_floor
 cutover_plan = json.loads(cutover_plan_sql.replace("''", "'"))
 shadow_validation = json.loads(shadow_validation_sql.replace("''", "'"))
 assert cutover_plan.get('next_repository') == 'normalized_sql_dual_write', cutover_plan
@@ -95,6 +95,7 @@ expected_direct_commands = [
     'world_action',
     'world_contract_completion',
     'world_map_move',
+    'world_tactics_command',
     'world_asset_upgrade',
     'world_company',
     'world_listing',
@@ -150,6 +151,13 @@ if raw_dual_write_plan_checked:
         for write_set in (dual_write_plan.get('write_sets') or [])
     ), cutover_plan
     assert any(
+        write_set.get('command') == 'world_tactics_command'
+        and 'world_trillionnium_characters' in (write_set.get('tables') or [])
+        and 'world_tactics_sessions' in (write_set.get('tables') or [])
+        and 'world_tactics_simulation_ticks' in (write_set.get('tables') or [])
+        for write_set in (dual_write_plan.get('write_sets') or [])
+    ), cutover_plan
+    assert any(
         write_set.get('command') == 'world_work_deliver'
         and 'world_work_deliveries' in (write_set.get('tables') or [])
         and 'world_economy_events' in (write_set.get('tables') or [])
@@ -197,6 +205,9 @@ for key in [
     'world_faction_standings',
     'world_map_nodes',
     'world_player_positions',
+    'world_trillionnium_characters',
+    'world_tactics_sessions',
+    'world_tactics_simulation_ticks',
 ]:
     assert key in state, f'missing state key {key}'
 assert state['matches'], 'expected seeded league matches'
@@ -249,6 +260,13 @@ if endpoint is not None:
         for write_set in (endpoint_dual_write_plan.get('write_sets') or [])
     ), endpoint
     assert any(
+        write_set.get('command') == 'world_tactics_command'
+        and 'world_trillionnium_characters' in (write_set.get('tables') or [])
+        and 'world_tactics_sessions' in (write_set.get('tables') or [])
+        and 'world_tactics_simulation_ticks' in (write_set.get('tables') or [])
+        for write_set in (endpoint_dual_write_plan.get('write_sets') or [])
+    ), endpoint
+    assert any(
         write_set.get('command') == 'world_work_deliver'
         and 'world_work_deliveries' in (write_set.get('tables') or [])
         and 'world_economy_events' in (write_set.get('tables') or [])
@@ -271,6 +289,8 @@ if endpoint is not None:
         check in endpoint_runtime_validation_checks for check in [
             'verify_direct_world_action_write_helper',
             'verify_direct_world_contract_completion_write_helper',
+            'verify_direct_world_map_move_write_helper',
+            'verify_direct_world_tactics_command_write_helper',
             'verify_direct_world_asset_upgrade_write_helper',
             'verify_direct_world_company_write_helper',
             'verify_direct_world_listing_write_helper',
@@ -285,6 +305,8 @@ if endpoint is not None:
     if endpoint_direct_write_contract_current or endpoint_runtime_validation_current:
         assert 'verify_direct_world_action_write_helper' in (endpoint_runtime_validation.get('checks') or []), endpoint
         assert 'verify_direct_world_contract_completion_write_helper' in (endpoint_runtime_validation.get('checks') or []), endpoint
+        assert 'verify_direct_world_map_move_write_helper' in (endpoint_runtime_validation.get('checks') or []), endpoint
+        assert 'verify_direct_world_tactics_command_write_helper' in (endpoint_runtime_validation.get('checks') or []), endpoint
         assert 'verify_direct_world_asset_upgrade_write_helper' in (endpoint_runtime_validation.get('checks') or []), endpoint
         assert 'verify_direct_world_company_write_helper' in (endpoint_runtime_validation.get('checks') or []), endpoint
         assert 'verify_direct_world_listing_write_helper' in (endpoint_runtime_validation.get('checks') or []), endpoint
@@ -325,6 +347,8 @@ if endpoint is not None:
     if endpoint_normalized_world_shadow.get('sorted_vector_index_layer') is not None:
         assert endpoint_normalized_world_shadow.get('sorted_vector_index_layer') == 'WorldIndexes::normalized_shadow_sorted_vector_indices_v1', endpoint
     assert 'world_work_acceptances' in (endpoint_normalized_world_shadow.get('tables') or []), endpoint
+    assert 'world_tactics_sessions' in (endpoint_normalized_world_shadow.get('tables') or []), endpoint
+    assert 'world_tactics_simulation_ticks' in (endpoint_normalized_world_shadow.get('tables') or []), endpoint
     assert endpoint_audit.get('audit_version') == 'trillionnium_repository_cutover_audit_v1', endpoint
     assert endpoint_audit.get('cutover_phase') == 'final_cutover', endpoint
     assert endpoint_audit.get('next_repository') == 'normalized_sql_dual_write', endpoint
@@ -395,6 +419,9 @@ summary = {
     'world_faction_standings': len(state.get('world_faction_standings') or []),
     'world_map_nodes': len(state.get('world_map_nodes') or {}),
     'world_player_positions': len(state.get('world_player_positions') or {}),
+    'world_trillionnium_characters': len(state.get('world_trillionnium_characters') or {}),
+    'world_tactics_sessions': len(state.get('world_tactics_sessions') or {}),
+    'world_tactics_simulation_ticks': len(state.get('world_tactics_simulation_ticks') or []),
     'repository_audit_checked': True,
     'repository_write_set_audit_checked': True,
     'repository_migration_floor': migration_floor,

@@ -257,7 +257,7 @@ pub(super) fn default_league_state() -> LeagueState {
             world_entities,
             world_map_nodes,
             world_player_positions: HashMap::new(),
-            world_jianghu_characters: HashMap::new(),
+            world_trillionnium_characters: HashMap::new(),
             world_assets: Vec::new(),
             world_asset_upgrades: Vec::new(),
             world_companies: Vec::new(),
@@ -1046,6 +1046,50 @@ pub(super) fn world_state_normalized_shadow_sql(
         &["node_id", "location_id", "updated_at"],
     )?);
 
+    let trillionnium_characters: Vec<&WorldTrillionniumCharacter> = indexes
+        .sorted_trillionnium_character_user_ids
+        .iter()
+        .filter_map(|matrix_user_id| world.world_trillionnium_characters.get(matrix_user_id))
+        .collect();
+    sql.push_str(&normalized_shadow_json_upsert_sql(
+        "world_trillionnium_characters",
+        &trillionnium_characters,
+        "matrix_user_id text, character_id text, display_name text, attributes jsonb, sect_id text, title text, skill_ids jsonb, updated_at_epoch bigint",
+        &["matrix_user_id", "character_id", "display_name", "attributes", "sect_id", "title", "skill_ids", "updated_at"],
+        &["matrix_user_id", "character_id", "display_name", "attributes", "sect_id", "title", "skill_ids", "to_timestamp(updated_at_epoch)"],
+        "matrix_user_id",
+        &["character_id", "display_name", "attributes", "sect_id", "title", "skill_ids", "updated_at"],
+    )?);
+
+    let tactics_sessions: Vec<&WorldTacticsGameSession> = indexes
+        .sorted_tactics_session_ids
+        .iter()
+        .filter_map(|session_id| world.world_tactics_sessions.get(session_id))
+        .collect();
+    sql.push_str(&normalized_shadow_json_upsert_sql(
+        "world_tactics_sessions",
+        &tactics_sessions,
+        "contract_version text, session_id text, matrix_user_id text, room_id text, board_id text, active_node_id text, active_overlay_id text, active_unit_id text, active_side text, status text, round bigint, action_points_remaining bigint, current_tick bigint, objective_id text, objective_progress bigint, objective_goal bigint, victory_state text, reward_status text, reward_event_id text, reward_credits_awarded bigint, reward_xp_awarded bigint, created_at_epoch bigint, updated_at_epoch bigint, source_of_truth text, persistence_owner text",
+        &["session_id", "matrix_user_id", "room_id", "board_id", "active_node_id", "active_overlay_id", "active_unit_id", "active_side", "status", "round", "action_points_remaining", "current_tick", "objective_id", "objective_progress", "objective_goal", "victory_state", "reward_status", "reward_event_id", "reward_credits_awarded", "reward_xp_awarded", "created_at", "updated_at", "source_of_truth", "persistence_owner"],
+        &["session_id", "matrix_user_id", "room_id", "board_id", "active_node_id", "active_overlay_id", "active_unit_id", "active_side", "status", "round", "action_points_remaining", "current_tick", "objective_id", "objective_progress", "objective_goal", "victory_state", "reward_status", "reward_event_id", "reward_credits_awarded", "reward_xp_awarded", "to_timestamp(created_at_epoch)", "to_timestamp(updated_at_epoch)", "source_of_truth", "persistence_owner"],
+        "session_id",
+        &["matrix_user_id", "room_id", "board_id", "active_node_id", "active_overlay_id", "active_unit_id", "active_side", "status", "round", "action_points_remaining", "current_tick", "objective_id", "objective_progress", "objective_goal", "victory_state", "reward_status", "reward_event_id", "reward_credits_awarded", "reward_xp_awarded", "created_at", "updated_at", "source_of_truth", "persistence_owner"],
+    )?);
+
+    let tactics_ticks = indexed_sorted(
+        &world.world_tactics_simulation_ticks,
+        &indexes.sorted_tactics_simulation_tick_indices_by_id,
+    );
+    sql.push_str(&normalized_shadow_json_upsert_sql(
+        "world_tactics_simulation_ticks",
+        &tactics_ticks,
+        "contract_version text, tick_id text, session_id text, matrix_user_id text, room_id text, tick_index bigint, command text, unit_id text, target_tile text, outcome_result text, outcome_accepted boolean, simulation_effect text, round_before bigint, round_after bigint, action_points_before bigint, action_points_after bigint, objective_id text, objective_progress_before bigint, objective_progress_after bigint, objective_delta bigint, victory_state_before text, victory_state_after text, reward_status_after text, active_unit_after text, generated_encounter_id text, osm_game_overlay_id text, created_at_epoch bigint, source_of_truth text",
+        &["tick_id", "session_id", "matrix_user_id", "room_id", "tick_index", "command", "unit_id", "target_tile", "outcome_result", "outcome_accepted", "simulation_effect", "round_before", "round_after", "action_points_before", "action_points_after", "objective_id", "objective_progress_before", "objective_progress_after", "objective_delta", "victory_state_before", "victory_state_after", "reward_status_after", "active_unit_after", "generated_encounter_id", "osm_game_overlay_id", "created_at", "source_of_truth"],
+        &["tick_id", "session_id", "matrix_user_id", "room_id", "tick_index", "command", "unit_id", "target_tile", "outcome_result", "outcome_accepted", "simulation_effect", "round_before", "round_after", "action_points_before", "action_points_after", "objective_id", "objective_progress_before", "objective_progress_after", "objective_delta", "victory_state_before", "victory_state_after", "reward_status_after", "active_unit_after", "generated_encounter_id", "osm_game_overlay_id", "to_timestamp(created_at_epoch)", "source_of_truth"],
+        "tick_id",
+        &["session_id", "matrix_user_id", "room_id", "tick_index", "command", "unit_id", "target_tile", "outcome_result", "outcome_accepted", "simulation_effect", "round_before", "round_after", "action_points_before", "action_points_after", "objective_id", "objective_progress_before", "objective_progress_after", "objective_delta", "victory_state_before", "victory_state_after", "reward_status_after", "active_unit_after", "generated_encounter_id", "osm_game_overlay_id", "created_at", "source_of_truth"],
+    )?);
+
     let assets = indexed_sorted(&world.world_assets, &indexes.sorted_asset_indices_by_id);
     sql.push_str(&normalized_shadow_json_upsert_sql(
         "world_assets",
@@ -1311,6 +1355,9 @@ pub(super) fn normalized_world_shadow_tables() -> Vec<&'static str> {
         "world_entities",
         "world_map_nodes",
         "world_player_positions",
+        "world_trillionnium_characters",
+        "world_tactics_sessions",
+        "world_tactics_simulation_ticks",
         "world_assets",
         "world_events",
         "world_relationships",
@@ -1415,12 +1462,19 @@ pub(super) fn normalized_repository_command_world_table_closure(
             || include_tables.contains("world_shops")
             || include_tables.contains("world_map_nodes")
             || include_tables.contains("world_player_positions")
+            || include_tables.contains("world_tactics_sessions")
         {
             add_world_table_dependency(&mut include_tables, "world_zones");
             add_world_table_dependency(&mut include_tables, "world_locations");
         }
         if include_tables.contains("world_player_positions") {
             add_world_table_dependency(&mut include_tables, "world_map_nodes");
+        }
+        if include_tables.contains("world_tactics_sessions") {
+            add_world_table_dependency(&mut include_tables, "world_map_nodes");
+        }
+        if include_tables.contains("world_tactics_simulation_ticks") {
+            add_world_table_dependency(&mut include_tables, "world_tactics_sessions");
         }
         if include_tables.contains("world_contracts") {
             add_world_table_dependency(&mut include_tables, "world_events");
@@ -1559,6 +1613,7 @@ pub(super) fn normalized_repository_direct_write_supported_commands() -> Vec<&'s
         "world_action",
         "world_contract_completion",
         "world_map_move",
+        "world_tactics_command",
         "world_asset_upgrade",
         "world_company",
         "world_listing",
@@ -1577,6 +1632,7 @@ pub(super) fn normalized_repository_direct_write_supports_command(command: &str)
         "world_action"
             | "world_contract_completion"
             | "world_map_move"
+            | "world_tactics_command"
             | "world_asset_upgrade"
             | "world_company"
             | "world_listing"
@@ -1620,6 +1676,13 @@ pub(super) fn normalized_repository_direct_write_contract_json() -> Value {
                 "direct_tables": ["world_player_positions", "world_economy_events"],
                 "dependency_tables": ["world_zones", "world_locations", "world_map_nodes"],
                 "helper_mode": "typed_sqlx_upsert_from_repository_snapshot"
+            },
+            {
+                "command": "world_tactics_command",
+                "direct_tables": ["world_trillionnium_characters", "world_tactics_sessions", "world_tactics_simulation_ticks", "world_events", "world_relationships", "world_contracts", "world_contract_completions", "world_economy_events", "league_players"],
+                "dependency_tables": ["world_zones", "world_locations", "world_map_nodes"],
+                "helper_mode": "typed_sqlx_upsert_from_repository_snapshot",
+                "storage_boundary_decision": "tw_4_8_tactics_json_snapshot_plus_normalized_shadow_tables"
             },
             {
                 "command": "world_asset_upgrade",
@@ -1879,6 +1942,227 @@ pub(super) async fn upsert_normalized_world_player_positions(
         .execute(&mut **conn)
         .await
         .map_err(|err| format!("failed to direct-upsert world_player_positions: {err}"))?;
+        rows += 1;
+    }
+    Ok(rows)
+}
+
+pub(super) async fn upsert_normalized_world_trillionnium_characters(
+    conn: &mut sqlx::pool::PoolConnection<sqlx::Postgres>,
+    world: &WorldState,
+    indexes: &WorldIndexes,
+) -> Result<usize, String> {
+    let mut rows = 0;
+    for matrix_user_id in &indexes.sorted_trillionnium_character_user_ids {
+        let Some(character) = world.world_trillionnium_characters.get(matrix_user_id) else {
+            continue;
+        };
+        let attributes = serde_json::to_string(&character.attributes).map_err(|err| {
+            format!("failed to serialize world_trillionnium_characters.attributes: {err}")
+        })?;
+        let skill_ids = serde_json::to_string(&character.skill_ids).map_err(|err| {
+            format!("failed to serialize world_trillionnium_characters.skill_ids: {err}")
+        })?;
+        sqlx::query(
+            "insert into world_trillionnium_characters (
+                 matrix_user_id, character_id, display_name, attributes, sect_id,
+                 title, skill_ids, updated_at
+             ) values (
+                 $1, $2, $3, $4::jsonb, $5,
+                 $6, $7::jsonb, to_timestamp($8::double precision)
+             ) on conflict (matrix_user_id) do update set
+                 character_id = excluded.character_id,
+                 display_name = excluded.display_name,
+                 attributes = excluded.attributes,
+                 sect_id = excluded.sect_id,
+                 title = excluded.title,
+                 skill_ids = excluded.skill_ids,
+                 updated_at = excluded.updated_at",
+        )
+        .bind(&character.matrix_user_id)
+        .bind(&character.character_id)
+        .bind(&character.display_name)
+        .bind(attributes)
+        .bind(&character.sect_id)
+        .bind(&character.title)
+        .bind(skill_ids)
+        .bind(character.updated_at_epoch as f64)
+        .execute(&mut **conn)
+        .await
+        .map_err(|err| format!("failed to direct-upsert world_trillionnium_characters: {err}"))?;
+        rows += 1;
+    }
+    Ok(rows)
+}
+
+pub(super) async fn upsert_normalized_world_tactics_sessions(
+    conn: &mut sqlx::pool::PoolConnection<sqlx::Postgres>,
+    world: &WorldState,
+    indexes: &WorldIndexes,
+) -> Result<usize, String> {
+    let mut rows = 0;
+    for session_id in &indexes.sorted_tactics_session_ids {
+        let Some(session) = world.world_tactics_sessions.get(session_id) else {
+            continue;
+        };
+        sqlx::query(
+            "insert into world_tactics_sessions (
+                 session_id, matrix_user_id, room_id, board_id, active_node_id,
+                 active_overlay_id, active_unit_id, active_side, status, round,
+                 action_points_remaining, current_tick, objective_id, objective_progress,
+                 objective_goal, victory_state, reward_status, reward_event_id,
+                 reward_credits_awarded, reward_xp_awarded, created_at, updated_at,
+                 source_of_truth, persistence_owner
+             ) values (
+                 $1, $2, $3, $4, $5,
+                 $6, $7, $8, $9, $10::integer,
+                 $11::integer, $12::integer, $13, $14::integer,
+                 $15::integer, $16, $17, $18,
+                 $19::integer, $20::integer, to_timestamp($21::double precision), to_timestamp($22::double precision),
+                 $23, $24
+             ) on conflict (session_id) do update set
+                 matrix_user_id = excluded.matrix_user_id,
+                 room_id = excluded.room_id,
+                 board_id = excluded.board_id,
+                 active_node_id = excluded.active_node_id,
+                 active_overlay_id = excluded.active_overlay_id,
+                 active_unit_id = excluded.active_unit_id,
+                 active_side = excluded.active_side,
+                 status = excluded.status,
+                 round = excluded.round,
+                 action_points_remaining = excluded.action_points_remaining,
+                 current_tick = excluded.current_tick,
+                 objective_id = excluded.objective_id,
+                 objective_progress = excluded.objective_progress,
+                 objective_goal = excluded.objective_goal,
+                 victory_state = excluded.victory_state,
+                 reward_status = excluded.reward_status,
+                 reward_event_id = excluded.reward_event_id,
+                 reward_credits_awarded = excluded.reward_credits_awarded,
+                 reward_xp_awarded = excluded.reward_xp_awarded,
+                 created_at = excluded.created_at,
+                 updated_at = excluded.updated_at,
+                 source_of_truth = excluded.source_of_truth,
+                 persistence_owner = excluded.persistence_owner",
+        )
+        .bind(&session.session_id)
+        .bind(&session.matrix_user_id)
+        .bind(&session.room_id)
+        .bind(&session.board_id)
+        .bind(&session.active_node_id)
+        .bind(&session.active_overlay_id)
+        .bind(&session.active_unit_id)
+        .bind(&session.active_side)
+        .bind(&session.status)
+        .bind(session.round)
+        .bind(session.action_points_remaining)
+        .bind(session.current_tick)
+        .bind(&session.objective_id)
+        .bind(session.objective_progress)
+        .bind(session.objective_goal)
+        .bind(&session.victory_state)
+        .bind(&session.reward_status)
+        .bind(&session.reward_event_id)
+        .bind(session.reward_credits_awarded)
+        .bind(session.reward_xp_awarded)
+        .bind(session.created_at_epoch as f64)
+        .bind(session.updated_at_epoch as f64)
+        .bind(&session.source_of_truth)
+        .bind(&session.persistence_owner)
+        .execute(&mut **conn)
+        .await
+        .map_err(|err| format!("failed to direct-upsert world_tactics_sessions: {err}"))?;
+        rows += 1;
+    }
+    Ok(rows)
+}
+
+pub(super) async fn upsert_normalized_world_tactics_simulation_ticks(
+    conn: &mut sqlx::pool::PoolConnection<sqlx::Postgres>,
+    world: &WorldState,
+    indexes: &WorldIndexes,
+) -> Result<usize, String> {
+    let ticks = indexed_sorted(
+        &world.world_tactics_simulation_ticks,
+        &indexes.sorted_tactics_simulation_tick_indices_by_id,
+    );
+    let mut rows = 0;
+    for tick in ticks {
+        sqlx::query(
+            "insert into world_tactics_simulation_ticks (
+                 tick_id, session_id, matrix_user_id, room_id, tick_index,
+                 command, unit_id, target_tile, outcome_result, outcome_accepted,
+                 simulation_effect, round_before, round_after, action_points_before,
+                 action_points_after, objective_id, objective_progress_before,
+                 objective_progress_after, objective_delta, victory_state_before,
+                 victory_state_after, reward_status_after, active_unit_after,
+                 generated_encounter_id, osm_game_overlay_id, created_at, source_of_truth
+             ) values (
+                 $1, $2, $3, $4, $5::integer,
+                 $6, $7, $8, $9, $10,
+                 $11, $12::integer, $13::integer, $14::integer,
+                 $15::integer, $16, $17::integer,
+                 $18::integer, $19::integer, $20,
+                 $21, $22, $23,
+                 $24, $25, to_timestamp($26::double precision), $27
+             ) on conflict (tick_id) do update set
+                 session_id = excluded.session_id,
+                 matrix_user_id = excluded.matrix_user_id,
+                 room_id = excluded.room_id,
+                 tick_index = excluded.tick_index,
+                 command = excluded.command,
+                 unit_id = excluded.unit_id,
+                 target_tile = excluded.target_tile,
+                 outcome_result = excluded.outcome_result,
+                 outcome_accepted = excluded.outcome_accepted,
+                 simulation_effect = excluded.simulation_effect,
+                 round_before = excluded.round_before,
+                 round_after = excluded.round_after,
+                 action_points_before = excluded.action_points_before,
+                 action_points_after = excluded.action_points_after,
+                 objective_id = excluded.objective_id,
+                 objective_progress_before = excluded.objective_progress_before,
+                 objective_progress_after = excluded.objective_progress_after,
+                 objective_delta = excluded.objective_delta,
+                 victory_state_before = excluded.victory_state_before,
+                 victory_state_after = excluded.victory_state_after,
+                 reward_status_after = excluded.reward_status_after,
+                 active_unit_after = excluded.active_unit_after,
+                 generated_encounter_id = excluded.generated_encounter_id,
+                 osm_game_overlay_id = excluded.osm_game_overlay_id,
+                 created_at = excluded.created_at,
+                 source_of_truth = excluded.source_of_truth",
+        )
+        .bind(&tick.tick_id)
+        .bind(&tick.session_id)
+        .bind(&tick.matrix_user_id)
+        .bind(&tick.room_id)
+        .bind(tick.tick_index)
+        .bind(&tick.command)
+        .bind(&tick.unit_id)
+        .bind(&tick.target_tile)
+        .bind(&tick.outcome_result)
+        .bind(tick.outcome_accepted)
+        .bind(&tick.simulation_effect)
+        .bind(tick.round_before)
+        .bind(tick.round_after)
+        .bind(tick.action_points_before)
+        .bind(tick.action_points_after)
+        .bind(&tick.objective_id)
+        .bind(tick.objective_progress_before)
+        .bind(tick.objective_progress_after)
+        .bind(tick.objective_delta)
+        .bind(&tick.victory_state_before)
+        .bind(&tick.victory_state_after)
+        .bind(&tick.reward_status_after)
+        .bind(&tick.active_unit_after)
+        .bind(&tick.generated_encounter_id)
+        .bind(&tick.osm_game_overlay_id)
+        .bind(tick.created_at_epoch as f64)
+        .bind(&tick.source_of_truth)
+        .execute(&mut **conn)
+        .await
+        .map_err(|err| format!("failed to direct-upsert world_tactics_simulation_ticks: {err}"))?;
         rows += 1;
     }
     Ok(rows)
@@ -2862,6 +3146,49 @@ pub(super) async fn execute_normalized_repository_direct_command_write(
                 }
             }))
         }
+        "world_tactics_command" => {
+            let zone_rows = upsert_normalized_world_zones(conn, world, &indexes).await?;
+            let location_rows = upsert_normalized_world_locations(conn, world, &indexes).await?;
+            let map_node_rows = upsert_normalized_world_map_nodes(conn, world, &indexes).await?;
+            let player_rows = upsert_normalized_league_players(conn, &league).await?;
+            let character_rows =
+                upsert_normalized_world_trillionnium_characters(conn, world, &indexes).await?;
+            let tactics_session_rows =
+                upsert_normalized_world_tactics_sessions(conn, world, &indexes).await?;
+            let tactics_tick_rows =
+                upsert_normalized_world_tactics_simulation_ticks(conn, world, &indexes).await?;
+            let event_rows = upsert_normalized_world_events(conn, world, &indexes).await?;
+            let relationship_rows =
+                upsert_normalized_world_relationships(conn, world, &indexes).await?;
+            let contract_rows = upsert_normalized_world_contracts(conn, world, &indexes).await?;
+            let completion_rows =
+                upsert_normalized_world_contract_completions(conn, world, &indexes).await?;
+            let economy_event_rows =
+                upsert_normalized_world_economy_events(conn, world, &indexes).await?;
+            Ok(json!({
+                "command": command,
+                "helper": "execute_normalized_repository_direct_command_write",
+                "mode": "typed_sqlx_upsert_from_repository_snapshot",
+                "direct_write_contract": "trillionnium_normalized_repository_direct_write_v1",
+                "storage_boundary_decision": "tw_4_8_tactics_json_snapshot_plus_normalized_shadow_tables",
+                "dependency_rows": {
+                    "world_zones": zone_rows,
+                    "world_locations": location_rows,
+                    "world_map_nodes": map_node_rows,
+                },
+                "direct_rows": {
+                    "league_players": player_rows,
+                    "world_trillionnium_characters": character_rows,
+                    "world_tactics_sessions": tactics_session_rows,
+                    "world_tactics_simulation_ticks": tactics_tick_rows,
+                    "world_events": event_rows,
+                    "world_relationships": relationship_rows,
+                    "world_contracts": contract_rows,
+                    "world_contract_completions": completion_rows,
+                    "world_economy_events": economy_event_rows,
+                }
+            }))
+        }
         "world_asset_upgrade" => {
             let zone_rows = upsert_normalized_world_zones(conn, world, &indexes).await?;
             let location_rows = upsert_normalized_world_locations(conn, world, &indexes).await?;
@@ -3198,7 +3525,7 @@ pub(super) async fn execute_normalized_repository_direct_command_write(
 }
 
 pub(super) const TRILLIONNIUM_REPOSITORY_MIGRATION_FLOOR: &str =
-    "0020_add_trillionnium_repository_write_set_audit.sql";
+    "0021_add_trillionnium_tactics_storage_tables.sql";
 const TRILLIONNIUM_REPOSITORY_FINAL_CUTOVER_PHASE: &str = "final_cutover";
 const TRILLIONNIUM_CURRENT_REPOSITORY: &str = "json_file_with_sql_snapshot";
 const TRILLIONNIUM_NEXT_REPOSITORY: &str = "normalized_sql_dual_write";
@@ -3361,6 +3688,30 @@ pub(super) fn league_state_sql_cutover_plan_json(
                 "world.world_player_positions",
                 "matrix_user_id",
                 world.world_player_positions.len(),
+            ),
+            league_state_sql_cutover_table_json(
+                "world_trillionnium_characters",
+                "world.world_trillionnium_characters",
+                "matrix_user_id",
+                world.world_trillionnium_characters.len(),
+            ),
+            league_state_sql_cutover_table_json(
+                "world_tactics_sessions",
+                "world.world_tactics_sessions",
+                "session_id",
+                world.world_tactics_sessions.len(),
+            ),
+            league_state_sql_cutover_table_json_with_normalized_count(
+                "world_tactics_simulation_ticks",
+                "world.world_tactics_simulation_ticks",
+                "tick_id",
+                world.world_tactics_simulation_ticks.len(),
+                unique_key_count(
+                    world
+                        .world_tactics_simulation_ticks
+                        .iter()
+                        .map(|tick| tick.tick_id.as_str()),
+                ),
             ),
             league_state_sql_cutover_table_json_with_normalized_count(
                 "world_assets",
@@ -3651,6 +4002,13 @@ pub(super) fn league_state_repository_dual_write_plan_json() -> Value {
                 &["map_node_fk", "position_count", "economy_event_count"]
             ),
             league_state_repository_write_set_json(
+                "world_tactics_command",
+                "WorldState tactics character/session/tick state + optional task/combat rewards",
+                &["world_trillionnium_characters", "world_tactics_sessions", "world_tactics_simulation_ticks", "world_events", "world_relationships", "world_contracts", "world_contract_completions", "world_economy_events", "league_players"],
+                "world_tactics_simulation_ticks.tick_id",
+                &["tactics_session_fk", "tick_count", "objective_progress", "victory_reward_settlement", "task_reward_gate"]
+            ),
+            league_state_repository_write_set_json(
                 "world_contract_completion",
                 "WorldState contract settlement",
                 &["world_contract_completions", "world_contracts", "world_assets", "league_rewards", "league_inventory_items"],
@@ -3922,6 +4280,8 @@ pub(super) fn league_state_repository_contract_json() -> Value {
                 "verify_league_state_repository_write_set_audits",
                 "verify_direct_world_action_write_helper",
                 "verify_direct_world_contract_completion_write_helper",
+                "verify_direct_world_map_move_write_helper",
+                "verify_direct_world_tactics_command_write_helper",
                 "verify_direct_world_asset_upgrade_write_helper",
                 "verify_direct_world_company_write_helper",
                 "verify_direct_world_listing_write_helper",
@@ -3966,7 +4326,7 @@ pub(super) fn league_state_repository_contract_json() -> Value {
             }
         ],
         "read_switch_gates": [
-            "all migrations through 0020_add_trillionnium_repository_write_set_audit.sql applied",
+            "all migrations through 0021_add_trillionnium_tactics_storage_tables.sql applied",
             "WorldState projection contexts read from repository snapshots without direct LeagueState coupling",
             "repository_audit_green",
             "repository_write_set_audit_green",

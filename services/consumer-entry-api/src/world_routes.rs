@@ -1272,8 +1272,8 @@ pub(super) async fn post_world_action(
         .into_response()
 }
 
-fn world_jianghu_task_id(task_archetype_id: &str) -> String {
-    format!("jianghu-task:{task_archetype_id}")
+fn world_trillionnium_task_id(task_archetype_id: &str) -> String {
+    format!("trillionnium-task:{task_archetype_id}")
 }
 
 fn world_tactics_contract_completion_released(completion: &WorldContractCompletion) -> bool {
@@ -1283,12 +1283,12 @@ fn world_tactics_contract_completion_released(completion: &WorldContractCompleti
     )
 }
 
-fn latest_open_jianghu_task_contract_index(
+fn latest_open_trillionnium_task_contract_index(
     world: &WorldState,
     matrix_user_id: &str,
     task_archetype_id: &str,
 ) -> Option<usize> {
-    let task_id = world_jianghu_task_id(task_archetype_id);
+    let task_id = world_trillionnium_task_id(task_archetype_id);
     world
         .world_contracts
         .iter()
@@ -1313,7 +1313,7 @@ fn latest_open_jianghu_task_contract_index(
         })
 }
 
-fn judge_jianghu_task_completion(
+fn judge_trillionnium_task_completion(
     world: &WorldState,
     matrix_user_id: &str,
     contract_id: &str,
@@ -1338,7 +1338,7 @@ fn judge_jianghu_task_completion(
         .map(|signal| format!("missing_{signal}"))
         .collect::<Vec<_>>();
     if duplicate_count > 0 {
-        anti_cheat_flags.push("duplicate_jianghu_task_completion".to_string());
+        anti_cheat_flags.push("duplicate_trillionnium_task_completion".to_string());
     }
     if body.chars().count() < 64 {
         anti_cheat_flags.push("task_report_too_short".to_string());
@@ -1370,11 +1370,11 @@ fn judge_jianghu_task_completion(
         score,
         grade,
         reward_amount,
-        judge_status: "deterministic_jianghu_task_completion_judge_v1".to_string(),
+        judge_status: "deterministic_trillionnium_task_completion_judge_v1".to_string(),
         payout_status,
         anti_cheat_flags,
         score_events: vec![LeagueScoreEvent {
-            dimension: "jianghu_task_completion_quality".to_string(),
+            dimension: "trillionnium_task_completion_quality".to_string(),
             score,
             weight: 1.0,
             judge_kind: "rust_deterministic_quality_gate".to_string(),
@@ -1402,6 +1402,7 @@ async fn record_world_tactics_command(
         Value,
         Option<WorldContract>,
         Option<WorldContractCompletion>,
+        Value,
         Value,
         Value,
     ),
@@ -1481,29 +1482,29 @@ async fn record_world_tactics_command(
                 .unwrap_or("courier_letter");
             let contract = WorldContract {
                 contract_id: league_hash_id(
-                    "world-jianghu-task-contract",
+                    "world-trillionnium-task-contract",
                     &format!("{}:{}:{}", matrix_user_id, task_archetype_id, event_id),
                 ),
                 event_id: event_id.clone(),
                 actor_matrix_user_id: matrix_user_id.clone(),
                 location_id: location_id.clone(),
-                task_id: world_jianghu_task_id(task_archetype_id),
-                title: format!("Jianghu Task · {task_archetype_id}"),
+                task_id: world_trillionnium_task_id(task_archetype_id),
+                title: format!("Trillionnium Task · {task_archetype_id}"),
                 body: format!(
-                    "Trillionnium Jianghu task offer: archetype={task_archetype_id}; npc={}; objective={}; source=rust_jianghu_task_offer_validator.",
+                    "Trillionnium task offer: archetype={task_archetype_id}; npc={}; objective={}; source=rust_trillionnium_task_offer_validator.",
                     payload.npc_id.as_deref().unwrap_or("unknown_npc"),
                     payload
                         .osm_game_overlay_id
                         .as_deref()
                         .unwrap_or("rust_generated_objective")
                 ),
-                status: "jianghu_task_offered".to_string(),
-                cex_status: Some("jianghu_task_pending_completion".to_string()),
+                status: "trillionnium_task_offered".to_string(),
+                cex_status: Some("trillionnium_task_pending_completion".to_string()),
                 value_score: 8,
                 created_at_epoch: now,
             };
-            outcome["jianghu_task_contract_id"] = json!(contract.contract_id.clone());
-            outcome["jianghu_task_contract_status"] = json!(contract.status.clone());
+            outcome["trillionnium_task_contract_id"] = json!(contract.contract_id.clone());
+            outcome["trillionnium_task_contract_status"] = json!(contract.status.clone());
             outcome["completion_command"] = json!("complete_task");
             outcome["ledger_reward_requires_settlement"] = json!(true);
             league.world.world_contracts.push(contract.clone());
@@ -1517,14 +1518,14 @@ async fn record_world_tactics_command(
                 .or(payload.task_archetype_id.as_deref())
                 .unwrap_or("courier_letter")
                 .to_string();
-            match latest_open_jianghu_task_contract_index(
+            match latest_open_trillionnium_task_contract_index(
                 &league.world,
                 &matrix_user_id,
                 &task_archetype_id,
             ) {
                 Some(contract_index) => {
                     let contract = league.world.world_contracts[contract_index].clone();
-                    let judgement = judge_jianghu_task_completion(
+                    let judgement = judge_trillionnium_task_completion(
                         &league.world,
                         &matrix_user_id,
                         &contract.contract_id,
@@ -1534,7 +1535,7 @@ async fn record_world_tactics_command(
                     );
                     let completion = WorldContractCompletion {
                         completion_id: league_hash_id(
-                            "world-jianghu-task-completion",
+                            "world-trillionnium-task-completion",
                             &format!("{}:{}:{}", contract.contract_id, now, event_body),
                         ),
                         contract_id: contract.contract_id.clone(),
@@ -1557,7 +1558,7 @@ async fn record_world_tactics_command(
                     let pending_release = completion.payout_status == "eligible";
                     let stored_contract = &mut league.world.world_contracts[contract_index];
                     stored_contract.status = if pending_release {
-                        "jianghu_task_completion_pending_settlement".to_string()
+                        "trillionnium_task_completion_pending_settlement".to_string()
                     } else {
                         "review_hold".to_string()
                     };
@@ -1566,12 +1567,13 @@ async fn record_world_tactics_command(
                     } else {
                         "review_hold".to_string()
                     });
-                    outcome["jianghu_task_contract_id"] = json!(contract.contract_id.clone());
-                    outcome["jianghu_task_completion_id"] = json!(completion.completion_id.clone());
+                    outcome["trillionnium_task_contract_id"] = json!(contract.contract_id.clone());
+                    outcome["trillionnium_task_completion_id"] =
+                        json!(completion.completion_id.clone());
                     outcome["completion_contract_version"] =
-                        json!(TRILLIONNIUM_JIANGHU_TASK_COMPLETION_CONTRACT_VERSION);
+                        json!(TRILLIONNIUM_TASK_COMPLETION_CONTRACT_VERSION);
                     outcome["reward_gate_contract_version"] =
-                        json!(TRILLIONNIUM_JIANGHU_REWARD_GATE_CONTRACT_VERSION);
+                        json!(TRILLIONNIUM_REWARD_GATE_CONTRACT_VERSION);
                     outcome["payout_status"] = json!(completion.payout_status.clone());
                     outcome["anti_cheat_flags"] = json!(completion.anti_cheat_flags.clone());
                     outcome["ledger_status"] = json!("pending");
@@ -1595,8 +1597,8 @@ async fn record_world_tactics_command(
                         "target_tile": payload.target_tile.as_deref(),
                         "task_archetype_id": task_archetype_id,
                         "result": "task_completion_requires_offer",
-                        "rejection_reason": "complete_task_requires_open_jianghu_task_contract",
-                        "source_of_truth": "rust_jianghu_task_completion_handler",
+                        "rejection_reason": "complete_task_requires_open_trillionnium_task_contract",
+                        "source_of_truth": "rust_trillionnium_task_completion_handler",
                         "web_role": "intent_only_visualization_input",
                     });
                 }
@@ -1638,7 +1640,7 @@ async fn record_world_tactics_command(
                 .or_else(|| payload.unit_id.clone())
                 .unwrap_or_else(|| "lord".to_string());
             let relationship_kind = if relationship_target.starts_with("npc-") {
-                format!("jianghu_npc_{command}")
+                format!("trillionnium_npc_{command}")
             } else {
                 format!("tactics_{command}")
             };
@@ -1665,7 +1667,7 @@ async fn record_world_tactics_command(
                 updated_at_epoch: now,
             });
         }
-        let (tactics_session, simulation_tick) = record_world_tactics_simulation_tick(
+        let (mut tactics_session, simulation_tick) = record_world_tactics_simulation_tick(
             &mut league.world,
             &matrix_user_id,
             payload.room_id.as_deref(),
@@ -1676,12 +1678,92 @@ async fn record_world_tactics_command(
             &outcome,
             now,
         );
+        let mut tactics_reward_settlement = json!({
+            "contract_version": TRILLIONNIUM_TACTICS_REWARD_SETTLEMENT_CONTRACT_VERSION,
+            "status": "not_eligible",
+            "source_of_truth": "rust_tactics_reward_settlement",
+            "reward_requires_victory": true,
+            "web_role": "intent_only_visualization_input",
+        });
+        if tactics_session.get("victory_state").and_then(Value::as_str) == Some("victory")
+            && tactics_session.get("reward_status").and_then(Value::as_str)
+                == Some("pending_settlement")
+        {
+            let session_id = tactics_session
+                .get("session_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let tick_id = simulation_tick
+                .get("tick_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let reward_event_id = league_hash_id(
+                "world-tactics-victory-reward",
+                &format!("{}:{}:{}", matrix_user_id, session_id, tick_id),
+            );
+            let reward_credits = 5;
+            let reward_xp = 12;
+            let already_settled = league
+                .world
+                .world_economy_events
+                .iter()
+                .any(|event| event.economy_event_id == reward_event_id);
+            if !already_settled {
+                let mut player = ensure_league_player(&mut league, &matrix_user_id, None);
+                player.earned_credits += reward_credits as f64;
+                player.xp += reward_xp;
+                player.reputation += 1;
+                player.rating += 1;
+                league
+                    .players_by_matrix_user
+                    .insert(matrix_user_id.clone(), player);
+                league.world.world_economy_events.push(WorldEconomyEvent {
+                    economy_event_id: reward_event_id.clone(),
+                    matrix_user_id: matrix_user_id.clone(),
+                    event_kind: "tactics_victory_reward".to_string(),
+                    subject_id: session_id.clone(),
+                    credits_delta: reward_credits,
+                    reputation_delta: 1,
+                    created_at_epoch: now,
+                });
+            }
+            if let Some(updated_session) = mark_world_tactics_reward_settled(
+                &mut league.world,
+                &session_id,
+                &reward_event_id,
+                reward_credits,
+                reward_xp,
+                now,
+            ) {
+                tactics_session = updated_session;
+            }
+            tactics_reward_settlement = json!({
+                "contract_version": TRILLIONNIUM_TACTICS_REWARD_SETTLEMENT_CONTRACT_VERSION,
+                "status": if already_settled { "duplicate_settled" } else { "settled" },
+                "reward_event_id": reward_event_id,
+                "session_id": session_id,
+                "tick_id": tick_id,
+                "credits_delta": reward_credits,
+                "xp_delta": reward_xp,
+                "reputation_delta": 1,
+                "source_of_truth": "rust_tactics_reward_settlement",
+                "settlement_owner": "world_state_and_league_player_projection",
+                "ledger_required": false,
+                "duplicate_safe": true,
+                "web_role": "intent_only_visualization_input",
+            });
+        }
         outcome["tactics_game_session_contract_version"] =
             json!(TRILLIONNIUM_TACTICS_GAME_SESSION_CONTRACT_VERSION);
         outcome["tactics_simulation_tick_contract_version"] =
             json!(TRILLIONNIUM_TACTICS_SIMULATION_TICK_CONTRACT_VERSION);
+        outcome["tactics_reward_settlement_contract_version"] =
+            json!(TRILLIONNIUM_TACTICS_REWARD_SETTLEMENT_CONTRACT_VERSION);
         outcome["tactics_session_id"] = tactics_session["session_id"].clone();
         outcome["tactics_tick_id"] = simulation_tick["tick_id"].clone();
+        outcome["tactics_reward_settlement"] = tactics_reward_settlement.clone();
         let home = world_home_json(&league);
         (
             (
@@ -1693,6 +1775,7 @@ async fn record_world_tactics_command(
                 created_completion,
                 tactics_session,
                 simulation_tick,
+                tactics_reward_settlement,
             ),
             completion_contract_for_settlement,
         )
@@ -1736,11 +1819,11 @@ async fn record_world_tactics_command(
                     .insert(matrix_user_id.clone(), player);
                 league.world.world_economy_events.push(WorldEconomyEvent {
                     economy_event_id: league_hash_id(
-                        "world-jianghu-task-reward",
+                        "world-trillionnium-task-reward",
                         &completion.completion_id,
                     ),
                     matrix_user_id: matrix_user_id.clone(),
-                    event_kind: "jianghu_task_reward".to_string(),
+                    event_kind: "trillionnium_task_reward".to_string(),
                     subject_id: contract.contract_id.clone(),
                     credits_delta: completion.reward_amount.round() as i64,
                     reputation_delta: (completion.score / 12.0).round() as i64,
@@ -1781,12 +1864,13 @@ async fn record_world_tactics_command(
                 Some(completion.clone()),
                 snapshot.6.clone(),
                 snapshot.7.clone(),
+                snapshot.8.clone(),
             )
         };
         final_snapshot.2["ledger_status"] = json!(settlement.status);
         final_snapshot.2["ledger_entry_id"] = json!(completion.ledger_entry_id.clone());
         final_snapshot.2["ledger_error"] = json!(completion.ledger_error.clone());
-        final_snapshot.2["jianghu_task_completion"] = json!(completion);
+        final_snapshot.2["trillionnium_task_completion"] = json!(completion);
         snapshot = final_snapshot;
     }
     Ok(snapshot)
@@ -1817,10 +1901,11 @@ pub(super) async fn post_world_tactics_command(
             "event": snapshot.1,
             "outcome": snapshot.2,
             "home": snapshot.3,
-            "jianghu_task_contract": snapshot.4,
-            "jianghu_task_completion": snapshot.5,
+            "trillionnium_task_contract": snapshot.4,
+            "trillionnium_task_completion": snapshot.5,
             "tactics_session": snapshot.6,
             "simulation_tick": snapshot.7,
+            "tactics_reward_settlement": snapshot.8,
         })),
     )
         .into_response()

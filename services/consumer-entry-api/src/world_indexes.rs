@@ -7,6 +7,8 @@ pub(super) struct WorldIndexes {
     pub(super) sorted_entity_ids: Vec<String>,
     pub(super) sorted_faction_ids: Vec<String>,
     pub(super) sorted_player_position_user_ids: Vec<String>,
+    pub(super) sorted_trillionnium_character_user_ids: Vec<String>,
+    pub(super) sorted_tactics_session_ids: Vec<String>,
     pub(super) sorted_map_node_ids: Vec<String>,
     pub(super) sorted_map_node_ids_by_id: Vec<String>,
     pub(super) sorted_asset_indices_by_id: Vec<usize>,
@@ -27,6 +29,7 @@ pub(super) struct WorldIndexes {
     pub(super) sorted_work_rejection_indices_by_id: Vec<usize>,
     pub(super) sorted_work_reopen_indices_by_id: Vec<usize>,
     pub(super) sorted_work_cancellation_indices_by_id: Vec<usize>,
+    pub(super) sorted_tactics_simulation_tick_indices_by_id: Vec<usize>,
     pub(super) map_node_ids_by_location: HashMap<String, Vec<String>>,
     pub(super) asset_index_by_id: HashMap<String, usize>,
     pub(super) contract_index_by_id: HashMap<String, usize>,
@@ -130,6 +133,14 @@ pub(super) fn build_world_indexes(world: &WorldState) -> WorldIndexes {
     indexes.sorted_player_position_user_ids =
         world.world_player_positions.keys().cloned().collect();
     indexes.sorted_player_position_user_ids.sort();
+    indexes.sorted_trillionnium_character_user_ids = world
+        .world_trillionnium_characters
+        .keys()
+        .cloned()
+        .collect();
+    indexes.sorted_trillionnium_character_user_ids.sort();
+    indexes.sorted_tactics_session_ids = world.world_tactics_sessions.keys().cloned().collect();
+    indexes.sorted_tactics_session_ids.sort();
 
     indexes.sorted_map_node_ids = world.world_map_nodes.keys().cloned().collect();
     indexes.sorted_map_node_ids_by_id = indexes.sorted_map_node_ids.clone();
@@ -247,6 +258,10 @@ pub(super) fn build_world_indexes(world: &WorldState) -> WorldIndexes {
     indexes.sorted_work_cancellation_indices_by_id =
         sorted_indices_by(&world.world_work_cancellations, |left, right| {
             left.cancellation_id.cmp(&right.cancellation_id)
+        });
+    indexes.sorted_tactics_simulation_tick_indices_by_id =
+        sorted_indices_by(&world.world_tactics_simulation_ticks, |left, right| {
+            left.tick_id.cmp(&right.tick_id)
         });
 
     for (index, asset) in world.world_assets.iter().enumerate() {

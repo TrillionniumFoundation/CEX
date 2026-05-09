@@ -523,7 +523,7 @@ pub(super) async fn get_league_web_shell(
     .stats {{ display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:14px; margin-top:22px; }}
     .stat {{ padding:18px; background:rgba(255,255,255,.06); border-radius:18px; }}
     .stat b {{ display:block; font-size:26px; color:var(--gold); }}
-    main {{ padding:20px min(6vw,72px) 60px; display:grid; gap:24px; min-width:0; }}
+    main {{ padding:18px min(6vw,72px) 48px; display:grid; gap:20px; min-width:0; }}
     main > * {{ min-width:0; max-width:100%; }}
     main > section {{ order:8; }}
     .stats {{ order:1; }}
@@ -532,21 +532,21 @@ pub(super) async fn get_league_web_shell(
     #league-progression {{ order:4; }}
     #league-world-bridge {{ order:5; }}
     .grid {{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:18px; }}
-    .card {{ padding:20px; min-height:210px; overflow-wrap:anywhere; }}
-    .card h3 {{ margin:12px 0; font-size:24px; }}
-    .card p {{ color:var(--muted); line-height:1.55; }}
+    .card {{ padding:18px; min-height:196px; overflow-wrap:anywhere; }}
+    .card h3 {{ margin:9px 0; font-size:23px; }}
+    .card p {{ color:var(--muted); line-height:1.48; }}
     .card footer {{ display:flex; justify-content:space-between; gap:10px; align-items:center; flex-wrap:wrap; margin-top:18px; color:var(--gold); }}
     .pill {{ display:inline-flex; border:1px solid rgba(100,227,255,.35); color:var(--cyan); padding:5px 10px; border-radius:999px; font-size:12px; letter-spacing:.12em; }}
     .league-hero-kicker {{ display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }}
     .language-switcher {{ display:inline-flex; align-items:center; gap:8px; width:max-content; max-width:100%; border:1px solid rgba(100,227,255,.24); background:rgba(255,255,255,.065); color:var(--cyan); border-radius:999px; padding:6px 8px 6px 10px; font-size:12px; font-weight:900; }}
     .language-switcher select {{ width:auto; min-height:40px; min-width:92px; max-width:130px; margin:0; border:0; background:rgba(7,8,20,.72); color:var(--text); border-radius:999px; padding:7px 26px 7px 10px; font:inherit; font-size:12px; }}
-    .panel {{ padding:24px; }}
+    .panel {{ padding:20px; }}
     table {{ width:100%; border-collapse:collapse; table-layout:fixed; }}
     td,th {{ padding:12px 10px; border-bottom:1px solid rgba(255,255,255,.08); text-align:left; overflow-wrap:anywhere; }}
     th {{ color:var(--muted); font-weight:600; }}
     .commands {{ display:flex; flex-wrap:wrap; gap:10px; }}
     .play {{ display:grid; grid-template-columns:1fr 1fr; gap:18px; align-items:start; }}
-    #league-battle-console .timeline {{ max-height:520px; overflow:auto; padding-right:4px; }}
+    #league-battle-console .timeline {{ max-height:460px; overflow:auto; padding-right:4px; }}
     form {{ display:grid; gap:10px; margin:0; }}
     input,textarea,select {{ width:100%; color:var(--text); background:rgba(255,255,255,.07); border:1px solid rgba(255,255,255,.14); border-radius:14px; padding:12px 14px; font:inherit; }}
     textarea {{ min-height:92px; resize:vertical; }}
@@ -567,7 +567,7 @@ pub(super) async fn get_league_web_shell(
     .cta {{ color:var(--bg); background:linear-gradient(135deg,var(--gold),#ff8d4d); padding:14px 18px; border-radius:16px; display:inline-flex; justify-content:center; align-items:center; min-height:48px; font-weight:800; text-decoration:none; }}
     .cta.secondary {{ color:var(--text); background:rgba(255,255,255,.07); border:1px solid rgba(100,227,255,.22); }}
     .league-hero-actions {{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }}
-    @media (max-width:900px) {{ header {{ grid-template-columns:1fr; padding:18px 16px 8px; gap:12px; }} h1 {{ font-size:clamp(38px,13vw,58px); }} .subtitle {{ font-size:14px; line-height:1.42; }} header > section .subtitle {{ margin:8px 0 0; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }} main > section {{ order:8; }} .grid,.play,.mini-grid {{ grid-template-columns:minmax(0,1fr); }} .score-grid {{ grid-template-columns:repeat(2,minmax(0,1fr)); max-height:220px; }} .score-mini small {{ display:none; }} .stats {{ order:1; display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); overflow:visible; gap:8px; margin-top:8px; padding-bottom:0; }} .stat {{ min-height:68px; min-width:0; padding:10px 8px; }} .stat b {{ font-size:clamp(17px,5.4vw,22px); letter-spacing:-.03em; }} .stat span {{ font-size:11px; }} #league-playable-modes {{ order:2; }} #league-playable-modes .grid {{ grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }} #league-playable-modes .card {{ display:grid; gap:5px; min-height:0; padding:11px; }} #league-playable-modes .card h3 {{ margin:2px 0; font-size:15px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }} #league-playable-modes .card p {{ display:none; }} #league-playable-modes .card footer {{ gap:5px; margin-top:2px; font-size:10px; }} #league-playable-modes .pill {{ padding:4px 7px; font-size:9px; letter-spacing:.08em; }} #league-battle-console {{ order:3; }} #league-battle-console .panel {{ padding:18px; }} #league-battle-console textarea {{ min-height:70px; }} #league-battle-console .timeline {{ max-height:320px; overflow:auto; padding-right:4px; }} #league-battle-console .timeline li {{ grid-template-columns:1fr; gap:6px; padding:10px; }} #league-progression {{ order:4; }} #league-world-bridge {{ order:5; }} .card {{ min-height:auto; padding:16px; }} .card h3 {{ font-size:20px; line-height:1.15; }} .card p {{ margin:8px 0; line-height:1.45; }} .card footer {{ font-size:12px; }} .hero-card {{ padding:16px; border-radius:20px; gap:10px; }} .hero-card .subtitle {{ margin:0; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }} .league-hero-actions {{ grid-template-columns:repeat(3,minmax(0,1fr)); gap:7px; }} .league-hero-actions .cta {{ font-size:12px; }} .cta {{ min-height:44px; padding:10px 12px; border-radius:14px; }} .language-switcher {{ padding:5px 6px 5px 8px; font-size:11px; }} .language-switcher select {{ min-height:40px; min-width:82px; max-width:112px; padding:6px 22px 6px 8px; font-size:11px; }} }}
+    @media (max-width:900px) {{ header {{ grid-template-columns:1fr; padding:18px 16px 8px; gap:12px; }} h1 {{ font-size:clamp(38px,13vw,58px); }} .subtitle {{ font-size:14px; line-height:1.42; }} header > section .subtitle {{ margin:8px 0 0; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }} main > section {{ order:8; }} .grid,.play,.mini-grid {{ grid-template-columns:minmax(0,1fr); }} .score-grid {{ grid-template-columns:repeat(2,minmax(0,1fr)); max-height:220px; }} .score-mini small {{ display:none; }} .stats {{ order:1; display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); overflow:visible; gap:8px; margin-top:8px; padding-bottom:0; }} .stat {{ min-height:68px; min-width:0; padding:10px 8px; }} .stat b {{ font-size:clamp(17px,5.4vw,22px); letter-spacing:-.03em; }} .stat span {{ font-size:11px; }} #league-playable-modes {{ order:2; }} #league-playable-modes .grid {{ grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }} #league-playable-modes .card {{ display:grid; gap:5px; min-height:0; padding:11px; }} #league-playable-modes .card h3 {{ margin:2px 0; font-size:15px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }} #league-playable-modes .card p {{ display:none; }} #league-playable-modes .card footer {{ gap:5px; margin-top:2px; font-size:10px; }} #league-playable-modes .pill {{ padding:4px 7px; font-size:9px; letter-spacing:.08em; }} #league-battle-console {{ order:3; }} #league-battle-console .panel {{ padding:14px; }} #league-battle-console textarea {{ min-height:62px; }} #league-battle-console .timeline {{ max-height:240px; overflow:auto; padding-right:4px; }} #league-battle-console .timeline li {{ grid-template-columns:1fr; gap:6px; padding:10px; }} #league-progression {{ order:4; }} #league-world-bridge {{ order:5; }} .card {{ min-height:auto; padding:16px; }} .card h3 {{ font-size:20px; line-height:1.15; }} .card p {{ margin:8px 0; line-height:1.45; }} .card footer {{ font-size:12px; }} .hero-card {{ padding:16px; border-radius:20px; gap:10px; }} .hero-card .subtitle {{ margin:0; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }} .league-hero-actions {{ grid-template-columns:repeat(3,minmax(0,1fr)); gap:7px; }} .league-hero-actions .cta {{ font-size:12px; }} .cta {{ min-height:44px; padding:10px 12px; border-radius:14px; }} .language-switcher {{ padding:5px 6px 5px 8px; font-size:11px; }} .language-switcher select {{ min-height:40px; min-width:82px; max-width:112px; padding:6px 22px 6px 8px; font-size:11px; }} }}
   </style>
 </head>
 <body>

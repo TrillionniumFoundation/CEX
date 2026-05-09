@@ -154,6 +154,94 @@ DUAL_WRITE_LOG="$LOG_DIR/consumer-entry-api-dual-write.log"
 DUAL_WRITE_STATE="$TMP_DIR/dual-write-state.json"
 DUAL_WRITE_SQL_SNAPSHOT="$TMP_DIR/dual-write-snapshot.sql"
 SMOKE_BODY="Runtime dual-write smoke: record normalized repository evidence, risk gate, acceptance standard, and next step."
+CONTRACT_TASK_ID="runtime-contract-task-direct-write-${TMP_DB}"
+
+LEDGER_BASE_URL_EFFECTIVE="${LEDGER_BASE_URL:-http://127.0.0.1:7002}"
+LEDGER_ADMIN_TOKEN_EFFECTIVE="${LEDGER_ADMIN_TOKEN:-}"
+LEDGER_ADMIN_ORG_ID_EFFECTIVE=""
+if [[ -z "$LEDGER_ADMIN_TOKEN_EFFECTIVE" && -n "${LEDGER_ADMIN_TOKENS_JSON:-}" ]]; then
+  LEDGER_ADMIN_TOKEN_EFFECTIVE="$(node - <<'NODE'
+const raw = process.env.LEDGER_ADMIN_TOKENS_JSON || '';
+try {
+  const parsed = JSON.parse(raw);
+  const candidates = Array.isArray(parsed) ? parsed : (Array.isArray(parsed.tokens) ? parsed.tokens : Object.values(parsed));
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim()) {
+      process.stdout.write(candidate.trim());
+      process.exit(0);
+    }
+    if (candidate && typeof candidate === 'object') {
+      const token = candidate.token || candidate.value || candidate.admin_token;
+      if (typeof token === 'string' && token.trim()) {
+        process.stdout.write(token.trim());
+        process.exit(0);
+      }
+    }
+  }
+} catch (_err) {}
+NODE
+)"
+fi
+if [[ -n "${LEDGER_ADMIN_TOKENS_JSON:-}" ]]; then
+  LEDGER_ADMIN_ORG_ID_EFFECTIVE="$(node - <<'NODE'
+const raw = process.env.LEDGER_ADMIN_TOKENS_JSON || '';
+try {
+  const parsed = JSON.parse(raw);
+  const candidates = Array.isArray(parsed) ? parsed : (Array.isArray(parsed.tokens) ? parsed.tokens : Object.values(parsed));
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== 'object') {
+      continue;
+    }
+    const orgIds = candidate.org_ids || candidate.orgIds || candidate.allowed_org_ids;
+    if (Array.isArray(orgIds)) {
+      const orgId = orgIds.find((value) => typeof value === 'string' && value.trim());
+      if (orgId) {
+        process.stdout.write(orgId.trim());
+        process.exit(0);
+      }
+    }
+    if (typeof candidate.org_id === 'string' && candidate.org_id.trim()) {
+      process.stdout.write(candidate.org_id.trim());
+      process.exit(0);
+    }
+  }
+} catch (_err) {}
+NODE
+)"
+fi
+LEDGER_ADMIN_ORG_ID_EFFECTIVE="${LEDGER_ADMIN_ORG_ID_EFFECTIVE:-world-commerce-org}"
+if [[ -z "$LEDGER_ADMIN_TOKEN_EFFECTIVE" ]]; then
+  echo "normalized runtime dual-write requires LEDGER_ADMIN_TOKEN or LEDGER_ADMIN_TOKENS_JSON to create isolated ledger accounts" >&2
+  exit 1
+fi
+
+create_runtime_ledger_account() {
+  local initial_balance="$1"
+  curl -fsS -X POST "$LEDGER_BASE_URL_EFFECTIVE/v1/accounts" \
+    -H "x-admin-token: $LEDGER_ADMIN_TOKEN_EFFECTIVE" \
+    -H 'content-type: application/json' \
+    -d "{\"org_id\":\"$LEDGER_ADMIN_ORG_ID_EFFECTIVE\",\"account_type\":\"world_player\",\"currency_unit\":\"credit\",\"initial_balance\":$initial_balance}" \
+    | node -e 'const fs=require("fs"); const raw=fs.readFileSync(0,"utf8"); const json=JSON.parse(raw); const id=json.account_id || json.account?.account_id; if (!id) { console.error(raw); process.exit(1); } process.stdout.write(id);'
+}
+
+SELLER_LEDGER_ACCOUNT_ID="$(create_runtime_ledger_account 0)"
+BUYER_LEDGER_ACCOUNT_ID="$(create_runtime_ledger_account 1000)"
+REVIEW_BUYER_LEDGER_ACCOUNT_ID="$(create_runtime_ledger_account 1000)"
+IDENTITY_BINDINGS_PATH="$TMP_DIR/identity-bindings.json"
+node - "$IDENTITY_BINDINGS_PATH" "$SELLER_LEDGER_ACCOUNT_ID" "$BUYER_LEDGER_ACCOUNT_ID" "$REVIEW_BUYER_LEDGER_ACCOUNT_ID" "$TMP_DB" "$LEDGER_ADMIN_ORG_ID_EFFECTIVE" <<'NODE'
+const fs = require('fs');
+const [path, seller, buyer, reviewBuyer, tmpDb, orgId] = process.argv.slice(2);
+fs.writeFileSync(path, JSON.stringify({
+  version: 1,
+  revision: `normalized-runtime-${tmpDb}`,
+  chat_users: {},
+  matrix_users: {
+    '@runtime-dual:local.dev': { org_id: orgId, account_id: seller },
+    '@runtime-buyer:local.dev': { org_id: orgId, account_id: buyer },
+    '@runtime-buyer-review:local.dev': { org_id: orgId, account_id: reviewBuyer },
+  },
+}, null, 2));
+NODE
 
 (
   cd "$PROJECT_ROOT"
@@ -165,6 +253,7 @@ SMOKE_BODY="Runtime dual-write smoke: record normalized repository evidence, ris
   CONSUMER_ENTRY_REQUIRE_IDENTITY_BINDING="false" \
   CONSUMER_ENTRY_REPLAY_STORE_PATH="" \
   CONSUMER_ENTRY_RATE_LIMIT_STORE_PATH="" \
+  CONSUMER_ENTRY_IDENTITY_BINDINGS_PATH="$IDENTITY_BINDINGS_PATH" \
   CONSUMER_ENTRY_LEAGUE_STATE_PATH="$DUAL_WRITE_STATE" \
   CONSUMER_ENTRY_LEAGUE_SQL_SNAPSHOT_PATH="$DUAL_WRITE_SQL_SNAPSHOT" \
   CONSUMER_ENTRY_LEAGUE_NORMALIZED_DATABASE_URL="$APP_DB_URL" \
@@ -199,7 +288,7 @@ fi
 CONTRACT_ACTION_STATUS="$TMP_DIR/world-contract-action-status.txt"
 if ! curl -sS -o "$TMP_DIR/world-contract-action-response.json" -w '%{http_code}' -X POST "$BASE_APP_URL/v1/world/action" \
   -H 'content-type: application/json' \
-  -d '{"matrix_user_id":"@runtime-dual:local.dev","room_id":"!runtime-dual:local.dev","location_id":"zbj-market-gate","cex_task_id":"runtime-contract-task-direct-write","cex_status":"completed","body":"Register direct-write contract task with evidence source, risk gate, acceptance standard, completion proof, and next action."}' \
+  -d "{\"matrix_user_id\":\"@runtime-dual:local.dev\",\"room_id\":\"!runtime-dual:local.dev\",\"location_id\":\"zbj-market-gate\",\"cex_task_id\":\"$CONTRACT_TASK_ID\",\"cex_status\":\"received\",\"body\":\"Register direct-write contract task with evidence source, risk gate, acceptance standard, completion proof, and next action.\"}" \
   > "$CONTRACT_ACTION_STATUS"; then
   echo "runtime dual-write contract seed world_action curl failed" >&2
   tail -120 "$DUAL_WRITE_LOG" >&2 || true
@@ -256,6 +345,42 @@ if [[ "$(cat "$WORLD_MOVE_STATUS")" != "200" ]]; then
   exit 1
 fi
 
+TACTICS_TRAIN_STATUS="$TMP_DIR/world-tactics-train-status.txt"
+if ! curl -sS -o "$TMP_DIR/world-tactics-train-response.json" -w '%{http_code}' -X POST "$BASE_APP_URL/v1/world/tactics/command" \
+  -H 'content-type: application/json' \
+  -d '{"matrix_user_id":"@runtime-dual:local.dev","room_id":"!runtime-dual:local.dev","command":"train_skill","unit_id":"lord","target_tile":"G8","skill_id":"basic_unarmed","osm_game_overlay_id":"trillionnium-world-node:mirror-city-square","body":"Train the normalized direct-write tactics attacker at the civic square before resolving the combat objective."}' \
+  > "$TACTICS_TRAIN_STATUS"; then
+  echo "runtime dual-write world_tactics_command training curl failed" >&2
+  tail -120 "$DUAL_WRITE_LOG" >&2 || true
+  cat "$TMP_DIR/world-tactics-train-response.json" >&2 || true
+  exit 1
+fi
+if [[ "$(cat "$TACTICS_TRAIN_STATUS")" != "200" ]]; then
+  echo "runtime dual-write world_tactics_command training returned HTTP $(cat "$TACTICS_TRAIN_STATUS")" >&2
+  cat "$TMP_DIR/world-tactics-train-response.json" >&2 || true
+  echo >&2
+  tail -120 "$DUAL_WRITE_LOG" >&2 || true
+  exit 1
+fi
+
+TACTICS_STATUS="$TMP_DIR/world-tactics-command-status.txt"
+if ! curl -sS -o "$TMP_DIR/world-tactics-command-response.json" -w '%{http_code}' -X POST "$BASE_APP_URL/v1/world/tactics/command" \
+  -H 'content-type: application/json' \
+  -d '{"matrix_user_id":"@runtime-dual:local.dev","room_id":"!runtime-dual:local.dev","command":"attack","unit_id":"lord","target_tile":"F5","skill_id":"basic_unarmed","body":"Resolve normalized direct-write tactics victory against the market bandit with deterministic reward settlement."}' \
+  > "$TACTICS_STATUS"; then
+  echo "runtime dual-write world_tactics_command curl failed" >&2
+  tail -120 "$DUAL_WRITE_LOG" >&2 || true
+  cat "$TMP_DIR/world-tactics-command-response.json" >&2 || true
+  exit 1
+fi
+if [[ "$(cat "$TACTICS_STATUS")" != "200" ]]; then
+  echo "runtime dual-write world_tactics_command returned HTTP $(cat "$TACTICS_STATUS")" >&2
+  cat "$TMP_DIR/world-tactics-command-response.json" >&2 || true
+  echo >&2
+  tail -120 "$DUAL_WRITE_LOG" >&2 || true
+  exit 1
+fi
+
 ASSET_SEED_STATUS="$TMP_DIR/world-asset-seed-status.txt"
 if ! curl -sS -o "$TMP_DIR/world-asset-seed-response.json" -w '%{http_code}' -X POST "$BASE_APP_URL/v1/world/action" \
   -H 'content-type: application/json' \
@@ -295,7 +420,7 @@ fi
 COMPANY_STATUS="$TMP_DIR/world-company-status.txt"
 if ! curl -sS -o "$TMP_DIR/world-company-response.json" -w '%{http_code}' -X POST "$BASE_APP_URL/v1/world/companies" \
   -H 'content-type: application/json' \
-  -d '{"matrix_user_id":"@runtime-dual:local.dev","asset_id":"latest","body":"Launch direct-write company storefront with operating loop, customer promise, evidence package, and revenue model."}' \
+  -d '{"matrix_user_id":"@runtime-dual:local.dev","asset_id":"latest","body":"Launch direct-write company storefront with customer deliverable, evidence package, risk controls, operating loop, next action plan, self review, and revenue model."}' \
   > "$COMPANY_STATUS"; then
   echo "runtime dual-write world_company curl failed" >&2
   tail -120 "$DUAL_WRITE_LOG" >&2 || true
@@ -541,7 +666,7 @@ begin
   if (select count(*) from league_state_repository_snapshots where cutover_phase = 'final_cutover') < 1 then
     raise exception 'runtime dual-write did not write repository audit snapshots';
   end if;
-  if (select count(*) from league_state_repository_write_set_audits where cutover_phase = 'final_cutover') < 12 then
+  if (select count(*) from league_state_repository_write_set_audits where cutover_phase = 'final_cutover') < 13 then
     raise exception 'runtime dual-write did not write repository write-set audits';
   end if;
   if (select count(*) from league_state_repository_write_set_audits where command = 'world_action' and 'world_events' = any(tables)) < 1 then
@@ -553,13 +678,16 @@ begin
   if (select count(*) from league_state_repository_write_set_audits where command = 'world_map_move' and 'world_player_positions' = any(tables) and 'world_economy_events' = any(tables)) < 1 then
     raise exception 'runtime dual-write write-set audit missing world_map_move movement/economy tables';
   end if;
+  if (select count(*) from league_state_repository_write_set_audits where command = 'world_tactics_command' and 'world_tactics_sessions' = any(tables) and 'world_tactics_simulation_ticks' = any(tables) and 'world_trillionnium_characters' = any(tables)) < 1 then
+    raise exception 'runtime dual-write write-set audit missing world_tactics_command tactics storage tables';
+  end if;
   if (select count(*) from league_state_repository_write_set_audits where command = 'world_work_deliver' and 'world_work_deliveries' = any(tables) and 'world_economy_events' = any(tables) and 'world_faction_standings' = any(tables)) < 1 then
     raise exception 'runtime dual-write write-set audit missing world_work_deliver delivery/economy/faction tables';
   end if;
   if (select count(*) from world_events where actor_matrix_user_id = '@runtime-dual:local.dev' and body = '$SMOKE_BODY') < 1 then
     raise exception 'runtime dual-write world event missing from normalized world_events';
   end if;
-  if (select count(*) from world_contracts where actor_matrix_user_id = '@runtime-dual:local.dev' and task_id = 'runtime-contract-task-direct-write') < 1 then
+  if (select count(*) from world_contracts where actor_matrix_user_id = '@runtime-dual:local.dev' and task_id = '$CONTRACT_TASK_ID') < 1 then
     raise exception 'runtime direct world_contract_completion helper did not preserve world_contracts dependency';
   end if;
   if (select count(*) from world_contract_completions where matrix_user_id = '@runtime-dual:local.dev') < 1 then
@@ -576,6 +704,18 @@ begin
   end if;
   if (select count(*) from world_economy_events where matrix_user_id = '@runtime-dual:local.dev' and event_kind = 'map_move' and subject_id = 'zbj-market-gate') < 1 then
     raise exception 'runtime direct world_map_move helper did not write world_economy_events';
+  end if;
+  if (select count(*) from world_trillionnium_characters where matrix_user_id = '@runtime-dual:local.dev') < 1 then
+    raise exception 'runtime direct world_tactics_command helper did not write world_trillionnium_characters';
+  end if;
+  if (select count(*) from world_tactics_sessions where matrix_user_id = '@runtime-dual:local.dev' and victory_state = 'victory' and reward_status = 'settled') < 1 then
+    raise exception 'runtime direct world_tactics_command helper did not write settled victory world_tactics_sessions';
+  end if;
+  if (select count(*) from world_tactics_simulation_ticks where matrix_user_id = '@runtime-dual:local.dev' and outcome_accepted is true and objective_delta > 0 and victory_state_after = 'victory') < 1 then
+    raise exception 'runtime direct world_tactics_command helper did not write victory world_tactics_simulation_ticks';
+  end if;
+  if (select count(*) from world_economy_events where matrix_user_id = '@runtime-dual:local.dev' and event_kind = 'tactics_victory_reward') < 1 then
+    raise exception 'runtime direct world_tactics_command helper did not write tactics victory reward economy event';
   end if;
   if (select count(*) from league_players where matrix_user_id = '@runtime-dual:local.dev') < 1 then
     raise exception 'runtime direct world_asset_upgrade helper did not write league_players';

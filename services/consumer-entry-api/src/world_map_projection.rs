@@ -3171,8 +3171,8 @@ impl<'a> WorldMapProjectionContext<'a> {
             current_node.as_ref(),
             &openstreetmap_geodata,
         );
-        let jianghu_character =
-            world_jianghu_character_projection_json(self.world, self.matrix_user_id);
+        let trillionnium_character =
+            world_trillionnium_character_projection_json(self.world, self.matrix_user_id);
         let avatar_task_routes = world_map_avatar_task_routes_json(
             self.world,
             &self.indexes,
@@ -3195,7 +3195,7 @@ impl<'a> WorldMapProjectionContext<'a> {
             "real_world_map_engine": real_world_map_engine,
             "openstreetmap_geodata": openstreetmap_geodata,
             "tactics_board": tactics_board,
-            "jianghu_character": jianghu_character,
+            "trillionnium_character": trillionnium_character,
             "route_preview": self.route_artifacts.preview.clone(),
             "route_task_graph": self.route_artifacts.task_graph.clone(),
             "route_story": self.route_artifacts.story.to_value(),
