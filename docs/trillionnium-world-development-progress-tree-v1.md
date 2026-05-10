@@ -1293,10 +1293,26 @@ Also append a one-paragraph summary to `/home/qian/.openclaw/workspace/memory/YY
 
 ---
 
+#### Update 2026-05-10 14:57 CST
+
+- Commit: this commit (`test: gate human playability assessment`)
+- Completed full human-playability assessment calibration against the operator baseline:
+  - [x] Added `scripts/check-trillionnium-world-human-playability-assessment.sh` and summary contract `trillionnium_human_playability_assessment_v1`.
+  - [x] Baseline scores are preserved explicitly: technical playability `8.5/10`, first internal beta playability `7.5/10`, commercial release playability `6.0/10`.
+  - [x] Latest evidence-backed scores: technical playability `9.3/10`, first internal beta playability `8.5/10`, commercial release playability `7.0/10`.
+  - [x] The assessment ties score movement to concrete artifacts: Browser request-failure hard gate, first-human mutating session, Web E2E, playability scorecard, real-user beta, public-commercial gate, production readiness/signoff evidence, normalized repository final cutover, runtime Prometheus gauges, and OSM attribution/ODbL gate.
+  - [x] Score caps stay intentionally conservative: technical is capped below `9.5` until `/health` and `/metrics` latency is optimized directly; first-beta is capped below `9` until real users test it; commercial is capped near `7.x` until live payment/support/legal/traffic drills exist.
+- Latest assessment evidence: `run/human-playability-assessment/human-playability-assessment-summary-1778396238.json` (`ok=true`, `/health` probe `30.210812s`, `/metrics` probe `30.589466s`).
+- Validation green: `scripts/check-trillionnium-world-human-playability-assessment.sh` passed against local-production evidence, with prior Web E2E `run/league-web/web-e2e-summary-1778394598.json`, Browser E2E `run/league-browser/browser-e2e-summary-1778394921-790148.json`, first-human E2E `run/first-human-session/browser-e2e-summary-1778395143-795329.json`, real-user beta `run/real-user-beta/real-user-beta-summary-1778346703.json`, public commercial `run/public-commercial/public-commercial-summary-1778346759.json`, and production signoff `run/signoff/production-signoff-20260508T073857Z-620743.summary.json`.
+- Remaining next: optimize `/health` and `/metrics` latency under accumulated normalized SQL state, run a real 5-10 person first-beta cohort, then add commercial launch drills for payment/refund support, legal/privacy review, operator runbooks, and live traffic/error budgets.
+- Constraints preserved: no live Overpass/Geofabrik ingestion, no MapLibre promotion, no MedievalWar/Phaser vendoring, and Rust remains source of truth.
+
+---
+
 ## Current Next Pointer
 
 If the next instruction is simply “continue”, start here:
 
-> **Next pointer:** The progress tree has been calibrated beyond checkpoint `4744573` with first-human browser flow hardening. Product completion remains roughly 99% if blocked/forbidden items are excluded. If the next instruction is simply “continue”, pick either (a) optimize `/health` and `/metrics` latency under accumulated normalized SQL state, (b) refresh real-user/public-commercial/signoff evidence, or (c) take another TW-6/TW-7 UX-runtime slice. Do not treat TW-8 policy bullets as unfinished product backlog.
+> **Next pointer:** Human-playability assessment is now an explicit gate: `9.3/10` technical, `8.5/10` first internal beta, `7.0/10` commercial release from the operator baselines `8.5 / 7.5 / 6.0`. Product completion remains roughly 99% if blocked/forbidden items are excluded. If the next instruction is simply “continue”, prioritize (a) optimizing `/health` and `/metrics` latency under accumulated normalized SQL state, then (b) real 5-10 person first-beta cohort evidence, then (c) commercial launch drills/payment-support-legal-live-traffic readiness. Do not treat TW-8 policy bullets as unfinished product backlog.
 
 Do not start live Overpass/Geofabrik ingestion yet. Do not promote MapLibre. Do not convert the web shell into a standalone JS source of truth.
