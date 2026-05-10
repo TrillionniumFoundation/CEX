@@ -60,6 +60,7 @@ for key, pattern in {
     "public_commercial": "run/public-commercial/public-commercial-summary-*.json",
     "production_signoff": "run/signoff/production-signoff-*.summary.json",
     "health_metrics_load_soak": "run/health-metrics-load-soak/health-metrics-load-soak-summary-*.json",
+    "first_beta_cohort": "run/first-beta-cohort/first-beta-cohort-summary-*.json",
 }.items():
     path, payload = latest_json(pattern)
     latest[key] = {"path": str(path) if path else None, "payload": payload}
@@ -80,6 +81,7 @@ public_summary = latest["public_commercial"].get("payload") or {}
 signoff_summary = latest["production_signoff"].get("payload") or {}
 health_metrics_load_soak = latest["health_metrics_load_soak"].get("payload") or {}
 health_metrics_load_soak_endpoints = health_metrics_load_soak.get("endpoints") or {}
+first_beta_cohort = latest["first_beta_cohort"].get("payload") or {}
 
 request_gate = browser.get("request_failure_gate") or {}
 first_human_coverage = first_human.get("coverage") or {}
@@ -124,6 +126,7 @@ first_beta_lift_checks = [
     evidence_check("web_static_and_signed_flow_green", ok(web) and web.get("has_client_app_first_playable_onboarding") is True and web.get("has_world_tactics_player_surface") is True, 0.10, latest["web_e2e"].get("path")),
     evidence_check("real_user_beta_gate_green", real_user_beta.get("overall_percent") == 100 and ok(real_user_summary), 0.10, latest["real_user_beta"].get("path")),
     evidence_check("comprehension_cost_runtime_axis_green", axis_score("real_player_comprehension_cost") == 10.0, 0.10, playability_axes.get("real_player_comprehension_cost")),
+    evidence_check("real_5_to_10_person_first_beta_cohort_green", ok(first_beta_cohort) and 5 <= int(first_beta_cohort.get("participant_count") or 0) <= 10, 0.50, {"path": latest["first_beta_cohort"].get("path"), "status": first_beta_cohort.get("status"), "metrics": first_beta_cohort.get("metrics"), "participant_count": first_beta_cohort.get("participant_count"), "top_confusion_categories": first_beta_cohort.get("top_confusion_categories")}),
 ]
 
 commercial_lift_checks = [
@@ -146,7 +149,7 @@ def lifted_score(baseline, checks, cap):
     return round(min(cap, baseline + earned), 1), round(earned, 2)
 
 technical_score, technical_lift = lifted_score(8.5, technical_lift_checks, 9.7)
-first_beta_score, first_beta_lift = lifted_score(7.5, first_beta_lift_checks, 8.8)
+first_beta_score, first_beta_lift = lifted_score(7.5, first_beta_lift_checks, 9.0)
 commercial_score, commercial_lift = lifted_score(6.0, commercial_lift_checks, 7.3)
 
 # Keep this intentionally honest: these caps express what the current repo can prove
@@ -173,7 +176,7 @@ assessment = {
     },
     "score_caps": {
         "technical_playability": {"cap": 9.7, "reason": "single-node concurrent p95 is green; keep cap below 9.8 until longer soak, multi-node, or live traffic evidence exists"},
-        "first_internal_beta_playability": {"cap": 8.8, "reason": "needs live human cohort feedback before claiming 9+"},
+        "first_internal_beta_playability": {"cap": 9.0, "reason": "real 5-10 person first-beta cohort gate must be green before claiming 9+"},
         "commercial_release_playability": {"cap": 7.3, "reason": "needs real payment/support/legal/launch traffic signoff before claiming 8+"},
     },
     "targets_for_this_push": {
@@ -193,7 +196,7 @@ assessment = {
     },
     "remaining_gaps_before_next_band": [
         "Extend /health and /metrics latency proof to longer soak, multi-node, or live traffic evidence before claiming 9.8+ technical playability.",
-        "Run a real 5-10 person first-beta cohort and convert confused clicks/drop-offs into UI copy/route fixes.",
+        "Run scripts/check-trillionnium-first-beta-cohort-evidence.sh with a real 5-10 person evidence file and convert confused clicks/drop-offs into UI copy/route fixes.",
         "Add commercial launch drills for payment/refund support, legal/privacy review, operator runbooks, and live traffic/error budgets.",
         "Refresh production signoff after this assessment if commercial score must move beyond 7.x.",
     ],

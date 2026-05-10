@@ -1343,10 +1343,26 @@ Also append a one-paragraph summary to `/home/qian/.openclaw/workspace/memory/YY
 
 ---
 
+#### Update 2026-05-10 15:xx CST
+
+- Commit: this commit (`test: prepare first beta cohort evidence gate`)
+- Prepared the real first-beta cohort collection gate without fabricating user evidence.
+  - [x] Added `docs/trillionnium-first-beta-cohort-runbook-v1.md` with the 5-10 participant protocol, privacy constraints, task steps, thresholds, evidence schema, and confusion/drop-off fix routing.
+  - [x] Added `scripts/check-trillionnium-first-beta-cohort-evidence.sh` with summary contract `trillionnium_first_beta_cohort_evidence_gate_v1`.
+  - [x] The gate requires a real JSON input contract `trillionnium_first_beta_cohort_evidence_v1`, rejects synthetic/template evidence, requires anonymized participants, consent/fresh-session/no-coaching attestations, and validates completion/reward/next-route/time/confusion thresholds.
+  - [x] Human-playability assessment now includes `real_5_to_10_person_first_beta_cohort_green` as the explicit check required before first-beta playability can claim `9+`.
+- Current cohort evidence status: blocked as intended until a real evidence file is provided. Latest blocked summary: `run/first-beta-cohort/first-beta-cohort-summary-1778398224.json` (`status=blocked_missing_real_cohort_evidence`).
+- Latest assessment evidence after adding the optional cohort gate: `run/human-playability-assessment/human-playability-assessment-summary-1778398224.json` (`ok=true`, scores remain `9.7 / 8.5 / 7.0`; the real cohort check is present and false until data exists).
+- Validation green: `bash -n scripts/check-trillionnium-first-beta-cohort-evidence.sh scripts/check-trillionnium-world-human-playability-assessment.sh`, blocked cohort gate behavior inspected, human-playability assessment still green, and `git diff --check`.
+- Remaining next: run the real 5-10 person cohort using the runbook/evidence schema, then convert confusion/drop-off findings into UI/route fixes; after that, move to commercial launch drills.
+- Constraints preserved: no live Overpass/Geofabrik ingestion, no MapLibre promotion, no MedievalWar/Phaser vendoring, and Rust remains source of truth.
+
+---
+
 ## Current Next Pointer
 
 If the next instruction is simply “continue”, start here:
 
-> **Next pointer:** Human-playability assessment is now an explicit gate: `9.7/10` technical, `8.5/10` first internal beta, `7.0/10` commercial release from the operator baselines `8.5 / 7.5 / 6.0`. Product completion remains roughly 99% if blocked/forbidden items are excluded. If the next instruction is simply “continue”, prioritize (a) real 5-10 person first-beta cohort evidence, then (b) commercial launch drills/payment-support-legal-live-traffic readiness, then (c) longer/multi-node/live-traffic latency proof if trying to claim `9.8+` technical playability. Do not treat TW-8 policy bullets as unfinished product backlog.
+> **Next pointer:** Human-playability assessment is now an explicit gate: `9.7/10` technical, `8.5/10` first internal beta, `7.0/10` commercial release from the operator baselines `8.5 / 7.5 / 6.0`. Product completion remains roughly 99% if blocked/forbidden items are excluded. The first-beta cohort validator/runbook is ready; the next evidence step requires a real 5-10 person cohort JSON file via `TRILLIONNIUM_FIRST_BETA_COHORT_EVIDENCE_PATH`. If that evidence is not available yet, prioritize commercial launch drills/payment-support-legal-live-traffic readiness or longer/multi-node/live-traffic latency proof for `9.8+` technical playability. Do not treat TW-8 policy bullets as unfinished product backlog.
 
 Do not start live Overpass/Geofabrik ingestion yet. Do not promote MapLibre. Do not convert the web shell into a standalone JS source of truth.
