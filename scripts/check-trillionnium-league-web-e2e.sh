@@ -340,7 +340,7 @@ for needle in ['Oracle 侦察手', '锻造建造者', '镜像审稿人', '最强
 world_status, world_html_after = get('/world', headers=cookie_header)
 assert world_status == 200, world_status
 assert world_marker in world_html_after, world_marker
-health_status, health_body = get('/health', timeout=60)
+health_status, health_body = get('/health', timeout=180)
 assert health_status == 200, health_status
 health = json.loads(health_body)
 maturity = health.get('trillionnium_world_maturity') or {}

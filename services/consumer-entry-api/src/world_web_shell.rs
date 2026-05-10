@@ -1312,13 +1312,57 @@ fn world_latest_active_trillionnium_task_contract<'a>(
     current_matrix_user_id: &str,
 ) -> Option<&'a WorldContract> {
     league.world.world_contracts.iter().rev().find(|contract| {
+        let status = contract.status.as_str();
         contract.actor_matrix_user_id == current_matrix_user_id
             && contract.task_id.starts_with("trillionnium-task:")
-            && matches!(
-                contract.status.as_str(),
-                "trillionnium_task_offered" | "trillionnium_task_completion_pending_settlement"
-            )
+            && (matches!(
+                status,
+                "trillionnium_task_offered"
+                    | "trillionnium_task_completion_pending_settlement"
+                    | "review_hold"
+            ) || status.starts_with("completed_"))
     })
+}
+
+fn world_latest_trillionnium_task_completion<'a>(
+    league: &'a LeagueState,
+    contract_id: &str,
+) -> Option<&'a WorldContractCompletion> {
+    league
+        .world
+        .world_contract_completions
+        .iter()
+        .rev()
+        .find(|completion| completion.contract_id == contract_id)
+}
+
+fn world_local_task_completion_feedback_html(
+    latest_completion: Option<&WorldContractCompletion>,
+) -> String {
+    let Some(completion) = latest_completion else {
+        return "<small id=\"world-local-task-completion-feedback\" data-completion-present=\"false\" data-i18n-en=\"No submitted local report yet.\" data-i18n-zh=\"还没有提交本地任务战报。\">No submitted local report yet.</small>".to_string();
+    };
+    let ledger_status = completion.ledger_status.as_deref().unwrap_or("pending");
+    format!(
+        "<aside id=\"world-local-task-completion-feedback\" class=\"world-local-task-completion-feedback\" data-completion-present=\"true\" data-completion-id=\"{}\" data-ledger-status=\"{}\" data-payout-status=\"{}\" data-judge-status=\"{}\" data-grade=\"{}\" data-source-of-truth=\"rust_world_contract_completions\"><strong data-i18n-en=\"Latest report\" data-i18n-zh=\"最近战报\">Latest report</strong><span data-i18n-en=\"Grade {} · score {:.1}\" data-i18n-zh=\"评级 {} · 分数 {:.1}\">Grade {} · score {:.1}</span><small data-i18n-en=\"Payout {} · ledger {}\" data-i18n-zh=\"奖励 {} · 账本 {}\">Payout {} · ledger {}</small></aside>",
+        escape_html_text(&completion.completion_id),
+        escape_html_text(ledger_status),
+        escape_html_text(&completion.payout_status),
+        escape_html_text(&completion.judge_status),
+        escape_html_text(&completion.grade),
+        escape_html_text(&completion.grade),
+        completion.score,
+        escape_html_text(&completion.grade),
+        completion.score,
+        escape_html_text(&completion.grade),
+        completion.score,
+        escape_html_text(&completion.payout_status),
+        escape_html_text(ledger_status),
+        escape_html_text(&completion.payout_status),
+        escape_html_text(ledger_status),
+        escape_html_text(&completion.payout_status),
+        escape_html_text(ledger_status),
+    )
 }
 
 fn world_play_first_exit_cards_html(
@@ -1519,6 +1563,8 @@ fn world_play_first_local_task_html(
         Some(contract) => {
             let task_archetype_id = world_task_archetype_id_from_task_id(&contract.task_id)
                 .unwrap_or("courier_letter");
+            let latest_completion =
+                world_latest_trillionnium_task_completion(league, &contract.contract_id);
             let local_candidate = current_candidates.iter().find(|candidate| {
                 candidate
                     .get("task_archetype_id")
@@ -1526,6 +1572,13 @@ fn world_play_first_local_task_html(
                     .is_some_and(|value| value == task_archetype_id)
             });
             let can_submit_completion = contract.status == "trillionnium_task_offered";
+            let lifecycle_step = match contract.status.as_str() {
+                "trillionnium_task_offered" => "complete_task",
+                "trillionnium_task_completion_pending_settlement" => "settlement_pending",
+                "review_hold" => "review_hold",
+                status if status.starts_with("completed_") => "settlement_feedback",
+                _ => "settlement_feedback",
+            };
             let completion_form = if can_submit_completion {
                 local_candidate.map(|candidate| {
                 let candidate_id = candidate
@@ -1533,7 +1586,7 @@ fn world_play_first_local_task_html(
                     .and_then(Value::as_str)
                     .unwrap_or("trillionnium-task:local");
                 format!(
-                    "<form id=\"world-local-task-complete-form\" class=\"world-local-task-form\" method=\"post\" action=\"/world/web/tactics-command\" data-command=\"complete_task\" data-candidate-id=\"{}\" data-contract-id=\"{}\" data-source-of-truth=\"rust_trillionnium_task_completion_handler\" data-web-role=\"intent_only_visualization_input\">{}<input type=\"hidden\" name=\"matrix_user_id\" value=\"{}\"><input type=\"hidden\" name=\"command\" value=\"complete_task\"><input type=\"hidden\" name=\"unit_id\" value=\"lord\"><input type=\"hidden\" name=\"target_tile\" value=\"G8\"><input type=\"hidden\" name=\"task_archetype_id\" value=\"{}\"><input type=\"hidden\" name=\"osm_game_overlay_id\" value=\"{}\"><input type=\"hidden\" name=\"body\" value=\"Trillionnium local task report: current room checked, NPC lead confirmed, evidence package attached, route risk reviewed, next step ready, self-review complete.\"><button type=\"submit\" data-i18n-en=\"Complete local task\" data-i18n-zh=\"完成本地任务\">Complete local task</button></form>",
+                    "<form id=\"world-local-task-complete-form\" class=\"world-local-task-form\" method=\"post\" action=\"/world/web/tactics-command\" data-command=\"complete_task\" data-candidate-id=\"{}\" data-contract-id=\"{}\" data-lifecycle-contract-version=\"trillionnium_world_local_task_lifecycle_v1\" data-source-of-truth=\"rust_trillionnium_task_completion_handler\" data-web-role=\"intent_only_visualization_input\">{}<input type=\"hidden\" name=\"matrix_user_id\" value=\"{}\"><input type=\"hidden\" name=\"command\" value=\"complete_task\"><input type=\"hidden\" name=\"unit_id\" value=\"lord\"><input type=\"hidden\" name=\"target_tile\" value=\"G8\"><input type=\"hidden\" name=\"task_archetype_id\" value=\"{}\"><input type=\"hidden\" name=\"osm_game_overlay_id\" value=\"{}\"><input type=\"hidden\" name=\"body\" value=\"Trillionnium local task report: current room checked, NPC lead confirmed, evidence package attached, route risk reviewed, next step ready, self-review complete.\"><button type=\"submit\" data-i18n-en=\"Complete local task\" data-i18n-zh=\"完成本地任务\">Complete local task</button></form>",
                     escape_html_text(candidate_id),
                     escape_html_text(&contract.contract_id),
                     csrf_input,
@@ -1545,6 +1598,7 @@ fn world_play_first_local_task_html(
             } else {
                 None
             };
+            let completion_feedback = world_local_task_completion_feedback_html(latest_completion);
             let completion_html = completion_form.unwrap_or_else(|| {
                 if can_submit_completion {
                     format!(
@@ -1552,11 +1606,12 @@ fn world_play_first_local_task_html(
                         escape_world_visible_text(&current_location_label),
                     )
                 } else {
-                    "<small data-task-settlement-pending=\"true\">Report already submitted; Rust ledger/review settlement must finish before another completion.</small>".to_string()
+                    "<small data-task-settlement-feedback=\"true\">Report already submitted; Rust ledger/review settlement state is shown below before another completion.</small>".to_string()
                 }
             });
             format!(
-                "<article class=\"world-local-task-card\" data-active-task=\"true\" data-contract-id=\"{}\" data-task-archetype-id=\"{}\" data-status=\"{}\"><strong>{}</strong><span>{}</span><small>{}</small>{}</article>",
+                "<article id=\"world-local-active-task-card\" class=\"world-local-task-card\" data-active-task=\"true\" data-lifecycle-contract-version=\"trillionnium_world_local_task_lifecycle_v1\" data-lifecycle-step=\"{}\" data-contract-id=\"{}\" data-task-archetype-id=\"{}\" data-status=\"{}\"><strong>{}</strong><span>{}</span><small>{}</small>{}{}</article>",
+                escape_html_text(lifecycle_step),
                 escape_html_text(&contract.contract_id),
                 escape_html_text(task_archetype_id),
                 escape_html_text(&contract.status),
@@ -1564,10 +1619,12 @@ fn world_play_first_local_task_html(
                 escape_world_visible_text(&world_user_visible_copy(&contract.body)),
                 escape_html_text(&contract.status),
                 completion_html,
+                completion_feedback,
             )
         }
         None => format!(
-            "<article class=\"world-local-task-card\" data-active-task=\"false\" data-pickup-hint=\"{}\"><strong data-i18n-en=\"No active task yet\" data-i18n-zh=\"还没有进行中的任务\">No active task yet</strong><span data-i18n-en=\"Talk to a local NPC, then pick up a task before submitting a report.\" data-i18n-zh=\"先和本地 NPC 交谈，再接取任务，最后提交战报。\">Talk to a local NPC, then pick up a task before submitting a report.</span><small>{} · candidate {}</small></article>",
+            "<article id=\"world-local-task-pickup-hint\" class=\"world-local-task-card\" data-active-task=\"false\" data-lifecycle-contract-version=\"trillionnium_world_local_task_lifecycle_v1\" data-lifecycle-step=\"pickup_task\" data-local-candidate-count=\"{}\" data-pickup-hint=\"{}\"><strong data-i18n-en=\"No active task yet\" data-i18n-zh=\"还没有进行中的任务\">No active task yet</strong><span data-i18n-en=\"Talk to a local NPC, then pick up a task before submitting a report.\" data-i18n-zh=\"先和本地 NPC 交谈，再接取任务，最后提交战报。\">Talk to a local NPC, then pick up a task before submitting a report.</span><small>{} · candidate {}</small></article>",
+            current_candidates.len(),
             escape_html_text(pickup_hint),
             escape_world_visible_text(&current_location_label),
             escape_html_text(pickup_hint),
@@ -1620,7 +1677,7 @@ fn world_play_first_action_prompt_html(
         csrf_input,
     );
     format!(
-        "<section id=\"world-play-first-action-prompt\" class=\"world-play-first-action-prompt\" data-contract-version=\"trillionnium_world_play_first_exploration_loop_v1\" data-current-node-id=\"{}\" data-current-overlay-id=\"{}\" data-source-of-truth=\"rust_world_map_nodes_and_tactics_commands\" data-web-role=\"intent_only_visualization_input\" aria-label=\"Current location exits local actions NPC task loop\"><article id=\"world-current-location-card\" class=\"world-current-location-card\"><span data-i18n-en=\"Current location\" data-i18n-zh=\"当前位置\">Current location</span><strong>{}</strong><small>{} · {}</small><p>{}</p></article><article id=\"world-current-exits\" class=\"world-current-exits\"><span data-i18n-en=\"Exits\" data-i18n-zh=\"出口\">Exits</span><div class=\"world-local-exit-grid\">{}</div></article><article id=\"world-local-actions\" class=\"world-local-actions\"><span data-i18n-en=\"Local actions\" data-i18n-zh=\"本地动作\">Local actions</span><div class=\"world-local-action-chip-row\">{}</div></article><article id=\"world-local-npc-talk\" class=\"world-local-npc-talk\" data-command=\"talk_npc\"><span data-i18n-en=\"NPC talk\" data-i18n-zh=\"NPC 交谈\">NPC talk</span>{}</article><article id=\"world-local-task-loop\" class=\"world-local-task-loop\" data-pickup-command=\"offer_task\" data-completion-command=\"complete_task\"><span data-i18n-en=\"Task pickup / completion\" data-i18n-zh=\"任务接取 / 完成\">Task pickup / completion</span>{}</article></section>",
+        "<section id=\"world-play-first-action-prompt\" class=\"world-play-first-action-prompt\" data-contract-version=\"trillionnium_world_play_first_exploration_loop_v1\" data-local-task-lifecycle-contract-version=\"trillionnium_world_local_task_lifecycle_v1\" data-current-node-id=\"{}\" data-current-overlay-id=\"{}\" data-source-of-truth=\"rust_world_map_nodes_and_tactics_commands\" data-web-role=\"intent_only_visualization_input\" aria-label=\"Current location exits local actions NPC task loop\"><article id=\"world-current-location-card\" class=\"world-current-location-card\"><span data-i18n-en=\"Current location\" data-i18n-zh=\"当前位置\">Current location</span><strong>{}</strong><small>{} · {}</small><p>{}</p></article><article id=\"world-current-exits\" class=\"world-current-exits\"><span data-i18n-en=\"Exits\" data-i18n-zh=\"出口\">Exits</span><div class=\"world-local-exit-grid\">{}</div></article><article id=\"world-local-actions\" class=\"world-local-actions\"><span data-i18n-en=\"Local actions\" data-i18n-zh=\"本地动作\">Local actions</span><div class=\"world-local-action-chip-row\">{}</div></article><article id=\"world-local-npc-talk\" class=\"world-local-npc-talk\" data-command=\"talk_npc\"><span data-i18n-en=\"NPC talk\" data-i18n-zh=\"NPC 交谈\">NPC talk</span>{}</article><article id=\"world-local-task-loop\" class=\"world-local-task-loop\" data-lifecycle-contract-version=\"trillionnium_world_local_task_lifecycle_v1\" data-pickup-command=\"offer_task\" data-completion-command=\"complete_task\" data-source-of-truth=\"rust_world_contracts_and_completions\"><span data-i18n-en=\"Task pickup / completion\" data-i18n-zh=\"任务接取 / 完成\">Task pickup / completion</span>{}</article></section>",
         escape_html_text(node_id),
         escape_html_text(&current_overlay_id),
         escape_world_visible_text(&node_name),
@@ -3539,6 +3596,7 @@ pub(super) async fn get_world_web_shell(
     .world-local-exit-form button {{ display:grid; justify-items:start; gap:1px; min-width:82px; }}
     .world-local-exit-form button span {{ color:#0b0b0b; font-size:8px; text-transform:none; letter-spacing:0; }}
     .world-local-task-card,.world-local-npc-card {{ display:grid; gap:3px; }}
+    .world-local-task-completion-feedback {{ border:1px solid rgba(11,16,7,.72); background:rgba(255,255,255,.16); display:grid; gap:2px; padding:3px; }}
     .world-keypad-quest-brief {{ background:#8fb454 !important; border-color:#0b1007 !important; }}
     .world-keypad-quest-brief .cta {{ width:100%; min-height:26px; padding:5px 8px; border-radius:0; border:1px solid #0b1007; background:#8fb454; color:#0b1007; box-shadow:none; font-size:10px; font-family:ui-monospace,"SFMono-Regular","Noto Sans Mono CJK SC",monospace; }}
     .world-keypad-sidecar strong {{ color:#111; }}

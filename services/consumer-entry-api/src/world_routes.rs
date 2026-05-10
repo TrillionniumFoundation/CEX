@@ -2043,6 +2043,7 @@ pub(super) async fn post_world_web_tactics_command(
         .filter(|value| !value.is_empty())
         .unwrap_or("select_unit")
         .to_string();
+    let command_for_redirect = command.clone();
     let request = WorldTacticsCommandRequest {
         matrix_user_id,
         room_id: web_session
@@ -2081,8 +2082,20 @@ pub(super) async fn post_world_web_tactics_command(
         .and_then(Value::as_bool)
         .unwrap_or(false);
     if accepted {
-        Redirect::to("/world?tactics=1#trillionnium-tactics-game-shell").into_response()
+        let target = match command_for_redirect.as_str() {
+            "talk_npc" => "/world?tactics=1&npc=talked#world-play-first-action-prompt",
+            "offer_task" => "/world?tactics=1&task=offered#world-play-first-action-prompt",
+            "complete_task" => "/world?tactics=1&task=completed#world-play-first-action-prompt",
+            _ => "/world?tactics=1#trillionnium-tactics-game-shell",
+        };
+        Redirect::to(target).into_response()
     } else {
-        Redirect::to("/world?tactics=0#trillionnium-tactics-game-shell").into_response()
+        let target = match command_for_redirect.as_str() {
+            "talk_npc" | "offer_task" | "complete_task" => {
+                "/world?tactics=0&task=rejected#world-play-first-action-prompt"
+            }
+            _ => "/world?tactics=0#trillionnium-tactics-game-shell",
+        };
+        Redirect::to(target).into_response()
     }
 }

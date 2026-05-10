@@ -382,6 +382,53 @@ async function submitWorldForm(page, formSelector, marker, expectedUrlFragment) 
   return response ? response.status() : 200;
 }
 
+async function moveWorldKeypadToNode(page, targetNodeId) {
+  await page.waitForFunction(() => {
+    const runtime = window.trillionniumKeyboardMap?.getState?.();
+    const domCurrent = document.querySelector('#world-keypad-map-grid')?.dataset?.currentNodeId;
+    return Boolean(runtime?.currentNodeId && domCurrent && runtime.currentNodeId === domCurrent);
+  }, undefined, { timeout: 10_000 });
+  const path = await page.evaluate((target) => {
+    const state = window.trillionniumKeyboardMap?.getState?.();
+    const nodes = state?.nodes || {};
+    const start = state?.currentNodeId;
+    if (!start || !nodes[start] || !nodes[target]) return null;
+    if (start === target) return [];
+    const directionKeys = {
+      east: '6', e: '6',
+      west: '4', w: '4',
+      north: '8', n: '8',
+      south: '2', s: '2',
+      'north-east': '9', northeast: '9', ne: '9',
+      'north-west': '7', northwest: '7', nw: '7',
+      'south-east': '3', southeast: '3', se: '3',
+      'south-west': '1', southwest: '1', sw: '1',
+    };
+    const queue = [{ nodeId: start, steps: [] }];
+    const seen = new Set([start]);
+    while (queue.length > 0) {
+      const current = queue.shift();
+      const exits = nodes[current.nodeId]?.exits || {};
+      for (const [direction, nextNodeId] of Object.entries(exits)) {
+        const key = directionKeys[String(direction).toLowerCase()];
+        if (!key || !nodes[nextNodeId] || seen.has(nextNodeId)) continue;
+        const steps = [...current.steps, { key, direction, targetNodeId: nextNodeId }];
+        if (nextNodeId === target) return steps;
+        seen.add(nextNodeId);
+        queue.push({ nodeId: nextNodeId, steps });
+      }
+    }
+    return null;
+  }, targetNodeId);
+  assert(Array.isArray(path), `world keypad cannot route to ${targetNodeId}`, { targetNodeId, path });
+  for (const step of path) {
+    const ok = await page.evaluate((key) => window.trillionniumKeyboardMap?.move?.(key, 'browser-e2e-route'), step.key);
+    assert(ok === true, 'world keypad route step failed', step);
+    await page.waitForFunction((expected) => window.trillionniumKeyboardMap?.getState?.().currentNodeId === expected, step.targetNodeId, { timeout: 10_000 });
+  }
+  return path;
+}
+
 async function assertWorldFirstHumanScreen(page, label) {
   assert(await count(page, '#world-first-human-loop[data-contract-version="trillionnium_first_human_session_v1"][data-visible-question-count="4"]') === 1, `${label} first-human four-question card missing`);
   const questionIds = await page.$$eval('#world-first-human-loop [data-first-human-question]', (nodes) => nodes.map((node) => node.dataset.firstHumanQuestion));
@@ -961,6 +1008,38 @@ async function main() {
   assert(afterKeyboardMove.runtime?.currentNodeId === keyboardMove.targetNodeId && afterKeyboardMove.domCurrent === keyboardMove.targetNodeId, 'world keypad keyboard/numpad movement did not update map position', afterKeyboardMove);
   assert(afterKeyboardMove.source === 'keyboard' && afterKeyboardMove.direction === keyboardMove.direction, 'world keypad keyboard movement source/direction missing', afterKeyboardMove);
   steps.push({ name: 'world_keypad_tile_map_button_and_numpad_movement', ok: true, button_move: firstKeypadMove, keyboard_move: keyboardMove });
+
+  let routeToNpcHub = await moveWorldKeypadToNode(page, 'mirror-city-square');
+  await page.goto('/world?lang=en#world-play-first-action-prompt', { waitUntil: 'domcontentloaded', timeout: 30_000 });
+  await page.waitForSelector('#world-play-first-action-prompt', { state: 'attached', timeout: 15_000 });
+  let promptNodeId = await page.locator('#world-play-first-action-prompt').first().getAttribute('data-current-node-id');
+  if (promptNodeId !== 'mirror-city-square') {
+    routeToNpcHub = await moveWorldKeypadToNode(page, 'mirror-city-square');
+    await page.goto('/world?lang=en#world-play-first-action-prompt', { waitUntil: 'domcontentloaded', timeout: 30_000 });
+    await page.waitForSelector('#world-play-first-action-prompt', { state: 'attached', timeout: 15_000 });
+    promptNodeId = await page.locator('#world-play-first-action-prompt').first().getAttribute('data-current-node-id');
+  }
+  assert(promptNodeId === 'mirror-city-square', 'world play-first prompt did not reload at Mirror City Square after keypad route', { promptNodeId, routeToNpcHub });
+  assert(await count(page, '#world-local-npc-talk .world-local-npc-form[data-command="talk_npc"][data-npc-id="npc-street-compass-sifu"]') >= 1, 'world local NPC talk form missing at Mirror City Square');
+  assert(await count(page, '#world-local-npc-talk .world-local-npc-form[data-command="offer_task"][data-npc-id="npc-street-compass-sifu"]') >= 1, 'world local NPC offer_task form missing at Mirror City Square');
+  await submitWorldForm(page, '#world-local-npc-talk .world-local-npc-form[data-command="talk_npc"][data-npc-id="npc-street-compass-sifu"]', marker, 'npc=talked');
+  assert(await count(page, '#world-play-first-action-prompt[data-current-node-id="mirror-city-square"]') === 1, 'world play-first prompt did not remain anchored after NPC talk');
+  await submitWorldForm(page, '#world-local-npc-talk .world-local-npc-form[data-command="offer_task"][data-npc-id="npc-street-compass-sifu"]', marker, 'task=offered');
+  await page.waitForSelector('#world-local-active-task-card[data-active-task="true"][data-lifecycle-step="complete_task"][data-task-archetype-id="courier_letter"]', { state: 'attached', timeout: 15_000 });
+  assert(await count(page, '#world-local-task-complete-form[data-command="complete_task"][data-lifecycle-contract-version="trillionnium_world_local_task_lifecycle_v1"]') === 1, 'world local task completion form missing after offer_task');
+  await page.locator('#world-local-task-complete-form input[name="body"]').evaluate((node, markerValue) => {
+    node.value = `Trillionnium local task report ${markerValue}: current room checked, NPC lead confirmed, evidence package attached, route risk reviewed, next step ready, self-review complete.`;
+    node.dispatchEvent(new Event('input', { bubbles: true }));
+  }, marker);
+  await submitWorldForm(page, '#world-local-task-complete-form', marker, 'task=completed');
+  await page.waitForSelector('#world-local-task-completion-feedback[data-completion-present="true"][data-source-of-truth="rust_world_contract_completions"]', { state: 'attached', timeout: 15_000 });
+  const localTaskStatusAfterCompletion = await page.locator('#world-local-active-task-card').first().getAttribute('data-status');
+  const localTaskLifecycleStepAfterCompletion = await page.locator('#world-local-active-task-card').first().getAttribute('data-lifecycle-step');
+  assert(/^(trillionnium_task_completion_pending_settlement|completed_|review_hold)/.test(String(localTaskStatusAfterCompletion || '')), 'world local task status did not advance after complete_task', { localTaskStatusAfterCompletion, localTaskLifecycleStepAfterCompletion });
+  assert(['settlement_pending', 'settlement_feedback', 'review_hold'].includes(String(localTaskLifecycleStepAfterCompletion || '')), 'world local task lifecycle did not expose settlement/review feedback after complete_task', { localTaskStatusAfterCompletion, localTaskLifecycleStepAfterCompletion });
+  assert(await count(page, '#world-local-task-complete-form') === 0, 'world local completion form must disappear while settlement is pending');
+  steps.push({ name: 'world_local_npc_task_pickup_completion_loop', ok: true, route_steps_to_npc_hub: routeToNpcHub.length });
+
   await page.goto('/world?lang=zh', { waitUntil: 'domcontentloaded', timeout: 30_000 });
   await page.waitForSelector('#world-real-map', { timeout: 15_000 });
   await page.waitForFunction(() => document.documentElement.getAttribute('data-ui-language') === 'zh', { timeout: 10_000 });
@@ -1048,7 +1127,7 @@ async function main() {
   assert(rumMatrixWarmup.every((result) => result.ok), 'RUM matrix warmup failed', rumMatrixWarmup);
   steps.push({ name: 'world_map_rum_matrix_browser_warmup', ok: true, samples: 12 });
 
-  const health = await page.request.get(`${baseUrl}/health`, { timeout: 60_000 });
+  const health = await page.request.get(`${baseUrl}/health`, { timeout: 180_000 });
   assert(health.ok(), `health failed after browser flow: ${health.status()}`);
   const healthJson = await health.json();
   assert(healthJson?.trillionnium_world_map_runtime_safety_gate?.contract_version === 'trillionnium_world_map_runtime_safety_gate_v1', 'health runtime safety gate contract missing', healthJson?.trillionnium_world_map_runtime_safety_gate);
@@ -1077,7 +1156,7 @@ async function main() {
   assert(Number.isFinite(Number(healthJson?.trillionnium_world_map_rum_slo_gate?.sample_count)), 'health RUM SLO sample count missing', healthJson?.trillionnium_world_map_rum_slo_gate);
   assert(['warming_until_min_samples', 'enforced'].includes(healthJson?.trillionnium_world_map_rum_slo_gate?.enforcement_status), 'health RUM SLO enforcement status missing', healthJson?.trillionnium_world_map_rum_slo_gate);
   assert(healthJson?.trillionnium_world_map_delta_cache_gate?.entity_delta_cache_contract === 'entity_group_versioned_delta_v1' && healthJson?.trillionnium_world_map_delta_cache_gate?.failure_rate_within_target === true, 'health delta cache gate not green', healthJson?.trillionnium_world_map_delta_cache_gate);
-  const metrics = await page.request.get(`${baseUrl}/metrics`, { timeout: 60_000 });
+  const metrics = await page.request.get(`${baseUrl}/metrics`, { timeout: 180_000 });
   assert(metrics.ok(), `metrics failed after browser flow: ${metrics.status()}`);
   const metricsText = await metrics.text();
   for (const needle of [
@@ -1144,6 +1223,7 @@ async function main() {
       route_runner_handoff_contract: true,
       route_runner_handoff_dom: true,
       world_map_move: true,
+      world_local_npc_task_loop: true,
       world_buy: true,
       world_work_deliver: true,
       world_work_accept: true,

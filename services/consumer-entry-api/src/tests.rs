@@ -3537,6 +3537,22 @@ async fn world_tactics_command_endpoint_validates_training_place_and_mutates_cha
         "review_hold"
     );
 
+    let world_local_task_html = get_world_web_shell(
+        axum::extract::State(state.clone()),
+        HeaderMap::new(),
+        axum::extract::Query(HashMap::new()),
+    )
+    .await
+    .0;
+    assert!(world_local_task_html.contains("world-local-active-task-card"));
+    assert!(world_local_task_html.contains("trillionnium_world_local_task_lifecycle_v1"));
+    assert!(world_local_task_html.contains("data-lifecycle-step=\"review_hold\""));
+    assert!(world_local_task_html.contains("world-local-task-completion-feedback"));
+    assert!(world_local_task_html.contains("data-completion-present=\"true\""));
+    assert!(
+        world_local_task_html.contains("data-source-of-truth=\"rust_world_contract_completions\"")
+    );
+
     let guard = state.inner.league_state.lock().await;
     let character = world_trillionnium_character_projection_json(&guard.world, "@alice:local.dev");
     assert!(character["skill_ids"]
@@ -4568,9 +4584,11 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(world_html.contains("world-local-actions"));
     assert!(world_html.contains("world-local-npc-talk"));
     assert!(world_html.contains("world-local-task-loop"));
+    assert!(world_html.contains("trillionnium_world_local_task_lifecycle_v1"));
     assert!(world_html.contains("data-command=\"talk_npc\""));
     assert!(world_html.contains("data-pickup-command=\"offer_task\""));
     assert!(world_html.contains("data-completion-command=\"complete_task\""));
+    assert!(world_html.contains("data-source-of-truth=\"rust_world_contracts_and_completions\""));
     assert!(
         world_html.contains("data-source-of-truth=\"rust_world_map_nodes_and_tactics_commands\"")
     );
