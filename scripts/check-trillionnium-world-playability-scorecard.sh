@@ -64,6 +64,9 @@ route_runner_handoff_gate = scorecard.get("route_runner_handoff_gate") or {}
 map_readability_lod_gate = scorecard.get("map_readability_lod_gate") or {}
 route_runner_funnel_telemetry_gate = scorecard.get("route_runner_funnel_telemetry_gate") or {}
 future_engine_readiness_gate = scorecard.get("future_engine_readiness_gate") or {}
+openstreetmap_provider_readiness_gate = scorecard.get("openstreetmap_provider_readiness_gate") or {}
+openstreetmap_geodata_freshness_gate = scorecard.get("openstreetmap_geodata_freshness_gate") or {}
+openstreetmap_attribution_presence_gate = scorecard.get("openstreetmap_attribution_presence_gate") or {}
 axis_order = scorecard.get("axis_order") or []
 user_metric_order = scorecard.get("user_metric_order") or []
 
@@ -122,6 +125,18 @@ require("playability_future_engine_stays_leaflet", future_engine_readiness_gate.
 require("playability_future_engine_candidate_maplibre", future_engine_readiness_gate.get("candidate_engine_id") == "maplibre_gl_v1", future_engine_readiness_gate)
 require("playability_future_engine_runtime_handle", future_engine_readiness_gate.get("runtime_handle_name") == "mapRuntime", future_engine_readiness_gate)
 require("playability_future_engine_shadow_rollback", future_engine_readiness_gate.get("rollback_plan_visible") is True and int(future_engine_readiness_gate.get("promotion_blocker_count") or 0) >= 3, future_engine_readiness_gate)
+require("playability_osm_provider_readiness_gate_contract", openstreetmap_provider_readiness_gate.get("contract_version") == "trillionnium_openstreetmap_provider_readiness_gate_v1", openstreetmap_provider_readiness_gate)
+require("playability_osm_provider_readiness_contract", openstreetmap_provider_readiness_gate.get("readiness_contract_version") == "openstreetmap_provider_readiness_v1", openstreetmap_provider_readiness_gate)
+require("playability_osm_provider_fixture_fail_closed", openstreetmap_provider_readiness_gate.get("provider_mode") == "fixture" and openstreetmap_provider_readiness_gate.get("fixture_mode_green") is True and openstreetmap_provider_readiness_gate.get("live_modes_fail_closed") is True, openstreetmap_provider_readiness_gate)
+require("playability_osm_provider_ingestion_disabled", openstreetmap_provider_readiness_gate.get("network_ingestion_disabled") is True and openstreetmap_provider_readiness_gate.get("production_ingestion_disabled") is True, openstreetmap_provider_readiness_gate)
+require("playability_osm_geodata_freshness_gate_contract", openstreetmap_geodata_freshness_gate.get("contract_version") == "trillionnium_openstreetmap_geodata_freshness_gate_v1", openstreetmap_geodata_freshness_gate)
+require("playability_osm_geodata_freshness_contract", openstreetmap_geodata_freshness_gate.get("freshness_contract_version") == "openstreetmap_geodata_freshness_v1", openstreetmap_geodata_freshness_gate)
+require("playability_osm_geodata_static_freshness", openstreetmap_geodata_freshness_gate.get("freshness_status") == "fixture_static_fresh_live_stale_blocked" and openstreetmap_geodata_freshness_gate.get("fixture_snapshot_age_seconds") == 0 and openstreetmap_geodata_freshness_gate.get("stale_live_ingestion_blocked") is True, openstreetmap_geodata_freshness_gate)
+require("playability_osm_attribution_presence_gate_contract", openstreetmap_attribution_presence_gate.get("contract_version") == "trillionnium_openstreetmap_attribution_presence_gate_v1", openstreetmap_attribution_presence_gate)
+require("playability_osm_attribution_presence_contract", openstreetmap_attribution_presence_gate.get("attribution_presence_contract_version") == "openstreetmap_attribution_presence_v1", openstreetmap_attribution_presence_gate)
+require("playability_osm_attribution_copy_visible", openstreetmap_attribution_presence_gate.get("attribution") == "© OpenStreetMap contributors" and openstreetmap_attribution_presence_gate.get("database_license") == "ODbL-1.0", openstreetmap_attribution_presence_gate)
+require("playability_osm_attribution_odbl_required", openstreetmap_attribution_presence_gate.get("attribution_visible_required") is True and openstreetmap_attribution_presence_gate.get("derived_database_tracking_required") is True and openstreetmap_attribution_presence_gate.get("odbl_database_obligations_visible") is True, openstreetmap_attribution_presence_gate)
+require("playability_osm_attribution_presence_green", openstreetmap_attribution_presence_gate.get("attribution_presence_green") is True and int(openstreetmap_attribution_presence_gate.get("presence_check_count") or 0) >= 4, openstreetmap_attribution_presence_gate)
 for axis_id in DIAGNOSTIC_AXES:
     axis = diagnostic_axes.get(axis_id) or {}
     require(f"playability_axis_{axis_id}_score_10", axis.get("score") == 10.0, axis)
@@ -166,6 +181,15 @@ for metric in [
     "cex_consumer_entry_trillionnium_world_commercial_reward_claim_to_next_commission_percent",
     "cex_consumer_entry_trillionnium_world_future_engine_readiness_gate_green",
     "cex_consumer_entry_trillionnium_world_future_engine_promotion_blocker_count",
+    "cex_consumer_entry_trillionnium_openstreetmap_provider_readiness_gate_green",
+    "cex_consumer_entry_trillionnium_openstreetmap_provider_fail_closed_mode_count",
+    "cex_consumer_entry_trillionnium_openstreetmap_geodata_freshness_gate_green",
+    "cex_consumer_entry_trillionnium_openstreetmap_geodata_fixture_snapshot_age_seconds",
+    "cex_consumer_entry_trillionnium_openstreetmap_geodata_staleness_alarm_active",
+    "cex_consumer_entry_trillionnium_openstreetmap_attribution_presence_gate_green",
+    "cex_consumer_entry_trillionnium_openstreetmap_attribution_visible_required",
+    "cex_consumer_entry_trillionnium_openstreetmap_odbl_obligations_visible",
+    "cex_consumer_entry_trillionnium_openstreetmap_attribution_presence_check_count",
     "cex_consumer_entry_trillionnium_world_playability_scorecard_overall_score",
     "cex_consumer_entry_trillionnium_world_playability_scorecard_overall_percent",
     "cex_consumer_entry_trillionnium_world_playability_scorecard_onboarding_3_minute_loop_score",
@@ -203,6 +227,9 @@ summary = {
     "map_readability_lod_gate": map_readability_lod_gate,
     "route_runner_funnel_telemetry_gate": route_runner_funnel_telemetry_gate,
     "future_engine_readiness_gate": future_engine_readiness_gate,
+    "openstreetmap_provider_readiness_gate": openstreetmap_provider_readiness_gate,
+    "openstreetmap_geodata_freshness_gate": openstreetmap_geodata_freshness_gate,
+    "openstreetmap_attribution_presence_gate": openstreetmap_attribution_presence_gate,
     "failures": failures,
 }
 path = summary_dir / f"playability-scorecard-summary-{checked_at}.json"

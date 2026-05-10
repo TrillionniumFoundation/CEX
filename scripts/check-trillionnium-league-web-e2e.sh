@@ -403,6 +403,16 @@ assert osm_geodata_freshness.get('fixture_snapshot_age_seconds') == 0, osm_geoda
 assert osm_geodata_freshness.get('live_ingestion_disabled') is True, osm_geodata_freshness
 assert osm_geodata_freshness.get('stale_live_ingestion_blocked') is True, osm_geodata_freshness
 assert osm_geodata_freshness.get('freshness_green') is True, osm_geodata_freshness
+osm_attribution_presence = health.get('trillionnium_openstreetmap_attribution_presence_gate') or {}
+assert osm_attribution_presence.get('contract_version') == 'trillionnium_openstreetmap_attribution_presence_gate_v1', osm_attribution_presence
+assert osm_attribution_presence.get('attribution_presence_contract_version') == 'openstreetmap_attribution_presence_v1', osm_attribution_presence
+assert osm_attribution_presence.get('attribution') == '© OpenStreetMap contributors', osm_attribution_presence
+assert osm_attribution_presence.get('database_license') == 'ODbL-1.0', osm_attribution_presence
+assert osm_attribution_presence.get('attribution_required') is True, osm_attribution_presence
+assert osm_attribution_presence.get('attribution_visible_required') is True, osm_attribution_presence
+assert osm_attribution_presence.get('derived_database_tracking_required') is True, osm_attribution_presence
+assert osm_attribution_presence.get('odbl_database_obligations_visible') is True, osm_attribution_presence
+assert osm_attribution_presence.get('attribution_presence_green') is True, osm_attribution_presence
 
 summary = {
     'ok': True,
@@ -559,6 +569,9 @@ summary = {
     'openstreetmap_geodata_freshness_status': osm_geodata_freshness.get('freshness_status'),
     'openstreetmap_geodata_fixture_snapshot_age_seconds': osm_geodata_freshness.get('fixture_snapshot_age_seconds'),
     'openstreetmap_geodata_stale_live_ingestion_blocked': osm_geodata_freshness.get('stale_live_ingestion_blocked'),
+    'openstreetmap_attribution_presence_contract_version': osm_attribution_presence.get('attribution_presence_contract_version'),
+    'openstreetmap_attribution_visible_required': osm_attribution_presence.get('attribution_visible_required'),
+    'openstreetmap_attribution_odbl_obligations_visible': osm_attribution_presence.get('odbl_database_obligations_visible'),
     'marker': marker,
 }
 path = summary_dir / f'web-e2e-summary-{int(time.time())}.json'

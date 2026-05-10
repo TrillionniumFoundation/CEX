@@ -777,6 +777,13 @@ async function main() {
   assert(healthJson?.trillionnium_openstreetmap_geodata_freshness_gate?.freshness_status === 'fixture_static_fresh_live_stale_blocked', 'health OSM freshness status drifted', healthJson?.trillionnium_openstreetmap_geodata_freshness_gate);
   assert(healthJson?.trillionnium_openstreetmap_geodata_freshness_gate?.fixture_snapshot_age_seconds === 0, 'health OSM fixture age sentinel must stay zero', healthJson?.trillionnium_openstreetmap_geodata_freshness_gate);
   assert(healthJson?.trillionnium_openstreetmap_geodata_freshness_gate?.stale_live_ingestion_blocked === true, 'health OSM stale live ingestion must fail closed', healthJson?.trillionnium_openstreetmap_geodata_freshness_gate);
+  assert(healthJson?.trillionnium_openstreetmap_attribution_presence_gate?.contract_version === 'trillionnium_openstreetmap_attribution_presence_gate_v1', 'health OSM attribution presence gate contract missing', healthJson?.trillionnium_openstreetmap_attribution_presence_gate);
+  assert(healthJson?.trillionnium_openstreetmap_attribution_presence_gate?.attribution_presence_contract_version === 'openstreetmap_attribution_presence_v1', 'health OSM attribution presence contract missing', healthJson?.trillionnium_openstreetmap_attribution_presence_gate);
+  assert(healthJson?.trillionnium_openstreetmap_attribution_presence_gate?.attribution === '© OpenStreetMap contributors', 'health OSM attribution copy drifted', healthJson?.trillionnium_openstreetmap_attribution_presence_gate);
+  assert(healthJson?.trillionnium_openstreetmap_attribution_presence_gate?.database_license === 'ODbL-1.0', 'health OSM database license drifted', healthJson?.trillionnium_openstreetmap_attribution_presence_gate);
+  assert(healthJson?.trillionnium_openstreetmap_attribution_presence_gate?.attribution_visible_required === true, 'health OSM attribution visible requirement missing', healthJson?.trillionnium_openstreetmap_attribution_presence_gate);
+  assert(healthJson?.trillionnium_openstreetmap_attribution_presence_gate?.odbl_database_obligations_visible === true, 'health OSM ODbL obligation visibility missing', healthJson?.trillionnium_openstreetmap_attribution_presence_gate);
+  assert(healthJson?.trillionnium_openstreetmap_attribution_presence_gate?.attribution_presence_green === true, 'health OSM attribution presence gate must be green', healthJson?.trillionnium_openstreetmap_attribution_presence_gate);
   assert(healthJson?.trillionnium_world_map_rum_slo_gate?.contract_version === 'trillionnium_world_map_rum_slo_v1' && healthJson?.trillionnium_world_map_rum_slo_gate?.green === true, 'health RUM SLO metrics gate not green', healthJson?.trillionnium_world_map_rum_slo_gate);
   assert(typeof healthJson?.trillionnium_world_map_rum_slo_gate?.raw_split_green === 'boolean', 'health RUM SLO raw split verdict must stay visible during warmup', healthJson?.trillionnium_world_map_rum_slo_gate);
   assert(Number.isFinite(Number(healthJson?.trillionnium_world_map_rum_slo_gate?.sample_count)), 'health RUM SLO sample count missing', healthJson?.trillionnium_world_map_rum_slo_gate);
@@ -800,6 +807,10 @@ async function main() {
     'cex_consumer_entry_trillionnium_openstreetmap_geodata_freshness_gate_green 1',
     'cex_consumer_entry_trillionnium_openstreetmap_geodata_fixture_snapshot_age_seconds 0',
     'cex_consumer_entry_trillionnium_openstreetmap_geodata_staleness_alarm_active 0',
+    'cex_consumer_entry_trillionnium_openstreetmap_attribution_presence_gate_green 1',
+    'cex_consumer_entry_trillionnium_openstreetmap_attribution_visible_required 1',
+    'cex_consumer_entry_trillionnium_openstreetmap_odbl_obligations_visible 1',
+    'cex_consumer_entry_trillionnium_openstreetmap_attribution_presence_check_count 4',
   ]) {
     assert(metricsText.includes(needle), `metrics runtime safety gauge missing: ${needle}`);
   }

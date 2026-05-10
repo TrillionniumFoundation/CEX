@@ -114,8 +114,8 @@ Current status:
 
 - `[x]` first provider seam exists.
 - `[x]` `/world` displays provider/source/legal metadata.
-- `[ ]` provider implementation should be split into `openstreetmap_geodata.rs`.
-- `[ ]` provider health/readiness metrics still need explicit fixture/live/fail-closed checks.
+- `[x]` provider implementation is split into `openstreetmap_geodata.rs`.
+- `[x]` provider health/readiness metrics explicitly cover fixture/live/fail-closed checks, geodata freshness/staleness, and attribution/ODbL visibility.
 
 Boundary output to Layer 3:
 
@@ -741,6 +741,7 @@ git log --oneline -5
   - `openstreetmap_attribution_presence_v1` now travels with OSM geodata JSON and is visible in `/app` + `/world` DOM.
   - Web E2E, Browser E2E, and UI audit hard-gate visible `© OpenStreetMap contributors` / `ODbL-1.0` attribution plus required/source-of-truth/data-tracking flags.
   - Leaflet runtime attribution must also render visibly in the browser audit gates.
+  - Health, playability scorecard, Prometheus, production readiness, Web E2E, and Browser E2E now hard-gate the same attribution/ODbL presence contract.
 - [!] TW-7.7 Do not increase MapLibre canary above 0 without fresh production signoff.
 
 ### TW-8 — Validation gates
@@ -1242,10 +1243,22 @@ Also append a one-paragraph summary to `/home/qian/.openclaw/workspace/memory/YY
 
 ---
 
+#### Update 2026-05-10 10:49 CST
+
+- Commit: this commit (`feat: gate osm attribution observability`)
+- Completed evidence-refresh / runtime-hardening slice:
+  - [x] Attribution presence is now promoted from static Web/UI/browser gates into health JSON, playability scorecard, Prometheus gauges, production readiness, Web E2E, and Browser E2E.
+  - [x] New health gate: `trillionnium_openstreetmap_attribution_presence_gate_v1`, requiring `openstreetmap_attribution_presence_v1`, fixture OSM provider mode, Rust source-of-truth, visualization-only web role, visible `© OpenStreetMap contributors`, `ODbL-1.0`, derived-database tracking, public tile-server policy, and at least four static/runtime presence checks.
+  - [x] New Prometheus coverage: attribution gate green, attribution required, visible required, ODbL obligations visible, and attribution presence check count.
+  - [x] Production readiness now fails closed if attribution/ODbL visibility disappears before any broader map-runtime promotion.
+- Validation green: `cargo fmt --all -- --check`, shell/node syntax checks, `git diff --check`, targeted Rust tests, `cargo test -p consumer-entry-api -- --nocapture` (`133 passed`), `cargo clippy --workspace -- -D warnings`, `cargo test --workspace`, local-production restart/status, playability scorecard `run/playability-scorecard/playability-scorecard-summary-1778380602.json`, production readiness `READY`, Web E2E `run/league-web/web-e2e-summary-1778380931.json`, and Browser E2E `run/league-browser/browser-e2e-summary-1778380983-688832.json`.
+
+---
+
 ## Current Next Pointer
 
 If the next instruction is simply “continue”, start here:
 
-> **Next pointer:** TW-7.6 is complete. If the next instruction is simply “continue”, pick the next TW-6/TW-7 UI-runtime hardening slice or refresh production-readiness/playability evidence before any broader map-runtime promotion.
+> **Next pointer:** TW-7.6 static attribution + runtime observability are complete. If the next instruction is simply “continue”, pick the next TW-6/TW-7 UI-runtime hardening slice, or refresh real-user/public-commercial/signoff evidence before any broader map-runtime promotion.
 
 Do not start live Overpass/Geofabrik ingestion yet. Do not promote MapLibre. Do not convert the web shell into a standalone JS source of truth.

@@ -322,6 +322,29 @@ else
         and $gate.odbl_tracking_visible == true
         and $gate.public_tile_server_production_traffic_allowed == false
         and $gate.freshness_green == true;
+      def openstreetmap_attribution_presence_gate_green($gate):
+        $gate.contract_version == "trillionnium_openstreetmap_attribution_presence_gate_v1"
+        and $gate.geodata_contract_version == "openstreetmap_geodata_v1"
+        and $gate.attribution_presence_contract_version == "openstreetmap_attribution_presence_v1"
+        and $gate.provider_contract == "OpenStreetMapDataProvider"
+        and $gate.provider_mode == "fixture"
+        and $gate.source_of_truth == "rust_openstreetmap_data_provider"
+        and $gate.web_role == "visualization_input_only"
+        and $gate.attribution == "© OpenStreetMap contributors"
+        and $gate.database_license == "ODbL-1.0"
+        and $gate.attribution_required == true
+        and $gate.attribution_visible_required == true
+        and $gate.derived_database_tracking_required == true
+        and $gate.odbl_database_obligations == true
+        and $gate.public_tile_server_policy == "cache_or_self_host_required_before_production_traffic"
+        and $gate.live_ingestion_blocked_until_attribution_manifest == true
+        and $gate.app_shell_static_attribution_node_present == true
+        and $gate.world_shell_static_attribution_node_present == true
+        and $gate.leaflet_runtime_attribution_configured == true
+        and $gate.odbl_database_obligations_visible == true
+        and ($gate.presence_check_count | type) == "number"
+        and $gate.presence_check_count >= 4
+        and $gate.attribution_presence_green == true;
       def world_map_runtime_safety_gate_green($gate):
         $gate.contract_version == "trillionnium_world_map_runtime_safety_gate_v1"
         and $gate.rum_slo_contract_version == "trillionnium_world_map_rum_slo_v1"
@@ -407,11 +430,12 @@ else
       and future_engine_readiness_gate_green(.trillionnium_world_playability_scorecard.future_engine_readiness_gate)
       and openstreetmap_provider_readiness_gate_green(.trillionnium_openstreetmap_provider_readiness_gate)
       and openstreetmap_geodata_freshness_gate_green(.trillionnium_openstreetmap_geodata_freshness_gate)
+      and openstreetmap_attribution_presence_gate_green(.trillionnium_openstreetmap_attribution_presence_gate)
       and world_map_runtime_safety_gate_green(.trillionnium_world_map_runtime_safety_gate)
       and world_map_rum_slo_gate_observable(.trillionnium_world_map_rum_slo_gate)
       and world_map_delta_cache_gate_green(.trillionnium_world_map_delta_cache_gate)
     ' "$consumer_health_file" >/dev/null; then
-      fail 'production runtime requires route-runner handoff/mastery plus map readability LOD, funnel telemetry, route recommendation quality, future-engine MapLibre shadow readiness, OSM provider fixture/live fail-closed readiness, OSM geodata freshness/staleness gates, map runtime safety, RUM SLO/matrix, offline queue, density, gameplay accessibility, and delta-cache gates'
+      fail 'production runtime requires route-runner handoff/mastery plus map readability LOD, funnel telemetry, route recommendation quality, future-engine MapLibre shadow readiness, OSM provider fixture/live fail-closed readiness, OSM geodata freshness/staleness, attribution/ODbL visibility gates, map runtime safety, RUM SLO/matrix, offline queue, density, gameplay accessibility, and delta-cache gates'
     fi
   fi
 

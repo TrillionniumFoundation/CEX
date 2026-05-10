@@ -2408,6 +2408,29 @@ fn openstreetmap_geodata_provider_uses_stable_fixture_identities() {
         true
     );
     assert_eq!(
+        geodata["attribution_presence"]["odbl_database_obligations"],
+        true
+    );
+    assert_eq!(
+        geodata["attribution_presence"]["live_ingestion_blocked_until_attribution_manifest"],
+        true
+    );
+    let attribution_presence_checks = geodata["attribution_presence"]["presence_checks"]
+        .as_array()
+        .unwrap();
+    assert!(attribution_presence_checks
+        .iter()
+        .any(|check| check == "app_shell_static_attribution_node_present"));
+    assert!(attribution_presence_checks
+        .iter()
+        .any(|check| check == "world_shell_static_attribution_node_present"));
+    assert!(attribution_presence_checks
+        .iter()
+        .any(|check| check == "leaflet_runtime_attribution_configured"));
+    assert!(attribution_presence_checks
+        .iter()
+        .any(|check| check == "odbl_database_obligations_visible"));
+    assert_eq!(
         geodata["freshness"]["derived_database_metadata_contract_version"],
         "openstreetmap_derived_database_metadata_v1"
     );
@@ -13620,6 +13643,47 @@ async fn health_endpoint_exposes_identity_governance_overview() {
         true
     );
     assert_eq!(
+        body["trillionnium_openstreetmap_attribution_presence_gate"]["contract_version"],
+        "trillionnium_openstreetmap_attribution_presence_gate_v1"
+    );
+    assert_eq!(
+        body["trillionnium_openstreetmap_attribution_presence_gate"]
+            ["attribution_presence_contract_version"],
+        "openstreetmap_attribution_presence_v1"
+    );
+    assert_eq!(
+        body["trillionnium_openstreetmap_attribution_presence_gate"]["attribution"],
+        "© OpenStreetMap contributors"
+    );
+    assert_eq!(
+        body["trillionnium_openstreetmap_attribution_presence_gate"]["database_license"],
+        "ODbL-1.0"
+    );
+    assert_eq!(
+        body["trillionnium_openstreetmap_attribution_presence_gate"]
+            ["attribution_visible_required"],
+        true
+    );
+    assert_eq!(
+        body["trillionnium_openstreetmap_attribution_presence_gate"]
+            ["derived_database_tracking_required"],
+        true
+    );
+    assert_eq!(
+        body["trillionnium_openstreetmap_attribution_presence_gate"]
+            ["odbl_database_obligations_visible"],
+        true
+    );
+    assert_eq!(
+        body["trillionnium_openstreetmap_attribution_presence_gate"]["attribution_presence_green"],
+        true
+    );
+    assert_eq!(
+        body["trillionnium_world_playability_scorecard"]["openstreetmap_attribution_presence_gate"]
+            ["attribution_presence_green"],
+        true
+    );
+    assert_eq!(
         body["trillionnium_world_playability_scorecard"]["world_map_runtime_safety_gate"]
             ["contract_version"],
         "trillionnium_world_map_runtime_safety_gate_v1"
@@ -13711,6 +13775,13 @@ async fn health_endpoint_exposes_identity_governance_overview() {
             .any(|check| check["check_id"] == "openstreetmap_geodata_freshness_gate_green")
     );
     assert!(
+        body["trillionnium_world_playability_scorecard"]["axes"]["observability_gates"]["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|check| check["check_id"] == "openstreetmap_attribution_presence_gate_green")
+    );
+    assert!(
         body["trillionnium_world_playability_scorecard"]["axes"]["surface_feedback"]["checks"]
             .as_array()
             .unwrap()
@@ -13723,6 +13794,13 @@ async fn health_endpoint_exposes_identity_governance_overview() {
             .unwrap()
             .iter()
             .any(|check| check["check_id"] == "openstreetmap_geodata_freshness_section_visible")
+    );
+    assert!(
+        body["trillionnium_world_playability_scorecard"]["axes"]["surface_feedback"]["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|check| check["check_id"] == "openstreetmap_attribution_presence_section_visible")
     );
     assert!(
         body["trillionnium_world_playability_scorecard"]["axes"]["observability_gates"]["checks"]
@@ -13973,6 +14051,18 @@ async fn metrics_endpoint_exposes_identity_governance_gauges() {
     ));
     assert!(body.contains(
         "cex_consumer_entry_trillionnium_openstreetmap_geodata_staleness_alarm_active 0"
+    ));
+    assert!(body.contains(
+        "cex_consumer_entry_trillionnium_openstreetmap_attribution_presence_gate_green 1"
+    ));
+    assert!(body.contains("cex_consumer_entry_trillionnium_openstreetmap_attribution_required 1"));
+    assert!(body
+        .contains("cex_consumer_entry_trillionnium_openstreetmap_attribution_visible_required 1"));
+    assert!(
+        body.contains("cex_consumer_entry_trillionnium_openstreetmap_odbl_obligations_visible 1")
+    );
+    assert!(body.contains(
+        "cex_consumer_entry_trillionnium_openstreetmap_attribution_presence_check_count 4"
     ));
     assert!(
         body.contains("cex_consumer_entry_trillionnium_world_playability_scorecard_overall_score")
