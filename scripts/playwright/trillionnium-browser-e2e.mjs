@@ -33,7 +33,17 @@ const leafletStub = String.raw`
     remove(){ return this; },
     clearLayers(){ return this; },
   });
-  const makeMap = () => ({
+  const ensureAttribution = (target) => {
+    const container = typeof target === 'string' ? document.getElementById(target) : target;
+    if (!container || container.querySelector('.leaflet-control-attribution')) return;
+    const attribution = document.createElement('div');
+    attribution.className = 'leaflet-control-attribution';
+    attribution.textContent = 'Leaflet | © OpenStreetMap contributors';
+    container.appendChild(attribution);
+  };
+  const makeMap = (target) => {
+    ensureAttribution(target);
+    return ({
     __layers: new Set(),
     __center: { lat: 31.230416, lng: 121.473701 },
     __zoom: 15,
@@ -48,6 +58,7 @@ const leafletStub = String.raw`
     fitBounds(){ return this; },
     invalidateSize(){ return this; },
   });
+  };
   window.L = {
     map: makeMap,
     tileLayer: () => layerApi(),
@@ -389,6 +400,8 @@ async function main() {
   await clickOrDomActivate(page.locator('#app-search-clear').first());
   await page.waitForFunction(() => !(document.querySelector('#app-search-empty-state')?.classList.contains('is-visible')), { timeout: 10_000 });
   steps.push({ name: 'app_mobile_ux_a11y_keyboard_search', ok: true });
+  await activateTab(page, 'map');
+  await page.waitForSelector('#app-tab-map.is-active', { timeout: 10_000 });
 
   const appJsonText = await page.locator('#trillionnium-app-data').first().textContent({ timeout: 10_000 });
   const appJson = JSON.parse(appJsonText || '{}');
@@ -421,11 +434,17 @@ async function main() {
     '#app-map-rum-slo[data-contract-version="trillionnium_world_map_rum_slo_v1"][data-quantiles="p50,p95,p99"][data-surface-split="app,world"][data-device-split="mobile,desktop"][data-matrix-contract="trillionnium_world_map_real_user_rum_matrix_v1"][data-per-bucket-min-samples="1"]',
     '#app-map-weak-network[data-contract-version="trillionnium_world_map_weak_network_resilience_v1"][data-cache-key="trillionnium-world-map:last-good-viewport:v1"][data-delta-304-supported="true"][data-offline-banner-required="true"][data-pending-action-queue-required="true"]',
     '#app-map-location-privacy[data-contract-version="trillionnium_world_map_location_privacy_v1"][data-rum-excludes-lat-lng="true"][data-cache-control="private"]',
+    '#app-openstreetmap-attribution[data-contract-version="openstreetmap_attribution_presence_v1"][data-attribution-required="true"][data-attribution-visible="true"][data-database-license="ODbL-1.0"]',
     '#app-map-performance-budget[data-spatial-cache-required="true"][data-virtualized-cards-required="true"][data-adaptive-density-required="true"]',
     '#app-map-readability-lod[data-semantic-legend-required="true"][data-avatar-feedback-required="true"][data-i18n-a11y-required="true"]',
   ]) {
     assert(await count(page, selector) === 1, `app map runtime safety DOM token missing: ${selector}`);
   }
+  await page.waitForFunction(() => Array.from(document.querySelectorAll('.leaflet-control-attribution')).some((element) => {
+    const style = window.getComputedStyle(element);
+    const rect = element.getBoundingClientRect();
+    return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0 && element.textContent.includes('OpenStreetMap');
+  }), { timeout: 15_000 });
   await page.waitForFunction(() => window.trillionniumMapLibreShadowProbe?.contract_version === 'trillionnium_world_map_renderer_shadow_v1' && window.trillionniumMapLibreShadowProbe?.shadow_engine_id === 'maplibre_gl_v1', { timeout: 15_000 });
   const browserShadowProbe = await page.evaluate(() => window.trillionniumMapLibreShadowProbe);
   assert(browserShadowProbe?.status === 'shadow_only_not_user_facing' && browserShadowProbe?.user_facing === false, 'MapLibre shadow probe must stay browser-exported and not user-facing', browserShadowProbe);
@@ -598,6 +617,12 @@ async function main() {
   assert(await count(page, '#world-mobile-route-first-sheet .world-route-stepper span') === 3, 'world mobile route-first stepper missing');
   assert(await count(page, '#world-openstreetmap-provider-readiness[data-contract-version="openstreetmap_provider_readiness_v1"][data-fixture-mode-green="true"][data-live-modes-fail-closed="true"][data-live-network-ingestion-enabled="false"][data-production-ingestion-enabled="false"]') === 1, 'world OSM provider readiness/fail-closed contract missing');
   assert(await count(page, '#world-openstreetmap-geodata-freshness[data-contract-version="openstreetmap_geodata_freshness_v1"][data-fixture-static-snapshot="true"][data-wall-clock-freshness-applies="false"][data-live-data-freshness-applies="false"][data-staleness-gate-green="true"][data-stale-live-ingestion-blocked="true"][data-fixture-snapshot-age-seconds="0"]') === 1, 'world OSM geodata freshness/staleness contract missing');
+  assert(await count(page, '#world-openstreetmap-attribution[data-contract-version="openstreetmap_attribution_presence_v1"][data-attribution-required="true"][data-attribution-visible="true"][data-database-license="ODbL-1.0"]') === 1, 'world OSM attribution presence contract missing');
+  await page.waitForFunction(() => Array.from(document.querySelectorAll('.leaflet-control-attribution')).some((element) => {
+    const style = window.getComputedStyle(element);
+    const rect = element.getBoundingClientRect();
+    return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0 && element.textContent.includes('OpenStreetMap');
+  }), { timeout: 15_000 });
   assert(await count(page, '#world-tactics-player-hud[data-contract-version="trillionnium_tactics_player_visible_surface_v1"]') === 1, 'world tactics player HUD contract missing');
   assert(await count(page, '#world-tactics-objective-card[data-session-contract="trillionnium_tactics_game_session_v1"]') === 1, 'world tactics objective card missing');
   assert(await count(page, '#world-tactics-current-session-card[data-tick-contract="trillionnium_tactics_simulation_tick_v1"]') === 1, 'world tactics current session card missing');

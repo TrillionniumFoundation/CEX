@@ -11,6 +11,8 @@ pub(super) const OPENSTREETMAP_PROVIDER_READINESS_CONTRACT_VERSION: &str =
     "openstreetmap_provider_readiness_v1";
 pub(super) const OPENSTREETMAP_GEODATA_FRESHNESS_CONTRACT_VERSION: &str =
     "openstreetmap_geodata_freshness_v1";
+pub(super) const OPENSTREETMAP_ATTRIBUTION_PRESENCE_CONTRACT_VERSION: &str =
+    "openstreetmap_attribution_presence_v1";
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub(super) enum OpenStreetMapProviderMode {
@@ -279,6 +281,28 @@ fn openstreetmap_geodata_freshness_json(
             "stale_or_unknown_live_ingestion_fail_closed",
             "derived_database_snapshot_id_visible",
             "odbl_tracking_required_before_live"
+        ],
+    })
+}
+
+fn openstreetmap_attribution_presence_json() -> Value {
+    json!({
+        "contract_version": OPENSTREETMAP_ATTRIBUTION_PRESENCE_CONTRACT_VERSION,
+        "source_of_truth": "rust_openstreetmap_data_provider",
+        "web_role": "visualization_input_only",
+        "attribution": "© OpenStreetMap contributors",
+        "database_license": "ODbL-1.0",
+        "attribution_required": true,
+        "attribution_visible_required": true,
+        "derived_database_tracking_required": true,
+        "odbl_database_obligations": true,
+        "public_tile_server_policy": "cache_or_self_host_required_before_production_traffic",
+        "live_ingestion_blocked_until_attribution_manifest": true,
+        "presence_checks": [
+            "app_shell_static_attribution_node_present",
+            "world_shell_static_attribution_node_present",
+            "leaflet_runtime_attribution_configured",
+            "odbl_database_obligations_visible"
         ],
     })
 }
@@ -1041,6 +1065,7 @@ pub(super) fn openstreetmap_geodata_v1_json(
         openstreetmap_provider_readiness_json(nodes, &fixture_layers, stable_fixture_count);
     let freshness =
         openstreetmap_geodata_freshness_json(nodes, &fixture_layers, &derived_database_metadata);
+    let attribution_presence = openstreetmap_attribution_presence_json();
     json!({
         "kind": OPENSTREETMAP_GEODATA_CONTRACT_VERSION,
         "contract_version": OPENSTREETMAP_GEODATA_CONTRACT_VERSION,
@@ -1054,6 +1079,8 @@ pub(super) fn openstreetmap_geodata_v1_json(
         "provider_readiness": provider_readiness,
         "freshness_contract_version": OPENSTREETMAP_GEODATA_FRESHNESS_CONTRACT_VERSION,
         "freshness": freshness,
+        "attribution_presence_contract_version": OPENSTREETMAP_ATTRIBUTION_PRESENCE_CONTRACT_VERSION,
+        "attribution_presence": attribution_presence,
         "source_mode": provider.source_mode(),
         "source_of_truth": "rust_openstreetmap_data_provider",
         "web_role": "visualization_input_only",

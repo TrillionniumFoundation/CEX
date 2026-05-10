@@ -1719,6 +1719,41 @@ pub(super) async fn get_world_web_shell(
         .get("layer_feature_count")
         .and_then(Value::as_u64)
         .unwrap_or(0);
+    let osm_attribution_presence = openstreetmap_geodata
+        .get("attribution_presence")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let osm_attribution_presence_contract = osm_attribution_presence
+        .get("contract_version")
+        .and_then(Value::as_str)
+        .unwrap_or("openstreetmap_attribution_presence_v1");
+    let osm_attribution_text = osm_attribution_presence
+        .get("attribution")
+        .and_then(Value::as_str)
+        .unwrap_or("© OpenStreetMap contributors");
+    let osm_database_license = osm_attribution_presence
+        .get("database_license")
+        .and_then(Value::as_str)
+        .unwrap_or("ODbL-1.0");
+    let osm_attribution_required = osm_attribution_presence
+        .get("attribution_required")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let osm_attribution_visible_required = osm_attribution_presence
+        .get("attribution_visible_required")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let osm_derived_database_tracking_required = osm_attribution_presence
+        .get("derived_database_tracking_required")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let osm_public_tile_server_policy = osm_attribution_presence
+        .get("public_tile_server_policy")
+        .and_then(Value::as_str)
+        .unwrap_or("cache_or_self_host_required_before_production_traffic");
+    let osm_attribution_text_html = escape_html_text(osm_attribution_text);
+    let osm_database_license_html = escape_html_text(osm_database_license);
+    let osm_public_tile_server_policy_html = escape_html_text(osm_public_tile_server_policy);
     let osm_geodata_feature_cards = openstreetmap_geodata
         .get("features")
         .and_then(Value::as_array)
@@ -3304,6 +3339,7 @@ pub(super) async fn get_world_web_shell(
               <article class="mini osm-contract"><strong>OpenStreetMapDataProvider</strong><span>openstreetmap_geodata_v1 · openstreetmap_fixture_layers_v1 · Rust source of truth · fixture first before Overpass/Geofabrik</span><code>osm_id · osm_type · lat/lng · tags · game_overlay_id · mentor_training_anchor</code><small>Do not use public OSM tile servers for production traffic; cache/self-host/vendor first.</small></article>
               <article id="world-openstreetmap-provider-readiness" class="mini osm-provider-readiness" data-contract-version="{osm_provider_readiness_contract}" data-readiness-status="{osm_provider_readiness_status}" data-fixture-mode-green="{osm_fixture_mode_green}" data-live-modes-fail-closed="{osm_live_modes_fail_closed}" data-live-network-ingestion-enabled="{osm_live_network_ingestion_enabled}" data-production-ingestion-enabled="{osm_production_ingestion_enabled}" data-fail-closed-mode-count="{osm_fail_closed_mode_count}" data-expected-fail-closed-mode-count="{osm_expected_fail_closed_mode_count}" data-stable-fixture-identity-coverage-complete="{osm_stable_fixture_identity_coverage_complete}" data-fixture-layer-feature-count="{osm_fixture_layer_feature_count}" data-source-of-truth="rust_openstreetmap_data_provider" data-web-role="visualization_input_only"><strong>OSM provider readiness</strong><span>fixture_ready_live_fail_closed · fixture green · Overpass/Geofabrik/vendor live modes fail closed</span><code>openstreetmap_provider_readiness_v1 · overpass_bbox_cache · geofabrik_extract_import · vendor_tile_cache</code><small>Live network ingestion stays disabled until cache/rate-limit, ODbL derived-database tracking, and fresh production signoff exist.</small></article>
               <article id="world-openstreetmap-geodata-freshness" class="mini osm-geodata-freshness" data-contract-version="{osm_geodata_freshness_contract}" data-freshness-status="{osm_geodata_freshness_status}" data-fixture-static-snapshot="{osm_fixture_static_snapshot}" data-wall-clock-freshness-applies="{osm_wall_clock_freshness_applies}" data-live-data-freshness-applies="{osm_live_data_freshness_applies}" data-staleness-gate-green="{osm_staleness_gate_green}" data-stale-live-ingestion-blocked="{osm_stale_live_ingestion_blocked}" data-fixture-snapshot-age-seconds="{osm_fixture_snapshot_age_seconds}" data-layer-feature-count="{osm_freshness_layer_feature_count}" data-source-of-truth="rust_openstreetmap_data_provider" data-web-role="visualization_input_only"><strong>OSM geodata freshness</strong><span>fixture_static_fresh_live_stale_blocked · static fixture has no wall-clock decay · stale live data fails closed</span><code>openstreetmap_geodata_freshness_v1 · derived_database_snapshot_id · fixture_snapshot_age_seconds=0</code><small>Freshness metrics are explicit now; real live data must provide import timestamps, max-age policy, and ODbL tracking before production ingestion can open.</small></article>
+              <article id="world-openstreetmap-attribution" class="mini osm-attribution" data-contract-version="{osm_attribution_presence_contract}" data-attribution-text="{osm_attribution_text_html}" data-database-license="{osm_database_license_html}" data-attribution-required="{osm_attribution_required}" data-attribution-visible="{osm_attribution_visible_required}" data-derived-database-tracking-required="{osm_derived_database_tracking_required}" data-public-tile-server-policy="{osm_public_tile_server_policy_html}" data-source-of-truth="rust_openstreetmap_data_provider" data-web-role="visualization_input_only"><strong>OSM attribution</strong><span>{osm_attribution_text_html} · attribution visible</span><code>{osm_database_license_html}</code><code>openstreetmap_attribution_presence_v1 · odbl_database_obligations</code><small>Keep attribution visible before live/imported OSM data or tile-provider promotion.</small></article>
               {osm_geodata_feature_cards}
             </section>
             <div id="world-tile-shards-live" class="mini-grid">{tile_shard_cards}</div>

@@ -1736,6 +1736,7 @@ pub(super) async fn get_client_app_web_shell(
         </div>
         <details class="dev-details map-technical-drawer"><summary data-i18n-en="Advanced map layers" data-i18n-zh="高级地图图层">Advanced map layers</summary>
           <p><strong>Real-world map engine</strong>: <code>{}</code> + <code>{}</code></p>
+          <p id="app-openstreetmap-attribution" class="subtitle" data-contract-version="openstreetmap_attribution_presence_v1" data-attribution-text="© OpenStreetMap contributors" data-database-license="ODbL-1.0" data-attribution-required="true" data-attribution-visible="true" data-derived-database-tracking-required="true" data-public-tile-server-policy="cache_or_self_host_required_before_production_traffic" data-source-of-truth="rust_openstreetmap_data_provider" data-web-role="visualization_input_only"><strong>OSM attribution</strong>: <span>© OpenStreetMap contributors</span> · <code>ODbL-1.0</code></p>
           <p><strong>Mirror</strong>: <code>{}</code> · <strong>Active Region</strong>: <code>{}</code> · <strong>Shards</strong>: {} · <strong>LOD Layers</strong>: {}</p>
           <p><strong>Viewport API</strong>: <code>{}</code></p>
           <p><strong>Web Viewport</strong>: <code>{}</code></p>

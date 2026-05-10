@@ -154,6 +154,22 @@ function checkTacticsPlayerSurface(result) {
   assertMetric((surface.repeatText || '').includes('Repeat-farming guard') || (surface.repeatText || '').includes('Repeat farming blocked'), `${result.profile}/${result.name} tactics repeat-farming copy missing`, surface);
 }
 
+function checkOpenStreetMapAttribution(result) {
+  if (!['app', 'world'].includes(result.name)) return;
+  const attribution = result.openStreetMapAttribution || {};
+  assertMetric(attribution.present === true, `${result.profile}/${result.name} OSM attribution node missing`, attribution);
+  assertMetric(attribution.contractVersion === 'openstreetmap_attribution_presence_v1', `${result.profile}/${result.name} OSM attribution contract missing`, attribution);
+  assertMetric((attribution.attributionText || '').includes('OpenStreetMap contributors'), `${result.profile}/${result.name} OSM attribution text missing`, attribution);
+  assertMetric(attribution.databaseLicense === 'ODbL-1.0', `${result.profile}/${result.name} OSM ODbL license missing`, attribution);
+  assertMetric(String(attribution.attributionRequired) === 'true' && String(attribution.attributionVisible) === 'true', `${result.profile}/${result.name} OSM attribution must be required and visible`, attribution);
+  assertMetric(String(attribution.derivedDatabaseTrackingRequired) === 'true', `${result.profile}/${result.name} OSM derived-database tracking requirement missing`, attribution);
+  assertMetric(attribution.sourceOfTruth === 'rust_openstreetmap_data_provider' && attribution.webRole === 'visualization_input_only', `${result.profile}/${result.name} OSM attribution source/web role drifted`, attribution);
+  assertMetric((attribution.publicTileServerPolicy || '').includes('cache_or_self_host'), `${result.profile}/${result.name} OSM public tile-server policy missing`, attribution);
+  assertMetric((attribution.text || '').includes('OpenStreetMap contributors') && (attribution.text || '').includes('ODbL-1.0'), `${result.profile}/${result.name} OSM attribution visible copy missing`, attribution);
+  assertMetric(Number(attribution.leafletRuntimeVisibleCount || 0) >= 1, `${result.profile}/${result.name} Leaflet runtime OSM attribution must be visibly rendered`, attribution);
+  assertMetric((attribution.leafletRuntimeText || '').includes('OpenStreetMap'), `${result.profile}/${result.name} Leaflet runtime OSM attribution text missing`, attribution);
+}
+
 function checkWorldSecondaryDashboards(result) {
   if (result.name !== 'world') return;
   const secondary = result.worldSecondaryDashboards || {};
@@ -495,6 +511,7 @@ async function auditPage(page, profile, target) {
     const mapWeakNetworkElement = document.getElementById(targetName === 'world' ? 'world-map-weak-network' : 'app-map-weak-network');
     const mapLocationPrivacyElement = document.getElementById(targetName === 'world' ? 'world-map-location-privacy' : 'app-map-location-privacy');
     const worldMapShadowRenderer = document.getElementById('world-map-shadow-renderer');
+    const openStreetMapAttributionElement = document.getElementById(targetName === 'app' ? 'app-openstreetmap-attribution' : 'world-openstreetmap-attribution');
     const openStreetMapProviderReadinessElement = document.getElementById('world-openstreetmap-provider-readiness');
     const openStreetMapGeodataFreshnessElement = document.getElementById('world-openstreetmap-geodata-freshness');
     const handoffElements = [appRouteHandoff, appFeedHandoff, worldRouteHandoff].filter(Boolean);
@@ -646,6 +663,22 @@ async function auditPage(page, profile, target) {
       rollbackDrillRequired: worldMapShadowRenderer?.dataset.rollbackDrillRequired || null,
       text: text(worldMapShadowRenderer).slice(0, 260),
     };
+    const leafletAttributionElements = Array.from(document.querySelectorAll('.leaflet-control-attribution')).filter(visible);
+    const openStreetMapAttribution = {
+      present: Boolean(openStreetMapAttributionElement),
+      contractVersion: openStreetMapAttributionElement?.dataset.contractVersion || null,
+      attributionText: openStreetMapAttributionElement?.dataset.attributionText || null,
+      databaseLicense: openStreetMapAttributionElement?.dataset.databaseLicense || null,
+      attributionRequired: openStreetMapAttributionElement?.dataset.attributionRequired || null,
+      attributionVisible: openStreetMapAttributionElement?.dataset.attributionVisible || null,
+      derivedDatabaseTrackingRequired: openStreetMapAttributionElement?.dataset.derivedDatabaseTrackingRequired || null,
+      publicTileServerPolicy: openStreetMapAttributionElement?.dataset.publicTileServerPolicy || null,
+      sourceOfTruth: openStreetMapAttributionElement?.dataset.sourceOfTruth || null,
+      webRole: openStreetMapAttributionElement?.dataset.webRole || null,
+      leafletRuntimeVisibleCount: leafletAttributionElements.length,
+      leafletRuntimeText: leafletAttributionElements.map((el) => text(el)).join(' · ').slice(0, 260),
+      text: String(openStreetMapAttributionElement?.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 260),
+    };
     const openStreetMapProviderReadiness = {
       present: Boolean(openStreetMapProviderReadinessElement),
       contractVersion: openStreetMapProviderReadinessElement?.dataset.contractVersion || null,
@@ -766,6 +799,7 @@ async function auditPage(page, profile, target) {
       mapWeakNetwork,
       mapLocationPrivacy,
       shadowRenderer,
+      openStreetMapAttribution,
       openStreetMapProviderReadiness,
       openStreetMapGeodataFreshness,
       worldSecondaryDashboards,
@@ -791,6 +825,7 @@ try {
         checkCommon(result);
         checkRouteRunnerHandoff(result);
         checkTacticsPlayerSurface(result);
+        checkOpenStreetMapAttribution(result);
         if (profile.name === 'desktop') checkDesktop(result, profile.limits[target.name]);
         else checkMobile(result, profile.limits[target.name]);
         result.ok = true;

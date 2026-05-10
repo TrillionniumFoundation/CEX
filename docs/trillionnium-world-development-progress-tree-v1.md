@@ -737,7 +737,10 @@ git log --oneline -5
   - static fixture snapshots declare no wall-clock decay (`fixture_snapshot_age_seconds=0`)
   - stale/unknown live ingestion remains blocked until import timestamps, max-age policy, and ODbL tracking exist
   - health/playability/Prometheus/Web/Browser/UI/production readiness gates cover the freshness contract
-- [ ] TW-7.6 Add OSM attribution presence check to web E2E and UI audit if not already hard-gated.
+- [x] TW-7.6 Add OSM attribution presence check to web E2E and UI audit if not already hard-gated.
+  - `openstreetmap_attribution_presence_v1` now travels with OSM geodata JSON and is visible in `/app` + `/world` DOM.
+  - Web E2E, Browser E2E, and UI audit hard-gate visible `© OpenStreetMap contributors` / `ODbL-1.0` attribution plus required/source-of-truth/data-tracking flags.
+  - Leaflet runtime attribution must also render visibly in the browser audit gates.
 - [!] TW-7.7 Do not increase MapLibre canary above 0 without fresh production signoff.
 
 ### TW-8 — Validation gates
@@ -1164,7 +1167,8 @@ Expected first-slice deliverables:
   - Public commercial green: `run/public-commercial/public-commercial-summary-1778346759.json`
   - Production readiness green: `CEX_ENV_FILE=run/local-production/.env scripts/check-production-readiness.sh` → `READY production readiness smoke passed`
 - Remaining next:
-  - [ ] TW-7.6 OSM attribution presence check to web E2E and UI audit if not already hard-gated.
+  - [x] TW-7.6 OSM attribution presence check to web E2E and UI audit if not already hard-gated.
+  - [ ] Continue with the next map/runtime hardening item after attribution validation and commit.
 
 ---
 
@@ -1225,10 +1229,23 @@ Also append a one-paragraph summary to `/home/qian/.openclaw/workspace/memory/YY
 
 ---
 
+
+#### Update 2026-05-10 10:06 CST
+
+- Commit: this commit (`feat: gate openstreetmap attribution`)
+- Completed next map/runtime hardening slice:
+  - [x] TW-7.6 `openstreetmap_attribution_presence_v1`: `/app` and `/world` now expose visible `© OpenStreetMap contributors` plus `ODbL-1.0` attribution, source-of-truth, required-visibility, derived-database tracking, and tile-server policy flags.
+  - [x] Web E2E hard-gates `/app` and `/world` attribution DOM tokens and summary booleans. Latest green summary: `run/league-web/web-e2e-summary-1778378250.json`.
+  - [x] UI audit hard-gates app/world attribution on mobile/tablet/desktop, including visible Leaflet runtime attribution. Latest green summary: `run/trillionnium-ui-audit/ui-audit-summary-1778377923-669309.json`.
+  - [x] Browser E2E hard-gates the attribution contract and the local Leaflet stub now renders runtime attribution for deterministic browser coverage. Latest green summary: `run/league-browser/browser-e2e-summary-1778378511-673286.json`.
+- Validation green: `cargo fmt --all -- --check`, shell/node syntax checks, `git diff --check`, targeted attribution/Rust tests, `cargo test -p consumer-entry-api -- --nocapture` (`133 passed`), `cargo clippy --workspace -- -D warnings`, `cargo test --workspace`, local-production restart/status health, Web E2E, UI audit, and Browser E2E.
+
+---
+
 ## Current Next Pointer
 
 If the next instruction is simply “continue”, start here:
 
-> **Next pointer:** TW-7.5 is complete. If the next instruction is simply “continue”, start with TW-7.6 OSM attribution presence check in web E2E/UI audit, unless product direction shifts to another TW-6/TW-7 UI-runtime hardening slice.
+> **Next pointer:** TW-7.6 is complete. If the next instruction is simply “continue”, pick the next TW-6/TW-7 UI-runtime hardening slice or refresh production-readiness/playability evidence before any broader map-runtime promotion.
 
 Do not start live Overpass/Geofabrik ingestion yet. Do not promote MapLibre. Do not convert the web shell into a standalone JS source of truth.

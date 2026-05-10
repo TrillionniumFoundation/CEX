@@ -2384,6 +2384,30 @@ fn openstreetmap_geodata_provider_uses_stable_fixture_identities() {
         true
     );
     assert_eq!(
+        geodata["attribution_presence_contract_version"],
+        "openstreetmap_attribution_presence_v1"
+    );
+    assert_eq!(
+        geodata["attribution_presence"]["contract_version"],
+        "openstreetmap_attribution_presence_v1"
+    );
+    assert_eq!(
+        geodata["attribution_presence"]["attribution"],
+        "© OpenStreetMap contributors"
+    );
+    assert_eq!(
+        geodata["attribution_presence"]["database_license"],
+        "ODbL-1.0"
+    );
+    assert_eq!(
+        geodata["attribution_presence"]["attribution_visible_required"],
+        true
+    );
+    assert_eq!(
+        geodata["attribution_presence"]["derived_database_tracking_required"],
+        true
+    );
+    assert_eq!(
         geodata["freshness"]["derived_database_metadata_contract_version"],
         "openstreetmap_derived_database_metadata_v1"
     );
@@ -4246,6 +4270,11 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(app_html.contains("renderMovingAvatar"));
     assert!(app_html.contains("Trillionnium World Map"));
     assert!(app_html.contains("OpenStreetMap upgraded into a playable world"));
+    assert!(app_html.contains("app-openstreetmap-attribution"));
+    assert!(app_html.contains("openstreetmap_attribution_presence_v1"));
+    assert!(app_html.contains("© OpenStreetMap contributors"));
+    assert!(app_html.contains("data-attribution-visible=\"true\""));
+    assert!(app_html.contains("data-derived-database-tracking-required=\"true\""));
     assert!(app_html.contains("Player avatars / 跑图角色"));
     assert!(app_html.contains("Task routes / 任务路线"));
     assert!(app_html.contains("Avatar Task Routes"));
@@ -4705,6 +4734,12 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(world_html.contains("data-staleness-gate-green=\"true\""));
     assert!(world_html.contains("data-stale-live-ingestion-blocked=\"true\""));
     assert!(world_html.contains("data-fixture-snapshot-age-seconds=\"0\""));
+    assert!(world_html.contains("world-openstreetmap-attribution"));
+    assert!(world_html.contains("openstreetmap_attribution_presence_v1"));
+    assert!(world_html.contains("© OpenStreetMap contributors"));
+    assert!(world_html.contains("ODbL-1.0"));
+    assert!(world_html.contains("data-attribution-visible=\"true\""));
+    assert!(world_html.contains("data-derived-database-tracking-required=\"true\""));
     assert!(world_html.contains("Trillionnium World Map"));
     assert!(world_html.contains("OpenStreetMap upgraded into a playable world"));
     assert!(world_html.contains("Player avatars / 跑图角色"));
