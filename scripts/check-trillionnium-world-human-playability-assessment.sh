@@ -59,6 +59,7 @@ for key, pattern in {
     "real_user_beta": "run/real-user-beta/real-user-beta-summary-*.json",
     "public_commercial": "run/public-commercial/public-commercial-summary-*.json",
     "production_signoff": "run/signoff/production-signoff-*.summary.json",
+    "health_metrics_load_soak": "run/health-metrics-load-soak/health-metrics-load-soak-summary-*.json",
 }.items():
     path, payload = latest_json(pattern)
     latest[key] = {"path": str(path) if path else None, "payload": payload}
@@ -77,6 +78,8 @@ playability_summary = latest["playability_scorecard"].get("payload") or {}
 real_user_summary = latest["real_user_beta"].get("payload") or {}
 public_summary = latest["public_commercial"].get("payload") or {}
 signoff_summary = latest["production_signoff"].get("payload") or {}
+health_metrics_load_soak = latest["health_metrics_load_soak"].get("payload") or {}
+health_metrics_load_soak_endpoints = health_metrics_load_soak.get("endpoints") or {}
 
 request_gate = browser.get("request_failure_gate") or {}
 first_human_coverage = first_human.get("coverage") or {}
@@ -103,6 +106,7 @@ technical_lift_checks = [
     evidence_check("browser_request_failures_hard_gated", request_gate.get("contract_version") == "trillionnium_browser_request_failure_gate_v1" and request_gate.get("green") is True and int(request_gate.get("unclassified_count") or 0) == 0, 0.25, request_gate),
     evidence_check("first_human_path_no_browser_failures", ok(first_human) and first_human.get("mode") == "first-human-session" and (first_human.get("request_failure_gate") or {}).get("green") is True and not first_human.get("page_errors") and not first_human.get("console_messages"), 0.20, latest["first_human_e2e"].get("path")),
     evidence_check("health_and_metrics_interactive_latency", health.get("status") == "ok" and health_seconds <= 1.0 and metrics_seconds <= 1.0, 0.15, {"health_seconds": health_seconds, "metrics_seconds": metrics_seconds, "target_seconds": 1.0}),
+    evidence_check("health_metrics_concurrent_p95_load_soak_green", ok(health_metrics_load_soak) and all((health_metrics_load_soak_endpoints.get(endpoint) or {}).get("green") is True and float((health_metrics_load_soak_endpoints.get(endpoint) or {}).get("p95_seconds") or 999.0) <= float((health_metrics_load_soak_endpoints.get(endpoint) or {}).get("target_p95_seconds") or 0.0) for endpoint in ["/health", "/metrics"]), 0.20, {"path": latest["health_metrics_load_soak"].get("path"), "endpoints": health_metrics_load_soak_endpoints, "wall_seconds": health_metrics_load_soak.get("wall_seconds")}),
     evidence_check("normalized_repository_final_cutover", repo.get("effective_repository") == "normalized_sql_direct_write_final" and repo.get("repository_cutover_status") == "normalized_sql_direct_write_final_cutover_active", 0.15, repo),
     evidence_check("runtime_playability_scorecard_green", playability.get("user_metric_overall_score") == 10.0 and all(axis_score(axis) == 10.0 for axis in ["technical_reliability", "first_playable_completeness", "real_player_comprehension_cost", "long_term_replayability", "economy_social_strategy_depth"]), 0.15, playability.get("user_metric_axes")),
     evidence_check("prometheus_runtime_gauges_visible", all(metric_present(metric) for metric in [
@@ -141,7 +145,7 @@ def lifted_score(baseline, checks, cap):
     earned = sum(check["weight"] for check in checks if check["passed"])
     return round(min(cap, baseline + earned), 1), round(earned, 2)
 
-technical_score, technical_lift = lifted_score(8.5, technical_lift_checks, 9.5)
+technical_score, technical_lift = lifted_score(8.5, technical_lift_checks, 9.7)
 first_beta_score, first_beta_lift = lifted_score(7.5, first_beta_lift_checks, 8.8)
 commercial_score, commercial_lift = lifted_score(6.0, commercial_lift_checks, 7.3)
 
@@ -168,7 +172,7 @@ assessment = {
         "commercial_release_playability": commercial_lift,
     },
     "score_caps": {
-        "technical_playability": {"cap": 9.5, "reason": "health/metrics are now interactive; keep cap below 9.7 until concurrent p95/load-soak evidence exists"},
+        "technical_playability": {"cap": 9.7, "reason": "single-node concurrent p95 is green; keep cap below 9.8 until longer soak, multi-node, or live traffic evidence exists"},
         "first_internal_beta_playability": {"cap": 8.8, "reason": "needs live human cohort feedback before claiming 9+"},
         "commercial_release_playability": {"cap": 7.3, "reason": "needs real payment/support/legal/launch traffic signoff before claiming 8+"},
     },
@@ -188,7 +192,7 @@ assessment = {
         "commercial_release_playability": commercial_lift_checks,
     },
     "remaining_gaps_before_next_band": [
-        "Add concurrent p95/load-soak evidence for /health and /metrics before claiming 9.7+ technical playability.",
+        "Extend /health and /metrics latency proof to longer soak, multi-node, or live traffic evidence before claiming 9.8+ technical playability.",
         "Run a real 5-10 person first-beta cohort and convert confused clicks/drop-offs into UI copy/route fixes.",
         "Add commercial launch drills for payment/refund support, legal/privacy review, operator runbooks, and live traffic/error budgets.",
         "Refresh production signoff after this assessment if commercial score must move beyond 7.x.",
