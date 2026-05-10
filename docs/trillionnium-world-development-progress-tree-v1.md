@@ -1277,10 +1277,26 @@ Also append a one-paragraph summary to `/home/qian/.openclaw/workspace/memory/YY
 
 ---
 
+#### Update 2026-05-10 14:xx CST
+
+- Commit: this commit (`feat: gate first-human browser flow`)
+- Completed TW-6/TW-7 player-readiness hardening slice:
+  - [x] Browser E2E `request_failures` are now a hard gate through `trillionnium_browser_request_failure_gate_v1`; only classified local world-map async cancellations are allowed, capped at six, and unclassified failures fail the run.
+  - [x] Added `TRILLIONNIUM_BROWSER_E2E_MODE=first-human-session` plus `scripts/check-trillionnium-first-human-session.sh`, using a unique browser-first-human user/session and applying migrations before the mutating path.
+  - [x] First-human path now exercises the actual loop: enter `/world`, verify the mobile four-question first screen, open tactics board, click/select `lord`, train `basic_unarmed` at `G8`, attack `F5`, draft reward claim, and submit the next route action.
+  - [x] `/world` mobile first screen now exposes `trillionnium_first_human_session_v1` and `trillionnium_world_first_screen_four_questions_v1` with explicit `who → where → click → reward` anchors and keeps `#world-mobile-primary-cta` reachable on the first iPhone viewport.
+  - [x] Web/Browser E2E health/metrics probes use safer 60s timeouts so accumulated normalized SQL state no longer causes false negatives while the underlying `/health`/`/metrics` contracts remain hard-gated.
+- Latest green evidence: Web E2E `run/league-web/web-e2e-summary-1778394598.json`; Browser E2E `run/league-browser/browser-e2e-summary-1778394921-790148.json`; first-human session `run/first-human-session/browser-e2e-summary-1778395143-795329.json`; local-production status OK on 7001/7002/7003/7004/7005/8080/8090/8091 plus worker.
+- Validation green: `bash -n scripts/check-trillionnium-league-web-e2e.sh scripts/check-trillionnium-first-human-session.sh`, `node --check scripts/playwright/trillionnium-browser-e2e.mjs`, `git diff --check`, prior Rust gate `cargo test -p consumer-entry-api -- --nocapture` (`133 passed`), serial local-production Web E2E, Browser E2E, and first-human-session E2E.
+- Remaining next: optimize `/health`/`/metrics` latency directly if this gate starts growing beyond the 60s safety budget; otherwise continue with real-user/public-commercial/signoff refresh or another TW-6/TW-7 UX-runtime slice.
+- Constraints preserved: no live Overpass/Geofabrik ingestion, no MapLibre promotion, no MedievalWar/Phaser vendoring, and Rust remains source of truth.
+
+---
+
 ## Current Next Pointer
 
 If the next instruction is simply “continue”, start here:
 
-> **Next pointer:** The progress tree has been calibrated against checkpoint `4744573`. Product completion is now roughly 99% if blocked/forbidden items are excluded. If the next instruction is simply “continue”, pick either (a) a TW-6/TW-7 UI-runtime hardening slice, (b) a fresh real-user/public-commercial/signoff evidence refresh, or (c) TW-2.5 optional visualization-runtime work. Do not treat TW-8 policy bullets as unfinished product backlog.
+> **Next pointer:** The progress tree has been calibrated beyond checkpoint `4744573` with first-human browser flow hardening. Product completion remains roughly 99% if blocked/forbidden items are excluded. If the next instruction is simply “continue”, pick either (a) optimize `/health` and `/metrics` latency under accumulated normalized SQL state, (b) refresh real-user/public-commercial/signoff evidence, or (c) take another TW-6/TW-7 UX-runtime slice. Do not treat TW-8 policy bullets as unfinished product backlog.
 
 Do not start live Overpass/Geofabrik ingestion yet. Do not promote MapLibre. Do not convert the web shell into a standalone JS source of truth.

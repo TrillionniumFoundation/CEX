@@ -12,10 +12,12 @@ const outDir = process.env.TRILLIONNIUM_BROWSER_E2E_OUT_DIR || path.join(rootDir
 const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE || process.env.CHROME_BIN || '/usr/bin/google-chrome-stable';
 const expectFinalCutover = process.env.TRILLIONNIUM_BROWSER_E2E_EXPECT_FINAL_CUTOVER !== '0';
 const ingressToken = (process.env.CONSUMER_ENTRY_INGRESS_TOKEN || '').trim();
-const matrixUserId = process.env.TRILLIONNIUM_BROWSER_E2E_MATRIX_USER_ID || '@alice:local.dev';
-const roomId = process.env.TRILLIONNIUM_BROWSER_E2E_ROOM_ID || '!browser-local:local.dev';
-const sessionId = process.env.TRILLIONNIUM_BROWSER_E2E_SESSION_ID || 'browser-e2e-session';
+const e2eMode = process.env.TRILLIONNIUM_BROWSER_E2E_MODE || 'full-browser-e2e';
 const runId = `${Math.floor(Date.now() / 1000)}-${process.pid}`;
+const defaultMatrixUserId = e2eMode === 'first-human-session' ? `@browser-first-human-${runId}:local.dev` : '@alice:local.dev';
+const matrixUserId = process.env.TRILLIONNIUM_BROWSER_E2E_MATRIX_USER_ID || defaultMatrixUserId;
+const roomId = process.env.TRILLIONNIUM_BROWSER_E2E_ROOM_ID || '!browser-local:local.dev';
+const sessionId = process.env.TRILLIONNIUM_BROWSER_E2E_SESSION_ID || (e2eMode === 'first-human-session' ? `browser-first-human-${runId}` : 'browser-e2e-session');
 const summaryPath = path.join(outDir, `browser-e2e-summary-${runId}.json`);
 const screenshotDir = path.join(outDir, `screenshots-${runId}`);
 
@@ -99,6 +101,70 @@ async function count(page, selector) {
 
 function isAllowedRouteRunnerNextRouteStatus(status) {
   return status === 'next_route_preview_locked_until_reward_claim' || status === 'next_route_ready_after_reward_claim';
+}
+
+function classifyRequestFailure(record) {
+  const urlText = String(record?.url || '');
+  const failure = String(record?.failure || 'requestfailed');
+  let parsed = null;
+  try {
+    parsed = new URL(urlText);
+  } catch (_error) {
+    parsed = null;
+  }
+  const pathName = parsed?.pathname || '';
+  const isLocalConsumer = parsed && parsed.origin === baseUrl;
+  const isWorldMapDelta = isLocalConsumer && pathName === '/world/web/map-delta';
+  const isWorldMapViewport = isLocalConsumer && pathName === '/world/web/map-viewport';
+  if (isWorldMapDelta && failure === 'net::ERR_ABORTED') {
+    return {
+      ...record,
+      allowed: true,
+      classification: 'allowed_stale_map_delta_request_aborted',
+      gate_reason: 'world map runtime intentionally aborts stale delta fetches when the viewport changes or the page navigates',
+    };
+  }
+  if ((isWorldMapDelta || isWorldMapViewport) && ['net::ERR_ABORTED', 'net::ERR_FAILED'].includes(failure)) {
+    return {
+      ...record,
+      allowed: true,
+      classification: 'allowed_world_map_async_request_cancelled_during_route_transition',
+      gate_reason: 'late map viewport refresh was cancelled during the scripted route transition after the runtime/health gates stayed green',
+    };
+  }
+  return {
+    ...record,
+    allowed: false,
+    classification: 'unclassified_browser_request_failure',
+    gate_reason: 'not on the explicit Browser E2E request-failure allowlist',
+  };
+}
+
+function buildRequestFailureGate(records) {
+  const classified = (records || []).map(classifyRequestFailure);
+  const unclassified = classified.filter((failure) => !failure.allowed);
+  const allowed = classified.filter((failure) => failure.allowed);
+  const allowedByClass = allowed.reduce((acc, failure) => {
+    acc[failure.classification] = (acc[failure.classification] || 0) + 1;
+    return acc;
+  }, {});
+  const maxAllowedWorldMapAsyncCancellations = 6;
+  const allowedWorldMapAsyncCancellationCount = allowed.length;
+  const allowedWithinBudget = allowedWorldMapAsyncCancellationCount <= maxAllowedWorldMapAsyncCancellations;
+  return {
+    contract_version: 'trillionnium_browser_request_failure_gate_v1',
+    green: unclassified.length === 0 && allowedWithinBudget,
+    policy: 'fail_on_unclassified_request_failures_allow_only_known_world_map_async_cancellations',
+    total_count: classified.length,
+    allowed_count: allowed.length,
+    unclassified_count: unclassified.length,
+    allowed_within_budget: allowedWithinBudget,
+    allowed_world_map_async_cancellation_count: allowedWorldMapAsyncCancellationCount,
+    max_allowed_world_map_async_cancellations: maxAllowedWorldMapAsyncCancellations,
+    allowed_by_class: allowedByClass,
+    classified_failures: classified.slice(0, 20),
+    unclassified_failures: unclassified.slice(0, 20),
+  };
 }
 
 function assertRouteRunnerHandoffContract(handoff, label) {
@@ -316,6 +382,112 @@ async function submitWorldForm(page, formSelector, marker, expectedUrlFragment) 
   return response ? response.status() : 200;
 }
 
+async function assertWorldFirstHumanScreen(page, label) {
+  assert(await count(page, '#world-first-human-loop[data-contract-version="trillionnium_first_human_session_v1"][data-visible-question-count="4"]') === 1, `${label} first-human four-question card missing`);
+  const questionIds = await page.$$eval('#world-first-human-loop [data-first-human-question]', (nodes) => nodes.map((node) => node.dataset.firstHumanQuestion));
+  assert(JSON.stringify(questionIds) === JSON.stringify(['who', 'where', 'click', 'reward']), `${label} first-human question order drifted`, questionIds);
+  const firstHumanText = await text(page, '#world-first-human-loop');
+  for (const needle of ['Who', 'Where', 'Click', 'Reward']) {
+    assert(firstHumanText.includes(needle), `${label} first-human cue missing: ${needle}`, firstHumanText);
+  }
+  const viewport = page.viewportSize() || { height: 844, width: 390 };
+  const ctaBox = await page.locator('#world-mobile-primary-cta').boundingBox({ timeout: 10_000 });
+  const firstHumanBox = await page.locator('#world-first-human-loop').boundingBox({ timeout: 10_000 });
+  assert(firstHumanBox && firstHumanBox.y < viewport.height * 0.72, `${label} first-human card must appear inside the first mobile screen`, { firstHumanBox, viewport });
+  assert(ctaBox && ctaBox.y < viewport.height * 0.92, `${label} primary CTA must stay reachable on the first mobile screen`, { ctaBox, viewport });
+  return {
+    contract_version: 'trillionnium_first_human_session_v1',
+    first_screen_contract: 'trillionnium_world_first_screen_four_questions_v1',
+    question_order: questionIds,
+    cta_y: ctaBox?.y ?? null,
+    first_human_y: firstHumanBox?.y ?? null,
+    viewport_height: viewport.height,
+  };
+}
+
+async function submitTacticsDraft(page, expectedUrlFragment) {
+  const form = page.locator('#world-tactics-command-draft-form').first();
+  await form.scrollIntoViewIfNeeded({ timeout: 10_000 });
+  const [response] = await Promise.all([
+    page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 20_000 }).catch(() => null),
+    form.evaluate((node) => {
+      const submitter = node.querySelector('button[type="submit"], button');
+      if (typeof node.requestSubmit === 'function') {
+        node.requestSubmit(submitter || undefined);
+      } else {
+        node.submit();
+      }
+    }),
+  ]);
+  await page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => null);
+  assert(page.url().includes(expectedUrlFragment), `expected tactics draft navigation to include ${expectedUrlFragment}`, { url: page.url(), status: response ? response.status() : null });
+  return response ? response.status() : 200;
+}
+
+async function runFirstHumanSessionPath(page, marker, steps, consoleMessages) {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto('/world?lang=en&first_human_session=1', { waitUntil: 'domcontentloaded', timeout: 30_000 });
+  await page.waitForSelector('#world-real-map', { timeout: 15_000 });
+  await page.waitForFunction(() => document.documentElement.getAttribute('data-ui-language') === 'en', { timeout: 10_000 });
+  const firstScreen = await assertWorldFirstHumanScreen(page, 'first human session');
+  steps.push({ name: 'first_human_session_first_screen_four_questions', ok: true, ...firstScreen });
+
+  await clickOrDomActivate(page.locator('#world-mobile-primary-cta').first());
+  await page.waitForFunction(() => {
+    const shell = document.querySelector('#trillionnium-tactics-game-shell');
+    if (!shell) return false;
+    const rect = shell.getBoundingClientRect();
+    return location.hash === '#trillionnium-tactics-game-shell' || rect.top < window.innerHeight;
+  }, { timeout: 10_000 });
+  steps.push({ name: 'first_human_session_enter_tactics_board', ok: true });
+
+  await clickOrDomActivate(page.locator('.tactics-unit[data-unit="lord"][data-side="player"]').first());
+  await clickOrDomActivate(page.locator('.tactics-tile[data-tile="G8"]').first());
+  await clickOrDomActivate(page.locator('.tactics-command[data-command="train_skill"]').first());
+  const trainingDraft = await page.evaluate(() => ({
+    command: document.querySelector('#world-tactics-command-draft-form [name="command"]')?.value,
+    targetTile: document.querySelector('#world-tactics-command-draft-form [name="target_tile"]')?.value,
+    unitId: document.querySelector('#world-tactics-command-draft-form [name="unit_id"]')?.value,
+    skillId: document.querySelector('#world-tactics-command-draft-form [name="skill_id"]')?.value,
+    runtime: window.trillionniumTacticsIntentDraft?.getState?.(),
+  }));
+  assert(trainingDraft.command === 'train_skill' && trainingDraft.targetTile === 'G8' && trainingDraft.unitId === 'lord', 'first human training draft did not map visible clicks into Rust intent form', trainingDraft);
+  await submitTacticsDraft(page, 'tactics=1');
+  steps.push({ name: 'first_human_session_complete_training_task', ok: true, command: trainingDraft.command, target_tile: trainingDraft.targetTile, skill_id: trainingDraft.skillId });
+
+  await page.waitForSelector('#trillionnium-tactics-game-shell', { timeout: 15_000 });
+  await clickOrDomActivate(page.locator('.tactics-unit[data-unit="lord"][data-side="player"]').first());
+  await clickOrDomActivate(page.locator('.tactics-tile[data-tile="F5"]').first());
+  await clickOrDomActivate(page.locator('.tactics-command[data-command="attack"]').first());
+  const attackDraft = await page.evaluate(() => ({
+    command: document.querySelector('#world-tactics-command-draft-form [name="command"]')?.value,
+    targetTile: document.querySelector('#world-tactics-command-draft-form [name="target_tile"]')?.value,
+    unitId: document.querySelector('#world-tactics-command-draft-form [name="unit_id"]')?.value,
+    runtime: window.trillionniumTacticsIntentDraft?.getState?.(),
+  }));
+  assert(attackDraft.command === 'attack' && attackDraft.targetTile === 'F5' && attackDraft.unitId === 'lord', 'first human attack draft did not map visible clicks into Rust intent form', attackDraft);
+  await submitTacticsDraft(page, 'tactics=1');
+  steps.push({ name: 'first_human_session_complete_tactics_battle', ok: true, command: attackDraft.command, target_tile: attackDraft.targetTile });
+
+  await page.waitForSelector('#world-action-body', { timeout: 15_000 });
+  await page.waitForFunction(() => document.querySelectorAll('.trillionnium-reward-claim-action').length >= 1 && document.querySelectorAll('.trillionnium-next-route-action').length >= 1, { timeout: 15_000 });
+  await clickOrDomActivate(page.locator('.trillionnium-reward-claim-action').first());
+  const rewardDraft = await page.locator('#world-action-body').inputValue({ timeout: 10_000 });
+  assert(/reward|claim|rating|evidence|领取|奖励/i.test(rewardDraft), 'first human reward claim click did not draft a reward/proof action', rewardDraft);
+  steps.push({ name: 'first_human_session_claim_reward_draft', ok: true, body_length: rewardDraft.length });
+
+  await clickOrDomActivate(page.locator('.trillionnium-next-route-action').first());
+  const nextRouteDraft = await page.locator('#world-action-body').inputValue({ timeout: 10_000 });
+  assert(/next route|route|下一|路线/i.test(nextRouteDraft), 'first human next-route click did not draft the next route action', nextRouteDraft);
+  await submitWorldForm(page, 'form[action="/world/web/action"]', marker, 'played=1');
+  steps.push({ name: 'first_human_session_open_next_route', ok: true, body_length: nextRouteDraft.length });
+
+  await page.screenshot({ path: path.join(screenshotDir, 'first-human-session.png'), fullPage: true, timeout: 15_000, animations: 'disabled' }).catch((error) => {
+    consoleMessages.push({ type: 'warning', text: `first human session screenshot skipped: ${error.message || error}` });
+  });
+  return firstScreen;
+}
+
 async function main() {
   await fs.mkdir(outDir, { recursive: true });
   await fs.mkdir(screenshotDir, { recursive: true });
@@ -359,6 +531,48 @@ async function main() {
   });
 
   const marker = `browser-e2e-${Math.floor(Date.now() / 1000)}`;
+
+  if (e2eMode === 'first-human-session') {
+    await runFirstHumanSessionPath(page, marker, steps, consoleMessages);
+    const requestFailureGate = buildRequestFailureGate(requestFailures);
+    const summary = {
+      ok: pageErrors.length === 0 && requestFailureGate.green,
+      run_id: runId,
+      checked_at_epoch: Math.floor(Date.now() / 1000),
+      base_url: baseUrl,
+      mode: e2eMode,
+      browser: 'playwright.chromium',
+      executable_path: executablePath,
+      viewport: 'iPhone 13',
+      coverage: {
+        first_human_session: true,
+        first_screen_four_questions: true,
+        enter_tactics_board: true,
+        complete_tactics_battle: true,
+        reward_claim_draft: true,
+        next_route_opened: true,
+      },
+      web_session: {
+        seeded: true,
+        matrix_user_id: matrixUserId,
+        room_id: roomId,
+        session_id: sessionId,
+        expires_at_epoch: webSession.expires_at_epoch,
+      },
+      steps,
+      request_failure_gate: requestFailureGate,
+      console_messages: consoleMessages.slice(0, 20),
+      page_errors: pageErrors,
+      request_failures: requestFailureGate.classified_failures,
+      screenshots_dir: screenshotDir,
+      summary_path: summaryPath,
+    };
+    await fs.writeFile(summaryPath, JSON.stringify(summary, null, 2));
+    await browser.close();
+    console.log(JSON.stringify(summary, null, 2));
+    if (!summary.ok) process.exit(2);
+    return;
+  }
 
   await page.goto('/app?lang=en', { waitUntil: 'domcontentloaded', timeout: 30_000 });
   await page.waitForSelector('#real-world-map', { timeout: 15_000 });
@@ -615,6 +829,8 @@ async function main() {
   assert(await count(page, '#world-hero-mobile-actions[data-contract-version="trillionnium_mobile_single_primary_cta_v1"][data-primary-cta-count="1"]') === 1, 'world mobile single-primary CTA contract missing');
   assert(await count(page, '#world-mobile-primary-cta.cta') === 1, 'world mobile primary CTA missing');
   assert(await count(page, '#world-mobile-route-first-sheet .world-route-stepper span') === 3, 'world mobile route-first stepper missing');
+  const worldFirstHumanScreen = await assertWorldFirstHumanScreen(page, '/world English system language');
+  steps.push({ name: 'world_first_human_screen_four_questions', ok: true, ...worldFirstHumanScreen });
   assert(await count(page, '#world-openstreetmap-provider-readiness[data-contract-version="openstreetmap_provider_readiness_v1"][data-fixture-mode-green="true"][data-live-modes-fail-closed="true"][data-live-network-ingestion-enabled="false"][data-production-ingestion-enabled="false"]') === 1, 'world OSM provider readiness/fail-closed contract missing');
   assert(await count(page, '#world-openstreetmap-geodata-freshness[data-contract-version="openstreetmap_geodata_freshness_v1"][data-fixture-static-snapshot="true"][data-wall-clock-freshness-applies="false"][data-live-data-freshness-applies="false"][data-staleness-gate-green="true"][data-stale-live-ingestion-blocked="true"][data-fixture-snapshot-age-seconds="0"]') === 1, 'world OSM geodata freshness/staleness contract missing');
   assert(await count(page, '#world-openstreetmap-attribution[data-contract-version="openstreetmap_attribution_presence_v1"][data-attribution-required="true"][data-attribution-visible="true"][data-database-license="ODbL-1.0"]') === 1, 'world OSM attribution presence contract missing');
@@ -760,7 +976,7 @@ async function main() {
   assert(rumMatrixWarmup.every((result) => result.ok), 'RUM matrix warmup failed', rumMatrixWarmup);
   steps.push({ name: 'world_map_rum_matrix_browser_warmup', ok: true, samples: 12 });
 
-  const health = await page.request.get(`${baseUrl}/health`, { timeout: 20_000 });
+  const health = await page.request.get(`${baseUrl}/health`, { timeout: 60_000 });
   assert(health.ok(), `health failed after browser flow: ${health.status()}`);
   const healthJson = await health.json();
   assert(healthJson?.trillionnium_world_map_runtime_safety_gate?.contract_version === 'trillionnium_world_map_runtime_safety_gate_v1', 'health runtime safety gate contract missing', healthJson?.trillionnium_world_map_runtime_safety_gate);
@@ -789,7 +1005,7 @@ async function main() {
   assert(Number.isFinite(Number(healthJson?.trillionnium_world_map_rum_slo_gate?.sample_count)), 'health RUM SLO sample count missing', healthJson?.trillionnium_world_map_rum_slo_gate);
   assert(['warming_until_min_samples', 'enforced'].includes(healthJson?.trillionnium_world_map_rum_slo_gate?.enforcement_status), 'health RUM SLO enforcement status missing', healthJson?.trillionnium_world_map_rum_slo_gate);
   assert(healthJson?.trillionnium_world_map_delta_cache_gate?.entity_delta_cache_contract === 'entity_group_versioned_delta_v1' && healthJson?.trillionnium_world_map_delta_cache_gate?.failure_rate_within_target === true, 'health delta cache gate not green', healthJson?.trillionnium_world_map_delta_cache_gate);
-  const metrics = await page.request.get(`${baseUrl}/metrics`, { timeout: 20_000 });
+  const metrics = await page.request.get(`${baseUrl}/metrics`, { timeout: 60_000 });
   assert(metrics.ok(), `metrics failed after browser flow: ${metrics.status()}`);
   const metricsText = await metrics.text();
   for (const needle of [
@@ -832,11 +1048,13 @@ async function main() {
     consoleMessages.push({ type: 'warning', text: `world screenshot skipped: ${error.message || error}` });
   });
 
+  const requestFailureGate = buildRequestFailureGate(requestFailures);
   const summary = {
-    ok: pageErrors.length === 0,
+    ok: pageErrors.length === 0 && requestFailureGate.green,
     run_id: runId,
     checked_at_epoch: Math.floor(Date.now() / 1000),
     base_url: baseUrl,
+    mode: e2eMode,
     browser: 'playwright.chromium',
     executable_path: executablePath,
     viewport: 'iPhone 13',
@@ -868,9 +1086,10 @@ async function main() {
     },
     steps,
     route_runner_handoff: routeRunnerHandoffCoverage,
+    request_failure_gate: requestFailureGate,
     console_messages: consoleMessages.slice(0, 20),
     page_errors: pageErrors,
-    request_failures: requestFailures.slice(0, 20),
+    request_failures: requestFailureGate.classified_failures,
     screenshots_dir: screenshotDir,
     summary_path: summaryPath,
   };

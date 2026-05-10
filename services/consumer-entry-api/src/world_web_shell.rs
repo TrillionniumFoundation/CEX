@@ -2906,6 +2906,11 @@ pub(super) async fn get_world_web_shell(
     .world-mobile-action-sheet p {{ margin:0; color:var(--muted); line-height:1.38; }}
     .world-mobile-action-sheet .world-route-stepper {{ display:flex; flex-wrap:wrap; gap:7px; }}
     .world-mobile-action-sheet .world-route-stepper span {{ border:1px solid rgba(100,227,255,.22); background:rgba(100,227,255,.075); color:var(--cyan); border-radius:999px; padding:6px 9px; font-size:12px; font-weight:850; }}
+    .world-first-human-loop {{ display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:8px; }}
+    .world-first-human-loop article {{ min-width:0; display:grid; gap:3px; padding:9px; border:1px solid rgba(255,255,255,.12); background:rgba(7,8,20,.42); border-radius:14px; }}
+    .world-first-human-loop span {{ color:var(--cyan); font-size:10px; font-weight:950; text-transform:uppercase; letter-spacing:.08em; }}
+    .world-first-human-loop b {{ color:var(--text); font-size:13px; line-height:1.15; overflow-wrap:anywhere; }}
+    .world-first-human-loop small {{ color:var(--muted); font-size:11px; line-height:1.22; overflow-wrap:anywhere; }}
     .world-mobile-promise {{ display:flex; flex-wrap:wrap; gap:8px; }}
     .world-mobile-promise span {{ border:1px solid rgba(100,227,255,.2); background:rgba(100,227,255,.075); color:var(--cyan); border-radius:999px; padding:8px 11px; font-size:12px; font-weight:850; }}
     .hero-card {{ display:grid; gap:14px; align-content:space-between; }}
@@ -3091,6 +3096,11 @@ pub(super) async fn get_world_web_shell(
       .tactics-command {{ font-size:12px; padding:8px; }}
       .world-mobile-action-sheet {{ padding:11px; border-radius:16px; }}
       .world-mobile-action-sheet .world-route-stepper span {{ font-size:11px; padding:5px 7px; }}
+      #world-mobile-current-route,#world-mobile-next-action,#world-mobile-reward-xp,#world-mobile-route-first-sheet .world-route-stepper {{ display:none; }}
+      .world-first-human-loop {{ grid-template-columns:repeat(2,minmax(0,1fr)); gap:6px; }}
+      .world-first-human-loop article {{ padding:8px; border-radius:12px; }}
+      .world-first-human-loop b {{ font-size:12px; }}
+      .world-first-human-loop small {{ font-size:10px; }}
       .world-hero-actions .cta,.hero-card .cta,.world-map-player-summary .cta {{ min-height:44px; padding:10px 11px; border-radius:14px; font-size:13px; }}
       button,input,textarea,select,.focus-chip,.overlay-toggle {{ min-height:44px; }}
       .hero-card,.panel,.card {{ padding:15px; border-radius:20px; }}
@@ -3159,7 +3169,7 @@ pub(super) async fn get_world_web_shell(
       <div class="world-hero-kicker"><div class="pill" data-i18n-en="Open-source tactics RPG · Three Kingdoms mod shell" data-i18n-zh="开源战棋 RPG · 三国魔改界面">Open-source tactics RPG · Three Kingdoms mod shell</div><div id="world-language-switcher">{world_header_language_switcher}</div></div>
       <div class="world-hero-title">
         <h1 data-i18n-en="Trillionnium Tactics Chronicle" data-i18n-zh="Trillionnium 战棋志">Trillionnium Tactics Chronicle</h1>
-        <p class="subtitle" data-i18n-en="Global-first open world rebuilt on a real open-source tactics base: tranchikhang/MedievalWar (MIT, Phaser 3, Fire Emblem-inspired) supplies the map/cursor/turn/pathfinding/menu/objective loop, while OpenClawStreetMap quietly feeds real streets, encounters, and route rewards underneath." data-i18n-zh="面向海外首发的战棋式开放世界：以 MIT 开源 tranchikhang/MedievalWar（Phaser 3、Fire Emblem 风格）作为地图/光标/回合/寻路/菜单/目标循环底座魔改；OpenClawStreetMap 在后台提供真实街巷、遭遇和路线奖励。">Global-first open world rebuilt on a real open-source tactics base: tranchikhang/MedievalWar (MIT, Phaser 3, Fire Emblem-inspired) supplies the map/cursor/turn/pathfinding/menu/objective loop, while OpenClawStreetMap quietly feeds real streets, encounters, and route rewards underneath.</p>
+        <p class="subtitle" data-i18n-en="Global-first open world: pick one squad, move to one real-street objective, submit proof, claim XP, then open the next route. Tactics patterns come from tranchikhang/MedievalWar; Rust owns the real game state." data-i18n-zh="面向海外首发的开放世界：选一个小队，推进到一个真实街巷目标，提交证据，领取 XP，再开启下一条路线。战棋模式借鉴 tranchikhang/MedievalWar；真实游戏状态由 Rust 负责。">Global-first open world: pick one squad, move to one real-street objective, submit proof, claim XP, then open the next route. Tactics patterns come from tranchikhang/MedievalWar; Rust owns the real game state.</p>
       </div>
       <div class="world-mobile-promise" aria-label="World mobile promises" data-i18n-aria-label-en="World mobile promises" data-i18n-aria-label-zh="世界移动端承诺">
         <span data-i18n-en="Unit turn" data-i18n-zh="单位回合">Unit turn</span>
@@ -3169,6 +3179,13 @@ pub(super) async fn get_world_web_shell(
       <div id="world-hero-mobile-actions" class="world-hero-actions" data-contract-version="trillionnium_mobile_single_primary_cta_v1" data-first-screen-decision-contract="trillionnium_world_map_first_screen_decision_v1" data-parity-source="app-mobile-primary-cta" data-primary-cta-count="1" data-first-screen-loop="pick_route_submit_proof_claim_reward">
         <section id="world-mobile-route-first-sheet" class="world-mobile-action-sheet" aria-label="World mobile one route first" data-i18n-aria-label-en="World mobile one route first" data-i18n-aria-label-zh="世界移动端一条路线优先">
           <strong data-i18n-en="Current route" data-i18n-zh="当前路线">Current route</strong>
+          <div id="world-first-human-loop" class="world-first-human-loop" data-contract-version="trillionnium_first_human_session_v1" data-first-screen-contract="trillionnium_world_first_screen_four_questions_v1" data-visible-question-count="4" data-source-of-truth="rust_trillionnium_game_state" data-web-role="player_orientation_only">
+            <article data-first-human-question="who"><span data-i18n-en="Who" data-i18n-zh="我是谁">Who</span><b data-i18n-en="{trillionnium_display_name_en}" data-i18n-zh="{trillionnium_display_name_zh}">{trillionnium_display_name_en}</b><small data-i18n-en="{trillionnium_title_en}" data-i18n-zh="{trillionnium_title_zh}">{trillionnium_title_en}</small></article>
+            <article data-first-human-question="where"><span data-i18n-en="Where" data-i18n-zh="去哪">Where</span><b data-i18n-en="Real-street objective" data-i18n-zh="真实街巷目标">Real-street objective</b><small data-i18n-en="One visible route, not every dashboard." data-i18n-zh="只看一条路线，不先看所有仪表盘。">One visible route, not every dashboard.</small></article>
+            <article data-first-human-question="click"><span data-i18n-en="Click" data-i18n-zh="点什么">Click</span><b data-i18n-en="Enter tactics board" data-i18n-zh="进入战棋棋盘">Enter tactics board</b><small data-i18n-en="Select unit → target → command." data-i18n-zh="选单位 → 选目标 → 下指令。">Select unit → target → command.</small></article>
+            <article data-first-human-question="reward"><span data-i18n-en="Reward" data-i18n-zh="得什么">Reward</span><b data-i18n-en="XP + next route" data-i18n-zh="XP + 下一路线">XP + next route</b><small data-i18n-en="{map_route_runner_reward_claim_count} claim · {map_route_runner_mastery_xp} XP" data-i18n-zh="{map_route_runner_reward_claim_count} 次领奖 · {map_route_runner_mastery_xp} XP">{map_route_runner_reward_claim_count} claim · {map_route_runner_mastery_xp} XP</small></article>
+          </div>
+          <a id="world-mobile-primary-cta" class="cta" href='#trillionnium-tactics-game-shell' data-i18n-en="Continue route: enter tactics board" data-i18n-zh="继续路线：进入战棋棋盘">Continue route: enter tactics board</a>
           <p id="world-mobile-current-route" data-i18n-en="{map_route_runner_handoff_summary}" data-i18n-zh="{map_route_runner_handoff_summary}">{map_route_runner_handoff_summary}</p>
           <div class="world-route-stepper" aria-label="Pick route submit proof claim reward" data-i18n-aria-label-en="Pick route submit proof claim reward" data-i18n-aria-label-zh="选路线、交证据、领奖励">
             <span data-i18n-en="Pick route" data-i18n-zh="选路线">Pick route</span>
@@ -3177,7 +3194,6 @@ pub(super) async fn get_world_web_shell(
           </div>
           <p id="world-mobile-next-action" data-i18n-en="Next action: move the selected unit toward the real-street objective, then submit proof or claim reward." data-i18n-zh="下一步动作：让选中单位推进到真实街巷目标，再提交证据或领取奖励。">Next action: move the selected unit toward the real-street objective, then submit proof or claim reward.</p>
           <p id="world-mobile-reward-xp" data-route-mastery-contract="{map_route_runner_mastery_contract}" data-route-mastery-tier="{map_route_runner_mastery_tier}" data-route-mastery-xp="{map_route_runner_mastery_xp}">Reward / XP · {map_route_runner_reward_claim_count} claim · {map_route_runner_mastery_xp} XP · {map_route_runner_mastery_tier}</p>
-          <a id="world-mobile-primary-cta" class="cta" href='#trillionnium-tactics-game-shell' data-i18n-en="Continue route: enter tactics board" data-i18n-zh="继续路线：进入战棋棋盘">Continue route: enter tactics board</a>
         </section>
       </div>
     </section>
