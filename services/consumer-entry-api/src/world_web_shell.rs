@@ -1297,6 +1297,343 @@ fn world_trillionnium_task_candidate_forms_html(
         .join("\n")
 }
 
+fn world_current_node_overlay_id(current_map_node: Option<&WorldMapNode>) -> String {
+    current_map_node
+        .map(openstreetmap_game_overlay_id)
+        .unwrap_or_else(|| "trillionnium-world-node:mirror-city-square".to_string())
+}
+
+fn world_task_archetype_id_from_task_id(task_id: &str) -> Option<&str> {
+    task_id.strip_prefix("trillionnium-task:")
+}
+
+fn world_latest_active_trillionnium_task_contract<'a>(
+    league: &'a LeagueState,
+    current_matrix_user_id: &str,
+) -> Option<&'a WorldContract> {
+    league.world.world_contracts.iter().rev().find(|contract| {
+        contract.actor_matrix_user_id == current_matrix_user_id
+            && contract.task_id.starts_with("trillionnium-task:")
+            && matches!(
+                contract.status.as_str(),
+                "trillionnium_task_offered" | "trillionnium_task_completion_pending_settlement"
+            )
+    })
+}
+
+fn world_play_first_exit_cards_html(
+    current_map_node: Option<&WorldMapNode>,
+    league: &LeagueState,
+    current_matrix_user_id: &str,
+    csrf_input: &str,
+) -> String {
+    let Some(node) = current_map_node else {
+        return "<article class=\"world-play-first-empty\"><strong>Map booting</strong><span>No exits yet.</span></article>".to_string();
+    };
+    let mut exits: Vec<(&String, &String)> = node.exits.iter().collect();
+    exits.sort_by(|left, right| left.0.cmp(right.0));
+    if exits.is_empty() {
+        return "<article class=\"world-play-first-empty\"><strong>No exit</strong><span>This room is sealed for now.</span></article>".to_string();
+    }
+    exits
+        .into_iter()
+        .map(|(direction, target_node_id)| {
+            let target_label = league
+                .world
+                .world_map_nodes
+                .get(target_node_id)
+                .map(|target| world_user_visible_copy(&target.name))
+                .unwrap_or_else(|| target_node_id.to_string());
+            format!(
+                "<form class=\"world-local-exit-form\" method=\"post\" action=\"/world/web/map-move\" data-direction=\"{}\" data-target-node-id=\"{}\" data-source-of-truth=\"rust_world_map_move\" data-web-role=\"movement_intent_only\">{}<input type=\"hidden\" name=\"matrix_user_id\" value=\"{}\"><input type=\"hidden\" name=\"target\" value=\"{}\"><button type=\"submit\"><b>{}</b><span>{}</span></button></form>",
+                escape_html_text(direction),
+                escape_html_text(target_node_id),
+                csrf_input,
+                escape_html_text(current_matrix_user_id),
+                escape_html_text(target_node_id),
+                escape_html_text(direction),
+                escape_world_visible_text(&target_label),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn world_play_first_local_actions_html(current_map_node: Option<&WorldMapNode>) -> String {
+    let Some(node) = current_map_node else {
+        return "<span data-action-kind=\"boot\">map boot</span>".to_string();
+    };
+    let mut actions = Vec::new();
+    for tag in &node.interaction_tags {
+        actions.push(("tag", tag.as_str()));
+    }
+    for hook in &node.freedom_hooks {
+        actions.push(("hook", hook.as_str()));
+    }
+    if actions.is_empty() {
+        return "<span data-action-kind=\"wait\">wait / 原地观察</span>".to_string();
+    }
+    actions
+        .into_iter()
+        .take(8)
+        .map(|(kind, action)| {
+            format!(
+                "<span data-action-kind=\"{}\">{}</span>",
+                escape_html_text(kind),
+                escape_world_visible_text(&world_user_visible_copy(action)),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn world_play_first_local_npc_forms_html(
+    tactics_board: &Value,
+    current_overlay_id: &str,
+    current_matrix_user_id: &str,
+    csrf_input: &str,
+) -> String {
+    let local_npcs = tactics_board
+        .get("npcs")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|npc| {
+            npc.get("osm_game_overlay_id")
+                .and_then(Value::as_str)
+                .is_some_and(|overlay_id| overlay_id == current_overlay_id)
+        })
+        .collect::<Vec<_>>();
+
+    if local_npcs.is_empty() {
+        return "<article class=\"world-play-first-empty\"><strong>No local NPC</strong><span>Move to another room to meet a mentor, clerk, or task giver.</span></article>".to_string();
+    }
+
+    local_npcs
+        .into_iter()
+        .map(|npc| {
+            let npc_id = npc.get("npc_id").and_then(Value::as_str).unwrap_or("npc");
+            let display_name = npc
+                .get("display_name")
+                .and_then(Value::as_str)
+                .unwrap_or(npc_id);
+            let role = npc.get("role").and_then(Value::as_str).unwrap_or("local_npc");
+            let relationship = npc.get("relationship").and_then(Value::as_i64).unwrap_or(0);
+            let trust = npc.get("trust").and_then(Value::as_i64).unwrap_or(0);
+            let forms = npc
+                .get("command_descriptors")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|descriptor| {
+                    descriptor
+                        .get("command")
+                        .and_then(Value::as_str)
+                        .is_some_and(|command| matches!(command, "talk_npc" | "offer_task"))
+                })
+                .map(|descriptor| {
+                    let command = descriptor
+                        .get("command")
+                        .and_then(Value::as_str)
+                        .unwrap_or("talk_npc");
+                    let label = descriptor
+                        .get("label")
+                        .and_then(Value::as_str)
+                        .unwrap_or(command);
+                    let task_archetype_id = descriptor
+                        .get("task_archetype_ids")
+                        .and_then(Value::as_array)
+                        .and_then(|ids| ids.iter().filter_map(Value::as_str).next())
+                        .unwrap_or("");
+                    let body_template = descriptor
+                        .get("body_template")
+                        .and_then(Value::as_str)
+                        .unwrap_or("local NPC interaction");
+                    format!(
+                        "<form class=\"world-local-npc-form\" method=\"post\" action=\"/world/web/tactics-command\" data-command=\"{}\" data-npc-id=\"{}\" data-task-archetype-id=\"{}\" data-command-handler-owner=\"rust_world_tactics_command_handler\" data-validation-owner=\"rust_trillionnium_npc_interaction_validator\" data-source-of-truth=\"rust_trillionnium_npc_model\" data-web-role=\"intent_only_visualization_input\">{}<input type=\"hidden\" name=\"matrix_user_id\" value=\"{}\"><input type=\"hidden\" name=\"command\" value=\"{}\"><input type=\"hidden\" name=\"unit_id\" value=\"lord\"><input type=\"hidden\" name=\"target_tile\" value=\"G8\"><input type=\"hidden\" name=\"npc_id\" value=\"{}\"><input type=\"hidden\" name=\"task_archetype_id\" value=\"{}\"><input type=\"hidden\" name=\"osm_game_overlay_id\" value=\"{}\"><input type=\"hidden\" name=\"body\" value=\"{}\"><button type=\"submit\">{}</button></form>",
+                        escape_html_text(command),
+                        escape_html_text(npc_id),
+                        escape_html_text(task_archetype_id),
+                        csrf_input,
+                        escape_html_text(current_matrix_user_id),
+                        escape_html_text(command),
+                        escape_html_text(npc_id),
+                        escape_html_text(task_archetype_id),
+                        escape_html_text(current_overlay_id),
+                        escape_html_text(body_template),
+                        escape_world_visible_text(label),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            format!(
+                "<article class=\"world-local-npc-card\" data-npc-id=\"{}\" data-osm-game-overlay-id=\"{}\"><strong>{}</strong><span>{}</span><small>relationship {} · trust {}</small><div class=\"world-local-npc-actions\">{}</div></article>",
+                escape_html_text(npc_id),
+                escape_html_text(current_overlay_id),
+                escape_world_visible_text(display_name),
+                escape_world_visible_text(&world_user_visible_copy(role)),
+                relationship,
+                trust,
+                forms,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn world_play_first_local_task_html(
+    league: &LeagueState,
+    tactics_board: &Value,
+    current_map_node: Option<&WorldMapNode>,
+    current_overlay_id: &str,
+    current_matrix_user_id: &str,
+    csrf_input: &str,
+) -> String {
+    let active_contract =
+        world_latest_active_trillionnium_task_contract(league, current_matrix_user_id);
+    let current_candidates = tactics_board
+        .get("task_candidates")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|candidate| {
+            candidate
+                .get("osm_game_overlay_id")
+                .and_then(Value::as_str)
+                .is_some_and(|overlay_id| overlay_id == current_overlay_id)
+        })
+        .collect::<Vec<_>>();
+    let pickup_hint = current_candidates
+        .iter()
+        .filter_map(|candidate| candidate.get("task_archetype_id").and_then(Value::as_str))
+        .next()
+        .unwrap_or("talk_to_local_npc");
+    let current_location_label = current_map_node
+        .map(|node| world_user_visible_copy(&node.name))
+        .unwrap_or_else(|| "Unknown place".to_string());
+
+    match active_contract {
+        Some(contract) => {
+            let task_archetype_id = world_task_archetype_id_from_task_id(&contract.task_id)
+                .unwrap_or("courier_letter");
+            let local_candidate = current_candidates.iter().find(|candidate| {
+                candidate
+                    .get("task_archetype_id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|value| value == task_archetype_id)
+            });
+            let can_submit_completion = contract.status == "trillionnium_task_offered";
+            let completion_form = if can_submit_completion {
+                local_candidate.map(|candidate| {
+                let candidate_id = candidate
+                    .get("candidate_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("trillionnium-task:local");
+                format!(
+                    "<form id=\"world-local-task-complete-form\" class=\"world-local-task-form\" method=\"post\" action=\"/world/web/tactics-command\" data-command=\"complete_task\" data-candidate-id=\"{}\" data-contract-id=\"{}\" data-source-of-truth=\"rust_trillionnium_task_completion_handler\" data-web-role=\"intent_only_visualization_input\">{}<input type=\"hidden\" name=\"matrix_user_id\" value=\"{}\"><input type=\"hidden\" name=\"command\" value=\"complete_task\"><input type=\"hidden\" name=\"unit_id\" value=\"lord\"><input type=\"hidden\" name=\"target_tile\" value=\"G8\"><input type=\"hidden\" name=\"task_archetype_id\" value=\"{}\"><input type=\"hidden\" name=\"osm_game_overlay_id\" value=\"{}\"><input type=\"hidden\" name=\"body\" value=\"Trillionnium local task report: current room checked, NPC lead confirmed, evidence package attached, route risk reviewed, next step ready, self-review complete.\"><button type=\"submit\" data-i18n-en=\"Complete local task\" data-i18n-zh=\"完成本地任务\">Complete local task</button></form>",
+                    escape_html_text(candidate_id),
+                    escape_html_text(&contract.contract_id),
+                    csrf_input,
+                    escape_html_text(current_matrix_user_id),
+                    escape_html_text(task_archetype_id),
+                    escape_html_text(current_overlay_id),
+                )
+                })
+            } else {
+                None
+            };
+            let completion_html = completion_form.unwrap_or_else(|| {
+                if can_submit_completion {
+                    format!(
+                        "<small data-task-travel-required=\"true\">Active task needs a matching local objective; move from {} to the task site before submitting.</small>",
+                        escape_world_visible_text(&current_location_label),
+                    )
+                } else {
+                    "<small data-task-settlement-pending=\"true\">Report already submitted; Rust ledger/review settlement must finish before another completion.</small>".to_string()
+                }
+            });
+            format!(
+                "<article class=\"world-local-task-card\" data-active-task=\"true\" data-contract-id=\"{}\" data-task-archetype-id=\"{}\" data-status=\"{}\"><strong>{}</strong><span>{}</span><small>{}</small>{}</article>",
+                escape_html_text(&contract.contract_id),
+                escape_html_text(task_archetype_id),
+                escape_html_text(&contract.status),
+                escape_world_visible_text(&world_user_visible_copy(&contract.title)),
+                escape_world_visible_text(&world_user_visible_copy(&contract.body)),
+                escape_html_text(&contract.status),
+                completion_html,
+            )
+        }
+        None => format!(
+            "<article class=\"world-local-task-card\" data-active-task=\"false\" data-pickup-hint=\"{}\"><strong data-i18n-en=\"No active task yet\" data-i18n-zh=\"还没有进行中的任务\">No active task yet</strong><span data-i18n-en=\"Talk to a local NPC, then pick up a task before submitting a report.\" data-i18n-zh=\"先和本地 NPC 交谈，再接取任务，最后提交战报。\">Talk to a local NPC, then pick up a task before submitting a report.</span><small>{} · candidate {}</small></article>",
+            escape_html_text(pickup_hint),
+            escape_world_visible_text(&current_location_label),
+            escape_html_text(pickup_hint),
+        ),
+    }
+}
+
+fn world_play_first_action_prompt_html(
+    league: &LeagueState,
+    tactics_board: &Value,
+    current_map_node: Option<&WorldMapNode>,
+    current_matrix_user_id: &str,
+    csrf_input: &str,
+) -> String {
+    let current_overlay_id = world_current_node_overlay_id(current_map_node);
+    let (node_id, node_name, node_kind, node_description) = current_map_node
+        .map(|node| {
+            (
+                node.node_id.as_str(),
+                world_user_visible_copy(&node.name),
+                world_node_kind_label(&node.node_kind).to_string(),
+                world_user_visible_copy(&node.description),
+            )
+        })
+        .unwrap_or((
+            "unknown",
+            "Unknown place".to_string(),
+            "unknown".to_string(),
+            "Map booting.".to_string(),
+        ));
+    let exits_html = world_play_first_exit_cards_html(
+        current_map_node,
+        league,
+        current_matrix_user_id,
+        csrf_input,
+    );
+    let local_actions_html = world_play_first_local_actions_html(current_map_node);
+    let local_npc_html = world_play_first_local_npc_forms_html(
+        tactics_board,
+        &current_overlay_id,
+        current_matrix_user_id,
+        csrf_input,
+    );
+    let local_task_html = world_play_first_local_task_html(
+        league,
+        tactics_board,
+        current_map_node,
+        &current_overlay_id,
+        current_matrix_user_id,
+        csrf_input,
+    );
+    format!(
+        "<section id=\"world-play-first-action-prompt\" class=\"world-play-first-action-prompt\" data-contract-version=\"trillionnium_world_play_first_exploration_loop_v1\" data-current-node-id=\"{}\" data-current-overlay-id=\"{}\" data-source-of-truth=\"rust_world_map_nodes_and_tactics_commands\" data-web-role=\"intent_only_visualization_input\" aria-label=\"Current location exits local actions NPC task loop\"><article id=\"world-current-location-card\" class=\"world-current-location-card\"><span data-i18n-en=\"Current location\" data-i18n-zh=\"当前位置\">Current location</span><strong>{}</strong><small>{} · {}</small><p>{}</p></article><article id=\"world-current-exits\" class=\"world-current-exits\"><span data-i18n-en=\"Exits\" data-i18n-zh=\"出口\">Exits</span><div class=\"world-local-exit-grid\">{}</div></article><article id=\"world-local-actions\" class=\"world-local-actions\"><span data-i18n-en=\"Local actions\" data-i18n-zh=\"本地动作\">Local actions</span><div class=\"world-local-action-chip-row\">{}</div></article><article id=\"world-local-npc-talk\" class=\"world-local-npc-talk\" data-command=\"talk_npc\"><span data-i18n-en=\"NPC talk\" data-i18n-zh=\"NPC 交谈\">NPC talk</span>{}</article><article id=\"world-local-task-loop\" class=\"world-local-task-loop\" data-pickup-command=\"offer_task\" data-completion-command=\"complete_task\"><span data-i18n-en=\"Task pickup / completion\" data-i18n-zh=\"任务接取 / 完成\">Task pickup / completion</span>{}</article></section>",
+        escape_html_text(node_id),
+        escape_html_text(&current_overlay_id),
+        escape_world_visible_text(&node_name),
+        escape_html_text(&node_kind),
+        escape_html_text(&current_overlay_id),
+        escape_world_visible_text(&node_description),
+        exits_html,
+        local_actions_html,
+        local_npc_html,
+        local_task_html,
+    )
+}
+
 fn world_trillionnium_status_html(trillionnium_character: &Value) -> String {
     let attributes = trillionnium_character
         .get("attributes")
@@ -2212,6 +2549,13 @@ pub(super) async fn get_world_web_shell(
         world_trillionnium_npc_cards_html(&tactics_board, current_matrix_user_id, &csrf_input);
     let trillionnium_task_completion_forms = world_trillionnium_task_candidate_forms_html(
         &tactics_board,
+        current_matrix_user_id,
+        &csrf_input,
+    );
+    let world_play_first_action_prompt = world_play_first_action_prompt_html(
+        &league,
+        &tactics_board,
+        current_map_node,
         current_matrix_user_id,
         &csrf_input,
     );
@@ -3182,6 +3526,19 @@ pub(super) async fn get_world_web_shell(
     .world-keypad-button.is-blocked {{ opacity:.64; background:#c5baa5; border-color:#333; box-shadow:0 8px 0 #6a655d; }}
     .world-keypad-button:not(.is-blocked):hover,.world-keypad-button:not(.is-blocked):focus {{ box-shadow:0 8px 0 #56524a, inset 0 0 0 2px #0b1007; transform:none; }}
     .world-keypad-sidecar article {{ border:1px solid #0b1007; background:#8fb454; color:#0b1007; border-radius:0; padding:5px; display:grid; gap:3px; font-family:ui-monospace,"SFMono-Regular","Noto Sans Mono CJK SC",monospace; }}
+    .world-play-first-action-prompt {{ border:1px solid #0b1007; background:#8fb454; color:#0b1007; display:grid; gap:4px; padding:5px; font-family:ui-monospace,"SFMono-Regular","Noto Sans Mono CJK SC",monospace; }}
+    .world-play-first-action-prompt > article {{ border:1px dotted rgba(11,16,7,.72); background:rgba(143,180,84,.82); padding:4px; display:grid; gap:3px; }}
+    .world-play-first-action-prompt span {{ color:#334620; font-size:8px; font-weight:950; text-transform:uppercase; letter-spacing:.04em; }}
+    .world-play-first-action-prompt strong {{ color:#111; font-size:10px; line-height:1.1; }}
+    .world-play-first-action-prompt p,.world-play-first-action-prompt small {{ color:#0b1007; font-size:8px; line-height:1.15; margin:0; }}
+    .world-local-exit-grid,.world-local-npc-actions {{ display:flex; flex-wrap:wrap; gap:4px; }}
+    .world-local-action-chip-row {{ display:flex; flex-wrap:wrap; gap:3px; }}
+    .world-local-action-chip-row span {{ border:1px solid rgba(11,16,7,.68); border-radius:0; padding:2px 4px; color:#0b1007; background:rgba(255,255,255,.18); text-transform:none; letter-spacing:0; }}
+    .world-local-exit-form,.world-local-npc-form,.world-local-task-form {{ margin:0; }}
+    .world-local-exit-form button,.world-local-npc-form button,.world-local-task-form button {{ min-height:24px; border:1px solid #0b1007; border-radius:0; background:#cfc3ad; color:#0b0b0b; padding:3px 5px; font:900 9px/1 ui-monospace,"SFMono-Regular","Noto Sans Mono CJK SC",monospace; box-shadow:none; cursor:pointer; }}
+    .world-local-exit-form button {{ display:grid; justify-items:start; gap:1px; min-width:82px; }}
+    .world-local-exit-form button span {{ color:#0b0b0b; font-size:8px; text-transform:none; letter-spacing:0; }}
+    .world-local-task-card,.world-local-npc-card {{ display:grid; gap:3px; }}
     .world-keypad-quest-brief {{ background:#8fb454 !important; border-color:#0b1007 !important; }}
     .world-keypad-quest-brief .cta {{ width:100%; min-height:26px; padding:5px 8px; border-radius:0; border:1px solid #0b1007; background:#8fb454; color:#0b1007; box-shadow:none; font-size:10px; font-family:ui-monospace,"SFMono-Regular","Noto Sans Mono CJK SC",monospace; }}
     .world-keypad-sidecar strong {{ color:#111; }}
@@ -3599,6 +3956,7 @@ pub(super) async fn get_world_web_shell(
               <p id="world-keypad-current-description">{world_keypad_current_description}</p>
               <small><span data-i18n-en="Exits" data-i18n-zh="出口">Exits</span>: <span id="world-keypad-current-exits">{world_keypad_current_exits}</span></small>
             </article>
+            {world_play_first_action_prompt}
             <div id="world-keypad-numpad" class="world-keypad-numpad" data-contract-version="trillionnium_text_adventure_keypad_movement_v1" data-source-of-truth="rust_world_map_move" aria-label="Numeric keypad movement" data-i18n-aria-label-en="Numeric keypad movement" data-i18n-aria-label-zh="小键盘移动">
               {world_keypad_buttons}
             </div>
@@ -4952,6 +5310,7 @@ pub(super) async fn get_world_web_shell(
         world_keypad_current_description = world_keypad_current_description,
         world_keypad_current_coordinates = escape_html_text(&world_keypad_current_coordinates),
         world_keypad_current_exits = world_keypad_current_exits,
+        world_play_first_action_prompt = world_play_first_action_prompt,
         location_cards = location_cards,
         location_options = location_options,
         entity_cards = entity_cards,

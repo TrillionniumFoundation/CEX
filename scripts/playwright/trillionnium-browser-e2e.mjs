@@ -895,6 +895,12 @@ async function main() {
   assert(await count(page, '#world-keypad-map-grid[data-lcd-cols="5"][data-lcd-rows="3"][data-reference-project="albert10jp/yxts-gold-asm"]') === 1, 'world keypad LCD viewport dimensions drifted');
   assert(await count(page, '.world-keypad-cell[data-node-id][data-current="true"]') === 1, 'world keypad current player cell missing');
   assert(await count(page, '#world-keypad-numpad .world-keypad-button[data-keypad-key]') === 9, 'world keypad numpad controls missing');
+  assert(await count(page, '#world-play-first-action-prompt[data-contract-version="trillionnium_world_play_first_exploration_loop_v1"][data-source-of-truth="rust_world_map_nodes_and_tactics_commands"]') === 1, 'world play-first exploration prompt missing');
+  assert(await count(page, '#world-current-location-card') === 1, 'world current location card missing');
+  assert(await count(page, '#world-current-exits .world-local-exit-form[data-source-of-truth="rust_world_map_move"]') >= 1, 'world current exits must expose movement intents');
+  assert(await count(page, '#world-local-actions [data-action-kind]') >= 1, 'world local actions missing');
+  assert(await count(page, '#world-local-npc-talk[data-command="talk_npc"]') === 1, 'world NPC talk affordance missing');
+  assert(await count(page, '#world-local-task-loop[data-pickup-command="offer_task"][data-completion-command="complete_task"]') === 1, 'world task pickup/completion affordance missing');
   const worldKeypadBox = await page.locator('#world-keypad-adventure-shell').boundingBox({ timeout: 10_000 });
   const worldKeypadGridBox = await page.locator('#world-keypad-map-grid').boundingBox({ timeout: 10_000 });
   const worldKeypadNumpadBox = await page.locator('#world-keypad-numpad').boundingBox({ timeout: 10_000 });

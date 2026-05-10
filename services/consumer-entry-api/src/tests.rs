@@ -4561,6 +4561,19 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(world_html.contains("world-keypad-map-grid"));
     assert!(world_html.contains("world-keypad-numpad"));
     assert!(world_html.contains("world-keypad-move-form"));
+    assert!(world_html.contains("world-play-first-action-prompt"));
+    assert!(world_html.contains("trillionnium_world_play_first_exploration_loop_v1"));
+    assert!(world_html.contains("world-current-location-card"));
+    assert!(world_html.contains("world-current-exits"));
+    assert!(world_html.contains("world-local-actions"));
+    assert!(world_html.contains("world-local-npc-talk"));
+    assert!(world_html.contains("world-local-task-loop"));
+    assert!(world_html.contains("data-command=\"talk_npc\""));
+    assert!(world_html.contains("data-pickup-command=\"offer_task\""));
+    assert!(world_html.contains("data-completion-command=\"complete_task\""));
+    assert!(
+        world_html.contains("data-source-of-truth=\"rust_world_map_nodes_and_tactics_commands\"")
+    );
     assert!(world_html.contains("window.trillionniumKeyboardMap"));
     assert!(world_html.contains("Numpad 8/2/4/6"));
     assert!(world_html.contains("world-route-archetype-catalog"));
