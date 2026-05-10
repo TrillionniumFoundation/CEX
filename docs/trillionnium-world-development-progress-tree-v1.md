@@ -1610,10 +1610,28 @@ Also append a one-paragraph summary to `/home/qian/.openclaw/workspace/memory/YY
 
 ---
 
+#### Update 2026-05-11 01:5x CST
+
+- Commit: `test: gate multi-node latency evidence` (this commit)
+- Prepared the technical 9.9+ evidence gate without pretending local single-node soak or browser E2E is enough:
+  - [x] Added `docs/trillionnium-multi-node-latency-runbook-v1.md` with non-localhost requirements, sanitized evidence schema, thresholds, and failure routing for real multi-node or live-traffic latency proof.
+  - [x] Added `scripts/check-trillionnium-multi-node-latency-evidence.sh` with summary contract `trillionnium_multi_node_latency_evidence_gate_v1` and input contract `trillionnium_multi_node_latency_evidence_v1`.
+  - [x] The gate intentionally blocks when no real evidence file exists; latest blocked summary: `run/multi-node-latency/multi-node-latency-summary-1778435475.json` (`status=blocked_missing_multi_node_or_live_traffic_latency_evidence`).
+  - [x] Human-playability assessment now includes `multi_node_or_live_traffic_latency_green` as the explicit extra check required before technical playability can earn the 9.9 lift. Current score remains honest at `9.8 / 8.5 / 7.0`.
+- Evidence:
+  - `bash -n scripts/check-trillionnium-multi-node-latency-evidence.sh scripts/check-trillionnium-world-human-playability-assessment.sh`
+  - blocked multi-node/live-traffic latency gate behavior inspected
+  - Human-playability assessment: `run/human-playability-assessment/human-playability-assessment-summary-1778435480.json`, `ok=true`, technical score still `9.8`, with the 9.9 lift blocked by missing real multi-node/live-traffic latency evidence
+- Remaining next:
+  - [ ] Provide/run a real multi-node or live-traffic latency evidence file, run the real 5-10 person first-beta cohort, or run commercial launch drills. Do not add more local-only demo loops for score inflation.
+- Constraints preserved: no Hero Tan code/text/assets/data copying, no live OSM ingestion, no MapLibre promotion, browser/web intent-only, Rust source of truth.
+
+---
+
 ## Current Next Pointer
 
 If the next instruction is simply “continue”, start here:
 
-> **Next pointer:** The Hero Tan-style exploration loop now has movement, Rust-owned transition semantics, node-local NPC talk, task pickup/completion, active task/NPC/party objective travel, node-local mentor skill practice, and lightweight combat encounter entry/return-to-map. Do not continue visual skin work or add local-only demo loops just to move the score. Human-playability assessment remains `9.8/10` technical, `8.5/10` first internal beta, `7.0/10` commercial release; first-beta/commercial score lifts require real evidence via `TRILLIONNIUM_FIRST_BETA_COHORT_EVIDENCE_PATH` and/or `TRILLIONNIUM_COMMERCIAL_LAUNCH_DRILL_EVIDENCE_PATH`. Technical `9.9+` requires multi-node or live-traffic latency evidence, not another local-only loop.
+> **Next pointer:** The Hero Tan-style exploration loop is closed for the current local milestone, and the technical 9.9+ proof is now explicitly gated by `trillionnium_multi_node_latency_evidence_gate_v1`. Do not continue visual skin work or add local-only demo loops. The next meaningful score lifts require one of: real multi-node/live-traffic latency evidence via `TRILLIONNIUM_MULTI_NODE_LATENCY_EVIDENCE_PATH`, real first-beta cohort evidence via `TRILLIONNIUM_FIRST_BETA_COHORT_EVIDENCE_PATH`, or commercial launch drill evidence via `TRILLIONNIUM_COMMERCIAL_LAUNCH_DRILL_EVIDENCE_PATH`. Current honest assessment remains `9.8/10` technical, `8.5/10` first internal beta, `7.0/10` commercial release.
 
 Do not start live Overpass/Geofabrik ingestion yet. Do not promote MapLibre. Do not convert the web shell into a standalone JS source of truth.
