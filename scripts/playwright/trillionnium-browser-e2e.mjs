@@ -890,7 +890,9 @@ async function main() {
   await assertNoVisibleBilingualSlashPair(page, '/world English system language');
   await assertEnglishSurfaceHasNoCoreChineseLeaks(page, '/world English system language');
   assert(await count(page, '#world-keypad-adventure-shell[data-contract-version="trillionnium_text_adventure_keypad_movement_v1"][data-interface-style="yingxiongtanshuo_keyboard_tile_map"][data-source-of-truth="rust_world_map_move"]') === 1, 'world keypad tile-map shell missing');
+  assert(await count(page, '#world-keypad-adventure-shell[data-reference-project="albert10jp/yxts-gold-asm"][data-lcd-screen="160x80"][data-lcd-viewport="5x3"][data-lcd-palette="green_monochrome"]') === 1, 'world keypad must declare 白金英雄坛说 source-derived LCD contract');
   assert(await count(page, '#world-keypad-map-grid[role="grid"][data-source-of-truth="rust_world_map_nodes"]') === 1, 'world keypad map grid missing');
+  assert(await count(page, '#world-keypad-map-grid[data-lcd-cols="5"][data-lcd-rows="3"][data-reference-project="albert10jp/yxts-gold-asm"]') === 1, 'world keypad LCD viewport dimensions drifted');
   assert(await count(page, '.world-keypad-cell[data-node-id][data-current="true"]') === 1, 'world keypad current player cell missing');
   assert(await count(page, '#world-keypad-numpad .world-keypad-button[data-keypad-key]') === 9, 'world keypad numpad controls missing');
   const worldKeypadBox = await page.locator('#world-keypad-adventure-shell').boundingBox({ timeout: 10_000 });

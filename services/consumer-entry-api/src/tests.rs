@@ -4550,6 +4550,12 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(world_html.contains("world-keypad-adventure-shell"));
     assert!(world_html.contains("trillionnium_text_adventure_keypad_movement_v1"));
     assert!(world_html.contains("data-interface-style=\"yingxiongtanshuo_keyboard_tile_map\""));
+    assert!(world_html.contains("data-reference-project=\"albert10jp/yxts-gold-asm\""));
+    assert!(world_html.contains("data-lcd-screen=\"160x80\""));
+    assert!(world_html.contains("data-lcd-viewport=\"5x3\""));
+    assert!(world_html.contains("data-lcd-palette=\"green_monochrome\""));
+    assert!(world_html.contains("data-lcd-cols=\"5\""));
+    assert!(world_html.contains("data-lcd-rows=\"3\""));
     assert!(world_html.contains("data-keypad-controls=\"7,8,9,4,5,6,1,2,3\""));
     assert!(world_html.contains("data-source-of-truth=\"rust_world_map_move\""));
     assert!(world_html.contains("world-keypad-map-grid"));
