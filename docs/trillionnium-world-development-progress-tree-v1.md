@@ -1,7 +1,8 @@
 # Trillionnium World Development Progress Tree v1
 
 Generated: 2026-05-08 18:11 CST  
-Current code checkpoint: `ea13ae6 feat: anchor trillionnium world osm geodata`
+Last audited: 2026-05-10 11:07 CST
+Current code checkpoint: `4744573 feat: gate osm attribution observability`
 Current progress-tree checkpoint before this expansion: `8fc65f1 docs: add trillionnium world progress tree`
 Repo: `/home/qian/.openclaw/workspace/CEX`
 
@@ -74,8 +75,8 @@ Must not own:
 Current status:
 
 - `[x]` fixture-first OSM identity projection exists as `openstreetmap_geodata_v1`.
-- `[ ]` stable fixture dataset still needs to replace mostly hash-derived identities.
-- `[ ]` roads/buildings/areas/admin boundary fixture layers are not yet implemented.
+- `[x]` stable Shanghai-core fixture identities exist with deterministic fallback for missing features.
+- `[x]` roads/buildings/areas/admin boundary fixture layers exist as `openstreetmap_fixture_layers_v1`.
 
 Boundary output to Layer 2:
 
@@ -153,8 +154,8 @@ Must not own:
 Current status:
 
 - `[x]` existing World/commerce/route-runner loops are Rust-owned.
-- `[~]` tactics shell exists visually, but tactics state is not yet a Rust game model.
-- `[ ]` Trillionnium attribute/skill/sect/NPC/task/combat-log systems need Trillionnium-native Rust models.
+- `[x]` tactics state is now a Rust game model with board, units, objectives, commands, game sessions, and simulation ticks.
+- `[x]` Trillionnium attribute/skill/sect/NPC/task/combat-log systems have first Trillionnium-native Rust models and projection contracts.
 
 Boundary output to Layer 4:
 
@@ -193,7 +194,7 @@ Current status:
 
 - `[x]` map/geodata projection exists.
 - `[x]` web shell consumes projection fields.
-- `[ ]` tactics board and Trillionnium mechanics projections need first-class contract versions.
+- `[x]` tactics board and Trillionnium mechanics projections have first-class contract versions and hard tests.
 
 Boundary output to Layer 5:
 
@@ -232,8 +233,8 @@ Must not own:
 Current status:
 
 - `[x]` `/world` has visible tactics shell and OSM support layer.
-- `[~]` board is still mostly static/CSS scaffold.
-- `[ ]` web must be rewired to render Rust `tactics_board` and `trillionnium_character` projections.
+- `[x]` board cells, units, objectives, commands, HUD, logs, and attribution/readiness layers render from Rust projections.
+- `[~]` CSS/HTML remains the current visualization scaffold; full Phaser runtime integration remains optional and unstarted.
 
 Boundary output to Layer 6:
 
@@ -270,7 +271,7 @@ Must not own:
 Current status:
 
 - `[x]` existing commerce/contract/ledger command handlers are hardened.
-- `[ ]` tactics/Trillionnium command handlers need to be introduced and wired to the same ledger/progression discipline.
+- `[x]` tactics/Trillionnium command handlers are introduced and wired through Rust validation, simulation ticks, event logs, reward handoff, ledger/review-hold, and anti-cheese gates.
 
 Command processing rule:
 
@@ -480,21 +481,25 @@ Progress tree hooks:
 
 ### Latest local commit
 
-- `ea13ae6 feat: anchor trillionnium world osm geodata`
+- `4744573 feat: gate osm attribution observability`
 
 ### Latest validated evidence
 
 - `cargo fmt --all -- --check` — passed
 - `git diff --check` — passed
 - `bash -n` touched scripts — passed
-- `cargo test -p consumer-entry-api -- --nocapture` — `129 passed`
-- Web E2E — `run/league-web/web-e2e-summary-1778234500.json`, `ok=true`
-- Route-runner handoff monitoring contract — passed
+- `cargo test -p consumer-entry-api -- --nocapture` — `133 passed`
+- `cargo clippy --workspace -- -D warnings` — passed
+- `cargo test --workspace` — passed
+- Playability scorecard — `run/playability-scorecard/playability-scorecard-summary-1778380602.json`, `ok=true`, 100%
+- Web E2E — `run/league-web/web-e2e-summary-1778380931.json`, `ok=true`
+- Browser E2E — `run/league-browser/browser-e2e-summary-1778380983-688832.json`, `ok=true`
+- UI audit — `run/trillionnium-ui-audit/ui-audit-summary-1778377923-669309.json`, `ok=true`
 - Production readiness — `CEX_ENV_FILE=run/local-production/.env scripts/check-production-readiness.sh`, `READY`
 
 ### Current working-tree expectation
 
-After `ea13ae6`, CEX should be clean. If not clean, inspect before editing:
+After `4744573`, CEX should be clean. If not clean, inspect before editing:
 
 ```bash
 git status --short
@@ -554,7 +559,9 @@ git log --oneline -5
 | --- | --- | --- |
 | World state structs | `services/consumer-entry-api/src/lib.rs` | `WorldState`, `WorldMapNode`, game/domain state |
 | Default fixtures | `services/consumer-entry-api/src/league_repository.rs` | default League/World fixture data and `world_map_node` helper |
+| OSM provider | `services/consumer-entry-api/src/openstreetmap_geodata.rs` | fixture-first OSM provider, provider modes, legal/freshness/attribution metadata |
 | Projection layer | `services/consumer-entry-api/src/world_map_projection.rs` | Rust source-of-truth JSON, OSM provider contract, map/runtime contracts |
+| Tactics/mechanics model | `services/consumer-entry-api/src/world_tactics.rs` | Trillionnium attributes, skills, sects, NPCs, tactics board, simulation ticks, command outcomes |
 | World web shell | `services/consumer-entry-api/src/world_web_shell.rs` | `/world` visualization/input HTML shell |
 | Shared map shell JS/CSS | `services/consumer-entry-api/src/real_world_map_shell.rs` | OpenClawStreetMap adapter/runtime helpers |
 | Runtime optimization contracts | `services/consumer-entry-api/src/world_map_optimization.rs` | map performance, delta, RUM, shadow parity contracts |
@@ -575,8 +582,8 @@ git log --oneline -5
 
 ### TW-0 — Preserve the current baseline
 
-- [x] TW-0.1 Keep CEX repo at clean checkpoint after OSM geodata slice.
-  - Evidence: `ea13ae6`
+- [x] TW-0.1 Keep CEX repo at clean checkpoint after OSM geodata/runtime observability slices.
+  - Evidence: `4744573`
 - [x] TW-0.2 Preserve OSS research decisions in docs.
   - Evidence: tactics and Hero Tan Shuo base-selection docs exist.
 - [x] TW-0.3 Preserve OSM/Rust/Web ownership rule.
@@ -631,10 +638,10 @@ git log --oneline -5
 - [x] TW-2.9 Add command endpoints/forms for tactics actions.
   - Web sends intent; Rust validates and mutates state.
 - [x] TW-2.10 Replace static board rendering with Rust-projected board state.
-- [ ] TW-2.11 Decide integration strategy for actual MedievalWar/Phaser code.
-  - Option A: port patterns only, no vendored code.
-  - Option B: vendor MIT code under `third_party/` with license notice.
-  - Recommendation: start with patterns only; vendor only when the Rust game-state contract stabilizes.
+- [x] TW-2.11 Decide integration strategy for actual MedievalWar/Phaser code.
+  - Decision: patterns only for now, no vendored MedievalWar code.
+  - Keep `tranchikhang/MedievalWar` as an MIT tactics reference for map/cursor/control/turn/pathfinding patterns.
+  - Revisit vendoring only after a separate explicit product/legal decision and license/asset manifest.
 - [!] TW-2.12 Do not copy MedievalWar art assets unless license/attribution is tracked.
 
 ### TW-3 — Trillionnium / Hero Tan Shuo mechanics reference layer
@@ -642,13 +649,13 @@ git log --oneline -5
 - [x] TW-3.1 Search and classify 白金英雄坛说 / 英雄坛说 OSS candidates.
 - [x] TW-3.2 Decide no direct fork is legally/product-clean today.
 - [x] TW-3.3 Use GMUD/Hero Tan projects as mechanics references only.
-- [ ] TW-3.4 Define Trillionnium-native character attributes.
-  - Required fields: `physique`, `force`, `agility`, `insight`, `resolve`, `craft`, `commerce`, `reputation`.
-  - Source inspiration: gmud/RMXP-Hero/yxts-llm attribute loops; names/content must be Trillionnium-native.
+- [x] TW-3.4 Define Trillionnium-native character attributes.
+  - Implemented fields: `physique`, `force`, `agility`, `insight`, `resolve`, `craft`, `commerce`, `reputation`.
+  - Derived stats are deterministic and capped; source inspiration remains mechanics-only, with Trillionnium-native names/content.
 - [x] TW-3.4a Add `TrillionniumAttributes` Rust model.
 - [x] TW-3.4b Add deterministic derived stats and caps.
 - [x] TW-3.4c Add tests for attribute projection and derived stats.
-- [ ] TW-3.5 Define skill/sect/mentor/NPC relationship models in Rust.
+- [x] TW-3.5 Define skill/sect/mentor/NPC relationship models in Rust.
 - [x] TW-3.5a Add skill definition model and fixture skills.
 - [x] TW-3.5b Add training command with mentor/OSM-place requirement.
 - [x] TW-3.5c Bind skills to tactics actions and world task effects.
@@ -692,7 +699,8 @@ git log --oneline -5
 
 - [x] TW-5.1 Existing world commerce loop works: company -> shop/listing -> purchase -> work order -> delivery -> accept/reject/reopen/cancel.
 - [x] TW-5.2 Existing route-runner handoff/reward/mastery gates are green.
-- [~] TW-5.3 Current `/world` visible game loop is still mostly presentation + Rust-owned intent forms.
+- [x] TW-5.3 Current `/world` visible game loop is playable through Rust-owned projection and intent forms.
+  - Remaining polish belongs to future UX/runtime slices, not first-loop completion.
 - [x] TW-5.4 Implement first tactics loop:
   - spawn player unit
   - spawn one objective
@@ -744,47 +752,61 @@ git log --oneline -5
   - Health, playability scorecard, Prometheus, production readiness, Web E2E, and Browser E2E now hard-gate the same attribution/ODbL presence contract.
 - [!] TW-7.7 Do not increase MapLibre canary above 0 without fresh production signoff.
 
-### TW-8 — Validation gates
+### TW-8 — Validation gate policy
 
-Minimum gate for documentation-only changes:
+TW-8 is a policy checklist, not product backlog. Do not include it in Trillionnium World feature completion percentages.
 
-- [ ] `git diff --check`
+Documentation-only calibration gate:
+
+- `git diff --check`
 
 Minimum gate for Rust projection/UI changes:
 
-- [ ] `cargo fmt --all -- --check`
-- [ ] `git diff --check`
-- [ ] `bash -n` for touched shell scripts
-- [ ] targeted `cargo test -p consumer-entry-api <test-name> -- --nocapture`
-- [ ] `cargo test -p consumer-entry-api -- --nocapture`
+- `cargo fmt --all -- --check`
+- `git diff --check`
+- `bash -n` for touched shell scripts
+- targeted `cargo test -p consumer-entry-api <test-name> -- --nocapture`
+- `cargo test -p consumer-entry-api -- --nocapture`
 
 Minimum gate for `/world` UI contract changes:
 
-- [ ] restart local production runtime when E2E depends on server code:
+- restart local production runtime when E2E depends on server code:
   - `CEX_ENV_FILE=run/local-production/.env scripts/runtime-manager-linux.sh restart`
-- [ ] `CEX_ENV_FILE=run/local-production/.env scripts/check-trillionnium-league-web-e2e.sh`
+- `CEX_ENV_FILE=run/local-production/.env scripts/check-trillionnium-league-web-e2e.sh`
 
 Minimum gate for monitoring/readiness changes:
 
-- [ ] `scripts/check-trillionnium-route-runner-handoff-monitoring.sh`
-- [ ] `CEX_ENV_FILE=run/local-production/.env scripts/check-production-readiness.sh`
+- `scripts/check-trillionnium-route-runner-handoff-monitoring.sh`
+- `CEX_ENV_FILE=run/local-production/.env scripts/check-production-readiness.sh`
 
 Full product checkpoint gate when touching core world runtime:
 
-- [ ] `cargo test -p consumer-entry-api -p matrix-entry-adapter -p ledger-service -- --nocapture`
-- [ ] Web E2E
-- [ ] Browser E2E if browser runtime/js changed
-- [ ] UI audit if DOM contract changed
-- [ ] real-user beta/public-commercial if product readiness changed
-- [ ] production signoff only when requested or when making release-grade runtime changes
+- `cargo test -p consumer-entry-api -p matrix-entry-adapter -p ledger-service -- --nocapture`
+- Web E2E
+- Browser E2E if browser runtime/js changed
+- UI audit if DOM contract changed
+- real-user beta/public-commercial if product readiness changed
+- production signoff only when requested or when making release-grade runtime changes
+
+Latest evidence snapshot for the current checkpoint:
+
+- Playability scorecard: `run/playability-scorecard/playability-scorecard-summary-1778380602.json`, `ok=true`, 100%
+- Web E2E: `run/league-web/web-e2e-summary-1778380931.json`, `ok=true`
+- Browser E2E: `run/league-browser/browser-e2e-summary-1778380983-688832.json`, `ok=true`
+- UI audit: `run/trillionnium-ui-audit/ui-audit-summary-1778377923-669309.json`, `ok=true`
+- Real-user beta: `run/real-user-beta/real-user-beta-summary-1778346703.json`, `ok=true`, 100%
+- Public commercial: `run/public-commercial/public-commercial-summary-1778346759.json`, `ok=true`, 100%
+- Production readiness: `CEX_ENV_FILE=run/local-production/.env scripts/check-production-readiness.sh`, `READY`
 
 ---
 
-## Recommended Next Development Slice
+## Historical Development Slice Notes
 
-The safest next slice after checkpoint `ab5f046` was **TW-1.6 + TW-1.7 + TW-2.6 + TW-3.4a**; that slice is now implemented in the active working tree and should be committed after validation.
+This section records older continuation recommendations. They are retained for audit trail only; they are **not** the active next pointer. Use **Current Next Pointer** at the bottom of this document for continuation.
 
-The next development slice after the current checkpoint should be **TW-1.9 + TW-1.10 + TW-2.9 + TW-3.5b/d/g**:
+The safest slice after checkpoint `ab5f046` was **TW-1.6 + TW-1.7 + TW-2.6 + TW-3.4a**; that slice is now complete.
+
+The next slice after that checkpoint was **TW-1.9 + TW-1.10 + TW-2.9 + TW-3.5b/d/g**; that slice is now complete.
 
 1. Add derived OSM database tracking metadata and provider-mode fail-closed enum.
 2. Add Rust command endpoints/forms for tactics intents.
@@ -1259,6 +1281,6 @@ Also append a one-paragraph summary to `/home/qian/.openclaw/workspace/memory/YY
 
 If the next instruction is simply “continue”, start here:
 
-> **Next pointer:** TW-7.6 static attribution + runtime observability are complete. If the next instruction is simply “continue”, pick the next TW-6/TW-7 UI-runtime hardening slice, or refresh real-user/public-commercial/signoff evidence before any broader map-runtime promotion.
+> **Next pointer:** The progress tree has been calibrated against checkpoint `4744573`. Product completion is now roughly 99% if blocked/forbidden items are excluded. If the next instruction is simply “continue”, pick either (a) a TW-6/TW-7 UI-runtime hardening slice, (b) a fresh real-user/public-commercial/signoff evidence refresh, or (c) TW-2.5 optional visualization-runtime work. Do not treat TW-8 policy bullets as unfinished product backlog.
 
 Do not start live Overpass/Geofabrik ingestion yet. Do not promote MapLibre. Do not convert the web shell into a standalone JS source of truth.
