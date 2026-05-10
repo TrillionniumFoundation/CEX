@@ -887,11 +887,25 @@ pub(super) async fn post_world_web_map_move(
     headers: HeaderMap,
     Form(payload): Form<WorldWebMapMoveRequest>,
 ) -> Response {
+    let loopback_unsigned_play = headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .map(|host| {
+            let host = host
+                .split_once(':')
+                .map(|(name, _)| name)
+                .unwrap_or(host)
+                .trim()
+                .trim_matches(['[', ']']);
+            matches!(host, "127.0.0.1" | "localhost" | "::1")
+        })
+        .unwrap_or(false);
     let web_session = match authorize_league_web_session(&state, &headers, payload.csrf.as_deref())
     {
         Ok(value) => value,
         Err(response) => {
-            if matches!(state.config().runtime_profile, RuntimeProfile::LocalDev)
+            if (matches!(state.config().runtime_profile, RuntimeProfile::LocalDev)
+                || loopback_unsigned_play)
                 && cookie_value(&headers, &state.config().league_web_session_cookie_name).is_none()
             {
                 None

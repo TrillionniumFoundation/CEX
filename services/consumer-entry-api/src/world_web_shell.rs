@@ -1385,15 +1385,15 @@ fn world_keypad_direction_candidates(key: &str) -> &'static [&'static str] {
 
 fn world_keypad_direction_label(key: &str) -> (&'static str, &'static str, &'static str) {
     match key {
-        "8" => ("上", "Up", "上"),
-        "2" => ("下", "Down", "下"),
-        "4" => ("左", "Left", "左"),
-        "6" => ("右", "Right", "右"),
-        "7" => ("左左", "Fast left", "左左"),
-        "9" => ("右右", "Fast right", "右右"),
-        "1" => ("轻功", "Lightness", "轻功"),
-        "3" => ("取消", "Cancel", "取消"),
-        "5" => ("确认", "Confirm", "确认"),
+        "8" => ("8↑", "Move up", "上"),
+        "2" => ("2↓", "Move down", "下"),
+        "4" => ("4←", "Move left", "左"),
+        "6" => ("6→", "Move right", "右"),
+        "7" => ("7↖", "Move up-left", "左上"),
+        "9" => ("9↗", "Move up-right", "右上"),
+        "1" => ("1↙", "Move down-left", "左下"),
+        "3" => ("3↘", "Move down-right", "右下"),
+        "5" => ("5·", "Wait", "停留"),
         _ => ("?", "Move", "移动"),
     }
 }
@@ -1527,10 +1527,7 @@ fn world_text_adventure_grid_html(map_nodes: &[WorldMapNode], current_node_id: &
 }
 
 fn world_keypad_buttons_html(current_node: Option<&WorldMapNode>) -> String {
-    let mut buttons = vec![
-        "<button id=\"world-keypad-menu\" type=\"button\" class=\"world-keypad-button world-keypad-chrome-button is-blocked\" data-keypad-role=\"menu\" data-web-role=\"reference_chrome_only\" aria-disabled=\"true\" data-i18n-aria-label-en=\"Menu\" data-i18n-aria-label-zh=\"设置\"><span data-i18n-en=\"Menu\" data-i18n-zh=\"设置\">Menu</span><small>F1</small></button>".to_string(),
-    ];
-    buttons.extend(["7", "8", "9", "3", "1", "4", "2", "6", "5"]
+    ["7", "8", "9", "4", "5", "6", "1", "2", "3"]
         .iter()
         .map(|key| {
             let (glyph, label_en, label_zh) = world_keypad_direction_label(key);
@@ -1560,8 +1557,9 @@ fn world_keypad_buttons_html(current_node: Option<&WorldMapNode>) -> String {
                 escape_html_text(label_zh),
                 escape_html_text(label_en),
             )
-        }));
-    buttons.join("\n")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn world_keypad_state_json(map_nodes: &[WorldMapNode], current_node_id: &str) -> String {
@@ -1622,6 +1620,22 @@ fn world_keypad_state_json(map_nodes: &[WorldMapNode], current_node_id: &str) ->
     .unwrap_or_else(|_| "{}".to_string())
 }
 
+fn world_web_shell_loopback_host(headers: &HeaderMap) -> bool {
+    headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .map(|host| {
+            let host = host
+                .split_once(':')
+                .map(|(name, _)| name)
+                .unwrap_or(host)
+                .trim()
+                .trim_matches(['[', ']']);
+            matches!(host, "127.0.0.1" | "localhost" | "::1")
+        })
+        .unwrap_or(false)
+}
+
 pub(super) async fn get_world_web_shell(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1630,6 +1644,7 @@ pub(super) async fn get_world_web_shell(
     let web_session = authorize_league_web_session_readonly(&state, &headers, true)
         .ok()
         .flatten();
+    let local_play_session = web_session.is_none() && world_web_shell_loopback_host(&headers);
     let current_matrix_user_id = web_session
         .as_ref()
         .map(|session| session.matrix_user_id.as_str())
@@ -1649,6 +1664,8 @@ pub(super) async fn get_world_web_shell(
         "行动没有丢失：请按恢复卡补齐证据、风险和下一步后重试。"
     } else if web_session.is_some() {
         "已登录的世界会话：行动会绑定当前玩家并通过 CSRF 保护。"
+    } else if local_play_session {
+        "本机试玩世界：可以直接用方向键 / WASD / 小键盘移动人物；正式环境仍需要签名会话。"
     } else if matches!(state.config().runtime_profile, RuntimeProfile::LocalDev) {
         "本地开发世界：探索城市、打造道具、招募 Agent，并把现实机会镜像成冒险事件。"
     } else {
