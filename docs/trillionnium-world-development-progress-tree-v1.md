@@ -1,9 +1,9 @@
 # Trillionnium World Development Progress Tree v1
 
 Generated: 2026-05-08 18:11 CST  
-Last audited: 2026-05-10 11:07 CST
-Current code checkpoint: `4744573 feat: gate osm attribution observability`
-Current progress-tree checkpoint before this expansion: `8fc65f1 docs: add trillionnium world progress tree`
+Last audited: 2026-05-10 18:12 CST
+Current code checkpoint: `a2e3b22 fix: make local world movement playable`
+Current progress-tree checkpoint before this expansion: `e5688c4 test: gate extended health metrics soak`
 Repo: `/home/qian/.openclaw/workspace/CEX`
 
 This document is the handoff spine for continuing Trillionnium World development without losing state after chat compaction, runtime restarts, or long task chains.
@@ -45,6 +45,8 @@ OpenStreetMap / cached geodata
 ```
 
 The web frontend is **not** the source of truth. It renders state and sends player intent. Rust owns world state, simulation, tasks, combat, NPCs, economy, ledger, persistence, validation, and production gates.
+
+After the 2026-05-10 Hero Tan alignment audit, treat `albert10jp/yxts-gold-asm` as a **game-loop reference**, not a skin target. The reference is useful for the sequence "character on map -> directional movement -> location transition -> NPC/task/skill/combat progression". Trillionnium must recreate that loop with native Rust state, native content, OSM/commerce objectives, and explicit command handlers; it must not merely imitate the green LCD appearance.
 
 ---
 
@@ -156,6 +158,7 @@ Current status:
 - `[x]` existing World/commerce/route-runner loops are Rust-owned.
 - `[x]` tactics state is now a Rust game model with board, units, objectives, commands, game sessions, and simulation ticks.
 - `[x]` Trillionnium attribute/skill/sect/NPC/task/combat-log systems have first Trillionnium-native Rust models and projection contracts.
+- `[~]` Hero Tan-style exploration is only partially aligned: Rust-owned world player positions, adjacent-node movement, and local playable loop exist; full NPC/task/skill/combat progression through map exploration remains backlog.
 
 Boundary output to Layer 4:
 
@@ -234,6 +237,7 @@ Current status:
 
 - `[x]` `/world` has visible tactics shell and OSM support layer.
 - `[x]` board cells, units, objectives, commands, HUD, logs, and attribution/readiness layers render from Rust projections.
+- `[x]` `/world` has a local playable character movement loop: the player can use direction keys (`7/8/9/4/5/6/1/2/3`, WASD, arrows) to submit movement intent to Rust-owned `/world/web/map-move`.
 - `[~]` CSS/HTML remains the current visualization scaffold; full Phaser runtime integration remains optional and unstarted.
 
 Boundary output to Layer 6:
@@ -283,13 +287,22 @@ Web intent -> Rust validate -> Rust mutate -> ledger/progression settle -> Rust 
 
 ## Trillionnium Mechanics Extraction Spec
 
-The goal is not to port 白金英雄坛说 literally. The goal is to extract proven Trillionnium/MUD mechanics from `gmud`, `RMXP-Hero`, and `yxts-llm`, then rebuild them as Trillionnium-native Rust systems bound to OSM objectives and the tactics board.
+The goal is not to port 白金英雄坛说 literally, and it is not to copy the small green LCD as a product goal. The goal is to extract the **playable loop** from the confirmed source reference `albert10jp/yxts-gold-asm`: a player exists on a map, directional input moves that player through reachable locations, each location exposes NPC/task/skill/combat choices, and Rust-owned state records the result. Trillionnium then rebuilds that loop with native content, OSM objectives, commerce/ledger systems, and production-grade gates.
+
+### Confirmed Hero Tan source facts now binding this progress tree
+
+- Confirmed current primary reference: `albert10jp/yxts-gold-asm` in `references/hero-tan/yxts-gold-asm`.
+- Source file `h/gmud.h` establishes the original exploration viewport constants: `ScreenX=160`, `ScreenY=80`, `Unit_Width=32`, `Unit_Height=32`, `ScreenX_Num=5`, `ScreenY_Num=3`.
+- Source file `gmud.s` confirms the movement shape: directional key routines update player/map offsets and then redraw player position.
+- Trillionnium may use these facts as **behavior/layout reference contracts** only. It must not copy original text, maps, images, binary tables, or game data into production.
+- Current implementation status: `/world` has a Rust-owned local movement loop (`a2e3b22`) but still lacks full Hero Tan-style NPC/task/skill/combat progression through exploration.
 
 ### Source references and allowed use
 
 | Reference | Use | Do not use directly | Trillionnium extraction target |
 | --- | --- | --- | --- |
-| `mogita/gmud` | Best authentic mechanics reference; MIT repo | Original text/maps/assets/tables without provenance review | skill taxonomy, task/NPC/fight engine shape, MUD-style logs |
+| `albert10jp/yxts-gold-asm` | Current primary Hero Tan source reference; source-level movement/map constants and loop structure | Original code, text, maps, bitmap data, NPC/task tables, binary data, or copied UI/game data | map exploration loop, 5x3 viewport contract, directional movement semantics, NPC/task/skill/combat sequencing |
+| `mogita/gmud` | Secondary authentic MUD mechanics reference where licensing/provenance is acceptable | Original text/maps/assets/tables without provenance review | skill taxonomy, task/NPC/fight engine shape, MUD-style logs |
 | `qq634488405/RMXP-Hero` | Rich RMXP/Ruby system reference | GPL/custom-license code, extracted assets, original data tables | sect progression, menu/data organization, battle/skill interaction ideas |
 | `coyoteXujie/yxts-llm` | Modern Python/Arcade reference | Code/assets until full LICENSE/provenance clarified | modern NPC/combat/quest/dialogue structure |
 
@@ -466,40 +479,43 @@ Progress tree hooks:
 
 1. **No dashboard-first regression.** `/world` must keep moving toward a game interface.
 2. **No fake game shell as final state.** Temporary CSS boards are acceptable only as scaffolding for Rust-owned game state and real interaction loops.
-3. **Legal OSS only.** Do not copy proprietary 三国 / 英雄坛说 / 白金英雄坛说 code, text, or assets.
-4. **MedievalWar is the current direct tactics UI base.** Use `tranchikhang/MedievalWar` as the permissive MIT tactics reference/base for browser-side board patterns.
-5. **Hero Tan Shuo projects are mechanics references only.** Use GMUD / RMXP / yxts-llm style ideas only after recreating Trillionnium-native content/assets.
-6. **OpenClawStreetMap remains support/underlay.** It supplies real-world map support, route context, geodata identity, and operational diagnostics; it should not dominate the visible game UI.
-7. **OpenStreetMap data belongs below Rust.** OSM provides roads, POIs, buildings, areas, admin boundaries, tags, and identities; Rust binds these to game overlays and gameplay systems.
-8. **No production use of public OSM tile servers.** Production traffic requires cache/self-host/vendor strategy.
-9. **Respect OSM attribution and ODbL obligations.** Keep attribution and derived database tracking visible in contracts.
-10. **MapLibre stays shadow-only.** Do not promote MapLibre above canary `0` without fresh explicit signoff.
+3. **Legal OSS only.** Do not copy proprietary 三国 / 英雄坛说 / 白金英雄坛说 code, text, maps, sprites, binary data, or assets into product runtime.
+4. **Hero Tan Shuo is a game-loop reference, not a skin target.** Use `albert10jp/yxts-gold-asm` to shape exploration/movement/NPC/task/skill/combat sequencing; do not stop at LCD visual imitation.
+5. **MedievalWar remains a tactics-pattern reference only.** Use `tranchikhang/MedievalWar` for board/cursor/control/turn/pathfinding patterns; no vendored MedievalWar/Phaser code unless a separate explicit product/legal decision approves it.
+6. **Hero Tan Shuo projects are mechanics references only.** Use yxts-gold-asm / GMUD / RMXP / yxts-llm style ideas only after recreating Trillionnium-native content/assets.
+7. **OpenClawStreetMap remains support/underlay.** It supplies real-world map support, route context, geodata identity, and operational diagnostics; it should not dominate the visible game UI.
+8. **OpenStreetMap data belongs below Rust.** OSM provides roads, POIs, buildings, areas, admin boundaries, tags, and identities; Rust binds these to game overlays and gameplay systems.
+9. **No production use of public OSM tile servers.** Production traffic requires cache/self-host/vendor strategy.
+10. **Respect OSM attribution and ODbL obligations.** Keep attribution and derived database tracking visible in contracts.
+11. **MapLibre stays shadow-only.** Do not promote MapLibre above canary `0` without fresh explicit signoff.
 
 ---
 
 ## Current Checkpoint Summary
 
-### Latest local commit
+### Latest code commit
 
-- `4744573 feat: gate osm attribution observability`
+- `a2e3b22 fix: make local world movement playable`
 
 ### Latest validated evidence
 
 - `cargo fmt --all -- --check` — passed
-- `git diff --check` — passed
-- `bash -n` touched scripts — passed
+- `cargo check -p consumer-entry-api` — passed
 - `cargo test -p consumer-entry-api -- --nocapture` — `133 passed`
-- `cargo clippy --workspace -- -D warnings` — passed
-- `cargo test --workspace` — passed
-- Playability scorecard — `run/playability-scorecard/playability-scorecard-summary-1778380602.json`, `ok=true`, 100%
-- Web E2E — `run/league-web/web-e2e-summary-1778380931.json`, `ok=true`
-- Browser E2E — `run/league-browser/browser-e2e-summary-1778380983-688832.json`, `ok=true`
-- UI audit — `run/trillionnium-ui-audit/ui-audit-summary-1778377923-669309.json`, `ok=true`
-- Production readiness — `CEX_ENV_FILE=run/local-production/.env scripts/check-production-readiness.sh`, `READY`
+- Targeted Rust test `web_map_shells_render_live_event_task_focus_metadata` — passed
+- `node --check scripts/playwright/trillionnium-browser-e2e.mjs` — passed
+- `git diff --check` — passed
+- Local-production restart/status — OK on 7001/7002/7003/7004/7005/8080/8090/8091 plus worker
+- Manual local no-cookie movement spot check — `raid-hall -> league-coliseum` via `4←`, `ok=true`, Rust-owned `/world/web/map-move`
+- Browser E2E — `run/league-browser/browser-e2e-summary-1778406800-889859.json`, `ok=true`, request-failure gate green
+- Web E2E — `run/league-web/web-e2e-summary-1778405605.json`, `ok=true`
+- First-human E2E — `run/first-human-session/browser-e2e-summary-1778405630-879882.json`, `ok=true`
+- Human-playability assessment — `run/human-playability-assessment/human-playability-assessment-summary-1778398733.json`, `ok=true`, scores `9.8 / 8.5 / 7.0`
+- Real-user beta/public-commercial gates remain green as product-surface gates but score lifts still require real cohort/drill evidence.
 
 ### Current working-tree expectation
 
-After `4744573`, CEX should be clean. If not clean, inspect before editing:
+After this progress-tree alignment commit, CEX should be clean. If not clean, inspect before editing:
 
 ```bash
 git status --short
@@ -512,14 +528,19 @@ git log --oneline -5
 
 ### Game UI / OSS base
 
-- `/world` exposes `trillionnium_open_source_tactics_world_shell_v1`.
-- `/world` uses `data-open-source-base="tranchikhang/MedievalWar"`.
-- `/world` declares:
-  - `data-base-license="MIT"`
-  - `data-base-engine="Phaser 3"`
-  - `data-base-patterns="map,cursor,control,turn_system,pathfinding,context_menu,objectives,ai"`
-  - `data-map-engine-role="openclawstreetmap_underlay"`
-- Current shell is still a Rust-rendered/CSS tactics scaffold, not a full Phaser integration.
+- `/world` exposes `trillionnium_open_source_tactics_world_shell_v1` for the tactics board scaffold.
+- `/world` exposes `trillionnium_text_adventure_keypad_movement_v1` for the first-screen exploration/movement loop.
+- `/world` uses `data-open-source-base="tranchikhang/MedievalWar"` for tactics-pattern metadata only.
+- `/world` declares Hero Tan movement reference metadata on the exploration shell:
+  - `data-reference-project="albert10jp/yxts-gold-asm"`
+  - `data-reference-file="h/gmud.h"`
+  - `data-lcd-screen="160x80"`
+  - `data-lcd-viewport="5x3"`
+  - `data-lcd-palette="green_monochrome"`
+  - `data-keypad-controls="7,8,9,4,5,6,1,2,3"`
+  - `data-source-of-truth="rust_world_map_move"`
+- The first-screen movement shell is playable locally: no-cookie loopback users can move with direction buttons/WASD/arrows; browser sends intent to `/world/web/map-move`; Rust mutates `world_player_positions`.
+- Current shell is still Rust-rendered/CSS visualization, not a full Phaser runtime or a Hero Tan code fork.
 
 ### OSM geodata substrate
 
@@ -574,6 +595,7 @@ git log --oneline -5
 | OSS stack decisions | `docs/trillionnium-open-source-stack-reference-v1.md` | layered OSS reference stack |
 | Tactics base decision | `docs/trillionnium-open-source-tactics-base-selection-v1.md` | permissive tactics candidates and MedievalWar selection |
 | Hero Tan Shuo decision | `docs/trillionnium-open-source-hero-tan-shuo-base-selection-v1.md` | Hero Tan Shuo / GMUD legal/mechanics reference decision |
+| Current Hero Tan source reference | `references/hero-tan/yxts-gold-asm/` | checked-out `albert10jp/yxts-gold-asm` source reference; mechanics/layout study only |
 | This progress tree | `docs/trillionnium-world-development-progress-tree-v1.md` | canonical continuation guide |
 
 ---
@@ -582,8 +604,8 @@ git log --oneline -5
 
 ### TW-0 — Preserve the current baseline
 
-- [x] TW-0.1 Keep CEX repo at clean checkpoint after OSM geodata/runtime observability slices.
-  - Evidence: `4744573`
+- [x] TW-0.1 Keep CEX repo at clean checkpoint after OSM geodata/runtime observability and Hero Tan movement slices.
+  - Evidence: latest code checkpoint `a2e3b22`; this doc update should be the only newer commit when present.
 - [x] TW-0.2 Preserve OSS research decisions in docs.
   - Evidence: tactics and Hero Tan Shuo base-selection docs exist.
 - [x] TW-0.3 Preserve OSM/Rust/Web ownership rule.
@@ -643,12 +665,21 @@ git log --oneline -5
   - Keep `tranchikhang/MedievalWar` as an MIT tactics reference for map/cursor/control/turn/pathfinding patterns.
   - Revisit vendoring only after a separate explicit product/legal decision and license/asset manifest.
 - [!] TW-2.12 Do not copy MedievalWar art assets unless license/attribution is tracked.
+- [x] TW-2.13 Add a first-screen local playable world movement loop.
+  - Current: `trillionnium_text_adventure_keypad_movement_v1` with clear directional controls, local no-cookie loopback play, and Rust-owned `/world/web/map-move` persistence.
+- [x] TW-2.14 Reject visual-only Hero Tan skinning as a completed game loop.
+  - The yxts-gold-asm reference is now framed as movement/exploration/game-loop reference, not a small-green-screen copying target.
+- [ ] TW-2.15 Make the current task/person/party route visibly travel through the world map.
+  - The player position can move today; the next product loop should make active tasks/NPC/party objectives move and react through the same world-node graph.
 
 ### TW-3 — Trillionnium / Hero Tan Shuo mechanics reference layer
 
 - [x] TW-3.1 Search and classify 白金英雄坛说 / 英雄坛说 OSS candidates.
+  - Current primary reference: `albert10jp/yxts-gold-asm`; checked out under `references/hero-tan/yxts-gold-asm`.
 - [x] TW-3.2 Decide no direct fork is legally/product-clean today.
-- [x] TW-3.3 Use GMUD/Hero Tan projects as mechanics references only.
+  - Use source facts and mechanics patterns only; do not vendor/copy original code, maps, text, sprites, tables, or data.
+- [x] TW-3.3 Use Hero Tan projects as mechanics/game-loop references only.
+  - Explicitly: yxts-gold-asm informs movement/exploration/NPC/task/skill/combat sequence; Trillionnium owns native Rust content and command validation.
 - [x] TW-3.4 Define Trillionnium-native character attributes.
   - Implemented fields: `physique`, `force`, `agility`, `insight`, `resolve`, `craft`, `commerce`, `reputation`.
   - Derived stats are deterministic and capped; source inspiration remains mechanics-only, with Trillionnium-native names/content.
@@ -679,7 +710,21 @@ git log --oneline -5
 - [x] TW-3.7a Add objective generator from `OpenStreetMapDataProvider` features.
 - [x] TW-3.7b Add deterministic seed so fixture/world state yields stable objectives.
 - [x] TW-3.7c Add tests proving OSM suggests objectives but Rust command handlers decide completion.
-- [!] TW-3.8 Do not import original Hero Tan Shuo text, maps, sprites, or database content.
+- [!] TW-3.8 Do not import original Hero Tan Shuo text, maps, sprites, code, binary tables, or database content.
+- [x] TW-3.9 Extract yxts-gold-asm exploration constants into product contracts.
+  - Evidence: `/world` declares `data-reference-project="albert10jp/yxts-gold-asm"`, `data-lcd-screen="160x80"`, `data-lcd-viewport="5x3"`, and `data-keypad-controls="7,8,9,4,5,6,1,2,3"`.
+- [x] TW-3.10 Implement the first Rust-owned adjacent-node movement loop.
+  - Evidence: `/world/web/map-move` mutates `world_player_positions`; local loopback manual spot check moved `raid-hall -> league-coliseum` with `4←`.
+- [ ] TW-3.11 Add Hero Tan-style blocked terrain/collision and room transition semantics.
+  - Today only explicit graph exits block movement. Next step should distinguish exit, blocked direction, locked route, and interaction-required route.
+- [ ] TW-3.12 Add NPC talk as a first-class exploration command from map nodes.
+  - Existing NPC/task descriptors exist, but the moment-to-moment map loop does not yet expose talk/inquire/accept in the same direct flow as movement.
+- [ ] TW-3.13 Add task pickup/completion as map-node actions.
+  - The current task/tactics/route systems work, but the Hero Tan-style loop should let the player reach a node, see local actions, accept/resolve a task, and persist the outcome.
+- [ ] TW-3.14 Add skill practice and mentor interaction into the exploration loop.
+  - Training exists in tactics/first-human flow; it needs map-node affordances and feedback like a real exploration RPG.
+- [ ] TW-3.15 Add lightweight combat encounter entry from exploration nodes.
+  - Combat/tactics exists; exploration should be able to trigger a small encounter from a node/NPC/task, then return to map state.
 
 ### TW-4 — Rust World domain and simulation backbone
 
@@ -700,7 +745,8 @@ git log --oneline -5
 - [x] TW-5.1 Existing world commerce loop works: company -> shop/listing -> purchase -> work order -> delivery -> accept/reject/reopen/cancel.
 - [x] TW-5.2 Existing route-runner handoff/reward/mastery gates are green.
 - [x] TW-5.3 Current `/world` visible game loop is playable through Rust-owned projection and intent forms.
-  - Remaining polish belongs to future UX/runtime slices, not first-loop completion.
+  - Current local player movement is playable without a signed cookie on loopback after `a2e3b22`.
+  - Remaining Hero Tan-style product loop work: local NPC actions, task pickup/completion, skill practice, and encounter return-to-map.
 - [x] TW-5.4 Implement first tactics loop:
   - spawn player unit
   - spawn one objective
@@ -731,6 +777,10 @@ git log --oneline -5
   - risk/reward
 - [x] TW-6.7 Add accessibility labels and keyboard/low-motion support for the tactics shell.
 - [x] TW-6.8 Keep old dashboard panels available as secondary/detail panels, not main experience.
+- [x] TW-6.9 Add clear first-screen movement controls for the player character.
+  - Controls: `7↖ 8↑ 9↗ / 4← 5· 6→ / 1↙ 2↓ 3↘`, plus WASD/arrows/numpad.
+- [ ] TW-6.10 Replace residual dashboard copy with a play-first action prompt.
+  - A user should immediately know: current location, available exits, local actions, active task, and next RPG action.
 
 ### TW-7 — Map and runtime operations
 
@@ -1390,10 +1440,27 @@ Also append a one-paragraph summary to `/home/qian/.openclaw/workspace/memory/YY
 
 ---
 
+
+#### Update 2026-05-10 18:12 CST
+
+- Commit: this progress-tree alignment slice (`docs: align progress tree with hero tan loop`).
+- Completed the requested alignment audit after `a2e3b22 fix: make local world movement playable`:
+  - [x] Reframed `albert10jp/yxts-gold-asm` as the current primary Hero Tan source reference for gameplay loop structure, not a small-green-screen skin target.
+  - [x] Recorded source facts from `h/gmud.h`: `ScreenX=160`, `ScreenY=80`, `Unit_Width=32`, `Unit_Height=32`, `ScreenX_Num=5`, `ScreenY_Num=3`.
+  - [x] Recorded current product reality: local loopback `/world` can move the player without a signed web-session cookie, browser sends movement intent to `/world/web/map-move`, and Rust mutates `world_player_positions`.
+  - [x] Added explicit not-yet-aligned backlog for Hero Tan-style blocked terrain, NPC talk, task pickup/completion, skill practice, and encounter entry/return from exploration.
+  - [x] Updated the next pointer away from visual copying and toward a map-exploration RPG loop.
+- Latest movement evidence: manual no-cookie loopback spot check moved `raid-hall -> league-coliseum` via `4←`; latest Browser E2E `run/league-browser/browser-e2e-summary-1778406800-889859.json` is green.
+- Validation for this documentation slice: `git diff --check` plus direct inspection of `docs/trillionnium-world-development-progress-tree-v1.md` and yxts-gold-asm source constants.
+- Remaining next: implement TW-6.10 + TW-3.12/TW-3.13 first — current location/exits/local actions, NPC talk, and task pickup/completion from the exploration map.
+- Constraints preserved: no live Overpass/Geofabrik ingestion, no MapLibre promotion, no MedievalWar/Phaser vendoring, no Hero Tan code/text/assets/data copying, and Rust remains source of truth.
+
+---
+
 ## Current Next Pointer
 
 If the next instruction is simply “continue”, start here:
 
-> **Next pointer:** Human-playability assessment is now an explicit gate: `9.8/10` technical, `8.5/10` first internal beta, `7.0/10` commercial release from the operator baselines `8.5 / 7.5 / 6.0`. Product completion remains roughly 99% if blocked/forbidden items are excluded. First-beta and commercial-release validators/runbooks are ready; the next score lifts require real evidence via `TRILLIONNIUM_FIRST_BETA_COHORT_EVIDENCE_PATH` and/or `TRILLIONNIUM_COMMERCIAL_LAUNCH_DRILL_EVIDENCE_PATH`. Technical `9.9+` should require multi-node or live-traffic latency evidence, not another local-only loop. Do not treat TW-8 policy bullets as unfinished product backlog.
+> **Next pointer:** Do not continue with visual skin work. The current highest product leverage is the Hero Tan-style exploration loop: (1) show current location/exits/local actions clearly, (2) add node-local NPC talk/inquire/accept-task actions, (3) let tasks and party objectives move/react through the same Rust-owned world-node graph, (4) let training/combat encounters start from map exploration and return to map state. Human-playability assessment remains `9.8/10` technical, `8.5/10` first internal beta, `7.0/10` commercial release; first-beta/commercial score lifts still require real evidence via `TRILLIONNIUM_FIRST_BETA_COHORT_EVIDENCE_PATH` and/or `TRILLIONNIUM_COMMERCIAL_LAUNCH_DRILL_EVIDENCE_PATH`. Technical `9.9+` requires multi-node or live-traffic latency evidence, not another local-only loop.
 
 Do not start live Overpass/Geofabrik ingestion yet. Do not promote MapLibre. Do not convert the web shell into a standalone JS source of truth.
