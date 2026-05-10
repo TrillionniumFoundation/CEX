@@ -56,6 +56,8 @@ pub(super) const TRILLIONNIUM_WORLD_OBJECTIVE_TRAVEL_CONTRACT_VERSION: &str =
     "trillionnium_world_objective_travel_v1";
 pub(super) const TRILLIONNIUM_WORLD_SKILL_PRACTICE_LOOP_CONTRACT_VERSION: &str =
     "trillionnium_world_skill_practice_loop_v1";
+pub(super) const TRILLIONNIUM_WORLD_COMBAT_ENCOUNTER_LOOP_CONTRACT_VERSION: &str =
+    "trillionnium_world_combat_encounter_loop_v1";
 
 fn default_tactics_objective_id() -> String {
     "defeat_market_bandit".to_string()
@@ -787,6 +789,95 @@ pub(super) fn world_trillionnium_character_projection_json(
         .cloned()
         .unwrap_or_else(|| WorldTrillionniumCharacter::default_for(matrix_user_id))
         .to_projection_json()
+}
+
+pub(super) fn trillionnium_world_combat_encounter_projection_json(
+    world: &WorldState,
+    matrix_user_id: &str,
+    current_node: Option<&WorldMapNode>,
+) -> Value {
+    let encounter = current_node
+        .map(world_combat_encounter_definition_for_node)
+        .or_else(|| current_world_combat_encounter_definition(world, matrix_user_id));
+    let latest_session = latest_world_tactics_session_for_user(world, matrix_user_id);
+    let (return_state, session_id, victory_state, reward_status) = latest_session
+        .map(|session| {
+            let state = if session.status == "completed"
+                || (session.victory_state == "victory" && session.reward_status == "settled")
+            {
+                "map_ready_after_resolution"
+            } else if session.victory_state == "victory" {
+                "reward_settlement_pending"
+            } else if session.status == "active" {
+                "encounter_active"
+            } else {
+                "map_ready"
+            };
+            (
+                state,
+                Some(session.session_id.clone()),
+                session.victory_state.clone(),
+                session.reward_status.clone(),
+            )
+        })
+        .unwrap_or((
+            "map_ready",
+            None,
+            "none".to_string(),
+            "not_started".to_string(),
+        ));
+    let entry = encounter
+        .as_ref()
+        .map(WorldCombatEncounterDefinition::to_projection_json)
+        .unwrap_or_else(|| {
+            json!({
+                "contract_version": TRILLIONNIUM_WORLD_COMBAT_ENCOUNTER_LOOP_CONTRACT_VERSION,
+                "available": false,
+                "source_of_truth": "rust_world_combat_encounter_projection",
+                "web_role": "intent_only_visualization_input",
+            })
+        });
+    let (return_to_node_id, return_overlay_id) = encounter
+        .as_ref()
+        .map(|encounter| {
+            (
+                encounter.current_node_id.clone(),
+                encounter.current_overlay_id.clone(),
+            )
+        })
+        .unwrap_or_else(|| {
+            (
+                default_world_node_id().to_string(),
+                format!("trillionnium-world-node:{}", default_world_node_id()),
+            )
+        });
+    json!({
+        "contract_version": TRILLIONNIUM_WORLD_COMBAT_ENCOUNTER_LOOP_CONTRACT_VERSION,
+        "source_of_truth": "rust_world_combat_encounter_projection",
+        "validation_owner": "rust_world_combat_encounter_validator",
+        "command_handler_owner": "rust_tactics_combat_handler",
+        "return_state_owner": "rust_world_combat_encounter_return_state",
+        "web_role": "intent_only_visualization_input",
+        "entry": entry,
+        "return_to_map": {
+            "contract_version": TRILLIONNIUM_WORLD_COMBAT_ENCOUNTER_LOOP_CONTRACT_VERSION,
+            "return_state": return_state,
+            "return_to_node_id": return_to_node_id,
+            "return_overlay_id": return_overlay_id,
+            "return_anchor": "world-keypad-adventure-shell",
+            "latest_session_id": session_id,
+            "victory_state": victory_state,
+            "reward_status": reward_status,
+            "source_of_truth": "rust_world_combat_encounter_return_state",
+            "web_role": "visualization_only_intent_to_map_move",
+        },
+        "anti_cheese": {
+            "contract_version": TRILLIONNIUM_TACTICS_REPEAT_FARMING_ANTI_CHEESE_CONTRACT_VERSION,
+            "duplicate_settled_reward": "blocked_by_rust_tactics_repeat_farming_guard",
+            "invalid_node_or_target": "fail_closed_by_rust_world_combat_encounter_validator",
+            "web_role": "visualization_input_only",
+        }
+    })
 }
 
 fn tactics_terrain_for(row: usize, col: usize) -> &'static str {
@@ -2767,6 +2858,134 @@ struct TacticsCombatTarget {
     osm_game_overlay_id: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+struct WorldCombatEncounterDefinition {
+    encounter_id: String,
+    encounter_kind: &'static str,
+    current_node_id: String,
+    current_node_name: String,
+    current_overlay_id: String,
+    semantic_role: &'static str,
+    target_tile: &'static str,
+    defender_unit_id: &'static str,
+    defender_title: &'static str,
+    recommended_skill_id: &'static str,
+    source_of_truth: &'static str,
+}
+
+impl WorldCombatEncounterDefinition {
+    fn to_projection_json(&self) -> Value {
+        json!({
+            "contract_version": TRILLIONNIUM_WORLD_COMBAT_ENCOUNTER_LOOP_CONTRACT_VERSION,
+            "encounter_id": self.encounter_id,
+            "encounter_kind": self.encounter_kind,
+            "current_node_id": self.current_node_id,
+            "current_node_name": self.current_node_name,
+            "current_overlay_id": self.current_overlay_id,
+            "semantic_role": self.semantic_role,
+            "target_tile": self.target_tile,
+            "defender_unit_id": self.defender_unit_id,
+            "defender_title": self.defender_title,
+            "recommended_skill_id": self.recommended_skill_id,
+            "available": true,
+            "entry_command": "attack",
+            "return_anchor": "world-keypad-adventure-shell",
+            "validation_owner": "rust_world_combat_encounter_validator",
+            "command_handler_owner": "rust_tactics_combat_handler",
+            "source_of_truth": self.source_of_truth,
+            "web_role": "intent_only_visualization_input",
+        })
+    }
+}
+
+fn world_combat_encounter_definition_for_node(
+    node: &WorldMapNode,
+) -> WorldCombatEncounterDefinition {
+    let semantic_role = openstreetmap_fixture_identity_for(node).semantic_role;
+    let (encounter_kind, target_tile, defender_unit_id, defender_title, recommended_skill_id) =
+        match semantic_role {
+            "arena" | "raid_hall" => (
+                "arena_duel_entry",
+                "G7",
+                "rival-warlord",
+                "Rival Warlord",
+                "basic_unarmed",
+            ),
+            "market" | "quest_board" | "delivery_route" | "arbitration_desk" => (
+                "bounty_market_skirmish",
+                "F5",
+                "market-bandit",
+                "Market Bandit",
+                "basic_unarmed",
+            ),
+            _ => (
+                "street_encounter_entry",
+                "F5",
+                "market-bandit",
+                "Street Bandit",
+                "basic_unarmed",
+            ),
+        };
+    let current_overlay_id = openstreetmap_game_overlay_id(node);
+    let encounter_id = league_hash_id(
+        "world-combat-encounter",
+        &format!("{}:{}:{}", node.node_id, semantic_role, target_tile),
+    );
+    WorldCombatEncounterDefinition {
+        encounter_id,
+        encounter_kind,
+        current_node_id: node.node_id.clone(),
+        current_node_name: node.name.clone(),
+        current_overlay_id,
+        semantic_role,
+        target_tile,
+        defender_unit_id,
+        defender_title,
+        recommended_skill_id,
+        source_of_truth: "rust_world_combat_encounter_projection",
+    }
+}
+
+fn current_world_combat_encounter_definition(
+    world: &WorldState,
+    matrix_user_id: &str,
+) -> Option<WorldCombatEncounterDefinition> {
+    let current_node_id = world_tactics_active_node_id(world, matrix_user_id);
+    world
+        .world_map_nodes
+        .get(&current_node_id)
+        .or_else(|| world.world_map_nodes.get(default_world_node_id()))
+        .map(world_combat_encounter_definition_for_node)
+}
+
+fn world_combat_encounter_entry_rejection_json(
+    command: &str,
+    unit_id: &str,
+    target_tile: Option<&str>,
+    encounter: &WorldCombatEncounterDefinition,
+    provided_overlay_id: Option<&str>,
+    result: &str,
+    rejection_reason: &str,
+) -> Value {
+    json!({
+        "contract_version": TRILLIONNIUM_TACTICS_COMMAND_OUTCOME_CONTRACT_VERSION,
+        "world_combat_encounter_loop_contract_version": TRILLIONNIUM_WORLD_COMBAT_ENCOUNTER_LOOP_CONTRACT_VERSION,
+        "accepted": false,
+        "command": command,
+        "unit_id": unit_id,
+        "target_tile": target_tile,
+        "expected_target_tile": encounter.target_tile,
+        "combat_encounter_id": encounter.encounter_id,
+        "current_node_id": encounter.current_node_id,
+        "required_osm_game_overlay_id": encounter.current_overlay_id,
+        "provided_osm_game_overlay_id": provided_overlay_id,
+        "result": result,
+        "rejection_reason": rejection_reason,
+        "source_of_truth": "rust_world_combat_encounter_validator",
+        "web_role": "intent_only_visualization_input",
+    })
+}
+
 fn tactics_combat_target_for_tile(
     target_tile: Option<&str>,
     arena_overlay_id: Option<String>,
@@ -2821,6 +3040,7 @@ fn tactics_combat_resolution_json(
     matrix_user_id: &str,
     attacker_unit_id: &str,
     target_tile: Option<&str>,
+    encounter_overlay_id: Option<&str>,
     skill_id: &str,
     attributes: &TrillionniumAttributes,
     now_epoch: i64,
@@ -2835,6 +3055,11 @@ fn tactics_combat_resolution_json(
     let arena_overlay_id = feature_overlay_id(feature_for_role(&features, "arena"));
     let market_overlay_id = feature_overlay_id(feature_for_role(&features, "market"));
     let target = tactics_combat_target_for_tile(target_tile, arena_overlay_id, market_overlay_id)?;
+    let encounter_overlay_id = encounter_overlay_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .or_else(|| target.osm_game_overlay_id.clone());
     let seed = league_hash_id(
         "tactics-combat-seed",
         &format!(
@@ -2844,10 +3069,7 @@ fn tactics_combat_resolution_json(
             target.unit_id,
             target.tile_id,
             skill_id,
-            target
-                .osm_game_overlay_id
-                .as_deref()
-                .unwrap_or("no-osm-overlay")
+            encounter_overlay_id.as_deref().unwrap_or("no-osm-overlay")
         ),
     );
     let damage = deterministic_tactics_damage(&seed, attributes, skill_id, target.guard);
@@ -2871,7 +3093,7 @@ fn tactics_combat_resolution_json(
         "defender_hp_before": target.hp_before,
         "defender_hp_after": hp_after,
         "result": result,
-        "osm_game_overlay_id": target.osm_game_overlay_id,
+        "osm_game_overlay_id": encounter_overlay_id,
         "source_of_truth": "rust_tactics_combat_handler",
         "state_persistence": "world_event_log_now_game_session_hp_state_in_tw4_4",
         "osm_can_place_encounter": true,
@@ -3004,6 +3226,11 @@ pub(super) fn apply_world_tactics_command(
         });
     }
 
+    let projected_combat_encounter = if command == "attack" {
+        current_world_combat_encounter_definition(world, matrix_user_id)
+    } else {
+        None
+    };
     let character = world
         .world_trillionnium_characters
         .entry(matrix_user_id.to_string())
@@ -3161,6 +3388,52 @@ pub(super) fn apply_world_tactics_command(
                 .filter(|value| !value.is_empty())
                 .or(required_skill_id.as_deref())
                 .unwrap_or("basic_unarmed");
+            let provided_overlay_id = osm_game_overlay_id
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
+            let projected_encounter = projected_combat_encounter;
+            if let Some(encounter) = projected_encounter.as_ref() {
+                if let Some(provided_overlay_id) = provided_overlay_id {
+                    if provided_overlay_id != encounter.current_overlay_id {
+                        return world_combat_encounter_entry_rejection_json(
+                            command,
+                            unit_id,
+                            target_tile,
+                            encounter,
+                            Some(provided_overlay_id),
+                            "combat_encounter_node_mismatch",
+                            "combat_entry_requires_current_exploration_node_overlay",
+                        );
+                    }
+                    let requested_target_tile = target_tile.unwrap_or(encounter.target_tile);
+                    if requested_target_tile != encounter.target_tile {
+                        return world_combat_encounter_entry_rejection_json(
+                            command,
+                            unit_id,
+                            target_tile,
+                            encounter,
+                            Some(provided_overlay_id),
+                            "combat_encounter_target_mismatch",
+                            "combat_entry_target_must_match_rust_projected_node_encounter",
+                        );
+                    }
+                }
+            }
+            let encounter_entry = projected_encounter.filter(|encounter| {
+                provided_overlay_id.is_some()
+                    || target_tile
+                        .map(|requested| requested == encounter.target_tile)
+                        .unwrap_or(true)
+            });
+            let effective_target_tile = encounter_entry
+                .as_ref()
+                .filter(|_| provided_overlay_id.is_some())
+                .map(|encounter| encounter.target_tile)
+                .or(target_tile);
+            let effective_overlay_id = encounter_entry
+                .as_ref()
+                .map(|encounter| encounter.current_overlay_id.as_str())
+                .or(provided_overlay_id);
             let character_attributes = character.attributes.clone();
             character.title = "街巷交锋".to_string();
             character.updated_at_epoch = now_epoch;
@@ -3168,7 +3441,8 @@ pub(super) fn apply_world_tactics_command(
                 world,
                 matrix_user_id,
                 unit_id,
-                target_tile,
+                effective_target_tile,
+                effective_overlay_id,
                 attack_skill_id,
                 &character_attributes,
                 now_epoch,
@@ -3176,21 +3450,38 @@ pub(super) fn apply_world_tactics_command(
                 return tactics_command_rejection_json(
                     command,
                     unit_id,
-                    target_tile,
+                    effective_target_tile,
                     "no_target_unit_at_tile",
                 );
             };
+            let combat_encounter = encounter_entry
+                .as_ref()
+                .map(WorldCombatEncounterDefinition::to_projection_json);
+            let return_to_map = encounter_entry.as_ref().map(|encounter| {
+                json!({
+                    "contract_version": TRILLIONNIUM_WORLD_COMBAT_ENCOUNTER_LOOP_CONTRACT_VERSION,
+                    "return_state": "map_ready_after_resolution",
+                    "return_to_node_id": encounter.current_node_id,
+                    "return_overlay_id": encounter.current_overlay_id,
+                    "return_anchor": "world-keypad-adventure-shell",
+                    "source_of_truth": "rust_world_combat_encounter_return_state",
+                    "web_role": "visualization_only_intent_to_map_move",
+                })
+            });
             if let Some(session) = latest_world_tactics_session_for_user(world, matrix_user_id) {
                 if session.victory_state == "victory" && session.reward_status == "settled" {
                     return json!({
                         "contract_version": TRILLIONNIUM_TACTICS_COMMAND_OUTCOME_CONTRACT_VERSION,
+                        "world_combat_encounter_loop_contract_version": TRILLIONNIUM_WORLD_COMBAT_ENCOUNTER_LOOP_CONTRACT_VERSION,
                         "accepted": false,
                         "command": command,
                         "unit_id": unit_id,
-                        "target_tile": target_tile,
+                        "target_tile": effective_target_tile,
                         "required_skill_id": required_skill_id,
                         "combat_resolution_contract_version": TRILLIONNIUM_TACTICS_COMBAT_RESOLUTION_CONTRACT_VERSION,
                         "combat_resolution": combat_resolution,
+                        "combat_encounter": combat_encounter.clone().unwrap_or(Value::Null),
+                        "return_to_map": return_to_map.clone().unwrap_or(Value::Null),
                         "result": "repeat_farming_blocked",
                         "rejection_reason": "tactics_objective_reward_already_settled",
                         "anti_cheese_contract_version": TRILLIONNIUM_TACTICS_REPEAT_FARMING_ANTI_CHEESE_CONTRACT_VERSION,
@@ -3206,13 +3497,16 @@ pub(super) fn apply_world_tactics_command(
             }
             return json!({
                 "contract_version": TRILLIONNIUM_TACTICS_COMMAND_OUTCOME_CONTRACT_VERSION,
+                "world_combat_encounter_loop_contract_version": TRILLIONNIUM_WORLD_COMBAT_ENCOUNTER_LOOP_CONTRACT_VERSION,
                 "accepted": true,
                 "command": command,
                 "unit_id": unit_id,
-                "target_tile": target_tile,
+                "target_tile": effective_target_tile,
                 "required_skill_id": required_skill_id,
                 "combat_resolution_contract_version": TRILLIONNIUM_TACTICS_COMBAT_RESOLUTION_CONTRACT_VERSION,
                 "combat_resolution": combat_resolution,
+                "combat_encounter": combat_encounter.unwrap_or(Value::Null),
+                "return_to_map": return_to_map.unwrap_or(Value::Null),
                 "validation_owner": descriptor.get("validation_owner").cloned().unwrap_or_else(|| json!("rust_tactics_combat_handler")),
                 "result": "tactics_combat_resolved",
                 "state_mutation": "world_tactics_combat_event_recorded",
@@ -3443,6 +3737,8 @@ pub(super) fn world_tactics_board_projection_json(
         &task_candidates,
         &osm_objectives,
     );
+    let world_combat_encounter =
+        trillionnium_world_combat_encounter_projection_json(world, matrix_user_id, current_node);
     let osm_objective_count = osm_objectives
         .as_array()
         .map(|objectives| objectives.len())
@@ -3489,6 +3785,7 @@ pub(super) fn world_tactics_board_projection_json(
         "trillionnium_osm_objective_contract_version": TRILLIONNIUM_OSM_OBJECTIVE_CONTRACT_VERSION,
         "world_objective_travel_contract_version": TRILLIONNIUM_WORLD_OBJECTIVE_TRAVEL_CONTRACT_VERSION,
         "world_skill_practice_loop_contract_version": TRILLIONNIUM_WORLD_SKILL_PRACTICE_LOOP_CONTRACT_VERSION,
+        "world_combat_encounter_loop_contract_version": TRILLIONNIUM_WORLD_COMBAT_ENCOUNTER_LOOP_CONTRACT_VERSION,
         "tactics_combat_resolution_contract_version": TRILLIONNIUM_TACTICS_COMBAT_RESOLUTION_CONTRACT_VERSION,
         "tactics_game_session_contract_version": TRILLIONNIUM_TACTICS_GAME_SESSION_CONTRACT_VERSION,
         "tactics_simulation_tick_contract_version": TRILLIONNIUM_TACTICS_SIMULATION_TICK_CONTRACT_VERSION,
@@ -3547,6 +3844,7 @@ pub(super) fn world_tactics_board_projection_json(
         "task_candidates": task_candidates,
         "osm_objectives": osm_objectives.clone(),
         "world_objective_travel": world_objective_travel,
+        "world_combat_encounter": world_combat_encounter,
         "map_overlay_identity_index": map_overlay_identity_index,
         "game_session": game_session,
         "simulation_ticks": simulation_ticks,

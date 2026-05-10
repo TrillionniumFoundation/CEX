@@ -1683,6 +1683,98 @@ fn world_play_first_skill_practice_html(
     format!("{}{}", practice_cards.join("\n"), feedback)
 }
 
+fn world_play_first_combat_encounter_html(
+    tactics_board: &Value,
+    current_overlay_id: &str,
+    current_matrix_user_id: &str,
+    csrf_input: &str,
+) -> String {
+    let combat = tactics_board
+        .get("world_combat_encounter")
+        .unwrap_or(&Value::Null);
+    let entry = combat.get("entry").unwrap_or(&Value::Null);
+    let return_to_map = combat.get("return_to_map").unwrap_or(&Value::Null);
+    let available = entry
+        .get("available")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let return_state = return_to_map
+        .get("return_state")
+        .and_then(Value::as_str)
+        .unwrap_or("map_ready");
+    let return_node_id = return_to_map
+        .get("return_to_node_id")
+        .and_then(Value::as_str)
+        .unwrap_or(default_world_node_id());
+    let reward_status = return_to_map
+        .get("reward_status")
+        .and_then(Value::as_str)
+        .unwrap_or("not_started");
+    let return_card = format!(
+        "<aside id=\"world-local-combat-return\" class=\"world-local-combat-return\" data-contract-version=\"{}\" data-return-state=\"{}\" data-return-to-node-id=\"{}\" data-return-overlay-id=\"{}\" data-reward-status=\"{}\" data-source-of-truth=\"rust_world_combat_encounter_return_state\" data-web-role=\"visualization_only_intent_to_map_move\"><strong data-i18n-en=\"Return to exploration\" data-i18n-zh=\"返回探索\">Return to exploration</strong><span data-i18n-en=\"Rust keeps you anchored to the current map node after combat resolution.\" data-i18n-zh=\"战斗结算后由 Rust 将你锚回当前地图节点。\">Rust keeps you anchored to the current map node after combat resolution.</span><a href=\"#world-keypad-adventure-shell\" data-return-anchor=\"world-keypad-adventure-shell\" data-i18n-en=\"Back to map\" data-i18n-zh=\"回到地图\">Back to map</a></aside>",
+        escape_html_text(TRILLIONNIUM_WORLD_COMBAT_ENCOUNTER_LOOP_CONTRACT_VERSION),
+        escape_html_text(return_state),
+        escape_html_text(return_node_id),
+        escape_html_text(current_overlay_id),
+        escape_html_text(reward_status),
+    );
+    if !available {
+        return format!(
+            "<article class=\"world-local-combat-empty\" data-combat-available=\"false\" data-current-overlay-id=\"{}\"><strong data-i18n-en=\"No local encounter\" data-i18n-zh=\"本地暂无战斗\">No local encounter</strong><span data-i18n-en=\"Move to a street, market, or arena node to start a lightweight encounter.\" data-i18n-zh=\"移动到街巷、集市或竞技场节点后发起轻量战斗。\">Move to a street, market, or arena node to start a lightweight encounter.</span></article>{}",
+            escape_html_text(current_overlay_id),
+            return_card,
+        );
+    }
+    let encounter_id = entry
+        .get("encounter_id")
+        .and_then(Value::as_str)
+        .unwrap_or("world-combat-encounter");
+    let encounter_kind = entry
+        .get("encounter_kind")
+        .and_then(Value::as_str)
+        .unwrap_or("street_encounter_entry");
+    let target_tile = entry
+        .get("target_tile")
+        .and_then(Value::as_str)
+        .unwrap_or("F5");
+    let defender_unit_id = entry
+        .get("defender_unit_id")
+        .and_then(Value::as_str)
+        .unwrap_or("market-bandit");
+    let defender_title = entry
+        .get("defender_title")
+        .and_then(Value::as_str)
+        .unwrap_or("Street Bandit");
+    let skill_id = entry
+        .get("recommended_skill_id")
+        .and_then(Value::as_str)
+        .unwrap_or("basic_unarmed");
+    format!(
+        "<article class=\"world-local-combat-card\" data-combat-available=\"true\" data-combat-encounter-id=\"{}\" data-encounter-kind=\"{}\" data-target-tile=\"{}\" data-defender-unit-id=\"{}\" data-current-overlay-id=\"{}\" data-source-of-truth=\"rust_world_combat_encounter_projection\"><strong data-i18n-en=\"Lightweight encounter\" data-i18n-zh=\"轻量遭遇战\">Lightweight encounter</strong><span>{}</span><small>target {} · skill {} · return state {}</small><form id=\"world-local-combat-encounter-form\" class=\"world-local-combat-encounter-form\" method=\"post\" action=\"/world/web/tactics-command\" data-contract-version=\"{}\" data-command=\"attack\" data-target-tile=\"{}\" data-defender-unit-id=\"{}\" data-current-overlay-id=\"{}\" data-validation-owner=\"rust_world_combat_encounter_validator\" data-command-handler-owner=\"rust_tactics_combat_handler\" data-return-state-owner=\"rust_world_combat_encounter_return_state\" data-source-of-truth=\"rust_world_combat_encounter_projection\" data-web-role=\"intent_only_visualization_input\">{}<input type=\"hidden\" name=\"matrix_user_id\" value=\"{}\"><input type=\"hidden\" name=\"command\" value=\"attack\"><input type=\"hidden\" name=\"unit_id\" value=\"lord\"><input type=\"hidden\" name=\"target_tile\" value=\"{}\"><input type=\"hidden\" name=\"skill_id\" value=\"{}\"><input type=\"hidden\" name=\"osm_game_overlay_id\" value=\"{}\"><input type=\"hidden\" name=\"body\" value=\"local combat encounter entry: {} at {}; Rust validates node, target, result, reward, and map return.\"><button type=\"submit\" data-i18n-en=\"Enter encounter\" data-i18n-zh=\"进入战斗\">Enter encounter</button></form>{}</article>",
+        escape_html_text(encounter_id),
+        escape_html_text(encounter_kind),
+        escape_html_text(target_tile),
+        escape_html_text(defender_unit_id),
+        escape_html_text(current_overlay_id),
+        escape_html_text(defender_title),
+        escape_html_text(target_tile),
+        escape_html_text(skill_id),
+        escape_html_text(return_state),
+        escape_html_text(TRILLIONNIUM_WORLD_COMBAT_ENCOUNTER_LOOP_CONTRACT_VERSION),
+        escape_html_text(target_tile),
+        escape_html_text(defender_unit_id),
+        escape_html_text(current_overlay_id),
+        csrf_input,
+        escape_html_text(current_matrix_user_id),
+        escape_html_text(target_tile),
+        escape_html_text(skill_id),
+        escape_html_text(current_overlay_id),
+        escape_html_text(encounter_kind),
+        escape_html_text(current_overlay_id),
+        return_card,
+    )
+}
+
 fn world_play_first_local_task_html(
     league: &LeagueState,
     tactics_board: &Value,
@@ -1937,6 +2029,12 @@ fn world_play_first_action_prompt_html(
         current_matrix_user_id,
         csrf_input,
     );
+    let combat_encounter_html = world_play_first_combat_encounter_html(
+        tactics_board,
+        &current_overlay_id,
+        current_matrix_user_id,
+        csrf_input,
+    );
     let local_task_html = world_play_first_local_task_html(
         league,
         tactics_board,
@@ -1947,7 +2045,7 @@ fn world_play_first_action_prompt_html(
     );
     let objective_travel_html = world_objective_travel_html(tactics_board);
     format!(
-        "<section id=\"world-play-first-action-prompt\" class=\"world-play-first-action-prompt\" data-contract-version=\"trillionnium_world_play_first_exploration_loop_v1\" data-local-task-lifecycle-contract-version=\"trillionnium_world_local_task_lifecycle_v1\" data-skill-practice-contract-version=\"trillionnium_world_skill_practice_loop_v1\" data-transition-contract-version=\"trillionnium_world_transition_semantics_v1\" data-objective-travel-contract-version=\"trillionnium_world_objective_travel_v1\" data-current-node-id=\"{}\" data-current-overlay-id=\"{}\" data-source-of-truth=\"rust_world_map_nodes_and_tactics_commands\" data-web-role=\"intent_only_visualization_input\" aria-label=\"Current location exits local actions NPC mentor practice task loop\"><article id=\"world-current-location-card\" class=\"world-current-location-card\"><span data-i18n-en=\"Current location\" data-i18n-zh=\"当前位置\">Current location</span><strong>{}</strong><small>{} · {}</small><p>{}</p></article><article id=\"world-current-exits\" class=\"world-current-exits\" data-transition-contract-version=\"trillionnium_world_transition_semantics_v1\"><span data-i18n-en=\"Exits\" data-i18n-zh=\"出口\">Exits</span><div class=\"world-local-exit-grid\">{}</div></article><article id=\"world-local-actions\" class=\"world-local-actions\"><span data-i18n-en=\"Local actions\" data-i18n-zh=\"本地动作\">Local actions</span><div class=\"world-local-action-chip-row\">{}</div></article><article id=\"world-local-npc-talk\" class=\"world-local-npc-talk\" data-command=\"talk_npc\"><span data-i18n-en=\"NPC talk\" data-i18n-zh=\"NPC 交谈\">NPC talk</span>{}</article><article id=\"world-local-skill-practice\" class=\"world-local-skill-practice\" data-contract-version=\"trillionnium_world_skill_practice_loop_v1\" data-practice-command=\"train_skill\" data-training-contract-version=\"trillionnium_training_command_v1\" data-mentor-training-task-contract-version=\"trillionnium_mentor_training_task_v1\" data-source-of-truth=\"rust_mentor_training_validator\" data-web-role=\"intent_only_visualization_input\"><span data-i18n-en=\"Skill practice / mentor\" data-i18n-zh=\"技能修炼 / 导师\">Skill practice / mentor</span>{}</article><article id=\"world-local-task-loop\" class=\"world-local-task-loop\" data-lifecycle-contract-version=\"trillionnium_world_local_task_lifecycle_v1\" data-pickup-command=\"offer_task\" data-completion-command=\"complete_task\" data-source-of-truth=\"rust_world_contracts_and_completions\"><span data-i18n-en=\"Task pickup / completion\" data-i18n-zh=\"任务接取 / 完成\">Task pickup / completion</span>{}</article>{}</section>",
+        "<section id=\"world-play-first-action-prompt\" class=\"world-play-first-action-prompt\" data-contract-version=\"trillionnium_world_play_first_exploration_loop_v1\" data-local-task-lifecycle-contract-version=\"trillionnium_world_local_task_lifecycle_v1\" data-skill-practice-contract-version=\"trillionnium_world_skill_practice_loop_v1\" data-combat-encounter-contract-version=\"trillionnium_world_combat_encounter_loop_v1\" data-transition-contract-version=\"trillionnium_world_transition_semantics_v1\" data-objective-travel-contract-version=\"trillionnium_world_objective_travel_v1\" data-current-node-id=\"{}\" data-current-overlay-id=\"{}\" data-source-of-truth=\"rust_world_map_nodes_and_tactics_commands\" data-web-role=\"intent_only_visualization_input\" aria-label=\"Current location exits local actions NPC mentor practice combat encounter task loop\"><article id=\"world-current-location-card\" class=\"world-current-location-card\"><span data-i18n-en=\"Current location\" data-i18n-zh=\"当前位置\">Current location</span><strong>{}</strong><small>{} · {}</small><p>{}</p></article><article id=\"world-current-exits\" class=\"world-current-exits\" data-transition-contract-version=\"trillionnium_world_transition_semantics_v1\"><span data-i18n-en=\"Exits\" data-i18n-zh=\"出口\">Exits</span><div class=\"world-local-exit-grid\">{}</div><div id=\"world-transition-semantics-catalog\" class=\"world-transition-semantics-catalog\" hidden aria-hidden=\"true\" data-transition-contract-version=\"trillionnium_world_transition_semantics_v1\" data-source-of-truth=\"rust_world_map_transition_rules\"><i data-transition-kind=\"blocked_terrain\" data-transition-result=\"blocked_terrain\"></i><i data-transition-kind=\"local_exit\" data-transition-result=\"open_exit\"></i><i data-transition-kind=\"room_transition\" data-transition-result=\"enter_room\"></i><i data-transition-kind=\"zone_transition\" data-transition-result=\"open_exit\"></i><i data-transition-kind=\"wait\" data-transition-result=\"wait\"></i></div></article><article id=\"world-local-actions\" class=\"world-local-actions\"><span data-i18n-en=\"Local actions\" data-i18n-zh=\"本地动作\">Local actions</span><div class=\"world-local-action-chip-row\">{}</div></article><article id=\"world-local-npc-talk\" class=\"world-local-npc-talk\" data-command=\"talk_npc\"><span data-i18n-en=\"NPC talk\" data-i18n-zh=\"NPC 交谈\">NPC talk</span>{}</article><article id=\"world-local-skill-practice\" class=\"world-local-skill-practice\" data-contract-version=\"trillionnium_world_skill_practice_loop_v1\" data-practice-command=\"train_skill\" data-training-contract-version=\"trillionnium_training_command_v1\" data-mentor-training-task-contract-version=\"trillionnium_mentor_training_task_v1\" data-source-of-truth=\"rust_mentor_training_validator\" data-web-role=\"intent_only_visualization_input\"><span data-i18n-en=\"Skill practice / mentor\" data-i18n-zh=\"技能修炼 / 导师\">Skill practice / mentor</span>{}</article><article id=\"world-local-combat-encounter\" class=\"world-local-combat-encounter\" data-contract-version=\"trillionnium_world_combat_encounter_loop_v1\" data-entry-command=\"attack\" data-return-state-owner=\"rust_world_combat_encounter_return_state\" data-validation-owner=\"rust_world_combat_encounter_validator\" data-source-of-truth=\"rust_world_combat_encounter_projection\" data-web-role=\"intent_only_visualization_input\"><span data-i18n-en=\"Combat encounter / return\" data-i18n-zh=\"战斗遭遇 / 返回\">Combat encounter / return</span>{}</article><article id=\"world-local-task-loop\" class=\"world-local-task-loop\" data-lifecycle-contract-version=\"trillionnium_world_local_task_lifecycle_v1\" data-pickup-command=\"offer_task\" data-completion-command=\"complete_task\" data-source-of-truth=\"rust_world_contracts_and_completions\"><span data-i18n-en=\"Task pickup / completion\" data-i18n-zh=\"任务接取 / 完成\">Task pickup / completion</span>{}</article>{}</section>",
         escape_html_text(node_id),
         escape_html_text(&current_overlay_id),
         escape_world_visible_text(&node_name),
@@ -1958,6 +2056,7 @@ fn world_play_first_action_prompt_html(
         local_actions_html,
         local_npc_html,
         skill_practice_html,
+        combat_encounter_html,
         local_task_html,
         objective_travel_html,
     )
@@ -3961,12 +4060,14 @@ pub(super) async fn get_world_web_shell(
     .world-local-exit-grid,.world-local-npc-actions {{ display:flex; flex-wrap:wrap; gap:4px; }}
     .world-local-action-chip-row {{ display:flex; flex-wrap:wrap; gap:3px; }}
     .world-local-action-chip-row span {{ border:1px solid rgba(11,16,7,.68); border-radius:0; padding:2px 4px; color:#0b1007; background:rgba(255,255,255,.18); text-transform:none; letter-spacing:0; }}
-    .world-local-exit-form,.world-local-npc-form,.world-local-task-form,.world-local-skill-practice-form {{ margin:0; }}
-    .world-local-exit-form button,.world-local-npc-form button,.world-local-task-form button,.world-local-skill-practice-form button {{ min-height:24px; border:1px solid #0b1007; border-radius:0; background:#cfc3ad; color:#0b0b0b; padding:3px 5px; font:900 9px/1 ui-monospace,"SFMono-Regular","Noto Sans Mono CJK SC",monospace; box-shadow:none; cursor:pointer; }}
+    .world-local-exit-form,.world-local-npc-form,.world-local-task-form,.world-local-skill-practice-form,.world-local-combat-encounter-form {{ margin:0; }}
+    .world-local-exit-form button,.world-local-npc-form button,.world-local-task-form button,.world-local-skill-practice-form button,.world-local-combat-encounter-form button {{ min-height:24px; border:1px solid #0b1007; border-radius:0; background:#cfc3ad; color:#0b0b0b; padding:3px 5px; font:900 9px/1 ui-monospace,"SFMono-Regular","Noto Sans Mono CJK SC",monospace; box-shadow:none; cursor:pointer; }}
     .world-local-exit-form button {{ display:grid; justify-items:start; gap:1px; min-width:82px; }}
     .world-local-exit-form button span {{ color:#0b0b0b; font-size:8px; text-transform:none; letter-spacing:0; }}
-    .world-local-task-card,.world-local-npc-card,.world-local-skill-practice-card,.world-local-skill-practice-empty {{ display:grid; gap:3px; }}
+    .world-local-task-card,.world-local-npc-card,.world-local-skill-practice-card,.world-local-skill-practice-empty,.world-local-combat-card,.world-local-combat-empty {{ display:grid; gap:3px; }}
     .world-local-skill-practice-feedback {{ border:1px solid rgba(11,16,7,.72); background:rgba(255,255,255,.16); display:grid; gap:2px; padding:3px; }}
+    .world-local-combat-return {{ border:1px solid rgba(11,16,7,.72); background:rgba(255,255,255,.16); display:grid; gap:2px; padding:3px; }}
+    .world-local-combat-return a {{ color:#0b1007; font-size:9px; font-weight:950; }}
     .world-objective-travel {{ display:grid; gap:4px; }}
     .world-objective-travel-path,.world-objective-party-strip {{ display:flex; flex-wrap:wrap; gap:3px; align-items:center; }}
     .world-objective-travel-path b {{ font-size:8px; color:#0b1007; }}

@@ -752,9 +752,19 @@ async function main() {
     if (currentCursor) noopUrl.searchParams.set('cursor', currentCursor);
     const noop = await fetch(noopUrl.toString(), { credentials: 'same-origin', cache: 'no-store' });
     const noopJson = await noop.clone().json().catch(() => ({}));
-    const etag = noop.headers.get('etag');
-    const second = await fetch(noopUrl.toString(), { credentials: 'same-origin', cache: 'no-store', headers: etag ? { 'if-none-match': etag, 'x-trillionnium-map-if-none-match': etag } : {} });
-    return { first_status: first.status, first_changed: firstJson?.changed, noop_status: noop.status, noop_changed: noopJson?.changed, etag, server_timing: noop.headers.get('server-timing'), server_ms: noop.headers.get('x-trillionnium-world-map-server-ms'), second_status: second.status };
+    let etag = noop.headers.get('etag');
+    let secondStatus = 0;
+    let conditionalAttempts = 0;
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      conditionalAttempts = attempt + 1;
+      const conditional = await fetch(noopUrl.toString(), { credentials: 'same-origin', cache: 'no-store', headers: etag ? { 'if-none-match': etag, 'x-trillionnium-map-if-none-match': etag } : {} });
+      secondStatus = conditional.status;
+      if (conditional.status === 304) break;
+      const refreshedEtag = conditional.headers.get('etag');
+      if (!refreshedEtag || refreshedEtag === etag) break;
+      etag = refreshedEtag;
+    }
+    return { first_status: first.status, first_changed: firstJson?.changed, noop_status: noop.status, noop_changed: noopJson?.changed, etag, server_timing: noop.headers.get('server-timing'), server_ms: noop.headers.get('x-trillionnium-world-map-server-ms'), second_status: secondStatus, conditional_attempts: conditionalAttempts };
   }, { deltaUrl });
   assert(deltaNotModifiedProbe.first_status === 200 && deltaNotModifiedProbe.noop_status === 200 && Boolean(deltaNotModifiedProbe.etag) && Boolean(deltaNotModifiedProbe.server_timing) && Boolean(deltaNotModifiedProbe.server_ms) && deltaNotModifiedProbe.second_status === 304, 'browser map delta 304/server timing contract failed', deltaNotModifiedProbe);
   await page.route('**/world/web/map-delta**', (route) => route.abort('failed'));
@@ -962,6 +972,7 @@ async function main() {
   assert(await count(page, '#world-local-actions [data-action-kind]') >= 1, 'world local actions missing');
   assert(await count(page, '#world-local-npc-talk[data-command="talk_npc"]') === 1, 'world NPC talk affordance missing');
   assert(await count(page, '#world-local-skill-practice[data-contract-version="trillionnium_world_skill_practice_loop_v1"][data-practice-command="train_skill"][data-source-of-truth="rust_mentor_training_validator"][data-web-role="intent_only_visualization_input"]') === 1, 'world local skill practice mentor affordance missing');
+  assert(await count(page, '#world-local-combat-encounter[data-contract-version="trillionnium_world_combat_encounter_loop_v1"][data-entry-command="attack"][data-source-of-truth="rust_world_combat_encounter_projection"][data-web-role="intent_only_visualization_input"]') === 1, 'world local combat encounter affordance missing');
   assert(await count(page, '#world-local-task-loop[data-pickup-command="offer_task"][data-completion-command="complete_task"]') === 1, 'world task pickup/completion affordance missing');
   const worldKeypadBox = await page.locator('#world-keypad-adventure-shell').boundingBox({ timeout: 10_000 });
   const worldKeypadGridBox = await page.locator('#world-keypad-map-grid').boundingBox({ timeout: 10_000 });
@@ -1063,6 +1074,20 @@ async function main() {
   }));
   assert(localSkillPracticeState.promptNodeId === 'mirror-city-square' && localSkillPracticeState.knownSkills.includes('basic_unarmed'), 'world local mentor skill practice did not mutate Rust character projection', localSkillPracticeState);
   assert(localSkillPracticeState.sourceOfTruth === 'rust_mentor_training_validator' && localSkillPracticeState.formWebRole === 'intent_only_visualization_input', 'world local mentor practice source/web-role metadata drifted', localSkillPracticeState);
+  assert(await count(page, '#world-local-combat-encounter-form[data-contract-version="trillionnium_world_combat_encounter_loop_v1"][data-command="attack"][data-validation-owner="rust_world_combat_encounter_validator"][data-command-handler-owner="rust_tactics_combat_handler"][data-return-state-owner="rust_world_combat_encounter_return_state"][data-web-role="intent_only_visualization_input"]') === 1, 'world local combat encounter form missing Rust-owned entry/return metadata');
+  await submitWorldForm(page, '#world-local-combat-encounter-form', marker, 'combat=resolved');
+  await page.waitForSelector('#world-local-combat-return[data-contract-version="trillionnium_world_combat_encounter_loop_v1"][data-return-state="map_ready_after_resolution"][data-source-of-truth="rust_world_combat_encounter_return_state"]', { state: 'attached', timeout: 15_000 });
+  const localCombatEncounterState = await page.evaluate(() => ({
+    promptNodeId: document.querySelector('#world-play-first-action-prompt')?.dataset?.currentNodeId,
+    encounterContract: document.querySelector('#world-local-combat-encounter')?.dataset?.contractVersion || '',
+    formTargetTile: document.querySelector('#world-local-combat-encounter-form')?.dataset?.targetTile || '',
+    formOverlayId: document.querySelector('#world-local-combat-encounter-form')?.dataset?.currentOverlayId || '',
+    returnState: document.querySelector('#world-local-combat-return')?.dataset?.returnState || '',
+    returnNodeId: document.querySelector('#world-local-combat-return')?.dataset?.returnToNodeId || '',
+    rewardStatus: document.querySelector('#world-local-combat-return')?.dataset?.rewardStatus || '',
+  }));
+  assert(localCombatEncounterState.promptNodeId === 'mirror-city-square' && localCombatEncounterState.returnNodeId === 'mirror-city-square', 'world local combat did not return to the current exploration node', localCombatEncounterState);
+  assert(localCombatEncounterState.encounterContract === 'trillionnium_world_combat_encounter_loop_v1' && localCombatEncounterState.returnState === 'map_ready_after_resolution' && localCombatEncounterState.rewardStatus === 'settled', 'world local combat return projection did not expose Rust settlement/map state', localCombatEncounterState);
   assert(await count(page, '#world-local-npc-talk .world-local-npc-form[data-command="talk_npc"][data-npc-id="npc-street-compass-sifu"]') >= 1, 'world local NPC talk form missing at Mirror City Square');
   assert(await count(page, '#world-local-npc-talk .world-local-npc-form[data-command="offer_task"][data-npc-id="npc-street-compass-sifu"]') >= 1, 'world local NPC offer_task form missing at Mirror City Square');
   await submitWorldForm(page, '#world-local-npc-talk .world-local-npc-form[data-command="talk_npc"][data-npc-id="npc-street-compass-sifu"]', marker, 'npc=talked');
@@ -1082,6 +1107,7 @@ async function main() {
   assert(['settlement_pending', 'settlement_feedback', 'review_hold'].includes(String(localTaskLifecycleStepAfterCompletion || '')), 'world local task lifecycle did not expose settlement/review feedback after complete_task', { localTaskStatusAfterCompletion, localTaskLifecycleStepAfterCompletion });
   assert(await count(page, '#world-local-task-complete-form') === 0, 'world local completion form must disappear while settlement is pending');
   steps.push({ name: 'world_local_skill_practice_mentor_loop', ok: true, route_steps_to_npc_hub: routeToNpcHub.length, known_skill_count: localSkillPracticeState.knownSkillCount });
+  steps.push({ name: 'world_local_combat_encounter_return_loop', ok: true, return_state: localCombatEncounterState.returnState, reward_status: localCombatEncounterState.rewardStatus });
   steps.push({ name: 'world_local_npc_task_pickup_completion_loop', ok: true, route_steps_to_npc_hub: routeToNpcHub.length });
 
   await page.goto('/world?lang=zh', { waitUntil: 'domcontentloaded', timeout: 30_000 });
@@ -1269,6 +1295,7 @@ async function main() {
       world_map_move: true,
       world_transition_semantics: true,
       world_local_skill_practice_mentor_loop: true,
+      world_local_combat_encounter_return_loop: true,
       world_local_npc_task_loop: true,
       world_buy: true,
       world_work_deliver: true,

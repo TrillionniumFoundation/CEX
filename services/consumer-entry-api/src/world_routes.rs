@@ -2113,6 +2113,7 @@ pub(super) async fn post_world_web_tactics_command(
         .unwrap_or(false);
     if accepted {
         let target = match command_for_redirect.as_str() {
+            "attack" => "/world?tactics=1&combat=resolved#world-local-combat-encounter",
             "talk_npc" => "/world?tactics=1&npc=talked#world-play-first-action-prompt",
             "train_skill" => "/world?tactics=1&skill=trained#world-local-skill-practice",
             "offer_task" => "/world?tactics=1&task=offered#world-play-first-action-prompt",
@@ -2122,6 +2123,7 @@ pub(super) async fn post_world_web_tactics_command(
         Redirect::to(target).into_response()
     } else {
         let target = match command_for_redirect.as_str() {
+            "attack" => "/world?tactics=0&combat=rejected#world-local-combat-encounter",
             "talk_npc" | "train_skill" | "offer_task" | "complete_task" => {
                 "/world?tactics=0&task=rejected#world-play-first-action-prompt"
             }

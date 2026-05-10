@@ -3223,6 +3223,67 @@ async fn world_tactics_command_endpoint_validates_training_place_and_mutates_cha
         "rust_mentor_training_validator"
     );
 
+    let (wrong_combat_node_status, wrong_combat_node) = send_json_request(
+        &app,
+        "POST",
+        "/v1/world/tactics/command",
+        &[],
+        json!({
+            "matrix_user_id": "@alice:local.dev",
+            "room_id": "!world:local.dev",
+            "command": "attack",
+            "unit_id": "lord",
+            "target_tile": "F5",
+            "skill_id": "basic_unarmed",
+            "osm_game_overlay_id": "trillionnium-world-node:starter-studio",
+            "body": "try entering a local combat encounter from the wrong exploration node"
+        }),
+    )
+    .await;
+    assert_eq!(wrong_combat_node_status, StatusCode::OK);
+    assert_eq!(wrong_combat_node["outcome"]["accepted"], false);
+    assert_eq!(
+        wrong_combat_node["outcome"]["result"],
+        "combat_encounter_node_mismatch"
+    );
+    assert_eq!(
+        wrong_combat_node["outcome"]["world_combat_encounter_loop_contract_version"],
+        "trillionnium_world_combat_encounter_loop_v1"
+    );
+    assert_eq!(
+        wrong_combat_node["outcome"]["source_of_truth"],
+        "rust_world_combat_encounter_validator"
+    );
+
+    let (wrong_combat_target_status, wrong_combat_target) = send_json_request(
+        &app,
+        "POST",
+        "/v1/world/tactics/command",
+        &[],
+        json!({
+            "matrix_user_id": "@alice:local.dev",
+            "room_id": "!world:local.dev",
+            "command": "attack",
+            "unit_id": "lord",
+            "target_tile": "G7",
+            "skill_id": "basic_unarmed",
+            "osm_game_overlay_id": "trillionnium-world-node:mirror-city-square",
+            "body": "try entering the wrong target tile for the current exploration node"
+        }),
+    )
+    .await;
+    assert_eq!(wrong_combat_target_status, StatusCode::OK);
+    assert_eq!(wrong_combat_target["outcome"]["accepted"], false);
+    assert_eq!(
+        wrong_combat_target["outcome"]["result"],
+        "combat_encounter_target_mismatch"
+    );
+    assert_eq!(wrong_combat_target["outcome"]["expected_target_tile"], "F5");
+    assert_eq!(
+        wrong_combat_target["outcome"]["source_of_truth"],
+        "rust_world_combat_encounter_validator"
+    );
+
     let (attack_status, attack) = send_json_request(
         &app,
         "POST",
@@ -3235,6 +3296,7 @@ async fn world_tactics_command_endpoint_validates_training_place_and_mutates_cha
             "unit_id": "lord",
             "target_tile": "F5",
             "skill_id": "basic_unarmed",
+            "osm_game_overlay_id": "trillionnium-world-node:mirror-city-square",
             "body": "resolve a deterministic street duel against the market bandit"
         }),
     )
@@ -3242,6 +3304,26 @@ async fn world_tactics_command_endpoint_validates_training_place_and_mutates_cha
     assert_eq!(attack_status, StatusCode::OK);
     assert_eq!(attack["outcome"]["accepted"], true);
     assert_eq!(attack["outcome"]["result"], "tactics_combat_resolved");
+    assert_eq!(
+        attack["outcome"]["world_combat_encounter_loop_contract_version"],
+        "trillionnium_world_combat_encounter_loop_v1"
+    );
+    assert_eq!(
+        attack["outcome"]["combat_encounter"]["source_of_truth"],
+        "rust_world_combat_encounter_projection"
+    );
+    assert_eq!(
+        attack["outcome"]["combat_encounter"]["current_node_id"],
+        "mirror-city-square"
+    );
+    assert_eq!(
+        attack["outcome"]["return_to_map"]["return_state"],
+        "map_ready_after_resolution"
+    );
+    assert_eq!(
+        attack["outcome"]["return_to_map"]["source_of_truth"],
+        "rust_world_combat_encounter_return_state"
+    );
     assert_eq!(
         attack["outcome"]["combat_resolution_contract_version"],
         "trillionnium_tactics_combat_resolution_v1"
@@ -3373,6 +3455,13 @@ async fn world_tactics_command_endpoint_validates_training_place_and_mutates_cha
     assert!(world_tactics_html.contains("world-tactics-current-session-card"));
     assert!(world_tactics_html.contains("world-tactics-reward-history-handoff"));
     assert!(world_tactics_html.contains("world-tactics-repeat-farming-copy"));
+    assert!(world_tactics_html.contains("trillionnium_world_combat_encounter_loop_v1"));
+    assert!(world_tactics_html.contains("world-local-combat-encounter"));
+    assert!(world_tactics_html.contains("world-local-combat-encounter-form"));
+    assert!(world_tactics_html.contains("rust_world_combat_encounter_projection"));
+    assert!(world_tactics_html.contains("rust_world_combat_encounter_validator"));
+    assert!(world_tactics_html.contains("rust_world_combat_encounter_return_state"));
+    assert!(world_tactics_html.contains("world-local-combat-return"));
     assert!(world_tactics_html.contains("data-victory-state=\"victory\""));
     assert!(world_tactics_html.contains("data-reward-status=\"settled\""));
     assert!(world_tactics_html.contains("data-repeat-farming-block-count=\"1\""));
