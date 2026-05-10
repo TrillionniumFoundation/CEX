@@ -1646,6 +1646,113 @@ fn world_play_first_local_task_html(
     }
 }
 
+fn world_objective_travel_html(tactics_board: &Value) -> String {
+    let travel = tactics_board
+        .get("world_objective_travel")
+        .unwrap_or(&Value::Null);
+    let active_route = travel.get("active_route").unwrap_or(&Value::Null);
+    let route_kind = active_route
+        .get("route_kind")
+        .and_then(Value::as_str)
+        .unwrap_or("free_roam_route");
+    let travel_status = active_route
+        .get("travel_status")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let next_step_node_id = active_route
+        .get("next_step_node_id")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let next_step_direction = active_route
+        .get("next_step_direction")
+        .and_then(Value::as_str)
+        .unwrap_or("wait");
+    let target_node_id = active_route
+        .get("target_node_id")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let target_node_name = active_route
+        .get("target_node_name")
+        .and_then(Value::as_str)
+        .unwrap_or(target_node_id);
+    let step_count = active_route
+        .get("step_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let party_members = travel
+        .get("party_members")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let party_count = party_members.len();
+    let path_html = active_route
+        .get("path_nodes")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|node| {
+            let node_id = node
+                .get("node_id")
+                .and_then(Value::as_str)
+                .unwrap_or("node");
+            let name = node.get("name").and_then(Value::as_str).unwrap_or(node_id);
+            format!(
+                "<span class=\"world-objective-travel-node\" data-node-id=\"{}\">{}</span>",
+                escape_html_text(node_id),
+                escape_world_visible_text(name),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("<b aria-hidden=\"true\">→</b>");
+    let party_html = party_members
+        .into_iter()
+        .map(|member| {
+            let member_id = member
+                .get("member_id")
+                .and_then(Value::as_str)
+                .unwrap_or("party-member");
+            let role = member
+                .get("party_role")
+                .and_then(Value::as_str)
+                .unwrap_or("party");
+            let node_id = member
+                .get("current_node_id")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            format!(
+                "<span class=\"world-objective-party-member\" data-member-id=\"{}\" data-party-role=\"{}\" data-current-node-id=\"{}\">{} · {}</span>",
+                escape_html_text(member_id),
+                escape_html_text(role),
+                escape_html_text(node_id),
+                escape_html_text(role),
+                escape_html_text(node_id),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    format!(
+        "<article id=\"world-objective-travel\" class=\"world-objective-travel\" data-contract-version=\"{}\" data-route-kind=\"{}\" data-travel-status=\"{}\" data-target-node-id=\"{}\" data-next-step-node-id=\"{}\" data-next-step-direction=\"{}\" data-step-count=\"{}\" data-party-count=\"{}\" data-source-of-truth=\"rust_world_graph_objective_travel\" data-web-role=\"visualization_only_intent_to_map_move\"><span data-i18n-en=\"Task / NPC / party travel\" data-i18n-zh=\"任务 / NPC / 小队行进\">Task / NPC / party travel</span><strong>{}</strong><small data-i18n-en=\"Next step: {} · {} steps\" data-i18n-zh=\"下一步：{} · {} 步\">Next step: {} · {} steps</small><div class=\"world-objective-travel-path\">{}</div><div class=\"world-objective-party-strip\">{}</div></article>",
+        TRILLIONNIUM_WORLD_OBJECTIVE_TRAVEL_CONTRACT_VERSION,
+        escape_html_text(route_kind),
+        escape_html_text(travel_status),
+        escape_html_text(target_node_id),
+        escape_html_text(next_step_node_id),
+        escape_html_text(next_step_direction),
+        step_count,
+        party_count,
+        escape_world_visible_text(target_node_name),
+        escape_html_text(next_step_direction),
+        step_count,
+        escape_html_text(next_step_direction),
+        step_count,
+        escape_html_text(next_step_direction),
+        step_count,
+        path_html,
+        party_html,
+    )
+}
+
 fn world_play_first_action_prompt_html(
     league: &LeagueState,
     tactics_board: &Value,
@@ -1690,8 +1797,9 @@ fn world_play_first_action_prompt_html(
         current_matrix_user_id,
         csrf_input,
     );
+    let objective_travel_html = world_objective_travel_html(tactics_board);
     format!(
-        "<section id=\"world-play-first-action-prompt\" class=\"world-play-first-action-prompt\" data-contract-version=\"trillionnium_world_play_first_exploration_loop_v1\" data-local-task-lifecycle-contract-version=\"trillionnium_world_local_task_lifecycle_v1\" data-transition-contract-version=\"trillionnium_world_transition_semantics_v1\" data-current-node-id=\"{}\" data-current-overlay-id=\"{}\" data-source-of-truth=\"rust_world_map_nodes_and_tactics_commands\" data-web-role=\"intent_only_visualization_input\" aria-label=\"Current location exits local actions NPC task loop\"><article id=\"world-current-location-card\" class=\"world-current-location-card\"><span data-i18n-en=\"Current location\" data-i18n-zh=\"当前位置\">Current location</span><strong>{}</strong><small>{} · {}</small><p>{}</p></article><article id=\"world-current-exits\" class=\"world-current-exits\" data-transition-contract-version=\"trillionnium_world_transition_semantics_v1\"><span data-i18n-en=\"Exits\" data-i18n-zh=\"出口\">Exits</span><div class=\"world-local-exit-grid\">{}</div></article><article id=\"world-local-actions\" class=\"world-local-actions\"><span data-i18n-en=\"Local actions\" data-i18n-zh=\"本地动作\">Local actions</span><div class=\"world-local-action-chip-row\">{}</div></article><article id=\"world-local-npc-talk\" class=\"world-local-npc-talk\" data-command=\"talk_npc\"><span data-i18n-en=\"NPC talk\" data-i18n-zh=\"NPC 交谈\">NPC talk</span>{}</article><article id=\"world-local-task-loop\" class=\"world-local-task-loop\" data-lifecycle-contract-version=\"trillionnium_world_local_task_lifecycle_v1\" data-pickup-command=\"offer_task\" data-completion-command=\"complete_task\" data-source-of-truth=\"rust_world_contracts_and_completions\"><span data-i18n-en=\"Task pickup / completion\" data-i18n-zh=\"任务接取 / 完成\">Task pickup / completion</span>{}</article></section>",
+        "<section id=\"world-play-first-action-prompt\" class=\"world-play-first-action-prompt\" data-contract-version=\"trillionnium_world_play_first_exploration_loop_v1\" data-local-task-lifecycle-contract-version=\"trillionnium_world_local_task_lifecycle_v1\" data-transition-contract-version=\"trillionnium_world_transition_semantics_v1\" data-objective-travel-contract-version=\"trillionnium_world_objective_travel_v1\" data-current-node-id=\"{}\" data-current-overlay-id=\"{}\" data-source-of-truth=\"rust_world_map_nodes_and_tactics_commands\" data-web-role=\"intent_only_visualization_input\" aria-label=\"Current location exits local actions NPC task loop\"><article id=\"world-current-location-card\" class=\"world-current-location-card\"><span data-i18n-en=\"Current location\" data-i18n-zh=\"当前位置\">Current location</span><strong>{}</strong><small>{} · {}</small><p>{}</p></article><article id=\"world-current-exits\" class=\"world-current-exits\" data-transition-contract-version=\"trillionnium_world_transition_semantics_v1\"><span data-i18n-en=\"Exits\" data-i18n-zh=\"出口\">Exits</span><div class=\"world-local-exit-grid\">{}</div></article><article id=\"world-local-actions\" class=\"world-local-actions\"><span data-i18n-en=\"Local actions\" data-i18n-zh=\"本地动作\">Local actions</span><div class=\"world-local-action-chip-row\">{}</div></article><article id=\"world-local-npc-talk\" class=\"world-local-npc-talk\" data-command=\"talk_npc\"><span data-i18n-en=\"NPC talk\" data-i18n-zh=\"NPC 交谈\">NPC talk</span>{}</article><article id=\"world-local-task-loop\" class=\"world-local-task-loop\" data-lifecycle-contract-version=\"trillionnium_world_local_task_lifecycle_v1\" data-pickup-command=\"offer_task\" data-completion-command=\"complete_task\" data-source-of-truth=\"rust_world_contracts_and_completions\"><span data-i18n-en=\"Task pickup / completion\" data-i18n-zh=\"任务接取 / 完成\">Task pickup / completion</span>{}</article>{}</section>",
         escape_html_text(node_id),
         escape_html_text(&current_overlay_id),
         escape_world_visible_text(&node_name),
@@ -1702,6 +1810,7 @@ fn world_play_first_action_prompt_html(
         local_actions_html,
         local_npc_html,
         local_task_html,
+        objective_travel_html,
     )
 }
 
@@ -1833,7 +1942,61 @@ fn world_keypad_i18n_pair(value: &str) -> (String, String) {
     }
 }
 
-fn world_text_adventure_grid_html(map_nodes: &[WorldMapNode], current_node_id: &str) -> String {
+fn world_objective_travel_node_role(
+    world_objective_travel: Option<&Value>,
+    node_id: &str,
+) -> (&'static str, usize) {
+    let Some(travel) = world_objective_travel else {
+        return ("none", 0);
+    };
+    let active_route = travel.get("active_route").unwrap_or(&Value::Null);
+    let target_node_id = active_route
+        .get("target_node_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let next_step_node_id = active_route
+        .get("next_step_node_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let on_path = active_route
+        .get("path_node_ids")
+        .and_then(Value::as_array)
+        .is_some_and(|path| {
+            path.iter()
+                .any(|path_node| path_node.as_str() == Some(node_id))
+        });
+    let party_count = travel
+        .get("party_members")
+        .and_then(Value::as_array)
+        .map(|party| {
+            party
+                .iter()
+                .filter(|member| {
+                    member
+                        .get("current_node_id")
+                        .and_then(Value::as_str)
+                        .is_some_and(|value| value == node_id)
+                })
+                .count()
+        })
+        .unwrap_or(0);
+    let role = if target_node_id == node_id {
+        "target"
+    } else if next_step_node_id == node_id {
+        "next_step"
+    } else if on_path {
+        "path"
+    } else {
+        "none"
+    };
+    (role, party_count)
+}
+
+fn world_text_adventure_grid_html(
+    map_nodes: &[WorldMapNode],
+    current_node_id: &str,
+    world_objective_travel: Option<&Value>,
+) -> String {
     if map_nodes.is_empty() {
         return "<div class=\"world-keypad-empty-cell\" data-i18n-en=\"World map is booting.\" data-i18n-zh=\"世界地图启动中。\">World map is booting.</div>".to_string();
     }
@@ -1870,10 +2033,22 @@ fn world_text_adventure_grid_html(map_nodes: &[WorldMapNode], current_node_id: &
                     })
                     .unwrap_or_default();
                 exit_keys.sort_unstable();
+                let (travel_role, party_count) =
+                    world_objective_travel_node_role(world_objective_travel, &node.node_id);
                 let class_name = format!(
-                    "world-keypad-cell is-occupied{}{} terrain-{}",
+                    "world-keypad-cell is-occupied{}{}{}{} terrain-{}",
                     if is_current { " is-current" } else { "" },
                     if is_reachable { " is-reachable" } else { "" },
+                    if travel_role != "none" {
+                        " is-objective-travel"
+                    } else {
+                        ""
+                    },
+                    if party_count > 0 {
+                        " has-party-member"
+                    } else {
+                        ""
+                    },
                     node.node_kind
                 );
                 let label_text = format!(
@@ -1888,7 +2063,7 @@ fn world_text_adventure_grid_html(map_nodes: &[WorldMapNode], current_node_id: &
                     }
                 );
                 cells.push(format!(
-                    "<button type=\"button\" role=\"gridcell\" class=\"{}\" data-node-id=\"{}\" data-node-name=\"{}\" data-node-kind=\"{}\" data-x=\"{}\" data-y=\"{}\" data-current=\"{}\" data-reachable=\"{}\" data-exit-directions=\"{}\" data-symbol=\"{}\" aria-label=\"{}\"><span class=\"world-keypad-cell-symbol\" aria-hidden=\"true\">{}</span><b>{}</b><small>{},{} · {}</small></button>",
+                    "<button type=\"button\" role=\"gridcell\" class=\"{}\" data-node-id=\"{}\" data-node-name=\"{}\" data-node-kind=\"{}\" data-x=\"{}\" data-y=\"{}\" data-current=\"{}\" data-reachable=\"{}\" data-objective-travel-contract-version=\"{}\" data-objective-travel-role=\"{}\" data-party-member-count=\"{}\" data-exit-directions=\"{}\" data-symbol=\"{}\" aria-label=\"{}\"><span class=\"world-keypad-cell-symbol\" aria-hidden=\"true\">{}</span><b>{}</b><small>{},{} · {}</small></button>",
                     escape_html_text(&class_name),
                     escape_html_text(&node.node_id),
                     escape_html_text(&node.name),
@@ -1897,6 +2072,9 @@ fn world_text_adventure_grid_html(map_nodes: &[WorldMapNode], current_node_id: &
                     node.y,
                     is_current,
                     is_reachable,
+                    TRILLIONNIUM_WORLD_OBJECTIVE_TRAVEL_CONTRACT_VERSION,
+                    escape_html_text(travel_role),
+                    party_count,
                     escape_html_text(&exit_keys.join(",")),
                     escape_html_text(world_text_map_node_symbol(&node.node_kind)),
                     escape_html_text(&label_text),
@@ -1982,7 +2160,11 @@ fn world_keypad_buttons_html(current_node: Option<&WorldMapNode>, world: &WorldS
         .join("\n")
 }
 
-fn world_keypad_state_json(map_nodes: &[WorldMapNode], current_node_id: &str) -> String {
+fn world_keypad_state_json(
+    map_nodes: &[WorldMapNode],
+    current_node_id: &str,
+    world_objective_travel: Option<&Value>,
+) -> String {
     let mut nodes = serde_json::Map::new();
     for node in map_nodes {
         let (name_en, name_zh) = world_keypad_i18n_pair(&node.name);
@@ -2017,6 +2199,7 @@ fn world_keypad_state_json(map_nodes: &[WorldMapNode], current_node_id: &str) ->
         "transition_source_of_truth": "rust_world_map_transition_rules",
         "web_role": "input_only_visualization",
         "movement_endpoint": "/world/web/map-move",
+        "objective_travel": world_objective_travel.cloned().unwrap_or(Value::Null),
         "visual_reference": {
             "repo": "albert10jp/yxts-gold-asm",
             "source_file": "h/gmud.h",
@@ -2247,9 +2430,7 @@ pub(super) async fn get_world_web_shell(
             "<span data-i18n-en=\"Map booting…\" data-i18n-zh=\"地图启动中…\">Map booting…</span>"
                 .to_string()
         });
-    let world_keypad_grid = world_text_adventure_grid_html(&map_nodes, &current_map_node_id);
     let world_keypad_buttons = world_keypad_buttons_html(current_map_node, &league.world);
-    let world_keypad_state_json = world_keypad_state_json(&map_nodes, &current_map_node_id);
     let world_keypad_current_name = current_map_node
         .map(|node| escape_world_visible_text(&node.name))
         .unwrap_or_else(|| {
@@ -2535,6 +2716,11 @@ pub(super) async fn get_world_web_shell(
             &openstreetmap_geodata,
         )
     });
+    let world_objective_travel = tactics_board.get("world_objective_travel");
+    let world_keypad_grid =
+        world_text_adventure_grid_html(&map_nodes, &current_map_node_id, world_objective_travel);
+    let world_keypad_state_json =
+        world_keypad_state_json(&map_nodes, &current_map_node_id, world_objective_travel);
     let trillionnium_character = world_map
         .get("trillionnium_character")
         .cloned()
@@ -2617,6 +2803,10 @@ pub(super) async fn get_world_web_shell(
         .get("map_overlay_identity_contract_version")
         .and_then(Value::as_str)
         .unwrap_or("trillionnium_map_overlay_identity_v1");
+    let world_objective_travel_contract = tactics_board
+        .get("world_objective_travel_contract_version")
+        .and_then(Value::as_str)
+        .unwrap_or("trillionnium_world_objective_travel_v1");
     let tactics_board_cells = world_tactics_board_cells_html(&tactics_board);
     let tactics_board_units = world_tactics_units_html(&tactics_board);
     let tactics_objective_markers = world_tactics_objectives_html(&tactics_board);
@@ -3599,6 +3789,9 @@ pub(super) async fn get_world_web_shell(
     .world-keypad-cell b,.world-keypad-cell small {{ display:none; }}
     .world-keypad-cell-symbol {{ width:auto; height:auto; border-radius:0; display:grid; place-items:center; color:#0b1007; background:transparent; font-weight:950; font-size:17px; line-height:1; z-index:1; box-shadow:none; transform:scaleX(.94); }}
     .world-keypad-cell.is-reachable {{ outline:1px dotted rgba(11,16,7,.58); outline-offset:-5px; }}
+    .world-keypad-cell.is-objective-travel {{ box-shadow:inset 0 0 0 2px rgba(11,16,7,.62); }}
+    .world-keypad-cell.is-objective-travel::after {{ content:attr(data-objective-travel-role); position:absolute; left:1px; bottom:1px; max-width:94%; color:#0b1007; font:900 6px/1 ui-monospace,"SFMono-Regular",monospace; text-transform:uppercase; opacity:.8; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }}
+    .world-keypad-cell.has-party-member .world-keypad-cell-symbol {{ text-decoration:underline; text-decoration-thickness:2px; }}
     .world-keypad-cell.is-current {{ background:#8fb454; box-shadow:none; }}
     .world-keypad-cell.is-current .world-keypad-cell-symbol {{ color:#0b1007; background:transparent; font-size:22px; animation:world-keypad-avatar-breathe 1.25s steps(2,end) infinite; }}
     .world-keypad-empty-cell {{ opacity:1; background:#8fb454; }}
@@ -3624,6 +3817,10 @@ pub(super) async fn get_world_web_shell(
     .world-local-exit-form button {{ display:grid; justify-items:start; gap:1px; min-width:82px; }}
     .world-local-exit-form button span {{ color:#0b0b0b; font-size:8px; text-transform:none; letter-spacing:0; }}
     .world-local-task-card,.world-local-npc-card {{ display:grid; gap:3px; }}
+    .world-objective-travel {{ display:grid; gap:4px; }}
+    .world-objective-travel-path,.world-objective-party-strip {{ display:flex; flex-wrap:wrap; gap:3px; align-items:center; }}
+    .world-objective-travel-path b {{ font-size:8px; color:#0b1007; }}
+    .world-objective-travel-node,.world-objective-party-member {{ border:1px solid rgba(11,16,7,.68); background:rgba(255,255,255,.18); color:#0b1007; padding:2px 4px; font-size:8px; font-weight:900; }}
     .world-local-task-completion-feedback {{ border:1px solid rgba(11,16,7,.72); background:rgba(255,255,255,.16); display:grid; gap:2px; padding:3px; }}
     .world-keypad-quest-brief {{ background:#8fb454 !important; border-color:#0b1007 !important; }}
     .world-keypad-quest-brief .cta {{ width:100%; min-height:26px; padding:5px 8px; border-radius:0; border:1px solid #0b1007; background:#8fb454; color:#0b1007; box-shadow:none; font-size:10px; font-family:ui-monospace,"SFMono-Regular","Noto Sans Mono CJK SC",monospace; }}
@@ -4104,7 +4301,7 @@ pub(super) async fn get_world_web_shell(
     </section>
     <section id="world-map-shell-panel" class="panel" data-bootstrap-mode="truncated_runtime_bootstrap_with_lazy_delta_hydration" data-bootstrap-payload-bytes="{world_map_bootstrap_bytes}" data-cache-contract="trillionnium_world_map_payload_cache_v1">
       <div class="map-shell">
-        <section id="trillionnium-tactics-game-shell" class="tactics-game-shell" data-contract-version="trillionnium_open_source_tactics_world_shell_v1" data-tactics-board-contract="{tactics_board_contract}" data-tactics-unit-contract="{tactics_unit_contract}" data-tactics-command-contract="{tactics_command_contract}" data-trillionnium-character-contract="{trillionnium_character_contract}" data-trillionnium-skill-contract="{trillionnium_skill_contract}" data-trillionnium-npc-command-descriptor-contract="{trillionnium_npc_command_descriptor_contract}" data-mentor-training-task-contract="{trillionnium_mentor_training_task_contract}" data-trillionnium-task-archetype-contract="{trillionnium_task_archetype_contract}" data-trillionnium-task-completion-contract="{trillionnium_task_completion_contract}" data-trillionnium-reward-gate-contract="{trillionnium_reward_gate_contract}" data-trillionnium-battle-log-style-contract="{trillionnium_battle_log_style_contract}" data-trillionnium-combat-log-contract="{trillionnium_combat_log_contract}" data-trillionnium-npc-relationship-contract="{trillionnium_npc_relationship_contract}" data-trillionnium-osm-objective-contract="{trillionnium_osm_objective_contract}" data-tactics-combat-resolution-contract="{tactics_combat_resolution_contract}" data-tactics-game-session-contract="{tactics_game_session_contract}" data-tactics-simulation-tick-contract="{tactics_simulation_tick_contract}" data-tactics-reward-settlement-contract="{tactics_reward_settlement_contract}" data-tactics-accessibility-contract="{tactics_accessibility_contract}" data-keyboard-traversal="roving_grid_focus" data-low-motion-support="prefers_reduced_motion" data-map-overlay-identity-contract="{map_overlay_identity_contract}" data-interface-style="turn_based_strategy_rpg" data-open-source-base="tranchikhang/MedievalWar" data-base-license="MIT" data-base-url="https://github.com/tranchikhang/MedievalWar" data-base-engine="Phaser 3" data-base-patterns="map,cursor,control,turn_system,pathfinding,context_menu,objectives,ai" data-asset-policy="no_proprietary_assets_css_tokens_first" data-map-engine-role="openclawstreetmap_underlay" data-underlay-engine="{map_engine_id}" data-underlay-provider="{tile_provider}" data-source-of-truth="rust_trillionnium_game_state" aria-label="Open-source tactics Trillionnium game shell" data-i18n-aria-label-en="Open-source tactics Trillionnium game shell" data-i18n-aria-label-zh="开源战棋 Trillionnium 游戏界面">
+        <section id="trillionnium-tactics-game-shell" class="tactics-game-shell" data-contract-version="trillionnium_open_source_tactics_world_shell_v1" data-tactics-board-contract="{tactics_board_contract}" data-tactics-unit-contract="{tactics_unit_contract}" data-tactics-command-contract="{tactics_command_contract}" data-trillionnium-character-contract="{trillionnium_character_contract}" data-trillionnium-skill-contract="{trillionnium_skill_contract}" data-trillionnium-npc-command-descriptor-contract="{trillionnium_npc_command_descriptor_contract}" data-mentor-training-task-contract="{trillionnium_mentor_training_task_contract}" data-trillionnium-task-archetype-contract="{trillionnium_task_archetype_contract}" data-trillionnium-task-completion-contract="{trillionnium_task_completion_contract}" data-trillionnium-reward-gate-contract="{trillionnium_reward_gate_contract}" data-trillionnium-battle-log-style-contract="{trillionnium_battle_log_style_contract}" data-trillionnium-combat-log-contract="{trillionnium_combat_log_contract}" data-trillionnium-npc-relationship-contract="{trillionnium_npc_relationship_contract}" data-trillionnium-osm-objective-contract="{trillionnium_osm_objective_contract}" data-tactics-combat-resolution-contract="{tactics_combat_resolution_contract}" data-tactics-game-session-contract="{tactics_game_session_contract}" data-tactics-simulation-tick-contract="{tactics_simulation_tick_contract}" data-tactics-reward-settlement-contract="{tactics_reward_settlement_contract}" data-tactics-accessibility-contract="{tactics_accessibility_contract}" data-keyboard-traversal="roving_grid_focus" data-low-motion-support="prefers_reduced_motion" data-map-overlay-identity-contract="{map_overlay_identity_contract}" data-world-objective-travel-contract="{world_objective_travel_contract}" data-interface-style="turn_based_strategy_rpg" data-open-source-base="tranchikhang/MedievalWar" data-base-license="MIT" data-base-url="https://github.com/tranchikhang/MedievalWar" data-base-engine="Phaser 3" data-base-patterns="map,cursor,control,turn_system,pathfinding,context_menu,objectives,ai" data-asset-policy="no_proprietary_assets_css_tokens_first" data-map-engine-role="openclawstreetmap_underlay" data-underlay-engine="{map_engine_id}" data-underlay-provider="{tile_provider}" data-source-of-truth="rust_trillionnium_game_state" aria-label="Open-source tactics Trillionnium game shell" data-i18n-aria-label-en="Open-source tactics Trillionnium game shell" data-i18n-aria-label-zh="开源战棋 Trillionnium 游戏界面">
           <article class="tactics-board-card">
             <div class="tactics-board-title"><span data-i18n-en="Three Kingdoms Tactics · Mirror Street Battle" data-i18n-zh="【三国战棋】镜像街巷战役">Three Kingdoms Tactics · Mirror Street Battle</span><code data-engine-role="underlay" data-underlay-name="OpenClawStreetMap" data-i18n-en="real street engine" data-i18n-zh="真实街巷引擎">real street engine</code></div>
             <div class="tactics-board" role="grid" aria-label="Trillionnium turn based tactics board" data-i18n-aria-label-en="Trillionnium turn based tactics board" data-i18n-aria-label-zh="Trillionnium 回合制战棋棋盘" aria-describedby="world-tactics-keyboard-help" data-accessibility-contract="{tactics_accessibility_contract}" data-keyboard-traversal="roving_grid_focus">
@@ -4490,6 +4687,22 @@ pub(super) async fn get_world_web_shell(
           return String(node[field + '_' + lang] || node[field] || '');
         }};
         const currentNode = () => (state.nodes || {{}})[state.current_node_id] || null;
+        const objectiveTravel = () => state.objective_travel || {{}};
+        const travelRoleForNode = (nodeId) => {{
+          const travel = objectiveTravel();
+          const activeRoute = travel.active_route || {{}};
+          const path = Array.isArray(activeRoute.path_node_ids) ? activeRoute.path_node_ids.map(String) : [];
+          const targetNodeId = String(activeRoute.target_node_id || '');
+          const nextStepNodeId = String(activeRoute.next_step_node_id || '');
+          const id = String(nodeId || '');
+          const party = Array.isArray(travel.party_members) ? travel.party_members : [];
+          const partyCount = party.filter((member) => String(member?.current_node_id || '') === id).length;
+          let role = 'none';
+          if (id && id === targetNodeId) role = 'target';
+          else if (id && id === nextStepNodeId) role = 'next_step';
+          else if (path.includes(id)) role = 'path';
+          return {{ role, partyCount, contract: travel.contract_version || 'trillionnium_world_objective_travel_v1' }};
+        }};
         const keyForEvent = (event) => {{
           const code = String(event.code || '');
           if (/^Numpad[1-9]$/.test(code)) return code.slice(-1);
@@ -4563,11 +4776,14 @@ pub(super) async fn get_world_web_shell(
               }}
               const current = String(tile.node_id || '') === String(state.current_node_id || '');
               const reachable = current || Object.values(exits).map(String).includes(String(tile.node_id || ''));
+              const travel = travelRoleForNode(tile.node_id);
               const cell = document.createElement('button');
               cell.type = 'button';
               cell.className = 'world-keypad-cell is-occupied terrain-' + String(tile.node_kind || 'unknown');
               cell.classList.toggle('is-current', current);
               cell.classList.toggle('is-reachable', reachable);
+              cell.classList.toggle('is-objective-travel', travel.role !== 'none');
+              cell.classList.toggle('has-party-member', travel.partyCount > 0);
               cell.setAttribute('role', 'gridcell');
               cell.dataset.nodeId = String(tile.node_id || '');
               cell.dataset.nodeName = String(tile.name || '');
@@ -4576,6 +4792,9 @@ pub(super) async fn get_world_web_shell(
               cell.dataset.y = String(tile.y ?? y);
               cell.dataset.current = String(current);
               cell.dataset.reachable = String(reachable);
+              cell.dataset.objectiveTravelContractVersion = travel.contract;
+              cell.dataset.objectiveTravelRole = travel.role;
+              cell.dataset.partyMemberCount = String(travel.partyCount);
               cell.dataset.symbol = String(tile.symbol || symbolForNode(tile));
               cell.dataset.exitDirections = Object.entries(exits)
                 .filter(([, target]) => String(target) === String(tile.node_id || ''))
@@ -4650,6 +4869,7 @@ pub(super) async fn get_world_web_shell(
             const toNode = result.to_node || {{}};
             state.nodes[toNode.node_id] = {{ ...(state.nodes[toNode.node_id] || {{}}), ...toNode }};
             state.current_node_id = result.position.node_id || toNode.node_id || next.targetNodeId;
+            if (result.world_objective_travel) state.objective_travel = result.world_objective_travel;
             render();
             if (status) status.textContent = language() === 'zh' ? ('已移动到：' + textForNode(currentNode(), 'name')) : ('Moved to: ' + textForNode(currentNode(), 'name'));
             shell.dataset.lastInputSource = source;
@@ -4698,6 +4918,10 @@ pub(super) async fn get_world_web_shell(
             currentExits: {{ ...((currentNode() || {{}}).exits || {{}}) }},
             nodes: state.nodes,
             transitionContractVersion: state.transition_contract_version || 'trillionnium_world_transition_semantics_v1',
+            objectiveTravelContractVersion: objectiveTravel().contract_version || 'trillionnium_world_objective_travel_v1',
+            objectiveTravelCurrentNodeId: objectiveTravel().active_route?.current_node_id || objectiveTravel().current_node_id || '',
+            objectiveTravelTargetNodeId: objectiveTravel().active_route?.target_node_id || '',
+            objectiveTravelNextStepNodeId: objectiveTravel().active_route?.next_step_node_id || '',
           }}),
           move: submitMove,
         }};
@@ -5391,6 +5615,7 @@ pub(super) async fn get_world_web_shell(
         tactics_simulation_tick_contract = escape_html_text(tactics_simulation_tick_contract),
         tactics_reward_settlement_contract = escape_html_text(tactics_reward_settlement_contract),
         map_overlay_identity_contract = escape_html_text(map_overlay_identity_contract),
+        world_objective_travel_contract = escape_html_text(world_objective_travel_contract),
         tactics_board_cells = tactics_board_cells,
         tactics_board_units = tactics_board_units,
         tactics_objective_markers = tactics_objective_markers,

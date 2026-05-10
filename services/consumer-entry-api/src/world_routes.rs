@@ -785,6 +785,24 @@ pub(super) async fn move_world_map_inner(
     {
         return response;
     }
+    let moved_nodes = snapshot
+        .0
+        .world
+        .world_map_nodes
+        .values()
+        .cloned()
+        .collect::<Vec<_>>();
+    let moved_geodata = openstreetmap_geodata_v1_json(&moved_nodes, Some(&snapshot.2));
+    let moved_tactics_board = world_tactics_board_projection_json(
+        &snapshot.0.world,
+        &matrix_user_id,
+        Some(&snapshot.2),
+        &moved_geodata,
+    );
+    let world_objective_travel = moved_tactics_board
+        .get("world_objective_travel")
+        .cloned()
+        .unwrap_or(Value::Null);
     (
         StatusCode::OK,
         Json(json!({
@@ -795,6 +813,8 @@ pub(super) async fn move_world_map_inner(
             "position": snapshot.3,
             "economy_event": snapshot.4,
             "movement_transition": snapshot.5,
+            "world_objective_travel_contract_version": TRILLIONNIUM_WORLD_OBJECTIVE_TRAVEL_CONTRACT_VERSION,
+            "world_objective_travel": world_objective_travel,
         })),
     )
         .into_response()

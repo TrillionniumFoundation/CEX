@@ -2951,6 +2951,65 @@ fn world_tactics_projection_binds_trillionnium_state_to_osm_objectives() {
                     .starts_with("trillionnium-objective-seed-")
         ));
     assert_eq!(tactics["objectives"], tactics["osm_objectives"]);
+    assert_eq!(
+        tactics["world_objective_travel_contract_version"],
+        "trillionnium_world_objective_travel_v1"
+    );
+    let objective_travel = &tactics["world_objective_travel"];
+    assert_eq!(
+        objective_travel["contract_version"],
+        "trillionnium_world_objective_travel_v1"
+    );
+    assert_eq!(
+        objective_travel["source_of_truth"],
+        "rust_world_graph_objective_travel"
+    );
+    assert_eq!(
+        objective_travel["movement_source_of_truth"],
+        "rust_world_map_move"
+    );
+    assert_eq!(
+        objective_travel["transition_source_of_truth"],
+        "rust_world_map_transition_rules"
+    );
+    assert_eq!(
+        objective_travel["graph_owner"],
+        "world_state.world_map_nodes.exits"
+    );
+    assert_eq!(
+        objective_travel["active_route"]["contract_version"],
+        "trillionnium_world_objective_travel_v1"
+    );
+    assert_eq!(
+        objective_travel["active_route"]["source_of_truth"],
+        "rust_world_graph_objective_travel"
+    );
+    assert_eq!(
+        objective_travel["active_route"]["current_node_id"],
+        default_world_node_id()
+    );
+    assert!(objective_travel["active_route"]["target_node_id"]
+        .as_str()
+        .is_some_and(|target| !target.is_empty()));
+    let travel_path = objective_travel["active_route"]["path_node_ids"]
+        .as_array()
+        .unwrap();
+    assert!(travel_path.len() >= 2);
+    assert_eq!(travel_path.first().unwrap(), default_world_node_id());
+    assert_eq!(
+        travel_path.last().unwrap(),
+        &objective_travel["active_route"]["target_node_id"]
+    );
+    assert!(objective_travel["active_route"]["next_step_direction"]
+        .as_str()
+        .is_some_and(|direction| direction != "wait"));
+    assert!(objective_travel["party_members"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|member| member["member_id"] == "lord"
+            && member["source_of_truth"] == "rust_world_player_positions"));
+    assert!(objective_travel["route_tracks"].as_array().unwrap().len() >= 2);
     assert!(tactics["map_overlay_identity_index"]
         .as_array()
         .unwrap()
@@ -3878,6 +3937,26 @@ async fn world_map_move_endpoint_exposes_transition_semantics_contract() {
     assert_eq!(room["movement_transition"]["changes_location"], true);
     assert_eq!(room["movement_transition"]["changes_zone"], false);
     assert_eq!(room["position"]["node_id"], "world-transition-side-room");
+    assert_eq!(
+        room["world_objective_travel_contract_version"],
+        "trillionnium_world_objective_travel_v1"
+    );
+    assert_eq!(
+        room["world_objective_travel"]["contract_version"],
+        "trillionnium_world_objective_travel_v1"
+    );
+    assert_eq!(
+        room["world_objective_travel"]["source_of_truth"],
+        "rust_world_graph_objective_travel"
+    );
+    assert_eq!(
+        room["world_objective_travel"]["current_node_id"],
+        "world-transition-side-room"
+    );
+    assert_eq!(
+        room["world_objective_travel"]["movement_source_of_truth"],
+        "rust_world_map_move"
+    );
 }
 
 #[tokio::test]
@@ -4949,6 +5028,14 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
         "data-tactics-reward-settlement-contract=\"trillionnium_tactics_reward_settlement_v1\""
     ));
     assert!(world_html.contains("trillionnium_map_overlay_identity_v1"));
+    assert!(world_html.contains("trillionnium_world_objective_travel_v1"));
+    assert!(world_html.contains(
+        "data-world-objective-travel-contract=\"trillionnium_world_objective_travel_v1\""
+    ));
+    assert!(world_html.contains("id=\"world-objective-travel\""));
+    assert!(world_html.contains("data-source-of-truth=\"rust_world_graph_objective_travel\""));
+    assert!(world_html.contains("data-objective-travel-role="));
+    assert!(world_html.contains("world-objective-party-member"));
     assert!(world_html.contains("trillionnium-tactics-session-state"));
     assert!(world_html.contains("data-objective-progress=\"0\""));
     assert!(world_html.contains("data-victory-state=\"active\""));

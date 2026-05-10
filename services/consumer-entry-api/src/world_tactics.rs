@@ -52,6 +52,8 @@ pub(super) const TRILLIONNIUM_TACTICS_ACCESSIBILITY_CONTRACT_VERSION: &str =
     "trillionnium_tactics_accessibility_v1";
 pub(super) const TRILLIONNIUM_MAP_OVERLAY_IDENTITY_CONTRACT_VERSION: &str =
     "trillionnium_map_overlay_identity_v1";
+pub(super) const TRILLIONNIUM_WORLD_OBJECTIVE_TRAVEL_CONTRACT_VERSION: &str =
+    "trillionnium_world_objective_travel_v1";
 
 fn default_tactics_objective_id() -> String {
     "defeat_market_bandit".to_string()
@@ -1462,6 +1464,437 @@ fn trillionnium_osm_objectives_json(
             .map(|(_, _, objective)| objective)
             .collect::<Vec<_>>(),
     )
+}
+
+fn trillionnium_world_overlay_node_id(overlay_id: &str) -> Option<&str> {
+    overlay_id.strip_prefix("trillionnium-world-node:")
+}
+
+fn world_graph_shortest_path(
+    world: &WorldState,
+    from_node_id: &str,
+    to_node_id: &str,
+) -> Vec<String> {
+    if from_node_id == to_node_id && world.world_map_nodes.contains_key(from_node_id) {
+        return vec![from_node_id.to_string()];
+    }
+    if !world.world_map_nodes.contains_key(from_node_id)
+        || !world.world_map_nodes.contains_key(to_node_id)
+    {
+        return Vec::new();
+    }
+
+    let mut visited = HashSet::new();
+    let mut previous: HashMap<String, String> = HashMap::new();
+    let mut queue = VecDeque::new();
+    visited.insert(from_node_id.to_string());
+    queue.push_back(from_node_id.to_string());
+
+    while let Some(node_id) = queue.pop_front() {
+        if node_id == to_node_id {
+            break;
+        }
+        let Some(node) = world.world_map_nodes.get(&node_id) else {
+            continue;
+        };
+        let mut targets = node.exits.values().cloned().collect::<Vec<_>>();
+        targets.sort();
+        for target in targets {
+            if !world.world_map_nodes.contains_key(&target) || visited.contains(&target) {
+                continue;
+            }
+            visited.insert(target.clone());
+            previous.insert(target.clone(), node_id.clone());
+            queue.push_back(target);
+        }
+    }
+
+    if !visited.contains(to_node_id) {
+        return Vec::new();
+    }
+    let mut path = vec![to_node_id.to_string()];
+    let mut cursor = to_node_id.to_string();
+    while let Some(parent) = previous.get(&cursor) {
+        path.push(parent.clone());
+        cursor = parent.clone();
+        if cursor == from_node_id {
+            break;
+        }
+    }
+    path.reverse();
+    path
+}
+
+fn world_graph_direction_between(
+    world: &WorldState,
+    from_node_id: &str,
+    to_node_id: &str,
+) -> Option<String> {
+    let node = world.world_map_nodes.get(from_node_id)?;
+    let mut exits = node.exits.iter().collect::<Vec<_>>();
+    exits.sort_by(|left, right| left.0.cmp(right.0));
+    exits.into_iter().find_map(|(direction, target)| {
+        if target == to_node_id {
+            Some(direction.clone())
+        } else {
+            None
+        }
+    })
+}
+
+fn world_graph_path_nodes_json(world: &WorldState, path_node_ids: &[String]) -> Value {
+    Value::Array(
+        path_node_ids
+            .iter()
+            .filter_map(|node_id| world.world_map_nodes.get(node_id))
+            .map(|node| {
+                json!({
+                    "node_id": node.node_id,
+                    "name": node.name,
+                    "node_kind": node.node_kind,
+                    "location_id": node.location_id,
+                    "zone_id": node.zone_id,
+                    "x": node.x,
+                    "y": node.y,
+                    "osm_game_overlay_id": openstreetmap_game_overlay_id(node),
+                })
+            })
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn latest_active_trillionnium_task_contract_for_travel<'a>(
+    world: &'a WorldState,
+    matrix_user_id: &str,
+) -> Option<&'a WorldContract> {
+    world.world_contracts.iter().rev().find(|contract| {
+        let status = contract.status.as_str();
+        contract.actor_matrix_user_id == matrix_user_id
+            && contract.task_id.starts_with("trillionnium-task:")
+            && (matches!(
+                status,
+                "trillionnium_task_offered"
+                    | "trillionnium_task_completion_pending_settlement"
+                    | "review_hold"
+            ) || status.starts_with("completed_"))
+    })
+}
+
+fn trillionnium_task_archetype_id_from_task_id(task_id: &str) -> Option<&str> {
+    task_id.strip_prefix("trillionnium-task:")
+}
+
+fn world_contract_objective_overlay_id(contract: &WorldContract) -> Option<String> {
+    let (_, after_objective) = contract.body.split_once("objective=")?;
+    let overlay = after_objective
+        .split(';')
+        .next()
+        .unwrap_or(after_objective)
+        .trim();
+    if overlay.starts_with("trillionnium-world-node:") {
+        Some(overlay.to_string())
+    } else {
+        None
+    }
+}
+
+fn task_candidate_target_node_id(
+    task_candidates: &Value,
+    task_archetype_id: &str,
+    current_node_id: Option<&str>,
+) -> Option<String> {
+    let mut candidates = task_candidates
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|candidate| {
+            candidate
+                .get("task_archetype_id")
+                .and_then(Value::as_str)
+                .is_some_and(|value| value == task_archetype_id)
+        })
+        .filter_map(|candidate| {
+            candidate
+                .get("osm_game_overlay_id")
+                .and_then(Value::as_str)
+                .and_then(trillionnium_world_overlay_node_id)
+                .map(|node_id| node_id.to_string())
+        })
+        .collect::<Vec<_>>();
+    candidates.sort();
+    candidates.dedup();
+    candidates
+        .iter()
+        .find(|node_id| Some(node_id.as_str()) != current_node_id)
+        .cloned()
+        .or_else(|| candidates.into_iter().next())
+}
+
+fn choose_visible_objective_target(
+    world: &WorldState,
+    current_node: Option<&WorldMapNode>,
+    osm_objectives: &Value,
+) -> Option<(Value, String, Vec<String>)> {
+    let current = current_node?;
+    osm_objectives
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, objective)| {
+            let target_node_id = objective
+                .get("osm_game_overlay_id")
+                .and_then(Value::as_str)
+                .and_then(trillionnium_world_overlay_node_id)?
+                .to_string();
+            let target_node = world.world_map_nodes.get(&target_node_id)?;
+            let path = world_graph_shortest_path(world, &current.node_id, &target_node_id);
+            if path.is_empty() {
+                return None;
+            }
+            let visible_in_keypad =
+                (target_node.x - current.x).abs() <= 2 && (target_node.y - current.y).abs() <= 1;
+            let target_priority = if target_node_id == current.node_id {
+                1
+            } else if visible_in_keypad {
+                0
+            } else {
+                2
+            };
+            Some((
+                target_priority,
+                path.len(),
+                index,
+                objective,
+                target_node_id,
+                path,
+            ))
+        })
+        .min_by(|left, right| (left.0, left.1, left.2).cmp(&(right.0, right.1, right.2)))
+        .map(|(_, _, _, objective, target_node_id, path)| (objective, target_node_id, path))
+}
+
+fn route_json_for_world_path(
+    world: &WorldState,
+    route_id: String,
+    route_kind: &str,
+    current_node_id: &str,
+    target_node_id: &str,
+    path_node_ids: Vec<String>,
+    route_context: Value,
+) -> Value {
+    let next_step_node_id = path_node_ids
+        .get(1)
+        .cloned()
+        .or_else(|| path_node_ids.first().cloned())
+        .unwrap_or_else(|| current_node_id.to_string());
+    let next_step_direction = if next_step_node_id == current_node_id {
+        Some("wait".to_string())
+    } else {
+        world_graph_direction_between(world, current_node_id, &next_step_node_id)
+    };
+    let target_node = world.world_map_nodes.get(target_node_id);
+    json!({
+        "contract_version": TRILLIONNIUM_WORLD_OBJECTIVE_TRAVEL_CONTRACT_VERSION,
+        "route_id": route_id,
+        "route_kind": route_kind,
+        "source_of_truth": "rust_world_graph_objective_travel",
+        "web_role": "visualization_only_intent_to_map_move",
+        "current_node_id": current_node_id,
+        "target_node_id": target_node_id,
+        "target_node_name": target_node.map(|node| node.name.clone()).unwrap_or_else(|| target_node_id.to_string()),
+        "target_overlay_id": target_node.map(openstreetmap_game_overlay_id).unwrap_or_else(|| format!("trillionnium-world-node:{target_node_id}")),
+        "next_step_node_id": next_step_node_id,
+        "next_step_direction": next_step_direction,
+        "path_node_ids": path_node_ids.clone(),
+        "path_nodes": world_graph_path_nodes_json(world, path_node_ids.as_slice()),
+        "step_count": path_node_ids.len().saturating_sub(1),
+        "travel_status": if current_node_id == target_node_id { "at_objective" } else { "en_route" },
+        "action_hint": if current_node_id == target_node_id { "use_local_action_or_complete_task" } else { "move_to_next_world_node" },
+        "route_context": route_context,
+    })
+}
+
+fn npc_person_route_for_world_travel(
+    world: &WorldState,
+    current_node: Option<&WorldMapNode>,
+    npcs: &Value,
+) -> Option<Value> {
+    let current = current_node?;
+    npcs.as_array()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|npc| {
+            let npc_node_id = npc
+                .get("osm_game_overlay_id")
+                .and_then(Value::as_str)
+                .and_then(trillionnium_world_overlay_node_id)?
+                .to_string();
+            let path = world_graph_shortest_path(world, &npc_node_id, &current.node_id);
+            if path.is_empty() {
+                return None;
+            }
+            Some((path.len(), npc, npc_node_id, path))
+        })
+        .min_by(|left, right| left.0.cmp(&right.0))
+        .map(|(_, npc, npc_node_id, path)| {
+            json!({
+                "contract_version": TRILLIONNIUM_WORLD_OBJECTIVE_TRAVEL_CONTRACT_VERSION,
+                "person_id": npc.get("npc_id").cloned().unwrap_or_else(|| json!("local-npc")),
+                "display_name": npc.get("display_name").cloned().unwrap_or_else(|| json!("Local NPC")),
+                "person_kind": "npc",
+                "current_node_id": npc_node_id,
+                "target_node_id": current.node_id,
+                "path_node_ids": path,
+                "path_nodes": world_graph_path_nodes_json(world, path.as_slice()),
+                "reaction_status": if npc_node_id == current.node_id { "available_here" } else { "traveling_to_player_node" },
+                "source_of_truth": "rust_trillionnium_npc_spawn_anchor_plus_world_graph",
+                "web_role": "visualization_only",
+            })
+        })
+}
+
+fn trillionnium_world_objective_travel_projection_json(
+    world: &WorldState,
+    matrix_user_id: &str,
+    current_node: Option<&WorldMapNode>,
+    npcs: &Value,
+    task_candidates: &Value,
+    osm_objectives: &Value,
+) -> Value {
+    let current_node_id = current_node
+        .map(|node| node.node_id.clone())
+        .unwrap_or_else(|| default_world_node_id().to_string());
+    let active_contract =
+        latest_active_trillionnium_task_contract_for_travel(world, matrix_user_id);
+
+    let (route_kind, target_node_id, path_node_ids, route_context) = if let Some(contract) =
+        active_contract
+    {
+        let task_archetype_id = trillionnium_task_archetype_id_from_task_id(&contract.task_id)
+            .unwrap_or("courier_letter");
+        let target_node_id = world_contract_objective_overlay_id(contract)
+            .and_then(|overlay| trillionnium_world_overlay_node_id(&overlay).map(str::to_string))
+            .or_else(|| {
+                task_candidate_target_node_id(
+                    task_candidates,
+                    task_archetype_id,
+                    Some(&current_node_id),
+                )
+            })
+            .unwrap_or_else(|| current_node_id.clone());
+        let path = world_graph_shortest_path(world, &current_node_id, &target_node_id);
+        (
+            "active_task_route",
+            target_node_id,
+            if path.is_empty() {
+                vec![current_node_id.clone()]
+            } else {
+                path
+            },
+            json!({
+                "task_contract_id": contract.contract_id,
+                "task_status": contract.status,
+                "task_archetype_id": task_archetype_id,
+                "task_title": contract.title,
+                "cex_status": contract.cex_status,
+            }),
+        )
+    } else if let Some((objective, target_node_id, path)) =
+        choose_visible_objective_target(world, current_node, osm_objectives)
+    {
+        (
+            "next_objective_route",
+            target_node_id,
+            path,
+            json!({
+                "objective_id": objective.get("objective_id").cloned().unwrap_or(Value::Null),
+                "task_archetype_id": objective.get("task_archetype_id").cloned().unwrap_or(Value::Null),
+                "objective_kind": objective.get("objective_kind").cloned().unwrap_or(Value::Null),
+                "suggested_command": objective.get("suggested_command").cloned().unwrap_or(Value::Null),
+            }),
+        )
+    } else {
+        (
+            "free_roam_route",
+            current_node_id.clone(),
+            vec![current_node_id.clone()],
+            json!({ "objective_id": Value::Null, "suggested_command": "move" }),
+        )
+    };
+
+    let active_route = route_json_for_world_path(
+        world,
+        league_hash_id(
+            "trillionnium-world-objective-travel-route",
+            &format!("{matrix_user_id}:{route_kind}:{current_node_id}:{target_node_id}"),
+        ),
+        route_kind,
+        &current_node_id,
+        &target_node_id,
+        path_node_ids.clone(),
+        route_context,
+    );
+    let npc_person_route = npc_person_route_for_world_travel(world, current_node, npcs);
+    let next_step_node_id = active_route
+        .get("next_step_node_id")
+        .and_then(Value::as_str)
+        .unwrap_or(&current_node_id)
+        .to_string();
+    let party_members = json!([
+        {
+            "member_id": "lord",
+            "display_name": "Player hero / 玩家主角",
+            "party_role": "player_character",
+            "current_node_id": current_node_id.clone(),
+            "target_node_id": target_node_id.clone(),
+            "next_step_node_id": next_step_node_id.clone(),
+            "path_node_ids": path_node_ids.clone(),
+            "source_of_truth": "rust_world_player_positions",
+            "web_role": "visualization_only",
+        },
+        {
+            "member_id": "route-scout",
+            "display_name": "Route Scout / 路线侦察",
+            "party_role": "agent_party_scout",
+            "current_node_id": current_node_id.clone(),
+            "target_node_id": next_step_node_id.clone(),
+            "next_step_node_id": next_step_node_id.clone(),
+            "path_node_ids": [current_node_id.clone(), next_step_node_id.clone()],
+            "source_of_truth": "rust_world_graph_objective_travel",
+            "web_role": "visualization_only",
+        },
+        {
+            "member_id": "ledger-closer",
+            "display_name": "Ledger Closer / 结算信使",
+            "party_role": "agent_party_reward_closer",
+            "current_node_id": target_node_id.clone(),
+            "target_node_id": target_node_id.clone(),
+            "next_step_node_id": target_node_id.clone(),
+            "path_node_ids": [target_node_id.clone()],
+            "source_of_truth": "rust_reward_settlement_route_projection",
+            "web_role": "visualization_only",
+        }
+    ]);
+    json!({
+        "contract_version": TRILLIONNIUM_WORLD_OBJECTIVE_TRAVEL_CONTRACT_VERSION,
+        "source_of_truth": "rust_world_graph_objective_travel",
+        "web_role": "visualization_only_intent_to_map_move",
+        "matrix_user_id": matrix_user_id,
+        "current_node_id": current_node_id.clone(),
+        "current_overlay_id": current_node.map(openstreetmap_game_overlay_id).unwrap_or_else(|| format!("trillionnium-world-node:{}", default_world_node_id())),
+        "graph_owner": "world_state.world_map_nodes.exits",
+        "movement_endpoint": "/world/web/map-move",
+        "movement_source_of_truth": "rust_world_map_move",
+        "transition_source_of_truth": "rust_world_map_transition_rules",
+        "active_route": active_route.clone(),
+        "person_route": npc_person_route.clone(),
+        "party_members": party_members,
+        "route_tracks": [active_route, npc_person_route],
+    })
 }
 
 fn trillionnium_task_archetype_ids_for_capability(capability: &str) -> Vec<&'static str> {
@@ -2980,6 +3413,14 @@ pub(super) fn world_tactics_board_projection_json(
     let task_candidates = trillionnium_task_candidates_json(&task_archetypes);
     let osm_objectives =
         trillionnium_osm_objectives_json(world, matrix_user_id, openstreetmap_geodata);
+    let world_objective_travel = trillionnium_world_objective_travel_projection_json(
+        world,
+        matrix_user_id,
+        current_node,
+        &npcs,
+        &task_candidates,
+        &osm_objectives,
+    );
     let osm_objective_count = osm_objectives
         .as_array()
         .map(|objectives| objectives.len())
@@ -3024,6 +3465,7 @@ pub(super) fn world_tactics_board_projection_json(
         "trillionnium_combat_log_contract_version": TRILLIONNIUM_COMBAT_LOG_CONTRACT_VERSION,
         "trillionnium_npc_relationship_contract_version": TRILLIONNIUM_NPC_RELATIONSHIP_CONTRACT_VERSION,
         "trillionnium_osm_objective_contract_version": TRILLIONNIUM_OSM_OBJECTIVE_CONTRACT_VERSION,
+        "world_objective_travel_contract_version": TRILLIONNIUM_WORLD_OBJECTIVE_TRAVEL_CONTRACT_VERSION,
         "tactics_combat_resolution_contract_version": TRILLIONNIUM_TACTICS_COMBAT_RESOLUTION_CONTRACT_VERSION,
         "tactics_game_session_contract_version": TRILLIONNIUM_TACTICS_GAME_SESSION_CONTRACT_VERSION,
         "tactics_simulation_tick_contract_version": TRILLIONNIUM_TACTICS_SIMULATION_TICK_CONTRACT_VERSION,
@@ -3081,6 +3523,7 @@ pub(super) fn world_tactics_board_projection_json(
         "task_archetypes": task_archetypes,
         "task_candidates": task_candidates,
         "osm_objectives": osm_objectives.clone(),
+        "world_objective_travel": world_objective_travel,
         "map_overlay_identity_index": map_overlay_identity_index,
         "game_session": game_session,
         "simulation_ticks": simulation_ticks,

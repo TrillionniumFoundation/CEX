@@ -942,7 +942,21 @@ async function main() {
   assert(await count(page, '#world-keypad-map-grid[data-lcd-cols="5"][data-lcd-rows="3"][data-reference-project="albert10jp/yxts-gold-asm"]') === 1, 'world keypad LCD viewport dimensions drifted');
   assert(await count(page, '.world-keypad-cell[data-node-id][data-current="true"]') === 1, 'world keypad current player cell missing');
   assert(await count(page, '#world-keypad-numpad[data-transition-contract-version="trillionnium_world_transition_semantics_v1"][data-transition-source-of-truth="rust_world_map_transition_rules"] .world-keypad-button[data-keypad-key][data-transition-contract-version="trillionnium_world_transition_semantics_v1"][data-transition-source-of-truth="rust_world_map_transition_rules"]') === 9, 'world keypad numpad transition semantics missing');
-  assert(await count(page, '#world-play-first-action-prompt[data-contract-version="trillionnium_world_play_first_exploration_loop_v1"][data-transition-contract-version="trillionnium_world_transition_semantics_v1"][data-source-of-truth="rust_world_map_nodes_and_tactics_commands"]') === 1, 'world play-first exploration prompt transition contract missing');
+  assert(await count(page, '#world-play-first-action-prompt[data-contract-version="trillionnium_world_play_first_exploration_loop_v1"][data-transition-contract-version="trillionnium_world_transition_semantics_v1"][data-objective-travel-contract-version="trillionnium_world_objective_travel_v1"][data-source-of-truth="rust_world_map_nodes_and_tactics_commands"]') === 1, 'world play-first exploration prompt transition/objective travel contract missing');
+  assert(await count(page, '#trillionnium-tactics-game-shell[data-world-objective-travel-contract="trillionnium_world_objective_travel_v1"]') === 1, 'world tactics shell objective travel contract missing');
+  assert(await count(page, '#world-objective-travel[data-contract-version="trillionnium_world_objective_travel_v1"][data-source-of-truth="rust_world_graph_objective_travel"][data-web-role="visualization_only_intent_to_map_move"]') === 1, 'world objective travel panel missing Rust graph contract');
+  assert(await count(page, '.world-keypad-cell[data-objective-travel-contract-version="trillionnium_world_objective_travel_v1"][data-objective-travel-role="next_step"], .world-keypad-cell[data-objective-travel-contract-version="trillionnium_world_objective_travel_v1"][data-objective-travel-role="target"], .world-keypad-cell[data-objective-travel-contract-version="trillionnium_world_objective_travel_v1"][data-objective-travel-role="path"]') >= 1, 'world keypad cells must show active objective travel route roles');
+  const objectiveTravelCoverage = await page.evaluate(() => ({
+    runtimeContract: window.trillionniumKeyboardMap?.getState?.().objectiveTravelContractVersion,
+    currentNodeId: window.trillionniumKeyboardMap?.getState?.().objectiveTravelCurrentNodeId,
+    targetNodeId: window.trillionniumKeyboardMap?.getState?.().objectiveTravelTargetNodeId,
+    nextStepNodeId: window.trillionniumKeyboardMap?.getState?.().objectiveTravelNextStepNodeId,
+    roleCount: document.querySelectorAll('.world-keypad-cell[data-objective-travel-role]:not([data-objective-travel-role="none"])').length,
+    partyCount: Number(document.querySelector('#world-objective-travel')?.dataset?.partyCount || 0),
+  }));
+  assert(objectiveTravelCoverage.runtimeContract === 'trillionnium_world_objective_travel_v1', 'world objective travel runtime contract missing', objectiveTravelCoverage);
+  assert(objectiveTravelCoverage.currentNodeId && objectiveTravelCoverage.targetNodeId && objectiveTravelCoverage.nextStepNodeId, 'world objective travel route endpoints missing', objectiveTravelCoverage);
+  assert(objectiveTravelCoverage.roleCount >= 1 && objectiveTravelCoverage.partyCount >= 2, 'world objective travel route/party projection missing', objectiveTravelCoverage);
   assert(await count(page, '#world-current-location-card') === 1, 'world current location card missing');
   assert(await count(page, '#world-current-exits .world-local-exit-form[data-source-of-truth="rust_world_map_move"][data-transition-source-of-truth="rust_world_map_transition_rules"][data-transition-contract-version="trillionnium_world_transition_semantics_v1"]') >= 1, 'world current exits must expose Rust-owned movement transition intents');
   assert(await count(page, '#world-local-actions [data-action-kind]') >= 1, 'world local actions missing');
@@ -988,12 +1002,14 @@ async function main() {
   const afterButtonMove = await page.evaluate(() => ({
     runtime: window.trillionniumKeyboardMap?.getState?.(),
     domCurrent: document.querySelector('.world-keypad-cell[data-current="true"]')?.dataset?.nodeId,
+    objectiveTravelCurrentNodeId: window.trillionniumKeyboardMap?.getState?.().objectiveTravelCurrentNodeId,
     status: document.querySelector('#world-keypad-live-status')?.textContent || '',
     source: document.querySelector('#world-keypad-adventure-shell')?.dataset?.lastInputSource || '',
     transitionKind: document.querySelector('#world-keypad-adventure-shell')?.dataset?.lastTransitionKind || '',
     transitionSourceOfTruth: document.querySelector('#world-keypad-adventure-shell')?.dataset?.lastTransitionSourceOfTruth || '',
   }));
   assert(afterButtonMove.runtime?.currentNodeId === firstKeypadMove.targetNodeId && afterButtonMove.domCurrent === firstKeypadMove.targetNodeId, 'world keypad button movement did not update persisted projection', afterButtonMove);
+  assert(afterButtonMove.objectiveTravelCurrentNodeId === firstKeypadMove.targetNodeId, 'world objective travel did not refresh from Rust move response', afterButtonMove);
   assert(afterButtonMove.source === 'button' && /Moved|已移动/.test(afterButtonMove.status), 'world keypad button move status missing', afterButtonMove);
   assert(['local_exit', 'room_transition', 'zone_transition', 'wait'].includes(afterButtonMove.transitionKind), 'world keypad button move transition kind missing', afterButtonMove);
   assert(afterButtonMove.transitionSourceOfTruth === 'rust_world_map_transition_rules', 'world keypad button move transition source missing', afterButtonMove);
