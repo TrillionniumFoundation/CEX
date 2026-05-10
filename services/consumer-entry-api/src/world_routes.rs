@@ -704,39 +704,47 @@ pub(super) async fn move_world_map_inner(
                 .into_response();
         };
         let target_trimmed = target.trim();
-        let target_node_id = current_node
-            .exits
-            .get(target_trimmed)
-            .cloned()
-            .unwrap_or_else(|| target_trimmed.to_string());
-        let Some(target_node) = league.world.world_map_nodes.get(&target_node_id).cloned() else {
+        let movement_transition =
+            world_map_transition_decision(&league.world, &current_node, target_trimmed);
+        if !movement_transition.accepted {
+            let status = movement_transition.http_status();
+            let error = movement_transition.error_message();
             return (
-                StatusCode::NOT_FOUND,
+                status,
                 Json(json!({
-                    "error": "world map target node not found or not reachable by that direction",
+                    "error": error,
                     "target": target_trimmed,
                     "current_node_id": current_node_id,
                     "exits": current_node.exits,
-                })),
-            )
-                .into_response();
-        };
-        let is_direct_exit = current_node
-            .exits
-            .values()
-            .any(|node_id| node_id == &target_node_id);
-        if target_node_id != current_node_id && !is_direct_exit {
-            return (
-                StatusCode::CONFLICT,
-                Json(json!({
-                    "error": "world map target is not adjacent",
-                    "target_node_id": target_node_id,
-                    "current_node_id": current_node_id,
-                    "exits": current_node.exits,
+                    "movement_transition": movement_transition,
                 })),
             )
                 .into_response();
         }
+        let Some(target_node_id) = movement_transition.to_node_id.clone() else {
+            return (
+                StatusCode::CONFLICT,
+                Json(json!({
+                    "error": "world map movement transition did not resolve a target node",
+                    "target": target_trimmed,
+                    "current_node_id": current_node_id,
+                    "movement_transition": movement_transition,
+                })),
+            )
+                .into_response();
+        };
+        let Some(target_node) = league.world.world_map_nodes.get(&target_node_id).cloned() else {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({
+                    "error": "world map target node not found after transition resolution",
+                    "target": target_trimmed,
+                    "current_node_id": current_node_id,
+                    "movement_transition": movement_transition,
+                })),
+            )
+                .into_response();
+        };
         let position = WorldPlayerPosition {
             matrix_user_id: matrix_user_id.clone(),
             node_id: target_node.node_id.clone(),
@@ -769,6 +777,7 @@ pub(super) async fn move_world_map_inner(
             target_node,
             position,
             economy_event,
+            movement_transition,
         )
     };
     if let Err(response) =
@@ -785,6 +794,7 @@ pub(super) async fn move_world_map_inner(
             "to_node": snapshot.2,
             "position": snapshot.3,
             "economy_event": snapshot.4,
+            "movement_transition": snapshot.5,
         })),
     )
         .into_response()

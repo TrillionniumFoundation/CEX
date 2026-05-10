@@ -936,15 +936,15 @@ async function main() {
   assert(pulseBox && pulseBox.height < 360, 'world mobile stats area is too tall', pulseBox);
   await assertNoVisibleBilingualSlashPair(page, '/world English system language');
   await assertEnglishSurfaceHasNoCoreChineseLeaks(page, '/world English system language');
-  assert(await count(page, '#world-keypad-adventure-shell[data-contract-version="trillionnium_text_adventure_keypad_movement_v1"][data-interface-style="yingxiongtanshuo_keyboard_tile_map"][data-source-of-truth="rust_world_map_move"]') === 1, 'world keypad tile-map shell missing');
+  assert(await count(page, '#world-keypad-adventure-shell[data-contract-version="trillionnium_text_adventure_keypad_movement_v1"][data-transition-contract-version="trillionnium_world_transition_semantics_v1"][data-interface-style="yingxiongtanshuo_keyboard_tile_map"][data-source-of-truth="rust_world_map_move"][data-transition-source-of-truth="rust_world_map_transition_rules"]') === 1, 'world keypad tile-map shell transition contract missing');
   assert(await count(page, '#world-keypad-adventure-shell[data-reference-project="albert10jp/yxts-gold-asm"][data-lcd-screen="160x80"][data-lcd-viewport="5x3"][data-lcd-palette="green_monochrome"]') === 1, 'world keypad must declare 白金英雄坛说 source-derived LCD contract');
   assert(await count(page, '#world-keypad-map-grid[role="grid"][data-source-of-truth="rust_world_map_nodes"]') === 1, 'world keypad map grid missing');
   assert(await count(page, '#world-keypad-map-grid[data-lcd-cols="5"][data-lcd-rows="3"][data-reference-project="albert10jp/yxts-gold-asm"]') === 1, 'world keypad LCD viewport dimensions drifted');
   assert(await count(page, '.world-keypad-cell[data-node-id][data-current="true"]') === 1, 'world keypad current player cell missing');
-  assert(await count(page, '#world-keypad-numpad .world-keypad-button[data-keypad-key]') === 9, 'world keypad numpad controls missing');
-  assert(await count(page, '#world-play-first-action-prompt[data-contract-version="trillionnium_world_play_first_exploration_loop_v1"][data-source-of-truth="rust_world_map_nodes_and_tactics_commands"]') === 1, 'world play-first exploration prompt missing');
+  assert(await count(page, '#world-keypad-numpad[data-transition-contract-version="trillionnium_world_transition_semantics_v1"][data-transition-source-of-truth="rust_world_map_transition_rules"] .world-keypad-button[data-keypad-key][data-transition-contract-version="trillionnium_world_transition_semantics_v1"][data-transition-source-of-truth="rust_world_map_transition_rules"]') === 9, 'world keypad numpad transition semantics missing');
+  assert(await count(page, '#world-play-first-action-prompt[data-contract-version="trillionnium_world_play_first_exploration_loop_v1"][data-transition-contract-version="trillionnium_world_transition_semantics_v1"][data-source-of-truth="rust_world_map_nodes_and_tactics_commands"]') === 1, 'world play-first exploration prompt transition contract missing');
   assert(await count(page, '#world-current-location-card') === 1, 'world current location card missing');
-  assert(await count(page, '#world-current-exits .world-local-exit-form[data-source-of-truth="rust_world_map_move"]') >= 1, 'world current exits must expose movement intents');
+  assert(await count(page, '#world-current-exits .world-local-exit-form[data-source-of-truth="rust_world_map_move"][data-transition-source-of-truth="rust_world_map_transition_rules"][data-transition-contract-version="trillionnium_world_transition_semantics_v1"]') >= 1, 'world current exits must expose Rust-owned movement transition intents');
   assert(await count(page, '#world-local-actions [data-action-kind]') >= 1, 'world local actions missing');
   assert(await count(page, '#world-local-npc-talk[data-command="talk_npc"]') === 1, 'world NPC talk affordance missing');
   assert(await count(page, '#world-local-task-loop[data-pickup-command="offer_task"][data-completion-command="complete_task"]') === 1, 'world task pickup/completion affordance missing');
@@ -956,15 +956,29 @@ async function main() {
   assert(worldKeypadGridBox && worldKeypadGridBox.y < worldViewport.height * 0.46, 'world keypad character grid must be visible in the first screen', { worldKeypadGridBox, worldViewport });
   assert(worldKeypadNumpadBox && worldKeypadNumpadBox.y < worldViewport.height * 0.50, 'world keypad controls must be visible in the first screen', { worldKeypadNumpadBox, worldViewport });
   assert(await page.evaluate(() => window.trillionniumKeyboardMap?.source_of_truth) === 'rust_world_map_move', 'world keypad runtime source-of-truth missing');
+  assert(await page.evaluate(() => window.trillionniumKeyboardMap?.transition_source_of_truth) === 'rust_world_map_transition_rules', 'world keypad transition runtime source-of-truth missing');
+  const keypadTransitionCoverage = await page.evaluate(() => {
+    const buttons = Array.from(document.querySelectorAll('#world-keypad-numpad .world-keypad-button[data-keypad-key]'));
+    return {
+      contract: window.trillionniumKeyboardMap?.getState?.().transitionContractVersion,
+      statuses: [...new Set(buttons.map((button) => button.dataset.transitionStatus || ''))],
+      kinds: [...new Set(buttons.map((button) => button.dataset.transitionKind || ''))],
+      results: [...new Set(buttons.map((button) => button.dataset.transitionResult || ''))],
+      blockedReasons: [...new Set(buttons.map((button) => button.dataset.blockedReason || '').filter(Boolean))],
+      blockedCount: buttons.filter((button) => button.dataset.transitionStatus !== 'accepted').length,
+      acceptedCount: buttons.filter((button) => button.dataset.transitionStatus === 'accepted').length,
+    };
+  });
+  assert(keypadTransitionCoverage.contract === 'trillionnium_world_transition_semantics_v1', 'world keypad runtime transition contract missing', keypadTransitionCoverage);
+  assert(keypadTransitionCoverage.acceptedCount >= 1 && keypadTransitionCoverage.blockedCount >= 1, 'world keypad must expose accepted and blocked transition semantics', keypadTransitionCoverage);
+  assert(keypadTransitionCoverage.kinds.includes('blocked_terrain'), 'world keypad blocked-terrain transition kind missing', keypadTransitionCoverage);
   const firstKeypadMove = await page.evaluate(() => {
     const state = window.trillionniumKeyboardMap?.getState?.();
-    const keys = ['6', '2', '8', '4', '3', '1', '9', '7'];
-    const aliases = { '6': ['east'], '2': ['south'], '8': ['north'], '4': ['west'], '3': ['south-east', 'southeast'], '1': ['south-west', 'southwest'], '9': ['north-east', 'northeast'], '7': ['north-west', 'northwest'] };
-    for (const key of keys) {
-      for (const direction of aliases[key] || []) {
-        const targetNodeId = state?.currentExits?.[direction];
-        if (targetNodeId) return { key, direction, targetNodeId, fromNodeId: state.currentNodeId };
-      }
+    const buttons = Array.from(document.querySelectorAll('#world-keypad-numpad .world-keypad-button[data-keypad-key]'));
+    const preferredKeys = ['6', '2', '8', '4', '3', '1', '9', '7'];
+    for (const key of preferredKeys) {
+      const button = buttons.find((candidate) => candidate.dataset.keypadKey === key && candidate.dataset.transitionStatus === 'accepted' && candidate.dataset.targetNodeId);
+      if (button) return { key, direction: button.dataset.moveDirection, targetNodeId: button.dataset.targetNodeId, fromNodeId: state?.currentNodeId, transitionKind: button.dataset.transitionKind };
     }
     return null;
   });
@@ -976,23 +990,20 @@ async function main() {
     domCurrent: document.querySelector('.world-keypad-cell[data-current="true"]')?.dataset?.nodeId,
     status: document.querySelector('#world-keypad-live-status')?.textContent || '',
     source: document.querySelector('#world-keypad-adventure-shell')?.dataset?.lastInputSource || '',
+    transitionKind: document.querySelector('#world-keypad-adventure-shell')?.dataset?.lastTransitionKind || '',
+    transitionSourceOfTruth: document.querySelector('#world-keypad-adventure-shell')?.dataset?.lastTransitionSourceOfTruth || '',
   }));
   assert(afterButtonMove.runtime?.currentNodeId === firstKeypadMove.targetNodeId && afterButtonMove.domCurrent === firstKeypadMove.targetNodeId, 'world keypad button movement did not update persisted projection', afterButtonMove);
   assert(afterButtonMove.source === 'button' && /Moved|已移动/.test(afterButtonMove.status), 'world keypad button move status missing', afterButtonMove);
+  assert(['local_exit', 'room_transition', 'zone_transition', 'wait'].includes(afterButtonMove.transitionKind), 'world keypad button move transition kind missing', afterButtonMove);
+  assert(afterButtonMove.transitionSourceOfTruth === 'rust_world_map_transition_rules', 'world keypad button move transition source missing', afterButtonMove);
   const keyboardMove = await page.evaluate((previousNodeId) => {
-    const state = window.trillionniumKeyboardMap?.getState?.();
-    const aliases = { '6': ['east'], '2': ['south'], '8': ['north'], '4': ['west'], '3': ['south-east', 'southeast'], '1': ['south-west', 'southwest'], '9': ['north-east', 'northeast'], '7': ['north-west', 'northwest'] };
-    for (const [key, directions] of Object.entries(aliases)) {
-      for (const direction of directions) {
-        if (state?.currentExits?.[direction] === previousNodeId) return { key, direction, targetNodeId: previousNodeId };
-      }
-    }
-    for (const [key, directions] of Object.entries(aliases)) {
-      for (const direction of directions) {
-        const targetNodeId = state?.currentExits?.[direction];
-        if (targetNodeId) return { key, direction, targetNodeId };
-      }
-    }
+    const buttons = Array.from(document.querySelectorAll('#world-keypad-numpad .world-keypad-button[data-keypad-key]'))
+      .filter((button) => button.dataset.transitionStatus === 'accepted' && button.dataset.targetNodeId && button.dataset.keypadKey !== '5');
+    const backtrack = buttons.find((button) => button.dataset.targetNodeId === previousNodeId);
+    if (backtrack) return { key: backtrack.dataset.keypadKey, direction: backtrack.dataset.moveDirection, targetNodeId: backtrack.dataset.targetNodeId, transitionKind: backtrack.dataset.transitionKind };
+    const next = buttons[0];
+    if (next) return { key: next.dataset.keypadKey, direction: next.dataset.moveDirection, targetNodeId: next.dataset.targetNodeId, transitionKind: next.dataset.transitionKind };
     return null;
   }, firstKeypadMove.fromNodeId);
   assert(keyboardMove && keyboardMove.targetNodeId, 'world keypad had no keyboard movement target after button move', keyboardMove);
@@ -1004,18 +1015,21 @@ async function main() {
     domCurrent: document.querySelector('.world-keypad-cell[data-current="true"]')?.dataset?.nodeId,
     source: document.querySelector('#world-keypad-adventure-shell')?.dataset?.lastInputSource || '',
     direction: document.querySelector('#world-keypad-adventure-shell')?.dataset?.lastMoveDirection || '',
+    transitionStatus: document.querySelector('#world-keypad-adventure-shell')?.dataset?.lastTransitionStatus || '',
+    transitionKind: document.querySelector('#world-keypad-adventure-shell')?.dataset?.lastTransitionKind || '',
   }));
   assert(afterKeyboardMove.runtime?.currentNodeId === keyboardMove.targetNodeId && afterKeyboardMove.domCurrent === keyboardMove.targetNodeId, 'world keypad keyboard/numpad movement did not update map position', afterKeyboardMove);
   assert(afterKeyboardMove.source === 'keyboard' && afterKeyboardMove.direction === keyboardMove.direction, 'world keypad keyboard movement source/direction missing', afterKeyboardMove);
+  assert(afterKeyboardMove.transitionStatus === 'accepted' && ['local_exit', 'room_transition', 'zone_transition', 'wait'].includes(afterKeyboardMove.transitionKind), 'world keypad keyboard movement transition semantics missing', afterKeyboardMove);
   steps.push({ name: 'world_keypad_tile_map_button_and_numpad_movement', ok: true, button_move: firstKeypadMove, keyboard_move: keyboardMove });
 
   let routeToNpcHub = await moveWorldKeypadToNode(page, 'mirror-city-square');
-  await page.goto('/world?lang=en#world-play-first-action-prompt', { waitUntil: 'domcontentloaded', timeout: 30_000 });
+  await page.goto(`/world?lang=en&e2e_reload=${encodeURIComponent(runId)}-npc-1#world-play-first-action-prompt`, { waitUntil: 'domcontentloaded', timeout: 30_000 });
   await page.waitForSelector('#world-play-first-action-prompt', { state: 'attached', timeout: 15_000 });
   let promptNodeId = await page.locator('#world-play-first-action-prompt').first().getAttribute('data-current-node-id');
   if (promptNodeId !== 'mirror-city-square') {
     routeToNpcHub = await moveWorldKeypadToNode(page, 'mirror-city-square');
-    await page.goto('/world?lang=en#world-play-first-action-prompt', { waitUntil: 'domcontentloaded', timeout: 30_000 });
+    await page.goto(`/world?lang=en&e2e_reload=${encodeURIComponent(runId)}-npc-2-${Date.now()}#world-play-first-action-prompt`, { waitUntil: 'domcontentloaded', timeout: 30_000 });
     await page.waitForSelector('#world-play-first-action-prompt', { state: 'attached', timeout: 15_000 });
     promptNodeId = await page.locator('#world-play-first-action-prompt').first().getAttribute('data-current-node-id');
   }
@@ -1223,6 +1237,7 @@ async function main() {
       route_runner_handoff_contract: true,
       route_runner_handoff_dom: true,
       world_map_move: true,
+      world_transition_semantics: true,
       world_local_npc_task_loop: true,
       world_buy: true,
       world_work_deliver: true,

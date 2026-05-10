@@ -1388,8 +1388,22 @@ fn world_play_first_exit_cards_html(
                 .get(target_node_id)
                 .map(|target| world_user_visible_copy(&target.name))
                 .unwrap_or_else(|| target_node_id.to_string());
+            let movement_transition = world_map_transition_decision(&league.world, node, direction);
             format!(
-                "<form class=\"world-local-exit-form\" method=\"post\" action=\"/world/web/map-move\" data-direction=\"{}\" data-target-node-id=\"{}\" data-source-of-truth=\"rust_world_map_move\" data-web-role=\"movement_intent_only\">{}<input type=\"hidden\" name=\"matrix_user_id\" value=\"{}\"><input type=\"hidden\" name=\"target\" value=\"{}\"><button type=\"submit\"><b>{}</b><span>{}</span></button></form>",
+                "<form class=\"world-local-exit-form\" method=\"post\" action=\"/world/web/map-move\" data-transition-contract-version=\"{}\" data-transition-status=\"{}\" data-transition-kind=\"{}\" data-transition-result=\"{}\" data-blocked-reason=\"{}\" data-requires-interaction=\"{}\" data-changes-location=\"{}\" data-changes-zone=\"{}\" data-direction=\"{}\" data-target-node-id=\"{}\" data-source-of-truth=\"rust_world_map_move\" data-transition-source-of-truth=\"rust_world_map_transition_rules\" data-web-role=\"movement_intent_only\">{}<input type=\"hidden\" name=\"matrix_user_id\" value=\"{}\"><input type=\"hidden\" name=\"target\" value=\"{}\"><button type=\"submit\"><b>{}</b><span>{}</span></button></form>",
+                movement_transition.contract_version,
+                escape_html_text(&movement_transition.transition_status),
+                escape_html_text(&movement_transition.transition_kind),
+                escape_html_text(&movement_transition.result),
+                escape_html_text(
+                    movement_transition
+                        .blocked_reason
+                        .as_deref()
+                        .unwrap_or("")
+                ),
+                movement_transition.requires_interaction,
+                movement_transition.changes_location,
+                movement_transition.changes_zone,
                 escape_html_text(direction),
                 escape_html_text(target_node_id),
                 csrf_input,
@@ -1677,7 +1691,7 @@ fn world_play_first_action_prompt_html(
         csrf_input,
     );
     format!(
-        "<section id=\"world-play-first-action-prompt\" class=\"world-play-first-action-prompt\" data-contract-version=\"trillionnium_world_play_first_exploration_loop_v1\" data-local-task-lifecycle-contract-version=\"trillionnium_world_local_task_lifecycle_v1\" data-current-node-id=\"{}\" data-current-overlay-id=\"{}\" data-source-of-truth=\"rust_world_map_nodes_and_tactics_commands\" data-web-role=\"intent_only_visualization_input\" aria-label=\"Current location exits local actions NPC task loop\"><article id=\"world-current-location-card\" class=\"world-current-location-card\"><span data-i18n-en=\"Current location\" data-i18n-zh=\"当前位置\">Current location</span><strong>{}</strong><small>{} · {}</small><p>{}</p></article><article id=\"world-current-exits\" class=\"world-current-exits\"><span data-i18n-en=\"Exits\" data-i18n-zh=\"出口\">Exits</span><div class=\"world-local-exit-grid\">{}</div></article><article id=\"world-local-actions\" class=\"world-local-actions\"><span data-i18n-en=\"Local actions\" data-i18n-zh=\"本地动作\">Local actions</span><div class=\"world-local-action-chip-row\">{}</div></article><article id=\"world-local-npc-talk\" class=\"world-local-npc-talk\" data-command=\"talk_npc\"><span data-i18n-en=\"NPC talk\" data-i18n-zh=\"NPC 交谈\">NPC talk</span>{}</article><article id=\"world-local-task-loop\" class=\"world-local-task-loop\" data-lifecycle-contract-version=\"trillionnium_world_local_task_lifecycle_v1\" data-pickup-command=\"offer_task\" data-completion-command=\"complete_task\" data-source-of-truth=\"rust_world_contracts_and_completions\"><span data-i18n-en=\"Task pickup / completion\" data-i18n-zh=\"任务接取 / 完成\">Task pickup / completion</span>{}</article></section>",
+        "<section id=\"world-play-first-action-prompt\" class=\"world-play-first-action-prompt\" data-contract-version=\"trillionnium_world_play_first_exploration_loop_v1\" data-local-task-lifecycle-contract-version=\"trillionnium_world_local_task_lifecycle_v1\" data-transition-contract-version=\"trillionnium_world_transition_semantics_v1\" data-current-node-id=\"{}\" data-current-overlay-id=\"{}\" data-source-of-truth=\"rust_world_map_nodes_and_tactics_commands\" data-web-role=\"intent_only_visualization_input\" aria-label=\"Current location exits local actions NPC task loop\"><article id=\"world-current-location-card\" class=\"world-current-location-card\"><span data-i18n-en=\"Current location\" data-i18n-zh=\"当前位置\">Current location</span><strong>{}</strong><small>{} · {}</small><p>{}</p></article><article id=\"world-current-exits\" class=\"world-current-exits\" data-transition-contract-version=\"trillionnium_world_transition_semantics_v1\"><span data-i18n-en=\"Exits\" data-i18n-zh=\"出口\">Exits</span><div class=\"world-local-exit-grid\">{}</div></article><article id=\"world-local-actions\" class=\"world-local-actions\"><span data-i18n-en=\"Local actions\" data-i18n-zh=\"本地动作\">Local actions</span><div class=\"world-local-action-chip-row\">{}</div></article><article id=\"world-local-npc-talk\" class=\"world-local-npc-talk\" data-command=\"talk_npc\"><span data-i18n-en=\"NPC talk\" data-i18n-zh=\"NPC 交谈\">NPC talk</span>{}</article><article id=\"world-local-task-loop\" class=\"world-local-task-loop\" data-lifecycle-contract-version=\"trillionnium_world_local_task_lifecycle_v1\" data-pickup-command=\"offer_task\" data-completion-command=\"complete_task\" data-source-of-truth=\"rust_world_contracts_and_completions\"><span data-i18n-en=\"Task pickup / completion\" data-i18n-zh=\"任务接取 / 完成\">Task pickup / completion</span>{}</article></section>",
         escape_html_text(node_id),
         escape_html_text(&current_overlay_id),
         escape_world_visible_text(&node_name),
@@ -1792,22 +1806,6 @@ fn world_keypad_direction_label(key: &str) -> (&'static str, &'static str, &'sta
     }
 }
 
-fn world_keypad_target_for_key<'a>(
-    node: &'a WorldMapNode,
-    key: &str,
-) -> Option<(&'static str, &'a String)> {
-    if key == "5" {
-        return Some(("wait", &node.node_id));
-    }
-    world_keypad_direction_candidates(key)
-        .iter()
-        .find_map(|direction| {
-            node.exits
-                .get(*direction)
-                .map(|target| (*direction, target))
-        })
-}
-
 fn world_text_map_node_symbol(kind: &str) -> &'static str {
     match kind {
         "hub_square" => "◎",
@@ -1920,27 +1918,55 @@ fn world_text_adventure_grid_html(map_nodes: &[WorldMapNode], current_node_id: &
     rows.join("\n")
 }
 
-fn world_keypad_buttons_html(current_node: Option<&WorldMapNode>) -> String {
+fn world_keypad_buttons_html(current_node: Option<&WorldMapNode>, world: &WorldState) -> String {
     ["7", "8", "9", "4", "5", "6", "1", "2", "3"]
         .iter()
         .map(|key| {
             let (glyph, label_en, label_zh) = world_keypad_direction_label(key);
-            let target = current_node.and_then(|node| world_keypad_target_for_key(node, key));
-            let target_node_id = target
-                .map(|(_, node_id)| node_id.as_str())
+            let movement_transition = current_node
+                .map(|node| world_map_transition_decision(world, node, key));
+            let fallback_direction = world_keypad_direction_candidates(key)
+                .first()
+                .copied()
+                .unwrap_or("blocked");
+            let target_node_id = movement_transition
+                .as_ref()
+                .and_then(|transition| transition.to_node_id.as_deref())
                 .unwrap_or_default();
-            let direction = target.map(|(direction, _)| direction).unwrap_or_else(|| {
-                world_keypad_direction_candidates(key)
-                    .first()
-                    .copied()
-                    .unwrap_or("blocked")
-            });
-            let disabled = target.is_none();
+            let direction = movement_transition
+                .as_ref()
+                .map(|transition| transition.direction.as_str())
+                .unwrap_or(fallback_direction);
+            let disabled = movement_transition
+                .as_ref()
+                .map(|transition| !transition.accepted)
+                .unwrap_or(true);
+            let transition_status = movement_transition
+                .as_ref()
+                .map(|transition| transition.transition_status.as_str())
+                .unwrap_or("blocked");
+            let transition_kind = movement_transition
+                .as_ref()
+                .map(|transition| transition.transition_kind.as_str())
+                .unwrap_or("blocked_terrain");
+            let transition_result = movement_transition
+                .as_ref()
+                .map(|transition| transition.result.as_str())
+                .unwrap_or("blocked_terrain");
+            let blocked_reason = movement_transition
+                .as_ref()
+                .and_then(|transition| transition.blocked_reason.as_deref())
+                .unwrap_or("");
             format!(
-                "<button id=\"world-keypad-{}\" type=\"button\" class=\"world-keypad-button{}\" data-keypad-key=\"{}\" data-move-direction=\"{}\" data-target-node-id=\"{}\" data-rust-endpoint=\"/world/web/map-move\" data-source-of-truth=\"rust_world_map_move\" data-web-role=\"input_only\" aria-disabled=\"{}\" data-i18n-aria-label-en=\"{}\" data-i18n-aria-label-zh=\"{}\"><span>{}</span><small data-i18n-en=\"{}\" data-i18n-zh=\"{}\">{}</small></button>",
+                "<button id=\"world-keypad-{}\" type=\"button\" class=\"world-keypad-button{}\" data-keypad-key=\"{}\" data-transition-contract-version=\"{}\" data-transition-status=\"{}\" data-transition-kind=\"{}\" data-transition-result=\"{}\" data-blocked-reason=\"{}\" data-move-direction=\"{}\" data-target-node-id=\"{}\" data-rust-endpoint=\"/world/web/map-move\" data-source-of-truth=\"rust_world_map_move\" data-transition-source-of-truth=\"rust_world_map_transition_rules\" data-web-role=\"input_only\" aria-disabled=\"{}\" data-i18n-aria-label-en=\"{}\" data-i18n-aria-label-zh=\"{}\"><span>{}</span><small data-i18n-en=\"{}\" data-i18n-zh=\"{}\">{}</small></button>",
                 escape_html_text(key),
                 if disabled { " is-blocked" } else { "" },
                 escape_html_text(key),
+                TRILLIONNIUM_WORLD_TRANSITION_SEMANTICS_CONTRACT_VERSION,
+                escape_html_text(transition_status),
+                escape_html_text(transition_kind),
+                escape_html_text(transition_result),
+                escape_html_text(blocked_reason),
                 escape_html_text(direction),
                 escape_html_text(target_node_id),
                 disabled,
@@ -1986,7 +2012,9 @@ fn world_keypad_state_json(map_nodes: &[WorldMapNode], current_node_id: &str) ->
     }
     serde_json::to_string(&json!({
         "contract_version": "trillionnium_text_adventure_keypad_movement_v1",
+        "transition_contract_version": TRILLIONNIUM_WORLD_TRANSITION_SEMANTICS_CONTRACT_VERSION,
         "source_of_truth": "rust_world_map_move",
+        "transition_source_of_truth": "rust_world_map_transition_rules",
         "web_role": "input_only_visualization",
         "movement_endpoint": "/world/web/map-move",
         "visual_reference": {
@@ -2220,7 +2248,7 @@ pub(super) async fn get_world_web_shell(
                 .to_string()
         });
     let world_keypad_grid = world_text_adventure_grid_html(&map_nodes, &current_map_node_id);
-    let world_keypad_buttons = world_keypad_buttons_html(current_map_node);
+    let world_keypad_buttons = world_keypad_buttons_html(current_map_node, &league.world);
     let world_keypad_state_json = world_keypad_state_json(&map_nodes, &current_map_node_id);
     let world_keypad_current_name = current_map_node
         .map(|node| escape_world_visible_text(&node.name))
@@ -3974,7 +4002,7 @@ pub(super) async fn get_world_web_shell(
       <div id="world-hero-mobile-actions" class="world-hero-actions" data-contract-version="trillionnium_mobile_single_primary_cta_v1" data-first-screen-decision-contract="trillionnium_world_map_first_screen_decision_v1" data-parity-source="app-mobile-primary-cta" data-primary-cta-count="1" data-first-screen-loop="pick_route_submit_proof_claim_reward">
         <section id="world-mobile-route-first-sheet" class="world-mobile-action-sheet" aria-label="World mobile one route first" data-i18n-aria-label-en="World mobile one route first" data-i18n-aria-label-zh="世界移动端一条路线优先">
           <strong data-i18n-en="Current route" data-i18n-zh="当前路线">Current route</strong>
-        <section id="world-keypad-adventure-shell" class="world-keypad-adventure-shell" tabindex="0" data-contract-version="trillionnium_text_adventure_keypad_movement_v1" data-interface-style="yingxiongtanshuo_keyboard_tile_map" data-reference-project="albert10jp/yxts-gold-asm" data-reference-file="h/gmud.h" data-lcd-screen="160x80" data-lcd-viewport="5x3" data-lcd-palette="green_monochrome" data-keypad-controls="7,8,9,4,5,6,1,2,3" data-keyboard-controls="numpad,arrows,wasd" data-movement-endpoint="/world/web/map-move" data-source-of-truth="rust_world_map_move" data-web-role="input_only_visualization" aria-label="Keyboard controlled Trillionnium tile map" data-i18n-aria-label-en="Keyboard controlled Trillionnium tile map" data-i18n-aria-label-zh="小键盘操纵的 Trillionnium 格子地图">
+        <section id="world-keypad-adventure-shell" class="world-keypad-adventure-shell" tabindex="0" data-contract-version="trillionnium_text_adventure_keypad_movement_v1" data-transition-contract-version="trillionnium_world_transition_semantics_v1" data-interface-style="yingxiongtanshuo_keyboard_tile_map" data-reference-project="albert10jp/yxts-gold-asm" data-reference-file="h/gmud.h" data-lcd-screen="160x80" data-lcd-viewport="5x3" data-lcd-palette="green_monochrome" data-keypad-controls="7,8,9,4,5,6,1,2,3" data-keyboard-controls="numpad,arrows,wasd" data-movement-endpoint="/world/web/map-move" data-source-of-truth="rust_world_map_move" data-transition-source-of-truth="rust_world_map_transition_rules" data-web-role="input_only_visualization" aria-label="Keyboard controlled Trillionnium tile map" data-i18n-aria-label-en="Keyboard controlled Trillionnium tile map" data-i18n-aria-label-zh="小键盘操纵的 Trillionnium 格子地图">
           <article class="world-keypad-stage">
             <div class="world-keypad-header">
               <div>
@@ -4015,7 +4043,7 @@ pub(super) async fn get_world_web_shell(
               <small><span data-i18n-en="Exits" data-i18n-zh="出口">Exits</span>: <span id="world-keypad-current-exits">{world_keypad_current_exits}</span></small>
             </article>
             {world_play_first_action_prompt}
-            <div id="world-keypad-numpad" class="world-keypad-numpad" data-contract-version="trillionnium_text_adventure_keypad_movement_v1" data-source-of-truth="rust_world_map_move" aria-label="Numeric keypad movement" data-i18n-aria-label-en="Numeric keypad movement" data-i18n-aria-label-zh="小键盘移动">
+            <div id="world-keypad-numpad" class="world-keypad-numpad" data-contract-version="trillionnium_text_adventure_keypad_movement_v1" data-transition-contract-version="trillionnium_world_transition_semantics_v1" data-source-of-truth="rust_world_map_move" data-transition-source-of-truth="rust_world_map_transition_rules" aria-label="Numeric keypad movement" data-i18n-aria-label-en="Numeric keypad movement" data-i18n-aria-label-zh="小键盘移动">
               {world_keypad_buttons}
             </div>
             <article>
@@ -4023,7 +4051,7 @@ pub(super) async fn get_world_web_shell(
               <p data-i18n-en="Numpad 8/2/4/6 moves north/south/west/east; 7/9/1/3 are diagonals; 5 waits. Arrow keys and WASD work as shortcuts." data-i18n-zh="小键盘 8/2/4/6 对应上/下/左/右，7/9/1/3 对应斜向，5 原地等待；方向键和 WASD 也可用。">Numpad 8/2/4/6 moves north/south/west/east; 7/9/1/3 are diagonals; 5 waits. Arrow keys and WASD work as shortcuts.</p>
               <small id="world-keypad-live-status" role="status" aria-live="polite" data-i18n-en="Ready: choose a keypad direction." data-i18n-zh="已就绪：选择一个小键盘方向。">Ready: choose a keypad direction.</small>
             </article>
-            <form id="world-keypad-move-form" class="world-keypad-hidden-form" method="post" action="/world/web/map-move" data-contract-version="trillionnium_text_adventure_keypad_movement_v1" data-source-of-truth="rust_world_map_move">
+            <form id="world-keypad-move-form" class="world-keypad-hidden-form" method="post" action="/world/web/map-move" data-contract-version="trillionnium_text_adventure_keypad_movement_v1" data-transition-contract-version="trillionnium_world_transition_semantics_v1" data-source-of-truth="rust_world_map_move" data-transition-source-of-truth="rust_world_map_transition_rules">
               {csrf_input}
               <input type="hidden" name="matrix_user_id" value="{current_matrix_user_id}" />
               <input id="world-keypad-move-target" type="hidden" name="target" value="{current_map_node_id}" />
@@ -4479,6 +4507,30 @@ pub(super) async fn get_world_web_shell(
           }}
           return {{ direction: '', targetNodeId: '' }};
         }};
+        const transitionForNext = (next, key) => {{
+          const fromNode = currentNode();
+          const toNode = next?.targetNodeId ? (state.nodes || {{}})[next.targetNodeId] : null;
+          if (!fromNode || !toNode || !next?.targetNodeId) {{
+            return {{ status: 'blocked', kind: 'blocked_terrain', result: 'blocked_terrain', reason: 'no_exit_for_direction' }};
+          }}
+          const toStatus = String(toNode.status || '').trim();
+          if (toStatus && toStatus.toLowerCase() !== 'open') {{
+            if (toStatus.toLowerCase() === 'interaction_required' || toStatus.toLowerCase().startsWith('interaction_required') || toStatus.toLowerCase().startsWith('requires_')) {{
+              return {{ status: 'locked', kind: 'interaction_required', result: 'interaction_required', reason: 'target_status:' + toStatus }};
+            }}
+            return {{ status: 'locked', kind: 'locked_route', result: 'locked_route', reason: 'target_status:' + toStatus }};
+          }}
+          if (String(key || '') === '5' || String(fromNode.node_id || '') === String(toNode.node_id || '')) {{
+            return {{ status: 'accepted', kind: 'wait', result: 'wait', reason: '' }};
+          }}
+          if (String(fromNode.zone_id || '') !== String(toNode.zone_id || '')) {{
+            return {{ status: 'accepted', kind: 'zone_transition', result: 'open_exit', reason: '' }};
+          }}
+          if (String(fromNode.location_id || '') !== String(toNode.location_id || '')) {{
+            return {{ status: 'accepted', kind: 'room_transition', result: 'open_exit', reason: '' }};
+          }}
+          return {{ status: 'accepted', kind: 'local_exit', result: 'open_exit', reason: '' }};
+        }};
         const symbolForNode = (node) => {{
           if (!node) return '·';
           if (String(node.node_id || '') === String(state.current_node_id || '')) return language() === 'zh' ? '人' : '@';
@@ -4550,10 +4602,17 @@ pub(super) async fn get_world_web_shell(
           grid.dataset.currentNodeId = state.current_node_id || '';
           rebuildLcdViewport();
           document.querySelectorAll('.world-keypad-button[data-keypad-key]').forEach((button) => {{
-            const next = targetForKey(button.dataset.keypadKey || '');
+            const key = button.dataset.keypadKey || '';
+            const next = targetForKey(key);
+            const transition = transitionForNext(next, key);
+            button.dataset.transitionContractVersion = state.transition_contract_version || 'trillionnium_world_transition_semantics_v1';
+            button.dataset.transitionStatus = transition.status;
+            button.dataset.transitionKind = transition.kind;
+            button.dataset.transitionResult = transition.result || transition.kind;
+            button.dataset.blockedReason = transition.reason || '';
             button.dataset.targetNodeId = next.targetNodeId || '';
             button.dataset.moveDirection = next.direction || '';
-            const blocked = !next.targetNodeId;
+            const blocked = !next.targetNodeId || transition.status !== 'accepted';
             button.classList.toggle('is-blocked', blocked);
             button.setAttribute('aria-disabled', String(blocked));
           }});
@@ -4568,6 +4627,15 @@ pub(super) async fn get_world_web_shell(
           const next = targetForKey(key);
           if (!next.targetNodeId) {{
             if (status) status.textContent = language() === 'zh' ? '这个方向没有出口。' : 'No exit in that direction.';
+            return false;
+          }}
+          const transition = transitionForNext(next, key);
+          if (transition.status !== 'accepted') {{
+            if (status) {{
+              status.textContent = language() === 'zh'
+                ? (transition.result === 'interaction_required' ? '这条路需要先完成本地互动。' : '这条路暂时被 Rust 世界状态锁定。')
+                : (transition.result === 'interaction_required' ? 'This route needs a local interaction first.' : 'This route is locked by the Rust world state.');
+            }}
             return false;
           }}
           if (status) status.textContent = language() === 'zh' ? ('移动意图已提交：' + next.direction) : ('Move intent submitted: ' + next.direction);
@@ -4586,6 +4654,9 @@ pub(super) async fn get_world_web_shell(
             if (status) status.textContent = language() === 'zh' ? ('已移动到：' + textForNode(currentNode(), 'name')) : ('Moved to: ' + textForNode(currentNode(), 'name'));
             shell.dataset.lastInputSource = source;
             shell.dataset.lastMoveDirection = next.direction;
+            shell.dataset.lastTransitionStatus = result.movement_transition?.transition_status || transition.status || '';
+            shell.dataset.lastTransitionKind = result.movement_transition?.transition_kind || transition.kind || '';
+            shell.dataset.lastTransitionSourceOfTruth = result.movement_transition?.source_of_truth || state.transition_source_of_truth || 'rust_world_map_transition_rules';
             return true;
           }} catch (error) {{
             if (status) status.textContent = (language() === 'zh' ? '移动失败：' : 'Move failed: ') + (error && error.message ? error.message : String(error));
@@ -4620,11 +4691,13 @@ pub(super) async fn get_world_web_shell(
         window.trillionniumKeyboardMap = {{
           contract_version: state.contract_version || 'trillionnium_text_adventure_keypad_movement_v1',
           source_of_truth: state.source_of_truth || 'rust_world_map_move',
+          transition_source_of_truth: state.transition_source_of_truth || 'rust_world_map_transition_rules',
           web_role: state.web_role || 'input_only_visualization',
           getState: () => ({{
             currentNodeId: state.current_node_id,
             currentExits: {{ ...((currentNode() || {{}}).exits || {{}}) }},
             nodes: state.nodes,
+            transitionContractVersion: state.transition_contract_version || 'trillionnium_world_transition_semantics_v1',
           }}),
           move: submitMove,
         }};

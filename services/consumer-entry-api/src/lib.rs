@@ -53,6 +53,8 @@ mod openstreetmap_geodata;
 use openstreetmap_geodata::*;
 mod world_tactics;
 use world_tactics::*;
+mod world_movement;
+use world_movement::*;
 mod world_map_projection;
 use world_map_projection::*;
 mod league_core;

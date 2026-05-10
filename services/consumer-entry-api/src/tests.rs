@@ -3701,6 +3701,273 @@ async fn world_tactics_command_endpoint_validates_training_place_and_mutates_cha
     );
 }
 
+#[tokio::test]
+async fn world_map_move_endpoint_exposes_transition_semantics_contract() {
+    let state = AppState::new(test_config());
+    {
+        let mut league = state.inner.league_state.lock().await;
+        let current_id = default_world_node_id().to_string();
+        let current = league
+            .world
+            .world_map_nodes
+            .get(&current_id)
+            .cloned()
+            .expect("default world node");
+        let mut insert_node =
+            |direction: &str, node_id: &str, location_id: &str, zone_id: &str, status: &str| {
+                league
+                    .world
+                    .world_map_nodes
+                    .get_mut(&current_id)
+                    .expect("current node exits")
+                    .exits
+                    .insert(direction.to_string(), node_id.to_string());
+                league.world.world_map_nodes.insert(
+                    node_id.to_string(),
+                    WorldMapNode {
+                        node_id: node_id.to_string(),
+                        location_id: location_id.to_string(),
+                        zone_id: zone_id.to_string(),
+                        name: format!("{node_id} / 测试房间"),
+                        node_kind: "transition_test_room".to_string(),
+                        description: "Transition semantics fixture.".to_string(),
+                        x: 7,
+                        y: 7,
+                        exits: HashMap::new(),
+                        interaction_tags: Vec::new(),
+                        freedom_hooks: Vec::new(),
+                        status: status.to_string(),
+                    },
+                );
+            };
+        insert_node(
+            "north-east",
+            "world-transition-side-room",
+            "world-transition-side-room",
+            &current.zone_id,
+            "open",
+        );
+        insert_node(
+            "north-west",
+            "world-transition-locked-room",
+            &current.location_id,
+            &current.zone_id,
+            "locked",
+        );
+        insert_node(
+            "south-west",
+            "world-transition-interaction-room",
+            &current.location_id,
+            &current.zone_id,
+            "interaction_required",
+        );
+    }
+    let app = build_router(state.clone());
+
+    let (blocked_status, blocked) = send_json_request(
+        &app,
+        "POST",
+        "/v1/world/map/move",
+        &[],
+        json!({
+            "matrix_user_id": "@transition:local.dev",
+            "room_id": "!world:local.dev",
+            "target": "south-east"
+        }),
+    )
+    .await;
+    assert_eq!(blocked_status, StatusCode::CONFLICT);
+    assert_eq!(
+        blocked["movement_transition"]["contract_version"],
+        "trillionnium_world_transition_semantics_v1"
+    );
+    assert_eq!(
+        blocked["movement_transition"]["source_of_truth"],
+        "rust_world_map_transition_rules"
+    );
+    assert_eq!(
+        blocked["movement_transition"]["web_role"],
+        "intent_only_visualization_input"
+    );
+    assert_eq!(blocked["movement_transition"]["accepted"], false);
+    assert_eq!(blocked["movement_transition"]["result"], "blocked_terrain");
+    assert_eq!(
+        blocked["movement_transition"]["transition_status"],
+        "blocked"
+    );
+    assert_eq!(
+        blocked["movement_transition"]["transition_kind"],
+        "blocked_terrain"
+    );
+    assert_eq!(
+        blocked["movement_transition"]["blocked_reason"],
+        "no_exit_for_direction"
+    );
+
+    let (locked_status, locked) = send_json_request(
+        &app,
+        "POST",
+        "/v1/world/map/move",
+        &[],
+        json!({
+            "matrix_user_id": "@transition:local.dev",
+            "room_id": "!world:local.dev",
+            "target": "north-west"
+        }),
+    )
+    .await;
+    assert_eq!(locked_status, StatusCode::CONFLICT);
+    assert_eq!(locked["movement_transition"]["accepted"], false);
+    assert_eq!(locked["movement_transition"]["result"], "locked_route");
+    assert_eq!(locked["movement_transition"]["transition_status"], "locked");
+    assert_eq!(
+        locked["movement_transition"]["transition_kind"],
+        "locked_route"
+    );
+    assert_eq!(
+        locked["movement_transition"]["to_node_id"],
+        "world-transition-locked-room"
+    );
+
+    let (interaction_status, interaction) = send_json_request(
+        &app,
+        "POST",
+        "/v1/world/map/move",
+        &[],
+        json!({
+            "matrix_user_id": "@transition:local.dev",
+            "room_id": "!world:local.dev",
+            "target": "south-west"
+        }),
+    )
+    .await;
+    assert_eq!(interaction_status, StatusCode::CONFLICT);
+    assert_eq!(
+        interaction["movement_transition"]["result"],
+        "interaction_required"
+    );
+    assert_eq!(
+        interaction["movement_transition"]["transition_kind"],
+        "interaction_required"
+    );
+    assert_eq!(
+        interaction["movement_transition"]["requires_interaction"],
+        true
+    );
+
+    let (room_status, room) = send_json_request(
+        &app,
+        "POST",
+        "/v1/world/map/move",
+        &[],
+        json!({
+            "matrix_user_id": "@transition:local.dev",
+            "room_id": "!world:local.dev",
+            "target": "north-east"
+        }),
+    )
+    .await;
+    assert_eq!(room_status, StatusCode::OK);
+    assert_eq!(room["movement_transition"]["accepted"], true);
+    assert_eq!(room["movement_transition"]["result"], "open_exit");
+    assert_eq!(room["movement_transition"]["transition_status"], "accepted");
+    assert_eq!(
+        room["movement_transition"]["transition_kind"],
+        "room_transition"
+    );
+    assert_eq!(room["movement_transition"]["changes_location"], true);
+    assert_eq!(room["movement_transition"]["changes_zone"], false);
+    assert_eq!(room["position"]["node_id"], "world-transition-side-room");
+}
+
+#[tokio::test]
+async fn world_web_shell_marks_keypad_and_exit_transition_semantics() {
+    let state = AppState::new(test_config());
+    {
+        let mut league = state.inner.league_state.lock().await;
+        let current_id = default_world_node_id().to_string();
+        let current = league
+            .world
+            .world_map_nodes
+            .get(&current_id)
+            .cloned()
+            .expect("default world node");
+        for (direction, node_id, location_id, zone_id, status) in [
+            (
+                "north-east",
+                "world-shell-side-room",
+                "world-shell-side-room",
+                current.zone_id.as_str(),
+                "open",
+            ),
+            (
+                "north-west",
+                "world-shell-locked-room",
+                current.location_id.as_str(),
+                current.zone_id.as_str(),
+                "locked",
+            ),
+            (
+                "south-west",
+                "world-shell-interaction-room",
+                current.location_id.as_str(),
+                current.zone_id.as_str(),
+                "interaction_required",
+            ),
+        ] {
+            league
+                .world
+                .world_map_nodes
+                .get_mut(&current_id)
+                .expect("current node exits")
+                .exits
+                .insert(direction.to_string(), node_id.to_string());
+            league.world.world_map_nodes.insert(
+                node_id.to_string(),
+                WorldMapNode {
+                    node_id: node_id.to_string(),
+                    location_id: location_id.to_string(),
+                    zone_id: zone_id.to_string(),
+                    name: format!("{node_id} / 壳测试房间"),
+                    node_kind: "transition_shell_room".to_string(),
+                    description: "Transition shell fixture.".to_string(),
+                    x: 8,
+                    y: 8,
+                    exits: HashMap::new(),
+                    interaction_tags: Vec::new(),
+                    freedom_hooks: Vec::new(),
+                    status: status.to_string(),
+                },
+            );
+        }
+    }
+
+    let world_html = get_world_web_shell(
+        axum::extract::State(state.clone()),
+        HeaderMap::new(),
+        axum::extract::Query(HashMap::new()),
+    )
+    .await
+    .0;
+    assert!(world_html.contains("trillionnium_world_transition_semantics_v1"));
+    assert!(
+        world_html.contains("data-transition-source-of-truth=\"rust_world_map_transition_rules\"")
+    );
+    assert!(world_html.contains("data-transition-kind=\"blocked_terrain\""));
+    assert!(world_html.contains("data-blocked-reason=\"no_exit_for_direction\""));
+    assert!(world_html.contains("data-transition-status=\"locked\""));
+    assert!(world_html.contains("data-transition-kind=\"locked_route\""));
+    assert!(world_html.contains("data-transition-kind=\"interaction_required\""));
+    assert!(world_html.contains("data-requires-interaction=\"true\""));
+    assert!(world_html.contains("data-transition-kind=\"room_transition\""));
+    assert!(world_html.contains("data-changes-location=\"true\""));
+    assert!(world_html.contains(
+        "\"transition_contract_version\":\"trillionnium_world_transition_semantics_v1\""
+    ));
+    assert!(world_html.contains("transitionForNext"));
+    assert!(world_html.contains("window.trillionniumKeyboardMap"));
+}
+
 #[test]
 fn world_home_json_exposes_shared_renderer_adapter_for_matrix_cards() {
     let league = default_league_state();
