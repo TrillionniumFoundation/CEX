@@ -1805,6 +1805,30 @@ struct HealthWorldProjection {
     route_artifacts: WorldRouteArtifacts,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct HealthWorldReadinessBundleCacheKey {
+    generation: u64,
+    profile_ok: bool,
+    identity_governance_valid: bool,
+    session_auth_registry_governance_valid: bool,
+    league_repository_runtime_fingerprint: String,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct HealthWorldReadinessBundle {
+    maturity: Value,
+    closed_beta_prototype: Value,
+    real_user_beta: Value,
+    public_commercial_product: Value,
+    playability_scorecard: Value,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct HealthWorldReadinessBundleCache {
+    key: HealthWorldReadinessBundleCacheKey,
+    bundle: HealthWorldReadinessBundle,
+}
+
 impl HealthWorldProjection {
     fn new(league: &LeagueState) -> Self {
         let matrix_user_id = first_maturity_matrix_user_id(league);
@@ -1814,6 +1838,98 @@ impl HealthWorldProjection {
             matrix_user_id,
         }
     }
+}
+
+async fn trillionnium_world_readiness_bundle(
+    state: &AppState,
+    profile_ok: bool,
+    identity_governance_valid: bool,
+    session_auth_registry_governance_valid: bool,
+    league_repository_runtime: &Value,
+) -> HealthWorldReadinessBundle {
+    let key = HealthWorldReadinessBundleCacheKey {
+        generation: state
+            .inner
+            .health_world_readiness_cache_generation
+            .load(Ordering::Relaxed),
+        profile_ok,
+        identity_governance_valid,
+        session_auth_registry_governance_valid,
+        league_repository_runtime_fingerprint: league_repository_runtime.to_string(),
+    };
+    {
+        let cache = state.inner.health_world_readiness_cache.lock().await;
+        if let Some(cache) = cache.as_ref() {
+            if cache.key == key {
+                return cache.bundle.clone();
+            }
+        }
+    }
+
+    let bundle = {
+        let league = state.inner.league_state.lock().await;
+        let projection = HealthWorldProjection::new(&league);
+        let maturity = trillionnium_world_maturity_axes_json(
+            &league,
+            state.config(),
+            profile_ok,
+            league_repository_runtime,
+            &projection,
+        );
+        let closed_beta_prototype = trillionnium_world_closed_beta_prototype_json(
+            &league,
+            state.config(),
+            profile_ok,
+            identity_governance_valid,
+            session_auth_registry_governance_valid,
+            league_repository_runtime,
+            &maturity,
+            &projection,
+        );
+        let real_user_beta = trillionnium_world_real_user_beta_json(
+            &league,
+            state.config(),
+            profile_ok,
+            identity_governance_valid,
+            session_auth_registry_governance_valid,
+            league_repository_runtime,
+            &closed_beta_prototype,
+            &projection,
+        );
+        let public_commercial_product = trillionnium_world_public_commercial_product_json(
+            &league,
+            state.config(),
+            profile_ok,
+            identity_governance_valid,
+            session_auth_registry_governance_valid,
+            league_repository_runtime,
+            &real_user_beta,
+            &projection,
+        );
+        let playability_scorecard = trillionnium_world_playability_scorecard_json(
+            &league,
+            &maturity,
+            &closed_beta_prototype,
+            &real_user_beta,
+            &public_commercial_product,
+            league_repository_runtime,
+            &projection,
+        );
+        HealthWorldReadinessBundle {
+            maturity,
+            closed_beta_prototype,
+            real_user_beta,
+            public_commercial_product,
+            playability_scorecard,
+        }
+    };
+
+    let mut cache = state.inner.health_world_readiness_cache.lock().await;
+    *cache = Some(HealthWorldReadinessBundleCache {
+        key,
+        bundle: bundle.clone(),
+    });
+    bundle
 }
 
 fn trillionnium_world_maturity_axes_json(
@@ -4141,69 +4257,23 @@ pub(super) async fn health(State(state): State<AppState>) -> Json<Value> {
         .get("valid")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let (
-        trillionnium_world_maturity,
-        trillionnium_world_closed_beta_prototype,
-        trillionnium_world_real_user_beta,
-        trillionnium_world_public_commercial_product,
-        trillionnium_world_playability_scorecard,
-    ) = {
-        let league = state.inner.league_state.lock().await;
-        let projection = HealthWorldProjection::new(&league);
-        let maturity = trillionnium_world_maturity_axes_json(
-            &league,
-            state.config(),
-            profile_ok,
-            &league_repository_runtime,
-            &projection,
-        );
-        let closed_beta = trillionnium_world_closed_beta_prototype_json(
-            &league,
-            state.config(),
-            profile_ok,
-            identity_governance_valid,
-            session_auth_registry_governance_valid,
-            &league_repository_runtime,
-            &maturity,
-            &projection,
-        );
-        let real_user_beta = trillionnium_world_real_user_beta_json(
-            &league,
-            state.config(),
-            profile_ok,
-            identity_governance_valid,
-            session_auth_registry_governance_valid,
-            &league_repository_runtime,
-            &closed_beta,
-            &projection,
-        );
-        let public_commercial_product = trillionnium_world_public_commercial_product_json(
-            &league,
-            state.config(),
-            profile_ok,
-            identity_governance_valid,
-            session_auth_registry_governance_valid,
-            &league_repository_runtime,
-            &real_user_beta,
-            &projection,
-        );
-        let playability_scorecard = trillionnium_world_playability_scorecard_json(
-            &league,
-            &maturity,
-            &closed_beta,
-            &real_user_beta,
-            &public_commercial_product,
-            &league_repository_runtime,
-            &projection,
-        );
-        (
-            maturity,
-            closed_beta,
-            real_user_beta,
-            public_commercial_product,
-            playability_scorecard,
-        )
-    };
+    let trillionnium_world_readiness = trillionnium_world_readiness_bundle(
+        &state,
+        profile_ok,
+        identity_governance_valid,
+        session_auth_registry_governance_valid,
+        &league_repository_runtime,
+    )
+    .await;
+    let trillionnium_world_maturity = trillionnium_world_readiness.maturity.clone();
+    let trillionnium_world_closed_beta_prototype =
+        trillionnium_world_readiness.closed_beta_prototype.clone();
+    let trillionnium_world_real_user_beta = trillionnium_world_readiness.real_user_beta.clone();
+    let trillionnium_world_public_commercial_product = trillionnium_world_readiness
+        .public_commercial_product
+        .clone();
+    let trillionnium_world_playability_scorecard =
+        trillionnium_world_readiness.playability_scorecard;
     let metrics_snapshot = state.inner.metrics.snapshot();
     let world_map_rum_slo_metrics_gate = world_map_rum_slo_gate_from_metrics(&metrics_snapshot);
     let world_map_delta_cache_gate = world_map_delta_cache_gate_from_metrics(&metrics_snapshot);
@@ -4468,69 +4538,23 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
         .and_then(Value::as_bool)
         .unwrap_or(false);
     let league_repository_runtime = league_repository_runtime_json(state.config());
-    let (
-        trillionnium_world_maturity,
-        trillionnium_world_closed_beta_prototype,
-        trillionnium_world_real_user_beta,
-        trillionnium_world_public_commercial_product,
-        trillionnium_world_playability_scorecard,
-    ) = {
-        let league = state.inner.league_state.lock().await;
-        let projection = HealthWorldProjection::new(&league);
-        let maturity = trillionnium_world_maturity_axes_json(
-            &league,
-            state.config(),
-            profile_ok_bool,
-            &league_repository_runtime,
-            &projection,
-        );
-        let closed_beta = trillionnium_world_closed_beta_prototype_json(
-            &league,
-            state.config(),
-            profile_ok_bool,
-            governance_valid,
-            session_auth_registry_governance_valid,
-            &league_repository_runtime,
-            &maturity,
-            &projection,
-        );
-        let real_user_beta = trillionnium_world_real_user_beta_json(
-            &league,
-            state.config(),
-            profile_ok_bool,
-            governance_valid,
-            session_auth_registry_governance_valid,
-            &league_repository_runtime,
-            &closed_beta,
-            &projection,
-        );
-        let public_commercial_product = trillionnium_world_public_commercial_product_json(
-            &league,
-            state.config(),
-            profile_ok_bool,
-            governance_valid,
-            session_auth_registry_governance_valid,
-            &league_repository_runtime,
-            &real_user_beta,
-            &projection,
-        );
-        let playability_scorecard = trillionnium_world_playability_scorecard_json(
-            &league,
-            &maturity,
-            &closed_beta,
-            &real_user_beta,
-            &public_commercial_product,
-            &league_repository_runtime,
-            &projection,
-        );
-        (
-            maturity,
-            closed_beta,
-            real_user_beta,
-            public_commercial_product,
-            playability_scorecard,
-        )
-    };
+    let trillionnium_world_readiness = trillionnium_world_readiness_bundle(
+        &state,
+        profile_ok_bool,
+        governance_valid,
+        session_auth_registry_governance_valid,
+        &league_repository_runtime,
+    )
+    .await;
+    let trillionnium_world_maturity = trillionnium_world_readiness.maturity.clone();
+    let trillionnium_world_closed_beta_prototype =
+        trillionnium_world_readiness.closed_beta_prototype.clone();
+    let trillionnium_world_real_user_beta = trillionnium_world_readiness.real_user_beta.clone();
+    let trillionnium_world_public_commercial_product = trillionnium_world_readiness
+        .public_commercial_product
+        .clone();
+    let trillionnium_world_playability_scorecard =
+        trillionnium_world_readiness.playability_scorecard;
     let empty_route_runner_handoff_gate = json!({});
     let playability_route_runner_handoff_gate = trillionnium_world_playability_scorecard
         .get("route_runner_handoff_gate")

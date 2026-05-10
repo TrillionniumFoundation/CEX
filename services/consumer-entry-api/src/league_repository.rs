@@ -5076,5 +5076,9 @@ pub(super) async fn persist_league_state_with_command(
         )
         .await?;
     }
+    state
+        .inner
+        .health_world_readiness_cache_generation
+        .fetch_add(1, Ordering::Relaxed);
     Ok(())
 }

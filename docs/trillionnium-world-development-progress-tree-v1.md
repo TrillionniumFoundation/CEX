@@ -1309,10 +1309,28 @@ Also append a one-paragraph summary to `/home/qian/.openclaw/workspace/memory/YY
 
 ---
 
+#### Update 2026-05-10 15:xx CST
+
+- Commit: this commit (`fix: cache health readiness projection`)
+- Completed the next technical cap: `/health` and `/metrics` latency under accumulated normalized SQL state.
+  - [x] Added a shared `HealthWorldReadinessBundle` cache for the expensive Trillionnium maturity / closed-beta / real-user-beta / public-commercial / playability-scorecard projection bundle.
+  - [x] `/health` and `/metrics` now reuse the same cached readiness bundle instead of rebuilding the full world projection independently on every probe.
+  - [x] The cache is keyed by profile/governance/repository runtime inputs and a league readiness generation counter.
+  - [x] League persistence increments the generation counter, so mutating world/league commands invalidate stale readiness evidence before the next gate read.
+  - [x] Human-playability assessment now hard-requires interactive `/health` and `/metrics` latency (`<=1s`) and raises the evidence-backed technical score from `9.3/10` to `9.5/10`.
+- Baseline before this slice: repeated probes were roughly `/health` `27-28s` and `/metrics` `27-29s`.
+- Latest local-production probe after restart/status: `/health` `0.059346s`, `0.060291s`, `0.025344s`; `/metrics` `0.006621s`, `0.009149s`, `0.007014s`.
+- Latest assessment evidence: `run/human-playability-assessment/human-playability-assessment-summary-1778397666.json` (`ok=true`, scores `9.5 / 8.5 / 7.0`, `/health` `0.059792s`, `/metrics` `0.009939s`).
+- Validation green: `cargo fmt --all -- --check`, `cargo check -p consumer-entry-api`, `cargo test -p consumer-entry-api -- --nocapture` (`133 passed`), local-production restart/status, latency probes, `bash -n scripts/check-trillionnium-world-human-playability-assessment.sh`, human-playability assessment gate, and `git diff --check`.
+- Remaining next: add concurrent p95/load-soak evidence before claiming `9.7+` technical playability; run a real 5-10 person first-beta cohort; add commercial launch drills for payment/refund support, legal/privacy review, operator runbooks, and live traffic/error budgets.
+- Constraints preserved: no live Overpass/Geofabrik ingestion, no MapLibre promotion, no MedievalWar/Phaser vendoring, and Rust remains source of truth.
+
+---
+
 ## Current Next Pointer
 
 If the next instruction is simply “continue”, start here:
 
-> **Next pointer:** Human-playability assessment is now an explicit gate: `9.3/10` technical, `8.5/10` first internal beta, `7.0/10` commercial release from the operator baselines `8.5 / 7.5 / 6.0`. Product completion remains roughly 99% if blocked/forbidden items are excluded. If the next instruction is simply “continue”, prioritize (a) optimizing `/health` and `/metrics` latency under accumulated normalized SQL state, then (b) real 5-10 person first-beta cohort evidence, then (c) commercial launch drills/payment-support-legal-live-traffic readiness. Do not treat TW-8 policy bullets as unfinished product backlog.
+> **Next pointer:** Human-playability assessment is now an explicit gate: `9.5/10` technical, `8.5/10` first internal beta, `7.0/10` commercial release from the operator baselines `8.5 / 7.5 / 6.0`. Product completion remains roughly 99% if blocked/forbidden items are excluded. If the next instruction is simply “continue”, prioritize (a) concurrent p95/load-soak evidence for `/health` and `/metrics`, then (b) real 5-10 person first-beta cohort evidence, then (c) commercial launch drills/payment-support-legal-live-traffic readiness. Do not treat TW-8 policy bullets as unfinished product backlog.
 
 Do not start live Overpass/Geofabrik ingestion yet. Do not promote MapLibre. Do not convert the web shell into a standalone JS source of truth.

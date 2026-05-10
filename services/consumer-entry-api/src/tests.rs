@@ -55,7 +55,7 @@ use std::{
     collections::{HashMap, VecDeque},
     fs,
     path::Path,
-    sync::{Arc, RwLock as StdRwLock},
+    sync::{atomic::AtomicU64, Arc, RwLock as StdRwLock},
     time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::{Mutex, RwLock};
@@ -1078,6 +1078,8 @@ fn test_state(
             identity_binding_audit_state: RwLock::new(IdentityBindingAuditState::default()),
             session_auth_issuer_registry_state: StdRwLock::new(session_auth_issuer_registry_state),
             league_state: Mutex::new(default_league_state()),
+            health_world_readiness_cache_generation: AtomicU64::new(0),
+            health_world_readiness_cache: Mutex::new(None),
             rate_limits: Mutex::new(RateLimitCache::default()),
             replay_cache: Mutex::new(ReplayCache::default()),
             metrics: ConsumerEntryMetrics::default(),
