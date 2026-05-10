@@ -1541,6 +1541,148 @@ fn world_play_first_local_npc_forms_html(
         .join("\n")
 }
 
+fn world_play_first_skill_practice_html(
+    tactics_board: &Value,
+    current_overlay_id: &str,
+    current_matrix_user_id: &str,
+    csrf_input: &str,
+) -> String {
+    let known_skill_ids = tactics_board
+        .get("trillionnium_character")
+        .and_then(|character| character.get("skill_ids"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|skill| skill.as_str().map(ToString::to_string))
+        .collect::<Vec<_>>();
+    let training_commands = tactics_board
+        .get("training_commands")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let local_npcs = tactics_board
+        .get("npcs")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|npc| {
+            npc.get("osm_game_overlay_id")
+                .and_then(Value::as_str)
+                .is_some_and(|overlay_id| overlay_id == current_overlay_id)
+        })
+        .collect::<Vec<_>>();
+
+    let mut practice_cards = Vec::new();
+    for npc in local_npcs {
+        let npc_id = npc.get("npc_id").and_then(Value::as_str).unwrap_or("npc");
+        let display_name = npc
+            .get("display_name")
+            .and_then(Value::as_str)
+            .unwrap_or(npc_id);
+        let training_skill_ids = npc
+            .get("command_descriptors")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .find(|descriptor| {
+                descriptor
+                    .get("command")
+                    .and_then(Value::as_str)
+                    .is_some_and(|command| command == "train_skill")
+            })
+            .and_then(|descriptor| descriptor.get("skill_ids").cloned())
+            .and_then(|skill_ids| skill_ids.as_array().cloned())
+            .unwrap_or_default();
+
+        for skill_id in training_skill_ids
+            .into_iter()
+            .filter_map(|skill| skill.as_str().map(ToString::to_string))
+        {
+            let Some(training) = training_commands.iter().find(|command| {
+                command
+                    .get("skill_id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|value| value == skill_id)
+                    && command
+                        .get("mentor_npc_id")
+                        .and_then(Value::as_str)
+                        .is_some_and(|value| value == npc_id)
+                    && command
+                        .get("required_osm_game_overlay_id")
+                        .and_then(Value::as_str)
+                        .is_some_and(|value| value == current_overlay_id)
+            }) else {
+                continue;
+            };
+            let already_known = known_skill_ids.iter().any(|known| known == &skill_id);
+            let required_role = training
+                .get("required_semantic_role")
+                .and_then(Value::as_str)
+                .unwrap_or("mentor_home");
+            let cost_xp = training.get("cost_xp").and_then(Value::as_i64).unwrap_or(0);
+            let cooldown_seconds = training
+                .get("cooldown_seconds")
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
+            let training_contract = training
+                .get("contract_version")
+                .and_then(Value::as_str)
+                .unwrap_or(TRILLIONNIUM_TRAINING_CONTRACT_VERSION);
+            let mentor_flow_id = training
+                .get("mentor_training_task_flow_id")
+                .and_then(Value::as_str)
+                .unwrap_or("mentor-training:basic_unarmed");
+            let skill_label = world_trillionnium_skill_english_label(&skill_id);
+            practice_cards.push(format!(
+                "<article class=\"world-local-skill-practice-card\" data-skill-id=\"{}\" data-mentor-npc-id=\"{}\" data-known-skill=\"{}\" data-required-osm-game-overlay-id=\"{}\" data-source-of-truth=\"rust_trillionnium_character\"><strong>{}</strong><span>{}</span><small>{} · {}xp · cooldown {}s · known {}</small><form class=\"world-local-skill-practice-form\" method=\"post\" action=\"/world/web/tactics-command\" data-contract-version=\"{}\" data-skill-practice-contract-version=\"{}\" data-command=\"train_skill\" data-skill-id=\"{}\" data-mentor-npc-id=\"{}\" data-mentor-training-task-flow-id=\"{}\" data-validation-owner=\"rust_mentor_training_validator\" data-command-handler-owner=\"rust_world_tactics_command_handler\" data-source-of-truth=\"rust_mentor_training_validator\" data-web-role=\"intent_only_visualization_input\">{}<input type=\"hidden\" name=\"matrix_user_id\" value=\"{}\"><input type=\"hidden\" name=\"command\" value=\"train_skill\"><input type=\"hidden\" name=\"unit_id\" value=\"lord\"><input type=\"hidden\" name=\"target_tile\" value=\"G8\"><input type=\"hidden\" name=\"skill_id\" value=\"{}\"><input type=\"hidden\" name=\"npc_id\" value=\"{}\"><input type=\"hidden\" name=\"osm_game_overlay_id\" value=\"{}\"><input type=\"hidden\" name=\"body\" value=\"local mentor practice: {} with {} at {}\"><button type=\"submit\" data-i18n-en=\"Practice {}\" data-i18n-zh=\"修炼 {}\">Practice {}</button></form></article>",
+                escape_html_text(&skill_id),
+                escape_html_text(npc_id),
+                already_known,
+                escape_html_text(current_overlay_id),
+                escape_html_text(skill_label),
+                escape_world_visible_text(display_name),
+                escape_html_text(required_role),
+                cost_xp,
+                cooldown_seconds,
+                already_known,
+                escape_html_text(training_contract),
+                escape_html_text(TRILLIONNIUM_WORLD_SKILL_PRACTICE_LOOP_CONTRACT_VERSION),
+                escape_html_text(&skill_id),
+                escape_html_text(npc_id),
+                escape_html_text(mentor_flow_id),
+                csrf_input,
+                escape_html_text(current_matrix_user_id),
+                escape_html_text(&skill_id),
+                escape_html_text(npc_id),
+                escape_html_text(current_overlay_id),
+                escape_html_text(&skill_id),
+                escape_html_text(npc_id),
+                escape_html_text(current_overlay_id),
+                escape_html_text(skill_label),
+                escape_html_text(&skill_id),
+                escape_html_text(skill_label),
+            ));
+        }
+    }
+
+    let feedback = format!(
+        "<aside id=\"world-local-skill-practice-feedback\" data-known-skill-count=\"{}\" data-source-of-truth=\"rust_trillionnium_character\" data-web-role=\"visualization_input_only\"><strong data-i18n-en=\"Known skills\" data-i18n-zh=\"已会技能\">Known skills</strong><span>{}</span></aside>",
+        known_skill_ids.len(),
+        escape_html_text(&known_skill_ids.join(", ")),
+    );
+    if practice_cards.is_empty() {
+        return format!(
+            "<article class=\"world-local-skill-practice-empty\" data-practice-available=\"false\" data-current-overlay-id=\"{}\"><strong data-i18n-en=\"No local mentor practice\" data-i18n-zh=\"本地暂无导师修炼\">No local mentor practice</strong><span data-i18n-en=\"Travel to a mentor node, then practice from the map room before entering tactics.\" data-i18n-zh=\"移动到导师所在节点后，可直接在地图房间里修炼。\">Travel to a mentor node, then practice from the map room before entering tactics.</span></article>{}",
+            escape_html_text(current_overlay_id),
+            feedback,
+        );
+    }
+    format!("{}{}", practice_cards.join("\n"), feedback)
+}
+
 fn world_play_first_local_task_html(
     league: &LeagueState,
     tactics_board: &Value,
@@ -1789,6 +1931,12 @@ fn world_play_first_action_prompt_html(
         current_matrix_user_id,
         csrf_input,
     );
+    let skill_practice_html = world_play_first_skill_practice_html(
+        tactics_board,
+        &current_overlay_id,
+        current_matrix_user_id,
+        csrf_input,
+    );
     let local_task_html = world_play_first_local_task_html(
         league,
         tactics_board,
@@ -1799,7 +1947,7 @@ fn world_play_first_action_prompt_html(
     );
     let objective_travel_html = world_objective_travel_html(tactics_board);
     format!(
-        "<section id=\"world-play-first-action-prompt\" class=\"world-play-first-action-prompt\" data-contract-version=\"trillionnium_world_play_first_exploration_loop_v1\" data-local-task-lifecycle-contract-version=\"trillionnium_world_local_task_lifecycle_v1\" data-transition-contract-version=\"trillionnium_world_transition_semantics_v1\" data-objective-travel-contract-version=\"trillionnium_world_objective_travel_v1\" data-current-node-id=\"{}\" data-current-overlay-id=\"{}\" data-source-of-truth=\"rust_world_map_nodes_and_tactics_commands\" data-web-role=\"intent_only_visualization_input\" aria-label=\"Current location exits local actions NPC task loop\"><article id=\"world-current-location-card\" class=\"world-current-location-card\"><span data-i18n-en=\"Current location\" data-i18n-zh=\"当前位置\">Current location</span><strong>{}</strong><small>{} · {}</small><p>{}</p></article><article id=\"world-current-exits\" class=\"world-current-exits\" data-transition-contract-version=\"trillionnium_world_transition_semantics_v1\"><span data-i18n-en=\"Exits\" data-i18n-zh=\"出口\">Exits</span><div class=\"world-local-exit-grid\">{}</div></article><article id=\"world-local-actions\" class=\"world-local-actions\"><span data-i18n-en=\"Local actions\" data-i18n-zh=\"本地动作\">Local actions</span><div class=\"world-local-action-chip-row\">{}</div></article><article id=\"world-local-npc-talk\" class=\"world-local-npc-talk\" data-command=\"talk_npc\"><span data-i18n-en=\"NPC talk\" data-i18n-zh=\"NPC 交谈\">NPC talk</span>{}</article><article id=\"world-local-task-loop\" class=\"world-local-task-loop\" data-lifecycle-contract-version=\"trillionnium_world_local_task_lifecycle_v1\" data-pickup-command=\"offer_task\" data-completion-command=\"complete_task\" data-source-of-truth=\"rust_world_contracts_and_completions\"><span data-i18n-en=\"Task pickup / completion\" data-i18n-zh=\"任务接取 / 完成\">Task pickup / completion</span>{}</article>{}</section>",
+        "<section id=\"world-play-first-action-prompt\" class=\"world-play-first-action-prompt\" data-contract-version=\"trillionnium_world_play_first_exploration_loop_v1\" data-local-task-lifecycle-contract-version=\"trillionnium_world_local_task_lifecycle_v1\" data-skill-practice-contract-version=\"trillionnium_world_skill_practice_loop_v1\" data-transition-contract-version=\"trillionnium_world_transition_semantics_v1\" data-objective-travel-contract-version=\"trillionnium_world_objective_travel_v1\" data-current-node-id=\"{}\" data-current-overlay-id=\"{}\" data-source-of-truth=\"rust_world_map_nodes_and_tactics_commands\" data-web-role=\"intent_only_visualization_input\" aria-label=\"Current location exits local actions NPC mentor practice task loop\"><article id=\"world-current-location-card\" class=\"world-current-location-card\"><span data-i18n-en=\"Current location\" data-i18n-zh=\"当前位置\">Current location</span><strong>{}</strong><small>{} · {}</small><p>{}</p></article><article id=\"world-current-exits\" class=\"world-current-exits\" data-transition-contract-version=\"trillionnium_world_transition_semantics_v1\"><span data-i18n-en=\"Exits\" data-i18n-zh=\"出口\">Exits</span><div class=\"world-local-exit-grid\">{}</div></article><article id=\"world-local-actions\" class=\"world-local-actions\"><span data-i18n-en=\"Local actions\" data-i18n-zh=\"本地动作\">Local actions</span><div class=\"world-local-action-chip-row\">{}</div></article><article id=\"world-local-npc-talk\" class=\"world-local-npc-talk\" data-command=\"talk_npc\"><span data-i18n-en=\"NPC talk\" data-i18n-zh=\"NPC 交谈\">NPC talk</span>{}</article><article id=\"world-local-skill-practice\" class=\"world-local-skill-practice\" data-contract-version=\"trillionnium_world_skill_practice_loop_v1\" data-practice-command=\"train_skill\" data-training-contract-version=\"trillionnium_training_command_v1\" data-mentor-training-task-contract-version=\"trillionnium_mentor_training_task_v1\" data-source-of-truth=\"rust_mentor_training_validator\" data-web-role=\"intent_only_visualization_input\"><span data-i18n-en=\"Skill practice / mentor\" data-i18n-zh=\"技能修炼 / 导师\">Skill practice / mentor</span>{}</article><article id=\"world-local-task-loop\" class=\"world-local-task-loop\" data-lifecycle-contract-version=\"trillionnium_world_local_task_lifecycle_v1\" data-pickup-command=\"offer_task\" data-completion-command=\"complete_task\" data-source-of-truth=\"rust_world_contracts_and_completions\"><span data-i18n-en=\"Task pickup / completion\" data-i18n-zh=\"任务接取 / 完成\">Task pickup / completion</span>{}</article>{}</section>",
         escape_html_text(node_id),
         escape_html_text(&current_overlay_id),
         escape_world_visible_text(&node_name),
@@ -1809,6 +1957,7 @@ fn world_play_first_action_prompt_html(
         exits_html,
         local_actions_html,
         local_npc_html,
+        skill_practice_html,
         local_task_html,
         objective_travel_html,
     )
@@ -3812,11 +3961,12 @@ pub(super) async fn get_world_web_shell(
     .world-local-exit-grid,.world-local-npc-actions {{ display:flex; flex-wrap:wrap; gap:4px; }}
     .world-local-action-chip-row {{ display:flex; flex-wrap:wrap; gap:3px; }}
     .world-local-action-chip-row span {{ border:1px solid rgba(11,16,7,.68); border-radius:0; padding:2px 4px; color:#0b1007; background:rgba(255,255,255,.18); text-transform:none; letter-spacing:0; }}
-    .world-local-exit-form,.world-local-npc-form,.world-local-task-form {{ margin:0; }}
-    .world-local-exit-form button,.world-local-npc-form button,.world-local-task-form button {{ min-height:24px; border:1px solid #0b1007; border-radius:0; background:#cfc3ad; color:#0b0b0b; padding:3px 5px; font:900 9px/1 ui-monospace,"SFMono-Regular","Noto Sans Mono CJK SC",monospace; box-shadow:none; cursor:pointer; }}
+    .world-local-exit-form,.world-local-npc-form,.world-local-task-form,.world-local-skill-practice-form {{ margin:0; }}
+    .world-local-exit-form button,.world-local-npc-form button,.world-local-task-form button,.world-local-skill-practice-form button {{ min-height:24px; border:1px solid #0b1007; border-radius:0; background:#cfc3ad; color:#0b0b0b; padding:3px 5px; font:900 9px/1 ui-monospace,"SFMono-Regular","Noto Sans Mono CJK SC",monospace; box-shadow:none; cursor:pointer; }}
     .world-local-exit-form button {{ display:grid; justify-items:start; gap:1px; min-width:82px; }}
     .world-local-exit-form button span {{ color:#0b0b0b; font-size:8px; text-transform:none; letter-spacing:0; }}
-    .world-local-task-card,.world-local-npc-card {{ display:grid; gap:3px; }}
+    .world-local-task-card,.world-local-npc-card,.world-local-skill-practice-card,.world-local-skill-practice-empty {{ display:grid; gap:3px; }}
+    .world-local-skill-practice-feedback {{ border:1px solid rgba(11,16,7,.72); background:rgba(255,255,255,.16); display:grid; gap:2px; padding:3px; }}
     .world-objective-travel {{ display:grid; gap:4px; }}
     .world-objective-travel-path,.world-objective-party-strip {{ display:flex; flex-wrap:wrap; gap:3px; align-items:center; }}
     .world-objective-travel-path b {{ font-size:8px; color:#0b1007; }}

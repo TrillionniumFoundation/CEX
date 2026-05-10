@@ -1,9 +1,9 @@
 # Trillionnium World Development Progress Tree v1
 
 Generated: 2026-05-08 18:11 CST  
-Last audited: 2026-05-10 23:2x CST
-Current code checkpoint: `feat: gate world objective travel` (this commit)
-Current progress-tree checkpoint before this expansion: `40f7482 feat: gate world movement transitions`
+Last audited: 2026-05-11 00:07 CST
+Current code checkpoint: `feat: gate world mentor skill practice` (this commit)
+Current progress-tree checkpoint before this expansion: `da20c1a feat: gate world objective travel`
 Repo: `/home/qian/.openclaw/workspace/CEX`
 
 This document is the handoff spine for continuing Trillionnium World development without losing state after chat compaction, runtime restarts, or long task chains.
@@ -725,8 +725,8 @@ git log --oneline -5
   - Evidence: `trillionnium_world_local_task_lifecycle_v1`; Browser E2E moves to `mirror-city-square` and exercises `talk_npc` from the play-first prompt.
 - [x] TW-3.13 Add task pickup/completion as map-node actions.
   - Evidence: Browser E2E covers `offer_task`, active task visibility, `complete_task`, completion feedback from `rust_world_contract_completions`, and completion form disappearance after submission/review state.
-- [ ] TW-3.14 Add skill practice and mentor interaction into the exploration loop.
-  - Training exists in tactics/first-human flow; it needs map-node affordances and feedback like a real exploration RPG.
+- [x] TW-3.14 Add skill practice and mentor interaction into the exploration loop.
+  - Evidence: `trillionnium_world_skill_practice_loop_v1`; `/world` play-first prompt now exposes node-local mentor practice, `train_skill` forms, Rust mentor/NPC/place validation, and character skill feedback from `rust_trillionnium_character`. Browser E2E exercises `basic_unarmed` practice at `mirror-city-square` before local NPC/task flow and records `coverage.world_local_skill_practice_mentor_loop=true`.
 - [ ] TW-3.15 Add lightweight combat encounter entry from exploration nodes.
   - Combat/tactics exists; exploration should be able to trigger a small encounter from a node/NPC/task, then return to map state.
 
@@ -1547,7 +1547,35 @@ Also append a one-paragraph summary to `/home/qian/.openclaw/workspace/memory/YY
   - Web E2E: `run/league-web/web-e2e-summary-1778426609.json`, `ok=true`
   - First-human E2E: `run/first-human-session/browser-e2e-summary-1778426636-1029761.json`, `ok=true`, zero request/page/console failures
 - Remaining next:
-  - [ ] TW-3.14 skill practice and mentor interaction from exploration nodes.
+  - [x] TW-3.14 skill practice and mentor interaction from exploration nodes. Completed in the 2026-05-11 00:07 CST update below.
+  - [ ] TW-3.15 lightweight combat encounter entry from exploration nodes, then return to map.
+- Constraints preserved: no Hero Tan code/text/assets/data copying, no live OSM ingestion, no MapLibre promotion, browser/web intent-only, Rust source of truth.
+
+---
+
+#### Update 2026-05-11 00:07 CST
+
+- Commit: `feat: gate world mentor skill practice` (this commit)
+- Completed TW-3.14 skill practice and mentor interaction from exploration nodes after `da20c1a feat: gate world objective travel`:
+  - [x] Added `trillionnium_world_skill_practice_loop_v1` to the Rust tactics projection and `/world` play-first prompt contract.
+  - [x] Rust mentor training validation now rejects wrong-place and wrong-mentor `train_skill` intents, with source-of-truth `rust_mentor_training_validator` and web role `intent_only_visualization_input`.
+  - [x] `/world` renders `#world-local-skill-practice` beside local exits/NPC/task loops, including node-local mentor practice forms, mentor/training metadata, and known-skill feedback sourced from `rust_trillionnium_character`.
+  - [x] `/world/web/tactics-command` routes accepted/rejected `train_skill` web submits back to the exploration prompt instead of treating it as a detached tactics-only action.
+  - [x] Browser E2E moves to `mirror-city-square`, submits the `basic_unarmed` mentor practice form for `npc-street-compass-sifu`, verifies the Rust-mutated character skill projection, then continues NPC talk/task pickup/completion.
+- Evidence:
+  - `cargo fmt --all -- --check`
+  - `cargo check -p consumer-entry-api`
+  - `cargo test -p consumer-entry-api -- --nocapture --test-threads=1` (`136 passed`)
+  - `cargo clippy -p consumer-entry-api -- -D warnings`
+  - `node --check scripts/playwright/trillionnium-browser-e2e.mjs`
+  - `bash -n scripts/check-trillionnium-league-web-e2e.sh`
+  - `bash -n scripts/check-trillionnium-first-human-session.sh`
+  - `git diff --check`
+  - local-production restart/status OK
+  - Browser E2E: `run/league-browser/browser-e2e-summary-1778428412-1041291.json`, `ok=true`, `coverage.world_local_skill_practice_mentor_loop=true`, request-failure gate green with `0` unclassified failures
+  - Web E2E: `run/league-web/web-e2e-summary-1778429124.json`, `ok=true`
+  - First-human E2E: `run/first-human-session/browser-e2e-summary-1778429149-1049309.json`, `ok=true`, zero request/page/console failures
+- Remaining next:
   - [ ] TW-3.15 lightweight combat encounter entry from exploration nodes, then return to map.
 - Constraints preserved: no Hero Tan code/text/assets/data copying, no live OSM ingestion, no MapLibre promotion, browser/web intent-only, Rust source of truth.
 
@@ -1557,6 +1585,6 @@ Also append a one-paragraph summary to `/home/qian/.openclaw/workspace/memory/YY
 
 If the next instruction is simply “continue”, start here:
 
-> **Next pointer:** The Hero Tan-style exploration loop now has movement, Rust-owned transition semantics, node-local NPC talk, task pickup/completion, and active task/NPC/party objective travel through the Rust-owned world-node graph. Do not continue visual skin work. The next highest product leverage is to deepen world logic: (1) expose skill practice and mentor interaction from exploration nodes, and (2) let lightweight combat encounters start from map exploration and return to map state. Human-playability assessment remains `9.8/10` technical, `8.5/10` first internal beta, `7.0/10` commercial release; first-beta/commercial score lifts still require real evidence via `TRILLIONNIUM_FIRST_BETA_COHORT_EVIDENCE_PATH` and/or `TRILLIONNIUM_COMMERCIAL_LAUNCH_DRILL_EVIDENCE_PATH`. Technical `9.9+` requires multi-node or live-traffic latency evidence, not another local-only loop.
+> **Next pointer:** The Hero Tan-style exploration loop now has movement, Rust-owned transition semantics, node-local NPC talk, task pickup/completion, active task/NPC/party objective travel through the Rust-owned world-node graph, and node-local mentor skill practice. Do not continue visual skin work. The next highest product leverage is to deepen world logic by letting lightweight combat encounters start from map exploration and return to map state. Human-playability assessment remains `9.8/10` technical, `8.5/10` first internal beta, `7.0/10` commercial release; first-beta/commercial score lifts still require real evidence via `TRILLIONNIUM_FIRST_BETA_COHORT_EVIDENCE_PATH` and/or `TRILLIONNIUM_COMMERCIAL_LAUNCH_DRILL_EVIDENCE_PATH`. Technical `9.9+` requires multi-node or live-traffic latency evidence, not another local-only loop.
 
 Do not start live Overpass/Geofabrik ingestion yet. Do not promote MapLibre. Do not convert the web shell into a standalone JS source of truth.

@@ -961,6 +961,7 @@ async function main() {
   assert(await count(page, '#world-current-exits .world-local-exit-form[data-source-of-truth="rust_world_map_move"][data-transition-source-of-truth="rust_world_map_transition_rules"][data-transition-contract-version="trillionnium_world_transition_semantics_v1"]') >= 1, 'world current exits must expose Rust-owned movement transition intents');
   assert(await count(page, '#world-local-actions [data-action-kind]') >= 1, 'world local actions missing');
   assert(await count(page, '#world-local-npc-talk[data-command="talk_npc"]') === 1, 'world NPC talk affordance missing');
+  assert(await count(page, '#world-local-skill-practice[data-contract-version="trillionnium_world_skill_practice_loop_v1"][data-practice-command="train_skill"][data-source-of-truth="rust_mentor_training_validator"][data-web-role="intent_only_visualization_input"]') === 1, 'world local skill practice mentor affordance missing');
   assert(await count(page, '#world-local-task-loop[data-pickup-command="offer_task"][data-completion-command="complete_task"]') === 1, 'world task pickup/completion affordance missing');
   const worldKeypadBox = await page.locator('#world-keypad-adventure-shell').boundingBox({ timeout: 10_000 });
   const worldKeypadGridBox = await page.locator('#world-keypad-map-grid').boundingBox({ timeout: 10_000 });
@@ -1050,6 +1051,18 @@ async function main() {
     promptNodeId = await page.locator('#world-play-first-action-prompt').first().getAttribute('data-current-node-id');
   }
   assert(promptNodeId === 'mirror-city-square', 'world play-first prompt did not reload at Mirror City Square after keypad route', { promptNodeId, routeToNpcHub });
+  assert(await count(page, '#world-local-skill-practice .world-local-skill-practice-form[data-command="train_skill"][data-skill-id="basic_unarmed"][data-mentor-npc-id="npc-street-compass-sifu"][data-skill-practice-contract-version="trillionnium_world_skill_practice_loop_v1"][data-source-of-truth="rust_mentor_training_validator"][data-web-role="intent_only_visualization_input"]') >= 1, 'world local mentor skill-practice form missing at Mirror City Square');
+  await submitWorldForm(page, '#world-local-skill-practice .world-local-skill-practice-form[data-command="train_skill"][data-skill-id="basic_unarmed"][data-mentor-npc-id="npc-street-compass-sifu"]', marker, 'skill=trained');
+  await page.waitForSelector('#world-local-skill-practice .world-local-skill-practice-card[data-skill-id="basic_unarmed"][data-known-skill="true"]', { state: 'attached', timeout: 15_000 });
+  const localSkillPracticeState = await page.evaluate(() => ({
+    promptNodeId: document.querySelector('#world-play-first-action-prompt')?.dataset?.currentNodeId,
+    knownSkillCount: Number(document.querySelector('#world-local-skill-practice-feedback')?.dataset?.knownSkillCount || 0),
+    knownSkills: document.querySelector('#world-local-skill-practice-feedback span')?.textContent || '',
+    sourceOfTruth: document.querySelector('#world-local-skill-practice')?.dataset?.sourceOfTruth || '',
+    formWebRole: document.querySelector('#world-local-skill-practice .world-local-skill-practice-form[data-skill-id="basic_unarmed"]')?.dataset?.webRole || '',
+  }));
+  assert(localSkillPracticeState.promptNodeId === 'mirror-city-square' && localSkillPracticeState.knownSkills.includes('basic_unarmed'), 'world local mentor skill practice did not mutate Rust character projection', localSkillPracticeState);
+  assert(localSkillPracticeState.sourceOfTruth === 'rust_mentor_training_validator' && localSkillPracticeState.formWebRole === 'intent_only_visualization_input', 'world local mentor practice source/web-role metadata drifted', localSkillPracticeState);
   assert(await count(page, '#world-local-npc-talk .world-local-npc-form[data-command="talk_npc"][data-npc-id="npc-street-compass-sifu"]') >= 1, 'world local NPC talk form missing at Mirror City Square');
   assert(await count(page, '#world-local-npc-talk .world-local-npc-form[data-command="offer_task"][data-npc-id="npc-street-compass-sifu"]') >= 1, 'world local NPC offer_task form missing at Mirror City Square');
   await submitWorldForm(page, '#world-local-npc-talk .world-local-npc-form[data-command="talk_npc"][data-npc-id="npc-street-compass-sifu"]', marker, 'npc=talked');
@@ -1068,6 +1081,7 @@ async function main() {
   assert(/^(trillionnium_task_completion_pending_settlement|completed_|review_hold)/.test(String(localTaskStatusAfterCompletion || '')), 'world local task status did not advance after complete_task', { localTaskStatusAfterCompletion, localTaskLifecycleStepAfterCompletion });
   assert(['settlement_pending', 'settlement_feedback', 'review_hold'].includes(String(localTaskLifecycleStepAfterCompletion || '')), 'world local task lifecycle did not expose settlement/review feedback after complete_task', { localTaskStatusAfterCompletion, localTaskLifecycleStepAfterCompletion });
   assert(await count(page, '#world-local-task-complete-form') === 0, 'world local completion form must disappear while settlement is pending');
+  steps.push({ name: 'world_local_skill_practice_mentor_loop', ok: true, route_steps_to_npc_hub: routeToNpcHub.length, known_skill_count: localSkillPracticeState.knownSkillCount });
   steps.push({ name: 'world_local_npc_task_pickup_completion_loop', ok: true, route_steps_to_npc_hub: routeToNpcHub.length });
 
   await page.goto('/world?lang=zh', { waitUntil: 'domcontentloaded', timeout: 30_000 });
@@ -1254,6 +1268,7 @@ async function main() {
       route_runner_handoff_dom: true,
       world_map_move: true,
       world_transition_semantics: true,
+      world_local_skill_practice_mentor_loop: true,
       world_local_npc_task_loop: true,
       world_buy: true,
       world_work_deliver: true,

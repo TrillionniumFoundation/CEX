@@ -3156,6 +3156,36 @@ async fn world_tactics_command_endpoint_validates_training_place_and_mutates_cha
         "rust_mentor_training_validator"
     );
 
+    let (wrong_mentor_status, wrong_mentor) = send_json_request(
+        &app,
+        "POST",
+        "/v1/world/tactics/command",
+        &[],
+        json!({
+            "matrix_user_id": "@alice:local.dev",
+            "room_id": "!world:local.dev",
+            "command": "train_skill",
+            "unit_id": "lord",
+            "target_tile": "G8",
+            "skill_id": "basic_unarmed",
+            "npc_id": "npc-cloud-ledger-mentor",
+            "osm_game_overlay_id": "trillionnium-world-node:mirror-city-square",
+            "body": "try training with the wrong mentor"
+        }),
+    )
+    .await;
+    assert_eq!(wrong_mentor_status, StatusCode::OK);
+    assert_eq!(wrong_mentor["outcome"]["accepted"], false);
+    assert_eq!(wrong_mentor["outcome"]["result"], "mentor_mismatch");
+    assert_eq!(
+        wrong_mentor["outcome"]["world_skill_practice_loop_contract_version"],
+        "trillionnium_world_skill_practice_loop_v1"
+    );
+    assert_eq!(
+        wrong_mentor["outcome"]["source_of_truth"],
+        "rust_mentor_training_validator"
+    );
+
     let (trained_status, trained) = send_json_request(
         &app,
         "POST",
@@ -3168,6 +3198,7 @@ async fn world_tactics_command_endpoint_validates_training_place_and_mutates_cha
             "unit_id": "lord",
             "target_tile": "G8",
             "skill_id": "basic_unarmed",
+            "npc_id": "npc-street-compass-sifu",
             "osm_game_overlay_id": "trillionnium-world-node:mirror-city-square",
             "body": "mentor training with the Street Compass Sifu"
         }),
@@ -3178,7 +3209,15 @@ async fn world_tactics_command_endpoint_validates_training_place_and_mutates_cha
     assert_eq!(trained["outcome"]["accepted"], true);
     assert_eq!(trained["outcome"]["result"], "skill_trained");
     assert_eq!(trained["outcome"]["skill_id"], "basic_unarmed");
+    assert_eq!(
+        trained["outcome"]["mentor_npc_id"],
+        "npc-street-compass-sifu"
+    );
     assert_eq!(trained["outcome"]["required_semantic_role"], "civic_square");
+    assert_eq!(
+        trained["outcome"]["world_skill_practice_loop_contract_version"],
+        "trillionnium_world_skill_practice_loop_v1"
+    );
     assert_eq!(
         trained["outcome"]["source_of_truth"],
         "rust_mentor_training_validator"
@@ -4929,12 +4968,17 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(world_html.contains("world-current-exits"));
     assert!(world_html.contains("world-local-actions"));
     assert!(world_html.contains("world-local-npc-talk"));
+    assert!(world_html.contains("world-local-skill-practice"));
     assert!(world_html.contains("world-local-task-loop"));
     assert!(world_html.contains("trillionnium_world_local_task_lifecycle_v1"));
+    assert!(world_html.contains("trillionnium_world_skill_practice_loop_v1"));
     assert!(world_html.contains("data-command=\"talk_npc\""));
+    assert!(world_html.contains("data-practice-command=\"train_skill\""));
     assert!(world_html.contains("data-pickup-command=\"offer_task\""));
     assert!(world_html.contains("data-completion-command=\"complete_task\""));
     assert!(world_html.contains("data-source-of-truth=\"rust_world_contracts_and_completions\""));
+    assert!(world_html.contains("world-local-skill-practice-feedback"));
+    assert!(world_html.contains("data-source-of-truth=\"rust_mentor_training_validator\""));
     assert!(
         world_html.contains("data-source-of-truth=\"rust_world_map_nodes_and_tactics_commands\"")
     );
@@ -5029,6 +5073,7 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     ));
     assert!(world_html.contains("trillionnium_map_overlay_identity_v1"));
     assert!(world_html.contains("trillionnium_world_objective_travel_v1"));
+    assert!(world_html.contains("trillionnium_world_skill_practice_loop_v1"));
     assert!(world_html.contains(
         "data-world-objective-travel-contract=\"trillionnium_world_objective_travel_v1\""
     ));

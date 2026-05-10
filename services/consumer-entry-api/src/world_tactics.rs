@@ -54,6 +54,8 @@ pub(super) const TRILLIONNIUM_MAP_OVERLAY_IDENTITY_CONTRACT_VERSION: &str =
     "trillionnium_map_overlay_identity_v1";
 pub(super) const TRILLIONNIUM_WORLD_OBJECTIVE_TRAVEL_CONTRACT_VERSION: &str =
     "trillionnium_world_objective_travel_v1";
+pub(super) const TRILLIONNIUM_WORLD_SKILL_PRACTICE_LOOP_CONTRACT_VERSION: &str =
+    "trillionnium_world_skill_practice_loop_v1";
 
 fn default_tactics_objective_id() -> String {
     "defeat_market_bandit".to_string()
@@ -3251,6 +3253,25 @@ pub(super) fn apply_world_tactics_command(
             "skill_has_no_training_command",
         );
     };
+    if let Some(provided_npc_id) = npc_id.map(str::trim).filter(|value| !value.is_empty()) {
+        if provided_npc_id != training_command.mentor_npc_id {
+            return json!({
+                "contract_version": TRILLIONNIUM_TACTICS_COMMAND_OUTCOME_CONTRACT_VERSION,
+                "accepted": false,
+                "command": command,
+                "unit_id": unit_id,
+                "skill_id": requested_skill_id,
+                "mentor_npc_id": training_command.mentor_npc_id,
+                "provided_npc_id": provided_npc_id,
+                "mentor_training_task_contract_version": TRILLIONNIUM_MENTOR_TRAINING_TASK_CONTRACT_VERSION,
+                "world_skill_practice_loop_contract_version": TRILLIONNIUM_WORLD_SKILL_PRACTICE_LOOP_CONTRACT_VERSION,
+                "result": "mentor_mismatch",
+                "rejection_reason": "mentor_training_requires_matching_npc",
+                "source_of_truth": "rust_mentor_training_validator",
+                "web_role": "intent_only_visualization_input",
+            });
+        }
+    }
     let nodes: Vec<WorldMapNode> = world.world_map_nodes.values().cloned().collect();
     let geodata = openstreetmap_geodata_v1_json(&nodes, None);
     let training_commands = trillionnium_training_commands_json(&geodata);
@@ -3316,6 +3337,7 @@ pub(super) fn apply_world_tactics_command(
         "mentor_npc_id": training_command.mentor_npc_id,
         "mentor_training_task_flow_id": format!("mentor-training:{}", requested_skill_id),
         "mentor_training_task_contract_version": TRILLIONNIUM_MENTOR_TRAINING_TASK_CONTRACT_VERSION,
+        "world_skill_practice_loop_contract_version": TRILLIONNIUM_WORLD_SKILL_PRACTICE_LOOP_CONTRACT_VERSION,
         "required_semantic_role": training_command.required_semantic_role,
         "required_osm_game_overlay_id": required_overlay_id,
         "cost_xp": training_command.cost_xp,
@@ -3466,6 +3488,7 @@ pub(super) fn world_tactics_board_projection_json(
         "trillionnium_npc_relationship_contract_version": TRILLIONNIUM_NPC_RELATIONSHIP_CONTRACT_VERSION,
         "trillionnium_osm_objective_contract_version": TRILLIONNIUM_OSM_OBJECTIVE_CONTRACT_VERSION,
         "world_objective_travel_contract_version": TRILLIONNIUM_WORLD_OBJECTIVE_TRAVEL_CONTRACT_VERSION,
+        "world_skill_practice_loop_contract_version": TRILLIONNIUM_WORLD_SKILL_PRACTICE_LOOP_CONTRACT_VERSION,
         "tactics_combat_resolution_contract_version": TRILLIONNIUM_TACTICS_COMBAT_RESOLUTION_CONTRACT_VERSION,
         "tactics_game_session_contract_version": TRILLIONNIUM_TACTICS_GAME_SESSION_CONTRACT_VERSION,
         "tactics_simulation_tick_contract_version": TRILLIONNIUM_TACTICS_SIMULATION_TICK_CONTRACT_VERSION,
