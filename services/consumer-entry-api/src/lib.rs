@@ -2117,6 +2117,7 @@ struct WorldWebMapMoveRequest {
     matrix_user_id: Option<String>,
     csrf: Option<String>,
     target: Option<String>,
+    response: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

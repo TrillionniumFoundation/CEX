@@ -889,6 +889,70 @@ async function main() {
   assert(pulseBox && pulseBox.height < 360, 'world mobile stats area is too tall', pulseBox);
   await assertNoVisibleBilingualSlashPair(page, '/world English system language');
   await assertEnglishSurfaceHasNoCoreChineseLeaks(page, '/world English system language');
+  assert(await count(page, '#world-keypad-adventure-shell[data-contract-version="trillionnium_text_adventure_keypad_movement_v1"][data-interface-style="yingxiongtanshuo_keyboard_tile_map"][data-source-of-truth="rust_world_map_move"]') === 1, 'world keypad tile-map shell missing');
+  assert(await count(page, '#world-keypad-map-grid[role="grid"][data-source-of-truth="rust_world_map_nodes"]') === 1, 'world keypad map grid missing');
+  assert(await count(page, '.world-keypad-cell[data-node-id][data-current="true"]') === 1, 'world keypad current player cell missing');
+  assert(await count(page, '#world-keypad-numpad .world-keypad-button[data-keypad-key]') === 9, 'world keypad numpad controls missing');
+  const worldKeypadBox = await page.locator('#world-keypad-adventure-shell').boundingBox({ timeout: 10_000 });
+  const worldKeypadGridBox = await page.locator('#world-keypad-map-grid').boundingBox({ timeout: 10_000 });
+  const worldKeypadNumpadBox = await page.locator('#world-keypad-numpad').boundingBox({ timeout: 10_000 });
+  const worldViewport = page.viewportSize() || { height: 844, width: 390 };
+  assert(worldKeypadBox && worldKeypadBox.y < worldViewport.height * 0.36, 'world keypad adventure shell must be the first-screen game interface', { worldKeypadBox, worldViewport });
+  assert(worldKeypadGridBox && worldKeypadGridBox.y < worldViewport.height * 0.46, 'world keypad character grid must be visible in the first screen', { worldKeypadGridBox, worldViewport });
+  assert(worldKeypadNumpadBox && worldKeypadNumpadBox.y < worldViewport.height * 0.50, 'world keypad controls must be visible in the first screen', { worldKeypadNumpadBox, worldViewport });
+  assert(await page.evaluate(() => window.trillionniumKeyboardMap?.source_of_truth) === 'rust_world_map_move', 'world keypad runtime source-of-truth missing');
+  const firstKeypadMove = await page.evaluate(() => {
+    const state = window.trillionniumKeyboardMap?.getState?.();
+    const keys = ['6', '2', '8', '4', '3', '1', '9', '7'];
+    const aliases = { '6': ['east'], '2': ['south'], '8': ['north'], '4': ['west'], '3': ['south-east', 'southeast'], '1': ['south-west', 'southwest'], '9': ['north-east', 'northeast'], '7': ['north-west', 'northwest'] };
+    for (const key of keys) {
+      for (const direction of aliases[key] || []) {
+        const targetNodeId = state?.currentExits?.[direction];
+        if (targetNodeId) return { key, direction, targetNodeId, fromNodeId: state.currentNodeId };
+      }
+    }
+    return null;
+  });
+  assert(firstKeypadMove && firstKeypadMove.targetNodeId, 'world keypad had no adjacent movement target', firstKeypadMove);
+  await clickOrDomActivate(page.locator(`#world-keypad-${firstKeypadMove.key}`));
+  await page.waitForFunction((expected) => window.trillionniumKeyboardMap?.getState?.().currentNodeId === expected, firstKeypadMove.targetNodeId, { timeout: 10_000 });
+  const afterButtonMove = await page.evaluate(() => ({
+    runtime: window.trillionniumKeyboardMap?.getState?.(),
+    domCurrent: document.querySelector('.world-keypad-cell[data-current="true"]')?.dataset?.nodeId,
+    status: document.querySelector('#world-keypad-live-status')?.textContent || '',
+    source: document.querySelector('#world-keypad-adventure-shell')?.dataset?.lastInputSource || '',
+  }));
+  assert(afterButtonMove.runtime?.currentNodeId === firstKeypadMove.targetNodeId && afterButtonMove.domCurrent === firstKeypadMove.targetNodeId, 'world keypad button movement did not update persisted projection', afterButtonMove);
+  assert(afterButtonMove.source === 'button' && /Moved|已移动/.test(afterButtonMove.status), 'world keypad button move status missing', afterButtonMove);
+  const keyboardMove = await page.evaluate((previousNodeId) => {
+    const state = window.trillionniumKeyboardMap?.getState?.();
+    const aliases = { '6': ['east'], '2': ['south'], '8': ['north'], '4': ['west'], '3': ['south-east', 'southeast'], '1': ['south-west', 'southwest'], '9': ['north-east', 'northeast'], '7': ['north-west', 'northwest'] };
+    for (const [key, directions] of Object.entries(aliases)) {
+      for (const direction of directions) {
+        if (state?.currentExits?.[direction] === previousNodeId) return { key, direction, targetNodeId: previousNodeId };
+      }
+    }
+    for (const [key, directions] of Object.entries(aliases)) {
+      for (const direction of directions) {
+        const targetNodeId = state?.currentExits?.[direction];
+        if (targetNodeId) return { key, direction, targetNodeId };
+      }
+    }
+    return null;
+  }, firstKeypadMove.fromNodeId);
+  assert(keyboardMove && keyboardMove.targetNodeId, 'world keypad had no keyboard movement target after button move', keyboardMove);
+  await page.locator('#world-keypad-adventure-shell').focus();
+  await page.keyboard.press(`Numpad${keyboardMove.key}`);
+  await page.waitForFunction((expected) => window.trillionniumKeyboardMap?.getState?.().currentNodeId === expected, keyboardMove.targetNodeId, { timeout: 10_000 });
+  const afterKeyboardMove = await page.evaluate(() => ({
+    runtime: window.trillionniumKeyboardMap?.getState?.(),
+    domCurrent: document.querySelector('.world-keypad-cell[data-current="true"]')?.dataset?.nodeId,
+    source: document.querySelector('#world-keypad-adventure-shell')?.dataset?.lastInputSource || '',
+    direction: document.querySelector('#world-keypad-adventure-shell')?.dataset?.lastMoveDirection || '',
+  }));
+  assert(afterKeyboardMove.runtime?.currentNodeId === keyboardMove.targetNodeId && afterKeyboardMove.domCurrent === keyboardMove.targetNodeId, 'world keypad keyboard/numpad movement did not update map position', afterKeyboardMove);
+  assert(afterKeyboardMove.source === 'keyboard' && afterKeyboardMove.direction === keyboardMove.direction, 'world keypad keyboard movement source/direction missing', afterKeyboardMove);
+  steps.push({ name: 'world_keypad_tile_map_button_and_numpad_movement', ok: true, button_move: firstKeypadMove, keyboard_move: keyboardMove });
   await page.goto('/world?lang=zh', { waitUntil: 'domcontentloaded', timeout: 30_000 });
   await page.waitForSelector('#world-real-map', { timeout: 15_000 });
   await page.waitForFunction(() => document.documentElement.getAttribute('data-ui-language') === 'zh', { timeout: 10_000 });

@@ -919,6 +919,10 @@ pub(super) async fn post_world_web_map_move(
         .filter(|value| !value.is_empty())
         .unwrap_or("east")
         .to_string();
+    let wants_json = payload
+        .response
+        .as_deref()
+        .is_some_and(|value| value.eq_ignore_ascii_case("json"));
     let response = move_world_map_inner(
         state,
         WorldMapMoveRequest {
@@ -932,7 +936,11 @@ pub(super) async fn post_world_web_map_move(
     )
     .await;
     if response.status().is_success() {
-        Redirect::to("/world?map=moved").into_response()
+        if wants_json {
+            response
+        } else {
+            Redirect::to("/world?map=moved").into_response()
+        }
     } else {
         response
     }

@@ -1368,6 +1368,249 @@ fn world_map_status_label(value: &str) -> String {
     })
 }
 
+fn world_keypad_direction_candidates(key: &str) -> &'static [&'static str] {
+    match key {
+        "8" => &["north", "n"],
+        "2" => &["south", "s"],
+        "4" => &["west", "w"],
+        "6" => &["east", "e"],
+        "7" => &["north-west", "northwest", "nw"],
+        "9" => &["north-east", "northeast", "ne"],
+        "1" => &["south-west", "southwest", "sw"],
+        "3" => &["south-east", "southeast", "se"],
+        "5" => &["wait", "stay"],
+        _ => &[],
+    }
+}
+
+fn world_keypad_direction_label(key: &str) -> (&'static str, &'static str, &'static str) {
+    match key {
+        "8" => ("N", "North", "向北"),
+        "2" => ("S", "South", "向南"),
+        "4" => ("W", "West", "向西"),
+        "6" => ("E", "East", "向东"),
+        "7" => ("NW", "North West", "西北"),
+        "9" => ("NE", "North East", "东北"),
+        "1" => ("SW", "South West", "西南"),
+        "3" => ("SE", "South East", "东南"),
+        "5" => ("·", "Wait", "原地等待"),
+        _ => ("?", "Move", "移动"),
+    }
+}
+
+fn world_keypad_target_for_key<'a>(
+    node: &'a WorldMapNode,
+    key: &str,
+) -> Option<(&'static str, &'a String)> {
+    if key == "5" {
+        return Some(("wait", &node.node_id));
+    }
+    world_keypad_direction_candidates(key)
+        .iter()
+        .find_map(|direction| {
+            node.exits
+                .get(*direction)
+                .map(|target| (*direction, target))
+        })
+}
+
+fn world_text_map_node_symbol(kind: &str) -> &'static str {
+    match kind {
+        "hub_square" => "◎",
+        "agent_home" => "⌂",
+        "ledger_office" => "$",
+        "workshop_room" => "▣",
+        "craft_station" => "⚒",
+        "asset_yard" => "◆",
+        "market_gate" => "◇",
+        "client_board" => "!",
+        "delivery_dock" => "✓",
+        "dispute_desk" => "?",
+        "arena_gate" => "⚔",
+        "raid_hall" => "♜",
+        _ => "·",
+    }
+}
+
+fn world_keypad_i18n_pair(value: &str) -> (String, String) {
+    let copy = world_user_visible_copy(value);
+    if let Some((english, chinese)) = copy.split_once(" / ") {
+        (english.trim().to_string(), chinese.trim().to_string())
+    } else {
+        (copy, value.to_string())
+    }
+}
+
+fn world_text_adventure_grid_html(map_nodes: &[WorldMapNode], current_node_id: &str) -> String {
+    if map_nodes.is_empty() {
+        return "<div class=\"world-keypad-empty-cell\" data-i18n-en=\"World map is booting.\" data-i18n-zh=\"世界地图启动中。\">World map is booting.</div>".to_string();
+    }
+    let min_x = map_nodes.iter().map(|node| node.x).min().unwrap_or(0);
+    let max_x = map_nodes.iter().map(|node| node.x).max().unwrap_or(0);
+    let min_y = map_nodes.iter().map(|node| node.y).min().unwrap_or(0);
+    let max_y = map_nodes.iter().map(|node| node.y).max().unwrap_or(0);
+    let current_node = map_nodes
+        .iter()
+        .find(|node| node.node_id == current_node_id);
+    let mut rows = Vec::new();
+    for y in min_y..=max_y {
+        let mut cells = Vec::new();
+        for x in min_x..=max_x {
+            if let Some(node) = map_nodes.iter().find(|node| node.x == x && node.y == y) {
+                let is_current = node.node_id == current_node_id;
+                let is_reachable = is_current
+                    || current_node.is_some_and(|current| {
+                        current.exits.values().any(|target| target == &node.node_id)
+                    });
+                let mut exit_keys = current_node
+                    .map(|current| {
+                        current
+                            .exits
+                            .iter()
+                            .filter_map(|(direction, target)| {
+                                if target == &node.node_id {
+                                    Some(direction.as_str())
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                exit_keys.sort_unstable();
+                let class_name = format!(
+                    "world-keypad-cell{}{} terrain-{}",
+                    if is_current { " is-current" } else { "" },
+                    if is_reachable { " is-reachable" } else { "" },
+                    node.node_kind
+                );
+                let label_text = format!(
+                    "{} ({},{}) {}",
+                    node.name,
+                    node.x,
+                    node.y,
+                    if is_current {
+                        "current player position"
+                    } else {
+                        "map node"
+                    }
+                );
+                cells.push(format!(
+                    "<button type=\"button\" role=\"gridcell\" class=\"{}\" data-node-id=\"{}\" data-node-name=\"{}\" data-node-kind=\"{}\" data-x=\"{}\" data-y=\"{}\" data-current=\"{}\" data-reachable=\"{}\" data-exit-directions=\"{}\" aria-label=\"{}\"><span class=\"world-keypad-cell-symbol\" aria-hidden=\"true\">{}</span><b>{}</b><small>{},{} · {}</small></button>",
+                    escape_html_text(&class_name),
+                    escape_html_text(&node.node_id),
+                    escape_html_text(&node.name),
+                    escape_html_text(&node.node_kind),
+                    node.x,
+                    node.y,
+                    is_current,
+                    is_reachable,
+                    escape_html_text(&exit_keys.join(",")),
+                    escape_html_text(&label_text),
+                    if is_current { "@" } else { world_text_map_node_symbol(&node.node_kind) },
+                    escape_world_visible_text(&node.name),
+                    node.x,
+                    node.y,
+                    escape_html_text(world_node_kind_label(&node.node_kind)),
+                ));
+            } else {
+                cells.push(format!(
+                    "<span class=\"world-keypad-cell world-keypad-empty-cell\" role=\"gridcell\" aria-hidden=\"true\" data-x=\"{}\" data-y=\"{}\"></span>",
+                    x, y
+                ));
+            }
+        }
+        rows.push(cells.join(""));
+    }
+    rows.join("\n")
+}
+
+fn world_keypad_buttons_html(current_node: Option<&WorldMapNode>) -> String {
+    ["7", "8", "9", "4", "5", "6", "1", "2", "3"]
+        .iter()
+        .map(|key| {
+            let (glyph, label_en, label_zh) = world_keypad_direction_label(key);
+            let target = current_node.and_then(|node| world_keypad_target_for_key(node, key));
+            let target_node_id = target
+                .map(|(_, node_id)| node_id.as_str())
+                .unwrap_or_default();
+            let direction = target.map(|(direction, _)| direction).unwrap_or_else(|| {
+                world_keypad_direction_candidates(key)
+                    .first()
+                    .copied()
+                    .unwrap_or("blocked")
+            });
+            let disabled = target.is_none();
+            format!(
+                "<button id=\"world-keypad-{}\" type=\"button\" class=\"world-keypad-button{}\" data-keypad-key=\"{}\" data-move-direction=\"{}\" data-target-node-id=\"{}\" data-rust-endpoint=\"/world/web/map-move\" data-source-of-truth=\"rust_world_map_move\" data-web-role=\"input_only\" aria-disabled=\"{}\" data-i18n-aria-label-en=\"{}\" data-i18n-aria-label-zh=\"{}\"><span>{}</span><small data-i18n-en=\"{}\" data-i18n-zh=\"{}\">{}</small></button>",
+                escape_html_text(key),
+                if disabled { " is-blocked" } else { "" },
+                escape_html_text(key),
+                escape_html_text(direction),
+                escape_html_text(target_node_id),
+                disabled,
+                escape_html_text(label_en),
+                escape_html_text(label_zh),
+                escape_html_text(glyph),
+                escape_html_text(label_en),
+                escape_html_text(label_zh),
+                escape_html_text(label_en),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn world_keypad_state_json(map_nodes: &[WorldMapNode], current_node_id: &str) -> String {
+    let mut nodes = serde_json::Map::new();
+    for node in map_nodes {
+        let (name_en, name_zh) = world_keypad_i18n_pair(&node.name);
+        let (description_en, description_zh) = world_keypad_i18n_pair(&node.description);
+        nodes.insert(
+            node.node_id.clone(),
+            json!({
+                "node_id": &node.node_id,
+                "location_id": &node.location_id,
+                "zone_id": &node.zone_id,
+                "name": &node.name,
+                "name_en": name_en,
+                "name_zh": name_zh,
+                "node_kind": &node.node_kind,
+                "description": &node.description,
+                "description_en": description_en,
+                "description_zh": description_zh,
+                "x": node.x,
+                "y": node.y,
+                "exits": &node.exits,
+                "interaction_tags": &node.interaction_tags,
+                "freedom_hooks": &node.freedom_hooks,
+                "status": &node.status,
+            }),
+        );
+    }
+    serde_json::to_string(&json!({
+        "contract_version": "trillionnium_text_adventure_keypad_movement_v1",
+        "source_of_truth": "rust_world_map_move",
+        "web_role": "input_only_visualization",
+        "movement_endpoint": "/world/web/map-move",
+        "current_node_id": current_node_id,
+        "nodes": nodes,
+        "keypad": {
+            "8": ["north", "n"],
+            "2": ["south", "s"],
+            "4": ["west", "w"],
+            "6": ["east", "e"],
+            "7": ["north-west", "northwest", "nw"],
+            "9": ["north-east", "northeast", "ne"],
+            "1": ["south-west", "southwest", "sw"],
+            "3": ["south-east", "southeast", "se"],
+            "5": ["wait", "stay"]
+        },
+        "keyboard": ["Numpad1", "Numpad2", "Numpad3", "Numpad4", "Numpad5", "Numpad6", "Numpad7", "Numpad8", "Numpad9", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "W", "A", "S", "D"]
+    }))
+    .unwrap_or_else(|_| "{}".to_string())
+}
+
 pub(super) async fn get_world_web_shell(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1554,6 +1797,35 @@ pub(super) async fn get_world_web_shell(
             "<span data-i18n-en=\"Map booting…\" data-i18n-zh=\"地图启动中…\">Map booting…</span>"
                 .to_string()
         });
+    let world_keypad_grid = world_text_adventure_grid_html(&map_nodes, &current_map_node_id);
+    let world_keypad_buttons = world_keypad_buttons_html(current_map_node);
+    let world_keypad_state_json = world_keypad_state_json(&map_nodes, &current_map_node_id);
+    let world_keypad_current_name = current_map_node
+        .map(|node| escape_world_visible_text(&node.name))
+        .unwrap_or_else(|| {
+            "<span data-i18n-en=\"Unknown place\" data-i18n-zh=\"未知地点\">Unknown place</span>"
+                .to_string()
+        });
+    let world_keypad_current_description = current_map_node
+        .map(|node| escape_world_visible_text(&node.description))
+        .unwrap_or_else(|| {
+            "<span data-i18n-en=\"Map booting.\" data-i18n-zh=\"地图启动中。\">Map booting.</span>"
+                .to_string()
+        });
+    let world_keypad_current_coordinates = current_map_node
+        .map(|node| format!("{},{}", node.x, node.y))
+        .unwrap_or_else(|| "0,0".to_string());
+    let world_keypad_current_exits = current_map_node
+        .map(|node| {
+            let mut exits: Vec<&String> = node.exits.keys().collect();
+            exits.sort();
+            exits
+                .into_iter()
+                .map(|exit| escape_html_text(exit))
+                .collect::<Vec<_>>()
+                .join(" · ")
+        })
+        .unwrap_or_default();
     let world_map = world_map_json(&league, current_matrix_user_id);
     let world_viewport = world_map_viewport_json(
         &league.world,
@@ -2849,6 +3121,42 @@ pub(super) async fn get_world_web_shell(
     .trillionnium-engine-drawer-body {{ max-height:360px; overflow:auto; padding:0 15px 15px; }}
     .trillionnium-underlay-label {{ grid-column:1 / -1; display:flex; justify-content:space-between; gap:10px; align-items:center; border:1px solid rgba(248,195,91,.18); background:rgba(248,195,91,.06); border-radius:16px; padding:10px 12px; color:var(--muted); font-size:12px; font-weight:850; }}
     .trillionnium-underlay-label strong {{ color:var(--gold); }}
+    .world-keypad-adventure-shell {{ order:1; grid-column:1 / -1; display:grid; grid-template-columns:minmax(320px,1.15fr) minmax(260px,.62fr); gap:14px; align-items:stretch; border:1px solid rgba(248,195,91,.42); background:radial-gradient(circle at 12% 0%,rgba(248,195,91,.20),transparent 26rem),radial-gradient(circle at 78% 16%,rgba(100,227,255,.16),transparent 22rem),linear-gradient(145deg,rgba(14,15,12,.96),rgba(5,9,15,.94)); box-shadow:0 28px 88px rgba(0,0,0,.5), inset 0 0 0 1px rgba(255,255,255,.05); border-radius:26px; padding:16px; overflow:hidden; }}
+    .world-keypad-stage,.world-keypad-sidecar {{ min-width:0; border:1px solid rgba(255,255,255,.1); background:rgba(255,255,255,.045); border-radius:20px; padding:14px; }}
+    .world-keypad-stage {{ display:grid; gap:12px; }}
+    .world-keypad-header {{ display:flex; align-items:flex-start; justify-content:space-between; gap:12px; flex-wrap:wrap; }}
+    .world-keypad-header h2 {{ margin:0; color:var(--gold); font-size:clamp(22px,3vw,34px); letter-spacing:-.035em; }}
+    .world-keypad-header p {{ margin:4px 0 0; color:#f7e7bd; line-height:1.45; max-width:760px; }}
+    .world-keypad-status {{ display:flex; flex-wrap:wrap; gap:8px; align-items:center; }}
+    .world-keypad-status code,.world-keypad-status span {{ border:1px solid rgba(100,227,255,.22); background:rgba(100,227,255,.075); color:var(--cyan); border-radius:999px; padding:6px 9px; font-size:12px; font-weight:900; }}
+    .world-keypad-map-frame {{ position:relative; border:1px solid rgba(248,195,91,.24); border-radius:18px; padding:10px; background:linear-gradient(180deg,rgba(2,5,8,.92),rgba(10,13,18,.96)); box-shadow:inset 0 0 48px rgba(0,0,0,.58); }}
+    .world-keypad-map-frame::before {{ content:'N'; position:absolute; top:7px; left:50%; transform:translateX(-50%); z-index:2; color:rgba(248,195,91,.72); font-size:11px; font-weight:950; letter-spacing:.18em; text-shadow:0 0 10px rgba(0,0,0,.9); }}
+    .world-keypad-map-frame::after {{ content:'NumPad'; position:absolute; right:10px; bottom:8px; z-index:2; color:rgba(100,227,255,.78); font-size:11px; font-weight:950; letter-spacing:.08em; text-shadow:0 0 10px rgba(0,0,0,.9); }}
+    .world-keypad-map-grid {{ display:grid; grid-template-columns:repeat(4,minmax(66px,1fr)); grid-auto-rows:minmax(78px,1fr); gap:7px; min-height:430px; outline:none; }}
+    .world-keypad-map-grid:focus {{ box-shadow:0 0 0 3px rgba(100,227,255,.28); border-radius:14px; }}
+    .world-keypad-cell {{ min-width:0; min-height:72px; border:1px solid rgba(255,255,255,.1); background:linear-gradient(145deg,rgba(255,255,255,.065),rgba(255,255,255,.025)); color:var(--text); border-radius:14px; padding:8px; display:grid; gap:3px; align-content:center; justify-items:center; text-align:center; font:inherit; box-shadow:inset 0 0 18px rgba(0,0,0,.28); }}
+    .world-keypad-cell b {{ font-size:13px; line-height:1.15; color:#f7e7bd; overflow-wrap:anywhere; }}
+    .world-keypad-cell small {{ color:var(--muted); font-size:10px; line-height:1.12; }}
+    .world-keypad-cell-symbol {{ width:30px; height:30px; border-radius:10px; display:grid; place-items:center; color:#071018; background:linear-gradient(135deg,#64e3ff,#7dff9b); font-weight:950; box-shadow:0 0 18px rgba(100,227,255,.25); }}
+    .world-keypad-cell.is-reachable {{ border-color:rgba(100,227,255,.3); }}
+    .world-keypad-cell.is-current {{ border-color:rgba(248,195,91,.78); background:radial-gradient(circle at 50% 20%,rgba(248,195,91,.24),rgba(255,255,255,.05)); transform:translateY(-2px); box-shadow:0 12px 36px rgba(248,195,91,.15), inset 0 0 22px rgba(248,195,91,.13); }}
+    .world-keypad-cell.is-current .world-keypad-cell-symbol {{ background:linear-gradient(135deg,#f8c35b,#ff7d9d); animation:world-keypad-avatar-breathe 1.25s ease-in-out infinite; }}
+    .world-keypad-empty-cell {{ opacity:.28; background:repeating-linear-gradient(135deg,rgba(255,255,255,.04),rgba(255,255,255,.04) 6px,transparent 6px,transparent 12px); }}
+    .world-keypad-sidecar {{ display:grid; gap:12px; align-content:start; }}
+    .world-keypad-numpad {{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; }}
+    .world-keypad-button {{ min-height:64px; display:grid; place-items:center; gap:2px; border:1px solid rgba(248,195,91,.28); background:linear-gradient(145deg,rgba(248,195,91,.18),rgba(100,227,255,.08)); color:var(--text); border-radius:16px; padding:8px; }}
+    .world-keypad-button span {{ font-size:22px; font-weight:950; color:var(--gold); line-height:1; }}
+    .world-keypad-button small {{ color:var(--muted); font-size:11px; font-weight:900; }}
+    .world-keypad-button.is-blocked {{ opacity:.38; background:rgba(255,255,255,.035); border-color:rgba(255,255,255,.08); }}
+    .world-keypad-button:not(.is-blocked):hover,.world-keypad-button:not(.is-blocked):focus {{ box-shadow:0 0 0 3px rgba(248,195,91,.23); transform:translateY(-1px); }}
+    .world-keypad-sidecar article {{ border:1px solid rgba(100,227,255,.18); background:rgba(100,227,255,.055); border-radius:16px; padding:12px; display:grid; gap:6px; }}
+    .world-keypad-quest-brief {{ background:linear-gradient(145deg,rgba(248,195,91,.16),rgba(100,227,255,.07)) !important; border-color:rgba(248,195,91,.35) !important; }}
+    .world-keypad-quest-brief .cta {{ width:100%; min-height:42px; padding:10px 12px; }}
+    .world-keypad-sidecar strong {{ color:var(--gold); }}
+    .world-keypad-sidecar small,.world-keypad-sidecar p {{ color:var(--muted); line-height:1.42; margin:0; }}
+    #world-keypad-live-status {{ min-height:22px; color:#d6ffd8; }}
+    .world-keypad-hidden-form {{ display:none; }}
+    @keyframes world-keypad-avatar-breathe {{ 0%,100% {{ transform:scale(1); }} 50% {{ transform:scale(1.12); }} }}
     .tactics-game-shell {{ position:relative; grid-column:1 / -1; order:4; display:grid; grid-template-columns:minmax(360px,1.15fr) minmax(280px,.72fr) minmax(280px,.76fr); gap:14px; align-items:stretch; border:1px solid rgba(248,195,91,.34); background:radial-gradient(circle at 18% 0%,rgba(248,195,91,.18),transparent 26rem),radial-gradient(circle at 78% 26%,rgba(100,227,255,.14),transparent 22rem),linear-gradient(145deg,rgba(16,18,26,.96),rgba(6,8,15,.94)); box-shadow:0 26px 90px rgba(0,0,0,.52), inset 0 0 0 1px rgba(255,255,255,.045); border-radius:26px; padding:16px; margin-bottom:16px; max-height:1900px; overflow:auto; }}
     .tactics-game-shell::before {{ content:""; position:absolute; inset:0; pointer-events:none; opacity:.16; background-image:linear-gradient(90deg,rgba(248,195,91,.42) 1px,transparent 1px),linear-gradient(0deg,rgba(248,195,91,.32) 1px,transparent 1px); background-size:56px 56px; mask-image:linear-gradient(180deg,rgba(0,0,0,.75),transparent 80%); }}
     .tactics-game-shell > * {{ position:relative; z-index:1; }}
@@ -3040,6 +3348,8 @@ pub(super) async fn get_world_web_shell(
       #world-map-move-panel {{ order:5; }}
       #world-map-shell-panel .map-shell {{ display:contents; }}
       .trillionnium-game-shell {{ order:4; }}
+      .world-keypad-adventure-shell {{ grid-template-columns:1fr; order:1; }}
+      .world-keypad-map-grid {{ min-height:390px; grid-auto-rows:minmax(68px,1fr); }}
       .tactics-game-shell {{ order:4; max-height:2400px; }}
       .trillionnium-underlay-label {{ order:2; }}
       #world-real-map {{ order:1; min-height:min(28svh,240px); }}
@@ -3082,11 +3392,52 @@ pub(super) async fn get_world_web_shell(
       .language-switcher {{ padding:5px 6px 5px 8px; font-size:11px; }}
       .language-switcher select {{ min-height:40px; min-width:82px; max-width:112px; padding:6px 22px 6px 8px; font-size:11px; }}
       .world-hero-actions {{ display:grid; grid-template-columns:1fr; gap:8px; }}
+      #world-mobile-route-first-sheet {{ padding:8px; gap:6px; }}
+      #world-mobile-route-first-sheet > strong {{ display:none; }}
       .trillionnium-game-shell {{ padding:10px; border-radius:20px; gap:10px; }}
       .trillionnium-room,.trillionnium-status,.trillionnium-engine-card {{ padding:12px; border-radius:16px; }}
       .trillionnium-scene-text {{ min-height:150px; padding:12px; font-size:13px; line-height:1.58; }}
       .trillionnium-command-grid {{ grid-template-columns:repeat(2,minmax(0,1fr)); }}
       .trillionnium-command {{ font-size:12px; padding:8px; }}
+      .world-keypad-adventure-shell {{ grid-template-columns:1fr; padding:10px; border-radius:20px; gap:10px; }}
+      .world-keypad-stage,.world-keypad-sidecar {{ padding:10px; border-radius:16px; }}
+      .world-keypad-header {{ gap:8px; }}
+      .world-keypad-header h2 {{ font-size:22px; }}
+      .world-keypad-header p {{ font-size:13px; }}
+      .world-keypad-status code,.world-keypad-status span {{ font-size:10px; padding:5px 7px; }}
+      .world-keypad-map-frame {{ padding:7px; border-radius:15px; }}
+      .world-keypad-map-grid {{ grid-template-columns:repeat(4,minmax(58px,1fr)); grid-auto-rows:minmax(62px,1fr); min-height:326px; gap:5px; }}
+      .world-keypad-cell {{ min-height:58px; border-radius:10px; padding:5px; }}
+      .world-keypad-cell-symbol {{ width:24px; height:24px; border-radius:8px; font-size:12px; }}
+      .world-keypad-cell b {{ font-size:11px; }}
+      .world-keypad-cell small {{ display:none; }}
+      .world-keypad-button {{ min-height:54px; border-radius:13px; padding:6px; }}
+      .world-keypad-button span {{ font-size:19px; }}
+      .world-keypad-button small {{ font-size:10px; }}
+      #world-mobile-route-first-sheet .world-keypad-adventure-shell {{ grid-template-columns:minmax(0,1fr) minmax(108px,116px); gap:7px; padding:8px; border-radius:18px; align-items:stretch; }}
+      #world-mobile-route-first-sheet .world-keypad-stage,#world-mobile-route-first-sheet .world-keypad-sidecar {{ padding:7px; border-radius:14px; gap:6px; }}
+      #world-mobile-route-first-sheet .world-keypad-header {{ display:grid; gap:4px; }}
+      #world-mobile-route-first-sheet .world-keypad-header .pill,#world-mobile-route-first-sheet .world-keypad-header p {{ display:none; }}
+      #world-mobile-route-first-sheet .world-keypad-header h2 {{ font-size:17px; line-height:1.02; letter-spacing:-.03em; }}
+      #world-mobile-route-first-sheet .world-keypad-status {{ gap:4px; }}
+      #world-mobile-route-first-sheet .world-keypad-status code,#world-mobile-route-first-sheet .world-keypad-status span {{ font-size:9px; padding:3px 5px; }}
+      #world-mobile-route-first-sheet .world-keypad-map-frame {{ padding:5px; border-radius:12px; }}
+      #world-mobile-route-first-sheet .world-keypad-map-grid {{ grid-template-columns:repeat(4,minmax(38px,1fr)); grid-auto-rows:minmax(42px,1fr); min-height:224px; gap:3px; }}
+      #world-mobile-route-first-sheet .world-keypad-cell {{ min-height:40px; border-radius:8px; padding:4px; }}
+      #world-mobile-route-first-sheet .world-keypad-cell-symbol {{ width:22px; height:22px; border-radius:7px; font-size:12px; }}
+      #world-mobile-route-first-sheet .world-keypad-cell b {{ font-size:10px; max-width:100%; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
+      #world-mobile-route-first-sheet .world-keypad-sidecar article {{ padding:6px; border-radius:11px; gap:4px; }}
+      #world-mobile-route-first-sheet .world-keypad-quest-brief > strong,#world-mobile-route-first-sheet .world-keypad-current-panel,#world-mobile-route-first-sheet .world-keypad-sidecar > article:not(.world-keypad-quest-brief):not(.world-keypad-current-panel) {{ display:none; }}
+      #world-mobile-route-first-sheet .world-keypad-numpad {{ order:-1; gap:3px; }}
+      #world-mobile-route-first-sheet .world-keypad-button {{ min-height:34px; border-radius:9px; padding:3px; }}
+      #world-mobile-route-first-sheet .world-keypad-button span {{ font-size:15px; }}
+      #world-mobile-route-first-sheet .world-keypad-button small {{ display:none; }}
+      #world-mobile-route-first-sheet #world-first-human-loop {{ grid-template-columns:repeat(2,minmax(0,1fr)); gap:3px; }}
+      #world-mobile-route-first-sheet #world-first-human-loop article {{ padding:4px; border-radius:8px; }}
+      #world-mobile-route-first-sheet #world-first-human-loop span {{ font-size:8px; }}
+      #world-mobile-route-first-sheet #world-first-human-loop b {{ font-size:9px; }}
+      #world-mobile-route-first-sheet #world-first-human-loop small {{ display:none; }}
+      #world-mobile-route-first-sheet .world-keypad-quest-brief .cta {{ min-height:34px; padding:7px 8px; border-radius:10px; font-size:11px; }}
       .tactics-game-shell {{ padding:10px; border-radius:20px; gap:10px; }}
       .tactics-board-card,.tactics-command-card,.tactics-base-card {{ padding:12px; border-radius:16px; }}
       .tactics-board {{ min-height:min(88vw,430px); gap:3px; padding:6px; border-radius:15px; }}
@@ -3179,6 +3530,28 @@ pub(super) async fn get_world_web_shell(
       <div id="world-hero-mobile-actions" class="world-hero-actions" data-contract-version="trillionnium_mobile_single_primary_cta_v1" data-first-screen-decision-contract="trillionnium_world_map_first_screen_decision_v1" data-parity-source="app-mobile-primary-cta" data-primary-cta-count="1" data-first-screen-loop="pick_route_submit_proof_claim_reward">
         <section id="world-mobile-route-first-sheet" class="world-mobile-action-sheet" aria-label="World mobile one route first" data-i18n-aria-label-en="World mobile one route first" data-i18n-aria-label-zh="世界移动端一条路线优先">
           <strong data-i18n-en="Current route" data-i18n-zh="当前路线">Current route</strong>
+        <section id="world-keypad-adventure-shell" class="world-keypad-adventure-shell" tabindex="0" data-contract-version="trillionnium_text_adventure_keypad_movement_v1" data-interface-style="yingxiongtanshuo_keyboard_tile_map" data-keypad-controls="7,8,9,4,5,6,1,2,3" data-keyboard-controls="numpad,arrows,wasd" data-movement-endpoint="/world/web/map-move" data-source-of-truth="rust_world_map_move" data-web-role="input_only_visualization" aria-label="Keyboard controlled Trillionnium tile map" data-i18n-aria-label-en="Keyboard controlled Trillionnium tile map" data-i18n-aria-label-zh="小键盘操纵的 Trillionnium 格子地图">
+          <article class="world-keypad-stage">
+            <div class="world-keypad-header">
+              <div>
+                <div class="pill" data-i18n-en="Playable map first" data-i18n-zh="可玩地图优先">Playable map first</div>
+                <h2 data-i18n-en="Text-MUD keypad world" data-i18n-zh="英雄坛说式键盘地图">Text-MUD keypad world</h2>
+                <p data-i18n-en="Stand on the grid, use the numeric keypad, arrows, or WASD to move. The browser only sends movement intent; Rust persists the real position." data-i18n-zh="角色站在格子地图上，用小键盘、方向键或 WASD 移动。浏览器只提交移动意图；真实位置由 Rust 持久化。">Stand on the grid, use the numeric keypad, arrows, or WASD to move. The browser only sends movement intent; Rust persists the real position.</p>
+              </div>
+              <div class="world-keypad-status" aria-label="Current map position" data-i18n-aria-label-en="Current map position" data-i18n-aria-label-zh="当前地图位置">
+                <code id="world-keypad-current-node-id">{current_map_node_id}</code>
+                <span id="world-keypad-current-coordinates">{world_keypad_current_coordinates}</span>
+              </div>
+            </div>
+            <div class="world-keypad-map-frame">
+              <div id="world-keypad-map-grid" class="world-keypad-map-grid" role="grid" tabindex="0" data-current-node-id="{current_map_node_id}" data-source-of-truth="rust_world_map_nodes" data-web-role="visualization_only" aria-label="Trillionnium keyboard tile map" data-i18n-aria-label-en="Trillionnium keyboard tile map" data-i18n-aria-label-zh="Trillionnium 键盘格子地图">
+                {world_keypad_grid}
+              </div>
+            </div>
+          </article>
+          <aside class="world-keypad-sidecar" aria-label="Movement controls" data-i18n-aria-label-en="Movement controls" data-i18n-aria-label-zh="移动控制">
+            <article class="world-keypad-quest-brief" data-contract-version="trillionnium_world_first_screen_four_questions_v1">
+              <strong data-i18n-en="First screen: move the character" data-i18n-zh="首屏：先操纵人物移动">First screen: move the character</strong>
           <div id="world-first-human-loop" class="world-first-human-loop" data-contract-version="trillionnium_first_human_session_v1" data-first-screen-contract="trillionnium_world_first_screen_four_questions_v1" data-visible-question-count="4" data-source-of-truth="rust_trillionnium_game_state" data-web-role="player_orientation_only">
             <article data-first-human-question="who"><span data-i18n-en="Who" data-i18n-zh="我是谁">Who</span><b data-i18n-en="{trillionnium_display_name_en}" data-i18n-zh="{trillionnium_display_name_zh}">{trillionnium_display_name_en}</b><small data-i18n-en="{trillionnium_title_en}" data-i18n-zh="{trillionnium_title_zh}">{trillionnium_title_en}</small></article>
             <article data-first-human-question="where"><span data-i18n-en="Where" data-i18n-zh="去哪">Where</span><b data-i18n-en="Real-street objective" data-i18n-zh="真实街巷目标">Real-street objective</b><small data-i18n-en="One visible route, not every dashboard." data-i18n-zh="只看一条路线，不先看所有仪表盘。">One visible route, not every dashboard.</small></article>
@@ -3186,12 +3559,34 @@ pub(super) async fn get_world_web_shell(
             <article data-first-human-question="reward"><span data-i18n-en="Reward" data-i18n-zh="得什么">Reward</span><b data-i18n-en="XP + next route" data-i18n-zh="XP + 下一路线">XP + next route</b><small data-i18n-en="{map_route_runner_reward_claim_count} claim · {map_route_runner_mastery_xp} XP" data-i18n-zh="{map_route_runner_reward_claim_count} 次领奖 · {map_route_runner_mastery_xp} XP">{map_route_runner_reward_claim_count} claim · {map_route_runner_mastery_xp} XP</small></article>
           </div>
           <a id="world-mobile-primary-cta" class="cta" href='#trillionnium-tactics-game-shell' data-i18n-en="Continue route: enter tactics board" data-i18n-zh="继续路线：进入战棋棋盘">Continue route: enter tactics board</a>
-          <p id="world-mobile-current-route" data-i18n-en="{map_route_runner_handoff_summary}" data-i18n-zh="{map_route_runner_handoff_summary}">{map_route_runner_handoff_summary}</p>
           <div class="world-route-stepper" aria-label="Pick route submit proof claim reward" data-i18n-aria-label-en="Pick route submit proof claim reward" data-i18n-aria-label-zh="选路线、交证据、领奖励">
             <span data-i18n-en="Pick route" data-i18n-zh="选路线">Pick route</span>
             <span data-i18n-en="Submit proof" data-i18n-zh="交证据">Submit proof</span>
             <span data-i18n-en="Claim reward" data-i18n-zh="领奖励">Claim reward</span>
           </div>
+            </article>
+            <article class="world-keypad-current-panel">
+              <strong id="world-keypad-current-name">{world_keypad_current_name}</strong>
+              <p id="world-keypad-current-description">{world_keypad_current_description}</p>
+              <small><span data-i18n-en="Exits" data-i18n-zh="出口">Exits</span>: <span id="world-keypad-current-exits">{world_keypad_current_exits}</span></small>
+            </article>
+            <div id="world-keypad-numpad" class="world-keypad-numpad" data-contract-version="trillionnium_text_adventure_keypad_movement_v1" data-source-of-truth="rust_world_map_move" aria-label="Numeric keypad movement" data-i18n-aria-label-en="Numeric keypad movement" data-i18n-aria-label-zh="小键盘移动">
+              {world_keypad_buttons}
+            </div>
+            <article>
+              <strong data-i18n-en="Keyboard" data-i18n-zh="键盘">Keyboard</strong>
+              <p data-i18n-en="Numpad 8/2/4/6 moves north/south/west/east; 7/9/1/3 are diagonals; 5 waits. Arrow keys and WASD work as shortcuts." data-i18n-zh="小键盘 8/2/4/6 对应上/下/左/右，7/9/1/3 对应斜向，5 原地等待；方向键和 WASD 也可用。">Numpad 8/2/4/6 moves north/south/west/east; 7/9/1/3 are diagonals; 5 waits. Arrow keys and WASD work as shortcuts.</p>
+              <small id="world-keypad-live-status" role="status" aria-live="polite" data-i18n-en="Ready: choose a keypad direction." data-i18n-zh="已就绪：选择一个小键盘方向。">Ready: choose a keypad direction.</small>
+            </article>
+            <form id="world-keypad-move-form" class="world-keypad-hidden-form" method="post" action="/world/web/map-move" data-contract-version="trillionnium_text_adventure_keypad_movement_v1" data-source-of-truth="rust_world_map_move">
+              {csrf_input}
+              <input type="hidden" name="matrix_user_id" value="{current_matrix_user_id}" />
+              <input id="world-keypad-move-target" type="hidden" name="target" value="{current_map_node_id}" />
+              <input type="hidden" name="response" value="json" />
+            </form>
+          </aside>
+        </section>
+          <p id="world-mobile-current-route" data-i18n-en="{map_route_runner_handoff_summary}" data-i18n-zh="{map_route_runner_handoff_summary}">{map_route_runner_handoff_summary}</p>
           <p id="world-mobile-next-action" data-i18n-en="Next action: move the selected unit toward the real-street objective, then submit proof or claim reward." data-i18n-zh="下一步动作：让选中单位推进到真实街巷目标，再提交证据或领取奖励。">Next action: move the selected unit toward the real-street objective, then submit proof or claim reward.</p>
           <p id="world-mobile-reward-xp" data-route-mastery-contract="{map_route_runner_mastery_contract}" data-route-mastery-tier="{map_route_runner_mastery_tier}" data-route-mastery-xp="{map_route_runner_mastery_xp}">Reward / XP · {map_route_runner_reward_claim_count} claim · {map_route_runner_mastery_xp} XP · {map_route_runner_mastery_tier}</p>
         </section>
@@ -3554,6 +3949,7 @@ pub(super) async fn get_world_web_shell(
     </section>
   </main>
   {language_runtime_script}
+  <script id="trillionnium-world-keypad-data" type="application/json">{world_keypad_state_json}</script>
   <script id="trillionnium-world-map-data" type="application/json">{world_map_data_json}</script>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
@@ -3598,6 +3994,143 @@ pub(super) async fn get_world_web_shell(
       let mapRumFirstInteractiveSent = false;
       let lastSelection = null;
       let routeFilterMode = 'all';
+      const initializeWorldKeypadMovement = () => {{
+        const shell = document.getElementById('world-keypad-adventure-shell');
+        const grid = document.getElementById('world-keypad-map-grid');
+        const dataNode = document.getElementById('trillionnium-world-keypad-data');
+        const form = document.getElementById('world-keypad-move-form');
+        if (!shell || !grid || !dataNode || !form) return;
+        let state = {{ nodes: {{}}, current_node_id: grid.dataset.currentNodeId || '' }};
+        try {{ state = {{ ...state, ...(JSON.parse(dataNode.textContent || '{{}}') || {{}}) }}; }} catch (_error) {{}}
+        const status = document.getElementById('world-keypad-live-status');
+        const currentNodeIdNode = document.getElementById('world-keypad-current-node-id');
+        const coordinatesNode = document.getElementById('world-keypad-current-coordinates');
+        const nameNode = document.getElementById('world-keypad-current-name');
+        const descriptionNode = document.getElementById('world-keypad-current-description');
+        const exitsNode = document.getElementById('world-keypad-current-exits');
+        const targetInput = document.getElementById('world-keypad-move-target');
+        const keyAliases = state.keypad || {{}};
+        const language = () => document.documentElement.getAttribute('data-ui-language') || 'en';
+        const textForNode = (node, field) => {{
+          if (!node) return '';
+          const lang = language() === 'zh' ? 'zh' : 'en';
+          return String(node[field + '_' + lang] || node[field] || '');
+        }};
+        const currentNode = () => (state.nodes || {{}})[state.current_node_id] || null;
+        const keyForEvent = (event) => {{
+          const code = String(event.code || '');
+          if (/^Numpad[1-9]$/.test(code)) return code.slice(-1);
+          const key = String(event.key || '').toLowerCase();
+          if (/^[1-9]$/.test(key)) return key;
+          return {{ arrowup:'8', arrowdown:'2', arrowleft:'4', arrowright:'6', w:'8', a:'4', s:'2', d:'6', q:'7', e:'9', z:'1', c:'3', x:'5' }}[key] || '';
+        }};
+        const targetForKey = (key) => {{
+          const node = currentNode();
+          if (!node) return {{ direction: '', targetNodeId: '' }};
+          if (key === '5') return {{ direction: 'wait', targetNodeId: state.current_node_id }};
+          const exits = node.exits || {{}};
+          for (const direction of (keyAliases[key] || [])) {{
+            if (exits[direction]) return {{ direction, targetNodeId: String(exits[direction]) }};
+          }}
+          return {{ direction: '', targetNodeId: '' }};
+        }};
+        const render = () => {{
+          const node = currentNode();
+          shell.dataset.currentNodeId = state.current_node_id || '';
+          grid.dataset.currentNodeId = state.current_node_id || '';
+          grid.querySelectorAll('.world-keypad-cell[data-node-id]').forEach((cell) => {{
+            const current = String(cell.dataset.nodeId || '') === String(state.current_node_id || '');
+            const reachable = current || Boolean(node && Object.values(node.exits || {{}}).includes(cell.dataset.nodeId || ''));
+            cell.classList.toggle('is-current', current);
+            cell.classList.toggle('is-reachable', reachable);
+            cell.dataset.current = String(current);
+            cell.dataset.reachable = String(reachable);
+            const symbol = cell.querySelector('.world-keypad-cell-symbol');
+            if (symbol && current) symbol.textContent = language() === 'zh' ? '人' : '@';
+            else if (symbol && !symbol.textContent.trim()) symbol.textContent = '·';
+          }});
+          document.querySelectorAll('.world-keypad-button[data-keypad-key]').forEach((button) => {{
+            const next = targetForKey(button.dataset.keypadKey || '');
+            button.dataset.targetNodeId = next.targetNodeId || '';
+            button.dataset.moveDirection = next.direction || '';
+            const blocked = !next.targetNodeId;
+            button.classList.toggle('is-blocked', blocked);
+            button.setAttribute('aria-disabled', String(blocked));
+          }});
+          if (targetInput) targetInput.value = state.current_node_id || '';
+          if (currentNodeIdNode) currentNodeIdNode.textContent = state.current_node_id || '';
+          if (coordinatesNode && node) coordinatesNode.textContent = String(node.x ?? 0) + ',' + String(node.y ?? 0);
+          if (nameNode && node) nameNode.textContent = textForNode(node, 'name');
+          if (descriptionNode && node) descriptionNode.textContent = textForNode(node, 'description');
+          if (exitsNode && node) exitsNode.textContent = Object.keys(node.exits || {{}}).sort().join(' · ') || 'none';
+        }};
+        const submitMove = async (key, source = 'keyboard') => {{
+          const next = targetForKey(key);
+          if (!next.targetNodeId) {{
+            if (status) status.textContent = language() === 'zh' ? '这个方向没有出口。' : 'No exit in that direction.';
+            return false;
+          }}
+          if (status) status.textContent = language() === 'zh' ? ('移动意图已提交：' + next.direction) : ('Move intent submitted: ' + next.direction);
+          if (targetInput) targetInput.value = next.direction === 'wait' ? state.current_node_id : next.direction;
+          const body = new URLSearchParams(new FormData(form));
+          try {{
+            const response = await fetch(form.action, {{ method: 'POST', body, headers: {{ 'Accept': 'application/json' }} }});
+            const result = await response.json().catch(() => null);
+            if (!response.ok || !result || !result.position || !result.to_node) {{
+              throw new Error((result && (result.error || result.message)) || ('HTTP ' + response.status));
+            }}
+            const toNode = result.to_node || {{}};
+            state.nodes[toNode.node_id] = {{ ...(state.nodes[toNode.node_id] || {{}}), ...toNode }};
+            state.current_node_id = result.position.node_id || toNode.node_id || next.targetNodeId;
+            render();
+            if (status) status.textContent = language() === 'zh' ? ('已移动到：' + textForNode(currentNode(), 'name')) : ('Moved to: ' + textForNode(currentNode(), 'name'));
+            shell.dataset.lastInputSource = source;
+            shell.dataset.lastMoveDirection = next.direction;
+            return true;
+          }} catch (error) {{
+            if (status) status.textContent = (language() === 'zh' ? '移动失败：' : 'Move failed: ') + (error && error.message ? error.message : String(error));
+            return false;
+          }}
+        }};
+        shell.addEventListener('click', (event) => {{
+          const button = event.target.closest('.world-keypad-button[data-keypad-key]');
+          if (!button || !shell.contains(button)) return;
+          event.preventDefault();
+          submitMove(button.dataset.keypadKey || '', 'button');
+        }});
+        shell.addEventListener('keydown', (event) => {{
+          const tagName = String((event.target && event.target.tagName) || '').toLowerCase();
+          if (['input', 'textarea', 'select', 'button'].includes(tagName)) return;
+          if (event.target && event.target.isContentEditable) return;
+          const key = keyForEvent(event);
+          if (!key) return;
+          event.preventDefault();
+          event.stopPropagation();
+          submitMove(key, 'keyboard');
+        }});
+        document.addEventListener('keydown', (event) => {{
+          if (!shell.matches(':focus-within')) return;
+          const key = keyForEvent(event);
+          if (!key) return;
+          const tagName = String((event.target && event.target.tagName) || '').toLowerCase();
+          if (['input', 'textarea', 'select', 'button'].includes(tagName)) return;
+          event.preventDefault();
+          submitMove(key, 'keyboard');
+        }});
+        window.trillionniumKeyboardMap = {{
+          contract_version: state.contract_version || 'trillionnium_text_adventure_keypad_movement_v1',
+          source_of_truth: state.source_of_truth || 'rust_world_map_move',
+          web_role: state.web_role || 'input_only_visualization',
+          getState: () => ({{
+            currentNodeId: state.current_node_id,
+            currentExits: {{ ...((currentNode() || {{}}).exits || {{}}) }},
+            nodes: state.nodes,
+          }}),
+          move: submitMove,
+        }};
+        render();
+      }};
+      initializeWorldKeypadMovement();
       const initializeTacticsIntentDraft = () => {{
         const shell = document.getElementById('trillionnium-tactics-game-shell');
         const panel = document.getElementById('world-tactics-command-draft-panel');
@@ -4325,8 +4858,16 @@ pub(super) async fn get_world_web_shell(
         map_engine_id = escape_html_text(map_engine_id),
         zone_cards = zone_cards,
         map_cards = map_cards,
+        current_map_node_id = escape_html_text(&current_map_node_id),
         current_map_summary = current_map_summary,
         map_exit_options = map_exit_options,
+        world_keypad_grid = world_keypad_grid,
+        world_keypad_buttons = world_keypad_buttons,
+        world_keypad_state_json = world_keypad_state_json,
+        world_keypad_current_name = world_keypad_current_name,
+        world_keypad_current_description = world_keypad_current_description,
+        world_keypad_current_coordinates = escape_html_text(&world_keypad_current_coordinates),
+        world_keypad_current_exits = world_keypad_current_exits,
         location_cards = location_cards,
         location_options = location_options,
         entity_cards = entity_cards,
