@@ -1375,10 +1375,25 @@ Also append a one-paragraph summary to `/home/qian/.openclaw/workspace/memory/YY
 
 ---
 
+#### Update 2026-05-10 15:xx CST
+
+- Commit: this commit (`test: gate extended health metrics soak`)
+- Completed the next internal technical proof while external first-beta/commercial evidence is still unavailable.
+  - [x] Reused `scripts/check-trillionnium-health-metrics-load-soak.sh` for an extended single-node soak: 240 requests per endpoint at concurrency 16.
+  - [x] Added `health_metrics_extended_soak_green` to `scripts/check-trillionnium-world-human-playability-assessment.sh`, requiring the latest load-soak summary to cover at least 200 requests per endpoint, concurrency >=12, and green p95/max latency for both `/health` and `/metrics`.
+  - [x] Human-playability assessment now raises the evidence-backed technical score from `9.7/10` to `9.8/10` when the extended soak is green.
+- Latest extended load-soak evidence: `run/health-metrics-load-soak/health-metrics-load-soak-summary-1778398719.json` (`ok=true`, 240 requests per endpoint, concurrency 16, wall `3.166863s`; `/health` p95 `0.130153s`, max `0.165369s`; `/metrics` p95 `0.115389s`, max `0.148545s`).
+- Latest assessment evidence: `run/human-playability-assessment/human-playability-assessment-summary-1778398733.json` (`ok=true`, scores `9.8 / 8.5 / 7.0`, `/health` `0.062418s`, `/metrics` `0.008294s`).
+- Validation green: `bash -n scripts/check-trillionnium-health-metrics-load-soak.sh scripts/check-trillionnium-world-human-playability-assessment.sh`, extended load-soak gate, human-playability assessment gate, and `git diff --check`.
+- Remaining next: first-beta and commercial score lifts now require real evidence files; technical `9.9+` requires multi-node or live-traffic latency proof rather than another local-only loop.
+- Constraints preserved: no live Overpass/Geofabrik ingestion, no MapLibre promotion, no MedievalWar/Phaser vendoring, and Rust remains source of truth.
+
+---
+
 ## Current Next Pointer
 
 If the next instruction is simply “continue”, start here:
 
-> **Next pointer:** Human-playability assessment is now an explicit gate: `9.7/10` technical, `8.5/10` first internal beta, `7.0/10` commercial release from the operator baselines `8.5 / 7.5 / 6.0`. Product completion remains roughly 99% if blocked/forbidden items are excluded. First-beta and commercial-release validators/runbooks are ready; the next score lifts require real evidence via `TRILLIONNIUM_FIRST_BETA_COHORT_EVIDENCE_PATH` and/or `TRILLIONNIUM_COMMERCIAL_LAUNCH_DRILL_EVIDENCE_PATH`. If those external evidence files are not available yet, prioritize longer/multi-node/live-traffic latency proof for `9.8+` technical playability. Do not treat TW-8 policy bullets as unfinished product backlog.
+> **Next pointer:** Human-playability assessment is now an explicit gate: `9.8/10` technical, `8.5/10` first internal beta, `7.0/10` commercial release from the operator baselines `8.5 / 7.5 / 6.0`. Product completion remains roughly 99% if blocked/forbidden items are excluded. First-beta and commercial-release validators/runbooks are ready; the next score lifts require real evidence via `TRILLIONNIUM_FIRST_BETA_COHORT_EVIDENCE_PATH` and/or `TRILLIONNIUM_COMMERCIAL_LAUNCH_DRILL_EVIDENCE_PATH`. Technical `9.9+` should require multi-node or live-traffic latency evidence, not another local-only loop. Do not treat TW-8 policy bullets as unfinished product backlog.
 
 Do not start live Overpass/Geofabrik ingestion yet. Do not promote MapLibre. Do not convert the web shell into a standalone JS source of truth.

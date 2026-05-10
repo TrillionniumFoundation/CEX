@@ -111,6 +111,7 @@ technical_lift_checks = [
     evidence_check("first_human_path_no_browser_failures", ok(first_human) and first_human.get("mode") == "first-human-session" and (first_human.get("request_failure_gate") or {}).get("green") is True and not first_human.get("page_errors") and not first_human.get("console_messages"), 0.20, latest["first_human_e2e"].get("path")),
     evidence_check("health_and_metrics_interactive_latency", health.get("status") == "ok" and health_seconds <= 1.0 and metrics_seconds <= 1.0, 0.15, {"health_seconds": health_seconds, "metrics_seconds": metrics_seconds, "target_seconds": 1.0}),
     evidence_check("health_metrics_concurrent_p95_load_soak_green", ok(health_metrics_load_soak) and all((health_metrics_load_soak_endpoints.get(endpoint) or {}).get("green") is True and float((health_metrics_load_soak_endpoints.get(endpoint) or {}).get("p95_seconds") or 999.0) <= float((health_metrics_load_soak_endpoints.get(endpoint) or {}).get("target_p95_seconds") or 0.0) for endpoint in ["/health", "/metrics"]), 0.20, {"path": latest["health_metrics_load_soak"].get("path"), "endpoints": health_metrics_load_soak_endpoints, "wall_seconds": health_metrics_load_soak.get("wall_seconds")}),
+    evidence_check("health_metrics_extended_soak_green", ok(health_metrics_load_soak) and int((health_metrics_load_soak.get("config") or {}).get("requests_per_endpoint") or 0) >= 200 and int((health_metrics_load_soak.get("config") or {}).get("concurrency") or 0) >= 12 and all((health_metrics_load_soak_endpoints.get(endpoint) or {}).get("green") is True and float((health_metrics_load_soak_endpoints.get(endpoint) or {}).get("p95_seconds") or 999.0) <= float((health_metrics_load_soak_endpoints.get(endpoint) or {}).get("target_p95_seconds") or 0.0) for endpoint in ["/health", "/metrics"]), 0.10, {"path": latest["health_metrics_load_soak"].get("path"), "config": health_metrics_load_soak.get("config"), "endpoints": health_metrics_load_soak_endpoints, "wall_seconds": health_metrics_load_soak.get("wall_seconds")}),
     evidence_check("normalized_repository_final_cutover", repo.get("effective_repository") == "normalized_sql_direct_write_final" and repo.get("repository_cutover_status") == "normalized_sql_direct_write_final_cutover_active", 0.15, repo),
     evidence_check("runtime_playability_scorecard_green", playability.get("user_metric_overall_score") == 10.0 and all(axis_score(axis) == 10.0 for axis in ["technical_reliability", "first_playable_completeness", "real_player_comprehension_cost", "long_term_replayability", "economy_social_strategy_depth"]), 0.15, playability.get("user_metric_axes")),
     evidence_check("prometheus_runtime_gauges_visible", all(metric_present(metric) for metric in [
@@ -151,7 +152,7 @@ def lifted_score(baseline, checks, cap):
     earned = sum(check["weight"] for check in checks if check["passed"])
     return round(min(cap, baseline + earned), 1), round(earned, 2)
 
-technical_score, technical_lift = lifted_score(8.5, technical_lift_checks, 9.7)
+technical_score, technical_lift = lifted_score(8.5, technical_lift_checks, 9.8)
 first_beta_score, first_beta_lift = lifted_score(7.5, first_beta_lift_checks, 9.0)
 commercial_score, commercial_lift = lifted_score(6.0, commercial_lift_checks, 8.0)
 
@@ -178,7 +179,7 @@ assessment = {
         "commercial_release_playability": commercial_lift,
     },
     "score_caps": {
-        "technical_playability": {"cap": 9.7, "reason": "single-node concurrent p95 is green; keep cap below 9.8 until longer soak, multi-node, or live traffic evidence exists"},
+        "technical_playability": {"cap": 9.8, "reason": "extended single-node p95 soak is green; keep cap below 9.9 until multi-node or live traffic evidence exists"},
         "first_internal_beta_playability": {"cap": 9.0, "reason": "real 5-10 person first-beta cohort gate must be green before claiming 9+"},
         "commercial_release_playability": {"cap": 8.0, "reason": "commercial launch drills gate must be green before claiming 8+"},
     },
@@ -198,7 +199,7 @@ assessment = {
         "commercial_release_playability": commercial_lift_checks,
     },
     "remaining_gaps_before_next_band": [
-        "Extend /health and /metrics latency proof to longer soak, multi-node, or live traffic evidence before claiming 9.8+ technical playability.",
+        "Extend /health and /metrics latency proof to multi-node or live traffic evidence before claiming 9.9+ technical playability.",
         "Run scripts/check-trillionnium-first-beta-cohort-evidence.sh with a real 5-10 person evidence file and convert confused clicks/drop-offs into UI copy/route fixes.",
         "Run scripts/check-trillionnium-commercial-launch-drills.sh with real payment/refund/support/legal/operator/traffic drill evidence before claiming commercial 8+.",
         "Refresh production signoff after this assessment if commercial score must move beyond 7.x.",
