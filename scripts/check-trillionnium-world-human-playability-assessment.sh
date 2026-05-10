@@ -61,6 +61,7 @@ for key, pattern in {
     "production_signoff": "run/signoff/production-signoff-*.summary.json",
     "health_metrics_load_soak": "run/health-metrics-load-soak/health-metrics-load-soak-summary-*.json",
     "first_beta_cohort": "run/first-beta-cohort/first-beta-cohort-summary-*.json",
+    "commercial_launch_drills": "run/commercial-launch-drills/commercial-launch-drills-summary-*.json",
 }.items():
     path, payload = latest_json(pattern)
     latest[key] = {"path": str(path) if path else None, "payload": payload}
@@ -82,6 +83,7 @@ signoff_summary = latest["production_signoff"].get("payload") or {}
 health_metrics_load_soak = latest["health_metrics_load_soak"].get("payload") or {}
 health_metrics_load_soak_endpoints = health_metrics_load_soak.get("endpoints") or {}
 first_beta_cohort = latest["first_beta_cohort"].get("payload") or {}
+commercial_launch_drills = latest["commercial_launch_drills"].get("payload") or {}
 
 request_gate = browser.get("request_failure_gate") or {}
 first_human_coverage = first_human.get("coverage") or {}
@@ -141,6 +143,7 @@ commercial_lift_checks = [
     evidence_check("legal_osm_attribution_gate_green", osm_attribution.get("attribution_presence_green") is True and osm_attribution.get("odbl_database_obligations_visible") is True, 0.10, osm_attribution),
     evidence_check("public_world_depth_and_strategy_axes_green", axis_score("long_term_replayability") == 10.0 and axis_score("economy_social_strategy_depth") == 10.0, 0.10, {"long_term_replayability": axis_score("long_term_replayability"), "economy_social_strategy_depth": axis_score("economy_social_strategy_depth")}),
     evidence_check("fresh_full_browser_request_gate_green", ok(browser) and request_gate.get("green") is True and int(request_gate.get("unclassified_count") or 0) == 0, 0.05, latest["browser_e2e"].get("path")),
+    evidence_check("commercial_launch_drills_green", ok(commercial_launch_drills), 1.00, {"path": latest["commercial_launch_drills"].get("path"), "status": commercial_launch_drills.get("status"), "metrics": commercial_launch_drills.get("metrics"), "open_launch_blockers": commercial_launch_drills.get("open_launch_blockers"), "errors": commercial_launch_drills.get("errors")}),
 ]
 
 
@@ -150,7 +153,7 @@ def lifted_score(baseline, checks, cap):
 
 technical_score, technical_lift = lifted_score(8.5, technical_lift_checks, 9.7)
 first_beta_score, first_beta_lift = lifted_score(7.5, first_beta_lift_checks, 9.0)
-commercial_score, commercial_lift = lifted_score(6.0, commercial_lift_checks, 7.3)
+commercial_score, commercial_lift = lifted_score(6.0, commercial_lift_checks, 8.0)
 
 # Keep this intentionally honest: these caps express what the current repo can prove
 # without live external launch traffic, payment/legal/support drills, or real beta cohorts.
@@ -177,7 +180,7 @@ assessment = {
     "score_caps": {
         "technical_playability": {"cap": 9.7, "reason": "single-node concurrent p95 is green; keep cap below 9.8 until longer soak, multi-node, or live traffic evidence exists"},
         "first_internal_beta_playability": {"cap": 9.0, "reason": "real 5-10 person first-beta cohort gate must be green before claiming 9+"},
-        "commercial_release_playability": {"cap": 7.3, "reason": "needs real payment/support/legal/launch traffic signoff before claiming 8+"},
+        "commercial_release_playability": {"cap": 8.0, "reason": "commercial launch drills gate must be green before claiming 8+"},
     },
     "targets_for_this_push": {
         "technical_playability": 9.0,
@@ -197,7 +200,7 @@ assessment = {
     "remaining_gaps_before_next_band": [
         "Extend /health and /metrics latency proof to longer soak, multi-node, or live traffic evidence before claiming 9.8+ technical playability.",
         "Run scripts/check-trillionnium-first-beta-cohort-evidence.sh with a real 5-10 person evidence file and convert confused clicks/drop-offs into UI copy/route fixes.",
-        "Add commercial launch drills for payment/refund support, legal/privacy review, operator runbooks, and live traffic/error budgets.",
+        "Run scripts/check-trillionnium-commercial-launch-drills.sh with real payment/refund/support/legal/operator/traffic drill evidence before claiming commercial 8+.",
         "Refresh production signoff after this assessment if commercial score must move beyond 7.x.",
     ],
 }

@@ -1359,10 +1359,26 @@ Also append a one-paragraph summary to `/home/qian/.openclaw/workspace/memory/YY
 
 ---
 
+#### Update 2026-05-10 15:xx CST
+
+- Commit: this commit (`test: prepare commercial launch drill gate`)
+- Prepared the commercial launch drill evidence gate without pretending browser/local tests are enough for paid launch readiness.
+  - [x] Added `docs/trillionnium-commercial-launch-drills-runbook-v1.md` covering payment reserve/consume reconciliation, refund/chargeback recovery, support escalation, legal/privacy + OSM review, operator incident runbook rehearsal, and live traffic/error-budget stop/go policy.
+  - [x] Added `scripts/check-trillionnium-commercial-launch-drills.sh` with summary contract `trillionnium_commercial_launch_drills_gate_v1`.
+  - [x] The gate requires a real/sanitized input contract `trillionnium_commercial_launch_drills_evidence_v1`, rejects synthetic/template evidence, requires owner/evidence/escalation on every drill, checks refund/support/incident response budgets, verifies privacy/payment/error-budget attestations, and fails unresolved launch blockers.
+  - [x] Human-playability assessment now includes `commercial_launch_drills_green` as the explicit check required before commercial release playability can claim `8+`.
+- Current commercial launch drill status: blocked as intended until real drill evidence is provided. Latest blocked summary: `run/commercial-launch-drills/commercial-launch-drills-summary-1778398636.json` (`status=blocked_missing_commercial_launch_drill_evidence`).
+- Latest assessment evidence after adding the commercial drill gate: `run/human-playability-assessment/human-playability-assessment-summary-1778398636.json` (`ok=true`, scores remain `9.7 / 8.5 / 7.0`; the commercial drill check is present and false until evidence exists).
+- Validation green: `bash -n scripts/check-trillionnium-commercial-launch-drills.sh scripts/check-trillionnium-world-human-playability-assessment.sh`, blocked commercial drill behavior inspected, human-playability assessment still green, and `git diff --check`.
+- Remaining next: provide/run the real commercial launch drill evidence file, or if launch drills are not ready yet, pursue longer/multi-node/live-traffic latency proof for technical `9.8+` while waiting on external beta/commercial evidence.
+- Constraints preserved: no live Overpass/Geofabrik ingestion, no MapLibre promotion, no MedievalWar/Phaser vendoring, and Rust remains source of truth.
+
+---
+
 ## Current Next Pointer
 
 If the next instruction is simply “continue”, start here:
 
-> **Next pointer:** Human-playability assessment is now an explicit gate: `9.7/10` technical, `8.5/10` first internal beta, `7.0/10` commercial release from the operator baselines `8.5 / 7.5 / 6.0`. Product completion remains roughly 99% if blocked/forbidden items are excluded. The first-beta cohort validator/runbook is ready; the next evidence step requires a real 5-10 person cohort JSON file via `TRILLIONNIUM_FIRST_BETA_COHORT_EVIDENCE_PATH`. If that evidence is not available yet, prioritize commercial launch drills/payment-support-legal-live-traffic readiness or longer/multi-node/live-traffic latency proof for `9.8+` technical playability. Do not treat TW-8 policy bullets as unfinished product backlog.
+> **Next pointer:** Human-playability assessment is now an explicit gate: `9.7/10` technical, `8.5/10` first internal beta, `7.0/10` commercial release from the operator baselines `8.5 / 7.5 / 6.0`. Product completion remains roughly 99% if blocked/forbidden items are excluded. First-beta and commercial-release validators/runbooks are ready; the next score lifts require real evidence via `TRILLIONNIUM_FIRST_BETA_COHORT_EVIDENCE_PATH` and/or `TRILLIONNIUM_COMMERCIAL_LAUNCH_DRILL_EVIDENCE_PATH`. If those external evidence files are not available yet, prioritize longer/multi-node/live-traffic latency proof for `9.8+` technical playability. Do not treat TW-8 policy bullets as unfinished product backlog.
 
 Do not start live Overpass/Geofabrik ingestion yet. Do not promote MapLibre. Do not convert the web shell into a standalone JS source of truth.
