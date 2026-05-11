@@ -1,9 +1,9 @@
 # Trillionnium World Development Progress Tree v1
 
 Generated: 2026-05-08 18:11 CST  
-Last audited: 2026-05-11 18:4x CST
-Current code checkpoint: `feat: gate clean-room content scale scaffold` (this commit)
-Previous checkpoint: `fbad93a feat: gate native social survival runtime`
+Last audited: 2026-05-11 21:0x CST
+Current code checkpoint: `feat: gate native authored quest chains` (this commit)
+Previous checkpoint: `9a7d916 feat: gate clean-room content scale scaffold`
 Repo: `/home/qian/.openclaw/workspace/CEX`
 
 This document is the handoff spine for continuing Trillionnium World development without losing state after chat compaction, runtime restarts, or long task chains.
@@ -734,6 +734,8 @@ git log --oneline -5
   - Evidence: `trillionnium_world_combat_encounter_loop_v1`; `/world` play-first prompt exposes a Rust-projected node-local combat encounter form, validates node/overlay/target through Rust tactics state, resolves via `rust_tactics_combat_handler`, and returns to `map_ready_after_resolution` under `rust_world_combat_encounter_return_state`. Browser E2E records `coverage.world_local_combat_encounter_return_loop=true`.
 - [x] TW-3.16 Add clean-room content-scale scaffold instead of copy-then-replace reference content.
   - Evidence: `trillionnium_clean_room_content_scale_v1`; `default_world_map_nodes()` now carries a 24-node original Trillionnium world graph including survival, social, mentor, auction, courier, archive, infirmary, cistern, and caravan pressure nodes; `trillionnium_hero_tan_full_content_alignment_v1` now requires `world_map_nodes >= 24`, exposes `clean_room_content_scale`, and explicitly forbids `no_full_hero_tan_replica_then_replace_workflow`.
+- [x] TW-3.17 Add clean-room authored quest-chain breadth across the 24-node graph.
+  - Evidence: `trillionnium_world_authored_quest_chain_v1`; Rust projection exposes six native authored chains, at least 18 authored steps, 16+ covered map nodes, native task archetypes such as `witness_archive_case`, `cistern_ration_run`, `night_watch_message`, `guild_vault_audit`, and `mentor_cloister_oath`, plus `/world` visualization section `#trillionnium-authored-quest-chains`. The full-content alignment gate tracks `authored_quest_chains`, preserves `no_full_hero_tan_replica_then_replace_workflow`, and keeps browser/web visualization-input-only.
 
 ### TW-4 — Rust World domain and simulation backbone
 
@@ -1787,10 +1789,25 @@ Also append a one-paragraph summary to `/home/qian/.openclaw/workspace/memory/YY
 
 ---
 
+#### Update 2026-05-11 21:0x CST
+
+- Commit: `feat: gate native authored quest chains` (this commit)
+- Continued the clean-room content-volume alignment by adding original Trillionnium authored quest-chain breadth instead of copying 白金英雄坛说 / Hero Tan task data:
+  - [x] Added `trillionnium_world_authored_quest_chain_v1` with six native chain IDs spanning archive reconciliation, cistern/ration relief, night courier watch, guild vault signals, auction appraisal, and mentor-title oath pressure.
+  - [x] Added native task archetypes and semantic-role bindings for archive, patrol yard, water supply, ration kitchen, infirmary, mediation steps, mentor cloister, courier yard, survey tower, guild vault, auction arcade, and caravan camp.
+  - [x] Exposed the authored quest-chain catalog in the Rust tactics projection with chain/step/node coverage thresholds and no-copy policy metadata.
+  - [x] Rendered `/world` section `#trillionnium-authored-quest-chains` as visualization-only content backed by `rust_trillionnium_authored_quest_chain_catalog`, `world_state.world_map_nodes.exits`, and `world_state.world_relationships`.
+  - [x] Extended Web/Browser E2E static gates and Rust tests to require the authored-chain contract, content-policy markers, task archetypes, chain counts, step counts, node coverage, and clean-room forbidden-intermediate marker.
+  - [x] Hardened the world-map viewport delta cursor by adding deterministic marker tie-breaking, so equal-distance map markers do not produce false-positive changed deltas between identical viewport calls.
+- Honest scope: this adds original quest-chain/catalog breadth and stabilizes the local map delta contract, but it still does not lift technical 9.9+, first-beta 9+, or commercial 8+ without real external evidence.
+- Constraints preserved: no Hero Tan code/text/assets/data/NPC/task-table copying, no full clone-then-replace workflow, no live OSM ingestion, no MapLibre promotion, browser/web intent-only, Rust source of truth, and no local-only score inflation.
+
+---
+
 ## Current Next Pointer
 
 If the next instruction is simply “continue”, start here:
 
-> **Next pointer:** Continue content-volume alignment only through clean-room authored breadth that creates real play value: more original encounters, quest chains, NPC relationship consequences, and survival/resource loops attached to the 24-node world graph. Do not use a copy-then-replace Hero Tan replica workflow. If the goal is score lift instead of content breadth, prioritize real `TRILLIONNIUM_MULTI_NODE_LATENCY_EVIDENCE_PATH`, `TRILLIONNIUM_FIRST_BETA_COHORT_EVIDENCE_PATH`, or `TRILLIONNIUM_COMMERCIAL_LAUNCH_DRILL_EVIDENCE_PATH`. Current honest assessment remains `9.8/10` technical, `8.5/10` first internal beta, `7.0/10` commercial release.
+> **Next pointer:** Make `/world` feel like a normal playable game UI rather than a dashboard/map demo: put the compact 5x3/keypad exploration viewport, current NPC/task/action choices, authored quest-chain objective, and survival/combat bars first; lazy/defer heavy map/dashboard support payloads; keep Rust `WorldState` / projection JSON as source of truth and browser/web as thin visualization/input. Do not use a copy-then-replace Hero Tan replica workflow. If the goal is score lift instead of UI/player-value work, prioritize real `TRILLIONNIUM_MULTI_NODE_LATENCY_EVIDENCE_PATH`, `TRILLIONNIUM_FIRST_BETA_COHORT_EVIDENCE_PATH`, or `TRILLIONNIUM_COMMERCIAL_LAUNCH_DRILL_EVIDENCE_PATH`. Current honest assessment remains `9.8/10` technical, `8.5/10` first internal beta, `7.0/10` commercial release.
 
 Do not start live Overpass/Geofabrik ingestion yet. Do not promote MapLibre. Do not convert the web shell into a standalone JS source of truth.

@@ -1331,6 +1331,116 @@ fn world_trillionnium_dynamic_social_simulation_html(tactics_board: &Value) -> S
     )
 }
 
+fn world_trillionnium_authored_quest_chains_html(tactics_board: &Value) -> String {
+    let catalog = tactics_board
+        .get("authored_quest_chains")
+        .unwrap_or(&Value::Null);
+    let contract = catalog
+        .get("contract_version")
+        .and_then(Value::as_str)
+        .unwrap_or("trillionnium_world_authored_quest_chain_v1");
+    let source_of_truth = catalog
+        .get("source_of_truth")
+        .and_then(Value::as_str)
+        .unwrap_or("rust_trillionnium_authored_quest_chain_catalog");
+    let graph_owner = catalog
+        .get("graph_owner")
+        .and_then(Value::as_str)
+        .unwrap_or("world_state.world_map_nodes.exits");
+    let relationship_owner = catalog
+        .get("relationship_owner")
+        .and_then(Value::as_str)
+        .unwrap_or("world_state.world_relationships");
+    let survival_owner = catalog
+        .get("survival_owner")
+        .and_then(Value::as_str)
+        .unwrap_or(
+            "world_state.world_trillionnium_characters.resource_pressure_state.food_water_age",
+        );
+    let forbidden_intermediate = catalog
+        .get("forbidden_intermediate")
+        .and_then(Value::as_str)
+        .unwrap_or("no_full_hero_tan_replica_then_replace_workflow");
+    let chain_count = catalog
+        .get("chain_count")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    let step_count = catalog
+        .get("total_step_count")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    let covered_node_count = catalog
+        .get("covered_node_count")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    let chain_cards = catalog
+        .get("chains")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|chain| {
+            let chain_id = chain
+                .get("chain_id")
+                .and_then(Value::as_str)
+                .unwrap_or("authored_chain");
+            let title = chain
+                .get("title")
+                .and_then(Value::as_str)
+                .unwrap_or("Authored quest chain");
+            let theme = chain
+                .get("theme")
+                .and_then(Value::as_str)
+                .unwrap_or("original_trillionnium_route");
+            let reward_gate = chain
+                .get("reward_gate")
+                .and_then(Value::as_str)
+                .unwrap_or("review_hold_reward_gate");
+            let survival_pressure = chain
+                .get("survival_pressure")
+                .and_then(Value::as_str)
+                .unwrap_or("visible");
+            let node_count = chain
+                .get("node_ids")
+                .and_then(Value::as_array)
+                .map(Vec::len)
+                .unwrap_or_default();
+            let task_count = chain
+                .get("task_archetype_ids")
+                .and_then(Value::as_array)
+                .map(Vec::len)
+                .unwrap_or_default();
+            format!(
+                "<article class=\"mini trillionnium-authored-chain-card\" data-chain-id=\"{}\" data-node-count=\"{}\" data-task-count=\"{}\" data-reward-gate=\"{}\" data-survival-pressure=\"{}\"><strong>{}</strong><span>{}</span><small>{} nodes · {} task hooks · {}</small></article>",
+                escape_html_text(chain_id),
+                node_count,
+                task_count,
+                escape_html_text(reward_gate),
+                escape_html_text(survival_pressure),
+                escape_world_visible_text(title),
+                escape_world_visible_text(theme),
+                node_count,
+                task_count,
+                escape_html_text(reward_gate),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        "<section id=\"trillionnium-authored-quest-chains\" class=\"trillionnium-authored-quest-chains\" data-authored-quest-chain-contract=\"{}\" data-source-of-truth=\"{}\" data-graph-owner=\"{}\" data-relationship-owner=\"{}\" data-survival-owner=\"{}\" data-forbidden-intermediate=\"{}\" data-chain-count=\"{}\" data-total-step-count=\"{}\" data-covered-node-count=\"{}\" data-web-role=\"visualization_input_only\" aria-label=\"Trillionnium authored quest chains\" data-i18n-aria-label-en=\"Trillionnium authored quest chains\" data-i18n-aria-label-zh=\"Trillionnium 原生任务链\"><h4 data-i18n-en=\"Authored quest chains\" data-i18n-zh=\"原生任务链\">Authored quest chains</h4><p data-i18n-en=\"Original Trillionnium routes bind clean-room nodes to task hooks, relationship consequences, survival pressure, and encounter returns.\" data-i18n-zh=\"原创 Trillionnium 路线把 clean-room 节点绑定到任务钩子、关系后果、生存压力和遭遇返回。\">Original Trillionnium routes bind clean-room nodes to task hooks, relationship consequences, survival pressure, and encounter returns.</p><div class=\"mini-grid\">{}</div></section>",
+        escape_html_text(contract),
+        escape_html_text(source_of_truth),
+        escape_html_text(graph_owner),
+        escape_html_text(relationship_owner),
+        escape_html_text(survival_owner),
+        escape_html_text(forbidden_intermediate),
+        chain_count,
+        step_count,
+        covered_node_count,
+        chain_cards,
+    )
+}
+
 fn world_trillionnium_task_candidate_forms_html(
     tactics_board: &Value,
     current_matrix_user_id: &str,
@@ -3856,6 +3966,8 @@ pub(super) async fn get_world_web_shell(
         world_trillionnium_npc_cards_html(&tactics_board, current_matrix_user_id, &csrf_input);
     let trillionnium_dynamic_social_simulation =
         world_trillionnium_dynamic_social_simulation_html(&tactics_board);
+    let trillionnium_authored_quest_chains =
+        world_trillionnium_authored_quest_chains_html(&tactics_board);
     let trillionnium_task_completion_forms = world_trillionnium_task_candidate_forms_html(
         &tactics_board,
         current_matrix_user_id,
@@ -5415,6 +5527,7 @@ pub(super) async fn get_world_web_shell(
               <p data-i18n-en="Submit task reports from OSM-generated candidates; Rust validates completion, review hold, anti-cheese, and ledger settlement before rewards release." data-i18n-zh="从 OSM 生成的候选任务提交战报；Rust 校验完成、复核暂挂、反刷和账本结算后才释放奖励。">Submit task reports from OSM-generated candidates; Rust validates completion, review hold, anti-cheese, and ledger settlement before rewards release.</p>
               <div class="mini-grid">{trillionnium_task_completion_forms}</div>
             </section>
+            {trillionnium_authored_quest_chains}
             {trillionnium_full_content_alignment}
             {trillionnium_combat_numerics_runtime}
             {trillionnium_resource_pressure_runtime}
@@ -6684,6 +6797,7 @@ pub(super) async fn get_world_web_shell(
         trillionnium_sect_cards = trillionnium_sect_cards,
         trillionnium_npc_cards = trillionnium_npc_cards,
         trillionnium_dynamic_social_simulation = trillionnium_dynamic_social_simulation,
+        trillionnium_authored_quest_chains = trillionnium_authored_quest_chains,
         trillionnium_task_completion_forms = trillionnium_task_completion_forms,
         trillionnium_full_content_alignment = trillionnium_full_content_alignment,
         trillionnium_combat_numerics_runtime = trillionnium_combat_numerics_runtime,

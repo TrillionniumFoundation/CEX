@@ -68,6 +68,8 @@ pub(super) const TRILLIONNIUM_WORLD_FOOD_WATER_AGE_SURVIVAL_CONTRACT_VERSION: &s
     "trillionnium_world_food_water_age_survival_v1";
 pub(super) const TRILLIONNIUM_WORLD_DYNAMIC_SOCIAL_SIMULATION_CONTRACT_VERSION: &str =
     "trillionnium_world_dynamic_social_simulation_v1";
+pub(super) const TRILLIONNIUM_WORLD_AUTHORED_QUEST_CHAIN_CONTRACT_VERSION: &str =
+    "trillionnium_world_authored_quest_chain_v1";
 pub(super) const TRILLIONNIUM_WORLD_REGION_STORY_UNLOCK_RUNTIME_CONTRACT_VERSION: &str =
     "trillionnium_world_region_story_unlock_runtime_v1";
 pub(super) const TRILLIONNIUM_WORLD_COMBAT_NUMERICS_RUNTIME_CONTRACT_VERSION: &str =
@@ -2833,6 +2835,7 @@ impl TrillionniumTaskArchetypeFixture {
             "reward_gate_contract_version": TRILLIONNIUM_REWARD_GATE_CONTRACT_VERSION,
             "completion_contract_version": TRILLIONNIUM_TASK_COMPLETION_CONTRACT_VERSION,
             "completion_command": "complete_task",
+            "content_policy": "trillionnium_native_no_copied_hero_tan_text_assets_or_tables",
             "rust_command_handler_decides_completion": true,
             "log_style_key": self.log_style_key,
             "candidate_generation_owner": "rust_openstreetmap_data_provider",
@@ -2958,6 +2961,78 @@ fn trillionnium_task_archetype_fixtures() -> Vec<TrillionniumTaskArchetypeFixtur
             reward_gate: "party_raid_resolution_then_ledger_gate",
             log_style_key: "raid_signal",
         },
+        TrillionniumTaskArchetypeFixture {
+            task_archetype_id: "witness_archive_case",
+            display_name: "Witness Archive Case / 见证档案案卷",
+            source_semantic_roles: vec!["archive", "mediation_steps", "arbitration_desk"],
+            command: "offer_task",
+            completion_owner: "rust_trillionnium_task_completion_handler",
+            reward_gate: "relationship_evidence_and_review_hold_gate",
+            log_style_key: "arbitrate_dispute",
+        },
+        TrillionniumTaskArchetypeFixture {
+            task_archetype_id: "night_watch_message",
+            display_name: "Night Watch Message / 夜巡暗信",
+            source_semantic_roles: vec!["patrol_yard", "courier_yard", "quest_board"],
+            command: "offer_task",
+            completion_owner: "rust_world_graph_objective_travel",
+            reward_gate: "route_evidence_required_before_reward",
+            log_style_key: "street_patrol",
+        },
+        TrillionniumTaskArchetypeFixture {
+            task_archetype_id: "cistern_ration_run",
+            display_name: "Cistern Ration Run / 水仓行粮",
+            source_semantic_roles: vec!["water_supply", "ration_kitchen", "caravan_camp"],
+            command: "offer_task",
+            completion_owner: "rust_trillionnium_food_water_age_survival_state",
+            reward_gate: "survival_supply_quality_review_required",
+            log_style_key: "healing_supply",
+        },
+        TrillionniumTaskArchetypeFixture {
+            task_archetype_id: "field_infirmary_round",
+            display_name: "Field Infirmary Round / 野外医棚巡诊",
+            source_semantic_roles: vec!["infirmary", "caravan_camp", "mentor_home"],
+            command: "offer_task",
+            completion_owner: "rust_trillionnium_resource_pressure_runtime_state",
+            reward_gate: "recovery_evidence_required_before_reward",
+            log_style_key: "healing_supply",
+        },
+        TrillionniumTaskArchetypeFixture {
+            task_archetype_id: "survey_tower_chart",
+            display_name: "Survey Tower Chart / 测绘塔图记",
+            source_semantic_roles: vec!["survey_tower", "courier_yard", "delivery_route"],
+            command: "offer_task",
+            completion_owner: "rust_world_graph_objective_travel",
+            reward_gate: "route_evidence_required_before_reward",
+            log_style_key: "map_survey",
+        },
+        TrillionniumTaskArchetypeFixture {
+            task_archetype_id: "guild_vault_audit",
+            display_name: "Guild Vault Audit / 公会库房稽核",
+            source_semantic_roles: vec!["guild_vault", "raid_hall", "ledger_hall"],
+            command: "offer_task",
+            completion_owner: "rust_review_hold_gate",
+            reward_gate: "guild_evidence_review_hold_required",
+            log_style_key: "raid_signal",
+        },
+        TrillionniumTaskArchetypeFixture {
+            task_archetype_id: "auction_appraisal",
+            display_name: "Auction Appraisal / 拍卖廊鉴定",
+            source_semantic_roles: vec!["auction_arcade", "workshop", "market"],
+            command: "offer_task",
+            completion_owner: "rust_inventory_crafting_gate",
+            reward_gate: "appraisal_evidence_and_settlement_required",
+            log_style_key: "market_parley",
+        },
+        TrillionniumTaskArchetypeFixture {
+            task_archetype_id: "mentor_cloister_oath",
+            display_name: "Mentor Cloister Oath / 导师回廊誓约",
+            source_semantic_roles: vec!["mentor_cloister", "mediation_steps", "civic_square"],
+            command: "train_skill",
+            completion_owner: "rust_mentor_training_validator",
+            reward_gate: "mentor_place_cost_cooldown_required",
+            log_style_key: "mentor_trial",
+        },
     ]
 }
 
@@ -3038,6 +3113,14 @@ fn trillionnium_objective_task_for_semantic_role(role: &str) -> Option<&'static 
         "delivery_route" => Some("courier_letter"),
         "arena" => Some("defeat_bandit"),
         "raid_hall" => Some("escort_route"),
+        "archive" | "mediation_steps" => Some("witness_archive_case"),
+        "patrol_yard" | "courier_yard" => Some("night_watch_message"),
+        "water_supply" | "ration_kitchen" => Some("cistern_ration_run"),
+        "infirmary" | "caravan_camp" => Some("field_infirmary_round"),
+        "mentor_cloister" => Some("mentor_cloister_oath"),
+        "survey_tower" => Some("survey_tower_chart"),
+        "guild_vault" => Some("guild_vault_audit"),
+        "auction_arcade" => Some("auction_appraisal"),
         _ => None,
     }
 }
@@ -3055,6 +3138,18 @@ fn trillionnium_objective_label_for_role(role: &str) -> &'static str {
         "arbitration_desk" => "判",
         "arena" => "战",
         "raid_hall" => "盟",
+        "archive" => "档",
+        "patrol_yard" => "巡",
+        "water_supply" => "水",
+        "ration_kitchen" => "粮",
+        "infirmary" => "医",
+        "mediation_steps" => "和",
+        "mentor_cloister" => "师",
+        "courier_yard" => "信",
+        "survey_tower" => "图",
+        "guild_vault" => "库",
+        "auction_arcade" => "拍",
+        "caravan_camp" => "营",
         _ => "遇",
     }
 }
@@ -3072,6 +3167,18 @@ fn trillionnium_objective_priority_for_role(role: &str) -> i64 {
         "arbitration_desk" => 68,
         "sect_hall" => 64,
         "raid_hall" => 60,
+        "archive" => 58,
+        "patrol_yard" => 57,
+        "water_supply" => 56,
+        "ration_kitchen" => 55,
+        "infirmary" => 54,
+        "mediation_steps" => 53,
+        "mentor_cloister" => 52,
+        "courier_yard" => 51,
+        "survey_tower" => 50,
+        "guild_vault" => 49,
+        "auction_arcade" => 48,
+        "caravan_camp" => 47,
         _ => 10,
     }
 }
@@ -3661,19 +3768,40 @@ fn trillionnium_task_archetype_ids_for_capability(capability: &str) -> Vec<&'sta
         | "train_auction_sense"
         | "train_camp_cooking"
         | "train_shadow_messaging" => vec!["sect_training_trial"],
-        "review_contract_risk" | "review_evidence" => vec!["market_settlement", "find_item"],
-        "repair_item" => vec!["find_item"],
-        "price_bounty" => vec!["market_settlement"],
+        "review_contract_risk" | "review_evidence" => {
+            vec!["market_settlement", "find_item", "witness_archive_case"]
+        }
+        "repair_item" => vec!["find_item", "auction_appraisal"],
+        "price_bounty" => vec!["market_settlement", "auction_appraisal"],
         "offer_escort_task" => vec!["escort_route"],
-        "offer_patrol_loop" => vec!["street_patrol", "map_survey"],
-        "recover_debt" => vec!["debt_recovery", "market_settlement"],
-        "supply_medicine" => vec!["healing_supply", "find_item"],
-        "survey_map" => vec!["map_survey", "courier_letter"],
-        "mediate_dispute" => vec!["arbitrate_dispute", "market_settlement"],
-        "coordinate_raid" => vec!["raid_signal", "escort_route", "defeat_bandit"],
+        "offer_patrol_loop" => vec!["street_patrol", "map_survey", "night_watch_message"],
+        "recover_debt" => vec!["debt_recovery", "market_settlement", "witness_archive_case"],
+        "supply_medicine" => vec![
+            "healing_supply",
+            "find_item",
+            "cistern_ration_run",
+            "field_infirmary_round",
+        ],
+        "survey_map" => vec!["map_survey", "courier_letter", "survey_tower_chart"],
+        "mediate_dispute" => vec![
+            "arbitrate_dispute",
+            "market_settlement",
+            "witness_archive_case",
+            "mentor_cloister_oath",
+        ],
+        "coordinate_raid" => vec![
+            "raid_signal",
+            "escort_route",
+            "defeat_bandit",
+            "guild_vault_audit",
+        ],
         "run_arena_duel" => vec!["defeat_bandit", "raid_signal"],
-        "register_sect_case" => vec!["sect_training_trial", "arbitrate_dispute"],
-        "appraise_artifact" => vec!["find_item", "healing_supply"],
+        "register_sect_case" => vec![
+            "sect_training_trial",
+            "arbitrate_dispute",
+            "mentor_cloister_oath",
+        ],
+        "appraise_artifact" => vec!["find_item", "healing_supply", "auction_appraisal"],
         _ => Vec::new(),
     }
 }
@@ -4712,6 +4840,216 @@ fn trillionnium_story_arc_catalog_json(region_story_unlock_runtime: &Value) -> V
     })
 }
 
+#[derive(Debug, Clone)]
+struct TrillionniumAuthoredQuestChainFixture {
+    chain_id: &'static str,
+    title: &'static str,
+    theme: &'static str,
+    node_ids: Vec<&'static str>,
+    task_archetype_ids: Vec<&'static str>,
+    relationship_consequence: &'static str,
+    survival_pressure: &'static str,
+    encounter_hook: &'static str,
+    reward_gate: &'static str,
+}
+
+impl TrillionniumAuthoredQuestChainFixture {
+    fn to_value(&self, world: &WorldState, task_candidates: &Value) -> Value {
+        let route_nodes = self
+            .node_ids
+            .iter()
+            .filter_map(|node_id| world.world_map_nodes.get(*node_id))
+            .map(|node| {
+                json!({
+                    "node_id": node.node_id,
+                    "name": node.name,
+                    "zone_id": node.zone_id,
+                    "location_id": node.location_id,
+                    "node_kind": node.node_kind,
+                    "interaction_tags": node.interaction_tags,
+                    "osm_game_overlay_id": openstreetmap_game_overlay_id(node),
+                })
+            })
+            .collect::<Vec<_>>();
+        let missing_node_ids = self
+            .node_ids
+            .iter()
+            .filter(|node_id| !world.world_map_nodes.contains_key(**node_id))
+            .copied()
+            .collect::<Vec<_>>();
+        let available_task_candidate_count = task_candidates
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|candidate| {
+                candidate
+                    .get("task_archetype_id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|task_id| self.task_archetype_ids.contains(&task_id))
+            })
+            .count();
+        json!({
+            "contract_version": TRILLIONNIUM_WORLD_AUTHORED_QUEST_CHAIN_CONTRACT_VERSION,
+            "chain_id": self.chain_id,
+            "title": self.title,
+            "theme": self.theme,
+            "node_ids": self.node_ids,
+            "route_nodes": route_nodes,
+            "task_archetype_ids": self.task_archetype_ids,
+            "available_task_candidate_count": available_task_candidate_count,
+            "missing_node_ids": missing_node_ids,
+            "relationship_consequence": self.relationship_consequence,
+            "survival_pressure": self.survival_pressure,
+            "encounter_hook": self.encounter_hook,
+            "reward_gate": self.reward_gate,
+            "graph_owner": "world_state.world_map_nodes.exits",
+            "task_candidate_owner": "rust_trillionnium_task_archetype_fixtures",
+            "source_of_truth": "rust_trillionnium_authored_quest_chain_catalog",
+            "content_policy": "trillionnium_native_no_copied_hero_tan_text_assets_or_tables",
+            "copy_policy": "no_copied_hero_tan_text_assets_code_tables_or_data",
+            "web_role": "visualization_input_only",
+        })
+    }
+}
+
+fn trillionnium_authored_quest_chain_fixtures() -> Vec<TrillionniumAuthoredQuestChainFixture> {
+    vec![
+        TrillionniumAuthoredQuestChainFixture {
+            chain_id: "witness_archive_reconciliation",
+            title: "Witness Archive Reconciliation / 见证档案调停",
+            theme: "restore_trust_by_rebuilding_a_clean_evidence_chain",
+            node_ids: vec!["witness-archive", "elder-step", "dispute-desk"],
+            task_archetype_ids: vec!["witness_archive_case", "arbitrate_dispute"],
+            relationship_consequence: "conflict_heat_can_shift_into_trust_recovery",
+            survival_pressure: "low",
+            encounter_hook: "social_dispute_without_combat_required",
+            reward_gate: "relationship_evidence_and_review_hold_gate",
+        },
+        TrillionniumAuthoredQuestChainFixture {
+            chain_id: "cistern_ration_relief",
+            title: "Cistern Ration Relief / 水仓行粮救援",
+            theme: "food_water_and_recovery_pressure_across_a_short_supply_route",
+            node_ids: vec![
+                "river-cistern",
+                "ration-kitchen",
+                "field-infirmary",
+                "caravan-rest-camp",
+            ],
+            task_archetype_ids: vec!["cistern_ration_run", "field_infirmary_round"],
+            relationship_consequence: "field_remedy_garden_trust_rises_when_supplies_arrive",
+            survival_pressure: "food_water_decay_visible",
+            encounter_hook: "failed_combat_recovery_can_redirect_here",
+            reward_gate: "survival_supply_quality_review_required",
+        },
+        TrillionniumAuthoredQuestChainFixture {
+            chain_id: "night_courier_watch",
+            title: "Night Courier Watch / 夜巡信使接力",
+            theme: "patrol_message_handoff_and_terrain_scouting",
+            node_ids: vec![
+                "night-watch-yard",
+                "courier-yard",
+                "survey-tower",
+                "client-board",
+            ],
+            task_archetype_ids: vec![
+                "night_watch_message",
+                "survey_tower_chart",
+                "courier_letter",
+            ],
+            relationship_consequence: "night_watch_alliance_trust_grows_with_clean_handoffs",
+            survival_pressure: "water_and_fatigue_risk_on_longer_routes",
+            encounter_hook: "optional_street_patrol_interruption",
+            reward_gate: "route_evidence_required_before_reward",
+        },
+        TrillionniumAuthoredQuestChainFixture {
+            chain_id: "guild_vault_signal",
+            title: "Guild Vault Signal / 公会库房号令",
+            theme: "raid_evidence_inventory_and_return_to_arena",
+            node_ids: vec!["raid-hall", "guild-vault", "league-coliseum"],
+            task_archetype_ids: vec!["guild_vault_audit", "raid_signal", "defeat_bandit"],
+            relationship_consequence: "raid_signal_lodge_standing_depends_on_evidence_custody",
+            survival_pressure: "combat_energy_and_guard_pressure",
+            encounter_hook: "lightweight_combat_entry_then_map_return",
+            reward_gate: "guild_evidence_review_hold_required",
+        },
+        TrillionniumAuthoredQuestChainFixture {
+            chain_id: "auction_arcade_appraisal",
+            title: "Auction Arcade Appraisal / 拍卖廊鉴定",
+            theme: "appraise_repair_and_price_original_market_goods",
+            node_ids: vec![
+                "auction-arcade",
+                "guild-vault",
+                "forge-workbench",
+                "zbj-market-gate",
+            ],
+            task_archetype_ids: vec!["auction_appraisal", "find_item", "market_settlement"],
+            relationship_consequence: "market_wind_pavilion_trust_tracks_fair_appraisal",
+            survival_pressure: "medium_supply_cost_before_market_reward",
+            encounter_hook: "no_reference_items_or_names_copied",
+            reward_gate: "appraisal_evidence_and_settlement_required",
+        },
+        TrillionniumAuthoredQuestChainFixture {
+            chain_id: "mentor_cloister_title_oath",
+            title: "Mentor Cloister Title Oath / 导师回廊誓约",
+            theme: "long_term_title_ladder_and_social_repair_route",
+            node_ids: vec!["mentor-cloister", "elder-step", "mirror-city-square"],
+            task_archetype_ids: vec!["mentor_cloister_oath", "sect_training_trial"],
+            relationship_consequence: "mentor_trust_unlocks_clean_room_title_ladder_progress",
+            survival_pressure: "age_days_make_training_time_a_visible_choice",
+            encounter_hook: "mentor_trial_not_external_sect_table",
+            reward_gate: "mentor_place_cost_cooldown_required",
+        },
+    ]
+}
+
+fn trillionnium_authored_quest_chain_catalog_json(
+    world: &WorldState,
+    task_candidates: &Value,
+) -> Value {
+    let chains = trillionnium_authored_quest_chain_fixtures()
+        .into_iter()
+        .map(|chain| chain.to_value(world, task_candidates))
+        .collect::<Vec<_>>();
+    let mut covered_node_ids = chains
+        .iter()
+        .flat_map(|chain| {
+            chain
+                .get("node_ids")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|value| value.as_str().map(ToString::to_string))
+        })
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    covered_node_ids.sort();
+    let total_step_count = chains
+        .iter()
+        .map(|chain| nested_array_len(chain, "node_ids"))
+        .sum::<usize>();
+    json!({
+        "contract_version": TRILLIONNIUM_WORLD_AUTHORED_QUEST_CHAIN_CONTRACT_VERSION,
+        "source_of_truth": "rust_trillionnium_authored_quest_chain_catalog",
+        "content_policy": "trillionnium_native_no_copied_hero_tan_text_assets_or_tables",
+        "copy_policy": "no_copied_hero_tan_text_assets_code_tables_or_data",
+        "architecture_rule": "build_reference_shape_equivalent_with_original_trillionnium_content_first",
+        "forbidden_intermediate": "no_full_hero_tan_replica_then_replace_workflow",
+        "graph_owner": "world_state.world_map_nodes.exits",
+        "task_candidate_owner": "rust_trillionnium_task_archetype_fixtures",
+        "relationship_owner": "world_state.world_relationships",
+        "survival_owner": "world_state.world_trillionnium_characters.resource_pressure_state.food_water_age",
+        "chain_count": chains.len(),
+        "total_step_count": total_step_count,
+        "covered_node_count": covered_node_ids.len(),
+        "covered_node_ids": covered_node_ids,
+        "chains": chains,
+        "web_role": "visualization_input_only",
+    })
+}
+
 fn value_array_len(value: &Value) -> usize {
     value.as_array().map(Vec::len).unwrap_or(0)
 }
@@ -4764,6 +5102,7 @@ fn trillionnium_full_content_volume_alignment_json(
     resource_pressure_runtime: &Value,
     resource_pressure_loops: &Value,
     dynamic_social_simulation: &Value,
+    authored_quest_chains: &Value,
     region_story_unlock_runtime: &Value,
     story_arc_catalog: &Value,
 ) -> Value {
@@ -4832,6 +5171,19 @@ fn trillionnium_full_content_volume_alignment_json(
         .get("faction_standings")
         .map(value_array_len)
         .unwrap_or(0);
+    let authored_quest_chain_contract_green = authored_quest_chains
+        .get("contract_version")
+        .and_then(Value::as_str)
+        == Some(TRILLIONNIUM_WORLD_AUTHORED_QUEST_CHAIN_CONTRACT_VERSION);
+    let authored_quest_chain_count = nested_array_len(authored_quest_chains, "chains");
+    let authored_quest_chain_step_count = authored_quest_chains
+        .get("total_step_count")
+        .and_then(Value::as_u64)
+        .unwrap_or_default() as usize;
+    let authored_quest_chain_node_coverage = authored_quest_chains
+        .get("covered_node_count")
+        .and_then(Value::as_u64)
+        .unwrap_or_default() as usize;
     let story_arc_count = nested_array_len(story_arc_catalog, "arcs");
     let region_story_runtime_contract_green = region_story_unlock_runtime
         .get("contract_version")
@@ -4890,6 +5242,10 @@ fn trillionnium_full_content_volume_alignment_json(
         && dynamic_social_contract_green
         && dynamic_social_tracked_domain_count >= 5
         && dynamic_social_faction_count >= 8
+        && authored_quest_chain_contract_green
+        && authored_quest_chain_count >= 6
+        && authored_quest_chain_step_count >= 18
+        && authored_quest_chain_node_coverage >= 16
         && story_arc_count >= 6
         && region_story_runtime_contract_green
         && region_story_unlocked_region_count >= 1
@@ -4967,6 +5323,9 @@ fn trillionnium_full_content_volume_alignment_json(
             "food_water_age_survival_runtime_tracked_domains": 5,
             "dynamic_social_simulation_tracked_domains": 5,
             "dynamic_social_simulation_factions": 8,
+            "authored_quest_chains": 6,
+            "authored_quest_chain_steps": 18,
+            "authored_quest_chain_node_coverage": 16,
             "story_arcs": 6,
             "region_story_unlocked_regions": 1,
             "region_story_unlocked_arcs": 1,
@@ -5004,6 +5363,10 @@ fn trillionnium_full_content_volume_alignment_json(
             "dynamic_social_simulation_contract_green": dynamic_social_contract_green,
             "dynamic_social_simulation_tracked_domains": dynamic_social_tracked_domain_count,
             "dynamic_social_simulation_factions": dynamic_social_faction_count,
+            "authored_quest_chain_contract_green": authored_quest_chain_contract_green,
+            "authored_quest_chains": authored_quest_chain_count,
+            "authored_quest_chain_steps": authored_quest_chain_step_count,
+            "authored_quest_chain_node_coverage": authored_quest_chain_node_coverage,
             "story_arcs": story_arc_count,
             "region_story_runtime_contract_green": region_story_runtime_contract_green,
             "region_story_unlocked_regions": region_story_unlocked_region_count,
@@ -5016,6 +5379,7 @@ fn trillionnium_full_content_volume_alignment_json(
             {"domain": "sects_and_title_ladders", "status": "native_catalog_expanded", "gate_field": "sects"},
             {"domain": "skill_families_and_training", "status": "native_catalog_expanded", "gate_field": "skill_definitions"},
             {"domain": "npc_social_relationships", "status": "rust_runtime_backed", "gate_field": "dynamic_social_simulation"},
+            {"domain": "authored_quest_chains", "status": "native_catalog_expanded", "gate_field": "authored_quest_chains"},
             {"domain": "quest_task_archetypes", "status": "native_catalog_expanded", "gate_field": "task_archetypes"},
             {"domain": "world_nodes_and_objective_travel", "status": "rust_runtime_backed", "gate_field": "world_objective_travel"},
             {"domain": "combat_entry_and_return", "status": "rust_runtime_backed", "gate_field": "world_combat_encounter"},
@@ -6401,6 +6765,8 @@ pub(super) fn world_tactics_board_projection_json(
         trillionnium_mentor_training_task_flows_json(openstreetmap_geodata);
     let task_archetypes = trillionnium_task_archetypes_json(openstreetmap_geodata);
     let task_candidates = trillionnium_task_candidates_json(&task_archetypes);
+    let authored_quest_chains =
+        trillionnium_authored_quest_chain_catalog_json(world, &task_candidates);
     let osm_objectives =
         trillionnium_osm_objectives_json(world, matrix_user_id, openstreetmap_geodata);
     let world_objective_travel = trillionnium_world_objective_travel_projection_json(
@@ -6495,6 +6861,7 @@ pub(super) fn world_tactics_board_projection_json(
         &resource_pressure_runtime,
         &resource_pressure_loops,
         &dynamic_social_simulation,
+        &authored_quest_chains,
         &region_story_unlock_runtime,
         &story_arc_catalog,
     );
@@ -6521,6 +6888,7 @@ pub(super) fn world_tactics_board_projection_json(
         "trillionnium_resource_pressure_runtime_contract_version": TRILLIONNIUM_WORLD_RESOURCE_PRESSURE_RUNTIME_CONTRACT_VERSION,
         "food_water_age_survival_runtime_contract_version": TRILLIONNIUM_WORLD_FOOD_WATER_AGE_SURVIVAL_CONTRACT_VERSION,
         "dynamic_social_simulation_contract_version": TRILLIONNIUM_WORLD_DYNAMIC_SOCIAL_SIMULATION_CONTRACT_VERSION,
+        "authored_quest_chain_contract_version": TRILLIONNIUM_WORLD_AUTHORED_QUEST_CHAIN_CONTRACT_VERSION,
         "trillionnium_region_story_unlock_runtime_contract_version": TRILLIONNIUM_WORLD_REGION_STORY_UNLOCK_RUNTIME_CONTRACT_VERSION,
         "trillionnium_combat_numerics_runtime_contract_version": TRILLIONNIUM_WORLD_COMBAT_NUMERICS_RUNTIME_CONTRACT_VERSION,
         "trillionnium_npc_relationship_contract_version": TRILLIONNIUM_NPC_RELATIONSHIP_CONTRACT_VERSION,
@@ -6582,6 +6950,7 @@ pub(super) fn world_tactics_board_projection_json(
         "sects": sects,
         "npcs": npcs,
         "dynamic_social_simulation": dynamic_social_simulation,
+        "authored_quest_chains": authored_quest_chains,
         "npc_spawn_anchors": npc_spawn_anchors,
         "npc_command_descriptors": npc_command_descriptors,
         "mentor_training_task_flows": mentor_training_task_flows,

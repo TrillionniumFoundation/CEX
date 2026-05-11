@@ -2968,6 +2968,18 @@ fn world_tactics_projection_binds_trillionnium_state_to_osm_objectives() {
         .iter()
         .any(|task| task["task_archetype_id"] == "sect_training_trial"
             && task["contract_version"] == "trillionnium_task_archetype_v1"));
+    assert!(tactics["task_archetypes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|task| task["task_archetype_id"] == "witness_archive_case"
+            && task["source_semantic_roles"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|role| role == "archive")
+            && task["content_policy"]
+                == "trillionnium_native_no_copied_hero_tan_text_assets_or_tables"));
     assert!(tactics["task_candidates"]
         .as_array()
         .unwrap()
@@ -2981,6 +2993,56 @@ fn world_tactics_projection_binds_trillionnium_state_to_osm_objectives() {
                 && candidate["review_hold_gate_enforced"] == true
                 && candidate["anti_cheese_gate_enforced"] == true
         ));
+    assert!(tactics["task_candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(
+            |candidate| candidate["task_archetype_id"] == "cistern_ration_run"
+                && candidate["source_semantic_role"] == "water_supply"
+        ));
+    assert_eq!(
+        tactics["authored_quest_chain_contract_version"],
+        "trillionnium_world_authored_quest_chain_v1"
+    );
+    let authored_quest_chains = &tactics["authored_quest_chains"];
+    assert_eq!(
+        authored_quest_chains["contract_version"],
+        "trillionnium_world_authored_quest_chain_v1"
+    );
+    assert_eq!(
+        authored_quest_chains["forbidden_intermediate"],
+        "no_full_hero_tan_replica_then_replace_workflow"
+    );
+    assert!(
+        authored_quest_chains["chain_count"]
+            .as_u64()
+            .unwrap_or_default()
+            >= 6
+    );
+    assert!(
+        authored_quest_chains["total_step_count"]
+            .as_u64()
+            .unwrap_or_default()
+            >= 18
+    );
+    assert!(
+        authored_quest_chains["covered_node_count"]
+            .as_u64()
+            .unwrap_or_default()
+            >= 16
+    );
+    assert!(authored_quest_chains["chains"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|chain| chain["chain_id"] == "cistern_ration_relief"
+            && chain["survival_pressure"] == "food_water_decay_visible"
+            && chain["task_archetype_ids"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|task| task == "field_infirmary_round")));
     assert!(tactics["osm_objectives"].as_array().unwrap().len() >= 5);
     assert!(tactics["osm_objectives"]
         .as_array()
@@ -2996,6 +3058,13 @@ fn world_tactics_projection_binds_trillionnium_state_to_osm_objectives() {
                     .unwrap_or_default()
                     .starts_with("trillionnium-objective-seed-")
         ));
+    assert!(tactics["osm_objectives"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|objective| objective["source_semantic_role"] == "archive"
+            && objective["task_archetype_id"] == "witness_archive_case"
+            && objective["completion_owner"] == "rust_trillionnium_task_completion_handler"));
     assert_eq!(tactics["objectives"], tactics["osm_objectives"]);
     assert_eq!(
         tactics["world_objective_travel_contract_version"],
@@ -3267,6 +3336,25 @@ fn world_tactics_projection_binds_trillionnium_state_to_osm_objectives() {
             .unwrap_or_default()
             >= 8
     );
+    assert_eq!(coverage_counts["authored_quest_chain_contract_green"], true);
+    assert!(
+        coverage_counts["authored_quest_chains"]
+            .as_u64()
+            .unwrap_or_default()
+            >= 6
+    );
+    assert!(
+        coverage_counts["authored_quest_chain_steps"]
+            .as_u64()
+            .unwrap_or_default()
+            >= 18
+    );
+    assert!(
+        coverage_counts["authored_quest_chain_node_coverage"]
+            .as_u64()
+            .unwrap_or_default()
+            >= 16
+    );
     assert_eq!(
         coverage_counts["combat_numerics_runtime_contract_green"],
         true
@@ -3332,6 +3420,13 @@ fn world_tactics_projection_binds_trillionnium_state_to_osm_objectives() {
         .any(|domain| domain["domain"] == "npc_social_relationships"
             && domain["status"] == "rust_runtime_backed"
             && domain["gate_field"] == "dynamic_social_simulation"));
+    assert!(full_content_alignment["domains"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|domain| domain["domain"] == "authored_quest_chains"
+            && domain["status"] == "native_catalog_expanded"
+            && domain["gate_field"] == "authored_quest_chains"));
     assert_eq!(
         tactics["item_equipment_runtime_contract_version"],
         "trillionnium_world_item_equipment_runtime_v1"
@@ -5995,6 +6090,16 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(world_html.contains("world_state.world_relationships"));
     assert!(world_html.contains("data-society-phase=\"watchful_city_society\""));
     assert!(world_html.contains("data-web-role=\"visualization_input_only\""));
+    assert!(world_html.contains(
+        "data-authored-quest-chain-contract=\"trillionnium_world_authored_quest_chain_v1\""
+    ));
+    assert!(world_html.contains("id=\"trillionnium-authored-quest-chains\""));
+    assert!(world_html.contains("rust_trillionnium_authored_quest_chain_catalog"));
+    assert!(world_html.contains("world_state.world_map_nodes.exits"));
+    assert!(world_html.contains(
+        "world_state.world_trillionnium_characters.resource_pressure_state.food_water_age"
+    ));
+    assert!(world_html.contains("data-content-domain=\"authored_quest_chains\""));
     assert!(world_html.contains("data-content-domain=\"story_arcs\""));
     assert!(world_html.contains("data-region-story-unlock-runtime-contract=\"trillionnium_world_region_story_unlock_runtime_v1\""));
     assert!(world_html.contains("trillionnium-region-story-unlock-panel"));

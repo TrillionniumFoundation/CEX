@@ -1030,6 +1030,9 @@ async function main() {
   assert(await count(page, '#trillionnium-food-water-age-survival[data-survival-runtime-contract="trillionnium_world_food_water_age_survival_v1"][data-source-of-truth="rust_trillionnium_food_water_age_survival_state"][data-persistence-owner="world_state.world_trillionnium_characters.resource_pressure_state.food_water_age"][data-web-role="visualization_input_only"]') === 1, 'world food/water/age survival runtime panel missing Rust-owned metadata');
   assert(await count(page, '#trillionnium-full-content-alignment [data-content-domain="npc_social_relationships"][data-domain-status="rust_runtime_backed"]') === 1, 'world full content NPC social simulation domain must be Rust runtime backed');
   assert(await count(page, '#trillionnium-dynamic-social-simulation[data-dynamic-social-simulation-contract="trillionnium_world_dynamic_social_simulation_v1"][data-source-of-truth="rust_world_relationships_dynamic_social_state"][data-persistence-owner="world_state.world_relationships"][data-web-role="visualization_input_only"]') === 1, 'world dynamic social simulation panel missing Rust-owned metadata');
+  assert(await count(page, '#trillionnium-full-content-alignment [data-content-domain="authored_quest_chains"][data-domain-status="native_catalog_expanded"]') === 1, 'world full content authored quest chain domain must be native expanded');
+  assert(await count(page, '#trillionnium-authored-quest-chains[data-authored-quest-chain-contract="trillionnium_world_authored_quest_chain_v1"][data-source-of-truth="rust_trillionnium_authored_quest_chain_catalog"][data-graph-owner="world_state.world_map_nodes.exits"][data-relationship-owner="world_state.world_relationships"][data-web-role="visualization_input_only"]') === 1, 'world authored quest chain catalog missing Rust-owned metadata');
+  assert(await count(page, '#trillionnium-authored-quest-chains .trillionnium-authored-chain-card[data-chain-id="cistern_ration_relief"][data-survival-pressure="food_water_decay_visible"]') === 1, 'world authored quest chain catalog missing survival-linked native route');
   assert(await count(page, '#trillionnium-full-content-alignment [data-content-domain="combat_numerics"][data-domain-status="rust_runtime_backed"]') === 1, 'world full content combat numerics domain must be Rust runtime backed');
   assert(await count(page, '#trillionnium-combat-numerics-runtime[data-combat-numerics-runtime-contract="trillionnium_world_combat_numerics_runtime_v1"][data-source-of-truth="rust_trillionnium_combat_numerics_runtime_state"][data-persistence-owner="world_state.world_trillionnium_characters.combat_numerics_state"][data-runtime-status="rust_owned_hp_energy_guard_focus_hitcrit_live"][data-web-role="visualization_input_only"]') === 1, 'world combat numerics runtime panel missing Rust-owned metadata');
   assert(await count(page, '#trillionnium-full-content-alignment [data-content-domain="story_arcs"][data-domain-status="rust_runtime_backed"]') === 1, 'world full content story arcs domain must be Rust runtime backed');
@@ -1160,6 +1163,9 @@ async function main() {
     dynamicSocialContract: document.querySelector('#trillionnium-dynamic-social-simulation')?.dataset?.dynamicSocialSimulationContract || '',
     dynamicSocialEventCount: Number(document.querySelector('#trillionnium-dynamic-social-simulation')?.dataset?.relationshipEventCount || 0),
     dynamicSocialFactionCount: Number(document.querySelector('#trillionnium-dynamic-social-simulation')?.dataset?.factionCount || 0),
+    authoredQuestChainContract: document.querySelector('#trillionnium-authored-quest-chains')?.dataset?.authoredQuestChainContract || '',
+    authoredQuestChainCount: Number(document.querySelector('#trillionnium-authored-quest-chains')?.dataset?.chainCount || 0),
+    authoredQuestNodeCoverage: Number(document.querySelector('#trillionnium-authored-quest-chains')?.dataset?.coveredNodeCount || 0),
     combatNumericsContract: document.querySelector('#trillionnium-combat-numerics-runtime')?.dataset?.combatNumericsRuntimeContract || '',
     combatNumericsSource: document.querySelector('#trillionnium-combat-numerics-runtime')?.dataset?.sourceOfTruth || '',
     combatNumericsLastMutation: document.querySelector('#trillionnium-combat-numerics-runtime')?.dataset?.lastMutationEvent || '',
@@ -1175,6 +1181,7 @@ async function main() {
   assert(localCombatEncounterState.resourceContract === 'trillionnium_world_resource_pressure_runtime_v1' && localCombatEncounterState.resourceLastMutation === 'tactics_attack' && localCombatEncounterState.resourceMutationCount >= 1, 'world local combat did not surface Rust-owned resource-pressure mutation state', localCombatEncounterState);
   assert(localCombatEncounterState.survivalContract === 'trillionnium_world_food_water_age_survival_v1' && localCombatEncounterState.survivalFoodStatus && localCombatEncounterState.survivalWaterStatus && localCombatEncounterState.survivalAgeStage, 'world local combat did not surface Rust-owned food/water/age survival state', localCombatEncounterState);
   assert(localCombatEncounterState.dynamicSocialContract === 'trillionnium_world_dynamic_social_simulation_v1' && localCombatEncounterState.dynamicSocialEventCount >= 1 && localCombatEncounterState.dynamicSocialFactionCount >= 8, 'world local combat did not surface Rust-owned dynamic social simulation state', localCombatEncounterState);
+  assert(localCombatEncounterState.authoredQuestChainContract === 'trillionnium_world_authored_quest_chain_v1' && localCombatEncounterState.authoredQuestChainCount >= 6 && localCombatEncounterState.authoredQuestNodeCoverage >= 16, 'world local combat did not preserve authored quest-chain breadth catalog', localCombatEncounterState);
   assert(localCombatEncounterState.combatNumericsContract === 'trillionnium_world_combat_numerics_runtime_v1' && localCombatEncounterState.combatNumericsSource === 'rust_trillionnium_combat_numerics_runtime_state' && localCombatEncounterState.combatNumericsLastMutation === 'tactics_attack' && localCombatEncounterState.combatNumericsMutationCount >= 1 && localCombatEncounterState.combatNumericsExchangeCount >= 1 && localCombatEncounterState.combatNumericsHealthStatus, 'world local combat did not surface Rust-owned combat numerics mutation state', localCombatEncounterState);
   assert(localCombatEncounterState.regionStoryContract === 'trillionnium_world_region_story_unlock_runtime_v1' && localCombatEncounterState.regionStoryLastMutation === 'tactics_attack' && localCombatEncounterState.regionStoryArcCount >= 2, 'world local combat did not surface Rust-owned region/story unlock mutation state', localCombatEncounterState);
   assert(await count(page, '#world-local-npc-talk .world-local-npc-form[data-command="talk_npc"][data-npc-id="npc-street-compass-sifu"]') >= 1, 'world local NPC talk form missing at Mirror City Square');
@@ -1228,6 +1235,7 @@ async function main() {
   steps.push({ name: 'world_resource_pressure_runtime_loop', ok: true, last_mutation: localResourcePressureAfterTask.lastMutation, mutation_count: localResourcePressureAfterTask.mutationCount });
   steps.push({ name: 'world_food_water_age_survival_runtime_loop', ok: true, mutation_count: localResourcePressureAfterTask.survivalMutationCount });
   steps.push({ name: 'world_dynamic_social_simulation_loop', ok: true, relationship_event_count: localResourcePressureAfterTask.dynamicSocialEventCount, faction_count: localCombatEncounterState.dynamicSocialFactionCount });
+  steps.push({ name: 'world_authored_quest_chain_catalog', ok: true, chain_count: localCombatEncounterState.authoredQuestChainCount, node_coverage: localCombatEncounterState.authoredQuestNodeCoverage });
   steps.push({ name: 'world_region_story_unlock_runtime_loop', ok: true, last_mutation: localRegionStoryAfterTask.lastMutation, mutation_count: localRegionStoryAfterTask.mutationCount, unlocked_story_arc_count: localRegionStoryAfterTask.unlockedStoryArcCount });
   steps.push({ name: 'world_local_npc_task_pickup_completion_loop', ok: true, route_steps_to_npc_hub: routeToNpcHub.length });
 
@@ -1435,6 +1443,7 @@ async function main() {
       world_resource_pressure_runtime_loop: true,
       world_food_water_age_survival_runtime_loop: true,
       world_dynamic_social_simulation_loop: true,
+      world_authored_quest_chain_catalog: true,
       world_region_story_unlock_runtime_loop: true,
       world_local_npc_task_loop: true,
       world_buy: true,

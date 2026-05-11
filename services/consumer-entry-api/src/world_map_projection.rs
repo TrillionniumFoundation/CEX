@@ -2731,9 +2731,28 @@ pub(super) fn world_map_viewport_json(
         })
         .collect();
     markers_with_distance.sort_by(|left, right| {
-        left.0
+        let distance_order = left
+            .0
             .partial_cmp(&right.0)
-            .unwrap_or(std::cmp::Ordering::Equal)
+            .unwrap_or(std::cmp::Ordering::Equal);
+        if distance_order != std::cmp::Ordering::Equal {
+            return distance_order;
+        }
+        let left_key = left
+            .1
+            .get("node_id")
+            .and_then(Value::as_str)
+            .or_else(|| left.1.get("game_overlay_id").and_then(Value::as_str))
+            .or_else(|| left.1.get("name").and_then(Value::as_str))
+            .unwrap_or_default();
+        let right_key = right
+            .1
+            .get("node_id")
+            .and_then(Value::as_str)
+            .or_else(|| right.1.get("game_overlay_id").and_then(Value::as_str))
+            .or_else(|| right.1.get("name").and_then(Value::as_str))
+            .unwrap_or_default();
+        left_key.cmp(right_key)
     });
 
     let mut visible_markers: Vec<Value> = markers_with_distance
