@@ -5919,6 +5919,37 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(world_html.contains("Pick route"));
     assert!(world_html.contains("Submit proof"));
     assert!(world_html.contains("Claim reward"));
+    assert!(world_html.contains(r#"id="trillionnium-world-game-first-shell""#));
+    assert!(world_html.contains("trillionnium_world_game_first_playable_shell_v1"));
+    assert!(world_html.contains(r#"data-source-of-truth="rust_world_state_projection""#));
+    assert!(world_html.contains(r#"data-web-role="input_only_visualization""#));
+    assert!(world_html.contains(r#"data-heavy-panels-policy="secondary_collapsed_deferred""#));
+    assert!(world_html.contains(
+        r#"data-forbidden-intermediate="no_full_hero_tan_replica_then_replace_workflow""#
+    ));
+    assert!(world_html.contains(
+        r#"data-resource-source-of-truth="rust_trillionnium_resource_pressure_runtime_state""#
+    ));
+    assert!(world_html.contains(
+        r#"data-combat-source-of-truth="rust_trillionnium_combat_numerics_runtime_state""#
+    ));
+    assert!(world_html.contains("world-game-first-action-list"));
+    assert!(world_html.contains(r#"data-action-kind="talk_npc""#));
+    assert!(world_html.contains(r#"data-action-kind="train_skill""#));
+    assert!(world_html.contains(r#"data-action-kind="combat""#));
+    assert!(world_html.contains(
+        r#"data-authored-quest-chain-contract="trillionnium_world_authored_quest_chain_v1""#
+    ));
+    assert!(world_html.contains(r#"data-deferred-payload="true""#));
+    let game_first_index = world_html
+        .find(r#"id="trillionnium-world-game-first-shell""#)
+        .expect("game-first shell missing");
+    let map_panel_index = world_html
+        .find(r#"id="world-map-shell-panel""#)
+        .expect("map shell panel missing");
+    assert!(game_first_index < map_panel_index);
+    assert!(!world_html.contains("Platinum Hero Tale LCD"));
+    assert!(!world_html.contains("白金英雄坛说小绿屏"));
     assert!(world_html.contains("world-keypad-adventure-shell"));
     assert!(world_html.contains("trillionnium_text_adventure_keypad_movement_v1"));
     assert!(world_html.contains("data-interface-style=\"yingxiongtanshuo_keyboard_tile_map\""));

@@ -993,8 +993,19 @@ async function main() {
   assert(pulseBox && pulseBox.height < 360, 'world mobile stats area is too tall', pulseBox);
   await assertNoVisibleBilingualSlashPair(page, '/world English system language');
   await assertEnglishSurfaceHasNoCoreChineseLeaks(page, '/world English system language');
+  assert(await count(page, '#trillionnium-world-game-first-shell[data-contract-version="trillionnium_world_game_first_playable_shell_v1"][data-source-of-truth="rust_world_state_projection"][data-web-role="input_only_visualization"][data-heavy-panels-policy="secondary_collapsed_deferred"]') === 1, 'world game-first playable shell missing Rust-owned projection contract');
+  assert(await count(page, '#trillionnium-world-game-first-shell [data-action-kind="move"], #trillionnium-world-game-first-shell [data-action-kind="talk_npc"], #trillionnium-world-game-first-shell [data-action-kind="train_skill"], #trillionnium-world-game-first-shell [data-action-kind="task"], #trillionnium-world-game-first-shell [data-action-kind="combat"]') >= 5, 'world game-first shell missing immediate action list');
+  assert(await count(page, '#trillionnium-world-game-first-shell [data-bar-kind="hp"], #trillionnium-world-game-first-shell [data-bar-kind="energy"], #trillionnium-world-game-first-shell [data-bar-kind="stamina"], #trillionnium-world-game-first-shell [data-bar-kind="guard"], #trillionnium-world-game-first-shell [data-bar-kind="focus"], #trillionnium-world-game-first-shell [data-bar-kind="survival"]') >= 6, 'world game-first shell missing compact survival/combat bars');
+  const gameFirstOrder = await page.evaluate(() => ({
+    gameFirst: document.querySelector('#trillionnium-world-game-first-shell')?.compareDocumentPosition(document.querySelector('#world-map-shell-panel')),
+    heroTitleText: document.querySelector('#world-keypad-adventure-shell h2')?.textContent || '',
+    secondaryDeferred: document.querySelectorAll('[data-secondary-dashboard-contract="trillionnium_secondary_dashboard_panels_v1"][data-deferred-payload="true"]').length,
+  }));
+  assert((gameFirstOrder.gameFirst & 4) !== 0, 'world game-first shell must appear before heavy map/dashboard panel', gameFirstOrder);
+  assert(!String(gameFirstOrder.heroTitleText).includes('Platinum Hero'), 'world first playable title must use Trillionnium-native copy', gameFirstOrder);
+  assert(gameFirstOrder.secondaryDeferred >= 5, 'world secondary dashboard payloads must be marked deferred', gameFirstOrder);
   assert(await count(page, '#world-keypad-adventure-shell[data-contract-version="trillionnium_text_adventure_keypad_movement_v1"][data-transition-contract-version="trillionnium_world_transition_semantics_v1"][data-interface-style="yingxiongtanshuo_keyboard_tile_map"][data-source-of-truth="rust_world_map_move"][data-transition-source-of-truth="rust_world_map_transition_rules"]') === 1, 'world keypad tile-map shell transition contract missing');
-  assert(await count(page, '#world-keypad-adventure-shell[data-reference-project="albert10jp/yxts-gold-asm"][data-lcd-screen="160x80"][data-lcd-viewport="5x3"][data-lcd-palette="green_monochrome"]') === 1, 'world keypad must declare 白金英雄坛说 source-derived LCD contract');
+  assert(await count(page, '#world-keypad-adventure-shell[data-reference-project="albert10jp/yxts-gold-asm"][data-lcd-screen="160x80"][data-lcd-viewport="5x3"][data-lcd-palette="green_monochrome"]') === 1, 'world keypad must declare mechanics reference LCD contract');
   assert(await count(page, '#world-keypad-map-grid[role="grid"][data-source-of-truth="rust_world_map_nodes"]') === 1, 'world keypad map grid missing');
   assert(await count(page, '#world-keypad-map-grid[data-lcd-cols="5"][data-lcd-rows="3"][data-reference-project="albert10jp/yxts-gold-asm"]') === 1, 'world keypad LCD viewport dimensions drifted');
   assert(await count(page, '.world-keypad-cell[data-node-id][data-current="true"]') === 1, 'world keypad current player cell missing');

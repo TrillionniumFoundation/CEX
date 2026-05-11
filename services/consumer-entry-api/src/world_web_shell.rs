@@ -2078,6 +2078,261 @@ fn world_trillionnium_combat_numerics_runtime_html(trillionnium_character: &Valu
     )
 }
 
+fn world_meter_percent(current: i64, max: i64) -> i64 {
+    if max <= 0 {
+        return 0;
+    }
+    ((current.saturating_mul(100)) / max).clamp(0, 100)
+}
+
+fn world_game_first_playable_shell_html(
+    current_map_node: Option<&WorldMapNode>,
+    tactics_board: &Value,
+    trillionnium_character: &Value,
+) -> String {
+    let node_id = current_map_node
+        .map(|node| node.node_id.as_str())
+        .unwrap_or(default_world_node_id());
+    let node_name = current_map_node
+        .map(|node| escape_world_visible_text(&node.name))
+        .unwrap_or_else(|| {
+            "<span data-i18n-en=\"Unknown place\" data-i18n-zh=\"未知地点\">Unknown place</span>"
+                .to_string()
+        });
+    let node_zone = current_map_node
+        .map(|node| node.zone_id.as_str())
+        .unwrap_or("world-zone:unknown");
+    let node_kind = current_map_node
+        .map(|node| world_node_kind_label(&node.node_kind).to_string())
+        .unwrap_or_else(|| "exploration node".to_string());
+    let exit_count = current_map_node
+        .map(|node| node.exits.len())
+        .unwrap_or_default();
+    let interaction_count = current_map_node
+        .map(|node| node.interaction_tags.len())
+        .unwrap_or_default();
+
+    let session = tactics_board.get("game_session").unwrap_or(&Value::Null);
+    let objective_id = session
+        .get("objective_id")
+        .and_then(Value::as_str)
+        .unwrap_or("objective:projected");
+    let objective = tactics_board
+        .get("objectives")
+        .and_then(Value::as_array)
+        .and_then(|objectives| {
+            objectives.iter().find(|objective| {
+                objective.get("objective_id").and_then(Value::as_str) == Some(objective_id)
+            })
+        });
+    let objective_label = objective
+        .and_then(|objective| objective.get("label"))
+        .and_then(Value::as_str)
+        .unwrap_or("Current route objective");
+    let objective_command = objective
+        .and_then(|objective| objective.get("suggested_command"))
+        .and_then(Value::as_str)
+        .unwrap_or("move");
+    let objective_progress = session
+        .get("objective_progress")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let objective_goal = session
+        .get("objective_goal")
+        .and_then(Value::as_i64)
+        .unwrap_or(1)
+        .max(1);
+    let victory_state = session
+        .get("victory_state")
+        .and_then(Value::as_str)
+        .unwrap_or("active");
+    let authored = tactics_board
+        .get("authored_quest_chains")
+        .unwrap_or(&Value::Null);
+    let authored_contract = authored
+        .get("contract_version")
+        .and_then(Value::as_str)
+        .unwrap_or("trillionnium_world_authored_quest_chain_v1");
+    let authored_chain_count = authored
+        .get("chain_count")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    let authored_step_count = authored
+        .get("total_step_count")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    let authored_node_count = authored
+        .get("covered_node_count")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    let authored_next_title = authored
+        .get("chains")
+        .and_then(Value::as_array)
+        .and_then(|chains| chains.first())
+        .and_then(|chain| chain.get("title"))
+        .and_then(Value::as_str)
+        .unwrap_or("Native Trillionnium route");
+
+    let resource_runtime = trillionnium_character
+        .get("resource_pressure_runtime")
+        .or_else(|| trillionnium_character.get("resource_pressure_state"))
+        .unwrap_or(&Value::Null);
+    let survival = resource_runtime
+        .get("survival")
+        .or_else(|| resource_runtime.get("survival_runtime"))
+        .or_else(|| trillionnium_character.get("survival_runtime"))
+        .unwrap_or(&Value::Null);
+    let stamina_current = resource_runtime
+        .get("stamina")
+        .and_then(|stamina| stamina.get("current"))
+        .and_then(Value::as_i64)
+        .unwrap_or(100);
+    let stamina_max = resource_runtime
+        .get("stamina")
+        .and_then(|stamina| stamina.get("max"))
+        .and_then(Value::as_i64)
+        .unwrap_or(100);
+    let injury_level = resource_runtime
+        .get("injury")
+        .and_then(|injury| injury.get("level"))
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let food_current = survival
+        .get("food")
+        .and_then(|food| food.get("current"))
+        .and_then(Value::as_i64)
+        .unwrap_or(76);
+    let food_max = survival
+        .get("food")
+        .and_then(|food| food.get("max"))
+        .and_then(Value::as_i64)
+        .unwrap_or(100);
+    let water_current = survival
+        .get("water")
+        .and_then(|water| water.get("current"))
+        .and_then(Value::as_i64)
+        .unwrap_or(82);
+    let water_max = survival
+        .get("water")
+        .and_then(|water| water.get("max"))
+        .and_then(Value::as_i64)
+        .unwrap_or(100);
+    let age_stage = survival
+        .get("age")
+        .and_then(|age| age.get("stage"))
+        .and_then(Value::as_str)
+        .unwrap_or("young_adult");
+
+    let combat_runtime = trillionnium_character
+        .get("combat_numerics_runtime")
+        .or_else(|| trillionnium_character.get("combat_numerics_state"))
+        .unwrap_or(&Value::Null);
+    let hp_current = combat_runtime
+        .get("health")
+        .and_then(|health| health.get("current"))
+        .and_then(Value::as_i64)
+        .unwrap_or(176);
+    let hp_max = combat_runtime
+        .get("health")
+        .and_then(|health| health.get("max"))
+        .and_then(Value::as_i64)
+        .unwrap_or(176);
+    let energy_current = combat_runtime
+        .get("inner_energy")
+        .and_then(|energy| energy.get("current"))
+        .and_then(Value::as_i64)
+        .unwrap_or(126);
+    let energy_max = combat_runtime
+        .get("inner_energy")
+        .and_then(|energy| energy.get("max"))
+        .and_then(Value::as_i64)
+        .unwrap_or(126);
+    let guard_current = combat_runtime
+        .get("guard")
+        .and_then(|guard| guard.get("current"))
+        .and_then(Value::as_i64)
+        .unwrap_or(24);
+    let guard_max = combat_runtime
+        .get("guard")
+        .and_then(|guard| guard.get("max"))
+        .and_then(Value::as_i64)
+        .unwrap_or(24);
+    let focus_current = combat_runtime
+        .get("focus")
+        .and_then(|focus| focus.get("current"))
+        .and_then(Value::as_i64)
+        .unwrap_or(103);
+    let focus_max = combat_runtime
+        .get("focus")
+        .and_then(|focus| focus.get("max"))
+        .and_then(Value::as_i64)
+        .unwrap_or(103);
+
+    format!(
+        "<section id=\"trillionnium-world-game-first-shell\" class=\"world-game-first-shell\" data-contract-version=\"trillionnium_world_game_first_playable_shell_v1\" data-source-of-truth=\"rust_world_state_projection\" data-map-source-of-truth=\"rust_world_map_move\" data-transition-source-of-truth=\"rust_world_map_transition_rules\" data-authored-quest-chain-contract=\"{}\" data-current-zone-id=\"{}\" data-web-role=\"input_only_visualization\" data-heavy-panels-policy=\"secondary_collapsed_deferred\" data-forbidden-intermediate=\"no_full_hero_tan_replica_then_replace_workflow\" data-lcd-viewport=\"5x3\" data-movement-control-anchor=\"world-keypad-numpad\" data-action-list-anchor=\"world-local-actions\" data-objective-anchor=\"trillionnium-authored-quest-chains\" aria-label=\"Trillionnium game-first playable shell\" data-i18n-aria-label-en=\"Trillionnium game-first playable shell\" data-i18n-aria-label-zh=\"Trillionnium 游戏优先可玩界面\"><div class=\"world-game-first-topline\"><span class=\"pill\" data-i18n-en=\"Clean-room Trillionnium · game first\" data-i18n-zh=\"Clean-room Trillionnium · 先玩游戏\">Clean-room Trillionnium · game first</span><code>{}</code></div><div class=\"world-game-first-location\"><div><strong id=\"world-game-first-location-name\">{}</strong><span data-i18n-en=\"{} · {} exits · {} local hooks\" data-i18n-zh=\"{} · {} 个出口 · {} 个本地钩子\">{} · {} exits · {} local hooks</span></div><a class=\"cta world-game-first-next-cta\" href=\"#world-keypad-numpad\" data-i18n-en=\"Move now\" data-i18n-zh=\"立刻移动\">Move now</a></div><div class=\"world-game-first-objective\" data-objective-id=\"{}\" data-objective-progress=\"{}\" data-objective-goal=\"{}\" data-victory-state=\"{}\"><strong data-i18n-en=\"Current objective\" data-i18n-zh=\"当前目标\">Current objective</strong><span>{}</span><small data-i18n-en=\"Next command: {} · Native chain: {} · {} chains / {} steps / {} nodes\" data-i18n-zh=\"下一指令：{} · 原生任务链：{} · {} 条链 / {} 步 / {} 节点\">Next command: {} · Native chain: {} · {} chains / {} steps / {} nodes</small></div><div class=\"world-game-first-action-list\" data-action-source-of-truth=\"rust_world_map_nodes_and_tactics_commands\" data-web-role=\"input_only_visualization\"><a href=\"#world-keypad-numpad\" data-action-kind=\"move\">Move</a><a href=\"#world-local-npc-talk\" data-action-kind=\"talk_npc\">Talk</a><a href=\"#world-local-skill-practice\" data-action-kind=\"train_skill\">Practice</a><a href=\"#world-local-task-loop\" data-action-kind=\"task\">Task</a><a href=\"#world-local-combat-encounter\" data-action-kind=\"combat\">Combat</a></div><div class=\"world-game-first-bars\" data-resource-source-of-truth=\"rust_trillionnium_resource_pressure_runtime_state\" data-combat-source-of-truth=\"rust_trillionnium_combat_numerics_runtime_state\"><article data-bar-kind=\"hp\"><span>HP</span><meter min=\"0\" max=\"{}\" value=\"{}\"></meter><b>{}/{}</b></article><article data-bar-kind=\"energy\"><span>Energy</span><meter min=\"0\" max=\"{}\" value=\"{}\"></meter><b>{}/{}</b></article><article data-bar-kind=\"stamina\"><span>Stamina</span><meter min=\"0\" max=\"{}\" value=\"{}\"></meter><b>{}/{}</b></article><article data-bar-kind=\"guard\"><span>Guard</span><meter min=\"0\" max=\"{}\" value=\"{}\"></meter><b>{}/{}</b></article><article data-bar-kind=\"focus\"><span>Focus</span><meter min=\"0\" max=\"{}\" value=\"{}\"></meter><b>{}/{}</b></article><article data-bar-kind=\"survival\"><span>Food / Water</span><meter min=\"0\" max=\"100\" value=\"{}\"></meter><b>{}/{} · {}/{} · injury {} · {}</b></article></div></section>",
+        escape_html_text(authored_contract),
+        escape_html_text(node_zone),
+        escape_html_text(node_id),
+        node_name,
+        escape_html_text(&node_kind),
+        exit_count,
+        interaction_count,
+        escape_html_text(&node_kind),
+        exit_count,
+        interaction_count,
+        escape_html_text(&node_kind),
+        exit_count,
+        interaction_count,
+        escape_html_text(objective_id),
+        objective_progress,
+        objective_goal,
+        escape_html_text(victory_state),
+        escape_world_visible_text(objective_label),
+        escape_html_text(objective_command),
+        escape_world_visible_text(authored_next_title),
+        authored_chain_count,
+        authored_step_count,
+        authored_node_count,
+        escape_html_text(objective_command),
+        escape_world_visible_text(authored_next_title),
+        authored_chain_count,
+        authored_step_count,
+        authored_node_count,
+        escape_html_text(objective_command),
+        escape_world_visible_text(authored_next_title),
+        authored_chain_count,
+        authored_step_count,
+        authored_node_count,
+        hp_max,
+        hp_current,
+        hp_current,
+        hp_max,
+        energy_max,
+        energy_current,
+        energy_current,
+        energy_max,
+        stamina_max,
+        stamina_current,
+        stamina_current,
+        stamina_max,
+        guard_max,
+        guard_current,
+        guard_current,
+        guard_max,
+        focus_max,
+        focus_current,
+        focus_current,
+        focus_max,
+        world_meter_percent(food_current + water_current, food_max + water_max),
+        food_current,
+        food_max,
+        water_current,
+        water_max,
+        injury_level,
+        escape_html_text(age_stage),
+    )
+}
+
 fn world_trillionnium_region_story_unlock_runtime_html(trillionnium_character: &Value) -> String {
     let runtime = trillionnium_character
         .get("region_story_unlock_runtime")
@@ -3993,6 +4248,11 @@ pub(super) async fn get_world_web_shell(
         current_matrix_user_id,
         &csrf_input,
     );
+    let world_game_first_playable_shell = world_game_first_playable_shell_html(
+        current_map_node,
+        &tactics_board,
+        &trillionnium_character,
+    );
     let trillionnium_status_lines = world_trillionnium_status_html(&trillionnium_character);
     let trillionnium_character_contract = trillionnium_character
         .get("contract_version")
@@ -4919,6 +5179,23 @@ pub(super) async fn get_world_web_shell(
     .trillionnium-bounty-list {{ display:grid; gap:7px; margin:0; padding:0; list-style:none; }}
     .trillionnium-bounty-list li {{ border:1px solid rgba(255,255,255,.1); background:rgba(255,255,255,.05); border-radius:14px; padding:9px 10px; color:#f7e7bd; font-size:13px; }}
     .trillionnium-game-shell [data-engine-role=underlay] {{ color:var(--cyan); font-weight:900; }}
+    .world-game-first-shell {{ order:0; grid-column:1 / -1; display:grid; gap:10px; border:1px solid rgba(125,255,155,.3); background:linear-gradient(135deg,rgba(9,23,18,.94),rgba(7,10,18,.92)); border-radius:22px; padding:14px; margin:0 0 10px; box-shadow:0 18px 56px rgba(0,0,0,.34); }}
+    .world-game-first-topline,.world-game-first-location {{ display:flex; justify-content:space-between; align-items:center; gap:10px; min-width:0; }}
+    .world-game-first-topline code {{ color:var(--cyan); background:rgba(100,227,255,.08); border-radius:999px; padding:3px 8px; }}
+    .world-game-first-location strong {{ display:block; color:#f7ffd8; font-size:18px; letter-spacing:-.02em; }}
+    .world-game-first-location span {{ display:block; color:var(--muted); font-size:12px; line-height:1.3; }}
+    .world-game-first-next-cta {{ white-space:nowrap; }}
+    .world-game-first-objective {{ display:grid; gap:3px; border:1px solid rgba(248,195,91,.18); background:rgba(248,195,91,.055); border-radius:14px; padding:9px; }}
+    .world-game-first-objective strong {{ color:var(--gold); font-size:12px; text-transform:uppercase; letter-spacing:.08em; }}
+    .world-game-first-objective span {{ color:#fff2c0; font-weight:900; }}
+    .world-game-first-objective small {{ color:var(--muted); line-height:1.35; }}
+    .world-game-first-action-list {{ display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:7px; }}
+    .world-game-first-action-list a {{ display:grid; place-items:center; min-height:34px; border:1px solid rgba(100,227,255,.22); background:rgba(100,227,255,.08); color:var(--cyan); border-radius:12px; text-decoration:none; font-weight:950; font-size:12px; }}
+    .world-game-first-bars {{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:6px; }}
+    .world-game-first-bars article {{ min-width:0; display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:5px; border:1px solid rgba(255,255,255,.1); background:rgba(255,255,255,.05); border-radius:12px; padding:6px; font-size:11px; }}
+    .world-game-first-bars span {{ color:var(--muted); font-weight:900; }}
+    .world-game-first-bars meter {{ width:100%; height:8px; }}
+    .world-game-first-bars b {{ color:#f7ffd8; white-space:nowrap; font-size:10px; }}
     .trillionnium-engine-drawer {{ grid-column:1 / -1; border:1px solid rgba(100,227,255,.18); background:rgba(100,227,255,.045); border-radius:18px; overflow:hidden; }}
     .trillionnium-engine-drawer > summary {{ cursor:pointer; list-style:none; display:flex; justify-content:space-between; gap:10px; align-items:center; padding:13px 15px; color:var(--cyan); font-weight:950; }}
     .trillionnium-engine-drawer > summary::-webkit-details-marker {{ display:none; }}
@@ -5234,6 +5511,23 @@ pub(super) async fn get_world_web_shell(
       .world-hero-actions {{ display:grid; grid-template-columns:1fr; gap:8px; }}
       #world-mobile-route-first-sheet {{ padding:0; gap:0; border-radius:0; border-color:transparent; background:#ffffff; }}
       #world-mobile-route-first-sheet > strong {{ display:none; }}
+      #world-mobile-route-first-sheet .world-game-first-shell {{ padding:4px; gap:3px; margin:0; border-radius:0; border-color:#0b1007; background:#8fb454; color:#0b1007; box-shadow:none; font-family:ui-monospace,"SFMono-Regular","Noto Sans Mono CJK SC",monospace; }}
+      #world-mobile-route-first-sheet .world-game-first-topline {{ display:none; }}
+      #world-mobile-route-first-sheet .world-game-first-location {{ display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:4px; }}
+      #world-mobile-route-first-sheet .world-game-first-location strong {{ color:#111; font-size:11px; line-height:1.05; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
+      #world-mobile-route-first-sheet .world-game-first-location span {{ color:#0b1007; font-size:8px; line-height:1.05; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
+      #world-mobile-route-first-sheet .world-game-first-next-cta {{ min-height:22px; padding:3px 6px; border-radius:0; font-size:9px; }}
+      #world-mobile-route-first-sheet .world-game-first-objective {{ padding:3px; gap:1px; border-radius:0; border-color:rgba(11,16,7,.72); background:rgba(255,255,255,.16); }}
+      #world-mobile-route-first-sheet .world-game-first-objective strong {{ display:none; }}
+      #world-mobile-route-first-sheet .world-game-first-objective span {{ color:#111; font-size:9px; line-height:1.05; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
+      #world-mobile-route-first-sheet .world-game-first-objective small {{ display:none; }}
+      #world-mobile-route-first-sheet .world-game-first-action-list {{ grid-template-columns:repeat(5,minmax(0,1fr)); gap:3px; }}
+      #world-mobile-route-first-sheet .world-game-first-action-list a {{ min-height:22px; padding:2px; border-radius:0; border-color:#0b1007; background:#cfc3ad; color:#0b0b0b; font-size:8px; }}
+      #world-mobile-route-first-sheet .world-game-first-bars {{ grid-template-columns:repeat(3,minmax(0,1fr)); gap:2px; }}
+      #world-mobile-route-first-sheet .world-game-first-bars article {{ grid-template-columns:auto minmax(0,1fr); gap:2px; padding:2px; border-radius:0; border-color:rgba(11,16,7,.68); background:rgba(255,255,255,.16); }}
+      #world-mobile-route-first-sheet .world-game-first-bars span {{ color:#0b1007; font-size:7px; line-height:1; }}
+      #world-mobile-route-first-sheet .world-game-first-bars meter {{ height:5px; }}
+      #world-mobile-route-first-sheet .world-game-first-bars b {{ display:none; }}
       .trillionnium-game-shell {{ padding:10px; border-radius:20px; gap:10px; }}
       .trillionnium-room,.trillionnium-status,.trillionnium-engine-card {{ padding:12px; border-radius:16px; }}
       .trillionnium-scene-text {{ min-height:150px; padding:12px; font-size:13px; line-height:1.58; }}
@@ -5359,15 +5653,15 @@ pub(super) async fn get_world_web_shell(
         <span data-i18n-en="Reward / XP" data-i18n-zh="奖励 / XP">Reward / XP</span>
       </div>
       <div id="world-hero-mobile-actions" class="world-hero-actions" data-contract-version="trillionnium_mobile_single_primary_cta_v1" data-first-screen-decision-contract="trillionnium_world_map_first_screen_decision_v1" data-parity-source="app-mobile-primary-cta" data-primary-cta-count="1" data-first-screen-loop="pick_route_submit_proof_claim_reward">
-        <section id="world-mobile-route-first-sheet" class="world-mobile-action-sheet" aria-label="World mobile one route first" data-i18n-aria-label-en="World mobile one route first" data-i18n-aria-label-zh="世界移动端一条路线优先">
+        <section id="world-mobile-route-first-sheet" class="world-mobile-action-sheet" aria-label="World mobile one route first" data-i18n-aria-label-en="World mobile one route first" data-i18n-aria-label-zh="世界移动端一条路线优先" data-game-first-shell-contract="trillionnium_world_game_first_playable_shell_v1" data-source-of-truth="rust_world_state_projection" data-web-role="input_only_visualization" data-heavy-panels-policy="secondary_collapsed_deferred">
           <strong data-i18n-en="Current route" data-i18n-zh="当前路线">Current route</strong>
         <section id="world-keypad-adventure-shell" class="world-keypad-adventure-shell" tabindex="0" data-contract-version="trillionnium_text_adventure_keypad_movement_v1" data-transition-contract-version="trillionnium_world_transition_semantics_v1" data-interface-style="yingxiongtanshuo_keyboard_tile_map" data-reference-project="albert10jp/yxts-gold-asm" data-reference-file="h/gmud.h" data-lcd-screen="160x80" data-lcd-viewport="5x3" data-lcd-palette="green_monochrome" data-keypad-controls="7,8,9,4,5,6,1,2,3" data-keyboard-controls="numpad,arrows,wasd" data-movement-endpoint="/world/web/map-move" data-source-of-truth="rust_world_map_move" data-transition-source-of-truth="rust_world_map_transition_rules" data-web-role="input_only_visualization" aria-label="Keyboard controlled Trillionnium tile map" data-i18n-aria-label-en="Keyboard controlled Trillionnium tile map" data-i18n-aria-label-zh="小键盘操纵的 Trillionnium 格子地图">
           <article class="world-keypad-stage">
             <div class="world-keypad-header">
               <div>
-                <div class="pill" data-i18n-en="Reference: yxts-gold-asm · 160×80 LCD" data-i18n-zh="参考：白金英雄坛说源码 · 160×80 小绿屏">Reference: yxts-gold-asm · 160×80 LCD</div>
-                <h2 data-i18n-en="Platinum Hero Tale LCD" data-i18n-zh="白金英雄坛说小绿屏">Platinum Hero Tale LCD</h2>
-                <p data-i18n-en="Five-by-three tile viewport, monochrome LCD, physical-key buttons below. Browser sends movement intent only; Rust persists the real position." data-i18n-zh="5×3 格视窗、单色小绿屏、下方实体键盘。浏览器只提交移动意图；真实位置由 Rust 持久化。">Five-by-three tile viewport, monochrome LCD, physical-key buttons below. Browser sends movement intent only; Rust persists the real position.</p>
+                <div class="pill" data-i18n-en="Clean-room 5×3 tile viewport" data-i18n-zh="Clean-room 5×3 格子视窗">Clean-room 5×3 tile viewport</div>
+                <h2 data-i18n-en="Trillionnium field console" data-i18n-zh="Trillionnium 野外界面">Trillionnium field console</h2>
+                <p data-i18n-en="Five-by-three tile viewport, action buttons below, Rust-owned position and transition rules." data-i18n-zh="5×3 格视窗、下方行动键，位置和转场规则由 Rust 持有。">Five-by-three tile viewport, action buttons below, Rust-owned position and transition rules.</p>
               </div>
               <div class="world-keypad-status" aria-label="Current map position" data-i18n-aria-label-en="Current map position" data-i18n-aria-label-zh="当前地图位置">
                 <code id="world-keypad-current-node-id">{current_map_node_id}</code>
@@ -5390,6 +5684,7 @@ pub(super) async fn get_world_web_shell(
             <article data-first-human-question="reward"><span data-i18n-en="Reward" data-i18n-zh="得什么">Reward</span><b data-i18n-en="XP + next route" data-i18n-zh="XP + 下一路线">XP + next route</b><small data-i18n-en="{map_route_runner_reward_claim_count} claim · {map_route_runner_mastery_xp} XP" data-i18n-zh="{map_route_runner_reward_claim_count} 次领奖 · {map_route_runner_mastery_xp} XP">{map_route_runner_reward_claim_count} claim · {map_route_runner_mastery_xp} XP</small></article>
           </div>
           <a id="world-mobile-primary-cta" class="cta" href='#trillionnium-tactics-game-shell' data-i18n-en="Continue route: enter tactics board" data-i18n-zh="继续路线：进入战棋棋盘">Continue route: enter tactics board</a>
+          {world_game_first_playable_shell}
           <div class="world-route-stepper" aria-label="Pick route submit proof claim reward" data-i18n-aria-label-en="Pick route submit proof claim reward" data-i18n-aria-label-zh="选路线、交证据、领奖励">
             <span data-i18n-en="Pick route" data-i18n-zh="选路线">Pick route</span>
             <span data-i18n-en="Submit proof" data-i18n-zh="交证据">Submit proof</span>
@@ -5441,7 +5736,7 @@ pub(super) async fn get_world_web_shell(
       <article class="pulse-card"><span data-i18n-en="Quest Cards" data-i18n-zh="任务牌">Quest Cards</span><b>{listings}</b><small data-i18n-en="Available bounties" data-i18n-zh="可接取悬赏">Available bounties</small></article>
       <article class="pulse-card"><span data-i18n-en="Commissions" data-i18n-zh="委托">Commissions</span><b>{work_orders}</b><small data-i18n-en="Accepted loops" data-i18n-zh="已进入执行循环">Accepted loops</small></article>
       <article class="pulse-card"><span data-i18n-en="Agents" data-i18n-zh="居民">Agents</span><b>{entities}</b><small data-i18n-en="World residents" data-i18n-zh="世界居民">World residents</small></article>
-      <details id="world-stats-compact-more" class="world-stats-more" data-secondary-dashboard-contract="trillionnium_secondary_dashboard_panels_v1" data-secondary-dashboard-role="secondary_counter_drawer" data-main-experience="false" data-default-state="collapsed">
+      <details id="world-stats-compact-more" class="world-stats-more" data-secondary-dashboard-contract="trillionnium_secondary_dashboard_panels_v1" data-secondary-dashboard-role="secondary_counter_drawer" data-main-experience="false" data-default-state="collapsed" data-deferred-payload="true">
         <summary data-i18n-en="More world counters" data-i18n-zh="更多世界统计">More world counters</summary>
         <div class="stats-more-grid">
           <div class="stat"><span data-i18n-en="Zones" data-i18n-zh="区域">Zones</span><b>{zones}</b></div>
@@ -5535,7 +5830,7 @@ pub(super) async fn get_world_web_shell(
             <small data-i18n-en="Next mod path: replace placeholder units with Trillionnium agents, convert POIs into capture points, and use route evidence as battle reports." data-i18n-zh="下一步魔改：把占位单位替换为 Trillionnium Agent，把 POI 转成占领点，把路线证据转成战报。">Next mod path: replace placeholder units with Trillionnium agents, convert POIs into capture points, and use route evidence as battle reports.</small>
           </aside>
         </section>
-        <details id="world-map-underlay-details" class="map-copy trillionnium-engine-drawer" data-secondary-dashboard-contract="trillionnium_secondary_dashboard_panels_v1" data-secondary-dashboard-role="supporting_engine_diagnostics" data-main-experience="false" data-default-state="collapsed" data-openclawstreetmap-role="supporting_engine_diagnostics">
+        <details id="world-map-underlay-details" class="map-copy trillionnium-engine-drawer" data-secondary-dashboard-contract="trillionnium_secondary_dashboard_panels_v1" data-secondary-dashboard-role="supporting_engine_diagnostics" data-main-experience="false" data-default-state="collapsed" data-openclawstreetmap-role="supporting_engine_diagnostics" data-deferred-payload="true">
           <summary data-i18n-en="OpenClawStreetMap underlay / engine details" data-i18n-zh="OpenClawStreetMap 底层引擎 / 技术细节">OpenClawStreetMap underlay / engine details</summary>
           <div class="trillionnium-engine-drawer-body">
           <div class="pill" data-i18n-en="{map_product_name_html}" data-i18n-zh="Trillionnium 世界地图">{map_product_name_html}</div>
@@ -5627,7 +5922,7 @@ pub(super) async fn get_world_web_shell(
         <div id="world-real-map" data-engine="{map_engine_id}" data-provider="{tile_provider}" aria-label="Trillionnium World Map" data-i18n-aria-label-en="Trillionnium World Map" data-i18n-aria-label-zh="Trillionnium 世界地图"></div>
       </div>
     </section>
-    <section class="world-secondary-collapsed world-secondary-detail-panel" data-secondary-dashboard-contract="trillionnium_secondary_dashboard_panels_v1" data-secondary-dashboard-role="secondary_detail_panel" data-main-experience="false" data-default-state="collapsed_on_mobile" data-primary-loop-anchor="trillionnium-tactics-game-shell" data-mobile-ia="collapsed_secondary_panel">
+    <section class="world-secondary-collapsed world-secondary-detail-panel" data-secondary-dashboard-contract="trillionnium_secondary_dashboard_panels_v1" data-secondary-dashboard-role="secondary_detail_panel" data-main-experience="false" data-default-state="collapsed_on_mobile" data-primary-loop-anchor="trillionnium-tactics-game-shell" data-mobile-ia="collapsed_secondary_panel" data-deferred-payload="true">
       <h2 data-i18n-en="World Regions" data-i18n-zh="世界区域">World Regions</h2>
       <div class="grid">{zone_cards}</div>
     </section>
@@ -5655,20 +5950,20 @@ pub(super) async fn get_world_web_shell(
           <button type="submit" data-i18n-en="Submit World Action" data-i18n-zh="提交世界行动">Submit World Action</button>
         </form>
       </div>
-      <div class="panel world-secondary-collapsed world-secondary-detail-panel" data-secondary-dashboard-contract="trillionnium_secondary_dashboard_panels_v1" data-secondary-dashboard-role="secondary_detail_panel" data-main-experience="false" data-default-state="collapsed_on_mobile" data-primary-loop-anchor="trillionnium-tactics-game-shell" data-mobile-ia="collapsed_secondary_panel">
+      <div class="panel world-secondary-collapsed world-secondary-detail-panel" data-secondary-dashboard-contract="trillionnium_secondary_dashboard_panels_v1" data-secondary-dashboard-role="secondary_detail_panel" data-main-experience="false" data-default-state="collapsed_on_mobile" data-primary-loop-anchor="trillionnium-tactics-game-shell" data-mobile-ia="collapsed_secondary_panel" data-deferred-payload="true">
         <h2 data-i18n-en="World Event Timeline" data-i18n-zh="世界事件时间线">World Event Timeline</h2>
         <ul id="world-event-timeline" class="timeline">{event_items}</ul>
       </div>
     </section>
-    <section class="panel world-secondary-collapsed world-secondary-detail-panel" data-secondary-dashboard-contract="trillionnium_secondary_dashboard_panels_v1" data-secondary-dashboard-role="secondary_detail_panel" data-main-experience="false" data-default-state="collapsed_on_mobile" data-primary-loop-anchor="trillionnium-tactics-game-shell" data-mobile-ia="collapsed_secondary_panel">
+    <section class="panel world-secondary-collapsed world-secondary-detail-panel" data-secondary-dashboard-contract="trillionnium_secondary_dashboard_panels_v1" data-secondary-dashboard-role="secondary_detail_panel" data-main-experience="false" data-default-state="collapsed_on_mobile" data-primary-loop-anchor="trillionnium-tactics-game-shell" data-mobile-ia="collapsed_secondary_panel" data-deferred-payload="true">
       <h2 data-i18n-en="Places" data-i18n-zh="地点">Places</h2>
       <div class="mini-grid">{location_cards}</div>
     </section>
-    <section class="panel world-secondary-collapsed world-secondary-detail-panel" data-secondary-dashboard-contract="trillionnium_secondary_dashboard_panels_v1" data-secondary-dashboard-role="secondary_detail_panel" data-main-experience="false" data-default-state="collapsed_on_mobile" data-primary-loop-anchor="trillionnium-tactics-game-shell" data-mobile-ia="collapsed_secondary_panel">
+    <section class="panel world-secondary-collapsed world-secondary-detail-panel" data-secondary-dashboard-contract="trillionnium_secondary_dashboard_panels_v1" data-secondary-dashboard-role="secondary_detail_panel" data-main-experience="false" data-default-state="collapsed_on_mobile" data-primary-loop-anchor="trillionnium-tactics-game-shell" data-mobile-ia="collapsed_secondary_panel" data-deferred-payload="true">
       <h2 data-i18n-en="Agent Residents · NPC" data-i18n-zh="Agent 居民 · NPC">Agent Residents · NPC</h2>
       <div class="mini-grid">{entity_cards}</div>
     </section>
-    <section id="world-assets-panel" class="panel world-secondary-collapsed world-secondary-detail-panel" data-secondary-dashboard-contract="trillionnium_secondary_dashboard_panels_v1" data-secondary-dashboard-role="secondary_detail_panel" data-main-experience="false" data-default-state="collapsed_on_mobile" data-primary-loop-anchor="trillionnium-tactics-game-shell" data-mobile-ia="collapsed_secondary_panel">
+    <section id="world-assets-panel" class="panel world-secondary-collapsed world-secondary-detail-panel" data-secondary-dashboard-contract="trillionnium_secondary_dashboard_panels_v1" data-secondary-dashboard-role="secondary_detail_panel" data-main-experience="false" data-default-state="collapsed_on_mobile" data-primary-loop-anchor="trillionnium-tactics-game-shell" data-mobile-ia="collapsed_secondary_panel" data-deferred-payload="true">
       <h2 data-i18n-en="Character Items" data-i18n-zh="角色道具">Character Items</h2>
       <div class="mini-grid">{asset_cards}</div>
       <form method="post" action="/world/web/asset" style="margin-top:16px">
@@ -5679,7 +5974,7 @@ pub(super) async fn get_world_web_shell(
         <button type="submit" data-i18n-en="Upgrade Item" data-i18n-zh="升级道具">Upgrade Item</button>
       </form>
     </section>
-    <section id="world-companies-panel" class="panel world-secondary-collapsed world-secondary-detail-panel" data-secondary-dashboard-contract="trillionnium_secondary_dashboard_panels_v1" data-secondary-dashboard-role="secondary_detail_panel" data-main-experience="false" data-default-state="collapsed_on_mobile" data-primary-loop-anchor="trillionnium-tactics-game-shell" data-mobile-ia="collapsed_secondary_panel">
+    <section id="world-companies-panel" class="panel world-secondary-collapsed world-secondary-detail-panel" data-secondary-dashboard-contract="trillionnium_secondary_dashboard_panels_v1" data-secondary-dashboard-role="secondary_detail_panel" data-main-experience="false" data-default-state="collapsed_on_mobile" data-primary-loop-anchor="trillionnium-tactics-game-shell" data-mobile-ia="collapsed_secondary_panel" data-deferred-payload="true">
       <h2 data-i18n-en="Studios and Hubs" data-i18n-zh="工坊与据点">Studios and Hubs</h2>
       <div class="mini-grid">{company_cards}</div>
       <form method="post" action="/world/web/company" style="margin-top:16px">
@@ -5690,7 +5985,7 @@ pub(super) async fn get_world_web_shell(
         <button type="submit" data-i18n-en="Launch Studio" data-i18n-zh="建立工坊">Launch Studio</button>
       </form>
     </section>
-    <section id="world-listings-panel" class="panel world-secondary-collapsed world-secondary-detail-panel" data-secondary-dashboard-contract="trillionnium_secondary_dashboard_panels_v1" data-secondary-dashboard-role="secondary_detail_panel" data-main-experience="false" data-default-state="collapsed_on_mobile" data-primary-loop-anchor="trillionnium-tactics-game-shell" data-mobile-ia="collapsed_secondary_panel">
+    <section id="world-listings-panel" class="panel world-secondary-collapsed world-secondary-detail-panel" data-secondary-dashboard-contract="trillionnium_secondary_dashboard_panels_v1" data-secondary-dashboard-role="secondary_detail_panel" data-main-experience="false" data-default-state="collapsed_on_mobile" data-primary-loop-anchor="trillionnium-tactics-game-shell" data-mobile-ia="collapsed_secondary_panel" data-deferred-payload="true">
       <h2 data-i18n-en="Hubs and Quest Cards" data-i18n-zh="据点与任务牌">Hubs and Quest Cards</h2>
       <div class="mini-grid">{shop_cards}</div>
       <div class="mini-grid" style="margin-top:12px">{listing_cards}</div>
@@ -5762,12 +6057,12 @@ pub(super) async fn get_world_web_shell(
       </form>
       </details>
     </section>
-    <section class="panel world-secondary-collapsed world-secondary-detail-panel" data-secondary-dashboard-contract="trillionnium_secondary_dashboard_panels_v1" data-secondary-dashboard-role="secondary_detail_panel" data-main-experience="false" data-default-state="collapsed_on_mobile" data-primary-loop-anchor="trillionnium-tactics-game-shell" data-mobile-ia="collapsed_secondary_panel">
+    <section class="panel world-secondary-collapsed world-secondary-detail-panel" data-secondary-dashboard-contract="trillionnium_secondary_dashboard_panels_v1" data-secondary-dashboard-role="secondary_detail_panel" data-main-experience="false" data-default-state="collapsed_on_mobile" data-primary-loop-anchor="trillionnium-tactics-game-shell" data-mobile-ia="collapsed_secondary_panel" data-deferred-payload="true">
       <h2 data-i18n-en="Faction Reputation Map" data-i18n-zh="阵营声望图">Faction Reputation Map</h2>
       <div class="mini-grid">{faction_cards}</div>
       <div class="mini-grid" style="margin-top:12px">{standing_cards}</div>
     </section>
-    <section id="world-contracts-panel" class="panel world-secondary-collapsed world-secondary-detail-panel" data-secondary-dashboard-contract="trillionnium_secondary_dashboard_panels_v1" data-secondary-dashboard-role="secondary_detail_panel" data-main-experience="false" data-default-state="collapsed_on_mobile" data-primary-loop-anchor="trillionnium-tactics-game-shell" data-mobile-ia="collapsed_secondary_panel">
+    <section id="world-contracts-panel" class="panel world-secondary-collapsed world-secondary-detail-panel" data-secondary-dashboard-contract="trillionnium_secondary_dashboard_panels_v1" data-secondary-dashboard-role="secondary_detail_panel" data-main-experience="false" data-default-state="collapsed_on_mobile" data-primary-loop-anchor="trillionnium-tactics-game-shell" data-mobile-ia="collapsed_secondary_panel" data-deferred-payload="true">
       <h2 data-i18n-en="World Contracts" data-i18n-zh="世界契约">World Contracts</h2>
       <div id="world-contract-cards-live" class="mini-grid">{contract_cards}</div>
       <form id="world-contract-completion-form" method="post" action="/world/web/contract" style="margin-top:16px">
@@ -5778,11 +6073,11 @@ pub(super) async fn get_world_web_shell(
         <button type="submit" data-i18n-en="Complete Contract" data-i18n-zh="完成契约">Complete Contract</button>
       </form>
     </section>
-    <section class="panel world-secondary-collapsed world-secondary-detail-panel" data-secondary-dashboard-contract="trillionnium_secondary_dashboard_panels_v1" data-secondary-dashboard-role="secondary_detail_panel" data-main-experience="false" data-default-state="collapsed_on_mobile" data-primary-loop-anchor="trillionnium-tactics-game-shell" data-mobile-ia="collapsed_secondary_panel">
+    <section class="panel world-secondary-collapsed world-secondary-detail-panel" data-secondary-dashboard-contract="trillionnium_secondary_dashboard_panels_v1" data-secondary-dashboard-role="secondary_detail_panel" data-main-experience="false" data-default-state="collapsed_on_mobile" data-primary-loop-anchor="trillionnium-tactics-game-shell" data-mobile-ia="collapsed_secondary_panel" data-deferred-payload="true">
       <h2 data-i18n-en="Quest Route Graph" data-i18n-zh="任务路线图">Quest Route Graph</h2>
       <div id="world-route-task-graph-live" class="mini-grid">{world_route_task_graph_cards}</div>
     </section>
-    <section class="panel world-secondary-collapsed world-secondary-detail-panel" data-secondary-dashboard-contract="trillionnium_secondary_dashboard_panels_v1" data-secondary-dashboard-role="secondary_detail_panel" data-main-experience="false" data-default-state="collapsed_on_mobile" data-primary-loop-anchor="trillionnium-tactics-game-shell" data-mobile-ia="collapsed_secondary_panel">
+    <section class="panel world-secondary-collapsed world-secondary-detail-panel" data-secondary-dashboard-contract="trillionnium_secondary_dashboard_panels_v1" data-secondary-dashboard-role="secondary_detail_panel" data-main-experience="false" data-default-state="collapsed_on_mobile" data-primary-loop-anchor="trillionnium-tactics-game-shell" data-mobile-ia="collapsed_secondary_panel" data-deferred-payload="true">
       <h2 data-i18n-en="Playable Commands" data-i18n-zh="可玩指令">Playable Commands</h2>
       <p class="subtitle"><code>/world</code> <code data-i18n-en="/world action Launch an AI Design Studio" data-i18n-zh="/world action 我要开一家 AI 设计工坊">/world action Launch an AI Design Studio</code> <code>/league</code> <code>/arena</code> <code>/guild</code> <code>/raid</code></p>
     </section>
@@ -6841,6 +7136,7 @@ pub(super) async fn get_world_web_shell(
         world_keypad_current_coordinates = escape_html_text(&world_keypad_current_coordinates),
         world_keypad_current_exits = world_keypad_current_exits,
         world_play_first_action_prompt = world_play_first_action_prompt,
+        world_game_first_playable_shell = world_game_first_playable_shell,
         location_cards = location_cards,
         location_options = location_options,
         entity_cards = entity_cards,

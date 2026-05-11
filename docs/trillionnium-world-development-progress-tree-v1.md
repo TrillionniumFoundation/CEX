@@ -2,8 +2,8 @@
 
 Generated: 2026-05-08 18:11 CST  
 Last audited: 2026-05-11 21:0x CST
-Current code checkpoint: `feat: gate native authored quest chains` (this commit)
-Previous checkpoint: `9a7d916 feat: gate clean-room content scale scaffold`
+Current code checkpoint: `feat: prioritize trillionnium world game shell` (this commit)
+Previous checkpoint: `c2f3613 feat: gate native authored quest chains`
 Repo: `/home/qian/.openclaw/workspace/CEX`
 
 This document is the handoff spine for continuing Trillionnium World development without losing state after chat compaction, runtime restarts, or long task chains.
@@ -1802,12 +1802,27 @@ Also append a one-paragraph summary to `/home/qian/.openclaw/workspace/memory/YY
 - Honest scope: this adds original quest-chain/catalog breadth and stabilizes the local map delta contract, but it still does not lift technical 9.9+, first-beta 9+, or commercial 8+ without real external evidence.
 - Constraints preserved: no Hero Tan code/text/assets/data/NPC/task-table copying, no full clone-then-replace workflow, no live OSM ingestion, no MapLibre promotion, browser/web intent-only, Rust source of truth, and no local-only score inflation.
 
+
+---
+
+#### Update 2026-05-11 21:4x CST
+
+- Commit: `feat: prioritize trillionnium world game shell` (this commit)
+- Responded to the UX problem that `/world` looked like a product dashboard/map demo instead of a normal playable game:
+  - [x] Added `trillionnium_world_game_first_playable_shell_v1`, a Rust-projected first-screen shell before the heavy map/dashboard panels.
+  - [x] Surfaced current location, native authored quest objective, immediate Move/Talk/Practice/Task/Combat affordances, and compact HP/energy/stamina/guard/focus/survival bars in the first playable viewport.
+  - [x] Kept the existing 5x3 keypad movement and transition contracts, but demoted player-visible Hero Tan branding to clean-room Trillionnium-native copy while retaining mechanics-reference metadata only where gates require it.
+  - [x] Marked secondary dashboard/map/support panels with collapsed/deferred payload metadata so the first screen is game-first and Rust-owned rather than map/dashboard-first.
+  - [x] Extended Rust tests and Web/Browser E2E gates to require the game-first shell ordering, Rust projection/source-of-truth metadata, immediate actions, survival/combat bars, and deferred secondary panels.
+- Honest scope: this improves first-screen player value and reduces dashboard-first IA pressure, but it is still a local UI/runtime slice and does not raise technical 9.9+, first-beta 9+, or commercial 8+ without real external evidence.
+- Constraints preserved: no copied 白金英雄坛说 / Hero Tan code/text/assets/data/NPC/task tables/names, no full clone-then-replace workflow, no live OSM ingestion, no MapLibre promotion, browser/web intent-only, Rust source of truth, and no local-only score inflation.
+
 ---
 
 ## Current Next Pointer
 
 If the next instruction is simply “continue”, start here:
 
-> **Next pointer:** Make `/world` feel like a normal playable game UI rather than a dashboard/map demo: put the compact 5x3/keypad exploration viewport, current NPC/task/action choices, authored quest-chain objective, and survival/combat bars first; lazy/defer heavy map/dashboard support payloads; keep Rust `WorldState` / projection JSON as source of truth and browser/web as thin visualization/input. Do not use a copy-then-replace Hero Tan replica workflow. If the goal is score lift instead of UI/player-value work, prioritize real `TRILLIONNIUM_MULTI_NODE_LATENCY_EVIDENCE_PATH`, `TRILLIONNIUM_FIRST_BETA_COHORT_EVIDENCE_PATH`, or `TRILLIONNIUM_COMMERCIAL_LAUNCH_DRILL_EVIDENCE_PATH`. Current honest assessment remains `9.8/10` technical, `8.5/10` first internal beta, `7.0/10` commercial release.
+> **Next pointer:** Measure and further reduce `/world` first-load weight now that the Rust-projected game-first shell is first: profile rendered HTML/script/style size, lazily hydrate map/dashboard payloads only after the player uses the game shell, and keep adding Rust-owned projection endpoints for any remaining browser-derived state. Do not use a copy-then-replace Hero Tan replica workflow. If the goal is score lift instead of UI/player-value work, prioritize real `TRILLIONNIUM_MULTI_NODE_LATENCY_EVIDENCE_PATH`, `TRILLIONNIUM_FIRST_BETA_COHORT_EVIDENCE_PATH`, or `TRILLIONNIUM_COMMERCIAL_LAUNCH_DRILL_EVIDENCE_PATH`. Current honest assessment remains `9.8/10` technical, `8.5/10` first internal beta, `7.0/10` commercial release.
 
 Do not start live Overpass/Geofabrik ingestion yet. Do not promote MapLibre. Do not convert the web shell into a standalone JS source of truth.
