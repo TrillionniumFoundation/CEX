@@ -58,6 +58,8 @@ pub(super) const TRILLIONNIUM_WORLD_SKILL_PRACTICE_LOOP_CONTRACT_VERSION: &str =
     "trillionnium_world_skill_practice_loop_v1";
 pub(super) const TRILLIONNIUM_WORLD_COMBAT_ENCOUNTER_LOOP_CONTRACT_VERSION: &str =
     "trillionnium_world_combat_encounter_loop_v1";
+pub(super) const TRILLIONNIUM_HERO_TAN_FULL_CONTENT_ALIGNMENT_CONTRACT_VERSION: &str =
+    "trillionnium_hero_tan_full_content_alignment_v1";
 
 fn default_tactics_objective_id() -> String {
     "defeat_market_bandit".to_string()
@@ -624,6 +626,127 @@ fn trillionnium_fixture_skill_definitions() -> Vec<TrillionniumSkillDefinition> 
             world_effect: "improve_evidence_gathering_and_dispute_routes",
             training_anchor_role: "arbitration_desk",
         },
+        TrillionniumSkillDefinition {
+            skill_id: "staff_and_polearm",
+            family: "staff",
+            name: "Route Guard Staff / 护路棍法",
+            level: 1,
+            xp: 70,
+            unlock_condition: "escort_route_training",
+            combat_effect: "extend_melee_zone_control",
+            world_effect: "improve_escort_and_patrol_task_safety",
+            training_anchor_role: "delivery_route",
+        },
+        TrillionniumSkillDefinition {
+            skill_id: "evidence_packaging",
+            family: "evidence",
+            name: "Evidence Packaging / 证据封装",
+            level: 1,
+            xp: 110,
+            unlock_condition: "submit_first_task_report",
+            combat_effect: "preserve_objective_proof_under_pressure",
+            world_effect: "improve_review_hold_release_quality",
+            training_anchor_role: "quest_board",
+        },
+        TrillionniumSkillDefinition {
+            skill_id: "healing_tonic_craft",
+            family: "medicine",
+            name: "Tonic Craft / 补剂调配",
+            level: 1,
+            xp: 85,
+            unlock_condition: "meet_field_apothecary",
+            combat_effect: "recover_minor_wounds_after_encounter",
+            world_effect: "reduce_party_downtime_after_failed_tasks",
+            training_anchor_role: "mentor_home",
+        },
+        TrillionniumSkillDefinition {
+            skill_id: "route_scouting",
+            family: "scouting",
+            name: "Route Scouting / 路线侦察",
+            level: 1,
+            xp: 95,
+            unlock_condition: "complete_first_delivery_route",
+            combat_effect: "preview_enemy_position_before_entry",
+            world_effect: "improve_objective_travel_next_step_quality",
+            training_anchor_role: "delivery_route",
+        },
+        TrillionniumSkillDefinition {
+            skill_id: "dispute_mediation",
+            family: "mediation",
+            name: "Dispute Mediation / 纠纷调停",
+            level: 1,
+            xp: 130,
+            unlock_condition: "inspect_arbitration_desk",
+            combat_effect: "convert_some_hostile_events_to_negotiation",
+            world_effect: "increase_npc_trust_and_reputation_recovery",
+            training_anchor_role: "arbitration_desk",
+        },
+        TrillionniumSkillDefinition {
+            skill_id: "raid_coordination",
+            family: "raid_command",
+            name: "Raid Coordination / 会战号令",
+            level: 1,
+            xp: 160,
+            unlock_condition: "enter_raid_hall",
+            combat_effect: "improve_party_focus_on_objective_tiles",
+            world_effect: "unlock_group_route_and_raid_hall_tasks",
+            training_anchor_role: "raid_hall",
+        },
+        TrillionniumSkillDefinition {
+            skill_id: "artifact_appraisal",
+            family: "appraisal",
+            name: "Artifact Appraisal / 器物鉴定",
+            level: 1,
+            xp: 105,
+            unlock_condition: "inspect_workshop_or_market_item",
+            combat_effect: "identify_item_quality_before_use",
+            world_effect: "improve_market_listing_quality_and_repair_routes",
+            training_anchor_role: "workshop",
+        },
+        TrillionniumSkillDefinition {
+            skill_id: "terrain_reading",
+            family: "terrain",
+            name: "Terrain Reading / 地势辨读",
+            level: 1,
+            xp: 100,
+            unlock_condition: "move_across_three_world_nodes",
+            combat_effect: "reduce_forest_and_river_movement_penalty",
+            world_effect: "improve_map_transition_and_blocked_terrain_guidance",
+            training_anchor_role: "civic_square",
+        },
+        TrillionniumSkillDefinition {
+            skill_id: "auction_sense",
+            family: "auction",
+            name: "Auction Sense / 拍卖眼力",
+            level: 1,
+            xp: 115,
+            unlock_condition: "visit_market_listing_board",
+            combat_effect: "turn_supply_tiles_into_temporary_focus",
+            world_effect: "improve_bounty_pricing_and_seller_selection",
+            training_anchor_role: "market",
+        },
+        TrillionniumSkillDefinition {
+            skill_id: "camp_cooking",
+            family: "survival",
+            name: "Camp Cooking / 行灶术",
+            level: 1,
+            xp: 75,
+            unlock_condition: "rest_after_long_route",
+            combat_effect: "restore_focus_before_next_encounter",
+            world_effect: "reduce_stamina_pressure_on_long_routes",
+            training_anchor_role: "mentor_home",
+        },
+        TrillionniumSkillDefinition {
+            skill_id: "shadow_messaging",
+            family: "messaging",
+            name: "Shadow Messaging / 暗信步",
+            level: 1,
+            xp: 125,
+            unlock_condition: "complete_night_watch_patrol",
+            combat_effect: "delay_enemy_reinforcement_signal",
+            world_effect: "unlock_discreet_courier_and_witness_routes",
+            training_anchor_role: "quest_board",
+        },
     ]
 }
 
@@ -766,7 +889,18 @@ impl WorldTrillionniumCharacter {
                 "reading_and_contracts",
                 "merchant_routecraft",
                 "artifact_crafting",
-                "streetwise_investigation"
+                "streetwise_investigation",
+                "staff_and_polearm",
+                "evidence_packaging",
+                "healing_tonic_craft",
+                "route_scouting",
+                "dispute_mediation",
+                "raid_coordination",
+                "artifact_appraisal",
+                "terrain_reading",
+                "auction_sense",
+                "camp_cooking",
+                "shadow_messaging"
             ],
             "next_development_hooks": [
                 "sect_hall_osm_overlay_binding",
@@ -1055,6 +1189,83 @@ fn trillionnium_training_command_fixtures() -> Vec<TrillionniumTrainingCommand> 
             cost_xp: 14,
             cooldown_seconds: 720,
         },
+        TrillionniumTrainingCommand {
+            skill_id: "staff_and_polearm",
+            mentor_npc_id: "npc-escort-captain-han",
+            required_semantic_role: "delivery_route",
+            cost_xp: 12,
+            cooldown_seconds: 600,
+        },
+        TrillionniumTrainingCommand {
+            skill_id: "evidence_packaging",
+            mentor_npc_id: "npc-bounty-board-clerk",
+            required_semantic_role: "quest_board",
+            cost_xp: 15,
+            cooldown_seconds: 840,
+        },
+        TrillionniumTrainingCommand {
+            skill_id: "healing_tonic_craft",
+            mentor_npc_id: "npc-field-apothecary",
+            required_semantic_role: "mentor_home",
+            cost_xp: 13,
+            cooldown_seconds: 720,
+        },
+        TrillionniumTrainingCommand {
+            skill_id: "route_scouting",
+            mentor_npc_id: "npc-jade-route-scout",
+            required_semantic_role: "delivery_route",
+            cost_xp: 15,
+            cooldown_seconds: 780,
+        },
+        TrillionniumTrainingCommand {
+            skill_id: "dispute_mediation",
+            mentor_npc_id: "npc-dispute-witness-lu",
+            required_semantic_role: "arbitration_desk",
+            cost_xp: 18,
+            cooldown_seconds: 960,
+        },
+        TrillionniumTrainingCommand {
+            skill_id: "raid_coordination",
+            mentor_npc_id: "npc-raid-drum-sergeant",
+            required_semantic_role: "raid_hall",
+            cost_xp: 20,
+            cooldown_seconds: 1200,
+        },
+        TrillionniumTrainingCommand {
+            skill_id: "artifact_appraisal",
+            mentor_npc_id: "npc-artifact-appraiser",
+            required_semantic_role: "workshop",
+            cost_xp: 14,
+            cooldown_seconds: 780,
+        },
+        TrillionniumTrainingCommand {
+            skill_id: "terrain_reading",
+            mentor_npc_id: "npc-map-tile-surveyor",
+            required_semantic_role: "civic_square",
+            cost_xp: 12,
+            cooldown_seconds: 600,
+        },
+        TrillionniumTrainingCommand {
+            skill_id: "auction_sense",
+            mentor_npc_id: "npc-warehouse-broker-xu",
+            required_semantic_role: "market",
+            cost_xp: 16,
+            cooldown_seconds: 900,
+        },
+        TrillionniumTrainingCommand {
+            skill_id: "camp_cooking",
+            mentor_npc_id: "npc-camp-cook-lin",
+            required_semantic_role: "mentor_home",
+            cost_xp: 10,
+            cooldown_seconds: 600,
+        },
+        TrillionniumTrainingCommand {
+            skill_id: "shadow_messaging",
+            mentor_npc_id: "npc-shadow-message-runner",
+            required_semantic_role: "quest_board",
+            cost_xp: 17,
+            cooldown_seconds: 960,
+        },
     ]
 }
 
@@ -1165,6 +1376,46 @@ fn trillionnium_sect_fixtures() -> Vec<TrillionniumSectFixture> {
             entry_requirement: "streetwise_investigation_training_available",
             benefits: vec!["dispute_evidence_bonus", "escort_risk_reduction"],
             title_ladder: vec!["watch_runner", "risk_warden", "night_watch_captain"],
+        },
+        TrillionniumSectFixture {
+            sect_id: "jade-route-agency",
+            display_name: "Jade Route Agency / 玉路局",
+            specialization: "route_scouting_patrol_and_caravan_escort",
+            anchor_role: "delivery_route",
+            mentor_npc_ids: vec!["npc-jade-route-scout", "npc-escort-captain-han"],
+            entry_requirement: "complete_first_delivery_or_patrol_task",
+            benefits: vec!["route_scouting_bonus", "escort_party_readiness"],
+            title_ladder: vec!["route_runner", "jade_scout", "caravan_path_master"],
+        },
+        TrillionniumSectFixture {
+            sect_id: "dispute-mirror-court",
+            display_name: "Dispute Mirror Court / 明镜庭",
+            specialization: "mediation_witness_handling_and_reputation_repair",
+            anchor_role: "arbitration_desk",
+            mentor_npc_ids: vec!["npc-dispute-witness-lu", "npc-sect-registrar-qin"],
+            entry_requirement: "relationship_trust_or_dispute_mediation_training",
+            benefits: vec!["npc_trust_recovery", "review_hold_release_hint"],
+            title_ladder: vec!["case_listener", "mirror_clerk", "court_mediator"],
+        },
+        TrillionniumSectFixture {
+            sect_id: "raid-signal-lodge",
+            display_name: "Raid Signal Lodge / 号令楼",
+            specialization: "combat_entry_party_coordination_and_raid_tasks",
+            anchor_role: "raid_hall",
+            mentor_npc_ids: vec!["npc-raid-drum-sergeant", "npc-arena-referee-du"],
+            entry_requirement: "win_first_lightweight_encounter",
+            benefits: vec!["raid_coordination_bonus", "combat_return_state_clarity"],
+            title_ladder: vec!["signal_runner", "drum_captain", "raid_lodge_commander"],
+        },
+        TrillionniumSectFixture {
+            sect_id: "field-remedy-garden",
+            display_name: "Field Remedy Garden / 行药园",
+            specialization: "medicine_recovery_and_failed_task_downtime_control",
+            anchor_role: "mentor_home",
+            mentor_npc_ids: vec!["npc-field-apothecary"],
+            entry_requirement: "meet_field_apothecary_or_failed_encounter_recovery",
+            benefits: vec!["minor_wound_recovery", "party_downtime_reduction"],
+            title_ladder: vec!["herb_runner", "field_tonic_maker", "garden_healer"],
         },
     ]
 }
@@ -1308,6 +1559,60 @@ fn trillionnium_task_archetype_fixtures() -> Vec<TrillionniumTaskArchetypeFixtur
             completion_owner: "rust_mentor_training_validator",
             reward_gate: "mentor_place_cost_cooldown_required",
             log_style_key: "mentor_trial",
+        },
+        TrillionniumTaskArchetypeFixture {
+            task_archetype_id: "street_patrol",
+            display_name: "Street Patrol / 街巡护路",
+            source_semantic_roles: vec!["civic_square", "delivery_route"],
+            command: "offer_task",
+            completion_owner: "rust_world_action_handler",
+            reward_gate: "patrol_report_review_hold_anti_cheese",
+            log_style_key: "street_patrol",
+        },
+        TrillionniumTaskArchetypeFixture {
+            task_archetype_id: "debt_recovery",
+            display_name: "Debt Recovery / 清账追索",
+            source_semantic_roles: vec!["ledger_hall", "market"],
+            command: "offer_task",
+            completion_owner: "rust_command_handler_ledger_progression",
+            reward_gate: "ledger_settlement_and_dispute_evidence_required",
+            log_style_key: "debt_recovery",
+        },
+        TrillionniumTaskArchetypeFixture {
+            task_archetype_id: "map_survey",
+            display_name: "Map Survey / 地图踏勘",
+            source_semantic_roles: vec!["civic_square", "quest_board", "delivery_route"],
+            command: "offer_task",
+            completion_owner: "rust_world_graph_objective_travel",
+            reward_gate: "route_evidence_required_before_reward",
+            log_style_key: "map_survey",
+        },
+        TrillionniumTaskArchetypeFixture {
+            task_archetype_id: "healing_supply",
+            display_name: "Healing Supply / 行药补给",
+            source_semantic_roles: vec!["mentor_home", "workshop"],
+            command: "offer_task",
+            completion_owner: "rust_world_action_handler",
+            reward_gate: "supply_quality_review_required",
+            log_style_key: "healing_supply",
+        },
+        TrillionniumTaskArchetypeFixture {
+            task_archetype_id: "arbitrate_dispute",
+            display_name: "Arbitrate Dispute / 调停纠纷",
+            source_semantic_roles: vec!["arbitration_desk", "market"],
+            command: "offer_task",
+            completion_owner: "rust_trillionnium_task_completion_handler",
+            reward_gate: "relationship_evidence_and_review_hold_gate",
+            log_style_key: "arbitrate_dispute",
+        },
+        TrillionniumTaskArchetypeFixture {
+            task_archetype_id: "raid_signal",
+            display_name: "Raid Signal / 会战号令",
+            source_semantic_roles: vec!["raid_hall", "arena"],
+            command: "offer_task",
+            completion_owner: "rust_tactics_turn_handler",
+            reward_gate: "party_raid_resolution_then_ledger_gate",
+            log_style_key: "raid_signal",
         },
     ]
 }
@@ -2000,11 +2305,31 @@ fn trillionnium_task_archetype_ids_for_capability(capability: &str) -> Vec<&'sta
         | "train_routecraft"
         | "train_artifact_crafting"
         | "train_investigation"
-        | "train_inner_power" => vec!["sect_training_trial"],
+        | "train_inner_power"
+        | "train_staff"
+        | "train_evidence_packaging"
+        | "train_medicine"
+        | "train_route_scouting"
+        | "train_mediation"
+        | "train_raid_coordination"
+        | "train_appraisal"
+        | "train_terrain_reading"
+        | "train_auction_sense"
+        | "train_camp_cooking"
+        | "train_shadow_messaging" => vec!["sect_training_trial"],
         "review_contract_risk" | "review_evidence" => vec!["market_settlement", "find_item"],
         "repair_item" => vec!["find_item"],
         "price_bounty" => vec!["market_settlement"],
         "offer_escort_task" => vec!["escort_route"],
+        "offer_patrol_loop" => vec!["street_patrol", "map_survey"],
+        "recover_debt" => vec!["debt_recovery", "market_settlement"],
+        "supply_medicine" => vec!["healing_supply", "find_item"],
+        "survey_map" => vec!["map_survey", "courier_letter"],
+        "mediate_dispute" => vec!["arbitrate_dispute", "market_settlement"],
+        "coordinate_raid" => vec!["raid_signal", "escort_route", "defeat_bandit"],
+        "run_arena_duel" => vec!["defeat_bandit", "raid_signal"],
+        "register_sect_case" => vec!["sect_training_trial", "arbitrate_dispute"],
+        "appraise_artifact" => vec!["find_item", "healing_supply"],
         _ => Vec::new(),
     }
 }
@@ -2249,6 +2574,158 @@ fn trillionnium_npc_fixtures() -> Vec<TrillionniumNpcFixture> {
                 "review_evidence",
             ],
         },
+        TrillionniumNpcFixture {
+            npc_id: "npc-contract-runner-mei",
+            display_name: "Contract Runner Mei / 梅契跑",
+            role: "courier_contract_runner",
+            sect_id: "cloud-ledger-hall",
+            anchor_role: "delivery_route",
+            relationship_seed: 6,
+            schedule: "route_morning_contract_evening_return",
+            task_capabilities: vec!["offer_patrol_loop", "recover_debt"],
+        },
+        TrillionniumNpcFixture {
+            npc_id: "npc-jade-route-scout",
+            display_name: "Jade Route Scout / 玉路探",
+            role: "mentor_route_scouting",
+            sect_id: "jade-route-agency",
+            anchor_role: "delivery_route",
+            relationship_seed: 11,
+            schedule: "dawn_route_scout_noon_report",
+            task_capabilities: vec!["train_route_scouting", "survey_map", "offer_patrol_loop"],
+        },
+        TrillionniumNpcFixture {
+            npc_id: "npc-bounty-board-clerk",
+            display_name: "Bounty Clerk Bao / 鲍榜吏",
+            role: "mentor_evidence_and_bounty_board",
+            sect_id: "street-compass-society",
+            anchor_role: "quest_board",
+            relationship_seed: 5,
+            schedule: "quest_board_open_hours",
+            task_capabilities: vec![
+                "train_evidence_packaging",
+                "review_evidence",
+                "offer_patrol_loop",
+            ],
+        },
+        TrillionniumNpcFixture {
+            npc_id: "npc-escort-captain-han",
+            display_name: "Escort Captain Han / 韩镖头",
+            role: "mentor_staff_and_escort",
+            sect_id: "jade-route-agency",
+            anchor_role: "delivery_route",
+            relationship_seed: 9,
+            schedule: "caravan_departure_and_evening_drill",
+            task_capabilities: vec!["train_staff", "offer_escort_task", "offer_patrol_loop"],
+        },
+        TrillionniumNpcFixture {
+            npc_id: "npc-arena-referee-du",
+            display_name: "Arena Referee Du / 杜校场",
+            role: "arena_duel_referee",
+            sect_id: "raid-signal-lodge",
+            anchor_role: "arena",
+            relationship_seed: 4,
+            schedule: "arena_challenge_windows",
+            task_capabilities: vec!["run_arena_duel", "coordinate_raid"],
+        },
+        TrillionniumNpcFixture {
+            npc_id: "npc-field-apothecary",
+            display_name: "Field Apothecary Yi / 易行药",
+            role: "mentor_field_medicine",
+            sect_id: "field-remedy-garden",
+            anchor_role: "mentor_home",
+            relationship_seed: 8,
+            schedule: "midday_tonic_prep_night_recovery",
+            task_capabilities: vec!["train_medicine", "supply_medicine", "review_evidence"],
+        },
+        TrillionniumNpcFixture {
+            npc_id: "npc-dispute-witness-lu",
+            display_name: "Witness Lu / 卢见证",
+            role: "mentor_mediation_and_witness",
+            sect_id: "dispute-mirror-court",
+            anchor_role: "arbitration_desk",
+            relationship_seed: 7,
+            schedule: "case_hearing_and_witness_route",
+            task_capabilities: vec!["train_mediation", "mediate_dispute", "review_evidence"],
+        },
+        TrillionniumNpcFixture {
+            npc_id: "npc-warehouse-broker-xu",
+            display_name: "Warehouse Broker Xu / 徐仓牙",
+            role: "mentor_auction_and_inventory",
+            sect_id: "market-wind-pavilion",
+            anchor_role: "market",
+            relationship_seed: 6,
+            schedule: "market_auction_and_warehouse_close",
+            task_capabilities: vec!["train_auction_sense", "price_bounty", "recover_debt"],
+        },
+        TrillionniumNpcFixture {
+            npc_id: "npc-raid-drum-sergeant",
+            display_name: "Raid Drum Sergeant / 鼓令军曹",
+            role: "mentor_raid_coordination",
+            sect_id: "raid-signal-lodge",
+            anchor_role: "raid_hall",
+            relationship_seed: 10,
+            schedule: "raid_drill_and_signal_watch",
+            task_capabilities: vec![
+                "train_raid_coordination",
+                "coordinate_raid",
+                "offer_escort_task",
+            ],
+        },
+        TrillionniumNpcFixture {
+            npc_id: "npc-sect-registrar-qin",
+            display_name: "Sect Registrar Qin / 秦录事",
+            role: "sect_registry_and_title_ladder",
+            sect_id: "dispute-mirror-court",
+            anchor_role: "sect_hall",
+            relationship_seed: 3,
+            schedule: "registry_open_midday",
+            task_capabilities: vec!["register_sect_case", "mediate_dispute"],
+        },
+        TrillionniumNpcFixture {
+            npc_id: "npc-map-tile-surveyor",
+            display_name: "Map Surveyor Gao / 高图工",
+            role: "mentor_terrain_and_map_survey",
+            sect_id: "street-compass-society",
+            anchor_role: "civic_square",
+            relationship_seed: 8,
+            schedule: "square_survey_and_evening_grid_notes",
+            task_capabilities: vec!["train_terrain_reading", "survey_map", "offer_patrol_loop"],
+        },
+        TrillionniumNpcFixture {
+            npc_id: "npc-artifact-appraiser",
+            display_name: "Artifact Appraiser Yan / 颜鉴器",
+            role: "mentor_artifact_appraisal",
+            sect_id: "iron-workshop-gate",
+            anchor_role: "workshop",
+            relationship_seed: 7,
+            schedule: "workshop_appraisal_and_market_walk",
+            task_capabilities: vec!["train_appraisal", "appraise_artifact", "repair_item"],
+        },
+        TrillionniumNpcFixture {
+            npc_id: "npc-camp-cook-lin",
+            display_name: "Camp Cook Lin / 林行灶",
+            role: "mentor_survival_cooking",
+            sect_id: "field-remedy-garden",
+            anchor_role: "mentor_home",
+            relationship_seed: 5,
+            schedule: "dawn_meal_prep_evening_recovery",
+            task_capabilities: vec!["train_camp_cooking", "supply_medicine", "offer_patrol_loop"],
+        },
+        TrillionniumNpcFixture {
+            npc_id: "npc-shadow-message-runner",
+            display_name: "Shadow Message Runner / 暗信行者",
+            role: "mentor_discreet_courier",
+            sect_id: "night-watch-alliance",
+            anchor_role: "quest_board",
+            relationship_seed: 9,
+            schedule: "night_message_route_and_board_drop",
+            task_capabilities: vec![
+                "train_shadow_messaging",
+                "offer_patrol_loop",
+                "review_evidence",
+            ],
+        },
     ]
 }
 
@@ -2470,6 +2947,398 @@ fn trillionnium_battle_log_lines_json(combat_log: &Value) -> Value {
             })
             .collect::<Vec<_>>(),
     )
+}
+
+fn trillionnium_item_equipment_catalog_json() -> Value {
+    json!({
+        "contract_version": "trillionnium_native_item_equipment_catalog_v1",
+        "source_of_truth": "rust_trillionnium_item_equipment_catalog",
+        "content_policy": "trillionnium_native_no_copied_hero_tan_text_assets_or_tables",
+        "runtime_status": "catalog_projection_gate_runtime_mutation_pending",
+        "items": [
+            {
+                "item_id": "ledger-seal-token",
+                "slot": "quest_proof",
+                "family": "evidence",
+                "display_name": "Ledger Seal Token / 账印令",
+                "use_case": "binds submitted proof to settlement review",
+                "combat_effect": "protects one objective proof bundle from interruption",
+                "world_effect": "improves review-hold release quality"
+            },
+            {
+                "item_id": "street-compass-bracer",
+                "slot": "wrist",
+                "family": "navigation",
+                "display_name": "Street Compass Bracer / 街指南护腕",
+                "use_case": "marks nearby exits and mentor anchors",
+                "combat_effect": "adds one focus point on objective-entry turns",
+                "world_effect": "reduces wrong-node route attempts"
+            },
+            {
+                "item_id": "route-guard-staff",
+                "slot": "weapon",
+                "family": "staff",
+                "display_name": "Route Guard Staff / 护路棍",
+                "use_case": "escort and patrol starter weapon",
+                "combat_effect": "extends melee zone control",
+                "world_effect": "improves escort-route safety"
+            },
+            {
+                "item_id": "iron-workshop-blade",
+                "slot": "weapon",
+                "family": "blade",
+                "display_name": "Iron Workshop Blade / 铁坊短刀",
+                "use_case": "workshop repair and armored encounter starter",
+                "combat_effect": "improves attack against armored targets",
+                "world_effect": "improves artifact repair task quality"
+            },
+            {
+                "item_id": "market-wind-sword",
+                "slot": "weapon",
+                "family": "sword",
+                "display_name": "Market Wind Sword / 集风剑",
+                "use_case": "market negotiation duel starter",
+                "combat_effect": "improves precision attack",
+                "world_effect": "raises opening negotiation quality"
+            },
+            {
+                "item_id": "night-watch-cloak",
+                "slot": "cloak",
+                "family": "lightness",
+                "display_name": "Night Watch Cloak / 夜巡披风",
+                "use_case": "patrol movement and evasion",
+                "combat_effect": "raises evade on low-light tiles",
+                "world_effect": "reduces travel friction on night routes"
+            },
+            {
+                "item_id": "field-tonic-kit",
+                "slot": "consumable",
+                "family": "medicine",
+                "display_name": "Field Tonic Kit / 行药包",
+                "use_case": "recover from failed encounters and long patrols",
+                "combat_effect": "recovers minor wounds after combat",
+                "world_effect": "reduces party downtime"
+            },
+            {
+                "item_id": "evidence-wrap-case",
+                "slot": "pack",
+                "family": "evidence",
+                "display_name": "Evidence Wrap Case / 证据匣",
+                "use_case": "holds task photos, reports, and review notes",
+                "combat_effect": "prevents proof loss on objective tiles",
+                "world_effect": "improves proof completeness scoring"
+            },
+            {
+                "item_id": "auction-eye-lens",
+                "slot": "tool",
+                "family": "auction",
+                "display_name": "Auction Eye Lens / 拍卖镜",
+                "use_case": "inspect bounty price and item quality",
+                "combat_effect": "reveals supply tile quality",
+                "world_effect": "improves bounty pricing"
+            },
+            {
+                "item_id": "raid-signal-drum",
+                "slot": "party_tool",
+                "family": "raid_command",
+                "display_name": "Raid Signal Drum / 会战鼓",
+                "use_case": "coordinate party entry and return state",
+                "combat_effect": "focuses party objective attacks",
+                "world_effect": "unlocks group route coordination"
+            },
+            {
+                "item_id": "map-tile-rubbing",
+                "slot": "map_note",
+                "family": "terrain",
+                "display_name": "Map Tile Rubbing / 地格拓片",
+                "use_case": "records blocked terrain and transition rules",
+                "combat_effect": "reduces movement penalty on known terrain",
+                "world_effect": "improves route explanation"
+            },
+            {
+                "item_id": "sect-registry-tag",
+                "slot": "identity",
+                "family": "sect",
+                "display_name": "Sect Registry Tag / 门籍牌",
+                "use_case": "tracks sect title ladder and mentor trust",
+                "combat_effect": "adds morale on sect trial objectives",
+                "world_effect": "improves relationship recovery"
+            }
+        ]
+    })
+}
+
+fn trillionnium_resource_pressure_loops_json() -> Value {
+    json!({
+        "contract_version": "trillionnium_native_resource_pressure_loop_v1",
+        "source_of_truth": "rust_trillionnium_resource_pressure_catalog",
+        "content_policy": "trillionnium_native_no_copied_hero_tan_text_assets_or_tables",
+        "runtime_status": "catalog_projection_gate_runtime_mutation_pending",
+        "loops": [
+            {
+                "loop_id": "daylight_route_window",
+                "domain": "time",
+                "pressure": "daylight_windows_change_patrol_and_delivery_risk",
+                "player_choice": "depart_now_or_wait_for_lower_risk",
+                "failure_mode": "late_report_review_hold"
+            },
+            {
+                "loop_id": "stamina_travel_budget",
+                "domain": "stamina",
+                "pressure": "long_routes_reduce_combat_entry_focus",
+                "player_choice": "rest_train_or_push_route",
+                "failure_mode": "low_focus_encounter_penalty"
+            },
+            {
+                "loop_id": "evidence_integrity",
+                "domain": "proof",
+                "pressure": "proof_bundle_can_be_incomplete_or_interrupted",
+                "player_choice": "collect_more_evidence_or_submit_fast",
+                "failure_mode": "review_hold_or_reward_delay"
+            },
+            {
+                "loop_id": "injury_recovery",
+                "domain": "health",
+                "pressure": "failed_encounters_increase_downtime",
+                "player_choice": "use_tonic_seek_mentor_or_continue",
+                "failure_mode": "party_downtime_and_task_risk"
+            },
+            {
+                "loop_id": "reputation_trust",
+                "domain": "relationship",
+                "pressure": "npc_trust_changes_task_access_and_dispute_outcomes",
+                "player_choice": "mediate_dispute_pay_debt_or_train",
+                "failure_mode": "locked_mentor_or_worse_reward_gate"
+            },
+            {
+                "loop_id": "ledger_settlement_risk",
+                "domain": "economy",
+                "pressure": "rewards_are_held_until_settlement_review_passes",
+                "player_choice": "improve_deliverable_or_accept_delay",
+                "failure_mode": "reward_not_released"
+            }
+        ]
+    })
+}
+
+fn trillionnium_story_arc_catalog_json() -> Value {
+    json!({
+        "contract_version": "trillionnium_native_story_arc_catalog_v1",
+        "source_of_truth": "rust_trillionnium_story_arc_catalog",
+        "content_policy": "trillionnium_native_no_copied_hero_tan_text_assets_or_tables",
+        "runtime_status": "catalog_projection_gate_runtime_mutation_pending",
+        "arcs": [
+            {
+                "arc_id": "mirror_city_arrival",
+                "theme": "first_route_first_mentor_first_reward",
+                "entry_task_archetypes": ["courier_letter", "sect_training_trial"],
+                "unlock_signal": "first_human_session_complete"
+            },
+            {
+                "arc_id": "ledger_debt_storm",
+                "theme": "contracts_debt_recovery_and_review_hold",
+                "entry_task_archetypes": ["debt_recovery", "market_settlement"],
+                "unlock_signal": "ledger_settlement_dispute_seen"
+            },
+            {
+                "arc_id": "jade_route_patrol",
+                "theme": "escort_patrol_and_map_survey",
+                "entry_task_archetypes": ["street_patrol", "map_survey", "escort_route"],
+                "unlock_signal": "route_scouting_known"
+            },
+            {
+                "arc_id": "night_watch_dispute",
+                "theme": "npc_relationship_witness_and_mediation",
+                "entry_task_archetypes": ["arbitrate_dispute", "find_item"],
+                "unlock_signal": "streetwise_investigation_or_mediation_known"
+            },
+            {
+                "arc_id": "raid_signal_return",
+                "theme": "combat_entry_party_raid_and_return_to_map",
+                "entry_task_archetypes": ["raid_signal", "defeat_bandit"],
+                "unlock_signal": "world_combat_encounter_return_loop_green"
+            },
+            {
+                "arc_id": "field_remedy_supply",
+                "theme": "medicine_supplies_recovery_and_failed_task_repair",
+                "entry_task_archetypes": ["healing_supply", "find_item"],
+                "unlock_signal": "healing_tonic_craft_known"
+            }
+        ]
+    })
+}
+
+fn value_array_len(value: &Value) -> usize {
+    value.as_array().map(Vec::len).unwrap_or(0)
+}
+
+fn nested_array_len(value: &Value, field: &str) -> usize {
+    value
+        .get(field)
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0)
+}
+
+fn unique_string_field_count(items: &Value, field: &str) -> usize {
+    items
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|item| item.get(field).and_then(Value::as_str).map(str::to_string))
+        .collect::<HashSet<_>>()
+        .len()
+}
+
+fn total_nested_array_field_count(items: &Value, field: &str) -> usize {
+    items
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|item| nested_array_len(&item, field))
+        .sum()
+}
+
+fn trillionnium_full_content_volume_alignment_json(
+    world: &WorldState,
+    skill_definitions: &Value,
+    training_commands: &Value,
+    sects: &Value,
+    npcs: &Value,
+    npc_command_descriptors: &Value,
+    mentor_training_task_flows: &Value,
+    task_archetypes: &Value,
+    task_candidates: &Value,
+    osm_objectives: &Value,
+    map_overlay_identity_count: usize,
+    combat_log: &Value,
+    item_catalog: &Value,
+    resource_pressure_loops: &Value,
+    story_arc_catalog: &Value,
+) -> Value {
+    let skill_count = value_array_len(skill_definitions);
+    let skill_family_count = unique_string_field_count(skill_definitions, "family");
+    let training_count = value_array_len(training_commands);
+    let sect_count = value_array_len(sects);
+    let npc_count = value_array_len(npcs);
+    let npc_command_descriptor_count = value_array_len(npc_command_descriptors);
+    let npc_task_capability_count = total_nested_array_field_count(npcs, "task_capabilities");
+    let mentor_training_flow_count = value_array_len(mentor_training_task_flows);
+    let task_archetype_count = value_array_len(task_archetypes);
+    let task_candidate_count = value_array_len(task_candidates);
+    let osm_objective_count = value_array_len(osm_objectives);
+    let combat_log_beat_count = nested_array_len(combat_log, "beats");
+    let item_count = nested_array_len(item_catalog, "items");
+    let item_family_count = item_catalog
+        .get("items")
+        .map(|items| unique_string_field_count(items, "family"))
+        .unwrap_or(0);
+    let resource_loop_count = nested_array_len(resource_pressure_loops, "loops");
+    let story_arc_count = nested_array_len(story_arc_catalog, "arcs");
+    let map_node_count = world.world_map_nodes.len();
+    let thresholds_green = skill_count >= 18
+        && skill_family_count >= 14
+        && training_count >= 18
+        && sect_count >= 8
+        && npc_count >= 18
+        && npc_command_descriptor_count >= 28
+        && npc_task_capability_count >= 36
+        && mentor_training_flow_count >= 18
+        && task_archetype_count >= 12
+        && task_candidate_count >= 10
+        && osm_objective_count >= 5
+        && map_node_count >= 8
+        && map_overlay_identity_count >= 8
+        && combat_log_beat_count >= 4
+        && item_count >= 12
+        && item_family_count >= 8
+        && resource_loop_count >= 6
+        && story_arc_count >= 6;
+
+    json!({
+        "contract_version": TRILLIONNIUM_HERO_TAN_FULL_CONTENT_ALIGNMENT_CONTRACT_VERSION,
+        "status": if thresholds_green { "content_volume_catalog_gate_green" } else { "content_volume_catalog_gate_blocked" },
+        "scope": "full_content_volume_alignment_manifest",
+        "reference_policy": {
+            "reference_title": "bai_jin_hero_tan_shuo_scale_reference_only",
+            "allowed_use": "mechanics_loops_content_breadth_and_coverage_shape_reference_only",
+            "forbidden_use": [
+                "original_text",
+                "map_data",
+                "sprites_or_assets",
+                "source_code",
+                "binary_tables",
+                "npc_task_tables",
+                "proprietary_names"
+            ],
+            "implementation_rule": "trillionnium_native_content_only",
+            "copy_policy": "no_copied_hero_tan_text_assets_code_tables_or_data"
+        },
+        "content_policy": "trillionnium_native_no_copied_hero_tan_text_assets_or_tables",
+        "source_of_truth": "rust_trillionnium_full_content_volume_alignment_gate",
+        "web_role": "visualization_input_only",
+        "runtime_depth_status": "expanded_native_catalog_projection_gate; full_mmo_scale_authoring_and_runtime_mutation_remain_incremental",
+        "minimum_thresholds": {
+            "skill_definitions": 18,
+            "skill_families": 14,
+            "training_commands": 18,
+            "sects": 8,
+            "npcs": 18,
+            "npc_command_descriptors": 28,
+            "npc_task_capabilities": 36,
+            "mentor_training_task_flows": 18,
+            "task_archetypes": 12,
+            "task_candidates": 10,
+            "osm_objectives": 5,
+            "world_map_nodes": 8,
+            "map_overlay_identities": 8,
+            "combat_log_beats": 4,
+            "item_equipment_catalog": 12,
+            "item_families": 8,
+            "resource_pressure_loops": 6,
+            "story_arcs": 6
+        },
+        "coverage_counts": {
+            "skill_definitions": skill_count,
+            "skill_families": skill_family_count,
+            "training_commands": training_count,
+            "sects": sect_count,
+            "npcs": npc_count,
+            "npc_command_descriptors": npc_command_descriptor_count,
+            "npc_task_capabilities": npc_task_capability_count,
+            "mentor_training_task_flows": mentor_training_flow_count,
+            "task_archetypes": task_archetype_count,
+            "task_candidates": task_candidate_count,
+            "osm_objectives": osm_objective_count,
+            "world_map_nodes": map_node_count,
+            "map_overlay_identities": map_overlay_identity_count,
+            "combat_log_beats": combat_log_beat_count,
+            "item_equipment_catalog": item_count,
+            "item_families": item_family_count,
+            "resource_pressure_loops": resource_loop_count,
+            "story_arcs": story_arc_count
+        },
+        "thresholds_green": thresholds_green,
+        "domains": [
+            {"domain": "sects_and_title_ladders", "status": "native_catalog_expanded", "gate_field": "sects"},
+            {"domain": "skill_families_and_training", "status": "native_catalog_expanded", "gate_field": "skill_definitions"},
+            {"domain": "npc_social_relationships", "status": "native_catalog_expanded", "gate_field": "npcs"},
+            {"domain": "quest_task_archetypes", "status": "native_catalog_expanded", "gate_field": "task_archetypes"},
+            {"domain": "world_nodes_and_objective_travel", "status": "rust_runtime_backed", "gate_field": "world_objective_travel"},
+            {"domain": "combat_entry_and_return", "status": "rust_runtime_backed", "gate_field": "world_combat_encounter"},
+            {"domain": "items_and_equipment", "status": "native_catalog_projection_gate", "gate_field": "item_equipment_catalog"},
+            {"domain": "survival_time_resource_pressure", "status": "native_catalog_projection_gate", "gate_field": "resource_pressure_loops"},
+            {"domain": "story_arcs", "status": "native_catalog_projection_gate", "gate_field": "story_arc_catalog"}
+        ],
+        "next_runtime_slices": [
+            "persist_item_equipment_inventory_and_equip_slots",
+            "mutate_time_stamina_injury_evidence_integrity_loops",
+            "expand_region_graph_and_story_arc_unlocks",
+            "deepen_combat_numerics_without_copying_reference_data"
+        ]
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -3718,6 +4587,7 @@ pub(super) fn world_tactics_board_projection_json(
         market_overlay_id.clone(),
     );
     let available_commands = tactics_available_commands_json();
+    let skill_definitions = trillionnium_skill_definitions_json();
     let training_commands = trillionnium_training_commands_json(openstreetmap_geodata);
     let sects = trillionnium_sect_fixtures_json(openstreetmap_geodata);
     let npcs = trillionnium_npc_fixtures_json(world, matrix_user_id, openstreetmap_geodata);
@@ -3761,6 +4631,26 @@ pub(super) fn world_tactics_board_projection_json(
         &task_candidates,
     );
     let battle_log = trillionnium_battle_log_lines_json(&combat_log);
+    let item_equipment_catalog = trillionnium_item_equipment_catalog_json();
+    let resource_pressure_loops = trillionnium_resource_pressure_loops_json();
+    let story_arc_catalog = trillionnium_story_arc_catalog_json();
+    let full_content_alignment = trillionnium_full_content_volume_alignment_json(
+        world,
+        &skill_definitions,
+        &training_commands,
+        &sects,
+        &npcs,
+        &npc_command_descriptors,
+        &mentor_training_task_flows,
+        &task_archetypes,
+        &task_candidates,
+        &osm_objectives,
+        map_overlay_identity_count,
+        &combat_log,
+        &item_equipment_catalog,
+        &resource_pressure_loops,
+        &story_arc_catalog,
+    );
     json!({
         "contract_version": TRILLIONNIUM_TACTICS_BOARD_CONTRACT_VERSION,
         "source_of_truth": "rust_trillionnium_game_state",
@@ -3786,6 +4676,7 @@ pub(super) fn world_tactics_board_projection_json(
         "world_objective_travel_contract_version": TRILLIONNIUM_WORLD_OBJECTIVE_TRAVEL_CONTRACT_VERSION,
         "world_skill_practice_loop_contract_version": TRILLIONNIUM_WORLD_SKILL_PRACTICE_LOOP_CONTRACT_VERSION,
         "world_combat_encounter_loop_contract_version": TRILLIONNIUM_WORLD_COMBAT_ENCOUNTER_LOOP_CONTRACT_VERSION,
+        "full_content_alignment_contract_version": TRILLIONNIUM_HERO_TAN_FULL_CONTENT_ALIGNMENT_CONTRACT_VERSION,
         "tactics_combat_resolution_contract_version": TRILLIONNIUM_TACTICS_COMBAT_RESOLUTION_CONTRACT_VERSION,
         "tactics_game_session_contract_version": TRILLIONNIUM_TACTICS_GAME_SESSION_CONTRACT_VERSION,
         "tactics_simulation_tick_contract_version": TRILLIONNIUM_TACTICS_SIMULATION_TICK_CONTRACT_VERSION,
@@ -3833,7 +4724,7 @@ pub(super) fn world_tactics_board_projection_json(
             "cells": cells,
         },
         "trillionnium_character": trillionnium_character,
-        "skill_definitions": trillionnium_skill_definitions_json(),
+        "skill_definitions": skill_definitions,
         "training_commands": training_commands,
         "sects": sects,
         "npcs": npcs,
@@ -3850,6 +4741,10 @@ pub(super) fn world_tactics_board_projection_json(
         "simulation_ticks": simulation_ticks,
         "battle_log_style": trillionnium_battle_log_style_json(),
         "combat_log": combat_log,
+        "item_equipment_catalog": item_equipment_catalog,
+        "resource_pressure_loops": resource_pressure_loops,
+        "story_arc_catalog": story_arc_catalog,
+        "full_content_alignment": full_content_alignment,
         "npc_relationship_model": {
             "contract_version": TRILLIONNIUM_NPC_RELATIONSHIP_CONTRACT_VERSION,
             "source_of_truth": "rust_world_relationships_persistent_state",

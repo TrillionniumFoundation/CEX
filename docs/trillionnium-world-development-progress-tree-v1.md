@@ -1628,10 +1628,30 @@ Also append a one-paragraph summary to `/home/qian/.openclaw/workspace/memory/YY
 
 ---
 
+#### Update 2026-05-11 02:5x CST
+
+- Commit: `feat: gate native content volume alignment` (this commit)
+- Began “完整内容量对齐” as a legally clean Trillionnium-native content-volume gate rather than copying 白金/英雄坛说 data:
+  - [x] Added `trillionnium_hero_tan_full_content_alignment_v1` to the Rust tactics projection as a coverage manifest for full content-volume alignment.
+  - [x] Expanded native content catalogs across skills, training commands, sects, NPCs, NPC command descriptors, task archetypes/candidates, item/equipment catalog, resource-pressure loops, and story arcs.
+  - [x] The alignment manifest explicitly states the reference policy: classic text-RPG scale/loop breadth is allowed as a reference, while original text, maps, sprites/assets, source code, binary tables, NPC/task tables, names, and proprietary data are forbidden.
+  - [x] The gate now checks native coverage thresholds: skills/families/training, sects/NPCs/commands, task archetypes/candidates, OSM objectives, world-map nodes, combat-log beats, item/equipment catalog, resource-pressure loops, and story arcs.
+  - [x] `/world` renders `#trillionnium-full-content-alignment` as a visualization-only content-volume proof panel with `data-thresholds-green="true"`, source-of-truth `rust_trillionnium_full_content_volume_alignment_gate`, and domain markers for item/equipment plus survival/time/resource pressure.
+  - [x] Tests and Web/Browser gates assert the content-volume contract, native/no-copy policy, thresholds, and key coverage domains.
+- Current honest scope: this is a native catalog/projection gate and content-volume foundation. It does not claim the whole MMO-scale world is fully authored or all runtime mutation loops are complete.
+- Remaining next:
+  - [ ] Persist item/equipment inventory and equip slots as Rust-owned runtime state.
+  - [ ] Mutate time/stamina/injury/evidence-integrity loops from real movement/combat/task events.
+  - [ ] Expand region graph and story-arc unlocks using Trillionnium-native content only.
+  - [ ] Deepen combat numerics without copying reference data.
+- Constraints preserved: no Hero Tan code/text/assets/data copying, no live OSM ingestion, no MapLibre promotion, browser/web intent-only, Rust source of truth.
+
+---
+
 ## Current Next Pointer
 
 If the next instruction is simply “continue”, start here:
 
-> **Next pointer:** The Hero Tan-style exploration loop is closed for the current local milestone, and the technical 9.9+ proof is now explicitly gated by `trillionnium_multi_node_latency_evidence_gate_v1`. Do not continue visual skin work or add local-only demo loops. The next meaningful score lifts require one of: real multi-node/live-traffic latency evidence via `TRILLIONNIUM_MULTI_NODE_LATENCY_EVIDENCE_PATH`, real first-beta cohort evidence via `TRILLIONNIUM_FIRST_BETA_COHORT_EVIDENCE_PATH`, or commercial launch drill evidence via `TRILLIONNIUM_COMMERCIAL_LAUNCH_DRILL_EVIDENCE_PATH`. Current honest assessment remains `9.8/10` technical, `8.5/10` first internal beta, `7.0/10` commercial release.
+> **Next pointer:** Continue full content-volume alignment by turning the new native catalogs into Rust-owned runtime state: item/equipment inventory and equip slots first, then time/stamina/injury/evidence-integrity mutation loops, then region/story unlocks and deeper combat numerics. Keep the technical 9.9+ proof gated by real `TRILLIONNIUM_MULTI_NODE_LATENCY_EVIDENCE_PATH`, first-beta 9+ gated by `TRILLIONNIUM_FIRST_BETA_COHORT_EVIDENCE_PATH`, and commercial 8+ gated by `TRILLIONNIUM_COMMERCIAL_LAUNCH_DRILL_EVIDENCE_PATH`. Current honest assessment remains `9.8/10` technical, `8.5/10` first internal beta, `7.0/10` commercial release.
 
 Do not start live Overpass/Geofabrik ingestion yet. Do not promote MapLibre. Do not convert the web shell into a standalone JS source of truth.

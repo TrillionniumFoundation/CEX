@@ -1297,6 +1297,94 @@ fn world_trillionnium_task_candidate_forms_html(
         .join("\n")
 }
 
+fn world_trillionnium_full_content_alignment_html(tactics_board: &Value) -> String {
+    let Some(alignment) = tactics_board.get("full_content_alignment") else {
+        return String::new();
+    };
+    let contract = alignment
+        .get("contract_version")
+        .and_then(Value::as_str)
+        .unwrap_or("trillionnium_hero_tan_full_content_alignment_v1");
+    let status = alignment
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("content_volume_catalog_gate_unknown");
+    let thresholds_green = alignment
+        .get("thresholds_green")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let source_of_truth = alignment
+        .get("source_of_truth")
+        .and_then(Value::as_str)
+        .unwrap_or("rust_trillionnium_full_content_volume_alignment_gate");
+    let content_policy = alignment
+        .get("content_policy")
+        .and_then(Value::as_str)
+        .unwrap_or("trillionnium_native_no_copied_hero_tan_text_assets_or_tables");
+    let counts = alignment.get("coverage_counts").unwrap_or(&Value::Null);
+    let count_for = |field: &str| -> u64 {
+        counts
+            .get(field)
+            .and_then(Value::as_u64)
+            .unwrap_or_default()
+    };
+    let domains = alignment
+        .get("domains")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|domain| {
+            let domain_id = domain
+                .get("domain")
+                .and_then(Value::as_str)
+                .unwrap_or("content_domain");
+            let domain_status = domain
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or("native_catalog_projection_gate");
+            let gate_field = domain
+                .get("gate_field")
+                .and_then(Value::as_str)
+                .unwrap_or("full_content_alignment");
+            format!(
+                "<li data-content-domain=\"{}\" data-domain-status=\"{}\" data-gate-field=\"{}\">{} · {}</li>",
+                escape_html_text(domain_id),
+                escape_html_text(domain_status),
+                escape_html_text(gate_field),
+                escape_world_visible_text(domain_id),
+                escape_world_visible_text(domain_status),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        "<section id=\"trillionnium-full-content-alignment\" class=\"trillionnium-full-content-alignment\" data-full-content-alignment-contract=\"{}\" data-status=\"{}\" data-thresholds-green=\"{}\" data-source-of-truth=\"{}\" data-content-policy=\"{}\" data-reference-use=\"mechanics_loops_content_breadth_reference_only\" data-forbidden-copy=\"text_maps_assets_code_binary_tables_names\" data-web-role=\"visualization_input_only\" aria-label=\"Trillionnium native full content volume alignment\" data-i18n-aria-label-en=\"Trillionnium native full content volume alignment\" data-i18n-aria-label-zh=\"Trillionnium 原生完整内容量对齐\"><h4 data-i18n-en=\"Native full content volume\" data-i18n-zh=\"原生完整内容量\">Native full content volume</h4><p data-i18n-en=\"Classic text-RPG scale is used only as a breadth reference; all content here is Trillionnium-native.\" data-i18n-zh=\"经典文字 RPG 体量只作广度参考；这里所有内容都是 Trillionnium 原生。\">Classic text-RPG scale is used only as a breadth reference; all content here is Trillionnium-native.</p><div class=\"mini-grid\"><article class=\"mini\"><strong>{}</strong><span data-i18n-en=\"Skills · families · training\" data-i18n-zh=\"技能 · 家族 · 修炼\">Skills · families · training</span><code>{}/{}/{}</code></article><article class=\"mini\"><strong>{}</strong><span data-i18n-en=\"Sects · NPCs · commands\" data-i18n-zh=\"门派 · NPC · 指令\">Sects · NPCs · commands</span><code>{}/{}/{}</code></article><article class=\"mini\"><strong>{}</strong><span data-i18n-en=\"Tasks · objectives · map nodes\" data-i18n-zh=\"任务 · 目标 · 地图节点\">Tasks · objectives · map nodes</span><code>{}/{}/{}</code></article><article class=\"mini\"><strong>{}</strong><span data-i18n-en=\"Items · pressure · story arcs\" data-i18n-zh=\"道具 · 压力循环 · 剧情线\">Items · pressure · story arcs</span><code>{}/{}/{}</code></article></div><ul class=\"world-content-domain-list\">{}</ul><small data-i18n-en=\"Runtime truth: Rust owns catalogs and validation; browser renders projections and submits intent only.\" data-i18n-zh=\"运行时真相：Rust 拥有目录和校验；浏览器只渲染投影并提交意图。\">Runtime truth: Rust owns catalogs and validation; browser renders projections and submits intent only.</small></section>",
+        escape_html_text(contract),
+        escape_html_text(status),
+        if thresholds_green { "true" } else { "false" },
+        escape_html_text(source_of_truth),
+        escape_html_text(content_policy),
+        if thresholds_green { "GREEN" } else { "CHECK" },
+        count_for("skill_definitions"),
+        count_for("skill_families"),
+        count_for("training_commands"),
+        if thresholds_green { "GREEN" } else { "CHECK" },
+        count_for("sects"),
+        count_for("npcs"),
+        count_for("npc_command_descriptors"),
+        if thresholds_green { "GREEN" } else { "CHECK" },
+        count_for("task_archetypes"),
+        count_for("osm_objectives"),
+        count_for("world_map_nodes"),
+        if thresholds_green { "GREEN" } else { "CHECK" },
+        count_for("item_equipment_catalog"),
+        count_for("resource_pressure_loops"),
+        count_for("story_arcs"),
+        domains,
+    )
+}
+
 fn world_current_node_overlay_id(current_map_node: Option<&WorldMapNode>) -> String {
     current_map_node
         .map(openstreetmap_game_overlay_id)
@@ -3075,6 +3163,8 @@ pub(super) async fn get_world_web_shell(
         current_matrix_user_id,
         &csrf_input,
     );
+    let trillionnium_full_content_alignment =
+        world_trillionnium_full_content_alignment_html(&tactics_board);
     let world_play_first_action_prompt = world_play_first_action_prompt_html(
         &league,
         &tactics_board,
@@ -4614,6 +4704,7 @@ pub(super) async fn get_world_web_shell(
               <p data-i18n-en="Submit task reports from OSM-generated candidates; Rust validates completion, review hold, anti-cheese, and ledger settlement before rewards release." data-i18n-zh="从 OSM 生成的候选任务提交战报；Rust 校验完成、复核暂挂、反刷和账本结算后才释放奖励。">Submit task reports from OSM-generated candidates; Rust validates completion, review hold, anti-cheese, and ledger settlement before rewards release.</p>
               <div class="mini-grid">{trillionnium_task_completion_forms}</div>
             </section>
+            {trillionnium_full_content_alignment}
             <small data-i18n-en="Next mod path: replace placeholder units with Trillionnium agents, convert POIs into capture points, and use route evidence as battle reports." data-i18n-zh="下一步魔改：把占位单位替换为 Trillionnium Agent，把 POI 转成占领点，把路线证据转成战报。">Next mod path: replace placeholder units with Trillionnium agents, convert POIs into capture points, and use route evidence as battle reports.</small>
           </aside>
         </section>
@@ -5879,6 +5970,7 @@ pub(super) async fn get_world_web_shell(
         trillionnium_sect_cards = trillionnium_sect_cards,
         trillionnium_npc_cards = trillionnium_npc_cards,
         trillionnium_task_completion_forms = trillionnium_task_completion_forms,
+        trillionnium_full_content_alignment = trillionnium_full_content_alignment,
         trillionnium_status_lines = trillionnium_status_lines,
         trillionnium_display_name_en = escape_html_text(world_trillionnium_visible_english(
             trillionnium_display_name

@@ -3078,6 +3078,127 @@ fn world_tactics_projection_binds_trillionnium_state_to_osm_objectives() {
         tactics["combat_log"]["source_reference_safety"]["test_gate"],
         "forbid_source_reference_strings_in_generated_beats"
     );
+    assert_eq!(
+        tactics["full_content_alignment_contract_version"],
+        "trillionnium_hero_tan_full_content_alignment_v1"
+    );
+    let full_content_alignment = &tactics["full_content_alignment"];
+    assert_eq!(
+        full_content_alignment["contract_version"],
+        "trillionnium_hero_tan_full_content_alignment_v1"
+    );
+    assert_eq!(
+        full_content_alignment["source_of_truth"],
+        "rust_trillionnium_full_content_volume_alignment_gate"
+    );
+    assert_eq!(
+        full_content_alignment["reference_policy"]["implementation_rule"],
+        "trillionnium_native_content_only"
+    );
+    assert_eq!(
+        full_content_alignment["reference_policy"]["copy_policy"],
+        "no_copied_hero_tan_text_assets_code_tables_or_data"
+    );
+    assert_eq!(
+        full_content_alignment["thresholds_green"], true,
+        "full content coverage counts: {}",
+        full_content_alignment["coverage_counts"]
+    );
+    assert_eq!(
+        full_content_alignment["status"],
+        "content_volume_catalog_gate_green"
+    );
+    let coverage_counts = &full_content_alignment["coverage_counts"];
+    assert!(
+        coverage_counts["skill_definitions"]
+            .as_u64()
+            .unwrap_or_default()
+            >= 18
+    );
+    assert!(
+        coverage_counts["skill_families"]
+            .as_u64()
+            .unwrap_or_default()
+            >= 14
+    );
+    assert!(
+        coverage_counts["training_commands"]
+            .as_u64()
+            .unwrap_or_default()
+            >= 18
+    );
+    assert!(coverage_counts["sects"].as_u64().unwrap_or_default() >= 8);
+    assert!(coverage_counts["npcs"].as_u64().unwrap_or_default() >= 18);
+    assert!(
+        coverage_counts["npc_command_descriptors"]
+            .as_u64()
+            .unwrap_or_default()
+            >= 28
+    );
+    assert!(
+        coverage_counts["task_archetypes"]
+            .as_u64()
+            .unwrap_or_default()
+            >= 12
+    );
+    assert!(
+        coverage_counts["item_equipment_catalog"]
+            .as_u64()
+            .unwrap_or_default()
+            >= 12
+    );
+    assert!(
+        coverage_counts["resource_pressure_loops"]
+            .as_u64()
+            .unwrap_or_default()
+            >= 6
+    );
+    assert!(coverage_counts["story_arcs"].as_u64().unwrap_or_default() >= 6);
+    assert!(full_content_alignment["domains"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|domain| domain["domain"] == "items_and_equipment"
+            && domain["status"] == "native_catalog_projection_gate"));
+    assert!(full_content_alignment["domains"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|domain| domain["domain"] == "combat_entry_and_return"
+            && domain["status"] == "rust_runtime_backed"));
+    assert_eq!(
+        tactics["item_equipment_catalog"]["contract_version"],
+        "trillionnium_native_item_equipment_catalog_v1"
+    );
+    assert!(tactics["item_equipment_catalog"]["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item["item_id"] == "raid-signal-drum" && item["family"] == "raid_command"));
+    assert_eq!(
+        tactics["resource_pressure_loops"]["contract_version"],
+        "trillionnium_native_resource_pressure_loop_v1"
+    );
+    assert!(tactics["resource_pressure_loops"]["loops"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|loop_def| loop_def["loop_id"] == "evidence_integrity"
+            && loop_def["failure_mode"] == "review_hold_or_reward_delay"));
+    assert_eq!(
+        tactics["story_arc_catalog"]["contract_version"],
+        "trillionnium_native_story_arc_catalog_v1"
+    );
+    assert!(tactics["story_arc_catalog"]["arcs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|arc| arc["arc_id"] == "jade_route_patrol"
+            && arc["entry_task_archetypes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|entry| entry == "map_survey")));
     let combat_log_text = tactics["combat_log"]["beats"]
         .as_array()
         .unwrap()
@@ -5145,6 +5266,14 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(world_html.contains("trillionnium_task_completion_v1"));
     assert!(world_html.contains("trillionnium_reward_gate_v1"));
     assert!(world_html.contains("trillionnium-task-candidates"));
+    assert!(world_html.contains("trillionnium-full-content-alignment"));
+    assert!(world_html.contains("trillionnium_hero_tan_full_content_alignment_v1"));
+    assert!(world_html.contains("data-full-content-alignment-contract="));
+    assert!(world_html.contains("data-thresholds-green=\"true\""));
+    assert!(world_html.contains("rust_trillionnium_full_content_volume_alignment_gate"));
+    assert!(world_html.contains("trillionnium_native_no_copied_hero_tan_text_assets_or_tables"));
+    assert!(world_html.contains("data-content-domain=\"items_and_equipment\""));
+    assert!(world_html.contains("data-content-domain=\"survival_time_resource_pressure\""));
     assert!(world_html.contains("data-ledger-reward-requires-settlement=\"true\""));
     assert!(world_html.contains("data-review-hold-gate-enforced=\"true\""));
     assert!(world_html.contains("data-anti-cheese-gate-enforced=\"true\""));

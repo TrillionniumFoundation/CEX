@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 const require = createRequire(import.meta.url);
-const { chromium, devices } = require('playwright');
+const { chromium, devices, request } = require('playwright');
 
 const baseUrl = (process.env.CONSUMER_ENTRY_BASE_URL || process.env.BASE_URL || 'http://127.0.0.1:8090').replace(/\/$/, '');
 const rootDir = process.env.CEX_PROJECT_ROOT || process.cwd();
@@ -254,23 +254,23 @@ function ingressHeaders() {
   return ingressToken ? { 'x-entry-token': ingressToken } : {};
 }
 
-function signedSessionHeaders() {
+function signedSessionHeaders({ matrixUserId: sessionMatrixUserId = matrixUserId, roomId: sessionRoomId = roomId, sessionId: webSessionId = sessionId } = {}) {
   const secret = process.env.CONSUMER_ENTRY_SESSION_AUTH_SECRET || process.env.MATRIX_ENTRY_CONSUMER_SESSION_AUTH_SECRET || '';
   if (!secret.trim()) return {};
   const issuer = process.env.MATRIX_ENTRY_CONSUMER_SESSION_AUTH_ISSUER || 'matrix-entry-adapter';
   const audience = process.env.CONSUMER_ENTRY_SESSION_AUTH_EXPECTED_AUDIENCE || process.env.MATRIX_ENTRY_CONSUMER_SESSION_AUTH_AUDIENCE || 'consumer-entry-api';
   const now = Math.floor(Date.now() / 1000);
-  const requestFingerprint = `league-web-session:${matrixUserId}:${roomId}:${sessionId}`;
+  const requestFingerprint = `league-web-session:${sessionMatrixUserId}:${sessionRoomId}:${webSessionId}`;
   const claims = {
     version: 1,
     issuer,
     key_id: null,
-    subject: matrixUserId,
+    subject: sessionMatrixUserId,
     source_kind: 'league_web_session',
     audience,
     request_fingerprint: requestFingerprint,
-    room_id: roomId,
-    session_id: sessionId,
+    room_id: sessionRoomId,
+    session_id: webSessionId,
     org_id: null,
     account_id: null,
     issued_at_epoch: now,
@@ -284,14 +284,30 @@ function signedSessionHeaders() {
   };
 }
 
-async function seedWebSession(context) {
-  const response = await context.request.post('/league/web/session', {
-    headers: { ...ingressHeaders(), ...signedSessionHeaders() },
-    data: { matrix_user_id: matrixUserId, room_id: roomId, session_id: sessionId },
+async function seedWebSession(context, { matrixUserId: sessionMatrixUserId = matrixUserId, roomId: sessionRoomId = roomId, sessionId: webSessionId = sessionId } = {}) {
+  const sessionHeaders = { ...ingressHeaders(), ...signedSessionHeaders({ matrixUserId: sessionMatrixUserId, roomId: sessionRoomId, sessionId: webSessionId }) };
+  const sessionApiContext = await request.newContext({ baseURL: baseUrl, extraHTTPHeaders: sessionHeaders, userAgent: 'cex-browser-e2e-session-probe/1.0' });
+  const response = await sessionApiContext.post('/league/web/session', {
+    data: { matrix_user_id: sessionMatrixUserId, room_id: sessionRoomId, session_id: webSessionId },
     timeout: 20_000,
   });
   const bodyText = await response.text();
   assert(response.ok(), `failed to seed browser web session: ${response.status()}`, bodyText);
+  const cookieHeaders = (await response.headersArray()).filter((header) => header.name.toLowerCase() === 'set-cookie');
+  const cookies = cookieHeaders
+    .map((header) => {
+      const pair = String(header.value || '').split(';')[0] || '';
+      const equalsIndex = pair.indexOf('=');
+      if (equalsIndex <= 0) return null;
+      return {
+        name: pair.slice(0, equalsIndex),
+        value: pair.slice(equalsIndex + 1),
+        url: baseUrl,
+      };
+    })
+    .filter(Boolean);
+  if (cookies.length > 0) await context.addCookies(cookies);
+  await sessionApiContext.dispose().catch(() => null);
   const body = JSON.parse(bodyText || '{}');
   assert(body.csrf, 'browser web session did not return csrf', body);
   return body;
@@ -578,6 +594,9 @@ async function main() {
   });
 
   const marker = `browser-e2e-${Math.floor(Date.now() / 1000)}`;
+  const localAdventureMatrixUserId = `@browser-e2e-adventure-${runId}:local.dev`;
+  const localAdventureRoomId = `!browser-e2e-adventure-${runId}:local.dev`;
+  const localAdventureSessionId = `browser-e2e-adventure-${runId}`;
 
   if (e2eMode === 'first-human-session') {
     await runFirstHumanSessionPath(page, marker, steps, consoleMessages);
@@ -973,6 +992,9 @@ async function main() {
   assert(await count(page, '#world-local-npc-talk[data-command="talk_npc"]') === 1, 'world NPC talk affordance missing');
   assert(await count(page, '#world-local-skill-practice[data-contract-version="trillionnium_world_skill_practice_loop_v1"][data-practice-command="train_skill"][data-source-of-truth="rust_mentor_training_validator"][data-web-role="intent_only_visualization_input"]') === 1, 'world local skill practice mentor affordance missing');
   assert(await count(page, '#world-local-combat-encounter[data-contract-version="trillionnium_world_combat_encounter_loop_v1"][data-entry-command="attack"][data-source-of-truth="rust_world_combat_encounter_projection"][data-web-role="intent_only_visualization_input"]') === 1, 'world local combat encounter affordance missing');
+  assert(await count(page, '#trillionnium-full-content-alignment[data-full-content-alignment-contract="trillionnium_hero_tan_full_content_alignment_v1"][data-thresholds-green="true"][data-source-of-truth="rust_trillionnium_full_content_volume_alignment_gate"][data-content-policy="trillionnium_native_no_copied_hero_tan_text_assets_or_tables"][data-web-role="visualization_input_only"]') === 1, 'world full content volume alignment gate missing');
+  assert(await count(page, '#trillionnium-full-content-alignment [data-content-domain="items_and_equipment"][data-domain-status="native_catalog_projection_gate"]') === 1, 'world full content item/equipment domain missing');
+  assert(await count(page, '#trillionnium-full-content-alignment [data-content-domain="survival_time_resource_pressure"][data-domain-status="native_catalog_projection_gate"]') === 1, 'world full content survival/resource domain missing');
   assert(await count(page, '#world-local-task-loop[data-pickup-command="offer_task"][data-completion-command="complete_task"]') === 1, 'world task pickup/completion affordance missing');
   const worldKeypadBox = await page.locator('#world-keypad-adventure-shell').boundingBox({ timeout: 10_000 });
   const worldKeypadGridBox = await page.locator('#world-keypad-map-grid').boundingBox({ timeout: 10_000 });
@@ -1051,6 +1073,10 @@ async function main() {
   assert(afterKeyboardMove.transitionStatus === 'accepted' && ['local_exit', 'room_transition', 'zone_transition', 'wait'].includes(afterKeyboardMove.transitionKind), 'world keypad keyboard movement transition semantics missing', afterKeyboardMove);
   steps.push({ name: 'world_keypad_tile_map_button_and_numpad_movement', ok: true, button_move: firstKeypadMove, keyboard_move: keyboardMove });
 
+  await seedWebSession(context, { matrixUserId: localAdventureMatrixUserId, roomId: localAdventureRoomId, sessionId: localAdventureSessionId });
+  await page.goto(`/world?lang=en&e2e_reload=${encodeURIComponent(runId)}-local-adventure#world-keypad-adventure-shell`, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+  await page.waitForSelector('#world-keypad-adventure-shell', { state: 'attached', timeout: 15_000 });
+
   let routeToNpcHub = await moveWorldKeypadToNode(page, 'mirror-city-square');
   await page.goto(`/world?lang=en&e2e_reload=${encodeURIComponent(runId)}-npc-1#world-play-first-action-prompt`, { waitUntil: 'domcontentloaded', timeout: 30_000 });
   await page.waitForSelector('#world-play-first-action-prompt', { state: 'attached', timeout: 15_000 });
@@ -1110,6 +1136,7 @@ async function main() {
   steps.push({ name: 'world_local_combat_encounter_return_loop', ok: true, return_state: localCombatEncounterState.returnState, reward_status: localCombatEncounterState.rewardStatus });
   steps.push({ name: 'world_local_npc_task_pickup_completion_loop', ok: true, route_steps_to_npc_hub: routeToNpcHub.length });
 
+  await seedWebSession(context);
   await page.goto('/world?lang=zh', { waitUntil: 'domcontentloaded', timeout: 30_000 });
   await page.waitForSelector('#world-real-map', { timeout: 15_000 });
   await page.waitForFunction(() => document.documentElement.getAttribute('data-ui-language') === 'zh', { timeout: 10_000 });
@@ -1131,7 +1158,7 @@ async function main() {
   await submitWorldForm(page, '#world-map-move-panel form', marker, 'map=moved');
   steps.push({ name: 'world_map_move_form_browser_submit', ok: true });
 
-  await page.locator('#world-action-body').fill('打造一个现实委托可用的 AI 设计工坊道具：写清成果、证据包、风险控制、行动循环、下一步和自检记录，用于 browser adventure E2E。');
+  await page.locator('#world-action-body').fill('Craft a browser E2E AI design studio asset: define the deliverable, evidence package, risk controls, action loop, next step, and self-review record for a reusable Trillionnium workshop item.');
   await submitWorldForm(page, 'form[action="/world/web/action"]', marker, 'played=1');
   steps.push({ name: 'world_action_browser_submit', ok: true });
 
@@ -1162,7 +1189,7 @@ async function main() {
   assert(acceptanceCards >= 1, 'quest rating card missing after rating');
   steps.push({ name: 'world_quest_rating_browser_submit', ok: true, acceptance_cards: acceptanceCards });
 
-  const rumMatrixWarmup = await page.evaluate(async ({ marker, deltaCursor }) => {
+  const rumMatrixWarmup = await page.evaluate(async ({ marker, deltaCursor, matrixUserId }) => {
     const results = [];
     const rumMatrixSurfaces = ['app', 'world'];
     const rumMatrixDevices = ['mobile', 'desktop'];
@@ -1175,7 +1202,7 @@ async function main() {
             credentials: 'same-origin',
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({
-              matrix_user_id: '@alice:local.dev',
+              matrix_user_id: matrixUserId,
               surface_id: surfaceId,
               session_id: `browser-e2e-rum-${marker}`,
               viewport_cursor: deltaCursor || 'browser-e2e-current-cursor',
@@ -1193,11 +1220,12 @@ async function main() {
       }
     }
     return results;
-  }, { marker, deltaCursor });
+  }, { marker, deltaCursor, matrixUserId });
   assert(rumMatrixWarmup.every((result) => result.ok), 'RUM matrix warmup failed', rumMatrixWarmup);
   steps.push({ name: 'world_map_rum_matrix_browser_warmup', ok: true, samples: 12 });
 
-  const health = await page.request.get(`${baseUrl}/health`, { timeout: 180_000 });
+  const healthApiContext = await request.newContext({ baseURL: baseUrl, extraHTTPHeaders: ingressHeaders(), userAgent: 'cex-browser-e2e-health-probe/1.0' });
+  const health = await healthApiContext.get('/health', { timeout: 180_000 });
   assert(health.ok(), `health failed after browser flow: ${health.status()}`);
   const healthJson = await health.json();
   assert(healthJson?.trillionnium_world_map_runtime_safety_gate?.contract_version === 'trillionnium_world_map_runtime_safety_gate_v1', 'health runtime safety gate contract missing', healthJson?.trillionnium_world_map_runtime_safety_gate);
@@ -1226,9 +1254,10 @@ async function main() {
   assert(Number.isFinite(Number(healthJson?.trillionnium_world_map_rum_slo_gate?.sample_count)), 'health RUM SLO sample count missing', healthJson?.trillionnium_world_map_rum_slo_gate);
   assert(['warming_until_min_samples', 'enforced'].includes(healthJson?.trillionnium_world_map_rum_slo_gate?.enforcement_status), 'health RUM SLO enforcement status missing', healthJson?.trillionnium_world_map_rum_slo_gate);
   assert(healthJson?.trillionnium_world_map_delta_cache_gate?.entity_delta_cache_contract === 'entity_group_versioned_delta_v1' && healthJson?.trillionnium_world_map_delta_cache_gate?.failure_rate_within_target === true, 'health delta cache gate not green', healthJson?.trillionnium_world_map_delta_cache_gate);
-  const metrics = await page.request.get(`${baseUrl}/metrics`, { timeout: 180_000 });
+  const metrics = await healthApiContext.get('/metrics', { timeout: 180_000 });
   assert(metrics.ok(), `metrics failed after browser flow: ${metrics.status()}`);
   const metricsText = await metrics.text();
+  await healthApiContext.dispose().catch(() => null);
   for (const needle of [
     'cex_consumer_entry_trillionnium_world_map_rum_slo_gate_green 1',
     'cex_consumer_entry_trillionnium_world_map_rum_slo_raw_split_green ',
