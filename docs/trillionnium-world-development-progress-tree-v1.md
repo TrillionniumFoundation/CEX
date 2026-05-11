@@ -1,9 +1,9 @@
 # Trillionnium World Development Progress Tree v1
 
 Generated: 2026-05-08 18:11 CST  
-Last audited: 2026-05-11 00:07 CST
-Current code checkpoint: `feat: gate world mentor skill practice` (this commit)
-Current progress-tree checkpoint before this expansion: `da20c1a feat: gate world objective travel`
+Last audited: 2026-05-11 17:1x CST
+Current code checkpoint: `docs: reconcile trillionnium hero tan audit evidence` (this commit)
+Previous checkpoint: `0965543 docs: prepare trillionnium real evidence templates`
 Repo: `/home/qian/.openclaw/workspace/CEX`
 
 This document is the handoff spine for continuing Trillionnium World development without losing state after chat compaction, runtime restarts, or long task chains.
@@ -46,7 +46,7 @@ OpenStreetMap / cached geodata
 
 The web frontend is **not** the source of truth. It renders state and sends player intent. Rust owns world state, simulation, tasks, combat, NPCs, economy, ledger, persistence, validation, and production gates.
 
-After the 2026-05-10 Hero Tan alignment audit, treat `albert10jp/yxts-gold-asm` as a **game-loop reference**, not a skin target. The reference is useful for the sequence "character on map -> directional movement -> location transition -> NPC/task/skill/combat progression". Trillionnium must recreate that loop with native Rust state, native content, OSM/commerce objectives, and explicit command handlers; it must not merely imitate the green LCD appearance.
+After the 2026-05-10/2026-05-11 Hero Tan alignment audits, treat `albert10jp/yxts-gold-asm` as a **game-loop reference**, not a skin target or content source. The reference is useful for the sequence "character on map -> directional movement -> location transition -> NPC/task/skill/combat progression". Trillionnium must recreate that loop with native Rust state, native content, OSM/commerce objectives, and explicit command handlers; it must not merely imitate the green LCD appearance and must not import Hero Tan code/text/maps/assets/tables/data.
 
 ---
 
@@ -291,11 +291,12 @@ The goal is not to port 白金英雄坛说 literally, and it is not to copy the 
 
 ### Confirmed Hero Tan source facts now binding this progress tree
 
-- Confirmed current primary reference: `albert10jp/yxts-gold-asm` in `references/hero-tan/yxts-gold-asm`.
-- Source file `h/gmud.h` establishes the original exploration viewport constants: `ScreenX=160`, `ScreenY=80`, `Unit_Width=32`, `Unit_Height=32`, `ScreenX_Num=5`, `ScreenY_Num=3`.
-- Source file `gmud.s` confirms the movement shape: directional key routines update player/map offsets and then redraw player position.
-- Trillionnium may use these facts as **behavior/layout reference contracts** only. It must not copy original text, maps, images, binary tables, or game data into production.
-- Current implementation status: `/world` has a Rust-owned local movement loop (`a2e3b22`), a first node-local NPC/task lifecycle (`4ec9a92`), Rust-owned transition semantics (`trillionnium_world_transition_semantics_v1`) for blocked terrain, locked routes, interaction-required exits, room transitions, zone transitions, local exits, wait, unknown targets, and non-adjacent routes, node-local mentor skill practice (`trillionnium_world_skill_practice_loop_v1`), and lightweight combat encounter entry/return from map exploration (`trillionnium_world_combat_encounter_loop_v1`).
+- Confirmed current primary reference: public Git reference `albert10jp/yxts-gold-asm` at `62f83c921ae7701fa230bd017e147f079aa70a36` (`refs/heads/main` as observed 2026-05-11). The prior local path `references/hero-tan/yxts-gold-asm/` is not required for production and must be treated as an optional, non-vendored study checkout if restored later.
+- Source file `h/gmud.h` establishes the original exploration viewport constants: `ScreenX=160`, `ScreenY=80`, `Unit_Width=32`, `Unit_Height=32`, `ScreenX_Num=5`, `ScreenY_Num=3`; it also exposes the broad mechanics shape of attributes, HP/FP, food/water, goods/equipment, skills, and tasks.
+- Source file `gmud.s` confirms the movement shape: a wait-key loop dispatches left/right/up/down routines, movement checks blockage/collision, updates player/map offsets, redraws player position, and `CR` checks/initiates object/NPC interaction.
+- Trillionnium may use these facts as **behavior/layout reference contracts** only. It must not copy original code, text, maps, images, binary tables, NPC/task tables, proprietary names, or game data into production.
+- Current implementation status: `/world` has a Rust-owned local movement loop (`a2e3b22`), a first node-local NPC/task lifecycle (`4ec9a92`), Rust-owned transition semantics (`trillionnium_world_transition_semantics_v1`) for blocked terrain, locked routes, interaction-required exits, room transitions, zone transitions, local exits, wait, unknown targets, and non-adjacent routes, node-local mentor skill practice (`trillionnium_world_skill_practice_loop_v1`), lightweight combat encounter entry/return from map exploration (`trillionnium_world_combat_encounter_loop_v1`), plus native item/equipment, resource-pressure, region/story unlock, and combat-numerics runtime loops through checkpoint `61056fc`.
+- Audit boundary: this is aligned to the Hero Tan-style **core playable loop and mechanics skeleton**. It is not, and must not become, a full Hero Tan content/data clone; remaining content breadth should be Trillionnium-native authored value.
 
 ### Source references and allowed use
 
@@ -330,8 +331,8 @@ struct TrillionniumAttributes {
 Progress tree hooks:
 
 - [x] TW-3.4a Add `TrillionniumAttributes` Rust model.
-- [ ] TW-3.4b Add derived stats: max HP, internal energy, move range modifier, learning speed, negotiation bonus.
-- [ ] TW-3.4c Add tests proving derived stats are deterministic and capped.
+- [x] TW-3.4b Add derived stats: max HP, internal energy, move range modifier, learning speed, negotiation bonus.
+- [x] TW-3.4c Add tests proving derived stats are deterministic and capped.
 
 #### Skills
 
@@ -598,7 +599,7 @@ git log --oneline -5
 | OSS stack decisions | `docs/trillionnium-open-source-stack-reference-v1.md` | layered OSS reference stack |
 | Tactics base decision | `docs/trillionnium-open-source-tactics-base-selection-v1.md` | permissive tactics candidates and MedievalWar selection |
 | Hero Tan Shuo decision | `docs/trillionnium-open-source-hero-tan-shuo-base-selection-v1.md` | Hero Tan Shuo / GMUD legal/mechanics reference decision |
-| Current Hero Tan source reference | `references/hero-tan/yxts-gold-asm/` | checked-out `albert10jp/yxts-gold-asm` source reference; mechanics/layout study only |
+| Current Hero Tan source reference | `https://github.com/albert10jp/yxts-gold-asm` @ `62f83c921ae7701fa230bd017e147f079aa70a36` | public source reference revalidated via Git; mechanics/layout study only, no vendored production data |
 | This progress tree | `docs/trillionnium-world-development-progress-tree-v1.md` | canonical continuation guide |
 
 ---
@@ -679,7 +680,7 @@ git log --oneline -5
 ### TW-3 — Trillionnium / Hero Tan Shuo mechanics reference layer
 
 - [x] TW-3.1 Search and classify 白金英雄坛说 / 英雄坛说 OSS candidates.
-  - Current primary reference: `albert10jp/yxts-gold-asm`; checked out under `references/hero-tan/yxts-gold-asm`.
+  - Current primary reference: `albert10jp/yxts-gold-asm` at Git commit `62f83c921ae7701fa230bd017e147f079aa70a36`; public reference only, not a vendored production dependency.
 - [x] TW-3.2 Decide no direct fork is legally/product-clean today.
   - Use source facts and mechanics patterns only; do not vendor/copy original code, maps, text, sprites, tables, or data.
 - [x] TW-3.3 Use Hero Tan projects as mechanics/game-loop references only.
@@ -1731,6 +1732,19 @@ Also append a one-paragraph summary to `/home/qian/.openclaw/workspace/memory/YY
   - [x] Verified both template JSON files parse and verified the existing gates reject the template files as non-evidence.
 - Honest scope: this is an evidence-collection kit only. It does not raise technical, first-beta, or commercial readiness scores. Real evidence must still be collected under `TRILLIONNIUM_MULTI_NODE_LATENCY_EVIDENCE_PATH`, `TRILLIONNIUM_FIRST_BETA_COHORT_EVIDENCE_PATH`, or `TRILLIONNIUM_COMMERCIAL_LAUNCH_DRILL_EVIDENCE_PATH`.
 - Constraints preserved: no Hero Tan code/text/assets/data copying, no live OSM ingestion, no MapLibre promotion, browser/web intent-only, Rust source of truth, and no local-only score inflation.
+
+---
+
+#### Update 2026-05-11 17:1x CST
+
+- Commit: `docs: reconcile trillionnium hero tan audit evidence` (this commit)
+- Executed the post-audit hygiene slice after the full Hero Tan alignment review:
+  - [x] Refreshed this progress-tree header from stale mentor-skill-practice metadata to the current documentation checkpoint after `0965543 docs: prepare trillionnium real evidence templates`.
+  - [x] Reconciled the duplicated TW-3.4 derived-stat status so both the mechanics spec and active tree mark derived stats/caps/tests complete.
+  - [x] Replaced the stale local `references/hero-tan/yxts-gold-asm/` checkout claim with public Git evidence: `albert10jp/yxts-gold-asm` at `62f83c921ae7701fa230bd017e147f079aa70a36`.
+  - [x] Recorded the exact 2026-05-11 audit boundary: Trillionnium is aligned to the Hero Tan-style movement/NPC/task/skill/combat **core loop**, while full content/data clone parity remains out of scope and forbidden.
+- Evidence: `git ls-remote https://github.com/albert10jp/yxts-gold-asm.git HEAD refs/heads/main`; `python3` doc-consistency scan for stale local checkout claims, unchecked TW-3.4b/c drift, and refreshed header; `git diff --check`.
+- Honest scope: documentation/repeatability hygiene only. This does not raise technical, first-beta, or commercial scores; those remain blocked on real multi-node/live-traffic, cohort, and commercial drill evidence.
 
 ---
 
