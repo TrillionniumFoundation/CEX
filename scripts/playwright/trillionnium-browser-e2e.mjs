@@ -1026,6 +1026,8 @@ async function main() {
   assert(await count(page, '.trillionnium-equipment-form[data-command="equip_item"][data-source-of-truth="rust_trillionnium_item_equipment_runtime_state"]') >= 1, 'world item/equipment equip intent form missing');
   assert(await count(page, '#trillionnium-full-content-alignment [data-content-domain="survival_time_resource_pressure"][data-domain-status="rust_runtime_backed"]') === 1, 'world full content survival/resource domain missing');
   assert(await count(page, '#trillionnium-resource-pressure-runtime[data-resource-pressure-runtime-contract="trillionnium_world_resource_pressure_runtime_v1"][data-source-of-truth="rust_trillionnium_resource_pressure_runtime_state"][data-persistence-owner="world_state.world_trillionnium_characters.resource_pressure_state"][data-web-role="visualization_input_only"]') === 1, 'world resource pressure runtime panel missing Rust-owned metadata');
+  assert(await count(page, '#trillionnium-full-content-alignment [data-content-domain="story_arcs"][data-domain-status="rust_runtime_backed"]') === 1, 'world full content story arcs domain must be Rust runtime backed');
+  assert(await count(page, '#trillionnium-region-story-unlocks[data-region-story-unlock-runtime-contract="trillionnium_world_region_story_unlock_runtime_v1"][data-source-of-truth="rust_trillionnium_region_story_unlock_runtime_state"][data-persistence-owner="world_state.world_trillionnium_characters.region_story_unlock_state"][data-runtime-status="rust_owned_region_graph_story_arc_unlocks_live"][data-web-role="visualization_input_only"]') === 1, 'world region/story unlock runtime panel missing Rust-owned metadata');
   assert(await count(page, '#world-local-task-loop[data-pickup-command="offer_task"][data-completion-command="complete_task"]') === 1, 'world task pickup/completion affordance missing');
   const worldKeypadBox = await page.locator('#world-keypad-adventure-shell').boundingBox({ timeout: 10_000 });
   const worldKeypadGridBox = await page.locator('#world-keypad-map-grid').boundingBox({ timeout: 10_000 });
@@ -1145,10 +1147,14 @@ async function main() {
     resourceContract: document.querySelector('#trillionnium-resource-pressure-runtime')?.dataset?.resourcePressureRuntimeContract || '',
     resourceLastMutation: document.querySelector('#trillionnium-resource-pressure-runtime')?.dataset?.lastMutationEvent || '',
     resourceMutationCount: Number(document.querySelector('#trillionnium-resource-pressure-runtime')?.dataset?.mutationCount || 0),
+    regionStoryContract: document.querySelector('#trillionnium-region-story-unlocks')?.dataset?.regionStoryUnlockRuntimeContract || '',
+    regionStoryLastMutation: document.querySelector('#trillionnium-region-story-unlocks')?.dataset?.lastMutationEvent || '',
+    regionStoryArcCount: Number(document.querySelector('#trillionnium-region-story-unlocks')?.dataset?.unlockedStoryArcCount || 0),
   }));
   assert(localCombatEncounterState.promptNodeId === 'mirror-city-square' && localCombatEncounterState.returnNodeId === 'mirror-city-square', 'world local combat did not return to the current exploration node', localCombatEncounterState);
   assert(localCombatEncounterState.encounterContract === 'trillionnium_world_combat_encounter_loop_v1' && localCombatEncounterState.returnState === 'map_ready_after_resolution' && localCombatEncounterState.rewardStatus === 'settled', 'world local combat return projection did not expose Rust settlement/map state', localCombatEncounterState);
   assert(localCombatEncounterState.resourceContract === 'trillionnium_world_resource_pressure_runtime_v1' && localCombatEncounterState.resourceLastMutation === 'tactics_attack' && localCombatEncounterState.resourceMutationCount >= 1, 'world local combat did not surface Rust-owned resource-pressure mutation state', localCombatEncounterState);
+  assert(localCombatEncounterState.regionStoryContract === 'trillionnium_world_region_story_unlock_runtime_v1' && localCombatEncounterState.regionStoryLastMutation === 'tactics_attack' && localCombatEncounterState.regionStoryArcCount >= 2, 'world local combat did not surface Rust-owned region/story unlock mutation state', localCombatEncounterState);
   assert(await count(page, '#world-local-npc-talk .world-local-npc-form[data-command="talk_npc"][data-npc-id="npc-street-compass-sifu"]') >= 1, 'world local NPC talk form missing at Mirror City Square');
   assert(await count(page, '#world-local-npc-talk .world-local-npc-form[data-command="offer_task"][data-npc-id="npc-street-compass-sifu"]') >= 1, 'world local NPC offer_task form missing at Mirror City Square');
   await submitWorldForm(page, '#world-local-npc-talk .world-local-npc-form[data-command="talk_npc"][data-npc-id="npc-street-compass-sifu"]', marker, 'npc=talked');
@@ -1163,6 +1169,7 @@ async function main() {
   await submitWorldForm(page, '#world-local-task-complete-form', marker, 'task=completed');
   await page.waitForSelector('#world-local-task-completion-feedback[data-completion-present="true"][data-source-of-truth="rust_world_contract_completions"]', { state: 'attached', timeout: 15_000 });
   await page.waitForSelector('#trillionnium-resource-pressure-runtime[data-last-mutation-event="tactics_complete_task"]', { state: 'attached', timeout: 15_000 });
+  await page.waitForSelector('#trillionnium-region-story-unlocks[data-last-mutation-event="tactics_complete_task"]', { state: 'attached', timeout: 15_000 });
   const localResourcePressureAfterTask = await page.evaluate(() => ({
     contract: document.querySelector('#trillionnium-resource-pressure-runtime')?.dataset?.resourcePressureRuntimeContract || '',
     lastMutation: document.querySelector('#trillionnium-resource-pressure-runtime')?.dataset?.lastMutationEvent || '',
@@ -1170,6 +1177,16 @@ async function main() {
     evidenceStatus: document.querySelector('#trillionnium-resource-pressure-runtime')?.dataset?.evidenceStatus || '',
   }));
   assert(localResourcePressureAfterTask.contract === 'trillionnium_world_resource_pressure_runtime_v1' && localResourcePressureAfterTask.lastMutation === 'tactics_complete_task' && localResourcePressureAfterTask.mutationCount >= localCombatEncounterState.resourceMutationCount + 1, 'world local task completion did not advance Rust-owned resource-pressure runtime', localResourcePressureAfterTask);
+  const localRegionStoryAfterTask = await page.evaluate(() => ({
+    contract: document.querySelector('#trillionnium-region-story-unlocks')?.dataset?.regionStoryUnlockRuntimeContract || '',
+    sourceOfTruth: document.querySelector('#trillionnium-region-story-unlocks')?.dataset?.sourceOfTruth || '',
+    lastMutation: document.querySelector('#trillionnium-region-story-unlocks')?.dataset?.lastMutationEvent || '',
+    mutationCount: Number(document.querySelector('#trillionnium-region-story-unlocks')?.dataset?.mutationCount || 0),
+    unlockedRegionCount: Number(document.querySelector('#trillionnium-region-story-unlocks')?.dataset?.unlockedRegionCount || 0),
+    unlockedStoryArcCount: Number(document.querySelector('#trillionnium-region-story-unlocks')?.dataset?.unlockedStoryArcCount || 0),
+    visitedNodeCount: Number(document.querySelector('#trillionnium-region-story-unlocks')?.dataset?.visitedNodeCount || 0),
+  }));
+  assert(localRegionStoryAfterTask.contract === 'trillionnium_world_region_story_unlock_runtime_v1' && localRegionStoryAfterTask.sourceOfTruth === 'rust_trillionnium_region_story_unlock_runtime_state' && localRegionStoryAfterTask.lastMutation === 'tactics_complete_task' && localRegionStoryAfterTask.mutationCount >= 2 && localRegionStoryAfterTask.unlockedRegionCount >= 1 && localRegionStoryAfterTask.unlockedStoryArcCount >= localCombatEncounterState.regionStoryArcCount, 'world local task completion did not advance Rust-owned region/story unlock runtime', localRegionStoryAfterTask);
   const localTaskStatusAfterCompletion = await page.locator('#world-local-active-task-card').first().getAttribute('data-status');
   const localTaskLifecycleStepAfterCompletion = await page.locator('#world-local-active-task-card').first().getAttribute('data-lifecycle-step');
   assert(/^(trillionnium_task_completion_pending_settlement|completed_|review_hold)/.test(String(localTaskStatusAfterCompletion || '')), 'world local task status did not advance after complete_task', { localTaskStatusAfterCompletion, localTaskLifecycleStepAfterCompletion });
@@ -1178,6 +1195,7 @@ async function main() {
   steps.push({ name: 'world_local_skill_practice_mentor_loop', ok: true, route_steps_to_npc_hub: routeToNpcHub.length, known_skill_count: localSkillPracticeState.knownSkillCount });
   steps.push({ name: 'world_local_combat_encounter_return_loop', ok: true, return_state: localCombatEncounterState.returnState, reward_status: localCombatEncounterState.rewardStatus });
   steps.push({ name: 'world_resource_pressure_runtime_loop', ok: true, last_mutation: localResourcePressureAfterTask.lastMutation, mutation_count: localResourcePressureAfterTask.mutationCount });
+  steps.push({ name: 'world_region_story_unlock_runtime_loop', ok: true, last_mutation: localRegionStoryAfterTask.lastMutation, mutation_count: localRegionStoryAfterTask.mutationCount, unlocked_story_arc_count: localRegionStoryAfterTask.unlockedStoryArcCount });
   steps.push({ name: 'world_local_npc_task_pickup_completion_loop', ok: true, route_steps_to_npc_hub: routeToNpcHub.length });
 
   await seedWebSession(context);
@@ -1381,6 +1399,7 @@ async function main() {
       world_local_skill_practice_mentor_loop: true,
       world_local_combat_encounter_return_loop: true,
       world_resource_pressure_runtime_loop: true,
+      world_region_story_unlock_runtime_loop: true,
       world_local_npc_task_loop: true,
       world_buy: true,
       world_work_deliver: true,

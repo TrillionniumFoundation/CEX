@@ -1642,7 +1642,7 @@ Also append a one-paragraph summary to `/home/qian/.openclaw/workspace/memory/YY
 - Remaining next:
   - [x] Persist item/equipment inventory and equip slots as Rust-owned runtime state. Completed in the 2026-05-11 13:1x CST update below.
   - [x] Mutate time/stamina/injury/evidence-integrity loops from real movement/combat/task events. Completed in the 2026-05-11 14:3x CST update below.
-  - [ ] Expand region graph and story-arc unlocks using Trillionnium-native content only.
+  - [x] Expand region graph and story-arc unlocks using Trillionnium-native content only. Completed in the 2026-05-11 15:2x CST update below.
   - [ ] Deepen combat numerics without copying reference data.
 - Constraints preserved: no Hero Tan code/text/assets/data copying, no live OSM ingestion, no MapLibre promotion, browser/web intent-only, Rust source of truth.
 
@@ -1683,10 +1683,28 @@ Also append a one-paragraph summary to `/home/qian/.openclaw/workspace/memory/YY
 
 ---
 
+#### Update 2026-05-11 15:2x CST
+
+- Commit: `feat: gate native region story unlock runtime` (this commit)
+- Continued legally clean full content-volume alignment by moving region graph / story-arc unlocks from catalog proof into Rust-owned runtime state:
+  - [x] Added `trillionnium_world_region_story_unlock_runtime_v1` for unlocked/visited regions, story arcs, nodes, mutation counts, last mutation metadata, and recent unlock events.
+  - [x] `WorldTrillionniumCharacter` now carries `region_story_unlock_state` with serde-safe starter defaults for Mirror City arrival, starter region, and starter node.
+  - [x] Real Rust command handlers mutate unlock state after accepted `world_map_move`, `tactics_attack`, and `tactics_complete_task` events; browser/web only submit movement/combat/task intent.
+  - [x] Tactics board/home JSON exposes `region_story_unlock_runtime` plus mutation-source metadata, and `trillionnium_story_arc_catalog_json(...)` now derives arc unlock status from runtime state.
+  - [x] The full-content alignment gate now marks `story_arcs` as `rust_runtime_backed` with tracked region/story runtime counts, not catalog-only coverage.
+  - [x] `/world` renders `#trillionnium-region-story-unlocks` as a visualization-only panel with source-of-truth `rust_trillionnium_region_story_unlock_runtime_state`, persistence owner `world_state.world_trillionnium_characters.region_story_unlock_state`, runtime status, counts, and latest mutation evidence.
+  - [x] Added normalized Postgres mirror column `world_trillionnium_characters.region_story_unlock_state` in migration `0024_add_trillionnium_region_story_unlock_runtime_column.sql`; repository shadow SQL/direct-write metadata and migration floor now include the region/story runtime column.
+  - [x] Rust tests, SQL snapshot, Web E2E, Browser E2E, and first-human gates assert projection defaults, movement/combat/task mutations, persistence/write-set parity, UI markers, and the `world_region_story_unlock_runtime_loop` coverage flag.
+- Evidence: `cargo fmt --all -- --check`; `cargo check -p consumer-entry-api`; `cargo test -p consumer-entry-api -- --nocapture --test-threads=1` (136 passed); `cargo clippy -p consumer-entry-api -- -D warnings`; node/bash syntax; `git diff --check`; local-production restart/status OK; SQL snapshot gate `repository_migration_floor=0024_add_trillionnium_region_story_unlock_runtime_column.sql`; Web E2E `run/league-web/web-e2e-summary-1778483103.json`; Browser E2E `run/league-browser/browser-e2e-summary-1778483132-1351145.json`, request-failure gate green with `0` unclassified failures; First-human E2E `run/first-human-session/browser-e2e-summary-1778483373-1356789.json`, zero request/page/console failures.
+- Current honest scope: item/equipment, survival/time/resource-pressure, and region graph/story-arc unlocks have crossed from native catalog breadth into persisted Rust runtime mutation. Deeper combat numerics remains the next native-runtime slice.
+- Constraints preserved: no Hero Tan code/text/assets/data copying, no live OSM ingestion, no MapLibre promotion, browser/web intent-only, Rust source of truth, and no local-only evidence used to lift the technical score beyond the established 9.8 ceiling.
+
+---
+
 ## Current Next Pointer
 
 If the next instruction is simply “continue”, start here:
 
-> **Next pointer:** Continue full content-volume alignment by turning the next native catalogs into Rust-owned runtime state: region graph/story-arc unlocks next, then deeper combat numerics. Keep the technical 9.9+ proof gated by real `TRILLIONNIUM_MULTI_NODE_LATENCY_EVIDENCE_PATH`, first-beta 9+ gated by `TRILLIONNIUM_FIRST_BETA_COHORT_EVIDENCE_PATH`, and commercial 8+ gated by `TRILLIONNIUM_COMMERCIAL_LAUNCH_DRILL_EVIDENCE_PATH`. Current honest assessment remains `9.8/10` technical, `8.5/10` first internal beta, `7.0/10` commercial release.
+> **Next pointer:** Continue full content-volume alignment by turning the next native catalog into Rust-owned runtime state: deeper combat numerics. Keep the technical 9.9+ proof gated by real `TRILLIONNIUM_MULTI_NODE_LATENCY_EVIDENCE_PATH`, first-beta 9+ gated by `TRILLIONNIUM_FIRST_BETA_COHORT_EVIDENCE_PATH`, and commercial 8+ gated by `TRILLIONNIUM_COMMERCIAL_LAUNCH_DRILL_EVIDENCE_PATH`. Current honest assessment remains `9.8/10` technical, `8.5/10` first internal beta, `7.0/10` commercial release.
 
 Do not start live Overpass/Geofabrik ingestion yet. Do not promote MapLibre. Do not convert the web shell into a standalone JS source of truth.

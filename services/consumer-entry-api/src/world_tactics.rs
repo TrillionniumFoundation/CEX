@@ -64,6 +64,8 @@ pub(super) const TRILLIONNIUM_WORLD_ITEM_EQUIPMENT_RUNTIME_CONTRACT_VERSION: &st
     "trillionnium_world_item_equipment_runtime_v1";
 pub(super) const TRILLIONNIUM_WORLD_RESOURCE_PRESSURE_RUNTIME_CONTRACT_VERSION: &str =
     "trillionnium_world_resource_pressure_runtime_v1";
+pub(super) const TRILLIONNIUM_WORLD_REGION_STORY_UNLOCK_RUNTIME_CONTRACT_VERSION: &str =
+    "trillionnium_world_region_story_unlock_runtime_v1";
 
 fn default_tactics_objective_id() -> String {
     "defeat_market_bandit".to_string()
@@ -1167,6 +1169,255 @@ impl WorldTrillionniumResourcePressureState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct WorldTrillionniumRegionStoryUnlockEvent {
+    pub(super) event_kind: String,
+    pub(super) command: String,
+    pub(super) node_id: Option<String>,
+    pub(super) zone_id: Option<String>,
+    pub(super) unlocked_region_ids: Vec<String>,
+    pub(super) unlocked_story_arc_ids: Vec<String>,
+    pub(super) source_of_truth: String,
+    pub(super) created_at_epoch: i64,
+}
+
+impl WorldTrillionniumRegionStoryUnlockEvent {
+    fn to_value(&self) -> Value {
+        json!({
+            "event_kind": &self.event_kind,
+            "command": &self.command,
+            "node_id": &self.node_id,
+            "zone_id": &self.zone_id,
+            "unlocked_region_ids": &self.unlocked_region_ids,
+            "unlocked_story_arc_ids": &self.unlocked_story_arc_ids,
+            "source_of_truth": &self.source_of_truth,
+            "created_at_epoch": self.created_at_epoch,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct WorldTrillionniumRegionStoryUnlockState {
+    pub(super) unlocked_region_ids: Vec<String>,
+    pub(super) unlocked_story_arc_ids: Vec<String>,
+    pub(super) visited_node_ids: Vec<String>,
+    pub(super) visited_zone_ids: Vec<String>,
+    pub(super) mutation_count: i64,
+    pub(super) last_mutation_command: Option<String>,
+    pub(super) last_mutation_event: Option<String>,
+    pub(super) last_mutation_result: Option<String>,
+    pub(super) updated_at_epoch: i64,
+    #[serde(default)]
+    pub(super) recent_unlock_events: Vec<WorldTrillionniumRegionStoryUnlockEvent>,
+}
+
+impl Default for WorldTrillionniumRegionStoryUnlockState {
+    fn default() -> Self {
+        Self {
+            unlocked_region_ids: vec!["reality-mirror-city".to_string()],
+            unlocked_story_arc_ids: vec!["mirror_city_arrival".to_string()],
+            visited_node_ids: vec!["mirror-city-square".to_string()],
+            visited_zone_ids: vec!["reality-mirror-city".to_string()],
+            mutation_count: 0,
+            last_mutation_command: None,
+            last_mutation_event: None,
+            last_mutation_result: None,
+            updated_at_epoch: 0,
+            recent_unlock_events: Vec::new(),
+        }
+    }
+}
+
+fn push_unique_unlock_id(values: &mut Vec<String>, value: &str) -> bool {
+    let value = value.trim();
+    if value.is_empty() || values.iter().any(|existing| existing == value) {
+        false
+    } else {
+        values.push(value.to_string());
+        true
+    }
+}
+
+fn story_arc_ids_for_region_story_signal(
+    event_kind: &str,
+    command: &str,
+    node_id: Option<&str>,
+    zone_id: Option<&str>,
+    result: Option<&str>,
+) -> Vec<&'static str> {
+    let mut arcs = Vec::new();
+    let mut add = |arc_id: &'static str| {
+        if !arcs.contains(&arc_id) {
+            arcs.push(arc_id);
+        }
+    };
+    if matches!(node_id, Some("mirror-city-square"))
+        || matches!(zone_id, Some("reality-mirror-city"))
+    {
+        add("mirror_city_arrival");
+    }
+    match zone_id.unwrap_or_default() {
+        "craft-district" => add("field_remedy_supply"),
+        "market-bazaar" => {
+            add("ledger_debt_storm");
+            add("jade_route_patrol");
+        }
+        "league-arena" => add("raid_signal_return"),
+        _ => {}
+    }
+    match node_id.unwrap_or_default() {
+        "client-board" | "delivery-dock" => add("jade_route_patrol"),
+        "ledger-office" => add("ledger_debt_storm"),
+        "dispute-desk" => add("night_watch_dispute"),
+        "forge-workbench" | "asset-yard" | "starter-studio" => add("field_remedy_supply"),
+        "league-coliseum" | "raid-hall" => add("raid_signal_return"),
+        _ => {}
+    }
+    if event_kind == "tactics_attack" || command == "attack" {
+        add("raid_signal_return");
+    }
+    if event_kind == "tactics_complete_task" || command == "complete_task" {
+        add("jade_route_patrol");
+        add("ledger_debt_storm");
+        if result == Some("task_completion_validated") {
+            add("night_watch_dispute");
+        }
+    }
+    arcs
+}
+
+impl WorldTrillionniumRegionStoryUnlockState {
+    fn ensure_defaults(&mut self) {
+        push_unique_unlock_id(&mut self.unlocked_region_ids, "reality-mirror-city");
+        push_unique_unlock_id(&mut self.unlocked_story_arc_ids, "mirror_city_arrival");
+        push_unique_unlock_id(&mut self.visited_node_ids, "mirror-city-square");
+        push_unique_unlock_id(&mut self.visited_zone_ids, "reality-mirror-city");
+    }
+
+    fn apply_mutation(
+        &mut self,
+        event_kind: &str,
+        command: &str,
+        result: Option<&str>,
+        node_id: Option<&str>,
+        zone_id: Option<&str>,
+        now_epoch: i64,
+    ) -> Value {
+        self.ensure_defaults();
+        let mut newly_unlocked_regions = Vec::new();
+        let mut newly_unlocked_arcs = Vec::new();
+        if let Some(node_id) = node_id.map(str::trim).filter(|value| !value.is_empty()) {
+            push_unique_unlock_id(&mut self.visited_node_ids, node_id);
+        }
+        if let Some(zone_id) = zone_id.map(str::trim).filter(|value| !value.is_empty()) {
+            push_unique_unlock_id(&mut self.visited_zone_ids, zone_id);
+            if push_unique_unlock_id(&mut self.unlocked_region_ids, zone_id) {
+                newly_unlocked_regions.push(zone_id.to_string());
+            }
+        }
+        for arc_id in
+            story_arc_ids_for_region_story_signal(event_kind, command, node_id, zone_id, result)
+        {
+            if push_unique_unlock_id(&mut self.unlocked_story_arc_ids, arc_id) {
+                newly_unlocked_arcs.push(arc_id.to_string());
+            }
+        }
+        self.mutation_count += 1;
+        self.last_mutation_command = Some(command.to_string());
+        self.last_mutation_event = Some(event_kind.to_string());
+        self.last_mutation_result = result.map(ToString::to_string);
+        self.updated_at_epoch = now_epoch;
+        let unlock_event = WorldTrillionniumRegionStoryUnlockEvent {
+            event_kind: event_kind.to_string(),
+            command: command.to_string(),
+            node_id: node_id.map(ToString::to_string),
+            zone_id: zone_id.map(ToString::to_string),
+            unlocked_region_ids: newly_unlocked_regions,
+            unlocked_story_arc_ids: newly_unlocked_arcs,
+            source_of_truth: "rust_trillionnium_region_story_unlock_runtime_state".to_string(),
+            created_at_epoch: now_epoch,
+        };
+        self.recent_unlock_events.push(unlock_event.clone());
+        if self.recent_unlock_events.len() > 8 {
+            let overflow = self.recent_unlock_events.len() - 8;
+            self.recent_unlock_events.drain(0..overflow);
+        }
+        json!({
+            "contract_version": TRILLIONNIUM_WORLD_REGION_STORY_UNLOCK_RUNTIME_CONTRACT_VERSION,
+            "source_of_truth": "rust_trillionnium_region_story_unlock_runtime_state",
+            "runtime_status": "rust_owned_region_graph_story_arc_unlocks_live",
+            "mutation_event": event_kind,
+            "command": command,
+            "result": result,
+            "node_id": node_id,
+            "zone_id": zone_id,
+            "mutation": unlock_event.to_value(),
+            "region_story_unlock_runtime": self.to_value(),
+            "web_role": "visualization_input_only",
+        })
+    }
+
+    fn to_value(&self) -> Value {
+        let region_graph = [
+            (
+                "reality-mirror-city",
+                "mirror-city-square",
+                "first_hub_and_identity",
+            ),
+            (
+                "craft-district",
+                "starter-studio",
+                "crafting_recovery_and_item_routes",
+            ),
+            (
+                "market-bazaar",
+                "zbj-market-gate",
+                "bounty_contracts_and_review_hold_routes",
+            ),
+            (
+                "league-arena",
+                "league-coliseum",
+                "combat_raid_and_return_routes",
+            ),
+        ]
+        .into_iter()
+        .map(|(region_id, entry_node_id, role)| {
+            json!({
+                "region_id": region_id,
+                "entry_node_id": entry_node_id,
+                "story_role": role,
+                "unlock_status": if self.unlocked_region_ids.iter().any(|id| id == region_id) { "unlocked" } else { "locked" },
+                "source_of_truth": "rust_world_map_nodes_and_region_story_unlock_state",
+            })
+        })
+        .collect::<Vec<_>>();
+        json!({
+            "contract_version": TRILLIONNIUM_WORLD_REGION_STORY_UNLOCK_RUNTIME_CONTRACT_VERSION,
+            "source_of_truth": "rust_trillionnium_region_story_unlock_runtime_state",
+            "persistence_owner": "world_state.world_trillionnium_characters.region_story_unlock_state",
+            "runtime_status": "rust_owned_region_graph_story_arc_unlocks_live",
+            "tracked_domains": ["regions", "story_arcs", "visited_nodes", "visited_zones"],
+            "mutation_sources": ["world_map_move", "tactics_attack", "tactics_complete_task"],
+            "region_graph": region_graph,
+            "unlocked_region_ids": &self.unlocked_region_ids,
+            "unlocked_story_arc_ids": &self.unlocked_story_arc_ids,
+            "visited_node_ids": &self.visited_node_ids,
+            "visited_zone_ids": &self.visited_zone_ids,
+            "unlocked_region_count": self.unlocked_region_ids.len(),
+            "unlocked_story_arc_count": self.unlocked_story_arc_ids.len(),
+            "visited_node_count": self.visited_node_ids.len(),
+            "visited_zone_count": self.visited_zone_ids.len(),
+            "mutation_count": self.mutation_count,
+            "last_mutation_command": &self.last_mutation_command,
+            "last_mutation_event": &self.last_mutation_event,
+            "last_mutation_result": &self.last_mutation_result,
+            "recent_unlock_events": self.recent_unlock_events.iter().map(WorldTrillionniumRegionStoryUnlockEvent::to_value).collect::<Vec<_>>(),
+            "updated_at_epoch": self.updated_at_epoch,
+            "web_role": "visualization_input_only",
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct WorldTrillionniumCharacter {
     pub(super) matrix_user_id: String,
     pub(super) character_id: String,
@@ -1181,6 +1432,8 @@ pub(super) struct WorldTrillionniumCharacter {
     pub(super) equipment_slots: HashMap<String, String>,
     #[serde(default)]
     pub(super) resource_pressure_state: WorldTrillionniumResourcePressureState,
+    #[serde(default)]
+    pub(super) region_story_unlock_state: WorldTrillionniumRegionStoryUnlockState,
     pub(super) updated_at_epoch: i64,
 }
 
@@ -1203,6 +1456,7 @@ impl WorldTrillionniumCharacter {
             inventory_items,
             equipment_slots,
             resource_pressure_state: WorldTrillionniumResourcePressureState::default(),
+            region_story_unlock_state: WorldTrillionniumRegionStoryUnlockState::default(),
             updated_at_epoch: 0,
         }
     }
@@ -1219,6 +1473,10 @@ impl WorldTrillionniumCharacter {
 
     fn ensure_resource_pressure_defaults(&mut self) {
         self.resource_pressure_state.ensure_defaults();
+    }
+
+    fn ensure_region_story_unlock_defaults(&mut self) {
+        self.region_story_unlock_state.ensure_defaults();
     }
 
     fn equip_item_by_id(&mut self, item_id: &str, now_epoch: i64) -> Option<(String, String)> {
@@ -1260,6 +1518,12 @@ impl WorldTrillionniumCharacter {
         state.to_value()
     }
 
+    fn region_story_unlock_runtime_json(&self) -> Value {
+        let mut state = self.region_story_unlock_state.clone();
+        state.ensure_defaults();
+        state.to_value()
+    }
+
     fn to_projection_json(&self) -> Value {
         json!({
             "contract_version": TRILLIONNIUM_CHARACTER_CONTRACT_VERSION,
@@ -1281,6 +1545,9 @@ impl WorldTrillionniumCharacter {
             "resource_pressure_runtime_contract_version": TRILLIONNIUM_WORLD_RESOURCE_PRESSURE_RUNTIME_CONTRACT_VERSION,
             "resource_pressure_state": self.resource_pressure_runtime_json(),
             "resource_pressure_runtime": self.resource_pressure_runtime_json(),
+            "region_story_unlock_runtime_contract_version": TRILLIONNIUM_WORLD_REGION_STORY_UNLOCK_RUNTIME_CONTRACT_VERSION,
+            "region_story_unlock_state": self.region_story_unlock_runtime_json(),
+            "region_story_unlock_runtime": self.region_story_unlock_runtime_json(),
             "skill_definition_contract": TRILLIONNIUM_SKILL_CONTRACT_VERSION,
             "skill_families": [
                 "basic_inner_power",
@@ -1326,6 +1593,7 @@ pub(super) fn world_trillionnium_character_projection_json(
         .unwrap_or_else(|| WorldTrillionniumCharacter::default_for(matrix_user_id));
     character.ensure_item_equipment_defaults(0);
     character.ensure_resource_pressure_defaults();
+    character.ensure_region_story_unlock_defaults();
     character.to_projection_json()
 }
 
@@ -1346,6 +1614,31 @@ pub(super) fn apply_world_resource_pressure_mutation(
     let mutation = character
         .resource_pressure_state
         .apply_mutation(event_kind, command, result, now_epoch);
+    character.updated_at_epoch = now_epoch;
+    mutation
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn apply_world_region_story_unlock_mutation(
+    world: &mut WorldState,
+    matrix_user_id: &str,
+    event_kind: &str,
+    command: &str,
+    result: Option<&str>,
+    node_id: Option<&str>,
+    zone_id: Option<&str>,
+    now_epoch: i64,
+) -> Value {
+    let character = world
+        .world_trillionnium_characters
+        .entry(matrix_user_id.to_string())
+        .or_insert_with(|| WorldTrillionniumCharacter::default_for(matrix_user_id));
+    character.ensure_item_equipment_defaults(now_epoch);
+    character.ensure_resource_pressure_defaults();
+    character.ensure_region_story_unlock_defaults();
+    let mutation = character
+        .region_story_unlock_state
+        .apply_mutation(event_kind, command, result, node_id, zone_id, now_epoch);
     character.updated_at_epoch = now_epoch;
     mutation
 }
@@ -3546,49 +3839,71 @@ fn trillionnium_resource_pressure_loops_json() -> Value {
     })
 }
 
-fn trillionnium_story_arc_catalog_json() -> Value {
+fn trillionnium_story_arc_catalog_json(region_story_unlock_runtime: &Value) -> Value {
+    let unlocked_arc_ids = region_story_unlock_runtime
+        .get("unlocked_story_arc_ids")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|value| value.as_str().map(ToString::to_string))
+        .collect::<HashSet<_>>();
+    let arc = |arc_id: &str, theme: &str, entry_task_archetypes: Vec<&str>, unlock_signal: &str| {
+        json!({
+            "arc_id": arc_id,
+            "theme": theme,
+            "entry_task_archetypes": entry_task_archetypes,
+            "unlock_signal": unlock_signal,
+            "unlock_status": if unlocked_arc_ids.contains(arc_id) { "unlocked" } else { "locked" },
+            "runtime_contract_version": TRILLIONNIUM_WORLD_REGION_STORY_UNLOCK_RUNTIME_CONTRACT_VERSION,
+            "runtime_source_of_truth": "rust_trillionnium_region_story_unlock_runtime_state",
+        })
+    };
     json!({
         "contract_version": "trillionnium_native_story_arc_catalog_v1",
         "source_of_truth": "rust_trillionnium_story_arc_catalog",
         "content_policy": "trillionnium_native_no_copied_hero_tan_text_assets_or_tables",
-        "runtime_status": "catalog_projection_gate_runtime_mutation_pending",
+        "runtime_status": "rust_runtime_backed_by_region_story_unlock_state",
+        "runtime_contract_version": TRILLIONNIUM_WORLD_REGION_STORY_UNLOCK_RUNTIME_CONTRACT_VERSION,
+        "runtime_source_of_truth": "rust_trillionnium_region_story_unlock_runtime_state",
+        "unlocked_story_arc_count": unlocked_arc_ids.len(),
         "arcs": [
-            {
-                "arc_id": "mirror_city_arrival",
-                "theme": "first_route_first_mentor_first_reward",
-                "entry_task_archetypes": ["courier_letter", "sect_training_trial"],
-                "unlock_signal": "first_human_session_complete"
-            },
-            {
-                "arc_id": "ledger_debt_storm",
-                "theme": "contracts_debt_recovery_and_review_hold",
-                "entry_task_archetypes": ["debt_recovery", "market_settlement"],
-                "unlock_signal": "ledger_settlement_dispute_seen"
-            },
-            {
-                "arc_id": "jade_route_patrol",
-                "theme": "escort_patrol_and_map_survey",
-                "entry_task_archetypes": ["street_patrol", "map_survey", "escort_route"],
-                "unlock_signal": "route_scouting_known"
-            },
-            {
-                "arc_id": "night_watch_dispute",
-                "theme": "npc_relationship_witness_and_mediation",
-                "entry_task_archetypes": ["arbitrate_dispute", "find_item"],
-                "unlock_signal": "streetwise_investigation_or_mediation_known"
-            },
-            {
-                "arc_id": "raid_signal_return",
-                "theme": "combat_entry_party_raid_and_return_to_map",
-                "entry_task_archetypes": ["raid_signal", "defeat_bandit"],
-                "unlock_signal": "world_combat_encounter_return_loop_green"
-            },
-            {
-                "arc_id": "field_remedy_supply",
-                "theme": "medicine_supplies_recovery_and_failed_task_repair",
-                "entry_task_archetypes": ["healing_supply", "find_item"],
-                "unlock_signal": "healing_tonic_craft_known"
-            }
+            arc(
+                "mirror_city_arrival",
+                "first_route_first_mentor_first_reward",
+                vec!["courier_letter", "sect_training_trial"],
+                "first_human_session_complete"
+            ),
+            arc(
+                "ledger_debt_storm",
+                "contracts_debt_recovery_and_review_hold",
+                vec!["debt_recovery", "market_settlement"],
+                "ledger_settlement_dispute_seen"
+            ),
+            arc(
+                "jade_route_patrol",
+                "escort_patrol_and_map_survey",
+                vec!["street_patrol", "map_survey", "escort_route"],
+                "route_scouting_known"
+            ),
+            arc(
+                "night_watch_dispute",
+                "npc_relationship_witness_and_mediation",
+                vec!["arbitrate_dispute", "find_item"],
+                "streetwise_investigation_or_mediation_known"
+            ),
+            arc(
+                "raid_signal_return",
+                "combat_entry_party_raid_and_return_to_map",
+                vec!["raid_signal", "defeat_bandit"],
+                "world_combat_encounter_return_loop_green"
+            ),
+            arc(
+                "field_remedy_supply",
+                "medicine_supplies_recovery_and_failed_task_repair",
+                vec!["healing_supply", "find_item"],
+                "healing_tonic_craft_known"
+            )
         ]
     })
 }
@@ -3643,6 +3958,7 @@ fn trillionnium_full_content_volume_alignment_json(
     item_catalog: &Value,
     resource_pressure_runtime: &Value,
     resource_pressure_loops: &Value,
+    region_story_unlock_runtime: &Value,
     story_arc_catalog: &Value,
 ) -> Value {
     let skill_count = value_array_len(skill_definitions);
@@ -3676,6 +3992,26 @@ fn trillionnium_full_content_volume_alignment_json(
         .and_then(Value::as_str)
         == Some(TRILLIONNIUM_WORLD_RESOURCE_PRESSURE_RUNTIME_CONTRACT_VERSION);
     let story_arc_count = nested_array_len(story_arc_catalog, "arcs");
+    let region_story_runtime_contract_green = region_story_unlock_runtime
+        .get("contract_version")
+        .and_then(Value::as_str)
+        == Some(TRILLIONNIUM_WORLD_REGION_STORY_UNLOCK_RUNTIME_CONTRACT_VERSION);
+    let region_story_unlocked_region_count = region_story_unlock_runtime
+        .get("unlocked_region_ids")
+        .map(value_array_len)
+        .unwrap_or(0);
+    let region_story_unlocked_arc_count = region_story_unlock_runtime
+        .get("unlocked_story_arc_ids")
+        .map(value_array_len)
+        .unwrap_or(0);
+    let region_story_visited_node_count = region_story_unlock_runtime
+        .get("visited_node_ids")
+        .map(value_array_len)
+        .unwrap_or(0);
+    let region_story_mutation_source_count = region_story_unlock_runtime
+        .get("mutation_sources")
+        .map(value_array_len)
+        .unwrap_or(0);
     let runtime_inventory_item_count = nested_array_len(trillionnium_character, "inventory_items");
     let runtime_equipped_slot_count = trillionnium_character
         .get("equipment_slots")
@@ -3705,7 +4041,12 @@ fn trillionnium_full_content_volume_alignment_json(
         && resource_runtime_contract_green
         && resource_runtime_tracked_domain_count >= 4
         && resource_runtime_mutation_source_count >= 3
-        && story_arc_count >= 6;
+        && story_arc_count >= 6
+        && region_story_runtime_contract_green
+        && region_story_unlocked_region_count >= 1
+        && region_story_unlocked_arc_count >= 1
+        && region_story_visited_node_count >= 1
+        && region_story_mutation_source_count >= 3;
 
     json!({
         "contract_version": TRILLIONNIUM_HERO_TAN_FULL_CONTENT_ALIGNMENT_CONTRACT_VERSION,
@@ -3752,7 +4093,11 @@ fn trillionnium_full_content_volume_alignment_json(
             "resource_pressure_loops": 6,
             "resource_pressure_runtime_tracked_domains": 4,
             "resource_pressure_runtime_mutation_sources": 3,
-            "story_arcs": 6
+            "story_arcs": 6,
+            "region_story_unlocked_regions": 1,
+            "region_story_unlocked_arcs": 1,
+            "region_story_visited_nodes": 1,
+            "region_story_runtime_mutation_sources": 3
         },
         "coverage_counts": {
             "skill_definitions": skill_count,
@@ -3777,7 +4122,12 @@ fn trillionnium_full_content_volume_alignment_json(
             "resource_pressure_runtime_tracked_domains": resource_runtime_tracked_domain_count,
             "resource_pressure_runtime_mutation_sources": resource_runtime_mutation_source_count,
             "resource_pressure_runtime_contract_green": resource_runtime_contract_green,
-            "story_arcs": story_arc_count
+            "story_arcs": story_arc_count,
+            "region_story_runtime_contract_green": region_story_runtime_contract_green,
+            "region_story_unlocked_regions": region_story_unlocked_region_count,
+            "region_story_unlocked_arcs": region_story_unlocked_arc_count,
+            "region_story_visited_nodes": region_story_visited_node_count,
+            "region_story_runtime_mutation_sources": region_story_mutation_source_count
         },
         "thresholds_green": thresholds_green,
         "domains": [
@@ -3789,12 +4139,10 @@ fn trillionnium_full_content_volume_alignment_json(
             {"domain": "combat_entry_and_return", "status": "rust_runtime_backed", "gate_field": "world_combat_encounter"},
             {"domain": "items_and_equipment", "status": "rust_runtime_backed", "gate_field": "item_equipment_runtime"},
             {"domain": "survival_time_resource_pressure", "status": "rust_runtime_backed", "gate_field": "resource_pressure_runtime"},
-            {"domain": "story_arcs", "status": "native_catalog_projection_gate", "gate_field": "story_arc_catalog"}
+            {"domain": "story_arcs", "status": "rust_runtime_backed", "gate_field": "region_story_unlock_runtime"}
         ],
         "next_runtime_slices": [
-            "persist_item_equipment_inventory_and_equip_slots",
-            "expand_resource_pressure_recovery_and_camp_rest_loops",
-            "expand_region_graph_and_story_arc_unlocks",
+            "expand_region_story_authoring_and_cross_region_arcs",
             "deepen_combat_numerics_without_copying_reference_data"
         ]
     })
@@ -5200,7 +5548,16 @@ pub(super) fn world_tactics_board_projection_json(
         })
         .unwrap_or_else(|| WorldTrillionniumResourcePressureState::default().to_value());
     let resource_pressure_loops = trillionnium_resource_pressure_loops_json();
-    let story_arc_catalog = trillionnium_story_arc_catalog_json();
+    let region_story_unlock_runtime = trillionnium_character
+        .get("region_story_unlock_runtime")
+        .cloned()
+        .or_else(|| {
+            trillionnium_character
+                .get("region_story_unlock_state")
+                .cloned()
+        })
+        .unwrap_or_else(|| WorldTrillionniumRegionStoryUnlockState::default().to_value());
+    let story_arc_catalog = trillionnium_story_arc_catalog_json(&region_story_unlock_runtime);
     let full_content_alignment = trillionnium_full_content_volume_alignment_json(
         world,
         &trillionnium_character,
@@ -5218,6 +5575,7 @@ pub(super) fn world_tactics_board_projection_json(
         &item_equipment_catalog,
         &resource_pressure_runtime,
         &resource_pressure_loops,
+        &region_story_unlock_runtime,
         &story_arc_catalog,
     );
     json!({
@@ -5241,6 +5599,7 @@ pub(super) fn world_tactics_board_projection_json(
         "trillionnium_battle_log_style_contract_version": TRILLIONNIUM_BATTLE_LOG_STYLE_CONTRACT_VERSION,
         "trillionnium_combat_log_contract_version": TRILLIONNIUM_COMBAT_LOG_CONTRACT_VERSION,
         "trillionnium_resource_pressure_runtime_contract_version": TRILLIONNIUM_WORLD_RESOURCE_PRESSURE_RUNTIME_CONTRACT_VERSION,
+        "trillionnium_region_story_unlock_runtime_contract_version": TRILLIONNIUM_WORLD_REGION_STORY_UNLOCK_RUNTIME_CONTRACT_VERSION,
         "trillionnium_npc_relationship_contract_version": TRILLIONNIUM_NPC_RELATIONSHIP_CONTRACT_VERSION,
         "trillionnium_osm_objective_contract_version": TRILLIONNIUM_OSM_OBJECTIVE_CONTRACT_VERSION,
         "world_objective_travel_contract_version": TRILLIONNIUM_WORLD_OBJECTIVE_TRAVEL_CONTRACT_VERSION,
@@ -5316,6 +5675,7 @@ pub(super) fn world_tactics_board_projection_json(
         "item_equipment_runtime": item_equipment_runtime,
         "resource_pressure_runtime": resource_pressure_runtime,
         "resource_pressure_loops": resource_pressure_loops,
+        "region_story_unlock_runtime": region_story_unlock_runtime,
         "story_arc_catalog": story_arc_catalog,
         "full_content_alignment": full_content_alignment,
         "npc_relationship_model": {

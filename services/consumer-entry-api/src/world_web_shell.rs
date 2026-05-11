@@ -1612,6 +1612,119 @@ fn world_trillionnium_resource_pressure_runtime_html(trillionnium_character: &Va
     )
 }
 
+fn world_trillionnium_region_story_unlock_runtime_html(trillionnium_character: &Value) -> String {
+    let runtime = trillionnium_character
+        .get("region_story_unlock_runtime")
+        .or_else(|| trillionnium_character.get("region_story_unlock_state"))
+        .unwrap_or(&Value::Null);
+    let contract = runtime
+        .get("contract_version")
+        .and_then(Value::as_str)
+        .unwrap_or("trillionnium_world_region_story_unlock_runtime_v1");
+    let source_of_truth = runtime
+        .get("source_of_truth")
+        .and_then(Value::as_str)
+        .unwrap_or("rust_trillionnium_region_story_unlock_runtime_state");
+    let persistence_owner = runtime
+        .get("persistence_owner")
+        .and_then(Value::as_str)
+        .unwrap_or("world_state.world_trillionnium_characters.region_story_unlock_state");
+    let runtime_status = runtime
+        .get("runtime_status")
+        .and_then(Value::as_str)
+        .unwrap_or("rust_owned_region_graph_story_arc_unlocks_live");
+    let unlocked_region_count = runtime
+        .get("unlocked_region_count")
+        .and_then(Value::as_i64)
+        .unwrap_or_else(|| {
+            runtime
+                .get("unlocked_region_ids")
+                .and_then(Value::as_array)
+                .map(|items| items.len() as i64)
+                .unwrap_or(1)
+        });
+    let unlocked_story_arc_count = runtime
+        .get("unlocked_story_arc_count")
+        .and_then(Value::as_i64)
+        .unwrap_or_else(|| {
+            runtime
+                .get("unlocked_story_arc_ids")
+                .and_then(Value::as_array)
+                .map(|items| items.len() as i64)
+                .unwrap_or(1)
+        });
+    let visited_node_count = runtime
+        .get("visited_node_count")
+        .and_then(Value::as_i64)
+        .unwrap_or(1);
+    let mutation_count = runtime
+        .get("mutation_count")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let last_mutation_event = runtime
+        .get("last_mutation_event")
+        .and_then(Value::as_str)
+        .unwrap_or("none");
+    let last_mutation_command = runtime
+        .get("last_mutation_command")
+        .and_then(Value::as_str)
+        .unwrap_or("none");
+    let region_cards = runtime
+        .get("region_graph")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|region| {
+            let region_id = region
+                .get("region_id")
+                .and_then(Value::as_str)
+                .unwrap_or("region");
+            let entry_node_id = region
+                .get("entry_node_id")
+                .and_then(Value::as_str)
+                .unwrap_or("mirror-city-square");
+            let unlock_status = region
+                .get("unlock_status")
+                .and_then(Value::as_str)
+                .unwrap_or("locked");
+            format!(
+                "<article class=\"mini trillionnium-region-unlock-card\" data-region-id=\"{}\" data-entry-node-id=\"{}\" data-unlock-status=\"{}\"><strong>{}</strong><span>{} · entry {}</span></article>",
+                escape_html_text(region_id),
+                escape_html_text(entry_node_id),
+                escape_html_text(unlock_status),
+                escape_html_text(region_id),
+                escape_html_text(unlock_status),
+                escape_html_text(entry_node_id),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let region_cards = if region_cards.is_empty() {
+        "<article class=\"mini trillionnium-region-unlock-card\" data-region-id=\"reality-mirror-city\" data-unlock-status=\"unlocked\"><strong>reality-mirror-city</strong><span>unlocked · entry mirror-city-square</span></article>".to_string()
+    } else {
+        region_cards
+    };
+    format!(
+        "<section id=\"trillionnium-region-story-unlocks\" class=\"trillionnium-region-story-unlock-panel\" data-region-story-unlock-runtime-contract=\"{}\" data-runtime-status=\"{}\" data-source-of-truth=\"{}\" data-persistence-owner=\"{}\" data-unlocked-region-count=\"{}\" data-unlocked-story-arc-count=\"{}\" data-visited-node-count=\"{}\" data-mutation-count=\"{}\" data-last-mutation-event=\"{}\" data-last-mutation-command=\"{}\" data-web-role=\"visualization_input_only\" aria-label=\"Trillionnium region graph and story arc unlocks\" data-i18n-aria-label-en=\"Trillionnium region graph and story arc unlocks\" data-i18n-aria-label-zh=\"Trillionnium 区域图与主线解锁\"><h4 data-i18n-en=\"Region graph / story unlocks\" data-i18n-zh=\"区域图 / 主线解锁\">Region graph / story unlocks</h4><p data-i18n-en=\"Rust unlocks regions and story arcs after movement, combat, and task completion; browser only shows unlock state.\" data-i18n-zh=\"移动、战斗和任务完成后由 Rust 解锁区域与主线；浏览器只显示解锁状态。\">Rust unlocks regions and story arcs after movement, combat, and task completion; browser only shows unlock state.</p><div class=\"mini-grid\"><article class=\"mini\"><strong>{}</strong><span>regions unlocked</span></article><article class=\"mini\"><strong>{}</strong><span>story arcs unlocked</span></article><article class=\"mini\"><strong>{}</strong><span>nodes visited</span></article><article class=\"mini\"><strong>{}</strong><span>runtime mutations</span></article></div><div class=\"mini-grid\">{}</div></section>",
+        escape_html_text(contract),
+        escape_html_text(runtime_status),
+        escape_html_text(source_of_truth),
+        escape_html_text(persistence_owner),
+        unlocked_region_count,
+        unlocked_story_arc_count,
+        visited_node_count,
+        mutation_count,
+        escape_html_text(last_mutation_event),
+        escape_html_text(last_mutation_command),
+        unlocked_region_count,
+        unlocked_story_arc_count,
+        visited_node_count,
+        mutation_count,
+        region_cards,
+    )
+}
+
 fn world_current_node_overlay_id(current_map_node: Option<&WorldMapNode>) -> String {
     current_map_node
         .map(openstreetmap_game_overlay_id)
@@ -3399,6 +3512,8 @@ pub(super) async fn get_world_web_shell(
     );
     let trillionnium_resource_pressure_runtime =
         world_trillionnium_resource_pressure_runtime_html(&trillionnium_character);
+    let trillionnium_region_story_unlock_runtime =
+        world_trillionnium_region_story_unlock_runtime_html(&trillionnium_character);
     let world_play_first_action_prompt = world_play_first_action_prompt_html(
         &league,
         &tactics_board,
@@ -4941,6 +5056,7 @@ pub(super) async fn get_world_web_shell(
             </section>
             {trillionnium_full_content_alignment}
             {trillionnium_resource_pressure_runtime}
+            {trillionnium_region_story_unlock_runtime}
             <small data-i18n-en="Next mod path: replace placeholder units with Trillionnium agents, convert POIs into capture points, and use route evidence as battle reports." data-i18n-zh="下一步魔改：把占位单位替换为 Trillionnium Agent，把 POI 转成占领点，把路线证据转成战报。">Next mod path: replace placeholder units with Trillionnium agents, convert POIs into capture points, and use route evidence as battle reports.</small>
           </aside>
         </section>
@@ -6207,6 +6323,7 @@ pub(super) async fn get_world_web_shell(
         trillionnium_npc_cards = trillionnium_npc_cards,
         trillionnium_task_completion_forms = trillionnium_task_completion_forms,
         trillionnium_full_content_alignment = trillionnium_full_content_alignment,
+        trillionnium_region_story_unlock_runtime = trillionnium_region_story_unlock_runtime,
         trillionnium_status_lines = trillionnium_status_lines,
         trillionnium_display_name_en = escape_html_text(world_trillionnium_visible_english(
             trillionnium_display_name

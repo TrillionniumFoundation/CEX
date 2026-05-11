@@ -779,6 +779,16 @@ pub(super) async fn move_world_map_inner(
             Some(movement_transition.result.as_str()),
             now,
         );
+        let region_story_unlock_mutation = apply_world_region_story_unlock_mutation(
+            &mut league.world,
+            &matrix_user_id,
+            "world_map_move",
+            "world_map_move",
+            Some(movement_transition.result.as_str()),
+            Some(target_node.node_id.as_str()),
+            Some(target_node.zone_id.as_str()),
+            now,
+        );
         (
             league.clone(),
             current_node,
@@ -787,6 +797,7 @@ pub(super) async fn move_world_map_inner(
             economy_event,
             movement_transition,
             resource_pressure_mutation,
+            region_story_unlock_mutation,
         )
     };
     if let Err(response) =
@@ -827,6 +838,9 @@ pub(super) async fn move_world_map_inner(
             "resource_pressure_runtime_contract_version": TRILLIONNIUM_WORLD_RESOURCE_PRESSURE_RUNTIME_CONTRACT_VERSION,
             "resource_pressure_mutation": snapshot.6,
             "resource_pressure_runtime": snapshot.6.get("resource_pressure_runtime").cloned().unwrap_or(Value::Null),
+            "region_story_unlock_runtime_contract_version": TRILLIONNIUM_WORLD_REGION_STORY_UNLOCK_RUNTIME_CONTRACT_VERSION,
+            "region_story_unlock_mutation": snapshot.7,
+            "region_story_unlock_runtime": snapshot.7.get("region_story_unlock_runtime").cloned().unwrap_or(Value::Null),
         })),
     )
         .into_response()
@@ -1763,6 +1777,41 @@ async fn record_world_tactics_command(
             outcome["resource_pressure_mutation"] = resource_pressure_mutation.clone();
             outcome["resource_pressure_runtime"] = resource_pressure_mutation
                 .get("resource_pressure_runtime")
+                .cloned()
+                .unwrap_or(Value::Null);
+            let unlock_event_kind = match command.as_str() {
+                "attack" => "tactics_attack",
+                "complete_task" => "tactics_complete_task",
+                _ => "tactics_command",
+            };
+            let unlock_result = outcome.get("result").and_then(Value::as_str);
+            let unlock_node_id = league
+                .world
+                .world_player_positions
+                .get(&matrix_user_id)
+                .map(|position| position.node_id.clone())
+                .filter(|node_id| league.world.world_map_nodes.contains_key(node_id))
+                .unwrap_or_else(|| default_world_node_id().to_string());
+            let unlock_zone_id = league
+                .world
+                .world_map_nodes
+                .get(&unlock_node_id)
+                .map(|node| node.zone_id.clone());
+            let region_story_unlock_mutation = apply_world_region_story_unlock_mutation(
+                &mut league.world,
+                &matrix_user_id,
+                unlock_event_kind,
+                &command,
+                unlock_result,
+                Some(unlock_node_id.as_str()),
+                unlock_zone_id.as_deref(),
+                now,
+            );
+            outcome["region_story_unlock_runtime_contract_version"] =
+                json!(TRILLIONNIUM_WORLD_REGION_STORY_UNLOCK_RUNTIME_CONTRACT_VERSION);
+            outcome["region_story_unlock_mutation"] = region_story_unlock_mutation.clone();
+            outcome["region_story_unlock_runtime"] = region_story_unlock_mutation
+                .get("region_story_unlock_runtime")
                 .cloned()
                 .unwrap_or(Value::Null);
         }
