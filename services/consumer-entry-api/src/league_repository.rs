@@ -1054,11 +1054,11 @@ pub(super) fn world_state_normalized_shadow_sql(
     sql.push_str(&normalized_shadow_json_upsert_sql(
         "world_trillionnium_characters",
         &trillionnium_characters,
-        "matrix_user_id text, character_id text, display_name text, attributes jsonb, sect_id text, title text, skill_ids jsonb, updated_at_epoch bigint",
-        &["matrix_user_id", "character_id", "display_name", "attributes", "sect_id", "title", "skill_ids", "updated_at"],
-        &["matrix_user_id", "character_id", "display_name", "attributes", "sect_id", "title", "skill_ids", "to_timestamp(updated_at_epoch)"],
+        "matrix_user_id text, character_id text, display_name text, attributes jsonb, sect_id text, title text, skill_ids jsonb, inventory_items jsonb, equipment_slots jsonb, resource_pressure_state jsonb, updated_at_epoch bigint",
+        &["matrix_user_id", "character_id", "display_name", "attributes", "sect_id", "title", "skill_ids", "inventory_items", "equipment_slots", "resource_pressure_state", "updated_at"],
+        &["matrix_user_id", "character_id", "display_name", "attributes", "sect_id", "title", "skill_ids", "inventory_items", "equipment_slots", "resource_pressure_state", "to_timestamp(updated_at_epoch)"],
         "matrix_user_id",
-        &["character_id", "display_name", "attributes", "sect_id", "title", "skill_ids", "updated_at"],
+        &["character_id", "display_name", "attributes", "sect_id", "title", "skill_ids", "inventory_items", "equipment_slots", "resource_pressure_state", "updated_at"],
     )?);
 
     let tactics_sessions: Vec<&WorldTacticsGameSession> = indexes
@@ -1673,9 +1673,10 @@ pub(super) fn normalized_repository_direct_write_contract_json() -> Value {
             },
             {
                 "command": "world_map_move",
-                "direct_tables": ["world_player_positions", "world_economy_events"],
+                "direct_tables": ["world_player_positions", "world_economy_events", "world_trillionnium_characters"],
                 "dependency_tables": ["world_zones", "world_locations", "world_map_nodes"],
-                "helper_mode": "typed_sqlx_upsert_from_repository_snapshot"
+                "helper_mode": "typed_sqlx_upsert_from_repository_snapshot",
+                "runtime_mutation_contract": "trillionnium_world_resource_pressure_runtime_v1"
             },
             {
                 "command": "world_tactics_command",
@@ -1969,13 +1970,19 @@ pub(super) async fn upsert_normalized_world_trillionnium_characters(
         let equipment_slots = serde_json::to_string(&character.equipment_slots).map_err(|err| {
             format!("failed to serialize world_trillionnium_characters.equipment_slots: {err}")
         })?;
+        let resource_pressure_state = serde_json::to_string(&character.resource_pressure_state)
+            .map_err(|err| {
+                format!(
+                    "failed to serialize world_trillionnium_characters.resource_pressure_state: {err}"
+                )
+            })?;
         sqlx::query(
             "insert into world_trillionnium_characters (
                  matrix_user_id, character_id, display_name, attributes, sect_id,
-                 title, skill_ids, inventory_items, equipment_slots, updated_at
+                 title, skill_ids, inventory_items, equipment_slots, resource_pressure_state, updated_at
              ) values (
                  $1, $2, $3, $4::jsonb, $5,
-                 $6, $7::jsonb, $8::jsonb, $9::jsonb, to_timestamp($10::double precision)
+                 $6, $7::jsonb, $8::jsonb, $9::jsonb, $10::jsonb, to_timestamp($11::double precision)
              ) on conflict (matrix_user_id) do update set
                  character_id = excluded.character_id,
                  display_name = excluded.display_name,
@@ -1985,6 +1992,7 @@ pub(super) async fn upsert_normalized_world_trillionnium_characters(
                  skill_ids = excluded.skill_ids,
                  inventory_items = excluded.inventory_items,
                  equipment_slots = excluded.equipment_slots,
+                 resource_pressure_state = excluded.resource_pressure_state,
                  updated_at = excluded.updated_at",
         )
         .bind(&character.matrix_user_id)
@@ -1996,6 +2004,7 @@ pub(super) async fn upsert_normalized_world_trillionnium_characters(
         .bind(skill_ids)
         .bind(inventory_items)
         .bind(equipment_slots)
+        .bind(resource_pressure_state)
         .bind(character.updated_at_epoch as f64)
         .execute(&mut **conn)
         .await
@@ -3140,11 +3149,14 @@ pub(super) async fn execute_normalized_repository_direct_command_write(
                 upsert_normalized_world_player_positions(conn, world, &indexes).await?;
             let economy_event_rows =
                 upsert_normalized_world_economy_events(conn, world, &indexes).await?;
+            let character_rows =
+                upsert_normalized_world_trillionnium_characters(conn, world, &indexes).await?;
             Ok(json!({
                 "command": command,
                 "helper": "execute_normalized_repository_direct_command_write",
                 "mode": "typed_sqlx_upsert_from_repository_snapshot",
                 "direct_write_contract": "trillionnium_normalized_repository_direct_write_v1",
+                "runtime_mutation_contract": "trillionnium_world_resource_pressure_runtime_v1",
                 "dependency_rows": {
                     "world_zones": zone_rows,
                     "world_locations": location_rows,
@@ -3153,6 +3165,7 @@ pub(super) async fn execute_normalized_repository_direct_command_write(
                 "direct_rows": {
                     "world_player_positions": position_rows,
                     "world_economy_events": economy_event_rows,
+                    "world_trillionnium_characters": character_rows,
                 }
             }))
         }
@@ -3535,7 +3548,7 @@ pub(super) async fn execute_normalized_repository_direct_command_write(
 }
 
 pub(super) const TRILLIONNIUM_REPOSITORY_MIGRATION_FLOOR: &str =
-    "0021_add_trillionnium_tactics_storage_tables.sql";
+    "0023_add_trillionnium_resource_pressure_runtime_column.sql";
 const TRILLIONNIUM_REPOSITORY_FINAL_CUTOVER_PHASE: &str = "final_cutover";
 const TRILLIONNIUM_CURRENT_REPOSITORY: &str = "json_file_with_sql_snapshot";
 const TRILLIONNIUM_NEXT_REPOSITORY: &str = "normalized_sql_dual_write";
@@ -4006,10 +4019,10 @@ pub(super) fn league_state_repository_dual_write_plan_json() -> Value {
             ),
             league_state_repository_write_set_json(
                 "world_map_move",
-                "WorldState.world_player_positions + movement economy audit",
-                &["world_player_positions", "world_economy_events"],
+                "WorldState.world_player_positions + movement economy audit + resource pressure runtime",
+                &["world_player_positions", "world_economy_events", "world_trillionnium_characters"],
                 "world_player_positions.matrix_user_id",
-                &["map_node_fk", "position_count", "economy_event_count"]
+                &["map_node_fk", "position_count", "economy_event_count", "resource_pressure_runtime"]
             ),
             league_state_repository_write_set_json(
                 "world_tactics_command",
@@ -4336,7 +4349,7 @@ pub(super) fn league_state_repository_contract_json() -> Value {
             }
         ],
         "read_switch_gates": [
-            "all migrations through 0021_add_trillionnium_tactics_storage_tables.sql applied",
+            "all migrations through 0023_add_trillionnium_resource_pressure_runtime_column.sql applied",
             "WorldState projection contexts read from repository snapshots without direct LeagueState coupling",
             "repository_audit_green",
             "repository_write_set_audit_green",

@@ -1461,6 +1461,157 @@ fn world_trillionnium_item_equipment_runtime_html(
     )
 }
 
+fn world_trillionnium_resource_pressure_runtime_html(trillionnium_character: &Value) -> String {
+    let runtime = trillionnium_character
+        .get("resource_pressure_runtime")
+        .or_else(|| trillionnium_character.get("resource_pressure_state"))
+        .unwrap_or(&Value::Null);
+    let contract = runtime
+        .get("contract_version")
+        .and_then(Value::as_str)
+        .unwrap_or("trillionnium_world_resource_pressure_runtime_v1");
+    let source_of_truth = runtime
+        .get("source_of_truth")
+        .and_then(Value::as_str)
+        .unwrap_or("rust_trillionnium_resource_pressure_runtime_state");
+    let persistence_owner = runtime
+        .get("persistence_owner")
+        .and_then(Value::as_str)
+        .unwrap_or("world_state.world_trillionnium_characters.resource_pressure_state");
+    let runtime_status = runtime
+        .get("runtime_status")
+        .and_then(Value::as_str)
+        .unwrap_or("rust_owned_time_stamina_injury_evidence_live");
+    let clock_label = runtime
+        .get("time")
+        .and_then(|time| time.get("clock_label"))
+        .and_then(Value::as_str)
+        .unwrap_or("08:00");
+    let day_index = runtime
+        .get("time")
+        .and_then(|time| time.get("day_index"))
+        .and_then(Value::as_i64)
+        .unwrap_or(1);
+    let stamina_current = runtime
+        .get("stamina")
+        .and_then(|stamina| stamina.get("current"))
+        .and_then(Value::as_i64)
+        .unwrap_or(100);
+    let stamina_max = runtime
+        .get("stamina")
+        .and_then(|stamina| stamina.get("max"))
+        .and_then(Value::as_i64)
+        .unwrap_or(100);
+    let stamina_status = runtime
+        .get("stamina")
+        .and_then(|stamina| stamina.get("status"))
+        .and_then(Value::as_str)
+        .unwrap_or("route_ready");
+    let injury_level = runtime
+        .get("injury")
+        .and_then(|injury| injury.get("level"))
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let injury_status = runtime
+        .get("injury")
+        .and_then(|injury| injury.get("status"))
+        .and_then(Value::as_str)
+        .unwrap_or("clear");
+    let evidence_score = runtime
+        .get("evidence_integrity")
+        .and_then(|evidence| evidence.get("score"))
+        .and_then(Value::as_i64)
+        .unwrap_or(72);
+    let evidence_fragments = runtime
+        .get("evidence_integrity")
+        .and_then(|evidence| evidence.get("fragments"))
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let evidence_status = runtime
+        .get("evidence_integrity")
+        .and_then(|evidence| evidence.get("status"))
+        .and_then(Value::as_str)
+        .unwrap_or("draft_evidence_bundle");
+    let mutation_count = runtime
+        .get("mutation_count")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let last_mutation_event = runtime
+        .get("last_mutation_event")
+        .and_then(Value::as_str)
+        .unwrap_or("none");
+    let recent_mutations = runtime
+        .get("recent_mutations")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .rev()
+        .take(4)
+        .map(|mutation| {
+            let event_kind = mutation
+                .get("event_kind")
+                .and_then(Value::as_str)
+                .unwrap_or("resource_event");
+            let command = mutation
+                .get("command")
+                .and_then(Value::as_str)
+                .unwrap_or("command");
+            let time_delta = mutation
+                .get("time_delta_minutes")
+                .and_then(Value::as_i64)
+                .unwrap_or_default();
+            let stamina_delta = mutation
+                .get("stamina_delta")
+                .and_then(Value::as_i64)
+                .unwrap_or_default();
+            let evidence_delta = mutation
+                .get("evidence_integrity_delta")
+                .and_then(Value::as_i64)
+                .unwrap_or_default();
+            format!(
+                "<article class=\"mini trillionnium-resource-mutation\" data-event-kind=\"{}\" data-command=\"{}\"><strong>{}</strong><span>{} · time {:+}m · stamina {:+} · evidence {:+}</span></article>",
+                escape_html_text(event_kind),
+                escape_html_text(command),
+                escape_html_text(event_kind),
+                escape_html_text(command),
+                time_delta,
+                stamina_delta,
+                evidence_delta,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let recent_mutations = if recent_mutations.is_empty() {
+        "<article class=\"mini trillionnium-resource-mutation\" data-event-kind=\"none\"><strong>Ready</strong><span>Move, attack, or complete a task to mutate Rust-owned pressure state.</span></article>".to_string()
+    } else {
+        recent_mutations
+    };
+    format!(
+        "<section id=\"trillionnium-resource-pressure-runtime\" class=\"trillionnium-resource-pressure-panel\" data-resource-pressure-runtime-contract=\"{}\" data-runtime-status=\"{}\" data-source-of-truth=\"{}\" data-persistence-owner=\"{}\" data-mutation-count=\"{}\" data-last-mutation-event=\"{}\" data-stamina-status=\"{}\" data-injury-status=\"{}\" data-evidence-status=\"{}\" data-web-role=\"visualization_input_only\" aria-label=\"Trillionnium time stamina injury evidence pressure\" data-i18n-aria-label-en=\"Trillionnium time stamina injury evidence pressure\" data-i18n-aria-label-zh=\"Trillionnium 时间体力伤势证据压力\"><h4 data-i18n-en=\"Time / stamina / injury / evidence\" data-i18n-zh=\"时间 / 体力 / 伤势 / 证据\">Time / stamina / injury / evidence</h4><p data-i18n-en=\"Rust mutates pressure after movement, combat, and task completion; browser only renders the needles.\" data-i18n-zh=\"移动、战斗和任务完成后由 Rust 修改压力；浏览器只渲染指针。\">Rust mutates pressure after movement, combat, and task completion; browser only renders the needles.</p><div class=\"mini-grid\"><article class=\"mini\"><strong>Day {} · {}</strong><span data-i18n-en=\"World clock\" data-i18n-zh=\"世界时钟\">World clock</span></article><article class=\"mini\"><strong>{}/{}</strong><span>stamina · {}</span></article><article class=\"mini\"><strong>{}</strong><span>injury · {}</span></article><article class=\"mini\"><strong>{}% · {} fragments</strong><span>evidence · {}</span></article></div><div class=\"mini-grid\">{}</div></section>",
+        escape_html_text(contract),
+        escape_html_text(runtime_status),
+        escape_html_text(source_of_truth),
+        escape_html_text(persistence_owner),
+        mutation_count,
+        escape_html_text(last_mutation_event),
+        escape_html_text(stamina_status),
+        escape_html_text(injury_status),
+        escape_html_text(evidence_status),
+        day_index,
+        escape_html_text(clock_label),
+        stamina_current,
+        stamina_max,
+        escape_html_text(stamina_status),
+        injury_level,
+        escape_html_text(injury_status),
+        evidence_score,
+        evidence_fragments,
+        escape_html_text(evidence_status),
+        recent_mutations,
+    )
+}
+
 fn world_current_node_overlay_id(current_map_node: Option<&WorldMapNode>) -> String {
     current_map_node
         .map(openstreetmap_game_overlay_id)
@@ -3246,6 +3397,8 @@ pub(super) async fn get_world_web_shell(
         current_matrix_user_id,
         &csrf_input,
     );
+    let trillionnium_resource_pressure_runtime =
+        world_trillionnium_resource_pressure_runtime_html(&trillionnium_character);
     let world_play_first_action_prompt = world_play_first_action_prompt_html(
         &league,
         &tactics_board,
@@ -4787,6 +4940,7 @@ pub(super) async fn get_world_web_shell(
               <div class="mini-grid">{trillionnium_task_completion_forms}</div>
             </section>
             {trillionnium_full_content_alignment}
+            {trillionnium_resource_pressure_runtime}
             <small data-i18n-en="Next mod path: replace placeholder units with Trillionnium agents, convert POIs into capture points, and use route evidence as battle reports." data-i18n-zh="下一步魔改：把占位单位替换为 Trillionnium Agent，把 POI 转成占领点，把路线证据转成战报。">Next mod path: replace placeholder units with Trillionnium agents, convert POIs into capture points, and use route evidence as battle reports.</small>
           </aside>
         </section>

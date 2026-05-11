@@ -771,6 +771,14 @@ pub(super) async fn move_world_map_inner(
             .world
             .world_economy_events
             .push(economy_event.clone());
+        let resource_pressure_mutation = apply_world_resource_pressure_mutation(
+            &mut league.world,
+            &matrix_user_id,
+            "world_map_move",
+            "world_map_move",
+            Some(movement_transition.result.as_str()),
+            now,
+        );
         (
             league.clone(),
             current_node,
@@ -778,6 +786,7 @@ pub(super) async fn move_world_map_inner(
             position,
             economy_event,
             movement_transition,
+            resource_pressure_mutation,
         )
     };
     if let Err(response) =
@@ -815,6 +824,9 @@ pub(super) async fn move_world_map_inner(
             "movement_transition": snapshot.5,
             "world_objective_travel_contract_version": TRILLIONNIUM_WORLD_OBJECTIVE_TRAVEL_CONTRACT_VERSION,
             "world_objective_travel": world_objective_travel,
+            "resource_pressure_runtime_contract_version": TRILLIONNIUM_WORLD_RESOURCE_PRESSURE_RUNTIME_CONTRACT_VERSION,
+            "resource_pressure_mutation": snapshot.6,
+            "resource_pressure_runtime": snapshot.6.get("resource_pressure_runtime").cloned().unwrap_or(Value::Null),
         })),
     )
         .into_response()
@@ -1722,6 +1734,37 @@ async fn record_world_tactics_command(
                 strength: relationship_strength,
                 updated_at_epoch: now,
             });
+        }
+        if accepted && matches!(command.as_str(), "attack" | "complete_task") {
+            let pressure_event_kind = match command.as_str() {
+                "attack" => "tactics_attack",
+                "complete_task" => "tactics_complete_task",
+                _ => "tactics_command",
+            };
+            let pressure_result = if command == "attack" {
+                outcome
+                    .get("combat_resolution")
+                    .and_then(|resolution| resolution.get("result"))
+                    .and_then(Value::as_str)
+                    .or_else(|| outcome.get("result").and_then(Value::as_str))
+            } else {
+                outcome.get("result").and_then(Value::as_str)
+            };
+            let resource_pressure_mutation = apply_world_resource_pressure_mutation(
+                &mut league.world,
+                &matrix_user_id,
+                pressure_event_kind,
+                &command,
+                pressure_result,
+                now,
+            );
+            outcome["resource_pressure_runtime_contract_version"] =
+                json!(TRILLIONNIUM_WORLD_RESOURCE_PRESSURE_RUNTIME_CONTRACT_VERSION);
+            outcome["resource_pressure_mutation"] = resource_pressure_mutation.clone();
+            outcome["resource_pressure_runtime"] = resource_pressure_mutation
+                .get("resource_pressure_runtime")
+                .cloned()
+                .unwrap_or(Value::Null);
         }
         let (mut tactics_session, simulation_tick) = record_world_tactics_simulation_tick(
             &mut league.world,

@@ -62,6 +62,8 @@ pub(super) const TRILLIONNIUM_HERO_TAN_FULL_CONTENT_ALIGNMENT_CONTRACT_VERSION: 
     "trillionnium_hero_tan_full_content_alignment_v1";
 pub(super) const TRILLIONNIUM_WORLD_ITEM_EQUIPMENT_RUNTIME_CONTRACT_VERSION: &str =
     "trillionnium_world_item_equipment_runtime_v1";
+pub(super) const TRILLIONNIUM_WORLD_RESOURCE_PRESSURE_RUNTIME_CONTRACT_VERSION: &str =
+    "trillionnium_world_resource_pressure_runtime_v1";
 
 fn default_tactics_objective_id() -> String {
     "defeat_market_bandit".to_string()
@@ -931,6 +933,240 @@ impl TrillionniumAttributes {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct WorldTrillionniumResourcePressureMutation {
+    pub(super) event_kind: String,
+    pub(super) command: String,
+    pub(super) time_delta_minutes: i64,
+    pub(super) stamina_delta: i64,
+    pub(super) injury_delta: i64,
+    pub(super) evidence_integrity_delta: i64,
+    pub(super) evidence_fragment_delta: i64,
+    pub(super) source_of_truth: String,
+    pub(super) created_at_epoch: i64,
+}
+
+impl WorldTrillionniumResourcePressureMutation {
+    fn to_value(&self) -> Value {
+        json!({
+            "event_kind": &self.event_kind,
+            "command": &self.command,
+            "time_delta_minutes": self.time_delta_minutes,
+            "stamina_delta": self.stamina_delta,
+            "injury_delta": self.injury_delta,
+            "evidence_integrity_delta": self.evidence_integrity_delta,
+            "evidence_fragment_delta": self.evidence_fragment_delta,
+            "source_of_truth": &self.source_of_truth,
+            "created_at_epoch": self.created_at_epoch,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct WorldTrillionniumResourcePressureState {
+    pub(super) day_index: i64,
+    pub(super) minute_of_day: i64,
+    pub(super) stamina_current: i64,
+    pub(super) stamina_max: i64,
+    pub(super) injury_level: i64,
+    pub(super) evidence_integrity: i64,
+    pub(super) evidence_fragments: i64,
+    pub(super) mutation_count: i64,
+    pub(super) last_mutation_command: Option<String>,
+    pub(super) last_mutation_event: Option<String>,
+    pub(super) last_mutation_result: Option<String>,
+    pub(super) updated_at_epoch: i64,
+    #[serde(default)]
+    pub(super) recent_mutations: Vec<WorldTrillionniumResourcePressureMutation>,
+}
+
+impl Default for WorldTrillionniumResourcePressureState {
+    fn default() -> Self {
+        Self {
+            day_index: 1,
+            minute_of_day: 8 * 60,
+            stamina_current: 100,
+            stamina_max: 100,
+            injury_level: 0,
+            evidence_integrity: 72,
+            evidence_fragments: 0,
+            mutation_count: 0,
+            last_mutation_command: None,
+            last_mutation_event: None,
+            last_mutation_result: None,
+            updated_at_epoch: 0,
+            recent_mutations: Vec::new(),
+        }
+    }
+}
+
+impl WorldTrillionniumResourcePressureState {
+    fn ensure_defaults(&mut self) {
+        if self.day_index <= 0 {
+            self.day_index = 1;
+        }
+        if !(0..(24 * 60)).contains(&self.minute_of_day) {
+            self.minute_of_day = 8 * 60;
+        }
+        if self.stamina_max <= 0 {
+            self.stamina_max = 100;
+        }
+        self.stamina_current = self.stamina_current.clamp(0, self.stamina_max);
+        self.injury_level = self.injury_level.clamp(0, 4);
+        if self.evidence_integrity <= 0 {
+            self.evidence_integrity = 72;
+        }
+        self.evidence_integrity = self.evidence_integrity.clamp(0, 100);
+        self.evidence_fragments = self.evidence_fragments.max(0);
+    }
+
+    fn clock_label(&self) -> String {
+        format!(
+            "{:02}:{:02}",
+            self.minute_of_day / 60,
+            self.minute_of_day % 60
+        )
+    }
+
+    fn stamina_status(&self) -> &'static str {
+        if self.stamina_current <= 20 {
+            "exhausted_risk"
+        } else if self.stamina_current <= 45 {
+            "strained"
+        } else {
+            "route_ready"
+        }
+    }
+
+    fn injury_status(&self) -> &'static str {
+        match self.injury_level {
+            0 => "clear",
+            1 => "bruised",
+            2 => "wounded",
+            3 => "downtime_recommended",
+            _ => "must_recover_before_risk_route",
+        }
+    }
+
+    fn evidence_status(&self) -> &'static str {
+        if self.evidence_integrity >= 82 && self.evidence_fragments >= 3 {
+            "review_ready"
+        } else if self.evidence_integrity >= 62 {
+            "draft_evidence_bundle"
+        } else {
+            "review_hold_risk"
+        }
+    }
+
+    fn apply_mutation(
+        &mut self,
+        event_kind: &str,
+        command: &str,
+        result: Option<&str>,
+        now_epoch: i64,
+    ) -> Value {
+        self.ensure_defaults();
+        let (
+            time_delta_minutes,
+            stamina_delta,
+            injury_delta,
+            evidence_integrity_delta,
+            evidence_fragment_delta,
+        ) = match event_kind {
+            "world_map_move" => (12, -4, 0, 1, 1),
+            "tactics_attack" => {
+                let injury_delta = if result == Some("defender_routed") {
+                    0
+                } else {
+                    1
+                };
+                (8, -14, injury_delta, -2, 0)
+            }
+            "tactics_complete_task" => (18, -6, -1, 12, 3),
+            _ => (4, -1, 0, 0, 0),
+        };
+        let old_minute = self.minute_of_day;
+        let absolute_minute = self.minute_of_day + time_delta_minutes;
+        self.day_index += absolute_minute.div_euclid(24 * 60);
+        self.minute_of_day = absolute_minute.rem_euclid(24 * 60);
+        self.stamina_current = (self.stamina_current + stamina_delta).clamp(0, self.stamina_max);
+        self.injury_level = (self.injury_level + injury_delta).clamp(0, 4);
+        self.evidence_integrity =
+            (self.evidence_integrity + evidence_integrity_delta).clamp(0, 100);
+        self.evidence_fragments = (self.evidence_fragments + evidence_fragment_delta).max(0);
+        self.mutation_count += 1;
+        self.last_mutation_command = Some(command.to_string());
+        self.last_mutation_event = Some(event_kind.to_string());
+        self.last_mutation_result = result.map(ToString::to_string);
+        self.updated_at_epoch = now_epoch;
+        let mutation = WorldTrillionniumResourcePressureMutation {
+            event_kind: event_kind.to_string(),
+            command: command.to_string(),
+            time_delta_minutes,
+            stamina_delta,
+            injury_delta,
+            evidence_integrity_delta,
+            evidence_fragment_delta,
+            source_of_truth: "rust_trillionnium_resource_pressure_runtime_state".to_string(),
+            created_at_epoch: now_epoch,
+        };
+        self.recent_mutations.push(mutation.clone());
+        if self.recent_mutations.len() > 8 {
+            let overflow = self.recent_mutations.len() - 8;
+            self.recent_mutations.drain(0..overflow);
+        }
+        json!({
+            "contract_version": TRILLIONNIUM_WORLD_RESOURCE_PRESSURE_RUNTIME_CONTRACT_VERSION,
+            "source_of_truth": "rust_trillionnium_resource_pressure_runtime_state",
+            "runtime_status": "rust_owned_time_stamina_injury_evidence_live",
+            "mutation_event": event_kind,
+            "command": command,
+            "result": result,
+            "mutation": mutation.to_value(),
+            "previous_minute_of_day": old_minute,
+            "resource_pressure_runtime": self.to_value(),
+            "web_role": "visualization_input_only",
+        })
+    }
+
+    fn to_value(&self) -> Value {
+        json!({
+            "contract_version": TRILLIONNIUM_WORLD_RESOURCE_PRESSURE_RUNTIME_CONTRACT_VERSION,
+            "source_of_truth": "rust_trillionnium_resource_pressure_runtime_state",
+            "persistence_owner": "world_state.world_trillionnium_characters.resource_pressure_state",
+            "runtime_status": "rust_owned_time_stamina_injury_evidence_live",
+            "tracked_domains": ["time", "stamina", "injury", "evidence_integrity"],
+            "mutation_sources": ["world_map_move", "tactics_attack", "tactics_complete_task"],
+            "time": {
+                "day_index": self.day_index,
+                "minute_of_day": self.minute_of_day,
+                "clock_label": self.clock_label(),
+            },
+            "stamina": {
+                "current": self.stamina_current,
+                "max": self.stamina_max,
+                "status": self.stamina_status(),
+            },
+            "injury": {
+                "level": self.injury_level,
+                "status": self.injury_status(),
+            },
+            "evidence_integrity": {
+                "score": self.evidence_integrity,
+                "fragments": self.evidence_fragments,
+                "status": self.evidence_status(),
+            },
+            "mutation_count": self.mutation_count,
+            "last_mutation_command": &self.last_mutation_command,
+            "last_mutation_event": &self.last_mutation_event,
+            "last_mutation_result": &self.last_mutation_result,
+            "recent_mutations": self.recent_mutations.iter().map(WorldTrillionniumResourcePressureMutation::to_value).collect::<Vec<_>>(),
+            "updated_at_epoch": self.updated_at_epoch,
+            "web_role": "visualization_input_only",
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct WorldTrillionniumCharacter {
     pub(super) matrix_user_id: String,
     pub(super) character_id: String,
@@ -943,11 +1179,13 @@ pub(super) struct WorldTrillionniumCharacter {
     pub(super) inventory_items: Vec<WorldTrillionniumInventoryItem>,
     #[serde(default)]
     pub(super) equipment_slots: HashMap<String, String>,
+    #[serde(default)]
+    pub(super) resource_pressure_state: WorldTrillionniumResourcePressureState,
     pub(super) updated_at_epoch: i64,
 }
 
 impl WorldTrillionniumCharacter {
-    fn default_for(matrix_user_id: &str) -> Self {
+    pub(super) fn default_for(matrix_user_id: &str) -> Self {
         let inventory_items = default_trillionnium_inventory_items(matrix_user_id, 0);
         let equipment_slots = default_trillionnium_equipment_slots(&inventory_items);
         Self {
@@ -964,6 +1202,7 @@ impl WorldTrillionniumCharacter {
             ],
             inventory_items,
             equipment_slots,
+            resource_pressure_state: WorldTrillionniumResourcePressureState::default(),
             updated_at_epoch: 0,
         }
     }
@@ -976,6 +1215,10 @@ impl WorldTrillionniumCharacter {
         if self.equipment_slots.is_empty() {
             self.equipment_slots = default_trillionnium_equipment_slots(&self.inventory_items);
         }
+    }
+
+    fn ensure_resource_pressure_defaults(&mut self) {
+        self.resource_pressure_state.ensure_defaults();
     }
 
     fn equip_item_by_id(&mut self, item_id: &str, now_epoch: i64) -> Option<(String, String)> {
@@ -1011,6 +1254,12 @@ impl WorldTrillionniumCharacter {
         })
     }
 
+    fn resource_pressure_runtime_json(&self) -> Value {
+        let mut state = self.resource_pressure_state.clone();
+        state.ensure_defaults();
+        state.to_value()
+    }
+
     fn to_projection_json(&self) -> Value {
         json!({
             "contract_version": TRILLIONNIUM_CHARACTER_CONTRACT_VERSION,
@@ -1029,6 +1278,9 @@ impl WorldTrillionniumCharacter {
             "inventory_items": &self.inventory_items,
             "equipment_slots": &self.equipment_slots,
             "item_equipment_runtime": self.item_equipment_runtime_json(),
+            "resource_pressure_runtime_contract_version": TRILLIONNIUM_WORLD_RESOURCE_PRESSURE_RUNTIME_CONTRACT_VERSION,
+            "resource_pressure_state": self.resource_pressure_runtime_json(),
+            "resource_pressure_runtime": self.resource_pressure_runtime_json(),
             "skill_definition_contract": TRILLIONNIUM_SKILL_CONTRACT_VERSION,
             "skill_families": [
                 "basic_inner_power",
@@ -1073,7 +1325,29 @@ pub(super) fn world_trillionnium_character_projection_json(
         .cloned()
         .unwrap_or_else(|| WorldTrillionniumCharacter::default_for(matrix_user_id));
     character.ensure_item_equipment_defaults(0);
+    character.ensure_resource_pressure_defaults();
     character.to_projection_json()
+}
+
+pub(super) fn apply_world_resource_pressure_mutation(
+    world: &mut WorldState,
+    matrix_user_id: &str,
+    event_kind: &str,
+    command: &str,
+    result: Option<&str>,
+    now_epoch: i64,
+) -> Value {
+    let character = world
+        .world_trillionnium_characters
+        .entry(matrix_user_id.to_string())
+        .or_insert_with(|| WorldTrillionniumCharacter::default_for(matrix_user_id));
+    character.ensure_item_equipment_defaults(now_epoch);
+    character.ensure_resource_pressure_defaults();
+    let mutation = character
+        .resource_pressure_state
+        .apply_mutation(event_kind, command, result, now_epoch);
+    character.updated_at_epoch = now_epoch;
+    mutation
 }
 
 pub(super) fn trillionnium_world_combat_encounter_projection_json(
@@ -3367,6 +3641,7 @@ fn trillionnium_full_content_volume_alignment_json(
     map_overlay_identity_count: usize,
     combat_log: &Value,
     item_catalog: &Value,
+    resource_pressure_runtime: &Value,
     resource_pressure_loops: &Value,
     story_arc_catalog: &Value,
 ) -> Value {
@@ -3388,6 +3663,18 @@ fn trillionnium_full_content_volume_alignment_json(
         .map(|items| unique_string_field_count(items, "family"))
         .unwrap_or(0);
     let resource_loop_count = nested_array_len(resource_pressure_loops, "loops");
+    let resource_runtime_tracked_domain_count = resource_pressure_runtime
+        .get("tracked_domains")
+        .map(value_array_len)
+        .unwrap_or(0);
+    let resource_runtime_mutation_source_count = resource_pressure_runtime
+        .get("mutation_sources")
+        .map(value_array_len)
+        .unwrap_or(0);
+    let resource_runtime_contract_green = resource_pressure_runtime
+        .get("contract_version")
+        .and_then(Value::as_str)
+        == Some(TRILLIONNIUM_WORLD_RESOURCE_PRESSURE_RUNTIME_CONTRACT_VERSION);
     let story_arc_count = nested_array_len(story_arc_catalog, "arcs");
     let runtime_inventory_item_count = nested_array_len(trillionnium_character, "inventory_items");
     let runtime_equipped_slot_count = trillionnium_character
@@ -3415,6 +3702,9 @@ fn trillionnium_full_content_volume_alignment_json(
         && runtime_inventory_item_count >= 3
         && runtime_equipped_slot_count >= 3
         && resource_loop_count >= 6
+        && resource_runtime_contract_green
+        && resource_runtime_tracked_domain_count >= 4
+        && resource_runtime_mutation_source_count >= 3
         && story_arc_count >= 6;
 
     json!({
@@ -3460,6 +3750,8 @@ fn trillionnium_full_content_volume_alignment_json(
             "runtime_inventory_items": 3,
             "runtime_equipped_slots": 3,
             "resource_pressure_loops": 6,
+            "resource_pressure_runtime_tracked_domains": 4,
+            "resource_pressure_runtime_mutation_sources": 3,
             "story_arcs": 6
         },
         "coverage_counts": {
@@ -3482,6 +3774,9 @@ fn trillionnium_full_content_volume_alignment_json(
             "runtime_inventory_items": runtime_inventory_item_count,
             "runtime_equipped_slots": runtime_equipped_slot_count,
             "resource_pressure_loops": resource_loop_count,
+            "resource_pressure_runtime_tracked_domains": resource_runtime_tracked_domain_count,
+            "resource_pressure_runtime_mutation_sources": resource_runtime_mutation_source_count,
+            "resource_pressure_runtime_contract_green": resource_runtime_contract_green,
             "story_arcs": story_arc_count
         },
         "thresholds_green": thresholds_green,
@@ -3493,12 +3788,12 @@ fn trillionnium_full_content_volume_alignment_json(
             {"domain": "world_nodes_and_objective_travel", "status": "rust_runtime_backed", "gate_field": "world_objective_travel"},
             {"domain": "combat_entry_and_return", "status": "rust_runtime_backed", "gate_field": "world_combat_encounter"},
             {"domain": "items_and_equipment", "status": "rust_runtime_backed", "gate_field": "item_equipment_runtime"},
-            {"domain": "survival_time_resource_pressure", "status": "native_catalog_projection_gate", "gate_field": "resource_pressure_loops"},
+            {"domain": "survival_time_resource_pressure", "status": "rust_runtime_backed", "gate_field": "resource_pressure_runtime"},
             {"domain": "story_arcs", "status": "native_catalog_projection_gate", "gate_field": "story_arc_catalog"}
         ],
         "next_runtime_slices": [
             "persist_item_equipment_inventory_and_equip_slots",
-            "mutate_time_stamina_injury_evidence_integrity_loops",
+            "expand_resource_pressure_recovery_and_camp_rest_loops",
             "expand_region_graph_and_story_arc_unlocks",
             "deepen_combat_numerics_without_copying_reference_data"
         ]
@@ -4895,6 +5190,15 @@ pub(super) fn world_tactics_board_projection_json(
                 "runtime_status": "projected_default_until_character_mutation",
             })
         });
+    let resource_pressure_runtime = trillionnium_character
+        .get("resource_pressure_runtime")
+        .cloned()
+        .or_else(|| {
+            trillionnium_character
+                .get("resource_pressure_state")
+                .cloned()
+        })
+        .unwrap_or_else(|| WorldTrillionniumResourcePressureState::default().to_value());
     let resource_pressure_loops = trillionnium_resource_pressure_loops_json();
     let story_arc_catalog = trillionnium_story_arc_catalog_json();
     let full_content_alignment = trillionnium_full_content_volume_alignment_json(
@@ -4912,6 +5216,7 @@ pub(super) fn world_tactics_board_projection_json(
         map_overlay_identity_count,
         &combat_log,
         &item_equipment_catalog,
+        &resource_pressure_runtime,
         &resource_pressure_loops,
         &story_arc_catalog,
     );
@@ -4935,6 +5240,7 @@ pub(super) fn world_tactics_board_projection_json(
         "trillionnium_reward_gate_contract_version": TRILLIONNIUM_REWARD_GATE_CONTRACT_VERSION,
         "trillionnium_battle_log_style_contract_version": TRILLIONNIUM_BATTLE_LOG_STYLE_CONTRACT_VERSION,
         "trillionnium_combat_log_contract_version": TRILLIONNIUM_COMBAT_LOG_CONTRACT_VERSION,
+        "trillionnium_resource_pressure_runtime_contract_version": TRILLIONNIUM_WORLD_RESOURCE_PRESSURE_RUNTIME_CONTRACT_VERSION,
         "trillionnium_npc_relationship_contract_version": TRILLIONNIUM_NPC_RELATIONSHIP_CONTRACT_VERSION,
         "trillionnium_osm_objective_contract_version": TRILLIONNIUM_OSM_OBJECTIVE_CONTRACT_VERSION,
         "world_objective_travel_contract_version": TRILLIONNIUM_WORLD_OBJECTIVE_TRAVEL_CONTRACT_VERSION,
@@ -5008,6 +5314,7 @@ pub(super) fn world_tactics_board_projection_json(
         "combat_log": combat_log,
         "item_equipment_catalog": item_equipment_catalog,
         "item_equipment_runtime": item_equipment_runtime,
+        "resource_pressure_runtime": resource_pressure_runtime,
         "resource_pressure_loops": resource_pressure_loops,
         "story_arc_catalog": story_arc_catalog,
         "full_content_alignment": full_content_alignment,
