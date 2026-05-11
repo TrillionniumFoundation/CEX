@@ -50,6 +50,14 @@ Each drill must have `passed=true`, an owner, an evidence reference, and a rollb
 
 ## Evidence schema
 
+A copyable template is tracked at:
+
+```text
+docs/templates/trillionnium-commercial-launch-drills-evidence-template-v1.json
+```
+
+Keep `template: true` while drafting. The validator must reject template files; only flip it to `false` after replacing every placeholder with real drill evidence.
+
 Do not include secrets, API keys, card numbers, contact info, or personal data. Use internal ticket IDs or sanitized file references.
 
 ```json

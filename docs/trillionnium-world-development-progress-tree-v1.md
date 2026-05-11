@@ -1721,6 +1721,19 @@ Also append a one-paragraph summary to `/home/qian/.openclaw/workspace/memory/YY
 
 ---
 
+#### Update 2026-05-11 16:5x CST
+
+- Commit: `docs: prepare trillionnium real evidence templates` (this commit)
+- Continued after the combat numerics runtime checkpoint by preparing the next honest score-lift path instead of adding another local-only runtime loop:
+  - [x] Added copyable first-beta cohort evidence template `docs/templates/trillionnium-first-beta-cohort-evidence-template-v1.json` for real 5-10 participant observations.
+  - [x] Added copyable commercial launch drill evidence template `docs/templates/trillionnium-commercial-launch-drills-evidence-template-v1.json` for payment/refund/support/legal/operator/traffic drill evidence.
+  - [x] Linked both templates from their runbooks and kept `template: true` by default so the existing validators reject them until real evidence replaces every placeholder.
+  - [x] Verified both template JSON files parse and verified the existing gates reject the template files as non-evidence.
+- Honest scope: this is an evidence-collection kit only. It does not raise technical, first-beta, or commercial readiness scores. Real evidence must still be collected under `TRILLIONNIUM_MULTI_NODE_LATENCY_EVIDENCE_PATH`, `TRILLIONNIUM_FIRST_BETA_COHORT_EVIDENCE_PATH`, or `TRILLIONNIUM_COMMERCIAL_LAUNCH_DRILL_EVIDENCE_PATH`.
+- Constraints preserved: no Hero Tan code/text/assets/data copying, no live OSM ingestion, no MapLibre promotion, browser/web intent-only, Rust source of truth, and no local-only score inflation.
+
+---
+
 ## Current Next Pointer
 
 If the next instruction is simply “continue”, start here:

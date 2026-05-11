@@ -52,6 +52,14 @@ Green thresholds:
 
 ## Evidence schema
 
+A copyable template is tracked at:
+
+```text
+docs/templates/trillionnium-first-beta-cohort-evidence-template-v1.json
+```
+
+Keep `template: true` while drafting. The validator must reject template files; only flip it to `false` after replacing every placeholder with real, consented, anonymized observations.
+
 Use this shape; anonymized participant ids only:
 
 ```json
