@@ -10,6 +10,12 @@ BASE_URL="${CONSUMER_ENTRY_BASE_URL:-http://127.0.0.1:8090}"
 SUMMARY_DIR="$ROOT_DIR/run/league-web"
 mkdir -p "$SUMMARY_DIR"
 
+# The web E2E mutates world/company/listing state and exercises normalized
+# repository mirrors. Runtime restarts do not apply migrations, so keep the
+# schema current before probing command paths.
+cex_wait_postgres 60 1 >/dev/null
+cex_apply_migrations >/dev/null 2>&1
+
 python3 - <<'PY'
 import base64, hashlib, hmac, json, os, pathlib, re, time, urllib.parse, urllib.request
 
@@ -103,6 +109,35 @@ def route_runner_next_route_status_ok(status):
     return status in ('next_route_preview_locked_until_reward_claim', 'next_route_ready_after_reward_claim')
 
 
+def extract_listing_id(html, marker_text):
+    match = re.search(
+        r'<article[^>]*class="[^"]*mini listing[^"]*"[^>]*>.*?'
+        + re.escape(marker_text)
+        + r'.*?<code>(world-listing-[^<]+)</code>',
+        html,
+        re.S,
+    )
+    assert match, ('created_listing_id_not_found', marker_text)
+    return match.group(1)
+
+
+def extract_work_order_id(html, marker_text):
+    match = re.search(
+        r'<article[^>]*class="[^"]*mini work[^"]*"[^>]*data-work-order-id="(world-work-[^"]+)"[^>]*>.*?'
+        + re.escape(marker_text),
+        html,
+        re.S,
+    )
+    if not match:
+        match = re.search(
+            re.escape(marker_text) + r'.*?<code>(world-work-[^<]+)</code>',
+            html,
+            re.S,
+        )
+    assert match, ('created_work_order_id_not_found', marker_text)
+    return match.group(1)
+
+
 def feed_route_runner_handoff_ok(feed):
     handoff = feed.get('route_runner_handoff') or {}
     runner_count = int(handoff.get('runner_count') or 0)
@@ -145,7 +180,7 @@ for needle in ['Trillionnium League', 'Trillionnium World', 'Global-first Beta',
 
 world_status, world_html = get('/world')
 assert world_status == 200, world_status
-for needle in ['Trillionnium World', 'Global-first open world', '面向海外首发', 'World Action Console', '世界行动台', 'Open-source tactics RPG', '开源战棋 RPG', '三国魔改界面', 'trillionnium_open_source_tactics_world_shell_v1', 'trillionnium_world_tactics_board_v1', 'trillionnium_world_tactics_unit_v1', 'trillionnium_world_tactics_command_v1', 'trillionnium_character_v1', 'trillionnium_skill_v1', 'trillionnium_training_command_v1', 'trillionnium_sect_v1', 'trillionnium_npc_v1', 'trillionnium_sect_osm_binding_v1', 'trillionnium_npc_spawn_anchor_v1', 'trillionnium_npc_command_descriptor_v1', 'trillionnium_mentor_training_task_v1', 'trillionnium_task_archetype_v1', 'trillionnium_task_completion_v1', 'trillionnium_reward_gate_v1', 'trillionnium_battle_log_style_v1', 'trillionnium_combat_log_v1', 'trillionnium_npc_relationship_v1', 'trillionnium_osm_objective_v1', 'trillionnium_tactics_combat_resolution_v1', 'trillionnium_tactics_game_session_v1', 'trillionnium_tactics_simulation_tick_v1', 'trillionnium_tactics_reward_settlement_v1', 'data-tactics-reward-settlement-contract', 'trillionnium_map_overlay_identity_v1', 'trillionnium_world_objective_travel_v1', 'trillionnium_world_skill_practice_loop_v1', 'data-skill-practice-contract-version="trillionnium_world_skill_practice_loop_v1"', 'world-local-skill-practice', 'data-practice-command="train_skill"', 'trillionnium_world_combat_encounter_loop_v1', 'data-combat-encounter-contract-version="trillionnium_world_combat_encounter_loop_v1"', 'trillionnium_hero_tan_full_content_alignment_v1', 'trillionnium-full-content-alignment', 'data-full-content-alignment-contract=', 'data-thresholds-green="true"', 'rust_trillionnium_full_content_volume_alignment_gate', 'data-content-domain="items_and_equipment"', 'data-content-domain="survival_time_resource_pressure"', 'world-local-combat-encounter', 'world-local-combat-encounter-form', 'rust_world_combat_encounter_projection', 'rust_world_combat_encounter_validator', 'rust_world_combat_encounter_return_state', 'world-local-combat-return', 'data-world-objective-travel-contract="trillionnium_world_objective_travel_v1"', 'world-objective-travel', 'rust_world_graph_objective_travel', 'data-objective-travel-role=', 'world-objective-party-member', 'trillionnium-tactics-session-state', 'world-tactics-player-hud', 'trillionnium_tactics_player_visible_surface_v1', 'world-tactics-objective-card', 'world-tactics-current-session-card', 'world-tactics-command-draft-panel', 'world-tactics-command-draft-form', 'world-tactics-reward-history-handoff', 'world-tactics-repeat-farming-copy', 'trillionnium_tactics_board_cell_interaction_v1', 'trillionnium_tactics_unit_selection_v1', 'trillionnium_tactics_command_intent_draft_v1', 'trillionnium_tactics_accessibility_v1', 'data-keyboard-traversal="roving_grid_focus"', 'data-low-motion-support="prefers_reduced_motion"', 'world-tactics-keyboard-help', 'role="gridcell"', 'data-roving-tabindex="tactics_board"', 'aria-live="polite"', 'focusAdjacentTile', 'data-draft-target-tile=', 'data-draft-unit-id=', 'data-draft-command=', 'initializeTacticsIntentDraft', 'window.trillionniumTacticsIntentDraft', 'data-reward-history-contract="trillionnium_tactics_reward_history_v1"', 'data-anti-cheese-contract="trillionnium_tactics_repeat_farming_anti_cheese_v1"', 'Repeat-farming guard', 'data-objective-progress', 'data-victory-state', 'data-reward-status', 'rust_trillionnium_osm_objective_generator', 'talk_npc', 'offer_task', 'complete_task', 'courier_letter', 'trillionnium-task-candidates', 'ledger_settlement_review_hold_anti_cheese', 'rust_trillionnium_task_completion_handler', '/world/web/tactics-command', '/v1/world/tactics/command', 'rust_mentor_training_validator', 'rust_mentor_training_command_model', 'rust_trillionnium_sect_model', 'rust_trillionnium_npc_model', 'rust_trillionnium_game_state', 'rust_tactics_board_projection', 'rust_tactics_command_model', 'rust_trillionnium_character', 'rust_tactics_combat_handler', 'basic_inner_power', 'rust_command_handler_ledger_progression', 'trillionnium_native_combat_task_templates_v1', 'native_templates_only_no_verbatim_source_reference_strings', '镜城风从巷口压低', '发起攻击', '结束回合', 'turn_based_strategy_rpg', 'tranchikhang/MedievalWar', '战棋指令菜单', 'openclawstreetmap_underlay', 'OpenClawStreetMap', 'supporting_engine_diagnostics', '支撑层，不是主界面', 'world-openstreetmap-geodata', 'openstreetmap_geodata_v1', 'OpenStreetMapDataProvider', 'fixture_openstreetmap_data_provider_v1', 'stable_fixture_table', 'openstreetmap_fixture_layers_v1', 'mentor_training_anchor', 'rust_openstreetmap_data_provider', 'visualization_input_only', 'osm_id', 'osm_type', 'game_overlay_id', 'odbl_database_obligations', 'no_live_overpass', 'world-openstreetmap-provider-readiness', 'openstreetmap_provider_readiness_v1', 'fixture_ready_live_fail_closed', 'data-live-modes-fail-closed="true"', 'data-live-network-ingestion-enabled="false"', 'overpass_bbox_cache', 'geofabrik_extract_import', 'vendor_tile_cache', 'world-openstreetmap-geodata-freshness', 'openstreetmap_geodata_freshness_v1', 'fixture_static_fresh_live_stale_blocked', 'data-wall-clock-freshness-applies="false"', 'data-live-data-freshness-applies="false"', 'data-staleness-gate-green="true"', 'world-openstreetmap-attribution', 'openstreetmap_attribution_presence_v1', '© OpenStreetMap contributors', 'ODbL-1.0', 'data-attribution-visible="true"', 'world-mobile-first-screen', 'world-hero-mobile-actions', 'world-first-human-loop', 'trillionnium_first_human_session_v1', 'trillionnium_world_first_screen_four_questions_v1', 'trillionnium_world_transition_semantics_v1', 'rust_world_map_transition_rules', 'data-transition-contract-version="trillionnium_world_transition_semantics_v1"', 'data-transition-source-of-truth="rust_world_map_transition_rules"', 'data-transition-kind="blocked_terrain"', 'data-transition-kind="zone_transition"', 'data-transition-result="open_exit"', 'world-keypad-adventure-shell', 'world-keypad-numpad', 'world-keypad-move-form', 'data-first-human-question="who"', 'data-first-human-question="where"', 'data-first-human-question="click"', 'data-first-human-question="reward"', 'world-language-switcher', 'trillionnium-world-language-select', 'world-pulse-strip', 'world-stats-compact-more', 'trillionnium_secondary_dashboard_panels_v1', 'data-secondary-dashboard-role="secondary_detail_panel"', 'data-main-experience="false"', 'data-default-state="collapsed_on_mobile"', 'world-mobile-primary-cta', 'Continue route: enter tactics board', '继续路线：进入战棋棋盘', 'Pick route', 'Submit proof', 'Claim reward', 'world-route-archetype-catalog', 'trillionnium_world_route_archetypes_v1', 'world-map-readability-lod', 'world-map-performance-budget', 'world-map-transport-delta', 'world-map-shadow-renderer', 'world-map-rum-slo', 'world-map-weak-network', 'world-map-location-privacy', 'trillionnium_world_map_readability_lod_v1', 'trillionnium_world_map_runtime_performance_budget_v1', 'trillionnium_world_map_transport_delta_v1', 'trillionnium_world_map_renderer_shadow_v1', 'trillionnium_world_map_rum_slo_v1', 'trillionnium_world_map_weak_network_resilience_v1', 'trillionnium_world_map_location_privacy_v1', 'bounty_delivery', 'trillionnium-active-route-line', 'trillionnium-map-pin', 'More world counters', '更多世界统计', 'Global Real-world Map Engine', 'world-real-map', 'createRealWorldMapAdapter', 'leaflet_renderer_adapter_v1', 'maplibre_gl_v1', 'const mapRuntime', 'supports_future_engine_swap', 'gating_contract', 'renderRouteLine', 'renderTileFrame', 'renderEventPulse', 'buildMapLibreShadowParityProbe', 'trillionnium-world-map:last-good-viewport:v1', 'weak_network_cached_snapshot', 'location_privacy_contract_visible', 'onViewportChange', 'getCenter', 'getZoom', 'global_real_world_tiles', 'cn-shanghai-core', 'street_level_world_nodes', 'osm-z15', 'primary_actions', 'trillionnium-map-action', 'Move Here', '移动到这里', 'world-map-move-target', 'world-action-body', 'world-action-console-status', '起草世界行动', '起草任务后续', '推进下一条支线', '下一条支线', 'Event brief', '事件简报：', 'Linked task route', '关联任务路线', 'Recommended next step', '推荐下一步', 'Quest Route Graph', '任务路线图', 'world-route-task-graph-live', '/world/web/map-viewport', '/world/web/map-viewport', 'world-map-camera-summary', 'world-map-route-flow-status', 'world-map-route-next-step-status', 'world-map-route-link-status', 'world-work-deliver-id', 'world-work-deliver-body', 'world-buy-body', 'world-contract-completion-id', 'world-contract-completion-body', 'world-company-asset-id', 'world-listing-company-id', 'world-tile-shards-live', 'Character Items', '角色道具', 'Upgrade Item', '升级道具', 'Studios and Hubs', '工坊与据点', 'Launch Studio', '建立工坊', 'Hubs and Quest Cards', '据点与任务牌', 'Publish Quest Card', '发布任务牌', 'Bounties and Adventure Commissions', '悬赏与冒险委托', 'Accept Quest Card', '接取任务牌', 'Submit Result', '提交成果', 'Pass Rating', '评级通过', 'Faction Reputation Map', '阵营声望图', 'World Contracts', '世界契约', 'Complete Contract', '完成契约', 'findLiveEventByFocus', 'buildEventFocus', 'focusRouteEvent', 'filterLiveEventStream', '条事件镜头', 'data-focus-kind="event"', 'data-event-id=', 'data-task-id=', 'world-event-timeline-item-']:
+for needle in ['Trillionnium World', 'Global-first open world', '面向海外首发', 'World Action Console', '世界行动台', 'Open-source tactics RPG', '开源战棋 RPG', '三国魔改界面', 'trillionnium_open_source_tactics_world_shell_v1', 'trillionnium_world_tactics_board_v1', 'trillionnium_world_tactics_unit_v1', 'trillionnium_world_tactics_command_v1', 'trillionnium_character_v1', 'trillionnium_skill_v1', 'trillionnium_training_command_v1', 'trillionnium_sect_v1', 'trillionnium_npc_v1', 'trillionnium_sect_osm_binding_v1', 'trillionnium_npc_spawn_anchor_v1', 'trillionnium_npc_command_descriptor_v1', 'trillionnium_mentor_training_task_v1', 'trillionnium_task_archetype_v1', 'trillionnium_task_completion_v1', 'trillionnium_reward_gate_v1', 'trillionnium_battle_log_style_v1', 'trillionnium_combat_log_v1', 'trillionnium_npc_relationship_v1', 'trillionnium_osm_objective_v1', 'trillionnium_tactics_combat_resolution_v1', 'trillionnium_tactics_game_session_v1', 'trillionnium_tactics_simulation_tick_v1', 'trillionnium_tactics_reward_settlement_v1', 'data-tactics-reward-settlement-contract', 'trillionnium_map_overlay_identity_v1', 'trillionnium_world_objective_travel_v1', 'trillionnium_world_skill_practice_loop_v1', 'data-skill-practice-contract-version="trillionnium_world_skill_practice_loop_v1"', 'world-local-skill-practice', 'data-practice-command="train_skill"', 'trillionnium_world_combat_encounter_loop_v1', 'data-combat-encounter-contract-version="trillionnium_world_combat_encounter_loop_v1"', 'trillionnium_hero_tan_full_content_alignment_v1', 'trillionnium-full-content-alignment', 'data-full-content-alignment-contract=', 'data-thresholds-green="true"', 'rust_trillionnium_full_content_volume_alignment_gate', 'data-content-domain="items_and_equipment"', 'data-domain-status="rust_runtime_backed"', 'trillionnium-equipment', 'data-item-equipment-runtime-contract="trillionnium_world_item_equipment_runtime_v1"', 'rust_trillionnium_item_equipment_runtime_state', 'trillionnium-equipment-form', 'name="command" value="equip_item"', 'name="target_slot"', 'data-content-domain="survival_time_resource_pressure"', 'world-local-combat-encounter', 'world-local-combat-encounter-form', 'rust_world_combat_encounter_projection', 'rust_world_combat_encounter_validator', 'rust_world_combat_encounter_return_state', 'world-local-combat-return', 'data-world-objective-travel-contract="trillionnium_world_objective_travel_v1"', 'world-objective-travel', 'rust_world_graph_objective_travel', 'data-objective-travel-role=', 'world-objective-party-member', 'trillionnium-tactics-session-state', 'world-tactics-player-hud', 'trillionnium_tactics_player_visible_surface_v1', 'world-tactics-objective-card', 'world-tactics-current-session-card', 'world-tactics-command-draft-panel', 'world-tactics-command-draft-form', 'world-tactics-reward-history-handoff', 'world-tactics-repeat-farming-copy', 'trillionnium_tactics_board_cell_interaction_v1', 'trillionnium_tactics_unit_selection_v1', 'trillionnium_tactics_command_intent_draft_v1', 'trillionnium_tactics_accessibility_v1', 'data-keyboard-traversal="roving_grid_focus"', 'data-low-motion-support="prefers_reduced_motion"', 'world-tactics-keyboard-help', 'role="gridcell"', 'data-roving-tabindex="tactics_board"', 'aria-live="polite"', 'focusAdjacentTile', 'data-draft-target-tile=', 'data-draft-unit-id=', 'data-draft-command=', 'initializeTacticsIntentDraft', 'window.trillionniumTacticsIntentDraft', 'data-reward-history-contract="trillionnium_tactics_reward_history_v1"', 'data-anti-cheese-contract="trillionnium_tactics_repeat_farming_anti_cheese_v1"', 'Repeat-farming guard', 'data-objective-progress', 'data-victory-state', 'data-reward-status', 'rust_trillionnium_osm_objective_generator', 'talk_npc', 'offer_task', 'complete_task', 'courier_letter', 'trillionnium-task-candidates', 'ledger_settlement_review_hold_anti_cheese', 'rust_trillionnium_task_completion_handler', '/world/web/tactics-command', '/v1/world/tactics/command', 'rust_mentor_training_validator', 'rust_mentor_training_command_model', 'rust_trillionnium_sect_model', 'rust_trillionnium_npc_model', 'rust_trillionnium_game_state', 'rust_tactics_board_projection', 'rust_tactics_command_model', 'rust_trillionnium_character', 'rust_tactics_combat_handler', 'basic_inner_power', 'rust_command_handler_ledger_progression', 'trillionnium_native_combat_task_templates_v1', 'native_templates_only_no_verbatim_source_reference_strings', '镜城风从巷口压低', '发起攻击', '结束回合', 'turn_based_strategy_rpg', 'tranchikhang/MedievalWar', '战棋指令菜单', 'openclawstreetmap_underlay', 'OpenClawStreetMap', 'supporting_engine_diagnostics', '支撑层，不是主界面', 'world-openstreetmap-geodata', 'openstreetmap_geodata_v1', 'OpenStreetMapDataProvider', 'fixture_openstreetmap_data_provider_v1', 'stable_fixture_table', 'openstreetmap_fixture_layers_v1', 'mentor_training_anchor', 'rust_openstreetmap_data_provider', 'visualization_input_only', 'osm_id', 'osm_type', 'game_overlay_id', 'odbl_database_obligations', 'no_live_overpass', 'world-openstreetmap-provider-readiness', 'openstreetmap_provider_readiness_v1', 'fixture_ready_live_fail_closed', 'data-live-modes-fail-closed="true"', 'data-live-network-ingestion-enabled="false"', 'overpass_bbox_cache', 'geofabrik_extract_import', 'vendor_tile_cache', 'world-openstreetmap-geodata-freshness', 'openstreetmap_geodata_freshness_v1', 'fixture_static_fresh_live_stale_blocked', 'data-wall-clock-freshness-applies="false"', 'data-live-data-freshness-applies="false"', 'data-staleness-gate-green="true"', 'world-openstreetmap-attribution', 'openstreetmap_attribution_presence_v1', '© OpenStreetMap contributors', 'ODbL-1.0', 'data-attribution-visible="true"', 'world-mobile-first-screen', 'world-hero-mobile-actions', 'world-first-human-loop', 'trillionnium_first_human_session_v1', 'trillionnium_world_first_screen_four_questions_v1', 'trillionnium_world_transition_semantics_v1', 'rust_world_map_transition_rules', 'data-transition-contract-version="trillionnium_world_transition_semantics_v1"', 'data-transition-source-of-truth="rust_world_map_transition_rules"', 'data-transition-kind="blocked_terrain"', 'data-transition-kind="zone_transition"', 'data-transition-result="open_exit"', 'world-keypad-adventure-shell', 'world-keypad-numpad', 'world-keypad-move-form', 'data-first-human-question="who"', 'data-first-human-question="where"', 'data-first-human-question="click"', 'data-first-human-question="reward"', 'world-language-switcher', 'trillionnium-world-language-select', 'world-pulse-strip', 'world-stats-compact-more', 'trillionnium_secondary_dashboard_panels_v1', 'data-secondary-dashboard-role="secondary_detail_panel"', 'data-main-experience="false"', 'data-default-state="collapsed_on_mobile"', 'world-mobile-primary-cta', 'Continue route: enter tactics board', '继续路线：进入战棋棋盘', 'Pick route', 'Submit proof', 'Claim reward', 'world-route-archetype-catalog', 'trillionnium_world_route_archetypes_v1', 'world-map-readability-lod', 'world-map-performance-budget', 'world-map-transport-delta', 'world-map-shadow-renderer', 'world-map-rum-slo', 'world-map-weak-network', 'world-map-location-privacy', 'trillionnium_world_map_readability_lod_v1', 'trillionnium_world_map_runtime_performance_budget_v1', 'trillionnium_world_map_transport_delta_v1', 'trillionnium_world_map_renderer_shadow_v1', 'trillionnium_world_map_rum_slo_v1', 'trillionnium_world_map_weak_network_resilience_v1', 'trillionnium_world_map_location_privacy_v1', 'bounty_delivery', 'trillionnium-active-route-line', 'trillionnium-map-pin', 'More world counters', '更多世界统计', 'Global Real-world Map Engine', 'world-real-map', 'createRealWorldMapAdapter', 'leaflet_renderer_adapter_v1', 'maplibre_gl_v1', 'const mapRuntime', 'supports_future_engine_swap', 'gating_contract', 'renderRouteLine', 'renderTileFrame', 'renderEventPulse', 'buildMapLibreShadowParityProbe', 'trillionnium-world-map:last-good-viewport:v1', 'weak_network_cached_snapshot', 'location_privacy_contract_visible', 'onViewportChange', 'getCenter', 'getZoom', 'global_real_world_tiles', 'cn-shanghai-core', 'street_level_world_nodes', 'osm-z15', 'primary_actions', 'trillionnium-map-action', 'Move Here', '移动到这里', 'world-map-move-target', 'world-action-body', 'world-action-console-status', '起草世界行动', '起草任务后续', '推进下一条支线', '下一条支线', 'Event brief', '事件简报：', 'Linked task route', '关联任务路线', 'Recommended next step', '推荐下一步', 'Quest Route Graph', '任务路线图', 'world-route-task-graph-live', '/world/web/map-viewport', '/world/web/map-viewport', 'world-map-camera-summary', 'world-map-route-flow-status', 'world-map-route-next-step-status', 'world-map-route-link-status', 'world-work-deliver-id', 'world-work-deliver-body', 'world-buy-body', 'world-contract-completion-id', 'world-contract-completion-body', 'world-company-asset-id', 'world-listing-company-id', 'world-tile-shards-live', 'Character Items', '角色道具', 'Upgrade Item', '升级道具', 'Studios and Hubs', '工坊与据点', 'Launch Studio', '建立工坊', 'Hubs and Quest Cards', '据点与任务牌', 'Publish Quest Card', '发布任务牌', 'Bounties and Adventure Commissions', '悬赏与冒险委托', 'Accept Quest Card', '接取任务牌', 'Submit Result', '提交成果', 'Pass Rating', '评级通过', 'Faction Reputation Map', '阵营声望图', 'World Contracts', '世界契约', 'Complete Contract', '完成契约', 'findLiveEventByFocus', 'buildEventFocus', 'focusRouteEvent', 'filterLiveEventStream', '条事件镜头', 'data-focus-kind="event"', 'data-event-id=', 'data-task-id=', 'world-event-timeline-item-']:
     assert needle in world_html, needle
 
 matrix_user_id = '@alice:local.dev'
@@ -220,86 +255,103 @@ code, url, body = post_form('/world/web/company', headers=cookie_header, **{
 assert code == 200 and 'Trillionnium World' in body, ('world_company', code, url)
 actions.append({'action': 'world_company', 'status': code, 'url': url})
 
+first_listing_marker = f'Web quest board {marker}'
 code, url, body = post_form('/world/web/listing', headers=cookie_header, **{
     'matrix_user_id': matrix_user_id,
     'csrf': csrf,
     'company_id': 'latest',
-    'body': f'Web quest board {marker}: AI 工坊委托，写清成果、赏金逻辑、证据包、承诺、风险控制、自检、评级标准、返工规则和下一步。',
+    'body': f'{first_listing_marker}: AI 工坊委托，写清成果、赏金逻辑、证据包、承诺、风险控制、自检、评级标准、返工规则和下一步。',
 })
 assert code == 200 and 'Trillionnium World' in body, ('world_listing', code, url)
-actions.append({'action': 'world_listing', 'status': code, 'url': url})
+first_listing_id = extract_listing_id(body, first_listing_marker)
+actions.append({'action': 'world_listing', 'status': code, 'url': url, 'listing_id': first_listing_id})
 
+first_buy_marker = f'Web quest accept {marker}'
 code, url, body = post_form('/world/web/buy', headers=cookie_header, **{
     'matrix_user_id': matrix_user_id,
     'csrf': csrf,
-    'listing_id': 'latest',
-    'body': f'Web quest accept {marker}: 接取任务牌，开启冒险委托，定义成果、证据、评级标准、风险控制和下一步。',
+    'listing_id': first_listing_id,
+    'body': f'{first_buy_marker}: 接取任务牌，开启冒险委托，定义成果、证据、评级标准、风险控制和下一步。',
 })
 assert code == 200 and 'Trillionnium World' in body, ('world_buy', code, url)
-actions.append({'action': 'world_buy', 'status': code, 'url': url})
+first_work_order_id = extract_work_order_id(body, first_buy_marker)
+actions.append({'action': 'world_buy', 'status': code, 'url': url, 'work_order_id': first_work_order_id})
 
 code, url, body = post_form('/world/web/work-deliver', headers=cookie_header, **{
     'matrix_user_id': matrix_user_id,
     'csrf': csrf,
-    'work_order_id': 'latest',
+    'work_order_id': first_work_order_id,
     'body': f'Web quest result {marker}: 最终成果、证据包、评级清单、风险复盘、下一步和完成自检。',
 })
 assert code == 200 and 'Trillionnium World' in body, ('world_work_deliver', code, url)
-actions.append({'action': 'world_work_deliver', 'status': code, 'url': url})
+actions.append({'action': 'world_work_deliver', 'status': code, 'url': url, 'work_order_id': first_work_order_id})
 
 code, url, body = post_form('/world/web/work-accept', headers=cookie_header, **{
     'matrix_user_id': matrix_user_id,
     'csrf': csrf,
-    'work_order_id': 'latest',
+    'work_order_id': first_work_order_id,
     'body': f'Web quest rating {marker}: 委托方确认质量、证据、评级标准和下一次协作。',
 })
 assert code == 200 and 'Trillionnium World' in body, ('world_work_accept', code, url)
-actions.append({'action': 'world_work_accept', 'status': code, 'url': url})
+actions.append({'action': 'world_work_accept', 'status': code, 'url': url, 'work_order_id': first_work_order_id})
 
+revise_listing_marker = f'Web revise-flow board {marker}'
+code, url, body = post_form('/world/web/listing', headers=cookie_header, **{
+    'matrix_user_id': matrix_user_id,
+    'csrf': csrf,
+    'company_id': 'latest',
+    'body': f'{revise_listing_marker}: AI 工坊返工委托，写清成果、赏金逻辑、证据包、验收标准、返工触发条件、风险控制、自检记录、评级标准和下一步计划。',
+})
+assert code == 200 and 'Trillionnium World' in body, ('world_reject_listing', code, url)
+revise_listing_id = extract_listing_id(body, revise_listing_marker)
+actions.append({'action': 'world_reject_listing', 'status': code, 'url': url, 'listing_id': revise_listing_id})
+
+revise_buy_marker = f'Web revise-flow accept {marker}'
 code, url, body = post_form('/world/web/buy', headers=cookie_header, **{
     'matrix_user_id': matrix_user_id,
     'csrf': csrf,
-    'listing_id': 'latest',
-    'body': f'Web revise-flow accept {marker}: 开启第二条冒险委托，用于验证奖励退回、证据缺口、返工要求和下一步。',
+    'listing_id': revise_listing_id,
+    'body': f'{revise_buy_marker}: 开启第二条冒险委托，用于验证奖励退回、证据缺口、返工要求和下一步。',
 })
 assert code == 200 and 'Trillionnium World' in body, ('world_reject_buy', code, url)
-actions.append({'action': 'world_reject_buy', 'status': code, 'url': url})
+revise_work_order_id = extract_work_order_id(body, revise_buy_marker)
+actions.append({'action': 'world_reject_buy', 'status': code, 'url': url, 'work_order_id': revise_work_order_id})
 
 code, url, body = post_form('/world/web/work-deliver', headers=cookie_header, **{
     'matrix_user_id': matrix_user_id,
     'csrf': csrf,
-    'work_order_id': 'latest',
+    'work_order_id': revise_work_order_id,
     'body': f'Web revise-flow result {marker}: 成果、证据包、质量记录、风险复盘和下一步。',
 })
 assert code == 200 and 'Trillionnium World' in body, ('world_reject_deliver', code, url)
-actions.append({'action': 'world_reject_deliver', 'status': code, 'url': url})
+actions.append({'action': 'world_reject_deliver', 'status': code, 'url': url, 'work_order_id': revise_work_order_id})
 
 code, url, body = post_form('/world/web/work-reject', headers=cookie_header, **{
     'matrix_user_id': matrix_user_id,
     'csrf': csrf,
-    'work_order_id': 'latest',
+    'work_order_id': revise_work_order_id,
     'body': f'Web quest revision {marker}: 委托方要求返工，退回预留奖励，记录证据缺口、修改要求和下一步。',
 })
 assert code == 200 and 'Trillionnium World' in body, ('world_work_reject', code, url)
-actions.append({'action': 'world_work_reject', 'status': code, 'url': url})
+actions.append({'action': 'world_work_reject', 'status': code, 'url': url, 'work_order_id': revise_work_order_id})
 
 code, url, body = post_form('/world/web/work-reopen', headers=cookie_header, **{
     'matrix_user_id': matrix_user_id,
     'csrf': csrf,
-    'work_order_id': 'latest',
+    'work_order_id': revise_work_order_id,
     'body': f'Web quest reopen {marker}: 委托方重新锁定奖励，列出返工要求、证据缺口、评级标准和再次提交动作。',
 })
 assert code == 200 and 'Trillionnium World' in body, ('world_work_reopen', code, url)
-actions.append({'action': 'world_work_reopen', 'status': code, 'url': url})
+actions.append({'action': 'world_work_reopen', 'status': code, 'url': url, 'work_order_id': revise_work_order_id})
 
 code, url, body = post_form('/world/web/work-cancel', headers=cookie_header, **{
     'matrix_user_id': matrix_user_id,
     'csrf': csrf,
-    'work_order_id': 'latest',
+    'work_order_id': revise_work_order_id,
     'body': f'Web quest cancel {marker}: 委托方在成果前放弃这条委托，退回预留奖励，记录原因并关闭契约。',
 })
 assert code == 200 and 'Trillionnium World' in body, ('world_work_cancel', code, url)
-actions.append({'action': 'world_work_cancel', 'status': code, 'url': url})
+actions.append({'action': 'world_work_cancel', 'status': code, 'url': url, 'work_order_id': revise_work_order_id})
 
 for fields in [
     {'action': 'join', 'matrix_user_id': matrix_user_id, 'csrf': csrf, 'match_id': 'daily-dungeon-001'},

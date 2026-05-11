@@ -1640,10 +1640,28 @@ Also append a one-paragraph summary to `/home/qian/.openclaw/workspace/memory/YY
   - [x] Tests and Web/Browser gates assert the content-volume contract, native/no-copy policy, thresholds, and key coverage domains.
 - Current honest scope: this is a native catalog/projection gate and content-volume foundation. It does not claim the whole MMO-scale world is fully authored or all runtime mutation loops are complete.
 - Remaining next:
-  - [ ] Persist item/equipment inventory and equip slots as Rust-owned runtime state.
+  - [x] Persist item/equipment inventory and equip slots as Rust-owned runtime state. Completed in the 2026-05-11 09:4x CST update below.
   - [ ] Mutate time/stamina/injury/evidence-integrity loops from real movement/combat/task events.
   - [ ] Expand region graph and story-arc unlocks using Trillionnium-native content only.
   - [ ] Deepen combat numerics without copying reference data.
+- Constraints preserved: no Hero Tan code/text/assets/data copying, no live OSM ingestion, no MapLibre promotion, browser/web intent-only, Rust source of truth.
+
+---
+
+#### Update 2026-05-11 13:1x CST
+
+- Commit: `feat: gate native equipment runtime` (this commit)
+- Continued “全量对齐白金英雄坛说完整体量” as scale/loop parity with Trillionnium-native content, not data copying:
+  - [x] Added `trillionnium_world_item_equipment_runtime_v1` as the Rust-owned runtime contract for inventory items and equipment slots.
+  - [x] `WorldTrillionniumCharacter` now carries starter inventory items and equipped-slot state, with serde defaults so older world-state snapshots hydrate safely.
+  - [x] Added `equip_item` as a distinct tactics command, including item id + target slot validation, wrong-slot rejection, Rust-owned slot mutation, and outcome projection.
+  - [x] `/world` now renders `#trillionnium-equipment` and `.trillionnium-equipment-form` as visualization/input-only equipment surfaces; browser forms submit intent while Rust validates catalog slot and mutates character runtime state.
+  - [x] The full-content alignment gate now requires runtime inventory/equipped-slot counts and marks `items_and_equipment` as `rust_runtime_backed`, not merely catalog-projected.
+  - [x] Added normalized Postgres mirror columns for `inventory_items` and `equipment_slots` in `world_trillionnium_characters` for parity audits/read-model evolution; Rust `WorldState` remains command source of truth.
+  - [x] Rust tests and Web/Browser static gates assert the runtime contract, no-copy content policy, equip intent form, slot validation, and projection counts.
+  - [x] Local-production Web/Browser E2E now use the explicit listing/work-order IDs created by the current marker/session instead of polluted `latest` defaults, preserving settlement/recovery rules while stabilizing commerce validation.
+- Evidence: `cargo fmt --all -- --check`; `cargo check -p consumer-entry-api`; `cargo test -p consumer-entry-api -- --nocapture --test-threads=1` (136 passed); `cargo clippy -p consumer-entry-api -- -D warnings`; node/bash syntax; `git diff --check`; Web E2E `run/league-web/web-e2e-summary-1778476008.json`; Browser E2E `run/league-browser/browser-e2e-summary-1778476572-1291576.json`; First-human E2E `run/first-human-session/browser-e2e-summary-1778476815-1297251.json`; final `/health` probes returned 200 in ~0.06–0.07s after the run.
+- Current honest scope: item/equipment has crossed from catalog breadth into persisted Rust runtime mutation. Survival/time/resource pressure, region/story unlocks, and deeper combat numerics remain future native-runtime slices.
 - Constraints preserved: no Hero Tan code/text/assets/data copying, no live OSM ingestion, no MapLibre promotion, browser/web intent-only, Rust source of truth.
 
 ---
@@ -1652,6 +1670,6 @@ Also append a one-paragraph summary to `/home/qian/.openclaw/workspace/memory/YY
 
 If the next instruction is simply “continue”, start here:
 
-> **Next pointer:** Continue full content-volume alignment by turning the new native catalogs into Rust-owned runtime state: item/equipment inventory and equip slots first, then time/stamina/injury/evidence-integrity mutation loops, then region/story unlocks and deeper combat numerics. Keep the technical 9.9+ proof gated by real `TRILLIONNIUM_MULTI_NODE_LATENCY_EVIDENCE_PATH`, first-beta 9+ gated by `TRILLIONNIUM_FIRST_BETA_COHORT_EVIDENCE_PATH`, and commercial 8+ gated by `TRILLIONNIUM_COMMERCIAL_LAUNCH_DRILL_EVIDENCE_PATH`. Current honest assessment remains `9.8/10` technical, `8.5/10` first internal beta, `7.0/10` commercial release.
+> **Next pointer:** Continue full content-volume alignment by turning the remaining native catalogs into Rust-owned runtime state: time/stamina/injury/evidence-integrity mutation loops next, then region/story unlocks and deeper combat numerics. Keep the technical 9.9+ proof gated by real `TRILLIONNIUM_MULTI_NODE_LATENCY_EVIDENCE_PATH`, first-beta 9+ gated by `TRILLIONNIUM_FIRST_BETA_COHORT_EVIDENCE_PATH`, and commercial 8+ gated by `TRILLIONNIUM_COMMERCIAL_LAUNCH_DRILL_EVIDENCE_PATH`. Current honest assessment remains `9.8/10` technical, `8.5/10` first internal beta, `7.0/10` commercial release.
 
 Do not start live Overpass/Geofabrik ingestion yet. Do not promote MapLibre. Do not convert the web shell into a standalone JS source of truth.

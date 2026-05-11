@@ -352,6 +352,34 @@ async function assertEnglishSurfaceHasNoCoreChineseLeaks(page, label) {
   assert(offenders.length === 0, `${label} leaked core Chinese map/onboarding labels in English mode`, offenders);
 }
 
+async function setWorldInputValue(page, selector, value) {
+  const input = page.locator(selector).first();
+  await input.evaluate((node, nextValue) => {
+    node.value = nextValue;
+    node.dispatchEvent(new Event('input', { bubbles: true }));
+    node.dispatchEvent(new Event('change', { bubbles: true }));
+  }, value);
+}
+
+async function extractWorldListingIdByMarker(page, markerText) {
+  const listingId = await page.$$eval('article.mini.listing', (nodes, marker) => {
+    const match = nodes.find((node) => (node.textContent || '').includes(marker));
+    return match?.querySelector('code')?.textContent?.trim() || null;
+  }, markerText);
+  assert(/^world-listing-/.test(String(listingId || '')), 'created world listing id not found for browser marker', { markerText, listingId });
+  return listingId;
+}
+
+async function extractWorldWorkOrderIdByMarker(page, markerText) {
+  const markerPrefix = String(markerText).slice(0, 48);
+  const workOrderId = await page.$$eval('article.mini.work[data-work-order-id]', (nodes, marker) => {
+    const match = nodes.find((node) => (node.textContent || '').includes(marker));
+    return match?.dataset?.workOrderId || null;
+  }, markerPrefix);
+  assert(/^world-work-/.test(String(workOrderId || '')), 'created world work order id not found for browser marker', { markerText, markerPrefix, workOrderId });
+  return workOrderId;
+}
+
 async function submitWorldForm(page, formSelector, marker, expectedUrlFragment) {
   const form = page.locator(formSelector).first();
   await form.evaluate((node) => {
@@ -993,7 +1021,9 @@ async function main() {
   assert(await count(page, '#world-local-skill-practice[data-contract-version="trillionnium_world_skill_practice_loop_v1"][data-practice-command="train_skill"][data-source-of-truth="rust_mentor_training_validator"][data-web-role="intent_only_visualization_input"]') === 1, 'world local skill practice mentor affordance missing');
   assert(await count(page, '#world-local-combat-encounter[data-contract-version="trillionnium_world_combat_encounter_loop_v1"][data-entry-command="attack"][data-source-of-truth="rust_world_combat_encounter_projection"][data-web-role="intent_only_visualization_input"]') === 1, 'world local combat encounter affordance missing');
   assert(await count(page, '#trillionnium-full-content-alignment[data-full-content-alignment-contract="trillionnium_hero_tan_full_content_alignment_v1"][data-thresholds-green="true"][data-source-of-truth="rust_trillionnium_full_content_volume_alignment_gate"][data-content-policy="trillionnium_native_no_copied_hero_tan_text_assets_or_tables"][data-web-role="visualization_input_only"]') === 1, 'world full content volume alignment gate missing');
-  assert(await count(page, '#trillionnium-full-content-alignment [data-content-domain="items_and_equipment"][data-domain-status="native_catalog_projection_gate"]') === 1, 'world full content item/equipment domain missing');
+  assert(await count(page, '#trillionnium-full-content-alignment [data-content-domain="items_and_equipment"][data-domain-status="rust_runtime_backed"]') === 1, 'world full content item/equipment runtime domain missing');
+  assert(await count(page, '#trillionnium-equipment[data-item-equipment-runtime-contract="trillionnium_world_item_equipment_runtime_v1"]') === 1, 'world item/equipment runtime panel missing');
+  assert(await count(page, '.trillionnium-equipment-form[data-command="equip_item"][data-source-of-truth="rust_trillionnium_item_equipment_runtime_state"]') >= 1, 'world item/equipment equip intent form missing');
   assert(await count(page, '#trillionnium-full-content-alignment [data-content-domain="survival_time_resource_pressure"][data-domain-status="native_catalog_projection_gate"]') === 1, 'world full content survival/resource domain missing');
   assert(await count(page, '#world-local-task-loop[data-pickup-command="offer_task"][data-completion-command="complete_task"]') === 1, 'world task pickup/completion affordance missing');
   const worldKeypadBox = await page.locator('#world-keypad-adventure-shell').boundingBox({ timeout: 10_000 });
@@ -1166,15 +1196,25 @@ async function main() {
   await submitWorldForm(page, 'form[action="/world/web/company"]', marker, 'company=created');
   steps.push({ name: 'world_company_browser_submit', ok: true });
 
-  await page.locator('#world-listing-body').fill('发布一个工坊任务牌：写清成果、赏金逻辑、证据包、承诺、风险控制、下一步行动和自检记录。');
+  const browserListingMarker = `Browser quest board ${marker}`;
+  await page.locator('#world-listing-body').fill(`${browserListingMarker}: publish a studio bounty card with deliverables, reward logic, evidence package, commitments, risk controls, next action, rating rubric, revision policy, and self-review record.`);
   await submitWorldForm(page, 'form[action="/world/web/listing"]', marker, 'listing=created');
-  steps.push({ name: 'world_listing_browser_submit', ok: true });
+  const browserListingId = await extractWorldListingIdByMarker(page, browserListingMarker);
+  steps.push({ name: 'world_listing_browser_submit', ok: true, listing_id: browserListingId });
 
+  const browserBuyMarker = `Browser quest accept ${marker}`;
+  await setWorldInputValue(page, '#world-buy-listing-id', browserListingId);
+  await page.locator('#world-buy-body').evaluate((node, bodyText) => {
+    node.value = bodyText;
+    node.dispatchEvent(new Event('input', { bubbles: true }));
+  }, `${browserBuyMarker}: accept this quest card and open an adventure commission with deliverables, evidence package, rating standards, risk controls, next action, and self-review.`);
   await submitWorldForm(page, '#world-buy-form', marker, 'purchase=created');
+  const browserWorkOrderId = await extractWorldWorkOrderIdByMarker(page, browserBuyMarker);
   const purchaseCards = await count(page, '#world-purchase-cards-live article, #world-purchase-cards-live .mini');
   assert(purchaseCards >= 1, 'quest accept card missing after accepting quest board');
-  steps.push({ name: 'world_quest_accept_browser_submit', ok: true, purchase_cards: purchaseCards });
+  steps.push({ name: 'world_quest_accept_browser_submit', ok: true, purchase_cards: purchaseCards, listing_id: browserListingId, work_order_id: browserWorkOrderId });
 
+  await setWorldInputValue(page, '#world-work-deliver-id', browserWorkOrderId);
   await page.locator('#world-work-deliver-body').evaluate((node) => {
     node.value = 'Browser quest delivery: deliver a customer-ready方案 with evidence/source data, risk controls, self-review, next action plan, acceptance checklist, and concrete result notes. 提交可交付方案：成果、证据包、风险控制、自评复盘、下一步计划、验收清单和真实结果记录。';
     node.dispatchEvent(new Event('input', { bubbles: true }));
@@ -1182,12 +1222,13 @@ async function main() {
   await submitWorldForm(page, '#world-work-deliver-form', marker, 'work=delivered');
   const deliveryCards = await count(page, '#world-work-deliveries-live article, #world-work-deliveries-live .mini');
   assert(deliveryCards >= 1, 'quest result card missing after submit');
-  steps.push({ name: 'world_quest_result_submit_browser_submit', ok: true, delivery_cards: deliveryCards });
+  steps.push({ name: 'world_quest_result_submit_browser_submit', ok: true, delivery_cards: deliveryCards, work_order_id: browserWorkOrderId });
 
+  await setWorldInputValue(page, '#world-work-accept-id', browserWorkOrderId);
   await submitWorldForm(page, '#world-work-accept-form', marker, 'work=accepted');
   const acceptanceCards = await count(page, '#world-work-acceptances-live article, #world-work-acceptances-live .mini');
   assert(acceptanceCards >= 1, 'quest rating card missing after rating');
-  steps.push({ name: 'world_quest_rating_browser_submit', ok: true, acceptance_cards: acceptanceCards });
+  steps.push({ name: 'world_quest_rating_browser_submit', ok: true, acceptance_cards: acceptanceCards, work_order_id: browserWorkOrderId });
 
   const rumMatrixWarmup = await page.evaluate(async ({ marker, deltaCursor, matrixUserId }) => {
     const results = [];

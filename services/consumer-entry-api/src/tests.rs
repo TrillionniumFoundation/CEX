@@ -3159,7 +3159,24 @@ fn world_tactics_projection_binds_trillionnium_state_to_osm_objectives() {
         .unwrap()
         .iter()
         .any(|domain| domain["domain"] == "items_and_equipment"
-            && domain["status"] == "native_catalog_projection_gate"));
+            && domain["status"] == "rust_runtime_backed"));
+    assert_eq!(
+        tactics["item_equipment_runtime_contract_version"],
+        "trillionnium_world_item_equipment_runtime_v1"
+    );
+    assert_eq!(
+        tactics["item_equipment_runtime"]["source_of_truth"],
+        "rust_trillionnium_item_equipment_runtime_state"
+    );
+    assert!(
+        tactics["item_equipment_runtime"]["inventory_count"]
+            .as_u64()
+            .unwrap_or_default()
+            >= 3
+    );
+    assert!(tactics["item_equipment_runtime"]["equipment_slots"]
+        .as_object()
+        .is_some_and(|slots| slots.len() >= 3));
     assert!(full_content_alignment["domains"]
         .as_array()
         .unwrap()
@@ -3342,6 +3359,76 @@ async fn world_tactics_command_endpoint_validates_training_place_and_mutates_cha
     assert_eq!(
         trained["outcome"]["source_of_truth"],
         "rust_mentor_training_validator"
+    );
+
+    let (wrong_slot_status, wrong_slot) = send_json_request(
+        &app,
+        "POST",
+        "/v1/world/tactics/command",
+        &[],
+        json!({
+            "matrix_user_id": "@alice:local.dev",
+            "room_id": "!world:local.dev",
+            "command": "equip_item",
+            "unit_id": "lord",
+            "item_id": "route-guard-staff",
+            "target_slot": "pack",
+            "body": "try equipping a staff into the wrong slot"
+        }),
+    )
+    .await;
+    assert_eq!(wrong_slot_status, StatusCode::OK);
+    assert_eq!(wrong_slot["outcome"]["accepted"], false);
+    assert_eq!(wrong_slot["outcome"]["result"], "equipment_slot_mismatch");
+    assert_eq!(wrong_slot["outcome"]["expected_slot"], "weapon");
+    assert_eq!(
+        wrong_slot["outcome"]["item_equipment_runtime_contract_version"],
+        "trillionnium_world_item_equipment_runtime_v1"
+    );
+    assert_eq!(
+        wrong_slot["outcome"]["source_of_truth"],
+        "rust_trillionnium_item_equipment_runtime_state"
+    );
+
+    let (equipped_status, equipped) = send_json_request(
+        &app,
+        "POST",
+        "/v1/world/tactics/command",
+        &[],
+        json!({
+            "matrix_user_id": "@alice:local.dev",
+            "room_id": "!world:local.dev",
+            "command": "equip_item",
+            "unit_id": "lord",
+            "item_id": "street-compass-bracer",
+            "target_slot": "wrist",
+            "body": "equip the street compass bracer from Rust-owned inventory"
+        }),
+    )
+    .await;
+    assert_eq!(equipped_status, StatusCode::OK);
+    assert_eq!(equipped["outcome"]["accepted"], true);
+    assert_eq!(equipped["outcome"]["result"], "item_equipped");
+    assert_eq!(equipped["outcome"]["equipped_slot"], "wrist");
+    assert_eq!(
+        equipped["outcome"]["item_equipment_runtime_contract_version"],
+        "trillionnium_world_item_equipment_runtime_v1"
+    );
+    assert_eq!(
+        equipped["outcome"]["item_equipment_runtime"]["runtime_status"],
+        "rust_owned_inventory_and_equip_slots_live"
+    );
+    assert!(
+        equipped["outcome"]["item_equipment_runtime"]["inventory_count"]
+            .as_u64()
+            .unwrap_or_default()
+            >= 3
+    );
+    assert!(
+        equipped["outcome"]["item_equipment_runtime"]["equipment_slots"]
+            .get("wrist")
+            .and_then(Value::as_str)
+            .is_some_and(|slot_item| !slot_item.is_empty())
     );
 
     let (wrong_combat_node_status, wrong_combat_node) = send_json_request(
@@ -5273,6 +5360,15 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(world_html.contains("rust_trillionnium_full_content_volume_alignment_gate"));
     assert!(world_html.contains("trillionnium_native_no_copied_hero_tan_text_assets_or_tables"));
     assert!(world_html.contains("data-content-domain=\"items_and_equipment\""));
+    assert!(world_html.contains("data-domain-status=\"rust_runtime_backed\""));
+    assert!(world_html.contains("id=\"trillionnium-equipment\""));
+    assert!(world_html.contains(
+        "data-item-equipment-runtime-contract=\"trillionnium_world_item_equipment_runtime_v1\""
+    ));
+    assert!(world_html.contains("rust_trillionnium_item_equipment_runtime_state"));
+    assert!(world_html.contains("class=\"trillionnium-equipment-form\""));
+    assert!(world_html.contains("name=\"command\" value=\"equip_item\""));
+    assert!(world_html.contains("name=\"target_slot\""));
     assert!(world_html.contains("data-content-domain=\"survival_time_resource_pressure\""));
     assert!(world_html.contains("data-ledger-reward-requires-settlement=\"true\""));
     assert!(world_html.contains("data-review-hold-gate-enforced=\"true\""));

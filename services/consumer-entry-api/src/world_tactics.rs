@@ -60,6 +60,8 @@ pub(super) const TRILLIONNIUM_WORLD_COMBAT_ENCOUNTER_LOOP_CONTRACT_VERSION: &str
     "trillionnium_world_combat_encounter_loop_v1";
 pub(super) const TRILLIONNIUM_HERO_TAN_FULL_CONTENT_ALIGNMENT_CONTRACT_VERSION: &str =
     "trillionnium_hero_tan_full_content_alignment_v1";
+pub(super) const TRILLIONNIUM_WORLD_ITEM_EQUIPMENT_RUNTIME_CONTRACT_VERSION: &str =
+    "trillionnium_world_item_equipment_runtime_v1";
 
 fn default_tactics_objective_id() -> String {
     "defeat_market_bandit".to_string()
@@ -177,7 +179,7 @@ fn world_tactics_active_overlay_id(world: &WorldState, matrix_user_id: &str) -> 
 
 fn world_tactics_command_action_cost(command: &str) -> i64 {
     match command {
-        "talk_npc" | "select_unit" | "inspect_osm_underlay" | "end_turn" => 0,
+        "talk_npc" | "select_unit" | "inspect_osm_underlay" | "equip_item" | "end_turn" => 0,
         _ => 1,
     }
 }
@@ -776,6 +778,99 @@ fn trillionnium_known_skill_definitions_json(skill_ids: &[String]) -> Value {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct WorldTrillionniumInventoryItem {
+    pub(super) item_instance_id: String,
+    pub(super) item_id: String,
+    pub(super) slot: String,
+    pub(super) family: String,
+    pub(super) display_name: String,
+    pub(super) quantity: u16,
+    pub(super) quality: String,
+    pub(super) equipped_slot: Option<String>,
+    pub(super) acquired_from: String,
+    pub(super) acquired_at_epoch: i64,
+    pub(super) updated_at_epoch: i64,
+}
+
+fn trillionnium_catalog_item_field(item_id: &str, field: &str) -> Option<String> {
+    trillionnium_item_equipment_catalog_json()
+        .get("items")
+        .and_then(Value::as_array)
+        .and_then(|items| {
+            items.iter().find(|item| {
+                item.get("item_id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|candidate| candidate == item_id)
+            })
+        })
+        .and_then(|item| item.get(field).and_then(Value::as_str))
+        .map(ToString::to_string)
+}
+
+fn trillionnium_inventory_item_for(
+    matrix_user_id: &str,
+    item_id: &str,
+    acquired_from: &str,
+    equipped_slot: Option<&str>,
+    now_epoch: i64,
+) -> Option<WorldTrillionniumInventoryItem> {
+    let slot = trillionnium_catalog_item_field(item_id, "slot")?;
+    let family = trillionnium_catalog_item_field(item_id, "family")?;
+    let display_name = trillionnium_catalog_item_field(item_id, "display_name")?;
+    Some(WorldTrillionniumInventoryItem {
+        item_instance_id: league_hash_id(
+            "world-trillionnium-inventory-item",
+            &format!("{matrix_user_id}:{item_id}"),
+        ),
+        item_id: item_id.to_string(),
+        slot,
+        family,
+        display_name,
+        quantity: 1,
+        quality: "starter".to_string(),
+        equipped_slot: equipped_slot.map(ToString::to_string),
+        acquired_from: acquired_from.to_string(),
+        acquired_at_epoch: now_epoch,
+        updated_at_epoch: now_epoch,
+    })
+}
+
+fn default_trillionnium_inventory_items(
+    matrix_user_id: &str,
+    now_epoch: i64,
+) -> Vec<WorldTrillionniumInventoryItem> {
+    [
+        ("route-guard-staff", Some("weapon")),
+        ("street-compass-bracer", Some("wrist")),
+        ("evidence-wrap-case", Some("pack")),
+    ]
+    .into_iter()
+    .filter_map(|(item_id, equipped_slot)| {
+        trillionnium_inventory_item_for(
+            matrix_user_id,
+            item_id,
+            "rust_default_trillionnium_starter_loadout",
+            equipped_slot,
+            now_epoch,
+        )
+    })
+    .collect()
+}
+
+fn default_trillionnium_equipment_slots(
+    inventory_items: &[WorldTrillionniumInventoryItem],
+) -> HashMap<String, String> {
+    inventory_items
+        .iter()
+        .filter_map(|item| {
+            item.equipped_slot
+                .as_ref()
+                .map(|slot| (slot.clone(), item.item_instance_id.clone()))
+        })
+        .collect()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct TrillionniumAttributes {
     pub(super) physique: u16,
     pub(super) force: u16,
@@ -844,11 +939,17 @@ pub(super) struct WorldTrillionniumCharacter {
     pub(super) sect_id: Option<String>,
     pub(super) title: String,
     pub(super) skill_ids: Vec<String>,
+    #[serde(default)]
+    pub(super) inventory_items: Vec<WorldTrillionniumInventoryItem>,
+    #[serde(default)]
+    pub(super) equipment_slots: HashMap<String, String>,
     pub(super) updated_at_epoch: i64,
 }
 
 impl WorldTrillionniumCharacter {
     fn default_for(matrix_user_id: &str) -> Self {
+        let inventory_items = default_trillionnium_inventory_items(matrix_user_id, 0);
+        let equipment_slots = default_trillionnium_equipment_slots(&inventory_items);
         Self {
             matrix_user_id: matrix_user_id.to_string(),
             character_id: league_hash_id("trillionnium-character", matrix_user_id),
@@ -861,8 +962,53 @@ impl WorldTrillionniumCharacter {
                 "basic_lightness".to_string(),
                 "reading_and_contracts".to_string(),
             ],
+            inventory_items,
+            equipment_slots,
             updated_at_epoch: 0,
         }
+    }
+
+    fn ensure_item_equipment_defaults(&mut self, now_epoch: i64) {
+        if self.inventory_items.is_empty() {
+            self.inventory_items =
+                default_trillionnium_inventory_items(&self.matrix_user_id, now_epoch);
+        }
+        if self.equipment_slots.is_empty() {
+            self.equipment_slots = default_trillionnium_equipment_slots(&self.inventory_items);
+        }
+    }
+
+    fn equip_item_by_id(&mut self, item_id: &str, now_epoch: i64) -> Option<(String, String)> {
+        self.ensure_item_equipment_defaults(now_epoch);
+        let (slot, item_instance_id) = {
+            let item = self
+                .inventory_items
+                .iter_mut()
+                .find(|candidate| candidate.item_id == item_id)?;
+            item.updated_at_epoch = now_epoch;
+            item.equipped_slot = Some(item.slot.clone());
+            (item.slot.clone(), item.item_instance_id.clone())
+        };
+        self.equipment_slots
+            .insert(slot.clone(), item_instance_id.clone());
+        self.updated_at_epoch = now_epoch;
+        Some((slot, item_instance_id))
+    }
+
+    fn item_equipment_runtime_json(&self) -> Value {
+        json!({
+            "contract_version": TRILLIONNIUM_WORLD_ITEM_EQUIPMENT_RUNTIME_CONTRACT_VERSION,
+            "source_of_truth": "rust_trillionnium_item_equipment_runtime_state",
+            "persistence_owner": "world_state.world_trillionnium_characters.inventory_items_and_equipment_slots",
+            "runtime_status": "rust_owned_inventory_and_equip_slots_live",
+            "content_policy": "trillionnium_native_no_copied_hero_tan_text_assets_or_tables",
+            "inventory_count": self.inventory_items.len(),
+            "equipped_slot_count": self.equipment_slots.len(),
+            "inventory_items": &self.inventory_items,
+            "equipment_slots": &self.equipment_slots,
+            "allowed_mutation_commands": ["equip_item", "attack", "complete_task"],
+            "web_role": "visualization_input_only",
+        })
     }
 
     fn to_projection_json(&self) -> Value {
@@ -879,6 +1025,10 @@ impl WorldTrillionniumCharacter {
             "attributes": self.attributes.to_value(),
             "skill_ids": &self.skill_ids,
             "known_skills": trillionnium_known_skill_definitions_json(&self.skill_ids),
+            "item_equipment_runtime_contract_version": TRILLIONNIUM_WORLD_ITEM_EQUIPMENT_RUNTIME_CONTRACT_VERSION,
+            "inventory_items": &self.inventory_items,
+            "equipment_slots": &self.equipment_slots,
+            "item_equipment_runtime": self.item_equipment_runtime_json(),
             "skill_definition_contract": TRILLIONNIUM_SKILL_CONTRACT_VERSION,
             "skill_families": [
                 "basic_inner_power",
@@ -917,12 +1067,13 @@ pub(super) fn world_trillionnium_character_projection_json(
     world: &WorldState,
     matrix_user_id: &str,
 ) -> Value {
-    world
+    let mut character = world
         .world_trillionnium_characters
         .get(matrix_user_id)
         .cloned()
-        .unwrap_or_else(|| WorldTrillionniumCharacter::default_for(matrix_user_id))
-        .to_projection_json()
+        .unwrap_or_else(|| WorldTrillionniumCharacter::default_for(matrix_user_id));
+    character.ensure_item_equipment_defaults(0);
+    character.to_projection_json()
 }
 
 pub(super) fn trillionnium_world_combat_encounter_projection_json(
@@ -2954,7 +3105,7 @@ fn trillionnium_item_equipment_catalog_json() -> Value {
         "contract_version": "trillionnium_native_item_equipment_catalog_v1",
         "source_of_truth": "rust_trillionnium_item_equipment_catalog",
         "content_policy": "trillionnium_native_no_copied_hero_tan_text_assets_or_tables",
-        "runtime_status": "catalog_projection_gate_runtime_mutation_pending",
+        "runtime_status": "catalog_drives_rust_owned_inventory_and_equip_slots",
         "items": [
             {
                 "item_id": "ledger-seal-token",
@@ -3203,6 +3354,7 @@ fn total_nested_array_field_count(items: &Value, field: &str) -> usize {
 
 fn trillionnium_full_content_volume_alignment_json(
     world: &WorldState,
+    trillionnium_character: &Value,
     skill_definitions: &Value,
     training_commands: &Value,
     sects: &Value,
@@ -3237,6 +3389,12 @@ fn trillionnium_full_content_volume_alignment_json(
         .unwrap_or(0);
     let resource_loop_count = nested_array_len(resource_pressure_loops, "loops");
     let story_arc_count = nested_array_len(story_arc_catalog, "arcs");
+    let runtime_inventory_item_count = nested_array_len(trillionnium_character, "inventory_items");
+    let runtime_equipped_slot_count = trillionnium_character
+        .get("equipment_slots")
+        .and_then(Value::as_object)
+        .map(Map::len)
+        .unwrap_or(0);
     let map_node_count = world.world_map_nodes.len();
     let thresholds_green = skill_count >= 18
         && skill_family_count >= 14
@@ -3254,6 +3412,8 @@ fn trillionnium_full_content_volume_alignment_json(
         && combat_log_beat_count >= 4
         && item_count >= 12
         && item_family_count >= 8
+        && runtime_inventory_item_count >= 3
+        && runtime_equipped_slot_count >= 3
         && resource_loop_count >= 6
         && story_arc_count >= 6;
 
@@ -3297,6 +3457,8 @@ fn trillionnium_full_content_volume_alignment_json(
             "combat_log_beats": 4,
             "item_equipment_catalog": 12,
             "item_families": 8,
+            "runtime_inventory_items": 3,
+            "runtime_equipped_slots": 3,
             "resource_pressure_loops": 6,
             "story_arcs": 6
         },
@@ -3317,6 +3479,8 @@ fn trillionnium_full_content_volume_alignment_json(
             "combat_log_beats": combat_log_beat_count,
             "item_equipment_catalog": item_count,
             "item_families": item_family_count,
+            "runtime_inventory_items": runtime_inventory_item_count,
+            "runtime_equipped_slots": runtime_equipped_slot_count,
             "resource_pressure_loops": resource_loop_count,
             "story_arcs": story_arc_count
         },
@@ -3328,7 +3492,7 @@ fn trillionnium_full_content_volume_alignment_json(
             {"domain": "quest_task_archetypes", "status": "native_catalog_expanded", "gate_field": "task_archetypes"},
             {"domain": "world_nodes_and_objective_travel", "status": "rust_runtime_backed", "gate_field": "world_objective_travel"},
             {"domain": "combat_entry_and_return", "status": "rust_runtime_backed", "gate_field": "world_combat_encounter"},
-            {"domain": "items_and_equipment", "status": "native_catalog_projection_gate", "gate_field": "item_equipment_catalog"},
+            {"domain": "items_and_equipment", "status": "rust_runtime_backed", "gate_field": "item_equipment_runtime"},
             {"domain": "survival_time_resource_pressure", "status": "native_catalog_projection_gate", "gate_field": "resource_pressure_loops"},
             {"domain": "story_arcs", "status": "native_catalog_projection_gate", "gate_field": "story_arc_catalog"}
         ],
@@ -3605,6 +3769,16 @@ fn tactics_available_commands_json() -> Value {
                 web_target: "#trillionnium-status",
                 required_skill_id: Some("basic_inner_power"),
                 action_cost: 1,
+            },
+            TacticsCommandDescriptor {
+                command_id: "equip_item",
+                command: "equip_item",
+                label: "装备道具",
+                command_family: "item_equipment",
+                validation_owner: "rust_trillionnium_item_equipment_runtime_state",
+                web_target: "#trillionnium-equipment",
+                required_skill_id: None,
+                action_cost: 0,
             },
             TacticsCommandDescriptor {
                 command_id: "train_skill",
@@ -3978,6 +4152,8 @@ pub(super) fn apply_world_tactics_command(
     unit_id: Option<&str>,
     target_tile: Option<&str>,
     skill_id: Option<&str>,
+    item_id: Option<&str>,
+    target_slot: Option<&str>,
     npc_id: Option<&str>,
     task_archetype_id: Option<&str>,
     osm_game_overlay_id: Option<&str>,
@@ -4104,6 +4280,7 @@ pub(super) fn apply_world_tactics_command(
         .world_trillionnium_characters
         .entry(matrix_user_id.to_string())
         .or_insert_with(|| WorldTrillionniumCharacter::default_for(matrix_user_id));
+    character.ensure_item_equipment_defaults(now_epoch);
     let known_skills: HashSet<String> = character.skill_ids.iter().cloned().collect();
 
     if matches!(command, "talk_npc" | "offer_task") {
@@ -4229,6 +4406,82 @@ pub(super) fn apply_world_tactics_command(
             "result": if command == "offer_task" { "task_offer_recorded" } else { "npc_talk_recorded" },
             "state_mutation": if command == "offer_task" { "world_task_offer_event_recorded" } else { "npc_relationship_event_recorded" },
             "source_of_truth": if command == "offer_task" { "rust_trillionnium_task_offer_validator" } else { "rust_trillionnium_npc_interaction_validator" },
+            "web_role": "intent_only_visualization_input",
+            "updated_at_epoch": now_epoch,
+        });
+    }
+
+    if command == "equip_item" {
+        let requested_item_id = item_id
+            .or(skill_id)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("route-guard-staff");
+        if trillionnium_catalog_item_field(requested_item_id, "item_id").is_none() {
+            return tactics_command_rejection_json(
+                command,
+                unit_id,
+                target_tile,
+                "unknown_item_id",
+            );
+        }
+        if let Some(requested_slot) = target_slot.map(str::trim).filter(|value| !value.is_empty()) {
+            let catalog_slot = trillionnium_catalog_item_field(requested_item_id, "slot")
+                .unwrap_or_else(|| "inventory".to_string());
+            if requested_slot != catalog_slot {
+                return json!({
+                    "contract_version": TRILLIONNIUM_TACTICS_COMMAND_OUTCOME_CONTRACT_VERSION,
+                    "item_equipment_runtime_contract_version": TRILLIONNIUM_WORLD_ITEM_EQUIPMENT_RUNTIME_CONTRACT_VERSION,
+                    "accepted": false,
+                    "command": command,
+                    "unit_id": unit_id,
+                    "target_tile": target_tile,
+                    "item_id": requested_item_id,
+                    "target_slot": requested_slot,
+                    "expected_slot": catalog_slot,
+                    "result": "equipment_slot_mismatch",
+                    "rejection_reason": "equip_requires_matching_rust_catalog_slot",
+                    "source_of_truth": "rust_trillionnium_item_equipment_runtime_state",
+                    "web_role": "intent_only_visualization_input",
+                });
+            }
+        }
+        let Some((equipped_slot, item_instance_id)) =
+            character.equip_item_by_id(requested_item_id, now_epoch)
+        else {
+            return json!({
+                "contract_version": TRILLIONNIUM_TACTICS_COMMAND_OUTCOME_CONTRACT_VERSION,
+                "item_equipment_runtime_contract_version": TRILLIONNIUM_WORLD_ITEM_EQUIPMENT_RUNTIME_CONTRACT_VERSION,
+                "accepted": false,
+                "command": command,
+                "unit_id": unit_id,
+                "target_tile": target_tile,
+                "item_id": requested_item_id,
+                "result": "item_not_in_inventory",
+                "rejection_reason": "equip_requires_item_in_rust_owned_inventory",
+                "source_of_truth": "rust_trillionnium_item_equipment_runtime_state",
+                "web_role": "intent_only_visualization_input",
+            });
+        };
+        character.title = "整备行囊".to_string();
+        character.updated_at_epoch = now_epoch;
+        return json!({
+            "contract_version": TRILLIONNIUM_TACTICS_COMMAND_OUTCOME_CONTRACT_VERSION,
+            "item_equipment_runtime_contract_version": TRILLIONNIUM_WORLD_ITEM_EQUIPMENT_RUNTIME_CONTRACT_VERSION,
+            "accepted": true,
+            "command": command,
+            "unit_id": unit_id,
+            "target_tile": target_tile,
+            "item_id": requested_item_id,
+            "target_slot": target_slot,
+            "item_instance_id": item_instance_id,
+            "equipped_slot": equipped_slot,
+            "equipment_slots": &character.equipment_slots,
+            "item_equipment_runtime": character.item_equipment_runtime_json(),
+            "validation_owner": descriptor.get("validation_owner").cloned().unwrap_or_else(|| json!("rust_trillionnium_item_equipment_runtime_state")),
+            "result": "item_equipped",
+            "state_mutation": "character_equipment_slot_updated",
+            "source_of_truth": "rust_trillionnium_item_equipment_runtime_state",
             "web_role": "intent_only_visualization_input",
             "updated_at_epoch": now_epoch,
         });
@@ -4632,10 +4885,21 @@ pub(super) fn world_tactics_board_projection_json(
     );
     let battle_log = trillionnium_battle_log_lines_json(&combat_log);
     let item_equipment_catalog = trillionnium_item_equipment_catalog_json();
+    let item_equipment_runtime = trillionnium_character
+        .get("item_equipment_runtime")
+        .cloned()
+        .unwrap_or_else(|| {
+            json!({
+                "contract_version": TRILLIONNIUM_WORLD_ITEM_EQUIPMENT_RUNTIME_CONTRACT_VERSION,
+                "source_of_truth": "rust_trillionnium_item_equipment_runtime_state",
+                "runtime_status": "projected_default_until_character_mutation",
+            })
+        });
     let resource_pressure_loops = trillionnium_resource_pressure_loops_json();
     let story_arc_catalog = trillionnium_story_arc_catalog_json();
     let full_content_alignment = trillionnium_full_content_volume_alignment_json(
         world,
+        &trillionnium_character,
         &skill_definitions,
         &training_commands,
         &sects,
@@ -4677,6 +4941,7 @@ pub(super) fn world_tactics_board_projection_json(
         "world_skill_practice_loop_contract_version": TRILLIONNIUM_WORLD_SKILL_PRACTICE_LOOP_CONTRACT_VERSION,
         "world_combat_encounter_loop_contract_version": TRILLIONNIUM_WORLD_COMBAT_ENCOUNTER_LOOP_CONTRACT_VERSION,
         "full_content_alignment_contract_version": TRILLIONNIUM_HERO_TAN_FULL_CONTENT_ALIGNMENT_CONTRACT_VERSION,
+        "item_equipment_runtime_contract_version": TRILLIONNIUM_WORLD_ITEM_EQUIPMENT_RUNTIME_CONTRACT_VERSION,
         "tactics_combat_resolution_contract_version": TRILLIONNIUM_TACTICS_COMBAT_RESOLUTION_CONTRACT_VERSION,
         "tactics_game_session_contract_version": TRILLIONNIUM_TACTICS_GAME_SESSION_CONTRACT_VERSION,
         "tactics_simulation_tick_contract_version": TRILLIONNIUM_TACTICS_SIMULATION_TICK_CONTRACT_VERSION,
@@ -4742,6 +5007,7 @@ pub(super) fn world_tactics_board_projection_json(
         "battle_log_style": trillionnium_battle_log_style_json(),
         "combat_log": combat_log,
         "item_equipment_catalog": item_equipment_catalog,
+        "item_equipment_runtime": item_equipment_runtime,
         "resource_pressure_loops": resource_pressure_loops,
         "story_arc_catalog": story_arc_catalog,
         "full_content_alignment": full_content_alignment,
@@ -4762,7 +5028,7 @@ pub(super) fn world_tactics_board_projection_json(
             "round": 1,
             "action_points_remaining": 2,
             "source_of_truth": "rust_tactics_turn_handler",
-            "allowed_commands": ["select_unit", "move_unit", "attack", "use_skill", "train_skill", "talk_npc", "offer_task", "complete_task", "interact", "end_turn"],
+            "allowed_commands": ["select_unit", "move_unit", "attack", "use_skill", "equip_item", "train_skill", "talk_npc", "offer_task", "complete_task", "interact", "end_turn"],
         },
         "battle_log": battle_log,
         "osm_objective_source": {

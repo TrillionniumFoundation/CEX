@@ -1488,6 +1488,8 @@ async fn record_world_tactics_command(
             payload.unit_id.as_deref(),
             payload.target_tile.as_deref(),
             payload.skill_id.as_deref(),
+            payload.item_id.as_deref(),
+            payload.target_slot.as_deref(),
             payload.npc_id.as_deref(),
             payload.task_archetype_id.as_deref(),
             payload.osm_game_overlay_id.as_deref(),
@@ -1513,6 +1515,8 @@ async fn record_world_tactics_command(
                 payload
                     .skill_id
                     .as_deref()
+                    .or(payload.item_id.as_deref())
+                    .or(payload.target_slot.as_deref())
                     .or(payload.npc_id.as_deref())
                     .or(payload.task_archetype_id.as_deref())
                     .unwrap_or("none")
@@ -2084,6 +2088,8 @@ pub(super) async fn post_world_web_tactics_command(
         unit_id: payload.unit_id,
         target_tile: payload.target_tile,
         skill_id: payload.skill_id,
+        item_id: payload.item_id,
+        target_slot: payload.target_slot,
         npc_id: payload.npc_id,
         task_archetype_id: payload.task_archetype_id,
         osm_game_overlay_id: payload.osm_game_overlay_id,
@@ -2114,6 +2120,7 @@ pub(super) async fn post_world_web_tactics_command(
     if accepted {
         let target = match command_for_redirect.as_str() {
             "attack" => "/world?tactics=1&combat=resolved#world-local-combat-encounter",
+            "equip_item" => "/world?tactics=1&item=equipped#trillionnium-equipment",
             "talk_npc" => "/world?tactics=1&npc=talked#world-play-first-action-prompt",
             "train_skill" => "/world?tactics=1&skill=trained#world-local-skill-practice",
             "offer_task" => "/world?tactics=1&task=offered#world-play-first-action-prompt",
@@ -2124,6 +2131,7 @@ pub(super) async fn post_world_web_tactics_command(
     } else {
         let target = match command_for_redirect.as_str() {
             "attack" => "/world?tactics=0&combat=rejected#world-local-combat-encounter",
+            "equip_item" => "/world?tactics=0&item=rejected#trillionnium-equipment",
             "talk_npc" | "train_skill" | "offer_task" | "complete_task" => {
                 "/world?tactics=0&task=rejected#world-play-first-action-prompt"
             }

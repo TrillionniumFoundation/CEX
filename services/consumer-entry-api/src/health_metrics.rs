@@ -1781,14 +1781,105 @@ fn first_maturity_matrix_user_id(league: &LeagueState) -> String {
         .collect::<Vec<_>>();
     candidates.sort();
     candidates.dedup();
+
+    let settled_reward_ids = league
+        .rewards
+        .iter()
+        .filter(|reward| {
+            matches!(
+                reward.ledger_status.as_deref(),
+                Some("settled") | Some("duplicate")
+            )
+        })
+        .map(|reward| reward.reward_id.clone())
+        .collect::<HashSet<_>>();
+    let mut successful_task_counts: HashMap<String, i64> = HashMap::new();
+    let mut experience_data_points: HashMap<String, i64> = HashMap::new();
+    let inc = |map: &mut HashMap<String, i64>, matrix_user_id: &str, amount: i64| {
+        *map.entry(matrix_user_id.to_string()).or_insert(0) += amount;
+    };
+
+    for submission in league.submissions.values() {
+        let payout_status = submission.payout_status.as_deref().unwrap_or("eligible");
+        let released = payout_status == "eligible" || payout_status == "approved_release";
+        let reward_id = league_hash_id("reward", &submission.submission_id);
+        if submission.score >= 60.0 && released && settled_reward_ids.contains(&reward_id) {
+            inc(&mut successful_task_counts, &submission.matrix_user_id, 1);
+        }
+        inc(&mut experience_data_points, &submission.matrix_user_id, 1);
+    }
+    for completion in &league.world.world_contract_completions {
+        if completion.score >= 60.0
+            && completion.payout_status == "eligible"
+            && matches!(
+                completion.ledger_status.as_deref(),
+                Some("settled") | Some("duplicate")
+            )
+        {
+            inc(&mut successful_task_counts, &completion.matrix_user_id, 1);
+        }
+    }
+    for delivery in &league.world.world_work_deliveries {
+        if delivery.score >= 60.0 && delivery.status == "delivered" {
+            inc(&mut successful_task_counts, &delivery.matrix_user_id, 1);
+        }
+    }
+    for acceptance in &league.world.world_work_acceptances {
+        if acceptance.status == "accepted" {
+            inc(&mut successful_task_counts, &acceptance.matrix_user_id, 1);
+        }
+    }
+    for upgrade in &league.world.world_asset_upgrades {
+        if upgrade.score >= 60.0 && upgrade.status == "upgraded" {
+            inc(&mut successful_task_counts, &upgrade.matrix_user_id, 1);
+        }
+    }
+    for battle in league.battles.values() {
+        inc(&mut experience_data_points, &battle.matrix_user_id, 1);
+    }
+    for event in &league.world.world_events {
+        inc(&mut experience_data_points, &event.actor_matrix_user_id, 1);
+    }
+    for asset in &league.world.world_assets {
+        inc(&mut experience_data_points, &asset.owner_matrix_user_id, 1);
+    }
+    for company in &league.world.world_companies {
+        inc(
+            &mut experience_data_points,
+            &company.owner_matrix_user_id,
+            1,
+        );
+    }
+    for listing in &league.world.world_listings {
+        inc(
+            &mut experience_data_points,
+            &listing.owner_matrix_user_id,
+            1,
+        );
+    }
+    for purchase in &league.world.world_purchases {
+        inc(
+            &mut experience_data_points,
+            &purchase.buyer_matrix_user_id,
+            1,
+        );
+        if purchase.seller_matrix_user_id != purchase.buyer_matrix_user_id {
+            inc(
+                &mut experience_data_points,
+                &purchase.seller_matrix_user_id,
+                1,
+            );
+        }
+    }
+
     candidates.sort_by(|left, right| {
         let left_score = (
-            league_successful_task_count(league, left),
-            league_experience_data_points(league, left),
+            *successful_task_counts.get(left).unwrap_or(&0),
+            *experience_data_points.get(left).unwrap_or(&0),
         );
         let right_score = (
-            league_successful_task_count(league, right),
-            league_experience_data_points(league, right),
+            *successful_task_counts.get(right).unwrap_or(&0),
+            *experience_data_points.get(right).unwrap_or(&0),
         );
         right_score.cmp(&left_score).then_with(|| left.cmp(right))
     });

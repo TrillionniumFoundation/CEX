@@ -1385,6 +1385,82 @@ fn world_trillionnium_full_content_alignment_html(tactics_board: &Value) -> Stri
     )
 }
 
+fn world_trillionnium_item_equipment_runtime_html(
+    trillionnium_character: &Value,
+    current_matrix_user_id: &str,
+    csrf_input: &str,
+) -> String {
+    let runtime = trillionnium_character
+        .get("item_equipment_runtime")
+        .unwrap_or(&Value::Null);
+    let contract = runtime
+        .get("contract_version")
+        .and_then(Value::as_str)
+        .unwrap_or("trillionnium_world_item_equipment_runtime_v1");
+    let source_of_truth = runtime
+        .get("source_of_truth")
+        .and_then(Value::as_str)
+        .unwrap_or("rust_trillionnium_item_equipment_runtime_state");
+    let inventory_count = runtime
+        .get("inventory_count")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    let equipped_slot_count = runtime
+        .get("equipped_slot_count")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    let item_cards = trillionnium_character
+        .get("inventory_items")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .take(8)
+        .map(|item| {
+            let item_id = item.get("item_id").and_then(Value::as_str).unwrap_or("item");
+            let slot = item.get("slot").and_then(Value::as_str).unwrap_or("slot");
+            let family = item
+                .get("family")
+                .and_then(Value::as_str)
+                .unwrap_or("item");
+            let display_name = item
+                .get("display_name")
+                .and_then(Value::as_str)
+                .unwrap_or(item_id);
+            let equipped_slot = item
+                .get("equipped_slot")
+                .and_then(Value::as_str)
+                .unwrap_or("inventory");
+            format!(
+                "<article class=\"mini trillionnium-equipment-item\" data-item-id=\"{}\" data-equipment-slot=\"{}\" data-family=\"{}\" data-equipped-slot=\"{}\"><strong>{}</strong><span>{} · {}</span><form class=\"trillionnium-equipment-form\" method=\"post\" action=\"/world/web/tactics-command\" data-command=\"equip_item\" data-item-id=\"{}\" data-target-slot=\"{}\" data-source-of-truth=\"rust_trillionnium_item_equipment_runtime_state\" data-web-role=\"intent_only_visualization_input\">{}<input type=\"hidden\" name=\"matrix_user_id\" value=\"{}\"><input type=\"hidden\" name=\"command\" value=\"equip_item\"><input type=\"hidden\" name=\"unit_id\" value=\"lord\"><input type=\"hidden\" name=\"item_id\" value=\"{}\"><input type=\"hidden\" name=\"target_slot\" value=\"{}\"><input type=\"hidden\" name=\"body\" value=\"equip item {} through Rust-owned Trillionnium inventory/equipment runtime\"><button type=\"submit\" data-i18n-en=\"Equip\" data-i18n-zh=\"装备\">Equip</button></form></article>",
+                escape_html_text(item_id),
+                escape_html_text(slot),
+                escape_html_text(family),
+                escape_html_text(equipped_slot),
+                escape_world_visible_text(display_name),
+                escape_html_text(slot),
+                escape_html_text(family),
+                escape_html_text(item_id),
+                escape_html_text(slot),
+                csrf_input,
+                escape_html_text(current_matrix_user_id),
+                escape_html_text(item_id),
+                escape_html_text(slot),
+                escape_html_text(item_id),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        "<section id=\"trillionnium-equipment\" class=\"trillionnium-equipment-panel\" data-item-equipment-runtime-contract=\"{}\" data-inventory-count=\"{}\" data-equipped-slot-count=\"{}\" data-source-of-truth=\"{}\" data-persistence-owner=\"world_state.world_trillionnium_characters.inventory_items_and_equipment_slots\" data-web-role=\"visualization_input_only\" aria-label=\"Trillionnium inventory and equipment\" data-i18n-aria-label-en=\"Trillionnium inventory and equipment\" data-i18n-aria-label-zh=\"Trillionnium 道具与装备\"><h4 data-i18n-en=\"Inventory / equipment\" data-i18n-zh=\"道具 / 装备\">Inventory / equipment</h4><p data-i18n-en=\"Starter items and equip slots are Rust-owned runtime state; browser forms only submit equip intent.\" data-i18n-zh=\"初始道具和装备槽是 Rust 拥有的运行态；浏览器表单只提交装备意图。\">Starter items and equip slots are Rust-owned runtime state; browser forms only submit equip intent.</p><div class=\"mini-grid\">{}</div></section>",
+        escape_html_text(contract),
+        inventory_count,
+        equipped_slot_count,
+        escape_html_text(source_of_truth),
+        item_cards,
+    )
+}
+
 fn world_current_node_overlay_id(current_map_node: Option<&WorldMapNode>) -> String {
     current_map_node
         .map(openstreetmap_game_overlay_id)
@@ -3165,6 +3241,11 @@ pub(super) async fn get_world_web_shell(
     );
     let trillionnium_full_content_alignment =
         world_trillionnium_full_content_alignment_html(&tactics_board);
+    let trillionnium_item_equipment_runtime = world_trillionnium_item_equipment_runtime_html(
+        &trillionnium_character,
+        current_matrix_user_id,
+        &csrf_input,
+    );
     let world_play_first_action_prompt = world_play_first_action_prompt_html(
         &league,
         &tactics_board,
@@ -4675,6 +4756,7 @@ pub(super) async fn get_world_web_shell(
               <p data-i18n-en="Web sends intent only; Rust checks mentor, OSM place, cost, cooldown, and skill mutation." data-i18n-zh="网页只提交意图；Rust 校验导师、OSM 地点、消耗、冷却和技能变更。">Web sends intent only; Rust checks mentor, OSM place, cost, cooldown, and skill mutation.</p>
               {trillionnium_training_forms}
             </section>
+            {trillionnium_item_equipment_runtime}
             <div class="tactics-chip-row" aria-label="Tactics rules" data-i18n-aria-label-en="Tactics rules" data-i18n-aria-label-zh="战棋规则">
               <span data-i18n-en="deterministic combat" data-i18n-zh="确定性战斗">deterministic combat</span>
               <span data-i18n-en="RPS unit counters" data-i18n-zh="兵种相克">RPS unit counters</span>

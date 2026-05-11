@@ -1963,13 +1963,19 @@ pub(super) async fn upsert_normalized_world_trillionnium_characters(
         let skill_ids = serde_json::to_string(&character.skill_ids).map_err(|err| {
             format!("failed to serialize world_trillionnium_characters.skill_ids: {err}")
         })?;
+        let inventory_items = serde_json::to_string(&character.inventory_items).map_err(|err| {
+            format!("failed to serialize world_trillionnium_characters.inventory_items: {err}")
+        })?;
+        let equipment_slots = serde_json::to_string(&character.equipment_slots).map_err(|err| {
+            format!("failed to serialize world_trillionnium_characters.equipment_slots: {err}")
+        })?;
         sqlx::query(
             "insert into world_trillionnium_characters (
                  matrix_user_id, character_id, display_name, attributes, sect_id,
-                 title, skill_ids, updated_at
+                 title, skill_ids, inventory_items, equipment_slots, updated_at
              ) values (
                  $1, $2, $3, $4::jsonb, $5,
-                 $6, $7::jsonb, to_timestamp($8::double precision)
+                 $6, $7::jsonb, $8::jsonb, $9::jsonb, to_timestamp($10::double precision)
              ) on conflict (matrix_user_id) do update set
                  character_id = excluded.character_id,
                  display_name = excluded.display_name,
@@ -1977,6 +1983,8 @@ pub(super) async fn upsert_normalized_world_trillionnium_characters(
                  sect_id = excluded.sect_id,
                  title = excluded.title,
                  skill_ids = excluded.skill_ids,
+                 inventory_items = excluded.inventory_items,
+                 equipment_slots = excluded.equipment_slots,
                  updated_at = excluded.updated_at",
         )
         .bind(&character.matrix_user_id)
@@ -1986,6 +1994,8 @@ pub(super) async fn upsert_normalized_world_trillionnium_characters(
         .bind(&character.sect_id)
         .bind(&character.title)
         .bind(skill_ids)
+        .bind(inventory_items)
+        .bind(equipment_slots)
         .bind(character.updated_at_epoch as f64)
         .execute(&mut **conn)
         .await
