@@ -1026,6 +1026,8 @@ async function main() {
   assert(await count(page, '.trillionnium-equipment-form[data-command="equip_item"][data-source-of-truth="rust_trillionnium_item_equipment_runtime_state"]') >= 1, 'world item/equipment equip intent form missing');
   assert(await count(page, '#trillionnium-full-content-alignment [data-content-domain="survival_time_resource_pressure"][data-domain-status="rust_runtime_backed"]') === 1, 'world full content survival/resource domain missing');
   assert(await count(page, '#trillionnium-resource-pressure-runtime[data-resource-pressure-runtime-contract="trillionnium_world_resource_pressure_runtime_v1"][data-source-of-truth="rust_trillionnium_resource_pressure_runtime_state"][data-persistence-owner="world_state.world_trillionnium_characters.resource_pressure_state"][data-web-role="visualization_input_only"]') === 1, 'world resource pressure runtime panel missing Rust-owned metadata');
+  assert(await count(page, '#trillionnium-full-content-alignment [data-content-domain="combat_numerics"][data-domain-status="rust_runtime_backed"]') === 1, 'world full content combat numerics domain must be Rust runtime backed');
+  assert(await count(page, '#trillionnium-combat-numerics-runtime[data-combat-numerics-runtime-contract="trillionnium_world_combat_numerics_runtime_v1"][data-source-of-truth="rust_trillionnium_combat_numerics_runtime_state"][data-persistence-owner="world_state.world_trillionnium_characters.combat_numerics_state"][data-runtime-status="rust_owned_hp_energy_guard_focus_hitcrit_live"][data-web-role="visualization_input_only"]') === 1, 'world combat numerics runtime panel missing Rust-owned metadata');
   assert(await count(page, '#trillionnium-full-content-alignment [data-content-domain="story_arcs"][data-domain-status="rust_runtime_backed"]') === 1, 'world full content story arcs domain must be Rust runtime backed');
   assert(await count(page, '#trillionnium-region-story-unlocks[data-region-story-unlock-runtime-contract="trillionnium_world_region_story_unlock_runtime_v1"][data-source-of-truth="rust_trillionnium_region_story_unlock_runtime_state"][data-persistence-owner="world_state.world_trillionnium_characters.region_story_unlock_state"][data-runtime-status="rust_owned_region_graph_story_arc_unlocks_live"][data-web-role="visualization_input_only"]') === 1, 'world region/story unlock runtime panel missing Rust-owned metadata');
   assert(await count(page, '#world-local-task-loop[data-pickup-command="offer_task"][data-completion-command="complete_task"]') === 1, 'world task pickup/completion affordance missing');
@@ -1147,6 +1149,12 @@ async function main() {
     resourceContract: document.querySelector('#trillionnium-resource-pressure-runtime')?.dataset?.resourcePressureRuntimeContract || '',
     resourceLastMutation: document.querySelector('#trillionnium-resource-pressure-runtime')?.dataset?.lastMutationEvent || '',
     resourceMutationCount: Number(document.querySelector('#trillionnium-resource-pressure-runtime')?.dataset?.mutationCount || 0),
+    combatNumericsContract: document.querySelector('#trillionnium-combat-numerics-runtime')?.dataset?.combatNumericsRuntimeContract || '',
+    combatNumericsSource: document.querySelector('#trillionnium-combat-numerics-runtime')?.dataset?.sourceOfTruth || '',
+    combatNumericsLastMutation: document.querySelector('#trillionnium-combat-numerics-runtime')?.dataset?.lastMutationEvent || '',
+    combatNumericsMutationCount: Number(document.querySelector('#trillionnium-combat-numerics-runtime')?.dataset?.mutationCount || 0),
+    combatNumericsHealthStatus: document.querySelector('#trillionnium-combat-numerics-runtime')?.dataset?.healthStatus || '',
+    combatNumericsExchangeCount: document.querySelectorAll('#trillionnium-combat-numerics-runtime .trillionnium-combat-exchange[data-result]:not([data-result="none"])').length,
     regionStoryContract: document.querySelector('#trillionnium-region-story-unlocks')?.dataset?.regionStoryUnlockRuntimeContract || '',
     regionStoryLastMutation: document.querySelector('#trillionnium-region-story-unlocks')?.dataset?.lastMutationEvent || '',
     regionStoryArcCount: Number(document.querySelector('#trillionnium-region-story-unlocks')?.dataset?.unlockedStoryArcCount || 0),
@@ -1154,6 +1162,7 @@ async function main() {
   assert(localCombatEncounterState.promptNodeId === 'mirror-city-square' && localCombatEncounterState.returnNodeId === 'mirror-city-square', 'world local combat did not return to the current exploration node', localCombatEncounterState);
   assert(localCombatEncounterState.encounterContract === 'trillionnium_world_combat_encounter_loop_v1' && localCombatEncounterState.returnState === 'map_ready_after_resolution' && localCombatEncounterState.rewardStatus === 'settled', 'world local combat return projection did not expose Rust settlement/map state', localCombatEncounterState);
   assert(localCombatEncounterState.resourceContract === 'trillionnium_world_resource_pressure_runtime_v1' && localCombatEncounterState.resourceLastMutation === 'tactics_attack' && localCombatEncounterState.resourceMutationCount >= 1, 'world local combat did not surface Rust-owned resource-pressure mutation state', localCombatEncounterState);
+  assert(localCombatEncounterState.combatNumericsContract === 'trillionnium_world_combat_numerics_runtime_v1' && localCombatEncounterState.combatNumericsSource === 'rust_trillionnium_combat_numerics_runtime_state' && localCombatEncounterState.combatNumericsLastMutation === 'tactics_attack' && localCombatEncounterState.combatNumericsMutationCount >= 1 && localCombatEncounterState.combatNumericsExchangeCount >= 1 && localCombatEncounterState.combatNumericsHealthStatus, 'world local combat did not surface Rust-owned combat numerics mutation state', localCombatEncounterState);
   assert(localCombatEncounterState.regionStoryContract === 'trillionnium_world_region_story_unlock_runtime_v1' && localCombatEncounterState.regionStoryLastMutation === 'tactics_attack' && localCombatEncounterState.regionStoryArcCount >= 2, 'world local combat did not surface Rust-owned region/story unlock mutation state', localCombatEncounterState);
   assert(await count(page, '#world-local-npc-talk .world-local-npc-form[data-command="talk_npc"][data-npc-id="npc-street-compass-sifu"]') >= 1, 'world local NPC talk form missing at Mirror City Square');
   assert(await count(page, '#world-local-npc-talk .world-local-npc-form[data-command="offer_task"][data-npc-id="npc-street-compass-sifu"]') >= 1, 'world local NPC offer_task form missing at Mirror City Square');
@@ -1194,6 +1203,7 @@ async function main() {
   assert(await count(page, '#world-local-task-complete-form') === 0, 'world local completion form must disappear while settlement is pending');
   steps.push({ name: 'world_local_skill_practice_mentor_loop', ok: true, route_steps_to_npc_hub: routeToNpcHub.length, known_skill_count: localSkillPracticeState.knownSkillCount });
   steps.push({ name: 'world_local_combat_encounter_return_loop', ok: true, return_state: localCombatEncounterState.returnState, reward_status: localCombatEncounterState.rewardStatus });
+  steps.push({ name: 'world_combat_numerics_runtime_loop', ok: true, last_mutation: localCombatEncounterState.combatNumericsLastMutation, mutation_count: localCombatEncounterState.combatNumericsMutationCount, exchange_count: localCombatEncounterState.combatNumericsExchangeCount });
   steps.push({ name: 'world_resource_pressure_runtime_loop', ok: true, last_mutation: localResourcePressureAfterTask.lastMutation, mutation_count: localResourcePressureAfterTask.mutationCount });
   steps.push({ name: 'world_region_story_unlock_runtime_loop', ok: true, last_mutation: localRegionStoryAfterTask.lastMutation, mutation_count: localRegionStoryAfterTask.mutationCount, unlocked_story_arc_count: localRegionStoryAfterTask.unlockedStoryArcCount });
   steps.push({ name: 'world_local_npc_task_pickup_completion_loop', ok: true, route_steps_to_npc_hub: routeToNpcHub.length });
@@ -1398,6 +1408,7 @@ async function main() {
       world_transition_semantics: true,
       world_local_skill_practice_mentor_loop: true,
       world_local_combat_encounter_return_loop: true,
+      world_combat_numerics_runtime_loop: true,
       world_resource_pressure_runtime_loop: true,
       world_region_story_unlock_runtime_loop: true,
       world_local_npc_task_loop: true,

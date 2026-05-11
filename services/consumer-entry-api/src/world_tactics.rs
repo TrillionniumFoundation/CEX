@@ -66,6 +66,8 @@ pub(super) const TRILLIONNIUM_WORLD_RESOURCE_PRESSURE_RUNTIME_CONTRACT_VERSION: 
     "trillionnium_world_resource_pressure_runtime_v1";
 pub(super) const TRILLIONNIUM_WORLD_REGION_STORY_UNLOCK_RUNTIME_CONTRACT_VERSION: &str =
     "trillionnium_world_region_story_unlock_runtime_v1";
+pub(super) const TRILLIONNIUM_WORLD_COMBAT_NUMERICS_RUNTIME_CONTRACT_VERSION: &str =
+    "trillionnium_world_combat_numerics_runtime_v1";
 
 fn default_tactics_objective_id() -> String {
     "defeat_market_bandit".to_string()
@@ -1418,6 +1420,397 @@ impl WorldTrillionniumRegionStoryUnlockState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct WorldTrillionniumCombatExchange {
+    pub(super) event_kind: String,
+    pub(super) command: String,
+    pub(super) attacker_unit_id: String,
+    pub(super) defender_unit_id: String,
+    pub(super) target_tile: String,
+    pub(super) skill_id: String,
+    pub(super) damage_dealt: i64,
+    pub(super) defender_hp_before: i64,
+    pub(super) defender_hp_after: i64,
+    pub(super) player_hp_delta: i64,
+    pub(super) inner_energy_delta: i64,
+    pub(super) guard_delta: i64,
+    pub(super) focus_delta: i64,
+    pub(super) mitigation_applied: i64,
+    pub(super) hit_quality: String,
+    pub(super) critical: bool,
+    pub(super) stance_after: String,
+    pub(super) tempo_after: String,
+    pub(super) result: String,
+    pub(super) source_of_truth: String,
+    pub(super) created_at_epoch: i64,
+}
+
+impl WorldTrillionniumCombatExchange {
+    fn to_value(&self) -> Value {
+        json!({
+            "event_kind": &self.event_kind,
+            "command": &self.command,
+            "attacker_unit_id": &self.attacker_unit_id,
+            "defender_unit_id": &self.defender_unit_id,
+            "target_tile": &self.target_tile,
+            "skill_id": &self.skill_id,
+            "damage_dealt": self.damage_dealt,
+            "defender_hp_before": self.defender_hp_before,
+            "defender_hp_after": self.defender_hp_after,
+            "player_hp_delta": self.player_hp_delta,
+            "inner_energy_delta": self.inner_energy_delta,
+            "guard_delta": self.guard_delta,
+            "focus_delta": self.focus_delta,
+            "mitigation_applied": self.mitigation_applied,
+            "hit_quality": &self.hit_quality,
+            "critical": self.critical,
+            "stance_after": &self.stance_after,
+            "tempo_after": &self.tempo_after,
+            "result": &self.result,
+            "source_of_truth": &self.source_of_truth,
+            "created_at_epoch": self.created_at_epoch,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct WorldTrillionniumCombatNumericsState {
+    pub(super) hp_current: i64,
+    pub(super) hp_max: i64,
+    pub(super) inner_energy_current: i64,
+    pub(super) inner_energy_max: i64,
+    pub(super) guard_current: i64,
+    pub(super) guard_max: i64,
+    pub(super) focus_current: i64,
+    pub(super) focus_max: i64,
+    pub(super) injury_level: i64,
+    pub(super) stance: String,
+    pub(super) tempo: String,
+    pub(super) hit_chance: i64,
+    pub(super) critical_chance: i64,
+    pub(super) mitigation_rating: i64,
+    pub(super) mutation_count: i64,
+    pub(super) last_mutation_command: Option<String>,
+    pub(super) last_mutation_event: Option<String>,
+    pub(super) last_mutation_result: Option<String>,
+    pub(super) updated_at_epoch: i64,
+    #[serde(default)]
+    pub(super) recent_exchanges: Vec<WorldTrillionniumCombatExchange>,
+}
+
+impl Default for WorldTrillionniumCombatNumericsState {
+    fn default() -> Self {
+        Self {
+            hp_current: 176,
+            hp_max: 176,
+            inner_energy_current: 126,
+            inner_energy_max: 126,
+            guard_current: 24,
+            guard_max: 24,
+            focus_current: 103,
+            focus_max: 103,
+            injury_level: 0,
+            stance: "balanced_guard".to_string(),
+            tempo: "steady".to_string(),
+            hit_chance: 73,
+            critical_chance: 11,
+            mitigation_rating: 18,
+            mutation_count: 0,
+            last_mutation_command: None,
+            last_mutation_event: None,
+            last_mutation_result: None,
+            updated_at_epoch: 0,
+            recent_exchanges: Vec::new(),
+        }
+    }
+}
+
+impl WorldTrillionniumCombatNumericsState {
+    fn derived_max_hp(attributes: &TrillionniumAttributes) -> i64 {
+        (80 + attributes.physique as i64 * 6 + attributes.resolve as i64 * 2).clamp(80, 260)
+    }
+
+    fn derived_inner_energy_max(attributes: &TrillionniumAttributes) -> i64 {
+        (40 + attributes.resolve as i64 * 5 + attributes.insight as i64 * 2).clamp(40, 220)
+    }
+
+    fn derived_guard_max(attributes: &TrillionniumAttributes) -> i64 {
+        (8 + attributes.resolve as i64 + attributes.physique as i64 / 2).clamp(8, 64)
+    }
+
+    fn derived_focus_max(attributes: &TrillionniumAttributes) -> i64 {
+        (40 + attributes.insight as i64 * 3 + attributes.agility as i64 * 2).clamp(40, 160)
+    }
+
+    fn ensure_defaults(&mut self, attributes: &TrillionniumAttributes) {
+        let hp_max = Self::derived_max_hp(attributes);
+        let inner_energy_max = Self::derived_inner_energy_max(attributes);
+        let guard_max = Self::derived_guard_max(attributes);
+        let focus_max = Self::derived_focus_max(attributes);
+        if self.hp_max <= 0 {
+            self.hp_max = hp_max;
+        }
+        self.hp_max = self.hp_max.max(hp_max).clamp(80, 320);
+        if self.hp_current < 0 {
+            self.hp_current = 0;
+        }
+        if self.hp_current > self.hp_max {
+            self.hp_current = self.hp_max;
+        }
+        if self.inner_energy_max <= 0 {
+            self.inner_energy_max = inner_energy_max;
+        }
+        self.inner_energy_max = self.inner_energy_max.max(inner_energy_max).clamp(40, 260);
+        self.inner_energy_current = self.inner_energy_current.clamp(0, self.inner_energy_max);
+        if self.guard_max <= 0 {
+            self.guard_max = guard_max;
+        }
+        self.guard_max = self.guard_max.max(guard_max).clamp(8, 80);
+        self.guard_current = self.guard_current.clamp(0, self.guard_max);
+        if self.focus_max <= 0 {
+            self.focus_max = focus_max;
+        }
+        self.focus_max = self.focus_max.max(focus_max).clamp(40, 180);
+        self.focus_current = self.focus_current.clamp(0, self.focus_max);
+        self.injury_level = self.injury_level.clamp(0, 5);
+        if self.stance.trim().is_empty() {
+            self.stance = "balanced_guard".to_string();
+        }
+        if self.tempo.trim().is_empty() {
+            self.tempo = "steady".to_string();
+        }
+        self.hit_chance =
+            (55 + attributes.agility as i64 + attributes.insight as i64 / 2).clamp(40, 95);
+        self.critical_chance =
+            (5 + attributes.insight as i64 / 3 + attributes.force as i64 / 4).clamp(5, 40);
+        self.mitigation_rating =
+            (self.guard_current / 2 + attributes.resolve as i64 / 2).clamp(0, 80);
+    }
+
+    fn health_status(&self) -> &'static str {
+        if self.hp_current <= 0 {
+            "routed_recovery_required"
+        } else if self.hp_current * 4 <= self.hp_max {
+            "critical"
+        } else if self.hp_current * 2 <= self.hp_max {
+            "wounded"
+        } else {
+            "combat_ready"
+        }
+    }
+
+    fn energy_status(&self) -> &'static str {
+        if self.inner_energy_current * 4 <= self.inner_energy_max {
+            "low_inner_energy"
+        } else if self.inner_energy_current * 2 <= self.inner_energy_max {
+            "managed_breath"
+        } else {
+            "flowing"
+        }
+    }
+
+    fn focus_status(&self) -> &'static str {
+        if self.focus_current * 4 <= self.focus_max {
+            "shaken"
+        } else if self.focus_current * 2 <= self.focus_max {
+            "contested"
+        } else {
+            "focused"
+        }
+    }
+
+    fn apply_attack(
+        &mut self,
+        event_kind: &str,
+        command: &str,
+        combat_resolution: &Value,
+        attributes: &TrillionniumAttributes,
+        now_epoch: i64,
+    ) -> Value {
+        self.ensure_defaults(attributes);
+        let result = combat_resolution
+            .get("result")
+            .and_then(Value::as_str)
+            .unwrap_or("hit_landed");
+        let damage_dealt = combat_resolution
+            .get("damage")
+            .and_then(Value::as_i64)
+            .unwrap_or(0)
+            .max(0);
+        let defender_hp_before = combat_resolution
+            .get("defender_hp_before")
+            .and_then(Value::as_i64)
+            .unwrap_or(0)
+            .max(0);
+        let defender_hp_after = combat_resolution
+            .get("defender_hp_after")
+            .and_then(Value::as_i64)
+            .unwrap_or(defender_hp_before)
+            .max(0);
+        let attacker_unit_id = combat_resolution
+            .get("attacker_unit_id")
+            .and_then(Value::as_str)
+            .unwrap_or("lord");
+        let defender_unit_id = combat_resolution
+            .get("defender_unit_id")
+            .and_then(Value::as_str)
+            .unwrap_or("market-bandit");
+        let target_tile = combat_resolution
+            .get("target_tile")
+            .and_then(Value::as_str)
+            .unwrap_or("F5");
+        let skill_id = combat_resolution
+            .get("skill_id")
+            .and_then(Value::as_str)
+            .unwrap_or("basic_unarmed");
+        let critical = damage_dealt >= 28 || (result == "defender_routed" && damage_dealt >= 20);
+        let hit_quality = if critical {
+            "critical_route_break"
+        } else if damage_dealt >= 18 {
+            "solid_hit"
+        } else {
+            "glancing_hit"
+        };
+        let inner_energy_delta = match skill_id {
+            "basic_blade" | "basic_sword" => -10,
+            "basic_inner_power" => -7,
+            "basic_unarmed" => -8,
+            _ => -6,
+        };
+        let guard_delta = if result == "defender_routed" { -1 } else { -3 };
+        let focus_delta = if result == "defender_routed" { 4 } else { -6 };
+        let incoming_pressure: i64 = if result == "defender_routed" { 4 } else { 16 };
+        let mitigation_applied = (self.mitigation_rating / 4).clamp(0, 12);
+        let player_hp_delta = -(incoming_pressure.saturating_sub(mitigation_applied).max(1));
+        self.hp_current = (self.hp_current + player_hp_delta).clamp(0, self.hp_max);
+        self.inner_energy_current =
+            (self.inner_energy_current + inner_energy_delta).clamp(0, self.inner_energy_max);
+        self.guard_current = (self.guard_current + guard_delta).clamp(0, self.guard_max);
+        self.focus_current = (self.focus_current + focus_delta).clamp(0, self.focus_max);
+        if self.hp_current * 3 <= self.hp_max || result != "defender_routed" {
+            self.injury_level = (self.injury_level + 1).clamp(0, 5);
+        }
+        self.stance = if self.guard_current * 3 <= self.guard_max {
+            "open_guard".to_string()
+        } else if self.focus_current * 3 >= self.focus_max * 2 {
+            "pressing_guard".to_string()
+        } else {
+            "balanced_guard".to_string()
+        };
+        self.tempo = if result == "defender_routed" {
+            "initiative".to_string()
+        } else if self.focus_current * 3 <= self.focus_max {
+            "under_pressure".to_string()
+        } else {
+            "contested".to_string()
+        };
+        self.mutation_count += 1;
+        self.last_mutation_command = Some(command.to_string());
+        self.last_mutation_event = Some(event_kind.to_string());
+        self.last_mutation_result = Some(result.to_string());
+        self.updated_at_epoch = now_epoch;
+        self.ensure_defaults(attributes);
+        let exchange = WorldTrillionniumCombatExchange {
+            event_kind: event_kind.to_string(),
+            command: command.to_string(),
+            attacker_unit_id: attacker_unit_id.to_string(),
+            defender_unit_id: defender_unit_id.to_string(),
+            target_tile: target_tile.to_string(),
+            skill_id: skill_id.to_string(),
+            damage_dealt,
+            defender_hp_before,
+            defender_hp_after,
+            player_hp_delta,
+            inner_energy_delta,
+            guard_delta,
+            focus_delta,
+            mitigation_applied,
+            hit_quality: hit_quality.to_string(),
+            critical,
+            stance_after: self.stance.clone(),
+            tempo_after: self.tempo.clone(),
+            result: result.to_string(),
+            source_of_truth: "rust_trillionnium_combat_numerics_runtime_state".to_string(),
+            created_at_epoch: now_epoch,
+        };
+        self.recent_exchanges.push(exchange.clone());
+        if self.recent_exchanges.len() > 8 {
+            let overflow = self.recent_exchanges.len() - 8;
+            self.recent_exchanges.drain(0..overflow);
+        }
+        json!({
+            "contract_version": TRILLIONNIUM_WORLD_COMBAT_NUMERICS_RUNTIME_CONTRACT_VERSION,
+            "source_of_truth": "rust_trillionnium_combat_numerics_runtime_state",
+            "runtime_status": "rust_owned_hp_energy_guard_focus_hitcrit_live",
+            "mutation_event": event_kind,
+            "command": command,
+            "result": result,
+            "combat_resolution": combat_resolution,
+            "mutation": exchange.to_value(),
+            "combat_numerics_runtime": self.to_value(),
+            "web_role": "visualization_input_only",
+        })
+    }
+
+    fn to_value(&self) -> Value {
+        let latest_hit_quality = self
+            .recent_exchanges
+            .last()
+            .map(|exchange| exchange.hit_quality.as_str())
+            .unwrap_or("none");
+        json!({
+            "contract_version": TRILLIONNIUM_WORLD_COMBAT_NUMERICS_RUNTIME_CONTRACT_VERSION,
+            "source_of_truth": "rust_trillionnium_combat_numerics_runtime_state",
+            "persistence_owner": "world_state.world_trillionnium_characters.combat_numerics_state",
+            "runtime_status": "rust_owned_hp_energy_guard_focus_hitcrit_live",
+            "tracked_domains": ["hp", "inner_energy", "guard", "focus", "injury", "hit_quality", "critical", "mitigation", "stance", "tempo"],
+            "mutation_sources": ["tactics_attack"],
+            "health": {
+                "current": self.hp_current,
+                "max": self.hp_max,
+                "status": self.health_status(),
+            },
+            "inner_energy": {
+                "current": self.inner_energy_current,
+                "max": self.inner_energy_max,
+                "status": self.energy_status(),
+            },
+            "guard": {
+                "current": self.guard_current,
+                "max": self.guard_max,
+                "stance": &self.stance,
+            },
+            "focus": {
+                "current": self.focus_current,
+                "max": self.focus_max,
+                "status": self.focus_status(),
+            },
+            "injury": {
+                "level": self.injury_level,
+                "status": self.health_status(),
+            },
+            "offense": {
+                "hit_chance": self.hit_chance,
+                "critical_chance": self.critical_chance,
+                "latest_hit_quality": latest_hit_quality,
+            },
+            "defense": {
+                "mitigation_rating": self.mitigation_rating,
+                "guard_current": self.guard_current,
+            },
+            "stance": &self.stance,
+            "tempo": &self.tempo,
+            "mutation_count": self.mutation_count,
+            "last_mutation_command": &self.last_mutation_command,
+            "last_mutation_event": &self.last_mutation_event,
+            "last_mutation_result": &self.last_mutation_result,
+            "recent_exchanges": self.recent_exchanges.iter().map(WorldTrillionniumCombatExchange::to_value).collect::<Vec<_>>(),
+            "updated_at_epoch": self.updated_at_epoch,
+            "web_role": "visualization_input_only",
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct WorldTrillionniumCharacter {
     pub(super) matrix_user_id: String,
     pub(super) character_id: String,
@@ -1434,6 +1827,8 @@ pub(super) struct WorldTrillionniumCharacter {
     pub(super) resource_pressure_state: WorldTrillionniumResourcePressureState,
     #[serde(default)]
     pub(super) region_story_unlock_state: WorldTrillionniumRegionStoryUnlockState,
+    #[serde(default)]
+    pub(super) combat_numerics_state: WorldTrillionniumCombatNumericsState,
     pub(super) updated_at_epoch: i64,
 }
 
@@ -1457,6 +1852,7 @@ impl WorldTrillionniumCharacter {
             equipment_slots,
             resource_pressure_state: WorldTrillionniumResourcePressureState::default(),
             region_story_unlock_state: WorldTrillionniumRegionStoryUnlockState::default(),
+            combat_numerics_state: WorldTrillionniumCombatNumericsState::default(),
             updated_at_epoch: 0,
         }
     }
@@ -1477,6 +1873,10 @@ impl WorldTrillionniumCharacter {
 
     fn ensure_region_story_unlock_defaults(&mut self) {
         self.region_story_unlock_state.ensure_defaults();
+    }
+
+    fn ensure_combat_numerics_defaults(&mut self) {
+        self.combat_numerics_state.ensure_defaults(&self.attributes);
     }
 
     fn equip_item_by_id(&mut self, item_id: &str, now_epoch: i64) -> Option<(String, String)> {
@@ -1524,6 +1924,12 @@ impl WorldTrillionniumCharacter {
         state.to_value()
     }
 
+    fn combat_numerics_runtime_json(&self) -> Value {
+        let mut state = self.combat_numerics_state.clone();
+        state.ensure_defaults(&self.attributes);
+        state.to_value()
+    }
+
     fn to_projection_json(&self) -> Value {
         json!({
             "contract_version": TRILLIONNIUM_CHARACTER_CONTRACT_VERSION,
@@ -1548,6 +1954,9 @@ impl WorldTrillionniumCharacter {
             "region_story_unlock_runtime_contract_version": TRILLIONNIUM_WORLD_REGION_STORY_UNLOCK_RUNTIME_CONTRACT_VERSION,
             "region_story_unlock_state": self.region_story_unlock_runtime_json(),
             "region_story_unlock_runtime": self.region_story_unlock_runtime_json(),
+            "combat_numerics_runtime_contract_version": TRILLIONNIUM_WORLD_COMBAT_NUMERICS_RUNTIME_CONTRACT_VERSION,
+            "combat_numerics_state": self.combat_numerics_runtime_json(),
+            "combat_numerics_runtime": self.combat_numerics_runtime_json(),
             "skill_definition_contract": TRILLIONNIUM_SKILL_CONTRACT_VERSION,
             "skill_families": [
                 "basic_inner_power",
@@ -1594,6 +2003,7 @@ pub(super) fn world_trillionnium_character_projection_json(
     character.ensure_item_equipment_defaults(0);
     character.ensure_resource_pressure_defaults();
     character.ensure_region_story_unlock_defaults();
+    character.ensure_combat_numerics_defaults();
     character.to_projection_json()
 }
 
@@ -1611,6 +2021,7 @@ pub(super) fn apply_world_resource_pressure_mutation(
         .or_insert_with(|| WorldTrillionniumCharacter::default_for(matrix_user_id));
     character.ensure_item_equipment_defaults(now_epoch);
     character.ensure_resource_pressure_defaults();
+    character.ensure_combat_numerics_defaults();
     let mutation = character
         .resource_pressure_state
         .apply_mutation(event_kind, command, result, now_epoch);
@@ -1636,9 +2047,38 @@ pub(super) fn apply_world_region_story_unlock_mutation(
     character.ensure_item_equipment_defaults(now_epoch);
     character.ensure_resource_pressure_defaults();
     character.ensure_region_story_unlock_defaults();
+    character.ensure_combat_numerics_defaults();
     let mutation = character
         .region_story_unlock_state
         .apply_mutation(event_kind, command, result, node_id, zone_id, now_epoch);
+    character.updated_at_epoch = now_epoch;
+    mutation
+}
+
+pub(super) fn apply_world_combat_numerics_mutation(
+    world: &mut WorldState,
+    matrix_user_id: &str,
+    event_kind: &str,
+    command: &str,
+    combat_resolution: &Value,
+    now_epoch: i64,
+) -> Value {
+    let character = world
+        .world_trillionnium_characters
+        .entry(matrix_user_id.to_string())
+        .or_insert_with(|| WorldTrillionniumCharacter::default_for(matrix_user_id));
+    character.ensure_item_equipment_defaults(now_epoch);
+    character.ensure_resource_pressure_defaults();
+    character.ensure_region_story_unlock_defaults();
+    character.ensure_combat_numerics_defaults();
+    let attributes = character.attributes.clone();
+    let mutation = character.combat_numerics_state.apply_attack(
+        event_kind,
+        command,
+        combat_resolution,
+        &attributes,
+        now_epoch,
+    );
     character.updated_at_epoch = now_epoch;
     mutation
 }
@@ -3955,6 +4395,7 @@ fn trillionnium_full_content_volume_alignment_json(
     osm_objectives: &Value,
     map_overlay_identity_count: usize,
     combat_log: &Value,
+    combat_numerics_runtime: &Value,
     item_catalog: &Value,
     resource_pressure_runtime: &Value,
     resource_pressure_loops: &Value,
@@ -3973,6 +4414,18 @@ fn trillionnium_full_content_volume_alignment_json(
     let task_candidate_count = value_array_len(task_candidates);
     let osm_objective_count = value_array_len(osm_objectives);
     let combat_log_beat_count = nested_array_len(combat_log, "beats");
+    let combat_numerics_runtime_contract_green = combat_numerics_runtime
+        .get("contract_version")
+        .and_then(Value::as_str)
+        == Some(TRILLIONNIUM_WORLD_COMBAT_NUMERICS_RUNTIME_CONTRACT_VERSION);
+    let combat_numerics_tracked_domain_count = combat_numerics_runtime
+        .get("tracked_domains")
+        .map(value_array_len)
+        .unwrap_or(0);
+    let combat_numerics_mutation_source_count = combat_numerics_runtime
+        .get("mutation_sources")
+        .map(value_array_len)
+        .unwrap_or(0);
     let item_count = nested_array_len(item_catalog, "items");
     let item_family_count = item_catalog
         .get("items")
@@ -4033,6 +4486,9 @@ fn trillionnium_full_content_volume_alignment_json(
         && map_node_count >= 8
         && map_overlay_identity_count >= 8
         && combat_log_beat_count >= 4
+        && combat_numerics_runtime_contract_green
+        && combat_numerics_tracked_domain_count >= 8
+        && combat_numerics_mutation_source_count >= 1
         && item_count >= 12
         && item_family_count >= 8
         && runtime_inventory_item_count >= 3
@@ -4086,6 +4542,8 @@ fn trillionnium_full_content_volume_alignment_json(
             "world_map_nodes": 8,
             "map_overlay_identities": 8,
             "combat_log_beats": 4,
+            "combat_numerics_runtime_tracked_domains": 8,
+            "combat_numerics_runtime_mutation_sources": 1,
             "item_equipment_catalog": 12,
             "item_families": 8,
             "runtime_inventory_items": 3,
@@ -4114,6 +4572,9 @@ fn trillionnium_full_content_volume_alignment_json(
             "world_map_nodes": map_node_count,
             "map_overlay_identities": map_overlay_identity_count,
             "combat_log_beats": combat_log_beat_count,
+            "combat_numerics_runtime_contract_green": combat_numerics_runtime_contract_green,
+            "combat_numerics_runtime_tracked_domains": combat_numerics_tracked_domain_count,
+            "combat_numerics_runtime_mutation_sources": combat_numerics_mutation_source_count,
             "item_equipment_catalog": item_count,
             "item_families": item_family_count,
             "runtime_inventory_items": runtime_inventory_item_count,
@@ -4137,13 +4598,14 @@ fn trillionnium_full_content_volume_alignment_json(
             {"domain": "quest_task_archetypes", "status": "native_catalog_expanded", "gate_field": "task_archetypes"},
             {"domain": "world_nodes_and_objective_travel", "status": "rust_runtime_backed", "gate_field": "world_objective_travel"},
             {"domain": "combat_entry_and_return", "status": "rust_runtime_backed", "gate_field": "world_combat_encounter"},
+            {"domain": "combat_numerics", "status": "rust_runtime_backed", "gate_field": "combat_numerics_runtime"},
             {"domain": "items_and_equipment", "status": "rust_runtime_backed", "gate_field": "item_equipment_runtime"},
             {"domain": "survival_time_resource_pressure", "status": "rust_runtime_backed", "gate_field": "resource_pressure_runtime"},
             {"domain": "story_arcs", "status": "rust_runtime_backed", "gate_field": "region_story_unlock_runtime"}
         ],
         "next_runtime_slices": [
             "expand_region_story_authoring_and_cross_region_arcs",
-            "deepen_combat_numerics_without_copying_reference_data"
+            "expand_combat_encounter_variety_without_copying_reference_data"
         ]
     })
 }
@@ -4263,6 +4725,13 @@ fn tactics_units_json(
     let energy = trillionnium_character["attributes"]["derived_stats"]["inner_energy"]
         .as_i64()
         .unwrap_or(100);
+    let combat_hp = trillionnium_character["combat_numerics_runtime"]["health"]["current"]
+        .as_i64()
+        .unwrap_or_else(|| (max_hp / 4).clamp(32, 80));
+    let combat_energy = trillionnium_character["combat_numerics_runtime"]["inner_energy"]
+        ["current"]
+        .as_i64()
+        .unwrap_or(energy);
     let move_range = trillionnium_character["attributes"]["derived_stats"]["move_range"]
         .as_i64()
         .unwrap_or(4);
@@ -4277,9 +4746,9 @@ fn tactics_units_json(
                 title: "主公 / Lord",
                 grid_column: 2,
                 grid_row: 7,
-                hp: (max_hp / 4).clamp(32, 80),
+                hp: combat_hp.clamp(0, max_hp),
                 max_hp,
-                energy,
+                energy: combat_energy.clamp(0, energy),
                 move_range,
                 attack_range: 1,
                 status_effects: vec!["ready", "player_controlled"],
@@ -4765,6 +5234,14 @@ fn tactics_combat_resolution_json(
     } else {
         "hit_landed"
     };
+    let critical = damage >= 28 || (result == "defender_routed" && damage >= 20);
+    let hit_quality = if critical {
+        "critical_route_break"
+    } else if damage >= 18 {
+        "solid_hit"
+    } else {
+        "glancing_hit"
+    };
     Some(json!({
         "contract_version": TRILLIONNIUM_TACTICS_COMBAT_RESOLUTION_CONTRACT_VERSION,
         "combat_resolution_id": league_hash_id("tactics-combat-resolution", &format!("{seed}:{now_epoch}")),
@@ -4776,12 +5253,15 @@ fn tactics_combat_resolution_json(
         "terrain": target.terrain,
         "skill_id": skill_id,
         "damage": damage,
+        "defender_guard": target.guard,
+        "hit_quality": hit_quality,
+        "critical": critical,
         "defender_hp_before": target.hp_before,
         "defender_hp_after": hp_after,
         "result": result,
         "osm_game_overlay_id": encounter_overlay_id,
         "source_of_truth": "rust_tactics_combat_handler",
-        "state_persistence": "world_event_log_now_game_session_hp_state_in_tw4_4",
+        "state_persistence": "world_state.world_trillionnium_characters.combat_numerics_state",
         "osm_can_place_encounter": true,
         "rust_combat_handler_decides_resolution": true,
         "web_role": "intent_only_visualization_input",
@@ -4924,6 +5404,9 @@ pub(super) fn apply_world_tactics_command(
         .entry(matrix_user_id.to_string())
         .or_insert_with(|| WorldTrillionniumCharacter::default_for(matrix_user_id));
     character.ensure_item_equipment_defaults(now_epoch);
+    character.ensure_resource_pressure_defaults();
+    character.ensure_region_story_unlock_defaults();
+    character.ensure_combat_numerics_defaults();
     let known_skills: HashSet<String> = character.skill_ids.iter().cloned().collect();
 
     if matches!(command, "talk_npc" | "offer_task") {
@@ -5527,6 +6010,11 @@ pub(super) fn world_tactics_board_projection_json(
         &task_candidates,
     );
     let battle_log = trillionnium_battle_log_lines_json(&combat_log);
+    let combat_numerics_runtime = trillionnium_character
+        .get("combat_numerics_runtime")
+        .cloned()
+        .or_else(|| trillionnium_character.get("combat_numerics_state").cloned())
+        .unwrap_or_else(|| WorldTrillionniumCombatNumericsState::default().to_value());
     let item_equipment_catalog = trillionnium_item_equipment_catalog_json();
     let item_equipment_runtime = trillionnium_character
         .get("item_equipment_runtime")
@@ -5572,6 +6060,7 @@ pub(super) fn world_tactics_board_projection_json(
         &osm_objectives,
         map_overlay_identity_count,
         &combat_log,
+        &combat_numerics_runtime,
         &item_equipment_catalog,
         &resource_pressure_runtime,
         &resource_pressure_loops,
@@ -5600,6 +6089,7 @@ pub(super) fn world_tactics_board_projection_json(
         "trillionnium_combat_log_contract_version": TRILLIONNIUM_COMBAT_LOG_CONTRACT_VERSION,
         "trillionnium_resource_pressure_runtime_contract_version": TRILLIONNIUM_WORLD_RESOURCE_PRESSURE_RUNTIME_CONTRACT_VERSION,
         "trillionnium_region_story_unlock_runtime_contract_version": TRILLIONNIUM_WORLD_REGION_STORY_UNLOCK_RUNTIME_CONTRACT_VERSION,
+        "trillionnium_combat_numerics_runtime_contract_version": TRILLIONNIUM_WORLD_COMBAT_NUMERICS_RUNTIME_CONTRACT_VERSION,
         "trillionnium_npc_relationship_contract_version": TRILLIONNIUM_NPC_RELATIONSHIP_CONTRACT_VERSION,
         "trillionnium_osm_objective_contract_version": TRILLIONNIUM_OSM_OBJECTIVE_CONTRACT_VERSION,
         "world_objective_travel_contract_version": TRILLIONNIUM_WORLD_OBJECTIVE_TRAVEL_CONTRACT_VERSION,
@@ -5671,6 +6161,7 @@ pub(super) fn world_tactics_board_projection_json(
         "simulation_ticks": simulation_ticks,
         "battle_log_style": trillionnium_battle_log_style_json(),
         "combat_log": combat_log,
+        "combat_numerics_runtime": combat_numerics_runtime,
         "item_equipment_catalog": item_equipment_catalog,
         "item_equipment_runtime": item_equipment_runtime,
         "resource_pressure_runtime": resource_pressure_runtime,

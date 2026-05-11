@@ -664,7 +664,14 @@ fn league_sql_cutover_plan_exposes_normalized_world_tables() {
     ))
     .expect("repository migration floor should exist");
     assert!(repository_migration.contains("world_trillionnium_characters"));
-    assert!(repository_migration.contains("region_story_unlock_state"));
+    assert!(repository_migration.contains("combat_numerics_state"));
+    let region_story_migration = std::fs::read_to_string(format!(
+        "{}/../../migrations/0024_add_trillionnium_region_story_unlock_runtime_column.sql",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .expect("region/story unlock runtime migration should exist");
+    assert!(region_story_migration.contains("world_trillionnium_characters"));
+    assert!(region_story_migration.contains("region_story_unlock_state"));
     let resource_pressure_migration = std::fs::read_to_string(format!(
         "{}/../../migrations/0023_add_trillionnium_resource_pressure_runtime_column.sql",
         env!("CARGO_MANIFEST_DIR")
@@ -740,6 +747,7 @@ fn normalized_repository_command_shadow_sql_uses_write_set_tables() {
     assert!(command_sql.contains("insert into world_trillionnium_characters"));
     assert!(command_sql.contains("resource_pressure_state"));
     assert!(command_sql.contains("region_story_unlock_state"));
+    assert!(command_sql.contains("combat_numerics_state"));
     assert!(command_sql.contains("insert into world_map_nodes"));
     assert!(command_sql.contains("\"dependency_world_tables\""));
     assert!(!command_sql.contains("insert into world_events"));
@@ -825,6 +833,7 @@ fn normalized_repository_runtime_dual_write_scopes_world_tables_to_command() {
     assert!(runtime_sql.contains("insert into world_trillionnium_characters"));
     assert!(runtime_sql.contains("resource_pressure_state"));
     assert!(runtime_sql.contains("region_story_unlock_state"));
+    assert!(runtime_sql.contains("combat_numerics_state"));
     assert!(runtime_sql.contains("insert into world_map_nodes"));
     assert!(runtime_sql.contains("\"dependency_world_tables\""));
     assert!(!runtime_sql.contains("insert into world_events"));
@@ -3206,6 +3215,22 @@ fn world_tactics_projection_binds_trillionnium_state_to_osm_objectives() {
         coverage_counts["resource_pressure_runtime_contract_green"],
         true
     );
+    assert_eq!(
+        coverage_counts["combat_numerics_runtime_contract_green"],
+        true
+    );
+    assert!(
+        coverage_counts["combat_numerics_runtime_tracked_domains"]
+            .as_u64()
+            .unwrap_or_default()
+            >= 8
+    );
+    assert!(
+        coverage_counts["combat_numerics_runtime_mutation_sources"]
+            .as_u64()
+            .unwrap_or_default()
+            >= 1
+    );
     assert!(coverage_counts["story_arcs"].as_u64().unwrap_or_default() >= 6);
     assert_eq!(coverage_counts["region_story_runtime_contract_green"], true);
     assert!(
@@ -3264,6 +3289,33 @@ fn world_tactics_projection_binds_trillionnium_state_to_osm_objectives() {
         .iter()
         .any(|domain| domain["domain"] == "combat_entry_and_return"
             && domain["status"] == "rust_runtime_backed"));
+    assert!(full_content_alignment["domains"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|domain| domain["domain"] == "combat_numerics"
+            && domain["status"] == "rust_runtime_backed"
+            && domain["gate_field"] == "combat_numerics_runtime"));
+    assert_eq!(
+        tactics["trillionnium_combat_numerics_runtime_contract_version"],
+        "trillionnium_world_combat_numerics_runtime_v1"
+    );
+    assert_eq!(
+        tactics["combat_numerics_runtime"]["contract_version"],
+        "trillionnium_world_combat_numerics_runtime_v1"
+    );
+    assert_eq!(
+        tactics["combat_numerics_runtime"]["source_of_truth"],
+        "rust_trillionnium_combat_numerics_runtime_state"
+    );
+    assert_eq!(
+        tactics["combat_numerics_runtime"]["mutation_sources"],
+        json!(["tactics_attack"])
+    );
+    assert_eq!(
+        tactics["combat_numerics_runtime"]["health"]["status"],
+        "combat_ready"
+    );
     assert_eq!(
         tactics["item_equipment_catalog"]["contract_version"],
         "trillionnium_native_item_equipment_catalog_v1"
@@ -3682,6 +3734,38 @@ async fn world_tactics_command_endpoint_validates_training_place_and_mutates_cha
     assert_eq!(
         attack["outcome"]["combat_resolution"]["defender_unit_id"],
         "market-bandit"
+    );
+    assert_eq!(
+        attack["outcome"]["combat_resolution"]["state_persistence"],
+        "world_state.world_trillionnium_characters.combat_numerics_state"
+    );
+    assert_eq!(
+        attack["outcome"]["combat_numerics_runtime_contract_version"],
+        "trillionnium_world_combat_numerics_runtime_v1"
+    );
+    assert_eq!(
+        attack["outcome"]["combat_numerics_mutation"]["mutation_event"],
+        "tactics_attack"
+    );
+    assert_eq!(
+        attack["outcome"]["combat_numerics_mutation"]["mutation"]["attacker_unit_id"],
+        "lord"
+    );
+    assert_eq!(
+        attack["outcome"]["combat_numerics_runtime"]["source_of_truth"],
+        "rust_trillionnium_combat_numerics_runtime_state"
+    );
+    assert_eq!(
+        attack["outcome"]["combat_numerics_runtime"]["mutation_count"],
+        1
+    );
+    assert!(
+        attack["outcome"]["combat_numerics_runtime"]["health"]["current"]
+            .as_i64()
+            .unwrap_or_default()
+            < attack["outcome"]["combat_numerics_runtime"]["health"]["max"]
+                .as_i64()
+                .unwrap_or_default()
     );
     assert_eq!(
         attack["outcome"]["resource_pressure_runtime_contract_version"],
@@ -5670,6 +5754,15 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(world_html.contains("name=\"command\" value=\"equip_item\""));
     assert!(world_html.contains("name=\"target_slot\""));
     assert!(world_html.contains("data-content-domain=\"survival_time_resource_pressure\""));
+    assert!(world_html.contains("data-content-domain=\"combat_numerics\""));
+    assert!(world_html.contains(
+        "data-combat-numerics-runtime-contract=\"trillionnium_world_combat_numerics_runtime_v1\""
+    ));
+    assert!(world_html.contains("trillionnium-combat-numerics-panel"));
+    assert!(world_html.contains("rust_trillionnium_combat_numerics_runtime_state"));
+    assert!(world_html.contains("world_state.world_trillionnium_characters.combat_numerics_state"));
+    assert!(world_html
+        .contains("data-runtime-status=\"rust_owned_hp_energy_guard_focus_hitcrit_live\""));
     assert!(world_html.contains("data-resource-pressure-runtime-contract=\"trillionnium_world_resource_pressure_runtime_v1\""));
     assert!(world_html.contains("trillionnium-resource-pressure-panel"));
     assert!(world_html.contains("rust_trillionnium_resource_pressure_runtime_state"));

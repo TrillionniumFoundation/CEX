@@ -1643,7 +1643,7 @@ Also append a one-paragraph summary to `/home/qian/.openclaw/workspace/memory/YY
   - [x] Persist item/equipment inventory and equip slots as Rust-owned runtime state. Completed in the 2026-05-11 13:1x CST update below.
   - [x] Mutate time/stamina/injury/evidence-integrity loops from real movement/combat/task events. Completed in the 2026-05-11 14:3x CST update below.
   - [x] Expand region graph and story-arc unlocks using Trillionnium-native content only. Completed in the 2026-05-11 15:2x CST update below.
-  - [ ] Deepen combat numerics without copying reference data.
+  - [x] Deepen combat numerics without copying reference data. Completed in the 2026-05-11 16:3x CST update below.
 - Constraints preserved: no Hero Tan code/text/assets/data copying, no live OSM ingestion, no MapLibre promotion, browser/web intent-only, Rust source of truth.
 
 ---
@@ -1701,10 +1701,30 @@ Also append a one-paragraph summary to `/home/qian/.openclaw/workspace/memory/YY
 
 ---
 
+
+#### Update 2026-05-11 16:3x CST
+
+- Commit: `feat: gate native combat numerics runtime` (this commit)
+- Continued legally clean full content-volume alignment by moving deeper combat numerics from deterministic attack-result JSON into Rust-owned persisted runtime state:
+  - [x] Added `trillionnium_world_combat_numerics_runtime_v1` for HP/health, inner energy, guard, focus, injury/status, hit quality, critical evidence, mitigation, stance/tempo, recent exchanges, mutation counts, last mutation metadata, and updated-at epoch.
+  - [x] `WorldTrillionniumCharacter` now carries `combat_numerics_state` with serde-safe defaults and derived max HP/energy/guard/focus helpers, while older snapshots hydrate safely.
+  - [x] Accepted `tactics_attack` events mutate the Rust-owned combat numerics state through `apply_world_combat_numerics_mutation(...)`; browser/web only submit combat intent and render the result.
+  - [x] Tactics combat resolution JSON now includes persisted-state evidence including defender guard, hit quality, critical flag, and `state_persistence=world_state.world_trillionnium_characters.combat_numerics_state`.
+  - [x] Tactics board/home projections expose `combat_numerics_runtime`, and the Lord unit display now derives HP / inner energy from persisted combat numerics state.
+  - [x] The full-content alignment gate now marks `combat_numerics` as `rust_runtime_backed`, with tracked domains, mutation source `tactics_attack`, runtime contract coverage, and no-copy reference policy preserved.
+  - [x] `/world` renders `#trillionnium-combat-numerics-runtime` as a visualization-only panel with source-of-truth `rust_trillionnium_combat_numerics_runtime_state`, persistence owner `world_state.world_trillionnium_characters.combat_numerics_state`, runtime status `rust_owned_hp_energy_guard_focus_hitcrit_live`, core numeric state, and latest exchange evidence.
+  - [x] Added normalized Postgres mirror column `world_trillionnium_characters.combat_numerics_state` in migration `0025_add_trillionnium_combat_numerics_runtime_column.sql`; repository shadow SQL/direct-write metadata and migration floor now include the combat numerics runtime column.
+  - [x] Rust tests, SQL snapshot, Web E2E, Browser E2E, and first-human gates assert projection defaults, attack mutation, persistence/write-set parity, UI markers, and the `world_combat_numerics_runtime_loop` coverage flag.
+- Evidence: `cargo fmt --all -- --check`; `cargo check -p consumer-entry-api`; `cargo test -p consumer-entry-api -- --nocapture --test-threads=1`; `cargo clippy -p consumer-entry-api -- -D warnings`; `node --check scripts/playwright/trillionnium-browser-e2e.mjs`; bash syntax; `git diff --check`; local-production restart/status OK; SQL snapshot gate `repository_migration_floor=0025_add_trillionnium_combat_numerics_runtime_column.sql`; Web E2E `run/league-web/web-e2e-summary-1778487888.json`; Browser E2E `run/league-browser/browser-e2e-summary-1778487969-1387664.json`, `coverage.world_combat_numerics_runtime_loop=true`, request-failure gate green with `0` unclassified failures; First-human E2E `run/first-human-session/browser-e2e-summary-1778488193-1393321.json`, zero request/page/console failures.
+- Current honest scope: item/equipment, survival/time/resource-pressure, region graph/story-arc unlocks, and deeper combat numerics have crossed from native catalog breadth into persisted Rust runtime mutation. Content volume is broader and more stateful, but technical 9.9+, first-beta 9+, and commercial 8+ remain blocked on real evidence files rather than local-only proof.
+- Constraints preserved: no Hero Tan code/text/assets/data copying, no live OSM ingestion, no MapLibre promotion, browser/web intent-only, Rust source of truth, and no local-only evidence used to lift the technical score beyond the established 9.8 ceiling.
+
+---
+
 ## Current Next Pointer
 
 If the next instruction is simply “continue”, start here:
 
-> **Next pointer:** Continue full content-volume alignment by turning the next native catalog into Rust-owned runtime state: deeper combat numerics. Keep the technical 9.9+ proof gated by real `TRILLIONNIUM_MULTI_NODE_LATENCY_EVIDENCE_PATH`, first-beta 9+ gated by `TRILLIONNIUM_FIRST_BETA_COHORT_EVIDENCE_PATH`, and commercial 8+ gated by `TRILLIONNIUM_COMMERCIAL_LAUNCH_DRILL_EVIDENCE_PATH`. Current honest assessment remains `9.8/10` technical, `8.5/10` first internal beta, `7.0/10` commercial release.
+> **Next pointer:** With item/equipment, resource pressure, region/story unlocks, and combat numerics now Rust-runtime-backed, do not add more local-only loops for score inflation. Continue full content-volume alignment through legally clean encounter variety / authored-content breadth only if it creates real play value, otherwise prioritize real `TRILLIONNIUM_MULTI_NODE_LATENCY_EVIDENCE_PATH`, `TRILLIONNIUM_FIRST_BETA_COHORT_EVIDENCE_PATH`, or `TRILLIONNIUM_COMMERCIAL_LAUNCH_DRILL_EVIDENCE_PATH`. Current honest assessment remains `9.8/10` technical, `8.5/10` first internal beta, `7.0/10` commercial release.
 
 Do not start live Overpass/Geofabrik ingestion yet. Do not promote MapLibre. Do not convert the web shell into a standalone JS source of truth.

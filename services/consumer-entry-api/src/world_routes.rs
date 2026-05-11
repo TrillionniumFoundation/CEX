@@ -1814,6 +1814,27 @@ async fn record_world_tactics_command(
                 .get("region_story_unlock_runtime")
                 .cloned()
                 .unwrap_or(Value::Null);
+            if command == "attack" {
+                let combat_resolution = outcome
+                    .get("combat_resolution")
+                    .cloned()
+                    .unwrap_or(Value::Null);
+                let combat_numerics_mutation = apply_world_combat_numerics_mutation(
+                    &mut league.world,
+                    &matrix_user_id,
+                    "tactics_attack",
+                    &command,
+                    &combat_resolution,
+                    now,
+                );
+                outcome["combat_numerics_runtime_contract_version"] =
+                    json!(TRILLIONNIUM_WORLD_COMBAT_NUMERICS_RUNTIME_CONTRACT_VERSION);
+                outcome["combat_numerics_mutation"] = combat_numerics_mutation.clone();
+                outcome["combat_numerics_runtime"] = combat_numerics_mutation
+                    .get("combat_numerics_runtime")
+                    .cloned()
+                    .unwrap_or(Value::Null);
+            }
         }
         let (mut tactics_session, simulation_tick) = record_world_tactics_simulation_tick(
             &mut league.world,

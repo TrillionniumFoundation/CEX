@@ -1612,6 +1612,156 @@ fn world_trillionnium_resource_pressure_runtime_html(trillionnium_character: &Va
     )
 }
 
+fn world_trillionnium_combat_numerics_runtime_html(trillionnium_character: &Value) -> String {
+    let runtime = trillionnium_character
+        .get("combat_numerics_runtime")
+        .or_else(|| trillionnium_character.get("combat_numerics_state"))
+        .unwrap_or(&Value::Null);
+    let contract = runtime
+        .get("contract_version")
+        .and_then(Value::as_str)
+        .unwrap_or("trillionnium_world_combat_numerics_runtime_v1");
+    let source_of_truth = runtime
+        .get("source_of_truth")
+        .and_then(Value::as_str)
+        .unwrap_or("rust_trillionnium_combat_numerics_runtime_state");
+    let persistence_owner = runtime
+        .get("persistence_owner")
+        .and_then(Value::as_str)
+        .unwrap_or("world_state.world_trillionnium_characters.combat_numerics_state");
+    let runtime_status = runtime
+        .get("runtime_status")
+        .and_then(Value::as_str)
+        .unwrap_or("rust_owned_hp_energy_guard_focus_hitcrit_live");
+    let health_current = runtime
+        .get("health")
+        .and_then(|health| health.get("current"))
+        .and_then(Value::as_i64)
+        .unwrap_or(176);
+    let health_max = runtime
+        .get("health")
+        .and_then(|health| health.get("max"))
+        .and_then(Value::as_i64)
+        .unwrap_or(176);
+    let health_status = runtime
+        .get("health")
+        .and_then(|health| health.get("status"))
+        .and_then(Value::as_str)
+        .unwrap_or("combat_ready");
+    let energy_current = runtime
+        .get("inner_energy")
+        .and_then(|energy| energy.get("current"))
+        .and_then(Value::as_i64)
+        .unwrap_or(126);
+    let energy_max = runtime
+        .get("inner_energy")
+        .and_then(|energy| energy.get("max"))
+        .and_then(Value::as_i64)
+        .unwrap_or(126);
+    let guard_current = runtime
+        .get("guard")
+        .and_then(|guard| guard.get("current"))
+        .and_then(Value::as_i64)
+        .unwrap_or(24);
+    let guard_max = runtime
+        .get("guard")
+        .and_then(|guard| guard.get("max"))
+        .and_then(Value::as_i64)
+        .unwrap_or(24);
+    let focus_current = runtime
+        .get("focus")
+        .and_then(|focus| focus.get("current"))
+        .and_then(Value::as_i64)
+        .unwrap_or(103);
+    let focus_max = runtime
+        .get("focus")
+        .and_then(|focus| focus.get("max"))
+        .and_then(Value::as_i64)
+        .unwrap_or(103);
+    let stance = runtime
+        .get("stance")
+        .and_then(Value::as_str)
+        .unwrap_or("balanced_guard");
+    let tempo = runtime
+        .get("tempo")
+        .and_then(Value::as_str)
+        .unwrap_or("steady");
+    let mutation_count = runtime
+        .get("mutation_count")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let last_mutation_event = runtime
+        .get("last_mutation_event")
+        .and_then(Value::as_str)
+        .unwrap_or("none");
+    let recent_exchanges = runtime
+        .get("recent_exchanges")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .rev()
+        .take(4)
+        .map(|exchange| {
+            let result = exchange
+                .get("result")
+                .and_then(Value::as_str)
+                .unwrap_or("combat_exchange");
+            let hit_quality = exchange
+                .get("hit_quality")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            let damage = exchange
+                .get("damage_dealt")
+                .and_then(Value::as_i64)
+                .unwrap_or_default();
+            let hp_delta = exchange
+                .get("player_hp_delta")
+                .and_then(Value::as_i64)
+                .unwrap_or_default();
+            format!(
+                "<article class=\"mini trillionnium-combat-exchange\" data-result=\"{}\" data-hit-quality=\"{}\"><strong>{}</strong><span>{} · damage {} · hp {:+}</span></article>",
+                escape_html_text(result),
+                escape_html_text(hit_quality),
+                escape_html_text(hit_quality),
+                escape_html_text(result),
+                damage,
+                hp_delta,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let recent_exchanges = if recent_exchanges.is_empty() {
+        "<article class=\"mini trillionnium-combat-exchange\" data-result=\"none\"><strong>Ready</strong><span>Attack from an encounter to mutate Rust-owned combat numerics.</span></article>".to_string()
+    } else {
+        recent_exchanges
+    };
+    format!(
+        "<section id=\"trillionnium-combat-numerics-runtime\" class=\"trillionnium-combat-numerics-panel\" data-combat-numerics-runtime-contract=\"{}\" data-runtime-status=\"{}\" data-source-of-truth=\"{}\" data-persistence-owner=\"{}\" data-mutation-count=\"{}\" data-last-mutation-event=\"{}\" data-health-status=\"{}\" data-stance=\"{}\" data-tempo=\"{}\" data-web-role=\"visualization_input_only\" aria-label=\"Trillionnium combat numerics runtime\" data-i18n-aria-label-en=\"Trillionnium combat numerics runtime\" data-i18n-aria-label-zh=\"Trillionnium 战斗数值运行态\"><h4 data-i18n-en=\"Combat numerics\" data-i18n-zh=\"战斗数值\">Combat numerics</h4><p data-i18n-en=\"Rust owns HP, inner energy, guard, focus, hit quality, mitigation, stance, and tempo; browser only displays the projection.\" data-i18n-zh=\"HP、内息、防护、专注、命中质量、减伤、架势与节奏由 Rust 持有；浏览器只显示投影。\">Rust owns HP, inner energy, guard, focus, hit quality, mitigation, stance, and tempo; browser only displays the projection.</p><div class=\"mini-grid\"><article class=\"mini\"><strong>{}/{}</strong><span>HP · {}</span></article><article class=\"mini\"><strong>{}/{}</strong><span>inner energy</span></article><article class=\"mini\"><strong>{}/{}</strong><span>guard · {}</span></article><article class=\"mini\"><strong>{}/{}</strong><span>focus · {}</span></article></div><div class=\"mini-grid\">{}</div></section>",
+        escape_html_text(contract),
+        escape_html_text(runtime_status),
+        escape_html_text(source_of_truth),
+        escape_html_text(persistence_owner),
+        mutation_count,
+        escape_html_text(last_mutation_event),
+        escape_html_text(health_status),
+        escape_html_text(stance),
+        escape_html_text(tempo),
+        health_current,
+        health_max,
+        escape_html_text(health_status),
+        energy_current,
+        energy_max,
+        guard_current,
+        guard_max,
+        escape_html_text(stance),
+        focus_current,
+        focus_max,
+        escape_html_text(tempo),
+        recent_exchanges,
+    )
+}
+
 fn world_trillionnium_region_story_unlock_runtime_html(trillionnium_character: &Value) -> String {
     let runtime = trillionnium_character
         .get("region_story_unlock_runtime")
@@ -3512,6 +3662,8 @@ pub(super) async fn get_world_web_shell(
     );
     let trillionnium_resource_pressure_runtime =
         world_trillionnium_resource_pressure_runtime_html(&trillionnium_character);
+    let trillionnium_combat_numerics_runtime =
+        world_trillionnium_combat_numerics_runtime_html(&trillionnium_character);
     let trillionnium_region_story_unlock_runtime =
         world_trillionnium_region_story_unlock_runtime_html(&trillionnium_character);
     let world_play_first_action_prompt = world_play_first_action_prompt_html(
@@ -5055,6 +5207,7 @@ pub(super) async fn get_world_web_shell(
               <div class="mini-grid">{trillionnium_task_completion_forms}</div>
             </section>
             {trillionnium_full_content_alignment}
+            {trillionnium_combat_numerics_runtime}
             {trillionnium_resource_pressure_runtime}
             {trillionnium_region_story_unlock_runtime}
             <small data-i18n-en="Next mod path: replace placeholder units with Trillionnium agents, convert POIs into capture points, and use route evidence as battle reports." data-i18n-zh="下一步魔改：把占位单位替换为 Trillionnium Agent，把 POI 转成占领点，把路线证据转成战报。">Next mod path: replace placeholder units with Trillionnium agents, convert POIs into capture points, and use route evidence as battle reports.</small>
@@ -6323,6 +6476,7 @@ pub(super) async fn get_world_web_shell(
         trillionnium_npc_cards = trillionnium_npc_cards,
         trillionnium_task_completion_forms = trillionnium_task_completion_forms,
         trillionnium_full_content_alignment = trillionnium_full_content_alignment,
+        trillionnium_combat_numerics_runtime = trillionnium_combat_numerics_runtime,
         trillionnium_region_story_unlock_runtime = trillionnium_region_story_unlock_runtime,
         trillionnium_status_lines = trillionnium_status_lines,
         trillionnium_display_name_en = escape_html_text(world_trillionnium_visible_english(
