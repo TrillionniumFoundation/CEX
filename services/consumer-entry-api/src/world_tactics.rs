@@ -4871,7 +4871,7 @@ fn trillionnium_full_content_volume_alignment_json(
         && task_archetype_count >= 12
         && task_candidate_count >= 10
         && osm_objective_count >= 5
-        && map_node_count >= 8
+        && map_node_count >= 24
         && map_overlay_identity_count >= 8
         && combat_log_beat_count >= 4
         && combat_numerics_runtime_contract_green
@@ -4919,7 +4919,27 @@ fn trillionnium_full_content_volume_alignment_json(
         "content_policy": "trillionnium_native_no_copied_hero_tan_text_assets_or_tables",
         "source_of_truth": "rust_trillionnium_full_content_volume_alignment_gate",
         "web_role": "visualization_input_only",
-        "runtime_depth_status": "expanded_native_catalog_projection_gate; full_mmo_scale_authoring_and_runtime_mutation_remain_incremental",
+        "runtime_depth_status": "expanded_native_catalog_projection_gate; clean_room_scale_scaffold_green; full_mmo_scale_authoring_and_runtime_mutation_remain_incremental",
+        "clean_room_content_scale": {
+            "contract_version": "trillionnium_clean_room_content_scale_v1",
+            "status": if map_node_count >= 24 && thresholds_green { "clean_room_scale_scaffold_green" } else { "clean_room_scale_scaffold_blocked" },
+            "architecture_rule": "build_reference_shape_equivalent_with_original_trillionnium_content_first",
+            "forbidden_intermediate": "no_full_hero_tan_replica_then_replace_workflow",
+            "content_source": "trillionnium_native_authored_catalogs_and_rust_world_state",
+            "covered_systems": [
+                "sects_and_title_ladders",
+                "skill_families_and_training",
+                "items_equipment_and_inventory",
+                "map_nodes_and_region_routes",
+                "story_arcs_and_unlocks",
+                "npc_social_relationships",
+                "food_water_age_survival",
+                "long_term_growth_and_combat_numerics"
+            ],
+            "map_node_scale": map_node_count,
+            "minimum_map_nodes": 24,
+            "copy_policy": "no_copied_hero_tan_text_assets_code_tables_or_data"
+        },
         "minimum_thresholds": {
             "skill_definitions": 18,
             "skill_families": 14,
@@ -4932,7 +4952,7 @@ fn trillionnium_full_content_volume_alignment_json(
             "task_archetypes": 12,
             "task_candidates": 10,
             "osm_objectives": 5,
-            "world_map_nodes": 8,
+            "world_map_nodes": 24,
             "map_overlay_identities": 8,
             "combat_log_beats": 4,
             "combat_numerics_runtime_tracked_domains": 8,
@@ -5006,6 +5026,7 @@ fn trillionnium_full_content_volume_alignment_json(
             {"domain": "story_arcs", "status": "rust_runtime_backed", "gate_field": "region_story_unlock_runtime"}
         ],
         "next_runtime_slices": [
+            "author_clean_room_world_content_batches_without_reference_content_copying",
             "expand_region_story_authoring_and_cross_region_arcs",
             "expand_combat_encounter_variety_without_copying_reference_data"
         ]

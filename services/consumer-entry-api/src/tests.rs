@@ -3188,6 +3188,32 @@ fn world_tactics_projection_binds_trillionnium_state_to_osm_objectives() {
             >= 12
     );
     assert!(
+        coverage_counts["world_map_nodes"]
+            .as_u64()
+            .unwrap_or_default()
+            >= 24
+    );
+    assert_eq!(
+        full_content_alignment["minimum_thresholds"]["world_map_nodes"],
+        24
+    );
+    assert_eq!(
+        full_content_alignment["clean_room_content_scale"]["contract_version"],
+        "trillionnium_clean_room_content_scale_v1"
+    );
+    assert_eq!(
+        full_content_alignment["clean_room_content_scale"]["status"],
+        "clean_room_scale_scaffold_green"
+    );
+    assert_eq!(
+        full_content_alignment["clean_room_content_scale"]["forbidden_intermediate"],
+        "no_full_hero_tan_replica_then_replace_workflow"
+    );
+    assert_eq!(
+        full_content_alignment["clean_room_content_scale"]["copy_policy"],
+        "no_copied_hero_tan_text_assets_code_tables_or_data"
+    );
+    assert!(
         coverage_counts["item_equipment_catalog"]
             .as_u64()
             .unwrap_or_default()
@@ -5910,6 +5936,13 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(world_html.contains("trillionnium_hero_tan_full_content_alignment_v1"));
     assert!(world_html.contains("data-full-content-alignment-contract="));
     assert!(world_html.contains("data-thresholds-green=\"true\""));
+    assert!(world_html.contains(
+        "data-clean-room-content-scale-contract=\"trillionnium_clean_room_content_scale_v1\""
+    ));
+    assert!(world_html.contains("data-clean-room-scale-status=\"clean_room_scale_scaffold_green\""));
+    assert!(world_html.contains(
+        "data-forbidden-intermediate=\"no_full_hero_tan_replica_then_replace_workflow\""
+    ));
     assert!(world_html.contains("rust_trillionnium_full_content_volume_alignment_gate"));
     assert!(world_html.contains("trillionnium_native_no_copied_hero_tan_text_assets_or_tables"));
     assert!(world_html.contains("data-content-domain=\"items_and_equipment\""));

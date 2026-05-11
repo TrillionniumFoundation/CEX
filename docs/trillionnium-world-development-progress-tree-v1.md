@@ -1,9 +1,9 @@
 # Trillionnium World Development Progress Tree v1
 
 Generated: 2026-05-08 18:11 CST  
-Last audited: 2026-05-11 18:0x CST
-Current code checkpoint: `feat: gate native social survival runtime` (this commit)
-Previous checkpoint: `d84e1bc docs: reconcile trillionnium hero tan audit evidence`
+Last audited: 2026-05-11 18:4x CST
+Current code checkpoint: `feat: gate clean-room content scale scaffold` (this commit)
+Previous checkpoint: `fbad93a feat: gate native social survival runtime`
 Repo: `/home/qian/.openclaw/workspace/CEX`
 
 This document is the handoff spine for continuing Trillionnium World development without losing state after chat compaction, runtime restarts, or long task chains.
@@ -47,6 +47,8 @@ OpenStreetMap / cached geodata
 The web frontend is **not** the source of truth. It renders state and sends player intent. Rust owns world state, simulation, tasks, combat, NPCs, economy, ledger, persistence, validation, and production gates.
 
 After the 2026-05-10/2026-05-11 Hero Tan alignment audits, treat `albert10jp/yxts-gold-asm` as a **game-loop reference**, not a skin target or content source. The reference is useful for the sequence "character on map -> directional movement -> location transition -> NPC/task/skill/combat progression". Trillionnium must recreate that loop with native Rust state, native content, OSM/commerce objectives, and explicit command handlers; it must not merely imitate the green LCD appearance and must not import Hero Tan code/text/maps/assets/tables/data.
+
+Important product/legal rule after the 2026-05-11 content-scale decision: do **not** build a full Hero Tan / 白金英雄坛说 replica and then replace names later. That workflow would contaminate the project with copied expression/data. The safe architecture path is a clean-room content-scale scaffold: match the system dimensions and load-bearing complexity with original Trillionnium districts, sect/title ladders, skills, NPC relationship dynamics, resources, combat numerics, items, story arcs, and validation gates from the start.
 
 ---
 
@@ -730,6 +732,8 @@ git log --oneline -5
   - Evidence: `trillionnium_world_skill_practice_loop_v1`; `/world` play-first prompt now exposes node-local mentor practice, `train_skill` forms, Rust mentor/NPC/place validation, and character skill feedback from `rust_trillionnium_character`. Browser E2E exercises `basic_unarmed` practice at `mirror-city-square` before local NPC/task flow and records `coverage.world_local_skill_practice_mentor_loop=true`.
 - [x] TW-3.15 Add lightweight combat encounter entry from exploration nodes.
   - Evidence: `trillionnium_world_combat_encounter_loop_v1`; `/world` play-first prompt exposes a Rust-projected node-local combat encounter form, validates node/overlay/target through Rust tactics state, resolves via `rust_tactics_combat_handler`, and returns to `map_ready_after_resolution` under `rust_world_combat_encounter_return_state`. Browser E2E records `coverage.world_local_combat_encounter_return_loop=true`.
+- [x] TW-3.16 Add clean-room content-scale scaffold instead of copy-then-replace reference content.
+  - Evidence: `trillionnium_clean_room_content_scale_v1`; `default_world_map_nodes()` now carries a 24-node original Trillionnium world graph including survival, social, mentor, auction, courier, archive, infirmary, cistern, and caravan pressure nodes; `trillionnium_hero_tan_full_content_alignment_v1` now requires `world_map_nodes >= 24`, exposes `clean_room_content_scale`, and explicitly forbids `no_full_hero_tan_replica_then_replace_workflow`.
 
 ### TW-4 — Rust World domain and simulation backbone
 
@@ -1766,10 +1770,27 @@ Also append a one-paragraph summary to `/home/qian/.openclaw/workspace/memory/YY
 
 ---
 
+#### Update 2026-05-11 18:4x CST
+
+- Commit: `feat: gate clean-room content scale scaffold` (this commit)
+- Responded to the content-scale concern without copying 白金英雄坛说 / Hero Tan data:
+  - [x] Rejected the unsafe intermediate workflow of "full replica first, replace later" and encoded the replacement as `no_full_hero_tan_replica_then_replace_workflow`.
+  - [x] Expanded `default_world_map_nodes()` from 12 to 24 original Trillionnium nodes, adding survival, resource, social, mentor, archive, auction, courier, survey, infirmary, cistern, guild-vault, and caravan-rest pressure locations.
+  - [x] Added native `WorldZone` / `WorldLocation` entries and stable fixture OSM identities for the new nodes so old state merges, SQL shadow upserts, provider-readiness gates, and live `/world/web/action` writes stay green.
+  - [x] Removed the direct Hero Tan title comparison from the player-facing starter square description and kept the reference role at mechanics/scale only.
+  - [x] Raised the full-content alignment map-node threshold to `world_map_nodes >= 24` so content breadth pressure is enforced by tests instead of vibes.
+  - [x] Added `trillionnium_clean_room_content_scale_v1` metadata to the full-content alignment projection and `/world` DOM, with Rust/native content as source of truth and browser/web visualization-only.
+  - [x] Updated Web E2E/static gates to require the clean-room content-scale marker.
+- Evidence: `cargo fmt --all -- --check`; `cargo check -p consumer-entry-api`; `cargo test -p consumer-entry-api -- --nocapture --test-threads=1` (136 passed); `cargo clippy -p consumer-entry-api -- -D warnings`; node/bash syntax; `git diff --check`; local-production restart/status OK; SQL snapshot gate `repository_migration_floor=0025_add_trillionnium_combat_numerics_runtime_column.sql` with `world_map_nodes=24`; Web E2E `run/league-web/web-e2e-summary-1778498369.json`; Browser E2E `run/league-browser/browser-e2e-summary-1778498385-1479207.json`, `coverage.world_food_water_age_survival_runtime_loop=true`, `coverage.world_dynamic_social_simulation_loop=true`, request-failure gate green with `0` unclassified failures; First-human E2E `run/first-human-session/browser-e2e-summary-1778498613-1484847.json`, zero request/page/console failures.
+- Honest scope: this is a clean-room world-breadth scaffold and gate, not a full authored MMO content pack and not a cloned Hero Tan dataset. It improves architecture load testing without raising technical/first-beta/commercial scores from local-only proof.
+- Constraints preserved: no Hero Tan code/text/assets/data copying, no live OSM ingestion, no MapLibre promotion, browser/web intent-only, Rust source of truth, and no local-only score inflation.
+
+---
+
 ## Current Next Pointer
 
 If the next instruction is simply “continue”, start here:
 
-> **Next pointer:** With item/equipment, resource pressure, region/story unlocks, combat numerics, food/water/age survival, and dynamic NPC society now Rust-runtime-backed, do not add more local-only loops for score inflation. Continue full content-volume alignment through legally clean encounter variety / authored-content breadth only if it creates real play value, otherwise prioritize real `TRILLIONNIUM_MULTI_NODE_LATENCY_EVIDENCE_PATH`, `TRILLIONNIUM_FIRST_BETA_COHORT_EVIDENCE_PATH`, or `TRILLIONNIUM_COMMERCIAL_LAUNCH_DRILL_EVIDENCE_PATH`. Current honest assessment remains `9.8/10` technical, `8.5/10` first internal beta, `7.0/10` commercial release.
+> **Next pointer:** Continue content-volume alignment only through clean-room authored breadth that creates real play value: more original encounters, quest chains, NPC relationship consequences, and survival/resource loops attached to the 24-node world graph. Do not use a copy-then-replace Hero Tan replica workflow. If the goal is score lift instead of content breadth, prioritize real `TRILLIONNIUM_MULTI_NODE_LATENCY_EVIDENCE_PATH`, `TRILLIONNIUM_FIRST_BETA_COHORT_EVIDENCE_PATH`, or `TRILLIONNIUM_COMMERCIAL_LAUNCH_DRILL_EVIDENCE_PATH`. Current honest assessment remains `9.8/10` technical, `8.5/10` first internal beta, `7.0/10` commercial release.
 
 Do not start live Overpass/Geofabrik ingestion yet. Do not promote MapLibre. Do not convert the web shell into a standalone JS source of truth.

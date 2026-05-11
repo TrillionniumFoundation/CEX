@@ -1417,6 +1417,21 @@ fn world_trillionnium_full_content_alignment_html(tactics_board: &Value) -> Stri
         .get("content_policy")
         .and_then(Value::as_str)
         .unwrap_or("trillionnium_native_no_copied_hero_tan_text_assets_or_tables");
+    let clean_room_scale = alignment
+        .get("clean_room_content_scale")
+        .unwrap_or(&Value::Null);
+    let clean_room_contract = clean_room_scale
+        .get("contract_version")
+        .and_then(Value::as_str)
+        .unwrap_or("trillionnium_clean_room_content_scale_v1");
+    let clean_room_status = clean_room_scale
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("clean_room_scale_scaffold_unknown");
+    let clean_room_forbidden = clean_room_scale
+        .get("forbidden_intermediate")
+        .and_then(Value::as_str)
+        .unwrap_or("no_full_hero_tan_replica_then_replace_workflow");
     let counts = alignment.get("coverage_counts").unwrap_or(&Value::Null);
     let count_for = |field: &str| -> u64 {
         counts
@@ -1455,12 +1470,15 @@ fn world_trillionnium_full_content_alignment_html(tactics_board: &Value) -> Stri
         .collect::<Vec<_>>()
         .join("\n");
     format!(
-        "<section id=\"trillionnium-full-content-alignment\" class=\"trillionnium-full-content-alignment\" data-full-content-alignment-contract=\"{}\" data-status=\"{}\" data-thresholds-green=\"{}\" data-source-of-truth=\"{}\" data-content-policy=\"{}\" data-reference-use=\"mechanics_loops_content_breadth_reference_only\" data-forbidden-copy=\"text_maps_assets_code_binary_tables_names\" data-web-role=\"visualization_input_only\" aria-label=\"Trillionnium native full content volume alignment\" data-i18n-aria-label-en=\"Trillionnium native full content volume alignment\" data-i18n-aria-label-zh=\"Trillionnium 原生完整内容量对齐\"><h4 data-i18n-en=\"Native full content volume\" data-i18n-zh=\"原生完整内容量\">Native full content volume</h4><p data-i18n-en=\"Classic text-RPG scale is used only as a breadth reference; all content here is Trillionnium-native.\" data-i18n-zh=\"经典文字 RPG 体量只作广度参考；这里所有内容都是 Trillionnium 原生。\">Classic text-RPG scale is used only as a breadth reference; all content here is Trillionnium-native.</p><div class=\"mini-grid\"><article class=\"mini\"><strong>{}</strong><span data-i18n-en=\"Skills · families · training\" data-i18n-zh=\"技能 · 家族 · 修炼\">Skills · families · training</span><code>{}/{}/{}</code></article><article class=\"mini\"><strong>{}</strong><span data-i18n-en=\"Sects · NPCs · commands\" data-i18n-zh=\"门派 · NPC · 指令\">Sects · NPCs · commands</span><code>{}/{}/{}</code></article><article class=\"mini\"><strong>{}</strong><span data-i18n-en=\"Tasks · objectives · map nodes\" data-i18n-zh=\"任务 · 目标 · 地图节点\">Tasks · objectives · map nodes</span><code>{}/{}/{}</code></article><article class=\"mini\"><strong>{}</strong><span data-i18n-en=\"Items · pressure · story arcs\" data-i18n-zh=\"道具 · 压力循环 · 剧情线\">Items · pressure · story arcs</span><code>{}/{}/{}</code></article></div><ul class=\"world-content-domain-list\">{}</ul><small data-i18n-en=\"Runtime truth: Rust owns catalogs and validation; browser renders projections and submits intent only.\" data-i18n-zh=\"运行时真相：Rust 拥有目录和校验；浏览器只渲染投影并提交意图。\">Runtime truth: Rust owns catalogs and validation; browser renders projections and submits intent only.</small></section>",
+        "<section id=\"trillionnium-full-content-alignment\" class=\"trillionnium-full-content-alignment\" data-full-content-alignment-contract=\"{}\" data-status=\"{}\" data-thresholds-green=\"{}\" data-source-of-truth=\"{}\" data-content-policy=\"{}\" data-clean-room-content-scale-contract=\"{}\" data-clean-room-scale-status=\"{}\" data-forbidden-intermediate=\"{}\" data-reference-use=\"mechanics_loops_content_breadth_reference_only\" data-forbidden-copy=\"text_maps_assets_code_binary_tables_names\" data-web-role=\"visualization_input_only\" aria-label=\"Trillionnium native full content volume alignment\" data-i18n-aria-label-en=\"Trillionnium native full content volume alignment\" data-i18n-aria-label-zh=\"Trillionnium 原生完整内容量对齐\"><h4 data-i18n-en=\"Native full content volume\" data-i18n-zh=\"原生完整内容量\">Native full content volume</h4><p data-i18n-en=\"Classic text-RPG scale is used only as a breadth reference; all content here is Trillionnium-native.\" data-i18n-zh=\"经典文字 RPG 体量只作广度参考；这里所有内容都是 Trillionnium 原生。\">Classic text-RPG scale is used only as a breadth reference; all content here is Trillionnium-native.</p><div class=\"mini-grid\"><article class=\"mini\"><strong>{}</strong><span data-i18n-en=\"Skills · families · training\" data-i18n-zh=\"技能 · 家族 · 修炼\">Skills · families · training</span><code>{}/{}/{}</code></article><article class=\"mini\"><strong>{}</strong><span data-i18n-en=\"Sects · NPCs · commands\" data-i18n-zh=\"门派 · NPC · 指令\">Sects · NPCs · commands</span><code>{}/{}/{}</code></article><article class=\"mini\"><strong>{}</strong><span data-i18n-en=\"Tasks · objectives · map nodes\" data-i18n-zh=\"任务 · 目标 · 地图节点\">Tasks · objectives · map nodes</span><code>{}/{}/{}</code></article><article class=\"mini\"><strong>{}</strong><span data-i18n-en=\"Items · pressure · story arcs\" data-i18n-zh=\"道具 · 压力循环 · 剧情线\">Items · pressure · story arcs</span><code>{}/{}/{}</code></article></div><ul class=\"world-content-domain-list\">{}</ul><small data-i18n-en=\"Runtime truth: Rust owns catalogs and validation; browser renders projections and submits intent only.\" data-i18n-zh=\"运行时真相：Rust 拥有目录和校验；浏览器只渲染投影并提交意图。\">Runtime truth: Rust owns catalogs and validation; browser renders projections and submits intent only.</small></section>",
         escape_html_text(contract),
         escape_html_text(status),
         if thresholds_green { "true" } else { "false" },
         escape_html_text(source_of_truth),
         escape_html_text(content_policy),
+        escape_html_text(clean_room_contract),
+        escape_html_text(clean_room_status),
+        escape_html_text(clean_room_forbidden),
         if thresholds_green { "GREEN" } else { "CHECK" },
         count_for("skill_definitions"),
         count_for("skill_families"),
