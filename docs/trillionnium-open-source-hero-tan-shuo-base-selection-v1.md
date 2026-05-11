@@ -25,7 +25,15 @@ Searched GitHub/web/Gitee-style queries for:
 - `新英雄坛说`
 - `文字武侠 MUD Python/MIT`
 
-Local inspection clones live under `/tmp/cex-hero-tan-bases`.
+Historical local inspection clones were previously created under `/tmp/cex-hero-tan-bases`, but that directory is not current repeatable evidence. Current repeatable evidence should cite public Git refs/commits, especially `albert10jp/yxts-gold-asm` at `62f83c921ae7701fa230bd017e147f079aa70a36`, and any local checkout must remain optional non-vendored study material.
+
+## Current repeatable reference policy
+
+- Prefer immutable public Git evidence over transient local `/tmp` checkouts.
+- Current verified mechanics reference: `albert10jp/yxts-gold-asm` at commit `62f83c921ae7701fa230bd017e147f079aa70a36`.
+- Use that repository only for public behavior/layout/mechanics evidence such as the 160x80 / 5x3 movement shell, directional movement loop, NPC interaction shape, attributes, HP/FP, food/water, items/equipment, skills, and tasks.
+- Do **not** copy original code, text, maps, binary tables, NPC/task tables, names, sprites/assets, music, or proprietary game data into Trillionnium.
+- Any local checkout is optional non-vendored study material and must not be treated as production source-of-truth.
 
 ## Candidate summary
 
@@ -47,7 +55,7 @@ Local inspection clones live under `/tmp/cex-hero-tan-bases`.
 ## 1) `mogita/gmud`
 
 - Repository: <https://github.com/mogita/gmud>
-- Local clone: `/tmp/cex-hero-tan-bases/gmud`
+- Historical optional local clone (not current repeatable evidence): `/tmp/cex-hero-tan-bases/gmud`
 - License: MIT (`LICENSE`)
 - README: “文曲星经典之作《英雄坛说》研究资料整理” and “Lee 开源版 GMUD 源码”
 - Useful files:
@@ -66,7 +74,7 @@ MIT is promising, but because the repo is an organized copy of an older game sou
 ## 2) `qq634488405/RMXP-Hero`
 
 - Repository: <https://github.com/qq634488405/RMXP-Hero>
-- Local clone: `/tmp/cex-hero-tan-bases/RMXP-Hero`
+- Historical optional local clone (not current repeatable evidence): `/tmp/cex-hero-tan-bases/RMXP-Hero`
 - GitHub license metadata: GPL-3.0
 - Stack: RPG Maker XP / Ruby
 - README says it is based on WQX 黄金英雄坛说 and 白金英雄坛说, thanks Lee for opening NC2000 白金英雄坛说, and uses GP1288/extracted gray-scale assets.
@@ -89,7 +97,7 @@ Use for high-level systems comparison only unless legal posture is intentionally
 ## 3) `coyoteXujie/yxts-llm`
 
 - Repository: <https://github.com/coyoteXujie/yxts-llm>
-- Local clone: `/tmp/cex-hero-tan-bases/yxts-llm`
+- Historical optional local clone (not current repeatable evidence): `/tmp/cex-hero-tan-bases/yxts-llm`
 - GitHub license metadata: none
 - README has a “MIT License” line but no full `LICENSE` file was found.
 - Stack: Python 3.9+ + Arcade 3.x
@@ -107,7 +115,7 @@ Do not directly copy until a real license file / author confirmation is availabl
 ## 4) `Toxicccxz/BaiJinHero`
 
 - Repository: <https://github.com/Toxicccxz/BaiJinHero>
-- Local clone: `/tmp/cex-hero-tan-bases/BaiJinHero`
+- Historical optional local clone (not current repeatable evidence): `/tmp/cex-hero-tan-bases/BaiJinHero`
 - License: none
 - Stack: Godot 4.5 mobile
 - Repo has bootstrap/title/menu/autoload scaffolding and title BGM.
@@ -120,7 +128,7 @@ Name match and useful Godot shell idea only. Not enough game code to serve as a 
 ## 5) `lw0717/GmudEX`
 
 - Repository: <https://github.com/lw0717/GmudEX>
-- Local clone: `/tmp/cex-hero-tan-bases/GmudEX`
+- Historical optional local clone (not current repeatable evidence): `/tmp/cex-hero-tan-bases/GmudEX`
 - License: none
 - Stack: Android Java
 - App string: `白金英雄坛说EX2014`
@@ -133,7 +141,7 @@ Closer to original than generic Wuxia projects, but old Android-native, unlicens
 ## 6) `sbhhbs/lava_collection`
 
 - Repository: <https://github.com/sbhhbs/lava_collection>
-- Local clone: `/tmp/cex-hero-tan-bases/lava_collection`
+- Historical optional local clone (not current repeatable evidence): `/tmp/cex-hero-tan-bases/lava_collection`
 - License: none
 - Relevant path: `sandbox/新英雄坛说(公测最终版)/Doc/readme.txt`
 
@@ -146,7 +154,7 @@ Do not use code/assets directly.
 ## 7) `GeorgeChen-666/sgmud`
 
 - Repository: <https://github.com/GeorgeChen-666/sgmud>
-- Local sparse clone: `/tmp/cex-hero-tan-bases/sgmud`
+- Historical optional local sparse clone (not current repeatable evidence): `/tmp/cex-hero-tan-bases/sgmud`
 - License: none
 - Stack: RPG Maker MV browser runtime plus archived GMUD-simple Android materials.
 - `doc/xtulnx-gmudsimple-04cabd28a77e/README`: “Gmud (simple) 英雄坛说 / 基于‘文曲星’英雄坛说PC版本移植。”

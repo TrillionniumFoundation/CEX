@@ -64,10 +64,34 @@ pub(super) const TRILLIONNIUM_WORLD_ITEM_EQUIPMENT_RUNTIME_CONTRACT_VERSION: &st
     "trillionnium_world_item_equipment_runtime_v1";
 pub(super) const TRILLIONNIUM_WORLD_RESOURCE_PRESSURE_RUNTIME_CONTRACT_VERSION: &str =
     "trillionnium_world_resource_pressure_runtime_v1";
+pub(super) const TRILLIONNIUM_WORLD_FOOD_WATER_AGE_SURVIVAL_CONTRACT_VERSION: &str =
+    "trillionnium_world_food_water_age_survival_v1";
+pub(super) const TRILLIONNIUM_WORLD_DYNAMIC_SOCIAL_SIMULATION_CONTRACT_VERSION: &str =
+    "trillionnium_world_dynamic_social_simulation_v1";
 pub(super) const TRILLIONNIUM_WORLD_REGION_STORY_UNLOCK_RUNTIME_CONTRACT_VERSION: &str =
     "trillionnium_world_region_story_unlock_runtime_v1";
 pub(super) const TRILLIONNIUM_WORLD_COMBAT_NUMERICS_RUNTIME_CONTRACT_VERSION: &str =
     "trillionnium_world_combat_numerics_runtime_v1";
+
+fn default_survival_food_current() -> i64 {
+    76
+}
+
+fn default_survival_food_max() -> i64 {
+    100
+}
+
+fn default_survival_water_current() -> i64 {
+    82
+}
+
+fn default_survival_water_max() -> i64 {
+    100
+}
+
+fn default_survival_age_days() -> i64 {
+    19 * 360
+}
 
 fn default_tactics_objective_id() -> String {
     "defeat_market_bandit".to_string()
@@ -945,6 +969,12 @@ pub(super) struct WorldTrillionniumResourcePressureMutation {
     pub(super) injury_delta: i64,
     pub(super) evidence_integrity_delta: i64,
     pub(super) evidence_fragment_delta: i64,
+    #[serde(default)]
+    pub(super) food_delta: i64,
+    #[serde(default)]
+    pub(super) water_delta: i64,
+    #[serde(default)]
+    pub(super) age_delta_days: i64,
     pub(super) source_of_truth: String,
     pub(super) created_at_epoch: i64,
 }
@@ -959,8 +989,26 @@ impl WorldTrillionniumResourcePressureMutation {
             "injury_delta": self.injury_delta,
             "evidence_integrity_delta": self.evidence_integrity_delta,
             "evidence_fragment_delta": self.evidence_fragment_delta,
+            "food_delta": self.food_delta,
+            "water_delta": self.water_delta,
+            "age_delta_days": self.age_delta_days,
             "source_of_truth": &self.source_of_truth,
             "created_at_epoch": self.created_at_epoch,
+        })
+    }
+
+    fn to_survival_value(&self) -> Value {
+        json!({
+            "contract_version": TRILLIONNIUM_WORLD_FOOD_WATER_AGE_SURVIVAL_CONTRACT_VERSION,
+            "source_of_truth": "rust_trillionnium_food_water_age_survival_state",
+            "event_kind": &self.event_kind,
+            "command": &self.command,
+            "time_delta_minutes": self.time_delta_minutes,
+            "food_delta": self.food_delta,
+            "water_delta": self.water_delta,
+            "age_delta_days": self.age_delta_days,
+            "created_at_epoch": self.created_at_epoch,
+            "web_role": "visualization_input_only",
         })
     }
 }
@@ -974,6 +1022,16 @@ pub(super) struct WorldTrillionniumResourcePressureState {
     pub(super) injury_level: i64,
     pub(super) evidence_integrity: i64,
     pub(super) evidence_fragments: i64,
+    #[serde(default = "default_survival_food_current")]
+    pub(super) food_current: i64,
+    #[serde(default = "default_survival_food_max")]
+    pub(super) food_max: i64,
+    #[serde(default = "default_survival_water_current")]
+    pub(super) water_current: i64,
+    #[serde(default = "default_survival_water_max")]
+    pub(super) water_max: i64,
+    #[serde(default = "default_survival_age_days")]
+    pub(super) age_days: i64,
     pub(super) mutation_count: i64,
     pub(super) last_mutation_command: Option<String>,
     pub(super) last_mutation_event: Option<String>,
@@ -993,6 +1051,11 @@ impl Default for WorldTrillionniumResourcePressureState {
             injury_level: 0,
             evidence_integrity: 72,
             evidence_fragments: 0,
+            food_current: default_survival_food_current(),
+            food_max: default_survival_food_max(),
+            water_current: default_survival_water_current(),
+            water_max: default_survival_water_max(),
+            age_days: default_survival_age_days(),
             mutation_count: 0,
             last_mutation_command: None,
             last_mutation_event: None,
@@ -1021,6 +1084,17 @@ impl WorldTrillionniumResourcePressureState {
         }
         self.evidence_integrity = self.evidence_integrity.clamp(0, 100);
         self.evidence_fragments = self.evidence_fragments.max(0);
+        if self.food_max <= 0 {
+            self.food_max = default_survival_food_max();
+        }
+        if self.water_max <= 0 {
+            self.water_max = default_survival_water_max();
+        }
+        self.food_current = self.food_current.clamp(0, self.food_max);
+        self.water_current = self.water_current.clamp(0, self.water_max);
+        if self.age_days <= 0 {
+            self.age_days = default_survival_age_days();
+        }
     }
 
     fn clock_label(&self) -> String {
@@ -1061,6 +1135,50 @@ impl WorldTrillionniumResourcePressureState {
         }
     }
 
+    fn food_status(&self) -> &'static str {
+        if self.food_current <= 12 {
+            "starvation_risk"
+        } else if self.food_current <= 34 {
+            "hungry"
+        } else {
+            "fed"
+        }
+    }
+
+    fn water_status(&self) -> &'static str {
+        if self.water_current <= 12 {
+            "dehydration_risk"
+        } else if self.water_current <= 34 {
+            "thirsty"
+        } else {
+            "hydrated"
+        }
+    }
+
+    fn age_years(&self) -> i64 {
+        (self.age_days / 360).max(1)
+    }
+
+    fn age_stage(&self) -> &'static str {
+        match self.age_years() {
+            0..=17 => "apprentice",
+            18..=29 => "young_adult",
+            30..=49 => "seasoned",
+            50..=69 => "elder",
+            _ => "ancient_legend",
+        }
+    }
+
+    fn survival_status(&self) -> &'static str {
+        if self.food_current <= 12 || self.water_current <= 12 {
+            "critical_survival_pressure"
+        } else if self.food_current <= 34 || self.water_current <= 34 {
+            "survival_pressure_visible"
+        } else {
+            "stable_survival_loop"
+        }
+    }
+
     fn apply_mutation(
         &mut self,
         event_kind: &str,
@@ -1075,28 +1193,40 @@ impl WorldTrillionniumResourcePressureState {
             injury_delta,
             evidence_integrity_delta,
             evidence_fragment_delta,
+            food_delta,
+            water_delta,
         ) = match event_kind {
-            "world_map_move" => (12, -4, 0, 1, 1),
+            "world_map_move" => (12, -4, 0, 1, 1, -2, -4),
             "tactics_attack" => {
                 let injury_delta = if result == Some("defender_routed") {
                     0
                 } else {
                     1
                 };
-                (8, -14, injury_delta, -2, 0)
+                (8, -14, injury_delta, -2, 0, -3, -5)
             }
-            "tactics_complete_task" => (18, -6, -1, 12, 3),
-            _ => (4, -1, 0, 0, 0),
+            "tactics_complete_task" => (18, -6, -1, 12, 3, -2, -3),
+            _ => (4, -1, 0, 0, 0, -1, -1),
         };
         let old_minute = self.minute_of_day;
         let absolute_minute = self.minute_of_day + time_delta_minutes;
-        self.day_index += absolute_minute.div_euclid(24 * 60);
+        let age_delta_days = absolute_minute.div_euclid(24 * 60).max(0);
+        self.day_index += age_delta_days;
         self.minute_of_day = absolute_minute.rem_euclid(24 * 60);
         self.stamina_current = (self.stamina_current + stamina_delta).clamp(0, self.stamina_max);
         self.injury_level = (self.injury_level + injury_delta).clamp(0, 4);
         self.evidence_integrity =
             (self.evidence_integrity + evidence_integrity_delta).clamp(0, 100);
         self.evidence_fragments = (self.evidence_fragments + evidence_fragment_delta).max(0);
+        self.food_current = (self.food_current + food_delta).clamp(0, self.food_max);
+        self.water_current = (self.water_current + water_delta).clamp(0, self.water_max);
+        self.age_days = (self.age_days + age_delta_days).max(0);
+        if self.food_current <= 12 || self.water_current <= 12 {
+            self.injury_level = (self.injury_level + 1).clamp(0, 4);
+            self.stamina_current = self.stamina_current.min(20);
+        } else if self.food_current <= 34 || self.water_current <= 34 {
+            self.stamina_current = self.stamina_current.min(45);
+        }
         self.mutation_count += 1;
         self.last_mutation_command = Some(command.to_string());
         self.last_mutation_event = Some(event_kind.to_string());
@@ -1110,6 +1240,9 @@ impl WorldTrillionniumResourcePressureState {
             injury_delta,
             evidence_integrity_delta,
             evidence_fragment_delta,
+            food_delta,
+            water_delta,
+            age_delta_days,
             source_of_truth: "rust_trillionnium_resource_pressure_runtime_state".to_string(),
             created_at_epoch: now_epoch,
         };
@@ -1128,6 +1261,9 @@ impl WorldTrillionniumResourcePressureState {
             "mutation": mutation.to_value(),
             "previous_minute_of_day": old_minute,
             "resource_pressure_runtime": self.to_value(),
+            "survival_runtime_contract_version": TRILLIONNIUM_WORLD_FOOD_WATER_AGE_SURVIVAL_CONTRACT_VERSION,
+            "survival_mutation": mutation.to_survival_value(),
+            "survival_runtime": self.survival_to_value(),
             "web_role": "visualization_input_only",
         })
     }
@@ -1137,8 +1273,8 @@ impl WorldTrillionniumResourcePressureState {
             "contract_version": TRILLIONNIUM_WORLD_RESOURCE_PRESSURE_RUNTIME_CONTRACT_VERSION,
             "source_of_truth": "rust_trillionnium_resource_pressure_runtime_state",
             "persistence_owner": "world_state.world_trillionnium_characters.resource_pressure_state",
-            "runtime_status": "rust_owned_time_stamina_injury_evidence_live",
-            "tracked_domains": ["time", "stamina", "injury", "evidence_integrity"],
+            "runtime_status": "rust_owned_time_stamina_injury_evidence_food_water_age_live",
+            "tracked_domains": ["time", "stamina", "injury", "evidence_integrity", "food", "water", "age"],
             "mutation_sources": ["world_map_move", "tactics_attack", "tactics_complete_task"],
             "time": {
                 "day_index": self.day_index,
@@ -1159,11 +1295,52 @@ impl WorldTrillionniumResourcePressureState {
                 "fragments": self.evidence_fragments,
                 "status": self.evidence_status(),
             },
+            "survival_runtime_contract_version": TRILLIONNIUM_WORLD_FOOD_WATER_AGE_SURVIVAL_CONTRACT_VERSION,
+            "survival": self.survival_to_value(),
             "mutation_count": self.mutation_count,
             "last_mutation_command": &self.last_mutation_command,
             "last_mutation_event": &self.last_mutation_event,
             "last_mutation_result": &self.last_mutation_result,
             "recent_mutations": self.recent_mutations.iter().map(WorldTrillionniumResourcePressureMutation::to_value).collect::<Vec<_>>(),
+            "updated_at_epoch": self.updated_at_epoch,
+            "web_role": "visualization_input_only",
+        })
+    }
+
+    fn survival_to_value(&self) -> Value {
+        json!({
+            "contract_version": TRILLIONNIUM_WORLD_FOOD_WATER_AGE_SURVIVAL_CONTRACT_VERSION,
+            "source_of_truth": "rust_trillionnium_food_water_age_survival_state",
+            "persistence_owner": "world_state.world_trillionnium_characters.resource_pressure_state.food_water_age",
+            "runtime_status": "rust_owned_food_water_age_decay_live",
+            "tracked_domains": ["food", "water", "age", "stamina_consequences", "injury_consequences"],
+            "mutation_sources": ["world_map_move", "tactics_attack", "tactics_complete_task"],
+            "food": {
+                "current": self.food_current,
+                "max": self.food_max,
+                "status": self.food_status(),
+            },
+            "water": {
+                "current": self.water_current,
+                "max": self.water_max,
+                "status": self.water_status(),
+            },
+            "age": {
+                "days": self.age_days,
+                "years": self.age_years(),
+                "stage": self.age_stage(),
+            },
+            "survival_pressure_status": self.survival_status(),
+            "consequences": {
+                "low_food_caps_stamina": true,
+                "low_water_caps_stamina": true,
+                "critical_food_or_water_adds_injury": true,
+                "age_advances_on_world_day_rollover": true,
+            },
+            "mutation_count": self.mutation_count,
+            "last_mutation_command": &self.last_mutation_command,
+            "last_mutation_event": &self.last_mutation_event,
+            "recent_mutations": self.recent_mutations.iter().map(WorldTrillionniumResourcePressureMutation::to_survival_value).collect::<Vec<_>>(),
             "updated_at_epoch": self.updated_at_epoch,
             "web_role": "visualization_input_only",
         })
@@ -1918,6 +2095,12 @@ impl WorldTrillionniumCharacter {
         state.to_value()
     }
 
+    fn survival_runtime_json(&self) -> Value {
+        let mut state = self.resource_pressure_state.clone();
+        state.ensure_defaults();
+        state.survival_to_value()
+    }
+
     fn region_story_unlock_runtime_json(&self) -> Value {
         let mut state = self.region_story_unlock_state.clone();
         state.ensure_defaults();
@@ -1951,6 +2134,9 @@ impl WorldTrillionniumCharacter {
             "resource_pressure_runtime_contract_version": TRILLIONNIUM_WORLD_RESOURCE_PRESSURE_RUNTIME_CONTRACT_VERSION,
             "resource_pressure_state": self.resource_pressure_runtime_json(),
             "resource_pressure_runtime": self.resource_pressure_runtime_json(),
+            "food_water_age_survival_runtime_contract_version": TRILLIONNIUM_WORLD_FOOD_WATER_AGE_SURVIVAL_CONTRACT_VERSION,
+            "survival_pressure_state": self.survival_runtime_json(),
+            "survival_runtime": self.survival_runtime_json(),
             "region_story_unlock_runtime_contract_version": TRILLIONNIUM_WORLD_REGION_STORY_UNLOCK_RUNTIME_CONTRACT_VERSION,
             "region_story_unlock_state": self.region_story_unlock_runtime_json(),
             "region_story_unlock_runtime": self.region_story_unlock_runtime_json(),
@@ -3549,6 +3735,162 @@ fn trillionnium_npc_relationship_projection_json(
     })
 }
 
+pub(super) fn trillionnium_dynamic_social_simulation_json(
+    world: &WorldState,
+    matrix_user_id: &str,
+    npcs: &Value,
+) -> Value {
+    let npc_values = npcs.as_array().cloned().unwrap_or_default();
+    let mut trusted_count = 0_i64;
+    let mut watchful_count = 0_i64;
+    let mut hostile_count = 0_i64;
+    let mut total_trust = 0_i64;
+    let mut total_affinity = 0_i64;
+    let mut faction_scores: HashMap<String, (i64, i64, i64)> = HashMap::new();
+    let mut npc_states = Vec::new();
+    for npc in &npc_values {
+        let npc_id = npc.get("npc_id").and_then(Value::as_str).unwrap_or("npc");
+        let display_name = npc
+            .get("display_name")
+            .and_then(Value::as_str)
+            .unwrap_or(npc_id);
+        let sect_id = npc
+            .get("sect_id")
+            .and_then(Value::as_str)
+            .unwrap_or("unaffiliated");
+        let relationship_score = npc
+            .get("relationship_state")
+            .and_then(|relationship| relationship.get("relationship_score"))
+            .and_then(Value::as_i64)
+            .or_else(|| npc.get("relationship").and_then(Value::as_i64))
+            .unwrap_or_default();
+        let trust = npc
+            .get("relationship_state")
+            .and_then(|relationship| relationship.get("trust"))
+            .and_then(Value::as_i64)
+            .or_else(|| npc.get("trust").and_then(Value::as_i64))
+            .unwrap_or_default();
+        let risk_posture = npc
+            .get("relationship_state")
+            .and_then(|relationship| relationship.get("risk_posture"))
+            .and_then(Value::as_str)
+            .or_else(|| npc.get("risk_posture").and_then(Value::as_str))
+            .unwrap_or("watchful");
+        match risk_posture {
+            "trusted" => trusted_count += 1,
+            "hostile" => hostile_count += 1,
+            _ => watchful_count += 1,
+        }
+        total_trust += trust;
+        total_affinity += relationship_score;
+        let entry = faction_scores
+            .entry(sect_id.to_string())
+            .or_insert((0, 0, 0));
+        entry.0 += relationship_score;
+        entry.1 += trust;
+        entry.2 += 1;
+        npc_states.push(json!({
+            "npc_id": npc_id,
+            "display_name": display_name,
+            "sect_id": sect_id,
+            "relationship_score": relationship_score,
+            "trust": trust,
+            "risk_posture": risk_posture,
+        }));
+    }
+    npc_states.sort_by(|left, right| {
+        right
+            .get("trust")
+            .and_then(Value::as_i64)
+            .cmp(&left.get("trust").and_then(Value::as_i64))
+    });
+    let relationship_events = world
+        .world_relationships
+        .iter()
+        .filter(|relationship| relationship.from_id == matrix_user_id)
+        .collect::<Vec<_>>();
+    let conflict_heat = hostile_count * 12
+        + relationship_events
+            .iter()
+            .filter(|relationship| relationship.strength < 0)
+            .map(|relationship| relationship.strength.abs())
+            .sum::<i64>();
+    let average_trust = if npc_values.is_empty() {
+        0
+    } else {
+        total_trust / npc_values.len() as i64
+    };
+    let average_affinity = if npc_values.is_empty() {
+        0
+    } else {
+        total_affinity / npc_values.len() as i64
+    };
+    let society_phase = if conflict_heat >= 36 {
+        "conflict_heat_visible"
+    } else if trusted_count >= 3 || average_trust >= 24 {
+        "cooperative_network"
+    } else {
+        "watchful_city_society"
+    };
+    let mut faction_standings = faction_scores
+        .into_iter()
+        .map(|(sect_id, (affinity_sum, trust_sum, count))| {
+            json!({
+                "sect_id": sect_id,
+                "npc_count": count,
+                "average_affinity": if count > 0 { affinity_sum / count } else { 0 },
+                "average_trust": if count > 0 { trust_sum / count } else { 0 },
+                "standing": if count > 0 && trust_sum / count >= 24 { "trusted" } else if count > 0 && affinity_sum / count <= -20 { "hostile" } else { "watchful" },
+            })
+        })
+        .collect::<Vec<_>>();
+    faction_standings.sort_by(|left, right| {
+        left.get("sect_id")
+            .and_then(Value::as_str)
+            .cmp(&right.get("sect_id").and_then(Value::as_str))
+    });
+    let recent_social_events = world
+        .world_relationships
+        .iter()
+        .rev()
+        .filter(|relationship| relationship.from_id == matrix_user_id)
+        .take(8)
+        .map(|relationship| {
+            json!({
+                "relationship_id": &relationship.relationship_id,
+                "from_id": &relationship.from_id,
+                "to_id": &relationship.to_id,
+                "relation_kind": &relationship.relation_kind,
+                "strength": relationship.strength,
+                "updated_at_epoch": relationship.updated_at_epoch,
+            })
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "contract_version": TRILLIONNIUM_WORLD_DYNAMIC_SOCIAL_SIMULATION_CONTRACT_VERSION,
+        "source_of_truth": "rust_world_relationships_dynamic_social_state",
+        "persistence_owner": "world_state.world_relationships",
+        "runtime_status": "rust_owned_npc_society_relationship_events_live",
+        "content_policy": "trillionnium_native_no_copied_hero_tan_text_assets_or_tables",
+        "tracked_domains": ["npc_affinity", "trust", "conflict_heat", "faction_standing", "recent_social_events"],
+        "mutation_sources": ["talk_npc", "train_skill", "offer_task", "complete_task", "attack", "world_action"],
+        "matrix_user_id": matrix_user_id,
+        "active_npc_count": npc_values.len(),
+        "relationship_event_count": relationship_events.len(),
+        "trusted_count": trusted_count,
+        "watchful_count": watchful_count,
+        "hostile_count": hostile_count,
+        "average_trust": average_trust,
+        "average_affinity": average_affinity,
+        "conflict_heat": conflict_heat,
+        "society_phase": society_phase,
+        "faction_standings": faction_standings,
+        "npc_states": npc_states,
+        "recent_social_events": recent_social_events,
+        "web_role": "visualization_input_only",
+    })
+}
+
 #[derive(Debug, Clone)]
 struct TrillionniumNpcFixture {
     npc_id: &'static str,
@@ -4231,7 +4573,8 @@ fn trillionnium_resource_pressure_loops_json() -> Value {
         "contract_version": "trillionnium_native_resource_pressure_loop_v1",
         "source_of_truth": "rust_trillionnium_resource_pressure_catalog",
         "content_policy": "trillionnium_native_no_copied_hero_tan_text_assets_or_tables",
-        "runtime_status": "catalog_projection_gate_runtime_mutation_pending",
+        "runtime_status": "rust_runtime_backed_time_stamina_injury_evidence_food_water_age",
+        "survival_runtime_contract_version": TRILLIONNIUM_WORLD_FOOD_WATER_AGE_SURVIVAL_CONTRACT_VERSION,
         "loops": [
             {
                 "loop_id": "daylight_route_window",
@@ -4260,6 +4603,27 @@ fn trillionnium_resource_pressure_loops_json() -> Value {
                 "pressure": "failed_encounters_increase_downtime",
                 "player_choice": "use_tonic_seek_mentor_or_continue",
                 "failure_mode": "party_downtime_and_task_risk"
+            },
+            {
+                "loop_id": "food_supply",
+                "domain": "food",
+                "pressure": "travel_and_combat_consume_food_until_stamina_caps_apply",
+                "player_choice": "restock_rations_finish_route_or_risk_exhaustion",
+                "failure_mode": "starvation_risk_caps_stamina_and_adds_injury"
+            },
+            {
+                "loop_id": "water_supply",
+                "domain": "water",
+                "pressure": "movement_and_combat_consume_water_faster_than_food",
+                "player_choice": "refill_water_take_shortcut_or_delay_combat",
+                "failure_mode": "dehydration_risk_caps_stamina_and_adds_injury"
+            },
+            {
+                "loop_id": "age_pressure",
+                "domain": "age",
+                "pressure": "world_day_rollovers_increment_age_and_long_term_stage",
+                "player_choice": "spend_days_training_building_trust_or_pushing_routes",
+                "failure_mode": "age_stage_changes_long_term_identity_and_recovery_pressure"
             },
             {
                 "loop_id": "reputation_trust",
@@ -4399,6 +4763,7 @@ fn trillionnium_full_content_volume_alignment_json(
     item_catalog: &Value,
     resource_pressure_runtime: &Value,
     resource_pressure_loops: &Value,
+    dynamic_social_simulation: &Value,
     region_story_unlock_runtime: &Value,
     story_arc_catalog: &Value,
 ) -> Value {
@@ -4444,6 +4809,29 @@ fn trillionnium_full_content_volume_alignment_json(
         .get("contract_version")
         .and_then(Value::as_str)
         == Some(TRILLIONNIUM_WORLD_RESOURCE_PRESSURE_RUNTIME_CONTRACT_VERSION);
+    let survival_runtime = resource_pressure_runtime
+        .get("survival")
+        .or_else(|| resource_pressure_runtime.get("survival_runtime"));
+    let survival_runtime_contract_green = survival_runtime
+        .and_then(|survival| survival.get("contract_version"))
+        .and_then(Value::as_str)
+        == Some(TRILLIONNIUM_WORLD_FOOD_WATER_AGE_SURVIVAL_CONTRACT_VERSION);
+    let survival_runtime_tracked_domain_count = survival_runtime
+        .and_then(|survival| survival.get("tracked_domains"))
+        .map(value_array_len)
+        .unwrap_or(0);
+    let dynamic_social_contract_green = dynamic_social_simulation
+        .get("contract_version")
+        .and_then(Value::as_str)
+        == Some(TRILLIONNIUM_WORLD_DYNAMIC_SOCIAL_SIMULATION_CONTRACT_VERSION);
+    let dynamic_social_tracked_domain_count = dynamic_social_simulation
+        .get("tracked_domains")
+        .map(value_array_len)
+        .unwrap_or(0);
+    let dynamic_social_faction_count = dynamic_social_simulation
+        .get("faction_standings")
+        .map(value_array_len)
+        .unwrap_or(0);
     let story_arc_count = nested_array_len(story_arc_catalog, "arcs");
     let region_story_runtime_contract_green = region_story_unlock_runtime
         .get("contract_version")
@@ -4497,6 +4885,11 @@ fn trillionnium_full_content_volume_alignment_json(
         && resource_runtime_contract_green
         && resource_runtime_tracked_domain_count >= 4
         && resource_runtime_mutation_source_count >= 3
+        && survival_runtime_contract_green
+        && survival_runtime_tracked_domain_count >= 5
+        && dynamic_social_contract_green
+        && dynamic_social_tracked_domain_count >= 5
+        && dynamic_social_faction_count >= 8
         && story_arc_count >= 6
         && region_story_runtime_contract_green
         && region_story_unlocked_region_count >= 1
@@ -4551,6 +4944,9 @@ fn trillionnium_full_content_volume_alignment_json(
             "resource_pressure_loops": 6,
             "resource_pressure_runtime_tracked_domains": 4,
             "resource_pressure_runtime_mutation_sources": 3,
+            "food_water_age_survival_runtime_tracked_domains": 5,
+            "dynamic_social_simulation_tracked_domains": 5,
+            "dynamic_social_simulation_factions": 8,
             "story_arcs": 6,
             "region_story_unlocked_regions": 1,
             "region_story_unlocked_arcs": 1,
@@ -4583,6 +4979,11 @@ fn trillionnium_full_content_volume_alignment_json(
             "resource_pressure_runtime_tracked_domains": resource_runtime_tracked_domain_count,
             "resource_pressure_runtime_mutation_sources": resource_runtime_mutation_source_count,
             "resource_pressure_runtime_contract_green": resource_runtime_contract_green,
+            "food_water_age_survival_runtime_contract_green": survival_runtime_contract_green,
+            "food_water_age_survival_runtime_tracked_domains": survival_runtime_tracked_domain_count,
+            "dynamic_social_simulation_contract_green": dynamic_social_contract_green,
+            "dynamic_social_simulation_tracked_domains": dynamic_social_tracked_domain_count,
+            "dynamic_social_simulation_factions": dynamic_social_faction_count,
             "story_arcs": story_arc_count,
             "region_story_runtime_contract_green": region_story_runtime_contract_green,
             "region_story_unlocked_regions": region_story_unlocked_region_count,
@@ -4594,13 +4995,14 @@ fn trillionnium_full_content_volume_alignment_json(
         "domains": [
             {"domain": "sects_and_title_ladders", "status": "native_catalog_expanded", "gate_field": "sects"},
             {"domain": "skill_families_and_training", "status": "native_catalog_expanded", "gate_field": "skill_definitions"},
-            {"domain": "npc_social_relationships", "status": "native_catalog_expanded", "gate_field": "npcs"},
+            {"domain": "npc_social_relationships", "status": "rust_runtime_backed", "gate_field": "dynamic_social_simulation"},
             {"domain": "quest_task_archetypes", "status": "native_catalog_expanded", "gate_field": "task_archetypes"},
             {"domain": "world_nodes_and_objective_travel", "status": "rust_runtime_backed", "gate_field": "world_objective_travel"},
             {"domain": "combat_entry_and_return", "status": "rust_runtime_backed", "gate_field": "world_combat_encounter"},
             {"domain": "combat_numerics", "status": "rust_runtime_backed", "gate_field": "combat_numerics_runtime"},
             {"domain": "items_and_equipment", "status": "rust_runtime_backed", "gate_field": "item_equipment_runtime"},
             {"domain": "survival_time_resource_pressure", "status": "rust_runtime_backed", "gate_field": "resource_pressure_runtime"},
+            {"domain": "food_water_age_survival", "status": "rust_runtime_backed", "gate_field": "survival_runtime"},
             {"domain": "story_arcs", "status": "rust_runtime_backed", "gate_field": "region_story_unlock_runtime"}
         ],
         "next_runtime_slices": [
@@ -5970,6 +6372,8 @@ pub(super) fn world_tactics_board_projection_json(
     let training_commands = trillionnium_training_commands_json(openstreetmap_geodata);
     let sects = trillionnium_sect_fixtures_json(openstreetmap_geodata);
     let npcs = trillionnium_npc_fixtures_json(world, matrix_user_id, openstreetmap_geodata);
+    let dynamic_social_simulation =
+        trillionnium_dynamic_social_simulation_json(world, matrix_user_id, &npcs);
     let npc_spawn_anchors = trillionnium_npc_spawn_anchors_json(&npcs);
     let npc_command_descriptors = trillionnium_npc_command_descriptors_from_npcs_json(&npcs);
     let mentor_training_task_flows =
@@ -6035,6 +6439,11 @@ pub(super) fn world_tactics_board_projection_json(
                 .cloned()
         })
         .unwrap_or_else(|| WorldTrillionniumResourcePressureState::default().to_value());
+    let survival_runtime = resource_pressure_runtime
+        .get("survival")
+        .cloned()
+        .or_else(|| trillionnium_character.get("survival_runtime").cloned())
+        .unwrap_or_else(|| WorldTrillionniumResourcePressureState::default().survival_to_value());
     let resource_pressure_loops = trillionnium_resource_pressure_loops_json();
     let region_story_unlock_runtime = trillionnium_character
         .get("region_story_unlock_runtime")
@@ -6064,6 +6473,7 @@ pub(super) fn world_tactics_board_projection_json(
         &item_equipment_catalog,
         &resource_pressure_runtime,
         &resource_pressure_loops,
+        &dynamic_social_simulation,
         &region_story_unlock_runtime,
         &story_arc_catalog,
     );
@@ -6088,6 +6498,8 @@ pub(super) fn world_tactics_board_projection_json(
         "trillionnium_battle_log_style_contract_version": TRILLIONNIUM_BATTLE_LOG_STYLE_CONTRACT_VERSION,
         "trillionnium_combat_log_contract_version": TRILLIONNIUM_COMBAT_LOG_CONTRACT_VERSION,
         "trillionnium_resource_pressure_runtime_contract_version": TRILLIONNIUM_WORLD_RESOURCE_PRESSURE_RUNTIME_CONTRACT_VERSION,
+        "food_water_age_survival_runtime_contract_version": TRILLIONNIUM_WORLD_FOOD_WATER_AGE_SURVIVAL_CONTRACT_VERSION,
+        "dynamic_social_simulation_contract_version": TRILLIONNIUM_WORLD_DYNAMIC_SOCIAL_SIMULATION_CONTRACT_VERSION,
         "trillionnium_region_story_unlock_runtime_contract_version": TRILLIONNIUM_WORLD_REGION_STORY_UNLOCK_RUNTIME_CONTRACT_VERSION,
         "trillionnium_combat_numerics_runtime_contract_version": TRILLIONNIUM_WORLD_COMBAT_NUMERICS_RUNTIME_CONTRACT_VERSION,
         "trillionnium_npc_relationship_contract_version": TRILLIONNIUM_NPC_RELATIONSHIP_CONTRACT_VERSION,
@@ -6148,6 +6560,7 @@ pub(super) fn world_tactics_board_projection_json(
         "training_commands": training_commands,
         "sects": sects,
         "npcs": npcs,
+        "dynamic_social_simulation": dynamic_social_simulation,
         "npc_spawn_anchors": npc_spawn_anchors,
         "npc_command_descriptors": npc_command_descriptors,
         "mentor_training_task_flows": mentor_training_task_flows,
@@ -6166,6 +6579,7 @@ pub(super) fn world_tactics_board_projection_json(
         "item_equipment_runtime": item_equipment_runtime,
         "resource_pressure_runtime": resource_pressure_runtime,
         "resource_pressure_loops": resource_pressure_loops,
+        "survival_runtime": survival_runtime,
         "region_story_unlock_runtime": region_story_unlock_runtime,
         "story_arc_catalog": story_arc_catalog,
         "full_content_alignment": full_content_alignment,

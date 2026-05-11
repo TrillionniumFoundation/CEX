@@ -1,9 +1,9 @@
 # Trillionnium World Development Progress Tree v1
 
 Generated: 2026-05-08 18:11 CST  
-Last audited: 2026-05-11 17:1x CST
-Current code checkpoint: `docs: reconcile trillionnium hero tan audit evidence` (this commit)
-Previous checkpoint: `0965543 docs: prepare trillionnium real evidence templates`
+Last audited: 2026-05-11 18:0x CST
+Current code checkpoint: `feat: gate native social survival runtime` (this commit)
+Previous checkpoint: `d84e1bc docs: reconcile trillionnium hero tan audit evidence`
 Repo: `/home/qian/.openclaw/workspace/CEX`
 
 This document is the handoff spine for continuing Trillionnium World development without losing state after chat compaction, runtime restarts, or long task chains.
@@ -1748,10 +1748,28 @@ Also append a one-paragraph summary to `/home/qian/.openclaw/workspace/memory/YY
 
 ---
 
+#### Update 2026-05-11 18:0x CST
+
+- Commit: `feat: gate native social survival runtime` (this commit)
+- Continued legally clean full content-volume alignment by deepening native runtime play pressure rather than copying Hero Tan / 白金英雄坛说 data:
+  - [x] Added explicit `trillionnium_world_food_water_age_survival_v1` projection under the existing Rust-owned resource-pressure state, covering `food`, `water`, `age`, survival status, low-resource stamina caps, and critical injury consequences.
+  - [x] Accepted `world_map_move`, `tactics_attack`, and `tactics_complete_task` events now apply food/water deltas and advance age on Rust world-day rollovers; browser/web only submit movement/combat/task intents.
+  - [x] Added `trillionnium_world_dynamic_social_simulation_v1` as a Rust-derived NPC society projection from persistent `world_state.world_relationships`, with trust, affinity, conflict heat, faction standing, recent social events, and NPC posture summaries.
+  - [x] Accepted tactics commands now append relationship events and expose social mutation metadata while keeping Rust `WorldState` as source of truth.
+  - [x] The full-content alignment gate now marks both `food_water_age_survival` and `npc_social_relationships` as `rust_runtime_backed` with contract/tracked-domain/faction coverage.
+  - [x] `/world` renders visualization-only panels `#trillionnium-food-water-age-survival` and `#trillionnium-dynamic-social-simulation`; browser state remains display/input only.
+  - [x] Browser E2E and Web E2E gates assert the new runtime markers and coverage flags `world_food_water_age_survival_runtime_loop` / `world_dynamic_social_simulation_loop`.
+  - [x] Updated the Hero Tan base-selection note so old `/tmp/cex-hero-tan-bases` clones are historical/optional only; current repeatable reference evidence is public Git, especially `albert10jp/yxts-gold-asm` at `62f83c921ae7701fa230bd017e147f079aa70a36`.
+- Evidence: `cargo fmt --all -- --check`; `cargo check -p consumer-entry-api`; `cargo test -p consumer-entry-api -- --nocapture --test-threads=1` (136 passed); `cargo clippy -p consumer-entry-api -- -D warnings`; `node --check scripts/playwright/trillionnium-browser-e2e.mjs`; `bash -n scripts/check-trillionnium-league-web-e2e.sh scripts/check-trillionnium-first-human-session.sh`; `git diff --check`; local-production restart/status OK; SQL snapshot gate `repository_migration_floor=0025_add_trillionnium_combat_numerics_runtime_column.sql`; Web E2E `run/league-web/web-e2e-summary-1778495092.json`; Browser E2E `run/league-browser/browser-e2e-summary-1778495136-1437995.json`, `coverage.world_food_water_age_survival_runtime_loop=true`, `coverage.world_dynamic_social_simulation_loop=true`, request-failure gate green with `0` unclassified failures; First-human E2E `run/first-human-session/browser-e2e-summary-1778495375-1443955.json`, zero request/page/console failures.
+- Current honest scope: social/survival runtime adds real native play pressure and stronger local loop coverage, but it still does **not** raise technical 9.9+, first-beta 9+, or commercial 8+ without real multi-node/live-traffic, cohort, and commercial drill evidence.
+- Constraints preserved: no Hero Tan code/text/assets/data copying, no live OSM ingestion, no MapLibre promotion, browser/web intent-only, Rust source of truth, and no local-only score inflation.
+
+---
+
 ## Current Next Pointer
 
 If the next instruction is simply “continue”, start here:
 
-> **Next pointer:** With item/equipment, resource pressure, region/story unlocks, and combat numerics now Rust-runtime-backed, do not add more local-only loops for score inflation. Continue full content-volume alignment through legally clean encounter variety / authored-content breadth only if it creates real play value, otherwise prioritize real `TRILLIONNIUM_MULTI_NODE_LATENCY_EVIDENCE_PATH`, `TRILLIONNIUM_FIRST_BETA_COHORT_EVIDENCE_PATH`, or `TRILLIONNIUM_COMMERCIAL_LAUNCH_DRILL_EVIDENCE_PATH`. Current honest assessment remains `9.8/10` technical, `8.5/10` first internal beta, `7.0/10` commercial release.
+> **Next pointer:** With item/equipment, resource pressure, region/story unlocks, combat numerics, food/water/age survival, and dynamic NPC society now Rust-runtime-backed, do not add more local-only loops for score inflation. Continue full content-volume alignment through legally clean encounter variety / authored-content breadth only if it creates real play value, otherwise prioritize real `TRILLIONNIUM_MULTI_NODE_LATENCY_EVIDENCE_PATH`, `TRILLIONNIUM_FIRST_BETA_COHORT_EVIDENCE_PATH`, or `TRILLIONNIUM_COMMERCIAL_LAUNCH_DRILL_EVIDENCE_PATH`. Current honest assessment remains `9.8/10` technical, `8.5/10` first internal beta, `7.0/10` commercial release.
 
 Do not start live Overpass/Geofabrik ingestion yet. Do not promote MapLibre. Do not convert the web shell into a standalone JS source of truth.

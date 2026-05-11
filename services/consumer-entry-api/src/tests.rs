@@ -3216,6 +3216,32 @@ fn world_tactics_projection_binds_trillionnium_state_to_osm_objectives() {
         true
     );
     assert_eq!(
+        coverage_counts["food_water_age_survival_runtime_contract_green"],
+        true
+    );
+    assert!(
+        coverage_counts["food_water_age_survival_runtime_tracked_domains"]
+            .as_u64()
+            .unwrap_or_default()
+            >= 5
+    );
+    assert_eq!(
+        coverage_counts["dynamic_social_simulation_contract_green"],
+        true
+    );
+    assert!(
+        coverage_counts["dynamic_social_simulation_tracked_domains"]
+            .as_u64()
+            .unwrap_or_default()
+            >= 5
+    );
+    assert!(
+        coverage_counts["dynamic_social_simulation_factions"]
+            .as_u64()
+            .unwrap_or_default()
+            >= 8
+    );
+    assert_eq!(
         coverage_counts["combat_numerics_runtime_contract_green"],
         true
     );
@@ -3266,6 +3292,20 @@ fn world_tactics_projection_binds_trillionnium_state_to_osm_objectives() {
                 && domain["status"] == "rust_runtime_backed"
                 && domain["gate_field"] == "resource_pressure_runtime"
         ));
+    assert!(full_content_alignment["domains"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|domain| domain["domain"] == "food_water_age_survival"
+            && domain["status"] == "rust_runtime_backed"
+            && domain["gate_field"] == "survival_runtime"));
+    assert!(full_content_alignment["domains"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|domain| domain["domain"] == "npc_social_relationships"
+            && domain["status"] == "rust_runtime_backed"
+            && domain["gate_field"] == "dynamic_social_simulation"));
     assert_eq!(
         tactics["item_equipment_runtime_contract_version"],
         "trillionnium_world_item_equipment_runtime_v1"
@@ -3336,6 +3376,20 @@ fn world_tactics_projection_binds_trillionnium_state_to_osm_objectives() {
         .any(|loop_def| loop_def["loop_id"] == "evidence_integrity"
             && loop_def["failure_mode"] == "review_hold_or_reward_delay"));
     assert_eq!(
+        tactics["resource_pressure_loops"]["survival_runtime_contract_version"],
+        "trillionnium_world_food_water_age_survival_v1"
+    );
+    for loop_id in ["food_supply", "water_supply", "age_pressure"] {
+        assert!(
+            tactics["resource_pressure_loops"]["loops"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|loop_def| loop_def["loop_id"] == loop_id),
+            "missing survival resource loop {loop_id}"
+        );
+    }
+    assert_eq!(
         tactics["trillionnium_resource_pressure_runtime_contract_version"],
         "trillionnium_world_resource_pressure_runtime_v1"
     );
@@ -3362,6 +3416,46 @@ fn world_tactics_projection_binds_trillionnium_state_to_osm_objectives() {
     assert_eq!(
         tactics["resource_pressure_runtime"]["evidence_integrity"]["status"],
         "draft_evidence_bundle"
+    );
+    assert_eq!(
+        tactics["food_water_age_survival_runtime_contract_version"],
+        "trillionnium_world_food_water_age_survival_v1"
+    );
+    assert_eq!(
+        tactics["survival_runtime"]["contract_version"],
+        "trillionnium_world_food_water_age_survival_v1"
+    );
+    assert_eq!(
+        tactics["survival_runtime"]["source_of_truth"],
+        "rust_trillionnium_food_water_age_survival_state"
+    );
+    assert_eq!(tactics["survival_runtime"]["food"]["status"], "fed");
+    assert_eq!(tactics["survival_runtime"]["water"]["status"], "hydrated");
+    assert_eq!(tactics["survival_runtime"]["age"]["stage"], "young_adult");
+    assert_eq!(
+        tactics["dynamic_social_simulation_contract_version"],
+        "trillionnium_world_dynamic_social_simulation_v1"
+    );
+    assert_eq!(
+        tactics["dynamic_social_simulation"]["contract_version"],
+        "trillionnium_world_dynamic_social_simulation_v1"
+    );
+    assert_eq!(
+        tactics["dynamic_social_simulation"]["source_of_truth"],
+        "rust_world_relationships_dynamic_social_state"
+    );
+    assert!(
+        tactics["dynamic_social_simulation"]["active_npc_count"]
+            .as_u64()
+            .unwrap_or_default()
+            >= 18
+    );
+    assert!(
+        tactics["dynamic_social_simulation"]["faction_standings"]
+            .as_array()
+            .unwrap()
+            .len()
+            >= 8
     );
     assert_eq!(
         tactics["story_arc_catalog"]["contract_version"],
@@ -3796,6 +3890,43 @@ async fn world_tactics_command_endpoint_validates_training_place_and_mutates_cha
         "tactics_attack"
     );
     assert_eq!(
+        attack["outcome"]["food_water_age_survival_runtime_contract_version"],
+        "trillionnium_world_food_water_age_survival_v1"
+    );
+    assert_eq!(
+        attack["outcome"]["survival_mutation"]["event_kind"],
+        "tactics_attack"
+    );
+    assert_eq!(attack["outcome"]["survival_mutation"]["food_delta"], -3);
+    assert_eq!(attack["outcome"]["survival_mutation"]["water_delta"], -5);
+    assert_eq!(
+        attack["outcome"]["survival_runtime"]["source_of_truth"],
+        "rust_trillionnium_food_water_age_survival_state"
+    );
+    assert_eq!(attack["outcome"]["survival_runtime"]["food"]["current"], 73);
+    assert_eq!(
+        attack["outcome"]["survival_runtime"]["water"]["current"],
+        77
+    );
+    assert_eq!(
+        attack["outcome"]["dynamic_social_simulation_contract_version"],
+        "trillionnium_world_dynamic_social_simulation_v1"
+    );
+    assert_eq!(
+        attack["outcome"]["dynamic_social_mutation"]["source_of_truth"],
+        "rust_world_relationships_dynamic_social_state"
+    );
+    assert_eq!(
+        attack["outcome"]["dynamic_social_mutation"]["event_kind"],
+        "tactics_attack"
+    );
+    assert!(
+        attack["outcome"]["dynamic_social_simulation"]["relationship_event_count"]
+            .as_u64()
+            .unwrap_or_default()
+            >= 1
+    );
+    assert_eq!(
         attack["outcome"]["region_story_unlock_runtime_contract_version"],
         "trillionnium_world_region_story_unlock_runtime_v1"
     );
@@ -4082,6 +4213,31 @@ async fn world_tactics_command_endpoint_validates_training_place_and_mutates_cha
     assert_eq!(
         completion["outcome"]["resource_pressure_runtime"]["evidence_integrity"]["fragments"],
         3
+    );
+    assert_eq!(
+        completion["outcome"]["food_water_age_survival_runtime_contract_version"],
+        "trillionnium_world_food_water_age_survival_v1"
+    );
+    assert_eq!(
+        completion["outcome"]["survival_mutation"]["event_kind"],
+        "tactics_complete_task"
+    );
+    assert_eq!(completion["outcome"]["survival_mutation"]["food_delta"], -2);
+    assert_eq!(
+        completion["outcome"]["survival_mutation"]["water_delta"],
+        -3
+    );
+    assert_eq!(
+        completion["outcome"]["survival_runtime"]["survival_pressure_status"],
+        "stable_survival_loop"
+    );
+    assert_eq!(
+        completion["outcome"]["dynamic_social_simulation_contract_version"],
+        "trillionnium_world_dynamic_social_simulation_v1"
+    );
+    assert_eq!(
+        completion["outcome"]["dynamic_social_mutation"]["relationship_kind"],
+        "tactics_complete_task"
     );
     assert_eq!(
         completion["outcome"]["region_story_unlock_runtime_contract_version"],
@@ -4659,6 +4815,19 @@ async fn world_map_move_endpoint_exposes_transition_semantics_contract() {
         room["resource_pressure_runtime"]["evidence_integrity"]["fragments"],
         1
     );
+    assert_eq!(
+        room["food_water_age_survival_runtime_contract_version"],
+        "trillionnium_world_food_water_age_survival_v1"
+    );
+    assert_eq!(room["survival_mutation"]["event_kind"], "world_map_move");
+    assert_eq!(room["survival_mutation"]["food_delta"], -2);
+    assert_eq!(room["survival_mutation"]["water_delta"], -4);
+    assert_eq!(
+        room["survival_runtime"]["source_of_truth"],
+        "rust_trillionnium_food_water_age_survival_state"
+    );
+    assert_eq!(room["survival_runtime"]["food"]["current"], 74);
+    assert_eq!(room["survival_runtime"]["water"]["current"], 78);
     assert_eq!(
         room["region_story_unlock_runtime_contract_version"],
         "trillionnium_world_region_story_unlock_runtime_v1"
@@ -5754,6 +5923,8 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(world_html.contains("name=\"command\" value=\"equip_item\""));
     assert!(world_html.contains("name=\"target_slot\""));
     assert!(world_html.contains("data-content-domain=\"survival_time_resource_pressure\""));
+    assert!(world_html.contains("data-content-domain=\"food_water_age_survival\""));
+    assert!(world_html.contains("data-content-domain=\"npc_social_relationships\""));
     assert!(world_html.contains("data-content-domain=\"combat_numerics\""));
     assert!(world_html.contains(
         "data-combat-numerics-runtime-contract=\"trillionnium_world_combat_numerics_runtime_v1\""
@@ -5769,9 +5940,27 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(
         world_html.contains("world_state.world_trillionnium_characters.resource_pressure_state")
     );
-    assert!(
-        world_html.contains("data-runtime-status=\"rust_owned_time_stamina_injury_evidence_live\"")
-    );
+    assert!(world_html.contains(
+        "data-runtime-status=\"rust_owned_time_stamina_injury_evidence_food_water_age_live\""
+    ));
+    assert!(world_html.contains(
+        "data-survival-runtime-contract=\"trillionnium_world_food_water_age_survival_v1\""
+    ));
+    assert!(world_html.contains("id=\"trillionnium-food-water-age-survival\""));
+    assert!(world_html.contains("rust_trillionnium_food_water_age_survival_state"));
+    assert!(world_html.contains(
+        "world_state.world_trillionnium_characters.resource_pressure_state.food_water_age"
+    ));
+    assert!(world_html.contains("data-food-status=\"fed\""));
+    assert!(world_html.contains("data-water-status=\"hydrated\""));
+    assert!(world_html.contains("data-age-stage=\"young_adult\""));
+    assert!(world_html.contains(
+        "data-dynamic-social-simulation-contract=\"trillionnium_world_dynamic_social_simulation_v1\""
+    ));
+    assert!(world_html.contains("id=\"trillionnium-dynamic-social-simulation\""));
+    assert!(world_html.contains("rust_world_relationships_dynamic_social_state"));
+    assert!(world_html.contains("world_state.world_relationships"));
+    assert!(world_html.contains("data-society-phase=\"watchful_city_society\""));
     assert!(world_html.contains("data-web-role=\"visualization_input_only\""));
     assert!(world_html.contains("data-content-domain=\"story_arcs\""));
     assert!(world_html.contains("data-region-story-unlock-runtime-contract=\"trillionnium_world_region_story_unlock_runtime_v1\""));

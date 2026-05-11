@@ -1235,6 +1235,102 @@ fn world_trillionnium_npc_cards_html(
         .join("\n")
 }
 
+fn world_trillionnium_dynamic_social_simulation_html(tactics_board: &Value) -> String {
+    let social = tactics_board
+        .get("dynamic_social_simulation")
+        .unwrap_or(&Value::Null);
+    let contract = social
+        .get("contract_version")
+        .and_then(Value::as_str)
+        .unwrap_or("trillionnium_world_dynamic_social_simulation_v1");
+    let source_of_truth = social
+        .get("source_of_truth")
+        .and_then(Value::as_str)
+        .unwrap_or("rust_world_relationships_dynamic_social_state");
+    let persistence_owner = social
+        .get("persistence_owner")
+        .and_then(Value::as_str)
+        .unwrap_or("world_state.world_relationships");
+    let runtime_status = social
+        .get("runtime_status")
+        .and_then(Value::as_str)
+        .unwrap_or("rust_owned_npc_society_relationship_events_live");
+    let society_phase = social
+        .get("society_phase")
+        .and_then(Value::as_str)
+        .unwrap_or("watchful_city_society");
+    let trusted_count = social
+        .get("trusted_count")
+        .and_then(Value::as_i64)
+        .unwrap_or_default();
+    let hostile_count = social
+        .get("hostile_count")
+        .and_then(Value::as_i64)
+        .unwrap_or_default();
+    let conflict_heat = social
+        .get("conflict_heat")
+        .and_then(Value::as_i64)
+        .unwrap_or_default();
+    let event_count = social
+        .get("relationship_event_count")
+        .and_then(Value::as_i64)
+        .unwrap_or_default();
+    let faction_count = social
+        .get("faction_standings")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or_default();
+    let faction_cards = social
+        .get("faction_standings")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .take(6)
+        .map(|faction| {
+            let sect_id = faction
+                .get("sect_id")
+                .and_then(Value::as_str)
+                .unwrap_or("sect");
+            let standing = faction
+                .get("standing")
+                .and_then(Value::as_str)
+                .unwrap_or("watchful");
+            let average_trust = faction
+                .get("average_trust")
+                .and_then(Value::as_i64)
+                .unwrap_or_default();
+            format!(
+                "<article class=\"mini trillionnium-social-faction\" data-sect-id=\"{}\" data-standing=\"{}\"><strong>{}</strong><span>{} · trust {}</span></article>",
+                escape_html_text(sect_id),
+                escape_html_text(standing),
+                escape_world_visible_text(sect_id),
+                escape_html_text(standing),
+                average_trust,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        "<section id=\"trillionnium-dynamic-social-simulation\" class=\"trillionnium-social-simulation-panel\" data-dynamic-social-simulation-contract=\"{}\" data-runtime-status=\"{}\" data-source-of-truth=\"{}\" data-persistence-owner=\"{}\" data-society-phase=\"{}\" data-trusted-count=\"{}\" data-hostile-count=\"{}\" data-conflict-heat=\"{}\" data-relationship-event-count=\"{}\" data-faction-count=\"{}\" data-web-role=\"visualization_input_only\" aria-label=\"Trillionnium dynamic NPC society\" data-i18n-aria-label-en=\"Trillionnium dynamic NPC society\" data-i18n-aria-label-zh=\"Trillionnium 动态 NPC 社会\"><h4 data-i18n-en=\"Dynamic NPC society\" data-i18n-zh=\"动态 NPC 社会\">Dynamic NPC society</h4><p data-i18n-en=\"Rust derives trust, affinity, conflict heat, and faction standing from persistent relationship events; browser only renders the society graph.\" data-i18n-zh=\"Rust 从持久关系事件推导信任、亲疏、冲突热度和阵营态势；浏览器只渲染社会图。\">Rust derives trust, affinity, conflict heat, and faction standing from persistent relationship events; browser only renders the society graph.</p><div class=\"mini-grid\"><article class=\"mini\"><strong>{}</strong><span>society phase</span></article><article class=\"mini\"><strong>{}</strong><span>trusted NPCs</span></article><article class=\"mini\"><strong>{}</strong><span>conflict heat</span></article><article class=\"mini\"><strong>{}</strong><span>relationship events</span></article></div><div class=\"mini-grid\">{}</div></section>",
+        escape_html_text(contract),
+        escape_html_text(runtime_status),
+        escape_html_text(source_of_truth),
+        escape_html_text(persistence_owner),
+        escape_html_text(society_phase),
+        trusted_count,
+        hostile_count,
+        conflict_heat,
+        event_count,
+        faction_count,
+        escape_html_text(society_phase),
+        trusted_count,
+        conflict_heat,
+        event_count,
+        faction_cards,
+    )
+}
+
 fn world_trillionnium_task_candidate_forms_html(
     tactics_board: &Value,
     current_matrix_user_id: &str,
@@ -1532,6 +1628,78 @@ fn world_trillionnium_resource_pressure_runtime_html(trillionnium_character: &Va
         .and_then(|evidence| evidence.get("status"))
         .and_then(Value::as_str)
         .unwrap_or("draft_evidence_bundle");
+    let survival = runtime
+        .get("survival")
+        .or_else(|| runtime.get("survival_runtime"))
+        .or_else(|| trillionnium_character.get("survival_runtime"))
+        .unwrap_or(&Value::Null);
+    let survival_contract = survival
+        .get("contract_version")
+        .and_then(Value::as_str)
+        .unwrap_or("trillionnium_world_food_water_age_survival_v1");
+    let survival_source_of_truth = survival
+        .get("source_of_truth")
+        .and_then(Value::as_str)
+        .unwrap_or("rust_trillionnium_food_water_age_survival_state");
+    let survival_persistence_owner = survival
+        .get("persistence_owner")
+        .and_then(Value::as_str)
+        .unwrap_or(
+            "world_state.world_trillionnium_characters.resource_pressure_state.food_water_age",
+        );
+    let survival_runtime_status = survival
+        .get("runtime_status")
+        .and_then(Value::as_str)
+        .unwrap_or("rust_owned_food_water_age_decay_live");
+    let survival_pressure_status = survival
+        .get("survival_pressure_status")
+        .and_then(Value::as_str)
+        .unwrap_or("stable_survival_loop");
+    let food_current = survival
+        .get("food")
+        .and_then(|food| food.get("current"))
+        .and_then(Value::as_i64)
+        .unwrap_or(76);
+    let food_max = survival
+        .get("food")
+        .and_then(|food| food.get("max"))
+        .and_then(Value::as_i64)
+        .unwrap_or(100);
+    let food_status = survival
+        .get("food")
+        .and_then(|food| food.get("status"))
+        .and_then(Value::as_str)
+        .unwrap_or("fed");
+    let water_current = survival
+        .get("water")
+        .and_then(|water| water.get("current"))
+        .and_then(Value::as_i64)
+        .unwrap_or(82);
+    let water_max = survival
+        .get("water")
+        .and_then(|water| water.get("max"))
+        .and_then(Value::as_i64)
+        .unwrap_or(100);
+    let water_status = survival
+        .get("water")
+        .and_then(|water| water.get("status"))
+        .and_then(Value::as_str)
+        .unwrap_or("hydrated");
+    let age_years = survival
+        .get("age")
+        .and_then(|age| age.get("years"))
+        .and_then(Value::as_i64)
+        .unwrap_or(19);
+    let age_days = survival
+        .get("age")
+        .and_then(|age| age.get("days"))
+        .and_then(Value::as_i64)
+        .unwrap_or(19 * 360);
+    let age_stage = survival
+        .get("age")
+        .and_then(|age| age.get("stage"))
+        .and_then(Value::as_str)
+        .unwrap_or("young_adult");
     let mutation_count = runtime
         .get("mutation_count")
         .and_then(Value::as_i64)
@@ -1588,7 +1756,7 @@ fn world_trillionnium_resource_pressure_runtime_html(trillionnium_character: &Va
         recent_mutations
     };
     format!(
-        "<section id=\"trillionnium-resource-pressure-runtime\" class=\"trillionnium-resource-pressure-panel\" data-resource-pressure-runtime-contract=\"{}\" data-runtime-status=\"{}\" data-source-of-truth=\"{}\" data-persistence-owner=\"{}\" data-mutation-count=\"{}\" data-last-mutation-event=\"{}\" data-stamina-status=\"{}\" data-injury-status=\"{}\" data-evidence-status=\"{}\" data-web-role=\"visualization_input_only\" aria-label=\"Trillionnium time stamina injury evidence pressure\" data-i18n-aria-label-en=\"Trillionnium time stamina injury evidence pressure\" data-i18n-aria-label-zh=\"Trillionnium 时间体力伤势证据压力\"><h4 data-i18n-en=\"Time / stamina / injury / evidence\" data-i18n-zh=\"时间 / 体力 / 伤势 / 证据\">Time / stamina / injury / evidence</h4><p data-i18n-en=\"Rust mutates pressure after movement, combat, and task completion; browser only renders the needles.\" data-i18n-zh=\"移动、战斗和任务完成后由 Rust 修改压力；浏览器只渲染指针。\">Rust mutates pressure after movement, combat, and task completion; browser only renders the needles.</p><div class=\"mini-grid\"><article class=\"mini\"><strong>Day {} · {}</strong><span data-i18n-en=\"World clock\" data-i18n-zh=\"世界时钟\">World clock</span></article><article class=\"mini\"><strong>{}/{}</strong><span>stamina · {}</span></article><article class=\"mini\"><strong>{}</strong><span>injury · {}</span></article><article class=\"mini\"><strong>{}% · {} fragments</strong><span>evidence · {}</span></article></div><div class=\"mini-grid\">{}</div></section>",
+        "<section id=\"trillionnium-resource-pressure-runtime\" class=\"trillionnium-resource-pressure-panel\" data-resource-pressure-runtime-contract=\"{}\" data-runtime-status=\"{}\" data-source-of-truth=\"{}\" data-persistence-owner=\"{}\" data-mutation-count=\"{}\" data-last-mutation-event=\"{}\" data-stamina-status=\"{}\" data-injury-status=\"{}\" data-evidence-status=\"{}\" data-survival-contract=\"{}\" data-web-role=\"visualization_input_only\" aria-label=\"Trillionnium time stamina injury evidence food water age pressure\" data-i18n-aria-label-en=\"Trillionnium time stamina injury evidence food water age pressure\" data-i18n-aria-label-zh=\"Trillionnium 时间体力伤势证据粮水年龄压力\"><h4 data-i18n-en=\"Time / stamina / injury / evidence\" data-i18n-zh=\"时间 / 体力 / 伤势 / 证据\">Time / stamina / injury / evidence</h4><p data-i18n-en=\"Rust mutates pressure after movement, combat, and task completion; browser only renders the needles.\" data-i18n-zh=\"移动、战斗和任务完成后由 Rust 修改压力；浏览器只渲染指针。\">Rust mutates pressure after movement, combat, and task completion; browser only renders the needles.</p><div class=\"mini-grid\"><article class=\"mini\"><strong>Day {} · {}</strong><span data-i18n-en=\"World clock\" data-i18n-zh=\"世界时钟\">World clock</span></article><article class=\"mini\"><strong>{}/{}</strong><span>stamina · {}</span></article><article class=\"mini\"><strong>{}</strong><span>injury · {}</span></article><article class=\"mini\"><strong>{}% · {} fragments</strong><span>evidence · {}</span></article></div><div class=\"mini-grid\">{}</div></section><section id=\"trillionnium-food-water-age-survival\" class=\"trillionnium-survival-panel\" data-survival-runtime-contract=\"{}\" data-runtime-status=\"{}\" data-source-of-truth=\"{}\" data-persistence-owner=\"{}\" data-food-status=\"{}\" data-water-status=\"{}\" data-age-stage=\"{}\" data-survival-pressure-status=\"{}\" data-mutation-count=\"{}\" data-web-role=\"visualization_input_only\" aria-label=\"Trillionnium food water age survival\" data-i18n-aria-label-en=\"Trillionnium food water age survival\" data-i18n-aria-label-zh=\"Trillionnium 粮水年龄生存\"><h4 data-i18n-en=\"Food / water / age\" data-i18n-zh=\"粮食 / 饮水 / 年龄\">Food / water / age</h4><p data-i18n-en=\"Food and water decay through Rust-owned movement/combat/task ticks; age advances on world day rollovers.\" data-i18n-zh=\"粮食和饮水随 Rust 拥有的移动/战斗/任务 tick 衰减；年龄随世界日翻转推进。\">Food and water decay through Rust-owned movement/combat/task ticks; age advances on world day rollovers.</p><div class=\"mini-grid\"><article class=\"mini\"><strong>{}/{}</strong><span>food · {}</span></article><article class=\"mini\"><strong>{}/{}</strong><span>water · {}</span></article><article class=\"mini\"><strong>{} years</strong><span>{} · {} days</span></article><article class=\"mini\"><strong>{}</strong><span>survival pressure</span></article></div></section>",
         escape_html_text(contract),
         escape_html_text(runtime_status),
         escape_html_text(source_of_truth),
@@ -1598,6 +1766,7 @@ fn world_trillionnium_resource_pressure_runtime_html(trillionnium_character: &Va
         escape_html_text(stamina_status),
         escape_html_text(injury_status),
         escape_html_text(evidence_status),
+        escape_html_text(survival_contract),
         day_index,
         escape_html_text(clock_label),
         stamina_current,
@@ -1609,6 +1778,25 @@ fn world_trillionnium_resource_pressure_runtime_html(trillionnium_character: &Va
         evidence_fragments,
         escape_html_text(evidence_status),
         recent_mutations,
+        escape_html_text(survival_contract),
+        escape_html_text(survival_runtime_status),
+        escape_html_text(survival_source_of_truth),
+        escape_html_text(survival_persistence_owner),
+        escape_html_text(food_status),
+        escape_html_text(water_status),
+        escape_html_text(age_stage),
+        escape_html_text(survival_pressure_status),
+        mutation_count,
+        food_current,
+        food_max,
+        escape_html_text(food_status),
+        water_current,
+        water_max,
+        escape_html_text(water_status),
+        age_years,
+        escape_html_text(age_stage),
+        age_days,
+        escape_html_text(survival_pressure_status),
     )
 }
 
@@ -3648,6 +3836,8 @@ pub(super) async fn get_world_web_shell(
     let trillionnium_sect_cards = world_trillionnium_sect_cards_html(&tactics_board);
     let trillionnium_npc_cards =
         world_trillionnium_npc_cards_html(&tactics_board, current_matrix_user_id, &csrf_input);
+    let trillionnium_dynamic_social_simulation =
+        world_trillionnium_dynamic_social_simulation_html(&tactics_board);
     let trillionnium_task_completion_forms = world_trillionnium_task_candidate_forms_html(
         &tactics_board,
         current_matrix_user_id,
@@ -5198,6 +5388,7 @@ pub(super) async fn get_world_web_shell(
             </ul>
             <section id="trillionnium-npcs" class="trillionnium-social-grid" data-sect-contract="trillionnium_sect_v1" data-sect-osm-binding-contract="trillionnium_sect_osm_binding_v1" data-npc-contract="trillionnium_npc_v1" data-npc-spawn-contract="trillionnium_npc_spawn_anchor_v1" data-npc-command-descriptor-contract="trillionnium_npc_command_descriptor_v1" data-source-of-truth="rust_trillionnium_npc_model" aria-label="Trillionnium sects and NPCs" data-i18n-aria-label-en="Trillionnium sects and NPCs" data-i18n-aria-label-zh="Trillionnium门派与 NPC">
               <h4 data-i18n-en="Sects / mentors / NPCs" data-i18n-zh="门派 / 导师 / NPC">Sects / mentors / NPCs</h4>
+              {trillionnium_dynamic_social_simulation}
               <div class="mini-grid">{trillionnium_sect_cards}</div>
               <div class="mini-grid">{trillionnium_npc_cards}</div>
             </section>
@@ -6474,6 +6665,7 @@ pub(super) async fn get_world_web_shell(
         trillionnium_training_forms = trillionnium_training_forms,
         trillionnium_sect_cards = trillionnium_sect_cards,
         trillionnium_npc_cards = trillionnium_npc_cards,
+        trillionnium_dynamic_social_simulation = trillionnium_dynamic_social_simulation,
         trillionnium_task_completion_forms = trillionnium_task_completion_forms,
         trillionnium_full_content_alignment = trillionnium_full_content_alignment,
         trillionnium_combat_numerics_runtime = trillionnium_combat_numerics_runtime,

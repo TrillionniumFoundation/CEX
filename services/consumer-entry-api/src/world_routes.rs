@@ -838,6 +838,9 @@ pub(super) async fn move_world_map_inner(
             "resource_pressure_runtime_contract_version": TRILLIONNIUM_WORLD_RESOURCE_PRESSURE_RUNTIME_CONTRACT_VERSION,
             "resource_pressure_mutation": snapshot.6,
             "resource_pressure_runtime": snapshot.6.get("resource_pressure_runtime").cloned().unwrap_or(Value::Null),
+            "food_water_age_survival_runtime_contract_version": TRILLIONNIUM_WORLD_FOOD_WATER_AGE_SURVIVAL_CONTRACT_VERSION,
+            "survival_mutation": snapshot.6.get("survival_mutation").cloned().unwrap_or(Value::Null),
+            "survival_runtime": snapshot.6.get("survival_runtime").cloned().unwrap_or(Value::Null),
             "region_story_unlock_runtime_contract_version": TRILLIONNIUM_WORLD_REGION_STORY_UNLOCK_RUNTIME_CONTRACT_VERSION,
             "region_story_unlock_mutation": snapshot.7,
             "region_story_unlock_runtime": snapshot.7.get("region_story_unlock_runtime").cloned().unwrap_or(Value::Null),
@@ -1743,11 +1746,35 @@ async fn record_world_tactics_command(
                     ),
                 ),
                 from_id: matrix_user_id.clone(),
-                to_id: relationship_target,
-                relation_kind: relationship_kind,
+                to_id: relationship_target.clone(),
+                relation_kind: relationship_kind.clone(),
                 strength: relationship_strength,
                 updated_at_epoch: now,
             });
+            let social_npcs = trillionnium_npc_fixtures_json(
+                &league.world,
+                &matrix_user_id,
+                &json!({ "features": [] }),
+            );
+            let dynamic_social_simulation = trillionnium_dynamic_social_simulation_json(
+                &league.world,
+                &matrix_user_id,
+                &social_npcs,
+            );
+            outcome["dynamic_social_simulation_contract_version"] =
+                json!(TRILLIONNIUM_WORLD_DYNAMIC_SOCIAL_SIMULATION_CONTRACT_VERSION);
+            outcome["dynamic_social_mutation"] = json!({
+                "contract_version": TRILLIONNIUM_WORLD_DYNAMIC_SOCIAL_SIMULATION_CONTRACT_VERSION,
+                "source_of_truth": "rust_world_relationships_dynamic_social_state",
+                "event_kind": format!("tactics_{command}"),
+                "command": &command,
+                "target_id": relationship_target,
+                "relationship_kind": relationship_kind,
+                "relationship_strength": relationship_strength,
+                "persistence_owner": "world_state.world_relationships",
+                "web_role": "visualization_input_only",
+            });
+            outcome["dynamic_social_simulation"] = dynamic_social_simulation;
         }
         if accepted && matches!(command.as_str(), "attack" | "complete_task") {
             let pressure_event_kind = match command.as_str() {
@@ -1777,6 +1804,16 @@ async fn record_world_tactics_command(
             outcome["resource_pressure_mutation"] = resource_pressure_mutation.clone();
             outcome["resource_pressure_runtime"] = resource_pressure_mutation
                 .get("resource_pressure_runtime")
+                .cloned()
+                .unwrap_or(Value::Null);
+            outcome["food_water_age_survival_runtime_contract_version"] =
+                json!(TRILLIONNIUM_WORLD_FOOD_WATER_AGE_SURVIVAL_CONTRACT_VERSION);
+            outcome["survival_mutation"] = resource_pressure_mutation
+                .get("survival_mutation")
+                .cloned()
+                .unwrap_or(Value::Null);
+            outcome["survival_runtime"] = resource_pressure_mutation
+                .get("survival_runtime")
                 .cloned()
                 .unwrap_or(Value::Null);
             let unlock_event_kind = match command.as_str() {
