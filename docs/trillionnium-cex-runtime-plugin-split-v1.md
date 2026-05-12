@@ -1,5 +1,8 @@
 # Trillionnium World / CEX Runtime Split v1
 
+> Superseded by `trillionnium-term-exchange-kernel-v1.md`: CEX is now modeled as the first settlement backend under `term_exchange_protocol_v1`, not as the top-level protocol.
+
+
 **Decision**: CEX and Trillionnium World should be split. CEX should be designed as a runtime-inserted economic kernel for Trillionnium World, not as gameplay code embedded inside World.
 
 **Current implementation anchor**: CEX `consumer-entry-api` exposes the first runtime plugin manifest at:

@@ -17,6 +17,7 @@ hmac = "0.12"
 sha2 = "0.10"
 sqlx.workspace = true
 shared-tracing = { path = "../../crates/shared-tracing" }
+term-exchange-protocol.workspace = true
 
 [dev-dependencies]
 ledger-service = { path = "../ledger-service" }

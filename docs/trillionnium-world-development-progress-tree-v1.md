@@ -1921,6 +1921,15 @@ Also append a one-paragraph summary to `/home/qian/.openclaw/workspace/memory/YY
 - Added split ADR `docs/trillionnium-cex-runtime-plugin-split-v1.md` and mirrored it to the Trillionnium repo. The boundary is: World owns gameplay/world truth and emits economic intent; CEX owns identity/account resolution, reserves, settlements, consume/refund/chargeback, rewards, review release, idempotency, audit, and recovery receipts; World advances only after an allowed CEX receipt or explicit recoverable hold.
 
 
+---
+
+#### Update 2026-05-12 19:2x CST
+
+- Upgraded the prior CEX runtime-plugin framing into a protocol-first Term Exchange Kernel. Added pure Rust crate `crates/term-exchange-protocol` with `TermDefinition`, `EconomicIntent`, `EconomicReceipt`, `ReceiptStatus`, `ReceiptProgressionClass`, `SettlementBackendManifest`, and shared protocol constants.
+- Primary manifest is now `GET /v1/trillionnium/term-exchange/kernel/manifest`, contract `trillionnium_term_exchange_kernel_v1`, protocol `term_exchange_protocol_v1`, kernel id `term-exchange-kernel`, active backend `cex-settlement-backend`. The legacy `GET /v1/trillionnium/runtime/cex/manifest` endpoint remains as a compatibility alias and returns the upgraded kernel manifest with `legacy_contract_version=trillionnium_cex_runtime_plugin_v1`.
+- Added `docs/trillionnium-term-exchange-kernel-v1.md` and mirrored it to the Trillionnium repo. Architecture is now: World/domain plugins emit typed `EconomicIntent`; Term Exchange Kernel owns term/receipt/progression protocol; CEX is the first settlement backend; DEX/chain backend will implement the same `term_exchange_backend_v1` contract later.
+
+
 ## Current Next Pointer
 
 If the next instruction is simply “continue”, start here:

@@ -67,7 +67,7 @@ CEX 当前已经不是纯文档阶段。可作为 Trillionnium World 的孵化�
 
 ### 2.1 Trillionnium World 是什么
 
-Trillionnium World 是一个基于真实地理骨架的开放世界 AI/Agent 江湖 MMO。真实地图提供道路、区域、POI、地理分区与位置语义；游戏系统在其上生成任务、NPC、门派/阵营、资产、公司、商店、路线、事件、战斗、协作和经济结算。
+Trillionnium World 是一个基于真实地理骨架的开放世界 AI/Agent 地理冒险 MMO。真实地图提供道路、区域、POI、地理分区与位置语义；游戏系统在其上生成任务、NPC、门派/阵营、资产、公司、商店、路线、事件、战斗、协作和经济结算。
 
 产品由五个互相连接的品牌域组成：
 
@@ -587,6 +587,7 @@ scripts/check-trillionnium-first-human-session.sh
 ---
 
 - CEX runtime plugin split: `docs/trillionnium-cex-runtime-plugin-split-v1.md` (`trillionnium_cex_runtime_plugin_v1`)
+- Term Exchange Kernel: `docs/trillionnium-term-exchange-kernel-v1.md` (`term_exchange_protocol_v1`, `trillionnium_term_exchange_kernel_v1`)
 
 ## 15. 当前下一步
 
