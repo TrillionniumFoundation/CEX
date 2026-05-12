@@ -823,6 +823,8 @@ pub(super) async fn move_world_map_inner(
         .get("world_objective_travel")
         .cloned()
         .unwrap_or(Value::Null);
+    let rust_owned_ui_fragments =
+        world_rust_owned_ui_fragments_json(&snapshot.0.world, &snapshot.2, &world_objective_travel);
     (
         StatusCode::OK,
         Json(json!({
@@ -835,6 +837,8 @@ pub(super) async fn move_world_map_inner(
             "movement_transition": snapshot.5,
             "world_objective_travel_contract_version": TRILLIONNIUM_WORLD_OBJECTIVE_TRAVEL_CONTRACT_VERSION,
             "world_objective_travel": world_objective_travel,
+            "rust_owned_ui_contract_version": TRILLIONNIUM_WORLD_RUST_OWNED_UI_SHELL_CONTRACT_VERSION,
+            "rust_owned_ui_fragments": rust_owned_ui_fragments,
             "resource_pressure_runtime_contract_version": TRILLIONNIUM_WORLD_RESOURCE_PRESSURE_RUNTIME_CONTRACT_VERSION,
             "resource_pressure_mutation": snapshot.6,
             "resource_pressure_runtime": snapshot.6.get("resource_pressure_runtime").cloned().unwrap_or(Value::Null),

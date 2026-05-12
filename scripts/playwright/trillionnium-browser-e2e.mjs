@@ -993,7 +993,10 @@ async function main() {
   assert(pulseBox && pulseBox.height < 360, 'world mobile stats area is too tall', pulseBox);
   await assertNoVisibleBilingualSlashPair(page, '/world English system language');
   await assertEnglishSurfaceHasNoCoreChineseLeaks(page, '/world English system language');
-  assert(await count(page, '#trillionnium-world-game-first-shell[data-contract-version="trillionnium_world_game_first_playable_shell_v1"][data-source-of-truth="rust_world_state_projection"][data-web-role="input_only_visualization"][data-heavy-panels-policy="secondary_collapsed_deferred"]') === 1, 'world game-first playable shell missing Rust-owned projection contract');
+  assert(await count(page, '#trillionnium-world-game-first-shell[data-contract-version="trillionnium_world_game_first_playable_shell_v1"][data-rust-owned-ui-contract="trillionnium_world_rust_owned_ui_shell_v1"][data-ui-render-owner="rust_world_ui_renderer"][data-browser-ui-owner="input_only_event_bridge"][data-source-of-truth="rust_world_state_projection"][data-web-role="input_only_visualization"][data-heavy-panels-policy="secondary_collapsed_deferred"]') === 1, 'world game-first playable shell missing Rust-owned projection/UI contract');
+  assert(await count(page, '#world-keypad-adventure-shell[data-rust-owned-ui-contract="trillionnium_world_rust_owned_ui_shell_v1"][data-ui-render-owner="rust_world_ui_renderer"]') === 1, 'world keypad shell missing Rust-owned UI renderer contract');
+  assert(await count(page, '#world-keypad-map-grid[data-rust-owned-ui-contract="trillionnium_world_rust_owned_ui_shell_v1"][data-render-owner="rust_world_ui_renderer"], #world-keypad-numpad[data-rust-owned-ui-contract="trillionnium_world_rust_owned_ui_shell_v1"][data-render-owner="rust_world_ui_renderer"]') >= 2, 'world keypad viewport/buttons are not Rust-rendered');
+  assert(await count(page, '#world-keypad-numpad .world-keypad-button[data-rust-owned-ui-contract="trillionnium_world_rust_owned_ui_shell_v1"][data-render-owner="rust_world_ui_renderer"][data-web-role="input_only"]') === 9, 'world keypad movement buttons must be Rust-rendered input-only controls');
   assert(await count(page, '#trillionnium-world-game-first-shell [data-action-kind="move"], #trillionnium-world-game-first-shell [data-action-kind="talk_npc"], #trillionnium-world-game-first-shell [data-action-kind="train_skill"], #trillionnium-world-game-first-shell [data-action-kind="task"], #trillionnium-world-game-first-shell [data-action-kind="combat"]') >= 5, 'world game-first shell missing immediate action list');
   assert(await count(page, '#trillionnium-world-game-first-shell [data-bar-kind="hp"], #trillionnium-world-game-first-shell [data-bar-kind="energy"], #trillionnium-world-game-first-shell [data-bar-kind="stamina"], #trillionnium-world-game-first-shell [data-bar-kind="guard"], #trillionnium-world-game-first-shell [data-bar-kind="focus"], #trillionnium-world-game-first-shell [data-bar-kind="survival"]') >= 6, 'world game-first shell missing compact survival/combat bars');
   const gameFirstOrder = await page.evaluate(() => ({
@@ -1094,8 +1097,12 @@ async function main() {
     source: document.querySelector('#world-keypad-adventure-shell')?.dataset?.lastInputSource || '',
     transitionKind: document.querySelector('#world-keypad-adventure-shell')?.dataset?.lastTransitionKind || '',
     transitionSourceOfTruth: document.querySelector('#world-keypad-adventure-shell')?.dataset?.lastTransitionSourceOfTruth || '',
+    gridRenderOwner: document.querySelector('#world-keypad-map-grid')?.dataset?.renderOwner || '',
+    numpadRenderOwner: document.querySelector('#world-keypad-numpad')?.dataset?.renderOwner || '',
+    rustOwnedUiContract: document.querySelector('#world-keypad-map-grid')?.dataset?.rustOwnedUiContract || '',
   }));
   assert(afterButtonMove.runtime?.currentNodeId === firstKeypadMove.targetNodeId && afterButtonMove.domCurrent === firstKeypadMove.targetNodeId, 'world keypad button movement did not update persisted projection', afterButtonMove);
+  assert(afterButtonMove.gridRenderOwner === 'rust_world_ui_renderer' && afterButtonMove.numpadRenderOwner === 'rust_world_ui_renderer' && afterButtonMove.rustOwnedUiContract === 'trillionnium_world_rust_owned_ui_shell_v1', 'world keypad button move must swap Rust-rendered UI fragments, not browser-built UI', afterButtonMove);
   assert(afterButtonMove.objectiveTravelCurrentNodeId === firstKeypadMove.targetNodeId, 'world objective travel did not refresh from Rust move response', afterButtonMove);
   assert(afterButtonMove.source === 'button' && /Moved|已移动/.test(afterButtonMove.status), 'world keypad button move status missing', afterButtonMove);
   assert(['local_exit', 'room_transition', 'zone_transition', 'wait'].includes(afterButtonMove.transitionKind), 'world keypad button move transition kind missing', afterButtonMove);
@@ -1120,8 +1127,11 @@ async function main() {
     direction: document.querySelector('#world-keypad-adventure-shell')?.dataset?.lastMoveDirection || '',
     transitionStatus: document.querySelector('#world-keypad-adventure-shell')?.dataset?.lastTransitionStatus || '',
     transitionKind: document.querySelector('#world-keypad-adventure-shell')?.dataset?.lastTransitionKind || '',
+    gridRenderOwner: document.querySelector('#world-keypad-map-grid')?.dataset?.renderOwner || '',
+    rustOwnedUiContract: document.querySelector('#world-keypad-map-grid')?.dataset?.rustOwnedUiContract || '',
   }));
   assert(afterKeyboardMove.runtime?.currentNodeId === keyboardMove.targetNodeId && afterKeyboardMove.domCurrent === keyboardMove.targetNodeId, 'world keypad keyboard/numpad movement did not update map position', afterKeyboardMove);
+  assert(afterKeyboardMove.gridRenderOwner === 'rust_world_ui_renderer' && afterKeyboardMove.rustOwnedUiContract === 'trillionnium_world_rust_owned_ui_shell_v1', 'world keypad keyboard move must keep Rust-rendered UI fragments current', afterKeyboardMove);
   assert(afterKeyboardMove.source === 'keyboard' && afterKeyboardMove.direction === keyboardMove.direction, 'world keypad keyboard movement source/direction missing', afterKeyboardMove);
   assert(afterKeyboardMove.transitionStatus === 'accepted' && ['local_exit', 'room_transition', 'zone_transition', 'wait'].includes(afterKeyboardMove.transitionKind), 'world keypad keyboard movement transition semantics missing', afterKeyboardMove);
   steps.push({ name: 'world_keypad_tile_map_button_and_numpad_movement', ok: true, button_move: firstKeypadMove, keyboard_move: keyboardMove });

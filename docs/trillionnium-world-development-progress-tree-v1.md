@@ -1,9 +1,9 @@
 # Trillionnium World Development Progress Tree v1
 
 Generated: 2026-05-08 18:11 CST  
-Last audited: 2026-05-11 21:0x CST
-Current code checkpoint: `feat: prioritize trillionnium world game shell` (this commit)
-Previous checkpoint: `c2f3613 feat: gate native authored quest chains`
+Last audited: 2026-05-11 22:4x CST
+Current code checkpoint: `feat: gate rust-owned trillionnium world ui` (this commit)
+Previous checkpoint: `93f3c0d feat: prioritize trillionnium world game shell`
 Repo: `/home/qian/.openclaw/workspace/CEX`
 
 This document is the handoff spine for continuing Trillionnium World development without losing state after chat compaction, runtime restarts, or long task chains.
@@ -1819,10 +1819,25 @@ Also append a one-paragraph summary to `/home/qian/.openclaw/workspace/memory/YY
 
 ---
 
+#### Update 2026-05-11 22:4x CST
+
+- Commit: `feat: gate rust-owned trillionnium world ui` (this commit)
+- Continued the “全量安全等价 + UI Rust-owned” push without copying 白金英雄坛说 / Hero Tan content:
+  - [x] Added `trillionnium_world_rust_owned_ui_shell_v1` as the explicit Rust-owned UI shell contract.
+  - [x] `/world` first playable shell now declares `data-rust-owned-ui-contract`, `data-ui-render-owner="rust_world_ui_renderer"`, and `data-browser-ui-owner="input_only_event_bridge"`.
+  - [x] 5x3 keypad viewport, keypad buttons, current location name/description/exits, and post-move fragments are Rust-rendered/server-projected through `world_rust_owned_ui_fragments_json(...)`.
+  - [x] `/world/web/map-move` now returns `rust_owned_ui_fragments` alongside the Rust movement/objective/resource/survival/story projections, so the browser swaps Rust-rendered fragments after accepted movement instead of rebuilding the UI as source of truth.
+  - [x] Browser JS remains an event bridge for click/keyboard/fetch/status only; fallback browser visualization is explicitly marked as fallback, not ownership.
+  - [x] Extended Rust tests plus Web/Browser E2E gates to require the new Rust-owned UI contract, render owner, fragment hydration policy, and post-move Rust-rendered fragment ownership.
+- Honest scope: this is a meaningful UI ownership slice, not a claim that every historical dashboard/map/support widget is already rewritten as Rust-owned fragments. Full safe equivalence still needs repeated slices plus real external evidence for score lifts.
+- Constraints preserved: no copied 白金英雄坛说 / Hero Tan code/text/assets/data/NPC/task tables/names, no full clone-then-replace workflow, no live OSM ingestion, no MapLibre promotion, Rust source of truth, browser input-only/event-bridge role, and no local-only score inflation.
+
+---
+
 ## Current Next Pointer
 
 If the next instruction is simply “continue”, start here:
 
-> **Next pointer:** Measure and further reduce `/world` first-load weight now that the Rust-projected game-first shell is first: profile rendered HTML/script/style size, lazily hydrate map/dashboard payloads only after the player uses the game shell, and keep adding Rust-owned projection endpoints for any remaining browser-derived state. Do not use a copy-then-replace Hero Tan replica workflow. If the goal is score lift instead of UI/player-value work, prioritize real `TRILLIONNIUM_MULTI_NODE_LATENCY_EVIDENCE_PATH`, `TRILLIONNIUM_FIRST_BETA_COHORT_EVIDENCE_PATH`, or `TRILLIONNIUM_COMMERCIAL_LAUNCH_DRILL_EVIDENCE_PATH`. Current honest assessment remains `9.8/10` technical, `8.5/10` first internal beta, `7.0/10` commercial release.
+> **Next pointer:** Continue converting remaining `/world` dashboard/map/support widgets into Rust-owned fragment endpoints and then measure/reduce first-load HTML/script/style size: lazily hydrate secondary map/dashboard payloads only after the player uses the game shell, and keep browser code as an input-only event bridge. Do not use a copy-then-replace Hero Tan replica workflow. If the goal is score lift instead of UI/player-value work, prioritize real `TRILLIONNIUM_MULTI_NODE_LATENCY_EVIDENCE_PATH`, `TRILLIONNIUM_FIRST_BETA_COHORT_EVIDENCE_PATH`, or `TRILLIONNIUM_COMMERCIAL_LAUNCH_DRILL_EVIDENCE_PATH`. Current honest assessment remains `9.8/10` technical, `8.5/10` first internal beta, `7.0/10` commercial release.
 
 Do not start live Overpass/Geofabrik ingestion yet. Do not promote MapLibre. Do not convert the web shell into a standalone JS source of truth.

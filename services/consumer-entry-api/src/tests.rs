@@ -4915,6 +4915,42 @@ async fn world_map_move_endpoint_exposes_transition_semantics_contract() {
         "rust_world_map_move"
     );
     assert_eq!(
+        room["rust_owned_ui_contract_version"],
+        "trillionnium_world_rust_owned_ui_shell_v1"
+    );
+    assert_eq!(
+        room["rust_owned_ui_fragments"]["contract_version"],
+        "trillionnium_world_rust_owned_ui_shell_v1"
+    );
+    assert_eq!(
+        room["rust_owned_ui_fragments"]["source_of_truth"],
+        "rust_world_ui_renderer"
+    );
+    assert_eq!(
+        room["rust_owned_ui_fragments"]["render_owner"],
+        "rust_world_ui_renderer"
+    );
+    assert_eq!(
+        room["rust_owned_ui_fragments"]["web_role"],
+        "input_only_event_bridge"
+    );
+    assert_eq!(
+        room["rust_owned_ui_fragments"]["ui_ownership"]["keypad_viewport"],
+        "rust_rendered"
+    );
+    assert!(room["rust_owned_ui_fragments"]["keypad_grid_html"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("data-render-owner=\"rust_world_ui_renderer\""));
+    assert!(room["rust_owned_ui_fragments"]["keypad_buttons_html"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("data-render-owner=\"rust_world_ui_renderer\""));
+    assert!(room["rust_owned_ui_fragments"]["keypad_buttons_html"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("data-source-of-truth=\"rust_world_map_move\""));
+    assert_eq!(
         room["resource_pressure_runtime_contract_version"],
         "trillionnium_world_resource_pressure_runtime_v1"
     );
@@ -5921,6 +5957,11 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(world_html.contains("Claim reward"));
     assert!(world_html.contains(r#"id="trillionnium-world-game-first-shell""#));
     assert!(world_html.contains("trillionnium_world_game_first_playable_shell_v1"));
+    assert!(world_html.contains("trillionnium_world_rust_owned_ui_shell_v1"));
+    assert!(world_html
+        .contains(r#"data-rust-owned-ui-contract="trillionnium_world_rust_owned_ui_shell_v1""#));
+    assert!(world_html.contains(r#"data-ui-render-owner="rust_world_ui_renderer""#));
+    assert!(world_html.contains(r#"data-browser-ui-owner="input_only_event_bridge""#));
     assert!(world_html.contains(r#"data-source-of-truth="rust_world_state_projection""#));
     assert!(world_html.contains(r#"data-web-role="input_only_visualization""#));
     assert!(world_html.contains(r#"data-heavy-panels-policy="secondary_collapsed_deferred""#));
@@ -5985,6 +6026,9 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
         world_html.contains("data-source-of-truth=\"rust_world_map_nodes_and_tactics_commands\"")
     );
     assert!(world_html.contains("window.trillionniumKeyboardMap"));
+    assert!(world_html.contains("rust_owned_ui_contract_version"));
+    assert!(world_html.contains("server_rendered_then_rust_fragment_swap"));
+    assert!(world_html.contains("applyRustOwnedUiFragments"));
     assert!(world_html.contains("Numpad 8/2/4/6"));
     assert!(world_html.contains("world-route-archetype-catalog"));
     assert!(world_html.contains("trillionnium_world_route_archetypes_v1"));

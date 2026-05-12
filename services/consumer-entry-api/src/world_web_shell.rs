@@ -1,5 +1,8 @@
 use super::*;
 
+pub(super) const TRILLIONNIUM_WORLD_RUST_OWNED_UI_SHELL_CONTRACT_VERSION: &str =
+    "trillionnium_world_rust_owned_ui_shell_v1";
+
 fn world_user_visible_copy(value: &str) -> String {
     let mut copy = value.to_string();
     let replacements = [
@@ -2269,7 +2272,8 @@ fn world_game_first_playable_shell_html(
         .unwrap_or(103);
 
     format!(
-        "<section id=\"trillionnium-world-game-first-shell\" class=\"world-game-first-shell\" data-contract-version=\"trillionnium_world_game_first_playable_shell_v1\" data-source-of-truth=\"rust_world_state_projection\" data-map-source-of-truth=\"rust_world_map_move\" data-transition-source-of-truth=\"rust_world_map_transition_rules\" data-authored-quest-chain-contract=\"{}\" data-current-zone-id=\"{}\" data-web-role=\"input_only_visualization\" data-heavy-panels-policy=\"secondary_collapsed_deferred\" data-forbidden-intermediate=\"no_full_hero_tan_replica_then_replace_workflow\" data-lcd-viewport=\"5x3\" data-movement-control-anchor=\"world-keypad-numpad\" data-action-list-anchor=\"world-local-actions\" data-objective-anchor=\"trillionnium-authored-quest-chains\" aria-label=\"Trillionnium game-first playable shell\" data-i18n-aria-label-en=\"Trillionnium game-first playable shell\" data-i18n-aria-label-zh=\"Trillionnium 游戏优先可玩界面\"><div class=\"world-game-first-topline\"><span class=\"pill\" data-i18n-en=\"Clean-room Trillionnium · game first\" data-i18n-zh=\"Clean-room Trillionnium · 先玩游戏\">Clean-room Trillionnium · game first</span><code>{}</code></div><div class=\"world-game-first-location\"><div><strong id=\"world-game-first-location-name\">{}</strong><span data-i18n-en=\"{} · {} exits · {} local hooks\" data-i18n-zh=\"{} · {} 个出口 · {} 个本地钩子\">{} · {} exits · {} local hooks</span></div><a class=\"cta world-game-first-next-cta\" href=\"#world-keypad-numpad\" data-i18n-en=\"Move now\" data-i18n-zh=\"立刻移动\">Move now</a></div><div class=\"world-game-first-objective\" data-objective-id=\"{}\" data-objective-progress=\"{}\" data-objective-goal=\"{}\" data-victory-state=\"{}\"><strong data-i18n-en=\"Current objective\" data-i18n-zh=\"当前目标\">Current objective</strong><span>{}</span><small data-i18n-en=\"Next command: {} · Native chain: {} · {} chains / {} steps / {} nodes\" data-i18n-zh=\"下一指令：{} · 原生任务链：{} · {} 条链 / {} 步 / {} 节点\">Next command: {} · Native chain: {} · {} chains / {} steps / {} nodes</small></div><div class=\"world-game-first-action-list\" data-action-source-of-truth=\"rust_world_map_nodes_and_tactics_commands\" data-web-role=\"input_only_visualization\"><a href=\"#world-keypad-numpad\" data-action-kind=\"move\">Move</a><a href=\"#world-local-npc-talk\" data-action-kind=\"talk_npc\">Talk</a><a href=\"#world-local-skill-practice\" data-action-kind=\"train_skill\">Practice</a><a href=\"#world-local-task-loop\" data-action-kind=\"task\">Task</a><a href=\"#world-local-combat-encounter\" data-action-kind=\"combat\">Combat</a></div><div class=\"world-game-first-bars\" data-resource-source-of-truth=\"rust_trillionnium_resource_pressure_runtime_state\" data-combat-source-of-truth=\"rust_trillionnium_combat_numerics_runtime_state\"><article data-bar-kind=\"hp\"><span>HP</span><meter min=\"0\" max=\"{}\" value=\"{}\"></meter><b>{}/{}</b></article><article data-bar-kind=\"energy\"><span>Energy</span><meter min=\"0\" max=\"{}\" value=\"{}\"></meter><b>{}/{}</b></article><article data-bar-kind=\"stamina\"><span>Stamina</span><meter min=\"0\" max=\"{}\" value=\"{}\"></meter><b>{}/{}</b></article><article data-bar-kind=\"guard\"><span>Guard</span><meter min=\"0\" max=\"{}\" value=\"{}\"></meter><b>{}/{}</b></article><article data-bar-kind=\"focus\"><span>Focus</span><meter min=\"0\" max=\"{}\" value=\"{}\"></meter><b>{}/{}</b></article><article data-bar-kind=\"survival\"><span>Food / Water</span><meter min=\"0\" max=\"100\" value=\"{}\"></meter><b>{}/{} · {}/{} · injury {} · {}</b></article></div></section>",
+        "<section id=\"trillionnium-world-game-first-shell\" class=\"world-game-first-shell\" data-contract-version=\"trillionnium_world_game_first_playable_shell_v1\" data-rust-owned-ui-contract=\"{}\" data-ui-render-owner=\"rust_world_ui_renderer\" data-browser-ui-owner=\"input_only_event_bridge\" data-source-of-truth=\"rust_world_state_projection\" data-map-source-of-truth=\"rust_world_map_move\" data-transition-source-of-truth=\"rust_world_map_transition_rules\" data-authored-quest-chain-contract=\"{}\" data-current-zone-id=\"{}\" data-web-role=\"input_only_visualization\" data-heavy-panels-policy=\"secondary_collapsed_deferred\" data-forbidden-intermediate=\"no_full_hero_tan_replica_then_replace_workflow\" data-lcd-viewport=\"5x3\" data-movement-control-anchor=\"world-keypad-numpad\" data-action-list-anchor=\"world-local-actions\" data-objective-anchor=\"trillionnium-authored-quest-chains\" aria-label=\"Trillionnium game-first playable shell\" data-i18n-aria-label-en=\"Trillionnium game-first playable shell\" data-i18n-aria-label-zh=\"Trillionnium 游戏优先可玩界面\"><div class=\"world-game-first-topline\"><span class=\"pill\" data-i18n-en=\"Clean-room Trillionnium · game first\" data-i18n-zh=\"Clean-room Trillionnium · 先玩游戏\">Clean-room Trillionnium · game first</span><code>{}</code></div><div class=\"world-game-first-location\"><div><strong id=\"world-game-first-location-name\">{}</strong><span data-i18n-en=\"{} · {} exits · {} local hooks\" data-i18n-zh=\"{} · {} 个出口 · {} 个本地钩子\">{} · {} exits · {} local hooks</span></div><a class=\"cta world-game-first-next-cta\" href=\"#world-keypad-numpad\" data-i18n-en=\"Move now\" data-i18n-zh=\"立刻移动\">Move now</a></div><div class=\"world-game-first-objective\" data-objective-id=\"{}\" data-objective-progress=\"{}\" data-objective-goal=\"{}\" data-victory-state=\"{}\"><strong data-i18n-en=\"Current objective\" data-i18n-zh=\"当前目标\">Current objective</strong><span>{}</span><small data-i18n-en=\"Next command: {} · Native chain: {} · {} chains / {} steps / {} nodes\" data-i18n-zh=\"下一指令：{} · 原生任务链：{} · {} 条链 / {} 步 / {} 节点\">Next command: {} · Native chain: {} · {} chains / {} steps / {} nodes</small></div><div class=\"world-game-first-action-list\" data-action-source-of-truth=\"rust_world_map_nodes_and_tactics_commands\" data-web-role=\"input_only_visualization\"><a href=\"#world-keypad-numpad\" data-action-kind=\"move\">Move</a><a href=\"#world-local-npc-talk\" data-action-kind=\"talk_npc\">Talk</a><a href=\"#world-local-skill-practice\" data-action-kind=\"train_skill\">Practice</a><a href=\"#world-local-task-loop\" data-action-kind=\"task\">Task</a><a href=\"#world-local-combat-encounter\" data-action-kind=\"combat\">Combat</a></div><div class=\"world-game-first-bars\" data-resource-source-of-truth=\"rust_trillionnium_resource_pressure_runtime_state\" data-combat-source-of-truth=\"rust_trillionnium_combat_numerics_runtime_state\"><article data-bar-kind=\"hp\"><span>HP</span><meter min=\"0\" max=\"{}\" value=\"{}\"></meter><b>{}/{}</b></article><article data-bar-kind=\"energy\"><span>Energy</span><meter min=\"0\" max=\"{}\" value=\"{}\"></meter><b>{}/{}</b></article><article data-bar-kind=\"stamina\"><span>Stamina</span><meter min=\"0\" max=\"{}\" value=\"{}\"></meter><b>{}/{}</b></article><article data-bar-kind=\"guard\"><span>Guard</span><meter min=\"0\" max=\"{}\" value=\"{}\"></meter><b>{}/{}</b></article><article data-bar-kind=\"focus\"><span>Focus</span><meter min=\"0\" max=\"{}\" value=\"{}\"></meter><b>{}/{}</b></article><article data-bar-kind=\"survival\"><span>Food / Water</span><meter min=\"0\" max=\"100\" value=\"{}\"></meter><b>{}/{} · {}/{} · injury {} · {}</b></article></div></section>",
+        TRILLIONNIUM_WORLD_RUST_OWNED_UI_SHELL_CONTRACT_VERSION,
         escape_html_text(authored_contract),
         escape_html_text(node_zone),
         escape_html_text(node_id),
@@ -3389,7 +3393,7 @@ fn world_objective_travel_node_role(
     (role, party_count)
 }
 
-fn world_text_adventure_grid_html(
+pub(super) fn world_text_adventure_grid_html(
     map_nodes: &[WorldMapNode],
     current_node_id: &str,
     world_objective_travel: Option<&Value>,
@@ -3460,7 +3464,7 @@ fn world_text_adventure_grid_html(
                     }
                 );
                 cells.push(format!(
-                    "<button type=\"button\" role=\"gridcell\" class=\"{}\" data-node-id=\"{}\" data-node-name=\"{}\" data-node-kind=\"{}\" data-x=\"{}\" data-y=\"{}\" data-current=\"{}\" data-reachable=\"{}\" data-objective-travel-contract-version=\"{}\" data-objective-travel-role=\"{}\" data-party-member-count=\"{}\" data-exit-directions=\"{}\" data-symbol=\"{}\" aria-label=\"{}\"><span class=\"world-keypad-cell-symbol\" aria-hidden=\"true\">{}</span><b>{}</b><small>{},{} · {}</small></button>",
+                    "<button type=\"button\" role=\"gridcell\" class=\"{}\" data-node-id=\"{}\" data-node-name=\"{}\" data-node-kind=\"{}\" data-x=\"{}\" data-y=\"{}\" data-current=\"{}\" data-reachable=\"{}\" data-rust-owned-ui-contract=\"{}\" data-render-owner=\"rust_world_ui_renderer\" data-objective-travel-contract-version=\"{}\" data-objective-travel-role=\"{}\" data-party-member-count=\"{}\" data-exit-directions=\"{}\" data-symbol=\"{}\" aria-label=\"{}\"><span class=\"world-keypad-cell-symbol\" aria-hidden=\"true\">{}</span><b>{}</b><small>{},{} · {}</small></button>",
                     escape_html_text(&class_name),
                     escape_html_text(&node.node_id),
                     escape_html_text(&node.name),
@@ -3469,6 +3473,7 @@ fn world_text_adventure_grid_html(
                     node.y,
                     is_current,
                     is_reachable,
+                    TRILLIONNIUM_WORLD_RUST_OWNED_UI_SHELL_CONTRACT_VERSION,
                     TRILLIONNIUM_WORLD_OBJECTIVE_TRAVEL_CONTRACT_VERSION,
                     escape_html_text(travel_role),
                     party_count,
@@ -3483,8 +3488,10 @@ fn world_text_adventure_grid_html(
                 ));
             } else {
                 cells.push(format!(
-                    "<span class=\"world-keypad-cell world-keypad-empty-cell\" role=\"gridcell\" aria-hidden=\"true\" data-x=\"{}\" data-y=\"{}\"></span>",
-                    x, y
+                    "<span class=\"world-keypad-cell world-keypad-empty-cell\" role=\"gridcell\" aria-hidden=\"true\" data-x=\"{}\" data-y=\"{}\" data-rust-owned-ui-contract=\"{}\" data-render-owner=\"rust_world_ui_renderer\"></span>",
+                    x,
+                    y,
+                    TRILLIONNIUM_WORLD_RUST_OWNED_UI_SHELL_CONTRACT_VERSION
                 ));
             }
         }
@@ -3493,7 +3500,10 @@ fn world_text_adventure_grid_html(
     rows.join("\n")
 }
 
-fn world_keypad_buttons_html(current_node: Option<&WorldMapNode>, world: &WorldState) -> String {
+pub(super) fn world_keypad_buttons_html(
+    current_node: Option<&WorldMapNode>,
+    world: &WorldState,
+) -> String {
     ["7", "8", "9", "4", "5", "6", "1", "2", "3"]
         .iter()
         .map(|key| {
@@ -3533,10 +3543,11 @@ fn world_keypad_buttons_html(current_node: Option<&WorldMapNode>, world: &WorldS
                 .and_then(|transition| transition.blocked_reason.as_deref())
                 .unwrap_or("");
             format!(
-                "<button id=\"world-keypad-{}\" type=\"button\" class=\"world-keypad-button{}\" data-keypad-key=\"{}\" data-transition-contract-version=\"{}\" data-transition-status=\"{}\" data-transition-kind=\"{}\" data-transition-result=\"{}\" data-blocked-reason=\"{}\" data-move-direction=\"{}\" data-target-node-id=\"{}\" data-rust-endpoint=\"/world/web/map-move\" data-source-of-truth=\"rust_world_map_move\" data-transition-source-of-truth=\"rust_world_map_transition_rules\" data-web-role=\"input_only\" aria-disabled=\"{}\" data-i18n-aria-label-en=\"{}\" data-i18n-aria-label-zh=\"{}\"><span>{}</span><small data-i18n-en=\"{}\" data-i18n-zh=\"{}\">{}</small></button>",
+                "<button id=\"world-keypad-{}\" type=\"button\" class=\"world-keypad-button{}\" data-keypad-key=\"{}\" data-rust-owned-ui-contract=\"{}\" data-render-owner=\"rust_world_ui_renderer\" data-transition-contract-version=\"{}\" data-transition-status=\"{}\" data-transition-kind=\"{}\" data-transition-result=\"{}\" data-blocked-reason=\"{}\" data-move-direction=\"{}\" data-target-node-id=\"{}\" data-rust-endpoint=\"/world/web/map-move\" data-source-of-truth=\"rust_world_map_move\" data-transition-source-of-truth=\"rust_world_map_transition_rules\" data-web-role=\"input_only\" aria-disabled=\"{}\" data-i18n-aria-label-en=\"{}\" data-i18n-aria-label-zh=\"{}\"><span>{}</span><small data-i18n-en=\"{}\" data-i18n-zh=\"{}\">{}</small></button>",
                 escape_html_text(key),
                 if disabled { " is-blocked" } else { "" },
                 escape_html_text(key),
+                TRILLIONNIUM_WORLD_RUST_OWNED_UI_SHELL_CONTRACT_VERSION,
                 TRILLIONNIUM_WORLD_TRANSITION_SEMANTICS_CONTRACT_VERSION,
                 escape_html_text(transition_status),
                 escape_html_text(transition_kind),
@@ -3591,8 +3602,11 @@ fn world_keypad_state_json(
     }
     serde_json::to_string(&json!({
         "contract_version": "trillionnium_text_adventure_keypad_movement_v1",
+        "rust_owned_ui_contract_version": TRILLIONNIUM_WORLD_RUST_OWNED_UI_SHELL_CONTRACT_VERSION,
         "transition_contract_version": TRILLIONNIUM_WORLD_TRANSITION_SEMANTICS_CONTRACT_VERSION,
         "source_of_truth": "rust_world_map_move",
+        "ui_source_of_truth": "rust_world_ui_renderer",
+        "render_owner": "rust_world_ui_renderer",
         "transition_source_of_truth": "rust_world_map_transition_rules",
         "web_role": "input_only_visualization",
         "movement_endpoint": "/world/web/map-move",
@@ -3620,6 +3634,47 @@ fn world_keypad_state_json(
         "keyboard": ["Numpad1", "Numpad2", "Numpad3", "Numpad4", "Numpad5", "Numpad6", "Numpad7", "Numpad8", "Numpad9", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "W", "A", "S", "D"]
     }))
     .unwrap_or_else(|_| "{}".to_string())
+}
+
+pub(super) fn world_rust_owned_ui_fragments_json(
+    world: &WorldState,
+    current_node: &WorldMapNode,
+    world_objective_travel: &Value,
+) -> Value {
+    let mut exits = current_node.exits.keys().cloned().collect::<Vec<_>>();
+    exits.sort();
+    let mut map_nodes = world.world_map_nodes.values().cloned().collect::<Vec<_>>();
+    map_nodes.sort_by(|left, right| {
+        (left.y, left.x, left.node_id.as_str()).cmp(&(right.y, right.x, right.node_id.as_str()))
+    });
+    json!({
+        "contract_version": TRILLIONNIUM_WORLD_RUST_OWNED_UI_SHELL_CONTRACT_VERSION,
+        "source_of_truth": "rust_world_ui_renderer",
+        "render_owner": "rust_world_ui_renderer",
+        "web_role": "input_only_event_bridge",
+        "hydration_policy": "server_rendered_then_rust_fragment_swap",
+        "forbidden_intermediate": "no_full_hero_tan_replica_then_replace_workflow",
+        "copy_policy": "trillionnium_native_no_copied_hero_tan_text_assets_or_tables",
+        "current_node_id": current_node.node_id,
+        "current_location_id": current_node.location_id,
+        "current_zone_id": current_node.zone_id,
+        "keypad_grid_html": world_text_adventure_grid_html(
+            &map_nodes,
+            &current_node.node_id,
+            Some(world_objective_travel),
+        ),
+        "keypad_buttons_html": world_keypad_buttons_html(Some(current_node), world),
+        "current_name_html": escape_world_visible_text(&current_node.name),
+        "current_description_html": escape_world_visible_text(&current_node.description),
+        "current_exits_text": if exits.is_empty() { "none".to_string() } else { exits.join(" · ") },
+        "ui_ownership": {
+            "first_playable_shell": "rust_rendered",
+            "keypad_viewport": "rust_rendered",
+            "movement_buttons": "rust_rendered",
+            "current_location_copy": "rust_rendered",
+            "browser": "input_only_event_bridge"
+        }
+    })
 }
 
 fn world_web_shell_loopback_host(headers: &HeaderMap) -> bool {
@@ -5655,7 +5710,7 @@ pub(super) async fn get_world_web_shell(
       <div id="world-hero-mobile-actions" class="world-hero-actions" data-contract-version="trillionnium_mobile_single_primary_cta_v1" data-first-screen-decision-contract="trillionnium_world_map_first_screen_decision_v1" data-parity-source="app-mobile-primary-cta" data-primary-cta-count="1" data-first-screen-loop="pick_route_submit_proof_claim_reward">
         <section id="world-mobile-route-first-sheet" class="world-mobile-action-sheet" aria-label="World mobile one route first" data-i18n-aria-label-en="World mobile one route first" data-i18n-aria-label-zh="世界移动端一条路线优先" data-game-first-shell-contract="trillionnium_world_game_first_playable_shell_v1" data-source-of-truth="rust_world_state_projection" data-web-role="input_only_visualization" data-heavy-panels-policy="secondary_collapsed_deferred">
           <strong data-i18n-en="Current route" data-i18n-zh="当前路线">Current route</strong>
-        <section id="world-keypad-adventure-shell" class="world-keypad-adventure-shell" tabindex="0" data-contract-version="trillionnium_text_adventure_keypad_movement_v1" data-transition-contract-version="trillionnium_world_transition_semantics_v1" data-interface-style="yingxiongtanshuo_keyboard_tile_map" data-reference-project="albert10jp/yxts-gold-asm" data-reference-file="h/gmud.h" data-lcd-screen="160x80" data-lcd-viewport="5x3" data-lcd-palette="green_monochrome" data-keypad-controls="7,8,9,4,5,6,1,2,3" data-keyboard-controls="numpad,arrows,wasd" data-movement-endpoint="/world/web/map-move" data-source-of-truth="rust_world_map_move" data-transition-source-of-truth="rust_world_map_transition_rules" data-web-role="input_only_visualization" aria-label="Keyboard controlled Trillionnium tile map" data-i18n-aria-label-en="Keyboard controlled Trillionnium tile map" data-i18n-aria-label-zh="小键盘操纵的 Trillionnium 格子地图">
+        <section id="world-keypad-adventure-shell" class="world-keypad-adventure-shell" tabindex="0" data-contract-version="trillionnium_text_adventure_keypad_movement_v1" data-rust-owned-ui-contract="{rust_owned_ui_contract}" data-ui-render-owner="rust_world_ui_renderer" data-transition-contract-version="trillionnium_world_transition_semantics_v1" data-interface-style="yingxiongtanshuo_keyboard_tile_map" data-reference-project="albert10jp/yxts-gold-asm" data-reference-file="h/gmud.h" data-lcd-screen="160x80" data-lcd-viewport="5x3" data-lcd-palette="green_monochrome" data-keypad-controls="7,8,9,4,5,6,1,2,3" data-keyboard-controls="numpad,arrows,wasd" data-movement-endpoint="/world/web/map-move" data-source-of-truth="rust_world_map_move" data-transition-source-of-truth="rust_world_map_transition_rules" data-web-role="input_only_visualization" aria-label="Keyboard controlled Trillionnium tile map" data-i18n-aria-label-en="Keyboard controlled Trillionnium tile map" data-i18n-aria-label-zh="小键盘操纵的 Trillionnium 格子地图">
           <article class="world-keypad-stage">
             <div class="world-keypad-header">
               <div>
@@ -5669,7 +5724,7 @@ pub(super) async fn get_world_web_shell(
               </div>
             </div>
             <div class="world-keypad-map-frame">
-              <div id="world-keypad-map-grid" class="world-keypad-map-grid" role="grid" tabindex="0" data-current-node-id="{current_map_node_id}" data-lcd-cols="5" data-lcd-rows="3" data-reference-project="albert10jp/yxts-gold-asm" data-source-of-truth="rust_world_map_nodes" data-web-role="visualization_only" aria-label="Trillionnium keyboard tile map" data-i18n-aria-label-en="Trillionnium keyboard tile map" data-i18n-aria-label-zh="Trillionnium 键盘格子地图">
+              <div id="world-keypad-map-grid" class="world-keypad-map-grid" role="grid" tabindex="0" data-current-node-id="{current_map_node_id}" data-lcd-cols="5" data-lcd-rows="3" data-reference-project="albert10jp/yxts-gold-asm" data-rust-owned-ui-contract="{rust_owned_ui_contract}" data-render-owner="rust_world_ui_renderer" data-hydration-policy="server_rendered_then_rust_fragment_swap" data-source-of-truth="rust_world_map_nodes" data-web-role="visualization_only" aria-label="Trillionnium keyboard tile map" data-i18n-aria-label-en="Trillionnium keyboard tile map" data-i18n-aria-label-zh="Trillionnium 键盘格子地图">
                 {world_keypad_grid}
               </div>
             </div>
@@ -5692,12 +5747,12 @@ pub(super) async fn get_world_web_shell(
           </div>
             </article>
             <article class="world-keypad-current-panel">
-              <strong id="world-keypad-current-name">{world_keypad_current_name}</strong>
-              <p id="world-keypad-current-description">{world_keypad_current_description}</p>
-              <small><span data-i18n-en="Exits" data-i18n-zh="出口">Exits</span>: <span id="world-keypad-current-exits">{world_keypad_current_exits}</span></small>
+              <strong id="world-keypad-current-name" data-rust-owned-ui-contract="{rust_owned_ui_contract}" data-render-owner="rust_world_ui_renderer">{world_keypad_current_name}</strong>
+              <p id="world-keypad-current-description" data-rust-owned-ui-contract="{rust_owned_ui_contract}" data-render-owner="rust_world_ui_renderer">{world_keypad_current_description}</p>
+              <small><span data-i18n-en="Exits" data-i18n-zh="出口">Exits</span>: <span id="world-keypad-current-exits" data-rust-owned-ui-contract="{rust_owned_ui_contract}" data-render-owner="rust_world_ui_renderer">{world_keypad_current_exits}</span></small>
             </article>
             {world_play_first_action_prompt}
-            <div id="world-keypad-numpad" class="world-keypad-numpad" data-contract-version="trillionnium_text_adventure_keypad_movement_v1" data-transition-contract-version="trillionnium_world_transition_semantics_v1" data-source-of-truth="rust_world_map_move" data-transition-source-of-truth="rust_world_map_transition_rules" aria-label="Numeric keypad movement" data-i18n-aria-label-en="Numeric keypad movement" data-i18n-aria-label-zh="小键盘移动">
+            <div id="world-keypad-numpad" class="world-keypad-numpad" data-contract-version="trillionnium_text_adventure_keypad_movement_v1" data-rust-owned-ui-contract="{rust_owned_ui_contract}" data-render-owner="rust_world_ui_renderer" data-hydration-policy="server_rendered_then_rust_fragment_swap" data-transition-contract-version="trillionnium_world_transition_semantics_v1" data-source-of-truth="rust_world_map_move" data-transition-source-of-truth="rust_world_map_transition_rules" aria-label="Numeric keypad movement" data-i18n-aria-label-en="Numeric keypad movement" data-i18n-aria-label-zh="小键盘移动">
               {world_keypad_buttons}
             </div>
             <article>
@@ -6131,6 +6186,7 @@ pub(super) async fn get_world_web_shell(
       const initializeWorldKeypadMovement = () => {{
         const shell = document.getElementById('world-keypad-adventure-shell');
         const grid = document.getElementById('world-keypad-map-grid');
+        const numpad = document.getElementById('world-keypad-numpad');
         const dataNode = document.getElementById('trillionnium-world-keypad-data');
         const form = document.getElementById('world-keypad-move-form');
         if (!shell || !grid || !dataNode || !form) return;
@@ -6144,6 +6200,7 @@ pub(super) async fn get_world_web_shell(
         const exitsNode = document.getElementById('world-keypad-current-exits');
         const targetInput = document.getElementById('world-keypad-move-target');
         const keyAliases = state.keypad || {{}};
+        const rustOwnedUiContract = state.rust_owned_ui_contract_version || 'trillionnium_world_rust_owned_ui_shell_v1';
         const language = () => document.documentElement.getAttribute('data-ui-language') || 'en';
         const textForNode = (node, field) => {{
           if (!node) return '';
@@ -6279,11 +6336,53 @@ pub(super) async fn get_world_web_shell(
             }}
           }}
         }};
+        const applyRustOwnedUiFragments = (fragments) => {{
+          if (!fragments || fragments.contract_version !== rustOwnedUiContract) return false;
+          const currentId = String(fragments.current_node_id || state.current_node_id || '');
+          if (grid && typeof fragments.keypad_grid_html === 'string' && fragments.keypad_grid_html.trim()) {{
+            grid.innerHTML = fragments.keypad_grid_html;
+            grid.dataset.currentNodeId = currentId;
+            grid.dataset.rustOwnedUiContract = fragments.contract_version;
+            grid.dataset.renderOwner = fragments.render_owner || 'rust_world_ui_renderer';
+            grid.dataset.hydrationPolicy = fragments.hydration_policy || 'server_rendered_then_rust_fragment_swap';
+          }}
+          if (numpad && typeof fragments.keypad_buttons_html === 'string' && fragments.keypad_buttons_html.trim()) {{
+            numpad.innerHTML = fragments.keypad_buttons_html;
+            numpad.dataset.rustOwnedUiContract = fragments.contract_version;
+            numpad.dataset.renderOwner = fragments.render_owner || 'rust_world_ui_renderer';
+            numpad.dataset.hydrationPolicy = fragments.hydration_policy || 'server_rendered_then_rust_fragment_swap';
+          }}
+          if (nameNode && typeof fragments.current_name_html === 'string') {{
+            nameNode.innerHTML = fragments.current_name_html;
+            nameNode.dataset.renderOwner = fragments.render_owner || 'rust_world_ui_renderer';
+            nameNode.dataset.rustOwnedUiContract = fragments.contract_version;
+          }}
+          if (descriptionNode && typeof fragments.current_description_html === 'string') {{
+            descriptionNode.innerHTML = fragments.current_description_html;
+            descriptionNode.dataset.renderOwner = fragments.render_owner || 'rust_world_ui_renderer';
+            descriptionNode.dataset.rustOwnedUiContract = fragments.contract_version;
+          }}
+          if (exitsNode && typeof fragments.current_exits_text === 'string') {{
+            exitsNode.textContent = fragments.current_exits_text;
+            exitsNode.dataset.renderOwner = fragments.render_owner || 'rust_world_ui_renderer';
+            exitsNode.dataset.rustOwnedUiContract = fragments.contract_version;
+          }}
+          state.rust_owned_ui_fragments_current_node_id = currentId;
+          state.rust_owned_ui_fragments_contract_version = fragments.contract_version;
+          return true;
+        }};
         const render = () => {{
           const node = currentNode();
           shell.dataset.currentNodeId = state.current_node_id || '';
-          grid.dataset.currentNodeId = state.current_node_id || '';
-          rebuildLcdViewport();
+          const rustGridCurrent = grid
+            && grid.dataset.renderOwner === 'rust_world_ui_renderer'
+            && grid.dataset.rustOwnedUiContract === rustOwnedUiContract
+            && String(grid.dataset.currentNodeId || '') === String(state.current_node_id || '');
+          if (!rustGridCurrent) {{
+            grid.dataset.currentNodeId = state.current_node_id || '';
+            grid.dataset.renderOwner = 'browser_visualization_fallback';
+            rebuildLcdViewport();
+          }}
           document.querySelectorAll('.world-keypad-button[data-keypad-key]').forEach((button) => {{
             const key = button.dataset.keypadKey || '';
             const next = targetForKey(key);
@@ -6302,9 +6401,9 @@ pub(super) async fn get_world_web_shell(
           if (targetInput) targetInput.value = state.current_node_id || '';
           if (currentNodeIdNode) currentNodeIdNode.textContent = state.current_node_id || '';
           if (coordinatesNode && node) coordinatesNode.textContent = String(node.x ?? 0) + ',' + String(node.y ?? 0);
-          if (nameNode && node) nameNode.textContent = textForNode(node, 'name');
-          if (descriptionNode && node) descriptionNode.textContent = textForNode(node, 'description');
-          if (exitsNode && node) exitsNode.textContent = Object.keys(node.exits || {{}}).sort().join(' · ') || 'none';
+          if (nameNode && node && nameNode.dataset.renderOwner !== 'rust_world_ui_renderer') nameNode.textContent = textForNode(node, 'name');
+          if (descriptionNode && node && descriptionNode.dataset.renderOwner !== 'rust_world_ui_renderer') descriptionNode.textContent = textForNode(node, 'description');
+          if (exitsNode && node && exitsNode.dataset.renderOwner !== 'rust_world_ui_renderer') exitsNode.textContent = Object.keys(node.exits || {{}}).sort().join(' · ') || 'none';
         }};
         const submitMove = async (key, source = 'keyboard') => {{
           const next = targetForKey(key);
@@ -6334,6 +6433,7 @@ pub(super) async fn get_world_web_shell(
             state.nodes[toNode.node_id] = {{ ...(state.nodes[toNode.node_id] || {{}}), ...toNode }};
             state.current_node_id = result.position.node_id || toNode.node_id || next.targetNodeId;
             if (result.world_objective_travel) state.objective_travel = result.world_objective_travel;
+            applyRustOwnedUiFragments(result.rust_owned_ui_fragments);
             render();
             if (status) status.textContent = language() === 'zh' ? ('已移动到：' + textForNode(currentNode(), 'name')) : ('Moved to: ' + textForNode(currentNode(), 'name'));
             shell.dataset.lastInputSource = source;
@@ -7131,6 +7231,7 @@ pub(super) async fn get_world_web_shell(
         world_keypad_grid = world_keypad_grid,
         world_keypad_buttons = world_keypad_buttons,
         world_keypad_state_json = world_keypad_state_json,
+        rust_owned_ui_contract = TRILLIONNIUM_WORLD_RUST_OWNED_UI_SHELL_CONTRACT_VERSION,
         world_keypad_current_name = world_keypad_current_name,
         world_keypad_current_description = world_keypad_current_description,
         world_keypad_current_coordinates = escape_html_text(&world_keypad_current_coordinates),
