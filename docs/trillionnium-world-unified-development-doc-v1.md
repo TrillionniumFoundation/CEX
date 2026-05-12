@@ -586,6 +586,8 @@ scripts/check-trillionnium-first-human-session.sh
 
 ---
 
+- CEX runtime plugin split: `docs/trillionnium-cex-runtime-plugin-split-v1.md` (`trillionnium_cex_runtime_plugin_v1`)
+
 ## 15. 当前下一步
 
 如果下一条指令是“继续”，优先做：

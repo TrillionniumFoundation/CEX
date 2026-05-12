@@ -71,6 +71,8 @@ mod health_metrics;
 use health_metrics::*;
 mod world_routes;
 use world_routes::*;
+mod cex_runtime_routes;
+use cex_runtime_routes::*;
 mod world_commerce_routes;
 use world_commerce_routes::*;
 mod world_web_shell;
@@ -4078,6 +4080,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/v1/chat/tasks", post(create_chat_task))
         .route("/v1/chat/tasks/:id", get(get_chat_task))
         .route("/v1/matrix/messages", post(create_matrix_message_task))
+        .route(
+            "/v1/trillionnium/runtime/cex/manifest",
+            get(get_cex_runtime_plugin_manifest),
+        )
         .route("/v1/league/home", get(get_league_home))
         .route("/v1/league/world", get(get_league_world))
         .route("/v1/world/home", get(get_world_home))

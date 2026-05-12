@@ -1912,6 +1912,15 @@ Also append a one-paragraph summary to `/home/qian/.openclaw/workspace/memory/YY
 
 - Unified development document: `docs/trillionnium-world-unified-development-doc-v1.md` (also mirrored to Trillionnium repo `docs/development/trillionnium-world-unified-development-doc-v1.md`).
 
+---
+
+#### Update 2026-05-12 18:3x CST
+
+- Began the full CEX / Trillionnium World split by making the boundary explicit: CEX is now documented and exposed as a runtime-inserted econ system kernel for Trillionnium World, not as gameplay code embedded in World.
+- Added runtime manifest contract `trillionnium_cex_runtime_plugin_v1` at `GET /v1/trillionnium/runtime/cex/manifest`, with `plugin_id=cex-econ-kernel`, `runtime_role=runtime_inserted_econ_system_kernel`, and host contract `trillionnium_world_runtime_plugin_host_v1`.
+- Added split ADR `docs/trillionnium-cex-runtime-plugin-split-v1.md` and mirrored it to the Trillionnium repo. The boundary is: World owns gameplay/world truth and emits economic intent; CEX owns identity/account resolution, reserves, settlements, consume/refund/chargeback, rewards, review release, idempotency, audit, and recovery receipts; World advances only after an allowed CEX receipt or explicit recoverable hold.
+
+
 ## Current Next Pointer
 
 If the next instruction is simply “continue”, start here:

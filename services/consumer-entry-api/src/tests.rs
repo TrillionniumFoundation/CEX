@@ -1177,6 +1177,43 @@ fn league_web_session_readonly_validates_cookie_without_requiring_csrf() {
 }
 
 #[tokio::test]
+async fn cex_runtime_manifest_declares_world_econ_plugin_boundary() {
+    let app = build_router(AppState::new(test_config()));
+    let (status, body) =
+        send_identity_request(&app, "GET", "/v1/trillionnium/runtime/cex/manifest", &[]).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["contract_version"],
+        "trillionnium_cex_runtime_plugin_v1"
+    );
+    assert_eq!(body["plugin_id"], "cex-econ-kernel");
+    assert_eq!(body["runtime_role"], "runtime_inserted_econ_system_kernel");
+    assert_eq!(
+        body["host_contract_version"],
+        "trillionnium_world_runtime_plugin_host_v1"
+    );
+    assert!(body["ownership"]["cex_owns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|value| value.as_str() == Some("seller_chargeback")));
+    assert!(body["ownership"]["trillionnium_world_owns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|value| value.as_str() == Some("world_state")));
+    assert_eq!(
+        body["integration_model"]["world_progression_gate"],
+        "world_state_advances_only_after_cex_receipt_or_explicit_recoverable_hold"
+    );
+    assert_eq!(body["runtime_requirements"]["fail_closed"], true);
+    assert_eq!(
+        body["migration_status"]["split_strategy"],
+        "extract_contract_first_then_runtime_adapter_then_storage_boundary"
+    );
+}
+
+#[tokio::test]
 async fn league_web_shell_explains_score_and_reward_formula() {
     let app = build_router(AppState::new(test_config()));
     let (status, body) = send_text_request(&app, "GET", "/league", &[]).await;
