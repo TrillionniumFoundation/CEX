@@ -947,6 +947,20 @@ fn normalized_repository_direct_write_contract_declares_command_helpers() {
         .and_then(Value::as_str)
         .unwrap_or_default()
         .contains("direct typed SQLx upserts first"));
+    assert_eq!(
+        contract.get("receipt_table_helper").and_then(Value::as_str),
+        Some("upsert_normalized_term_exchange_receipt_tables")
+    );
+    assert_eq!(
+        contract.get("receipt_table_mode").and_then(Value::as_str),
+        Some("typed_sqlx_receipt_upserts_from_repository_snapshot")
+    );
+    assert!(contract
+        .get("receipt_tables")
+        .and_then(Value::as_array)
+        .expect("receipt tables should be declared")
+        .iter()
+        .any(|table| table.as_str() == Some("world_term_exchange_receipts")));
     let supported_commands = contract
         .get("supported_commands")
         .and_then(Value::as_array)
@@ -1353,8 +1367,16 @@ async fn term_exchange_kernel_manifest_declares_cex_as_first_backend() {
         .iter()
         .any(|value| value.as_str() == Some("progression_class")));
     assert_eq!(
+        body["state_persistence"]["sql_direct_write_status"],
+        "typed_sqlx_receipt_upserts_active"
+    );
+    assert_eq!(
+        body["state_persistence"]["sql_direct_write_helper"],
+        "upsert_normalized_term_exchange_receipt_tables"
+    );
+    assert_eq!(
         body["migration_status"]["status"],
-        "typed_receipt_state_shadowed_to_normalized_sql"
+        "typed_receipt_state_direct_written_to_normalized_sql"
     );
 }
 

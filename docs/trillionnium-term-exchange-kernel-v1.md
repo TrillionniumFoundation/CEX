@@ -261,6 +261,8 @@ Both tables preserve the compact receipt projection fields needed for protocol-f
 - `settlement_reference`, `ledger_entry_id`, `reason`
 - `finalized_at`
 
-The generated repository SQL snapshot now shadows `LeagueState.term_exchange_receipts` and `WorldState.world_term_exchange_receipts` into those tables, and the Term Exchange Kernel manifest reports `normalized_sql_shadow_status=receipt_tables_shadowed`.
+The generated repository SQL snapshot shadows `LeagueState.term_exchange_receipts` and `WorldState.world_term_exchange_receipts` into those tables, and the Term Exchange Kernel manifest reports `normalized_sql_shadow_status=receipt_tables_shadowed`.
 
-Current cutover boundary: SQL shadow and migration floor are in place; typed SQLx direct-write upserts for receipt tables are still the next step before final direct-write cutover.
+The normalized direct-write path now also upserts both receipt tables through `upsert_normalized_term_exchange_receipt_tables` before rollback/audit snapshot export. Supported world command writes and final-cutover non-world snapshot writes persist the typed `TermExchangeReceiptState` projection with `status` and `progression_class` intact.
+
+Current cutover boundary: receipt tables are shadowed and direct-written. The next storage/progression slice is to move remaining legacy string-status progression checks onto `ReceiptProgressionClass` and add normalized receipt read-model probes.

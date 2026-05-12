@@ -590,13 +590,13 @@ scripts/check-trillionnium-first-human-session.sh
 - Term Exchange Kernel: `docs/trillionnium-term-exchange-kernel-v1.md` (`term_exchange_protocol_v1`, `trillionnium_term_exchange_kernel_v1`)
 - Term Exchange backend adapter: `trillionnium_term_exchange_backend_adapter_v1`; first migrated paths are League reward settlement, World commerce settlement lifecycle, and World contract completion settlement.
 - Typed receipt state: `TermExchangeReceiptState` persists adapter receipts into `LeagueState.term_exchange_receipts` and `WorldState.world_term_exchange_receipts` while legacy status fields remain compatible.
-- Normalized receipt shadow: migration `0026_add_term_exchange_receipt_tables.sql` adds `league_term_exchange_receipts` and `world_term_exchange_receipts`; repository snapshot SQL now preserves typed receipt `status` and `progression_class` for SQL shadow/cutover gates.
+- Normalized receipt persistence: migration `0026_add_term_exchange_receipt_tables.sql` adds `league_term_exchange_receipts` and `world_term_exchange_receipts`; repository snapshot SQL shadows typed receipt `status`/`progression_class`, and `upsert_normalized_term_exchange_receipt_tables` now direct-writes both receipt tables during normalized final-cutover writes.
 
 ## 15. 当前下一步
 
 如果下一条指令是“继续”，优先做：
 
-1. Term Exchange 方向：补 `league_term_exchange_receipts` / `world_term_exchange_receipts` 的 typed SQLx direct-write upserts，然后再把 progression checks 从 legacy string status 迁到 `ReceiptProgressionClass`。
+1. Term Exchange 方向：把剩余 progression checks 从 legacy string status 迁到 `ReceiptProgressionClass`，并补 normalized receipt read-model probes。
 2. World UI 方向：继续审计 `/world` 残留 browser-built secondary/dashboard/commerce/timeline UI，把剩余面板改成 Rust-owned fragment + lazy hydration。
 3. 不新增 live OSM、不提升 MapLibre、不引入 Hero Tan copy workflow。
 4. 若目标是评分提升，而不是 UI/player-value，则先补真实 evidence path：

@@ -124,6 +124,12 @@ if direct_write_contract:
     if direct_write_contract.get('transaction_mode') is not None:
         assert direct_write_contract.get('transaction_mode') == 'single_pg_transaction_direct_sql_primary_plus_snapshot_export', repository_contract
         assert 'atomically' in (direct_write_contract.get('transaction_boundary') or ''), repository_contract
+    if direct_write_contract.get('receipt_table_helper') is not None:
+        assert direct_write_contract.get('receipt_table_helper') == 'upsert_normalized_term_exchange_receipt_tables', repository_contract
+        assert direct_write_contract.get('receipt_table_mode') == 'typed_sqlx_receipt_upserts_from_repository_snapshot', repository_contract
+        receipt_tables = direct_write_contract.get('receipt_tables') or []
+        assert 'league_term_exchange_receipts' in receipt_tables, repository_contract
+        assert 'world_term_exchange_receipts' in receipt_tables, repository_contract
 raw_read_model_contract_checked = False
 if state_boundary.get('runtime_read_model_sql_helper') is not None:
     assert 'normalized_repository_world_home_read_model_sql' in (state_boundary.get('runtime_read_model_sql_helper') or ''), repository_contract
@@ -336,6 +342,12 @@ if endpoint is not None:
             assert 'atomically' in (endpoint_direct_write_contract.get('transaction_boundary') or ''), endpoint
         if endpoint_direct_write_contract.get('index_reuse') is not None:
             assert 'one WorldIndexes snapshot' in endpoint_direct_write_contract.get('index_reuse'), endpoint
+        if endpoint_direct_write_contract.get('receipt_table_helper') is not None:
+            assert endpoint_direct_write_contract.get('receipt_table_helper') == 'upsert_normalized_term_exchange_receipt_tables', endpoint
+            assert endpoint_direct_write_contract.get('receipt_table_mode') == 'typed_sqlx_receipt_upserts_from_repository_snapshot', endpoint
+            endpoint_receipt_tables = endpoint_direct_write_contract.get('receipt_tables') or []
+            assert 'league_term_exchange_receipts' in endpoint_receipt_tables, endpoint
+            assert 'world_term_exchange_receipts' in endpoint_receipt_tables, endpoint
     assert endpoint_read_model_contract.get('contract_version') == 'trillionnium_normalized_repository_read_model_v1', endpoint
     assert (endpoint_read_model_contract.get('world_home') or {}).get('read_model_version') == 'trillionnium_normalized_world_home_read_model_v1', endpoint
     if (endpoint_read_model_contract.get('world_home') or {}).get('startup_gate') is not None:

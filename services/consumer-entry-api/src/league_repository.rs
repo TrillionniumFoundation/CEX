@@ -2063,9 +2063,16 @@ pub(super) fn normalized_repository_direct_write_contract_json() -> Value {
         "index_reuse": "execute_normalized_repository_direct_command_write builds one WorldIndexes snapshot per hydrated repository state and reuses sorted vector indices across typed SQLx upserts",
         "supported_commands": normalized_repository_direct_write_supported_commands(),
         "fallback_helper": "snapshot_export_only",
-        "fallback_mode": "unsupported world commands are rejected in final cutover instead of falling back to generated command-scoped SQL; non-world snapshot exports remain rollback/audit-only",
+        "fallback_mode": "unsupported world commands are rejected in final cutover instead of falling back to generated command-scoped SQL; non-world final-cutover writes apply typed receipt-table upserts only, with JSON snapshot export remaining rollback/audit-only",
         "bridge": "league_state_snapshots, league_state_repository_snapshots, and league_state_repository_write_set_audits remain written only for rollback, parity, audit, and read-switch recovery gates",
         "transaction_boundary": "write_normalized_repository_snapshot_to_database commits direct typed SQLx upserts first, then writes JSON/snapshot export and audit artifacts, atomically in one PostgreSQL transaction",
+        "receipt_table_helper": "upsert_normalized_term_exchange_receipt_tables",
+        "receipt_table_mode": "typed_sqlx_receipt_upserts_from_repository_snapshot",
+        "receipt_tables": [
+            "league_term_exchange_receipts",
+            "world_term_exchange_receipts"
+        ],
+        "receipt_table_scope": "all supported world command direct writes plus final-cutover non-world snapshot writes upsert typed TermExchangeReceiptState projections before rollback/audit export",
         "command_helpers": [
             {
                 "command": "world_action",
@@ -2201,6 +2208,129 @@ pub(super) async fn upsert_normalized_league_players(
         rows += 1;
     }
     Ok(rows)
+}
+
+fn term_exchange_receipt_enum_text<T: Serialize>(value: &T, label: &str) -> Result<String, String> {
+    let json_value = serde_json::to_value(value)
+        .map_err(|err| format!("failed to serialize term exchange receipt {label}: {err}"))?;
+    json_value
+        .as_str()
+        .map(ToString::to_string)
+        .ok_or_else(|| format!("term exchange receipt {label} did not serialize to text"))
+}
+
+async fn upsert_normalized_term_exchange_receipts_for_table(
+    conn: &mut sqlx::pool::PoolConnection<sqlx::Postgres>,
+    table_name: &str,
+    receipts: Vec<&TermExchangeReceiptState>,
+) -> Result<usize, String> {
+    if !matches!(
+        table_name,
+        "league_term_exchange_receipts" | "world_term_exchange_receipts"
+    ) {
+        return Err(format!(
+            "unsupported normalized term exchange receipt table: {table_name}"
+        ));
+    }
+    let query = format!(
+        "insert into {table_name} (
+             receipt_id, protocol_version, intent_id, term_id, backend_id,
+             backend_kind, status, progression_class, settlement_reference,
+             ledger_entry_id, reason, finalized_at, updated_at
+         ) values (
+             $1, $2, $3, $4, $5,
+             $6, $7, $8, $9,
+             $10, $11, to_timestamp($12::double precision), now()
+         ) on conflict (receipt_id) do update set
+             protocol_version = excluded.protocol_version,
+             intent_id = excluded.intent_id,
+             term_id = excluded.term_id,
+             backend_id = excluded.backend_id,
+             backend_kind = excluded.backend_kind,
+             status = excluded.status,
+             progression_class = excluded.progression_class,
+             settlement_reference = excluded.settlement_reference,
+             ledger_entry_id = excluded.ledger_entry_id,
+             reason = excluded.reason,
+             finalized_at = excluded.finalized_at,
+             updated_at = now()"
+    );
+    let mut rows = 0;
+    for receipt in receipts {
+        let backend_kind = term_exchange_receipt_enum_text(&receipt.backend_kind, "backend_kind")?;
+        let status = term_exchange_receipt_enum_text(&receipt.status, "status")?;
+        let progression_class =
+            term_exchange_receipt_enum_text(&receipt.progression_class, "progression_class")?;
+        sqlx::query(&query)
+            .bind(&receipt.receipt_id)
+            .bind(&receipt.protocol_version)
+            .bind(&receipt.intent_id)
+            .bind(&receipt.term_id)
+            .bind(&receipt.backend_id)
+            .bind(&backend_kind)
+            .bind(&status)
+            .bind(&progression_class)
+            .bind(receipt.settlement_reference.as_deref())
+            .bind(receipt.ledger_entry_id.as_deref())
+            .bind(receipt.reason.as_deref())
+            .bind(receipt.finalized_at_epoch as f64)
+            .execute(&mut **conn)
+            .await
+            .map_err(|err| format!("failed to direct-upsert {table_name}: {err}"))?;
+        rows += 1;
+    }
+    Ok(rows)
+}
+
+pub(super) async fn upsert_normalized_league_term_exchange_receipts(
+    conn: &mut sqlx::pool::PoolConnection<sqlx::Postgres>,
+    league: &LeagueState,
+) -> Result<usize, String> {
+    let mut receipt_ids: Vec<&String> = league.term_exchange_receipts.keys().collect();
+    receipt_ids.sort();
+    let receipts = receipt_ids
+        .into_iter()
+        .filter_map(|receipt_id| league.term_exchange_receipts.get(receipt_id))
+        .collect();
+    upsert_normalized_term_exchange_receipts_for_table(
+        conn,
+        "league_term_exchange_receipts",
+        receipts,
+    )
+    .await
+}
+
+pub(super) async fn upsert_normalized_world_term_exchange_receipts(
+    conn: &mut sqlx::pool::PoolConnection<sqlx::Postgres>,
+    world: &WorldState,
+    indexes: &WorldIndexes,
+) -> Result<usize, String> {
+    let receipts = indexes
+        .sorted_world_term_exchange_receipt_ids
+        .iter()
+        .filter_map(|receipt_id| world.world_term_exchange_receipts.get(receipt_id))
+        .collect();
+    upsert_normalized_term_exchange_receipts_for_table(
+        conn,
+        "world_term_exchange_receipts",
+        receipts,
+    )
+    .await
+}
+
+pub(super) async fn upsert_normalized_term_exchange_receipt_tables(
+    conn: &mut sqlx::pool::PoolConnection<sqlx::Postgres>,
+    league: &LeagueState,
+    world: &WorldState,
+    indexes: &WorldIndexes,
+) -> Result<Value, String> {
+    let league_receipt_rows = upsert_normalized_league_term_exchange_receipts(conn, league).await?;
+    let world_receipt_rows =
+        upsert_normalized_world_term_exchange_receipts(conn, world, indexes).await?;
+    Ok(json!({
+        "league_term_exchange_receipts": league_receipt_rows,
+        "world_term_exchange_receipts": world_receipt_rows,
+    }))
 }
 
 pub(super) async fn upsert_normalized_world_zones(
@@ -3508,10 +3638,17 @@ pub(super) async fn execute_normalized_repository_direct_command_write(
     repository_snapshot: &LeagueStateRepositorySnapshot,
     command: &str,
 ) -> Result<Value, String> {
+    if !normalized_repository_direct_write_supports_command(command) {
+        return Err(format!(
+            "normalized repository direct write helper is not declared for command={command}"
+        ));
+    }
     let league = serde_json::from_str::<LeagueState>(&repository_snapshot.state_json)
         .map_err(|err| format!("failed to hydrate repository snapshot for direct write: {err}"))?;
     let world = &league.world;
     let indexes = build_world_indexes(world);
+    let receipt_rows =
+        upsert_normalized_term_exchange_receipt_tables(conn, &league, world, &indexes).await?;
     match command {
         "world_action" => {
             let zone_rows = upsert_normalized_world_zones(conn, world, &indexes).await?;
@@ -3526,6 +3663,7 @@ pub(super) async fn execute_normalized_repository_direct_command_write(
                 "helper": "execute_normalized_repository_direct_command_write",
                 "mode": "typed_sqlx_upsert_from_repository_snapshot",
                 "direct_write_contract": "trillionnium_normalized_repository_direct_write_v1",
+                "receipt_rows": receipt_rows,
                 "dependency_rows": {
                     "world_zones": zone_rows,
                     "world_locations": location_rows,
@@ -3552,6 +3690,7 @@ pub(super) async fn execute_normalized_repository_direct_command_write(
                 "helper": "execute_normalized_repository_direct_command_write",
                 "mode": "typed_sqlx_upsert_from_repository_snapshot",
                 "direct_write_contract": "trillionnium_normalized_repository_direct_write_v1",
+                "receipt_rows": receipt_rows,
                 "dependency_rows": {
                     "world_zones": zone_rows,
                     "world_locations": location_rows,
@@ -3580,6 +3719,7 @@ pub(super) async fn execute_normalized_repository_direct_command_write(
                 "helper": "execute_normalized_repository_direct_command_write",
                 "mode": "typed_sqlx_upsert_from_repository_snapshot",
                 "direct_write_contract": "trillionnium_normalized_repository_direct_write_v1",
+                "receipt_rows": receipt_rows,
                 "runtime_mutation_contract": "trillionnium_world_resource_pressure_runtime_v1",
                 "dependency_rows": {
                     "world_zones": zone_rows,
@@ -3617,6 +3757,7 @@ pub(super) async fn execute_normalized_repository_direct_command_write(
                 "helper": "execute_normalized_repository_direct_command_write",
                 "mode": "typed_sqlx_upsert_from_repository_snapshot",
                 "direct_write_contract": "trillionnium_normalized_repository_direct_write_v1",
+                "receipt_rows": receipt_rows,
                 "storage_boundary_decision": "tw_4_8_tactics_json_snapshot_plus_normalized_shadow_tables",
                 "dependency_rows": {
                     "world_zones": zone_rows,
@@ -3648,6 +3789,7 @@ pub(super) async fn execute_normalized_repository_direct_command_write(
                 "helper": "execute_normalized_repository_direct_command_write",
                 "mode": "typed_sqlx_upsert_from_repository_snapshot",
                 "direct_write_contract": "trillionnium_normalized_repository_direct_write_v1",
+                "receipt_rows": receipt_rows,
                 "dependency_rows": {
                     "world_zones": zone_rows,
                     "world_locations": location_rows,
@@ -3676,6 +3818,7 @@ pub(super) async fn execute_normalized_repository_direct_command_write(
                 "helper": "execute_normalized_repository_direct_command_write",
                 "mode": "typed_sqlx_upsert_from_repository_snapshot",
                 "direct_write_contract": "trillionnium_normalized_repository_direct_write_v1",
+                "receipt_rows": receipt_rows,
                 "dependency_rows": {
                     "world_zones": zone_rows,
                     "world_locations": location_rows,
@@ -3706,6 +3849,7 @@ pub(super) async fn execute_normalized_repository_direct_command_write(
                 "helper": "execute_normalized_repository_direct_command_write",
                 "mode": "typed_sqlx_upsert_from_repository_snapshot",
                 "direct_write_contract": "trillionnium_normalized_repository_direct_write_v1",
+                "receipt_rows": receipt_rows,
                 "dependency_rows": {
                     "world_zones": zone_rows,
                     "world_locations": location_rows,
@@ -3743,6 +3887,7 @@ pub(super) async fn execute_normalized_repository_direct_command_write(
                 "helper": "execute_normalized_repository_direct_command_write",
                 "mode": "typed_sqlx_upsert_from_repository_snapshot",
                 "direct_write_contract": "trillionnium_normalized_repository_direct_write_v1",
+                "receipt_rows": receipt_rows,
                 "dependency_rows": {
                     "world_zones": zone_rows,
                     "world_locations": location_rows,
@@ -3785,6 +3930,7 @@ pub(super) async fn execute_normalized_repository_direct_command_write(
                 "helper": "execute_normalized_repository_direct_command_write",
                 "mode": "typed_sqlx_upsert_from_repository_snapshot",
                 "direct_write_contract": "trillionnium_normalized_repository_direct_write_v1",
+                "receipt_rows": receipt_rows,
                 "dependency_rows": {
                     "world_zones": zone_rows,
                     "world_locations": location_rows,
@@ -3827,6 +3973,7 @@ pub(super) async fn execute_normalized_repository_direct_command_write(
                 "helper": "execute_normalized_repository_direct_command_write",
                 "mode": "typed_sqlx_upsert_from_repository_snapshot",
                 "direct_write_contract": "trillionnium_normalized_repository_direct_write_v1",
+                "receipt_rows": receipt_rows,
                 "dependency_rows": {
                     "world_zones": zone_rows,
                     "world_locations": location_rows,
@@ -3868,6 +4015,7 @@ pub(super) async fn execute_normalized_repository_direct_command_write(
                 "helper": "execute_normalized_repository_direct_command_write",
                 "mode": "typed_sqlx_upsert_from_repository_snapshot",
                 "direct_write_contract": "trillionnium_normalized_repository_direct_write_v1",
+                "receipt_rows": receipt_rows,
                 "dependency_rows": {
                     "world_zones": zone_rows,
                     "world_locations": location_rows,
@@ -3907,6 +4055,7 @@ pub(super) async fn execute_normalized_repository_direct_command_write(
                 "helper": "execute_normalized_repository_direct_command_write",
                 "mode": "typed_sqlx_upsert_from_repository_snapshot",
                 "direct_write_contract": "trillionnium_normalized_repository_direct_write_v1",
+                "receipt_rows": receipt_rows,
                 "dependency_rows": {
                     "world_zones": zone_rows,
                     "world_locations": location_rows,
@@ -3947,6 +4096,7 @@ pub(super) async fn execute_normalized_repository_direct_command_write(
                 "helper": "execute_normalized_repository_direct_command_write",
                 "mode": "typed_sqlx_upsert_from_repository_snapshot",
                 "direct_write_contract": "trillionnium_normalized_repository_direct_write_v1",
+                "receipt_rows": receipt_rows,
                 "dependency_rows": {
                     "world_zones": zone_rows,
                     "world_locations": location_rows,
@@ -5283,6 +5433,7 @@ pub(super) async fn write_normalized_repository_snapshot_to_database(
     let database_url = database_url.to_string();
     let repository_snapshot = repository_snapshot.clone();
     let direct_command = direct_command.map(str::to_string);
+    let normalized_final_cutover_enabled = config.league_normalized_final_cutover_enabled;
     tokio::task::spawn_blocking(move || {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -5316,6 +5467,25 @@ pub(super) async fn write_normalized_repository_snapshot_to_database(
                             &mut conn,
                             &repository_snapshot,
                             command,
+                        )
+                        .await
+                        .map(|_| ())?;
+                    } else if normalized_final_cutover_enabled {
+                        let league = serde_json::from_str::<LeagueState>(
+                            &repository_snapshot.state_json,
+                        )
+                        .map_err(|err| {
+                            format!(
+                                "failed to hydrate repository snapshot for receipt direct write: {err}"
+                            )
+                        })?;
+                        let world = &league.world;
+                        let indexes = build_world_indexes(world);
+                        upsert_normalized_term_exchange_receipt_tables(
+                            &mut conn,
+                            &league,
+                            world,
+                            &indexes,
                         )
                         .await
                         .map(|_| ())?;

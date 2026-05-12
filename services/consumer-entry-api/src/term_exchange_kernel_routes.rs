@@ -234,7 +234,9 @@ pub(super) fn term_exchange_kernel_manifest_json(state: &AppState) -> Value {
                 "intent_id",
                 "backend_kind"
             ],
-            "sql_direct_write_status": "pending_typed_sqlx_receipt_upserts"
+            "sql_direct_write_status": "typed_sqlx_receipt_upserts_active",
+            "sql_direct_write_helper": "upsert_normalized_term_exchange_receipt_tables",
+            "sql_direct_write_mode": "typed_sqlx_receipt_upserts_from_repository_snapshot"
         },
         "current_cex_backend_runtime": {
             "runtime_profile": state.config().runtime_profile.as_str(),
@@ -254,10 +256,10 @@ pub(super) fn term_exchange_kernel_manifest_json(state: &AppState) -> Value {
             "primary_endpoint": TERM_EXCHANGE_KERNEL_MANIFEST_ENDPOINT
         },
         "migration_status": {
-            "status": "typed_receipt_state_shadowed_to_normalized_sql",
+            "status": "typed_receipt_state_direct_written_to_normalized_sql",
             "split_strategy": "protocol_first_then_backend_adapter_then_storage_boundary",
             "current_source_of_evidence": "CEX local-production run/* gates",
-            "next_step": "add typed SQLx receipt upserts to the normalized direct-write path and migrate remaining progression checks from legacy string statuses to ReceiptProgressionClass"
+            "next_step": "migrate remaining progression checks from legacy string statuses to ReceiptProgressionClass and add normalized receipt read-model probes"
         }
     })
 }

@@ -792,6 +792,12 @@ begin
   if (select count(*) from world_economy_events where matrix_user_id = '@runtime-buyer-review:local.dev' and event_kind = 'work_cancelled') < 1 then
     raise exception 'runtime direct world_work_cancel helper did not write work_cancelled economy event';
   end if;
+  if (select count(*) from world_term_exchange_receipts where progression_class in ('progression_allowed', 'terminal_skip', 'recoverable_hold', 'hard_fail')) < 1 then
+    raise exception 'runtime direct Term Exchange receipt helper did not write world_term_exchange_receipts with typed progression_class';
+  end if;
+  if (select count(*) from world_term_exchange_receipts where backend_kind = 'cex' and status in ('reserved', 'settled', 'consumed', 'refunded', 'seller_chargeback_reserved', 'seller_chargeback_consumed', 'duplicate')) < 1 then
+    raise exception 'runtime direct Term Exchange receipt helper did not preserve typed receipt status/backend_kind';
+  end if;
   select jsonb_build_object(
     'read_model_version', 'trillionnium_normalized_world_home_read_model_v1',
     'source_tables', jsonb_build_array('world_events', 'world_relationships', 'world_map_nodes', 'world_contracts', 'world_work_orders', 'world_faction_standings'),
@@ -909,6 +915,16 @@ if ! grep -q 'trillionnium_normalized_repository_direct_write_v1' "$TMP_DIR/dual
   cat "$TMP_DIR/dual-write-health.json" >&2
   exit 1
 fi
+if ! grep -q 'upsert_normalized_term_exchange_receipt_tables' "$TMP_DIR/dual-write-health.json"; then
+  echo "dual-write health did not expose normalized Term Exchange receipt direct-write helper" >&2
+  cat "$TMP_DIR/dual-write-health.json" >&2
+  exit 1
+fi
+if ! grep -q 'typed_sqlx_receipt_upserts_from_repository_snapshot' "$TMP_DIR/dual-write-health.json"; then
+  echo "dual-write health did not expose normalized Term Exchange receipt direct-write mode" >&2
+  cat "$TMP_DIR/dual-write-health.json" >&2
+  exit 1
+fi
 if ! grep -q '"normalized_direct_write_transaction_mode":"single_pg_transaction_direct_sql_primary_plus_snapshot_export"' "$TMP_DIR/dual-write-health.json"; then
   echo "dual-write health did not expose normalized direct-write transaction mode" >&2
   cat "$TMP_DIR/dual-write-health.json" >&2
@@ -1020,6 +1036,8 @@ select jsonb_build_object(
   'world_work_rejection_rows_after_direct_write', (select count(*) from world_work_rejections where matrix_user_id = '@runtime-buyer-review:local.dev'),
   'world_work_reopen_rows_after_direct_write', (select count(*) from world_work_reopens where matrix_user_id = '@runtime-buyer-review:local.dev'),
   'world_work_cancellation_rows_after_direct_write', (select count(*) from world_work_cancellations where matrix_user_id = '@runtime-buyer-review:local.dev'),
+  'league_term_exchange_receipt_rows_after_direct_write', (select count(*) from league_term_exchange_receipts),
+  'world_term_exchange_receipt_rows_after_direct_write', (select count(*) from world_term_exchange_receipts),
   'world_event_rows', (select count(*) from world_events where actor_matrix_user_id = '@runtime-dual:local.dev'),
   'world_relationship_rows', (select count(*) from world_relationships where from_id = '@runtime-dual:local.dev'),
   'dual_write_health_active', true,
