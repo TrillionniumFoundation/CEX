@@ -1,6 +1,6 @@
 # Trillionnium World Development Progress Tree v1
 
-Generated: 2026-05-08 18:11 CST  
+Generated: 2026-05-08 18:11 CST
 Last audited: 2026-05-11 22:4x CST
 Current code checkpoint: `feat: gate rust-owned trillionnium world ui` (this commit)
 Previous checkpoint: `93f3c0d feat: prioritize trillionnium world game shell`
@@ -1909,6 +1909,8 @@ Also append a one-paragraph summary to `/home/qian/.openclaw/workspace/memory/YY
   - [x] Web/Browser E2E gates and Rust tests now require the focus/action rail fragment contract, bootstrap payload, and server-rendered focus hydration policy.
 - Constraints preserved: no copied 白金英雄坛说 / Hero Tan code/text/assets/data/NPC/task tables/names, no full clone-then-replace workflow, no live OSM ingestion, no MapLibre promotion, Rust source of truth, browser input-only/focus-bridge role, and no local-only score inflation.
 
+
+- Unified development document: `docs/trillionnium-world-unified-development-doc-v1.md` (also mirrored to Trillionnium repo `docs/development/trillionnium-world-unified-development-doc-v1.md`).
 
 ## Current Next Pointer
 
