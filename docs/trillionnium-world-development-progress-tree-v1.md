@@ -1857,6 +1857,17 @@ Also append a one-paragraph summary to `/home/qian/.openclaw/workspace/memory/YY
 
 ---
 
+#### Update 2026-05-12 10:4x CST
+
+- Continued the Rust-owned UI push into the `/world` live-event and avatar-task-route card layer:
+  - [x] Added `trillionnium_world_rust_live_task_ui_fragments_v1` for server-rendered live-event cards and avatar-task-route cards.
+  - [x] `/world` bootstrap plus `/world/web/map-viewport` and `/world/web/map-delta` now carry `rust_owned_live_task_ui_fragments`, including default and focus-keyed fragments by task, location, node, and event.
+  - [x] `#world-live-events-live` and `#world-avatar-task-routes-live` now declare `data-render-owner="rust_world_ui_renderer"`, the live/task fragment contract, and `data-browser-ui-owner="input_only_focus_bridge"`.
+  - [x] Browser JS still owns focus/event delegation, but `renderRustLiveTaskCards(...)` applies Rust-projected card HTML for `/world`; generic `renderCards(...)` remains fallback/shared compatibility for `/app` and non-migrated surfaces.
+- Constraints preserved: no copied 白金英雄坛说 / Hero Tan code/text/assets/data/NPC/task tables/names, no full clone-then-replace workflow, no live OSM ingestion, no MapLibre promotion, Rust source of truth, browser input-only/event-bridge role, and no local-only score inflation.
+
+---
+
 ## Current Next Pointer
 
 If the next instruction is simply “continue”, start here:

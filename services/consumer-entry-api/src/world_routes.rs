@@ -384,8 +384,13 @@ pub(super) async fn get_world_map_viewport(
         radius_km,
         limit,
     );
+    let live_task_fragments = world_rust_live_task_ui_fragments_json(&viewport);
     let route_runner_fragments = world_rust_route_runner_ui_fragments_json(&viewport);
     if let Some(object) = viewport.as_object_mut() {
+        object.insert(
+            "rust_owned_live_task_ui_fragments".to_string(),
+            live_task_fragments,
+        );
         object.insert(
             "rust_owned_route_runner_ui_fragments".to_string(),
             route_runner_fragments,
@@ -469,8 +474,13 @@ pub(super) async fn get_world_web_map_viewport(
         radius_km,
         limit,
     );
+    let live_task_fragments = world_rust_live_task_ui_fragments_json(&viewport);
     let route_runner_fragments = world_rust_route_runner_ui_fragments_json(&viewport);
     if let Some(object) = viewport.as_object_mut() {
+        object.insert(
+            "rust_owned_live_task_ui_fragments".to_string(),
+            live_task_fragments,
+        );
         object.insert(
             "rust_owned_route_runner_ui_fragments".to_string(),
             route_runner_fragments,
@@ -555,14 +565,23 @@ async fn world_map_delta_response(
         radius_km,
         limit,
     );
+    let live_task_fragments = world_rust_live_task_ui_fragments_json(&current_viewport);
     let route_runner_fragments = world_rust_route_runner_ui_fragments_json(&current_viewport);
     if let Some(object) = delta.as_object_mut() {
         if let Some(patch) = object.get_mut("delta").and_then(Value::as_object_mut) {
+            patch.insert(
+                "rust_owned_live_task_ui_fragments".to_string(),
+                live_task_fragments.clone(),
+            );
             patch.insert(
                 "rust_owned_route_runner_ui_fragments".to_string(),
                 route_runner_fragments.clone(),
             );
         }
+        object.insert(
+            "rust_owned_live_task_ui_fragments".to_string(),
+            live_task_fragments,
+        );
         object.insert(
             "rust_owned_route_runner_ui_fragments".to_string(),
             route_runner_fragments,

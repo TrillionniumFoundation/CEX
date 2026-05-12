@@ -6,6 +6,8 @@ pub(super) const TRILLIONNIUM_WORLD_RUST_ROUTE_UI_FRAGMENTS_CONTRACT_VERSION: &s
     "trillionnium_world_rust_route_ui_fragments_v1";
 pub(super) const TRILLIONNIUM_WORLD_RUST_ROUTE_RUNNER_UI_FRAGMENTS_CONTRACT_VERSION: &str =
     "trillionnium_world_rust_route_runner_ui_fragments_v1";
+pub(super) const TRILLIONNIUM_WORLD_RUST_LIVE_TASK_UI_FRAGMENTS_CONTRACT_VERSION: &str =
+    "trillionnium_world_rust_live_task_ui_fragments_v1";
 
 fn world_user_visible_copy(value: &str) -> String {
     let mut copy = value.to_string();
@@ -3807,6 +3809,366 @@ fn first_nonempty_str<'a>(values: &[&'a str], fallback: &'a str) -> &'a str {
         .unwrap_or(fallback)
 }
 
+fn world_live_event_card_html(event: &Value) -> String {
+    let event_kind = world_json_str(event, "event_kind");
+    let node_name = world_json_str(event, "node_name");
+    let node_name = if node_name.trim().is_empty() {
+        world_json_str(event, "location_id")
+    } else {
+        node_name
+    };
+    let distance_label = event
+        .get("distance_km")
+        .and_then(Value::as_f64)
+        .map(|distance| format!("{distance:.1} km"))
+        .unwrap_or_else(|| "global / 全域".to_string());
+    let event_id = world_json_str(event, "event_id");
+    let node_id = world_json_str(event, "node_id");
+    let task_id = world_json_str(event, "cex_task_id");
+    let location_id = world_json_str(event, "location_id");
+    let event_body = world_json_str(event, "body");
+    let event_result = world_json_str(event, "result");
+    let focus_button = map_event_focus_button_html(
+        node_id,
+        event_id,
+        task_id,
+        location_id,
+        &world_map_status_label(if event_kind.trim().is_empty() {
+            "world_event"
+        } else {
+            event_kind
+        }),
+        &world_user_visible_copy(if node_name.trim().is_empty() {
+            "POI"
+        } else {
+            node_name
+        }),
+        &world_user_visible_copy(event_body),
+        &world_user_visible_copy(event_result),
+        "追踪事件",
+    );
+    format!(
+        "<article class=\"mini event\" data-render-owner=\"rust_world_ui_renderer\" data-rust-live-task-ui-contract=\"{}\" data-browser-ui-owner=\"input_only_focus_bridge\" data-event-id=\"{}\" data-task-id=\"{}\" data-location-id=\"{}\" data-node-id=\"{}\"><strong>{}</strong><span>{} · {}</span><code>{}</code><div class=\"focus-stack\">{}</div></article>",
+        TRILLIONNIUM_WORLD_RUST_LIVE_TASK_UI_FRAGMENTS_CONTRACT_VERSION,
+        escape_html_text(event_id),
+        escape_html_text(task_id),
+        escape_html_text(location_id),
+        escape_html_text(node_id),
+        escape_html_text(&world_map_status_label(if event_kind.trim().is_empty() { "world_event" } else { event_kind })),
+        escape_world_visible_text(if node_name.trim().is_empty() { "POI" } else { node_name }),
+        escape_html_text(&distance_label),
+        escape_html_text(if event_id.trim().is_empty() { "event / 事件" } else { event_id }),
+        focus_button,
+    )
+}
+
+fn world_avatar_task_route_focus_button_html(route: &Value) -> String {
+    format!(
+        "<button type=\"button\" class=\"focus-chip trillionnium-map-focus\" data-focus-kind=\"node\" data-node-id=\"{}\" data-task-id=\"{}\" data-location-id=\"{}\" data-suppress-action=\"true\">{}</button>",
+        escape_html_text(world_json_str(route, "to_node_id")),
+        escape_html_text(world_json_str(route, "task_id")),
+        escape_html_text(world_json_str(route, "latest_location_id")),
+        escape_world_visible_text("Trace route / 追踪路线"),
+    )
+}
+
+fn world_avatar_task_route_card_html(route: &Value) -> String {
+    let from_name = first_nonempty_str(
+        &[
+            world_json_str(route, "from_node_name"),
+            world_json_str(route, "from_node_id"),
+        ],
+        "avatar / 角色",
+    );
+    let to_name = first_nonempty_str(
+        &[
+            world_json_str(route, "to_node_name"),
+            world_json_str(route, "to_node_id"),
+        ],
+        "task node / 任务节点",
+    );
+    let next_action_label = first_nonempty_str(
+        &[world_json_str(route, "next_action_label")],
+        "Avatar task route / 角色任务路线",
+    );
+    let latest_status = first_nonempty_str(
+        &[world_json_str(route, "latest_status")],
+        "pending / 待推进",
+    );
+    let reward_loop = first_nonempty_str(
+        &[world_json_str(route, "reward_loop")],
+        "move avatar → complete task → reward / 角色移动 → 完成任务 → 领奖励",
+    );
+    let focus_button = world_avatar_task_route_focus_button_html(route);
+    format!(
+        "<article class=\"mini route\" data-render-owner=\"rust_world_ui_renderer\" data-rust-live-task-ui-contract=\"{}\" data-browser-ui-owner=\"input_only_focus_bridge\" data-task-id=\"{}\" data-location-id=\"{}\" data-from-node-id=\"{}\" data-to-node-id=\"{}\"><strong>{}</strong><span>{} → {} · {}</span><code>{}</code><div class=\"focus-stack\">{} <span class=\"hud-chip\">{}</span></div></article>",
+        TRILLIONNIUM_WORLD_RUST_LIVE_TASK_UI_FRAGMENTS_CONTRACT_VERSION,
+        escape_html_text(world_json_str(route, "task_id")),
+        escape_html_text(world_json_str(route, "latest_location_id")),
+        escape_html_text(world_json_str(route, "from_node_id")),
+        escape_html_text(world_json_str(route, "to_node_id")),
+        escape_world_visible_text(next_action_label),
+        escape_world_visible_text(from_name),
+        escape_world_visible_text(to_name),
+        escape_world_visible_text(latest_status),
+        escape_html_text(first_nonempty_str(
+            &[world_json_str(route, "task_id"), world_json_str(route, "route_id")],
+            "avatar_task_route",
+        )),
+        focus_button,
+        escape_world_visible_text(reward_loop),
+    )
+}
+
+fn world_live_task_event_matches(
+    event: &Value,
+    active_task_id: Option<&str>,
+    location_id: Option<&str>,
+    node_id: Option<&str>,
+    event_id: Option<&str>,
+) -> bool {
+    if let Some(task_id) = active_task_id {
+        return world_json_str(event, "cex_task_id") == task_id;
+    }
+    if let Some(location_id) = location_id {
+        return world_json_str(event, "location_id") == location_id;
+    }
+    if let Some(event_id) = event_id {
+        return world_json_str(event, "event_id") == event_id;
+    }
+    if let Some(node_id) = node_id {
+        return world_json_str(event, "node_id") == node_id;
+    }
+    true
+}
+
+fn world_live_task_route_matches(
+    route: &Value,
+    active_task_id: Option<&str>,
+    location_id: Option<&str>,
+    node_id: Option<&str>,
+) -> bool {
+    if let Some(task_id) = active_task_id {
+        return world_json_str(route, "task_id") == task_id;
+    }
+    if let Some(node_id) = node_id {
+        return world_json_str(route, "to_node_id") == node_id
+            || world_json_str(route, "from_node_id") == node_id;
+    }
+    if let Some(location_id) = location_id {
+        return world_json_str(route, "latest_location_id") == location_id;
+    }
+    true
+}
+
+fn world_live_event_cards_html(events: &[Value]) -> String {
+    events
+        .iter()
+        .map(world_live_event_card_html)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn world_avatar_task_route_cards_html(routes: &[Value]) -> String {
+    routes
+        .iter()
+        .map(world_avatar_task_route_card_html)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn world_live_task_focus_fragment_json(
+    all_events: &[Value],
+    all_routes: &[Value],
+    active_task_id: Option<&str>,
+    location_id: Option<&str>,
+    node_id: Option<&str>,
+    event_id: Option<&str>,
+) -> Value {
+    let task_id = active_task_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let location_id = location_id.map(str::trim).filter(|value| !value.is_empty());
+    let node_id = node_id.map(str::trim).filter(|value| !value.is_empty());
+    let event_id = event_id.map(str::trim).filter(|value| !value.is_empty());
+    let focused_events = all_events
+        .iter()
+        .filter(|event| {
+            world_live_task_event_matches(event, task_id, location_id, node_id, event_id)
+        })
+        .take(6)
+        .cloned()
+        .collect::<Vec<_>>();
+    let focused_routes = all_routes
+        .iter()
+        .filter(|route| world_live_task_route_matches(route, task_id, location_id, node_id))
+        .take(6)
+        .cloned()
+        .collect::<Vec<_>>();
+    let events = if focused_events.is_empty() {
+        all_events.iter().take(6).cloned().collect::<Vec<_>>()
+    } else {
+        focused_events
+    };
+    let routes = if focused_routes.is_empty() {
+        all_routes.iter().take(6).cloned().collect::<Vec<_>>()
+    } else {
+        focused_routes
+    };
+    json!({
+        "contract_version": TRILLIONNIUM_WORLD_RUST_LIVE_TASK_UI_FRAGMENTS_CONTRACT_VERSION,
+        "source_of_truth": "rust_world_map_live_task_projection",
+        "render_owner": "rust_world_ui_renderer",
+        "web_role": "input_only_focus_bridge",
+        "active_task_id": task_id.unwrap_or(""),
+        "location_id": location_id.unwrap_or(""),
+        "node_id": node_id.unwrap_or(""),
+        "event_id": event_id.unwrap_or(""),
+        "live_event_count": events.len(),
+        "task_route_count": routes.len(),
+        "live_events_html": world_live_event_cards_html(&events),
+        "task_routes_html": world_avatar_task_route_cards_html(&routes),
+        "ui_ownership": {
+            "live_event_cards": "rust_rendered",
+            "avatar_task_route_cards": "rust_rendered",
+            "browser": "input_only_focus_bridge"
+        }
+    })
+}
+
+pub(super) fn world_rust_live_task_ui_fragments_json(viewport: &Value) -> Value {
+    let live_events = viewport
+        .get("live_event_stream")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let task_routes = viewport
+        .get("avatar_task_routes")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut by_task_id = Map::new();
+    let mut by_location_id = Map::new();
+    let mut by_node_id = Map::new();
+    let mut by_event_id = Map::new();
+    for event in &live_events {
+        let task_id = world_json_str(event, "cex_task_id").trim();
+        if !task_id.is_empty() && !by_task_id.contains_key(task_id) {
+            by_task_id.insert(
+                task_id.to_string(),
+                world_live_task_focus_fragment_json(
+                    &live_events,
+                    &task_routes,
+                    Some(task_id),
+                    None,
+                    None,
+                    None,
+                ),
+            );
+        }
+        let location_id = world_json_str(event, "location_id").trim();
+        if !location_id.is_empty() && !by_location_id.contains_key(location_id) {
+            by_location_id.insert(
+                location_id.to_string(),
+                world_live_task_focus_fragment_json(
+                    &live_events,
+                    &task_routes,
+                    None,
+                    Some(location_id),
+                    None,
+                    None,
+                ),
+            );
+        }
+        let node_id = world_json_str(event, "node_id").trim();
+        if !node_id.is_empty() && !by_node_id.contains_key(node_id) {
+            by_node_id.insert(
+                node_id.to_string(),
+                world_live_task_focus_fragment_json(
+                    &live_events,
+                    &task_routes,
+                    None,
+                    None,
+                    Some(node_id),
+                    None,
+                ),
+            );
+        }
+        let event_id = world_json_str(event, "event_id").trim();
+        if !event_id.is_empty() && !by_event_id.contains_key(event_id) {
+            by_event_id.insert(
+                event_id.to_string(),
+                world_live_task_focus_fragment_json(
+                    &live_events,
+                    &task_routes,
+                    None,
+                    None,
+                    None,
+                    Some(event_id),
+                ),
+            );
+        }
+    }
+    for route in &task_routes {
+        let task_id = world_json_str(route, "task_id").trim();
+        if !task_id.is_empty() && !by_task_id.contains_key(task_id) {
+            by_task_id.insert(
+                task_id.to_string(),
+                world_live_task_focus_fragment_json(
+                    &live_events,
+                    &task_routes,
+                    Some(task_id),
+                    None,
+                    None,
+                    None,
+                ),
+            );
+        }
+        let location_id = world_json_str(route, "latest_location_id").trim();
+        if !location_id.is_empty() && !by_location_id.contains_key(location_id) {
+            by_location_id.insert(
+                location_id.to_string(),
+                world_live_task_focus_fragment_json(
+                    &live_events,
+                    &task_routes,
+                    None,
+                    Some(location_id),
+                    None,
+                    None,
+                ),
+            );
+        }
+        for key in ["to_node_id", "from_node_id"] {
+            let node_id = world_json_str(route, key).trim();
+            if !node_id.is_empty() && !by_node_id.contains_key(node_id) {
+                by_node_id.insert(
+                    node_id.to_string(),
+                    world_live_task_focus_fragment_json(
+                        &live_events,
+                        &task_routes,
+                        None,
+                        None,
+                        Some(node_id),
+                        None,
+                    ),
+                );
+            }
+        }
+    }
+    json!({
+        "contract_version": TRILLIONNIUM_WORLD_RUST_LIVE_TASK_UI_FRAGMENTS_CONTRACT_VERSION,
+        "source_of_truth": "rust_world_map_live_task_projection",
+        "render_owner": "rust_world_ui_renderer",
+        "web_role": "input_only_focus_bridge",
+        "hydration_policy": "server_rendered_live_event_and_task_route_cards_selected_by_focus_bridge",
+        "default": world_live_task_focus_fragment_json(&live_events, &task_routes, None, None, None, None),
+        "by_task_id": by_task_id,
+        "by_location_id": by_location_id,
+        "by_node_id": by_node_id,
+        "by_event_id": by_event_id,
+    })
+}
+
 fn world_route_runner_hud_chip_html(label: &str) -> String {
     format!(
         "<span class=\"hud-chip\">{}</span>",
@@ -4979,60 +5341,19 @@ pub(super) async fn get_world_web_shell(
         })
         .collect::<Vec<_>>()
         .join("\n");
-    let live_event_cards = world_viewport
-        .get("live_event_stream")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default()
-        .into_iter()
-        .take(6)
-        .map(|event| {
-            let event_kind = event
-                .get("event_kind")
-                .and_then(Value::as_str)
-                .unwrap_or("world_event");
-            let node_name = event
-                .get("node_name")
-                .and_then(Value::as_str)
-                .unwrap_or("POI");
-            let distance_km = event.get("distance_km").cloned().unwrap_or(Value::Null);
-            let event_id = event
-                .get("event_id")
-                .and_then(Value::as_str)
-                .unwrap_or("event");
-            let node_id = event.get("node_id").and_then(Value::as_str).unwrap_or("node");
-            let task_id = event
-                .get("cex_task_id")
-                .and_then(Value::as_str)
-                .unwrap_or("");
-            let location_id = event
-                .get("location_id")
-                .and_then(Value::as_str)
-                .unwrap_or("");
-            let event_body = event.get("body").and_then(Value::as_str).unwrap_or("");
-            let event_result = event.get("result").and_then(Value::as_str).unwrap_or("");
-            let focus_button = map_event_focus_button_html(
-                node_id,
-                event_id,
-                task_id,
-                location_id,
-                &world_map_status_label(event_kind),
-                &world_user_visible_copy(node_name),
-                &world_user_visible_copy(event_body),
-                &world_user_visible_copy(event_result),
-                "追踪事件",
-            );
-            format!(
-                "<article class=\"mini event\"><strong>{}</strong><span>{} · {} km</span><code>{}</code><div class=\"focus-stack\">{}</div></article>",
-                escape_html_text(&world_map_status_label(event_kind)),
-                escape_world_visible_text(node_name),
-                escape_html_text(&distance_km.to_string()),
-                escape_html_text(event_id),
-                focus_button,
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+    let world_live_task_ui_fragments = world_rust_live_task_ui_fragments_json(&world_viewport);
+    let world_live_event_cards_html = world_live_task_ui_fragments
+        .get("default")
+        .and_then(|fragment| fragment.get("live_events_html"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let world_avatar_task_route_cards_html = world_live_task_ui_fragments
+        .get("default")
+        .and_then(|fragment| fragment.get("task_routes_html"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
     let map_density_summary = world_map_status_label(
         world_viewport
             .get("player_density")
@@ -5169,6 +5490,10 @@ pub(super) async fn get_world_web_shell(
         object.insert(
             "rust_owned_route_ui_fragments".to_string(),
             world_rust_route_ui_fragments_json(world_map.get("route_task_graph")),
+        );
+        object.insert(
+            "rust_owned_live_task_ui_fragments".to_string(),
+            world_rust_live_task_ui_fragments_json(&world_viewport),
         );
         object.insert(
             "rust_owned_route_runner_ui_fragments".to_string(),
@@ -6474,9 +6799,9 @@ pub(super) async fn get_world_web_shell(
             <div class="mini-grid" style="margin-top:12px">{lod_layer_cards}</div>
             <div id="world-poi-hotspots-live" class="mini-grid" style="margin-top:12px">{hotspot_cards}</div>
             <div id="world-prefetch-queue-live" class="mini-grid" style="margin-top:12px">{prefetch_cards}</div>
-            <div id="world-live-events-live" class="mini-grid" style="margin-top:12px">{live_event_cards}</div>
+            <div id="world-live-events-live" class="mini-grid" style="margin-top:12px" data-render-owner="rust_world_ui_renderer" data-rust-live-task-ui-contract="{rust_live_task_ui_contract}" data-browser-ui-owner="input_only_focus_bridge">{world_live_event_cards_html}</div>
             <h3 data-i18n-en="Avatar Task Routes" data-i18n-zh="角色任务路线">Avatar Task Routes</h3>
-            <div id="world-avatar-task-routes-live" class="mini-grid" style="margin-top:12px"></div>
+            <div id="world-avatar-task-routes-live" class="mini-grid" style="margin-top:12px" data-render-owner="rust_world_ui_renderer" data-rust-live-task-ui-contract="{rust_live_task_ui_contract}" data-browser-ui-owner="input_only_focus_bridge">{world_avatar_task_route_cards_html}</div>
             <h3 data-i18n-en="Avatar Movement" data-i18n-zh="角色跑图">Avatar Movement</h3>
             <div id="world-avatar-route-runners-live" class="mini-grid" style="margin-top:12px" data-render-owner="rust_world_ui_renderer" data-rust-route-runner-ui-contract="{rust_route_runner_ui_contract}" data-browser-ui-owner="input_only_focus_bridge">{world_route_runner_cards_html}</div>
             <p style="margin-top:12px"><strong>Global Real-world Map Engine</strong>: <code>{map_engine_name}</code> + <code>{tile_provider}</code></p>
@@ -7561,8 +7886,10 @@ pub(super) async fn get_world_web_shell(
         routeFilterMode = 'selection';
         if (lastViewport) {{
           renderStreamHud(lastViewport, focus);
-          renderCards(liveEventTarget, filterLiveEventStream(lastViewport.live_event_stream || [], focus), 'event');
-          renderCards(taskRouteTarget, filterAvatarTaskRoutes(lastViewport.avatar_task_routes || [], focus), 'taskRoute');
+          if (!renderRustLiveTaskCards(liveEventTarget, taskRouteTarget, lastViewport, focus)) {{
+            renderCards(liveEventTarget, filterLiveEventStream(lastViewport.live_event_stream || [], focus), 'event');
+            renderCards(taskRouteTarget, filterAvatarTaskRoutes(lastViewport.avatar_task_routes || [], focus), 'taskRoute');
+          }}
           renderRustRouteRunnerCards(routeRunnerTarget, lastViewport, focus) || renderCards(routeRunnerTarget, filterAvatarRouteRunners(lastViewport.avatar_route_runners || [], focus), 'routeRunner');
         }}
         renderFocusPanel();
@@ -7741,7 +8068,8 @@ pub(super) async fn get_world_web_shell(
         lod_layer_cards = lod_layer_cards,
         hotspot_cards = hotspot_cards,
         prefetch_cards = prefetch_cards,
-        live_event_cards = live_event_cards,
+        world_live_event_cards_html = world_live_event_cards_html,
+        world_avatar_task_route_cards_html = world_avatar_task_route_cards_html,
         viewport_path = escape_html_text(viewport_path),
         web_session_viewport_path = escape_html_text(web_session_viewport_path),
         map_density_summary = escape_html_text(&map_density_summary),
@@ -7764,6 +8092,8 @@ pub(super) async fn get_world_web_shell(
         world_keypad_state_json = world_keypad_state_json,
         rust_owned_ui_contract = TRILLIONNIUM_WORLD_RUST_OWNED_UI_SHELL_CONTRACT_VERSION,
         rust_route_ui_contract = TRILLIONNIUM_WORLD_RUST_ROUTE_UI_FRAGMENTS_CONTRACT_VERSION,
+        rust_live_task_ui_contract =
+            TRILLIONNIUM_WORLD_RUST_LIVE_TASK_UI_FRAGMENTS_CONTRACT_VERSION,
         rust_route_runner_ui_contract =
             TRILLIONNIUM_WORLD_RUST_ROUTE_RUNNER_UI_FRAGMENTS_CONTRACT_VERSION,
         world_keypad_current_name = world_keypad_current_name,

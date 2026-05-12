@@ -1254,7 +1254,43 @@ pub(super) fn real_world_map_render_cards_js(style: RealWorldMapShellCardStyle) 
         RealWorldMapShellCardStyle::WorldMini => "world",
     };
     format!(
-        r#"      const rustRouteRunnerUiFragmentForFocus = (viewport, focus) => {{
+        r#"      const rustLiveTaskUiFragmentForFocus = (viewport, focus) => {{
+        const fragments = (viewport || {{}}).rust_owned_live_task_ui_fragments || {{}};
+        const taskId = String((focus || {{}}).taskId || '').trim();
+        const locationId = String((focus || {{}}).locationId || '').trim();
+        const nodeId = String((focus || {{}}).nodeId || '').trim();
+        const eventId = String((focus || {{}}).eventId || '').trim();
+        return (eventId && fragments.by_event_id && fragments.by_event_id[eventId])
+          || (taskId && fragments.by_task_id && fragments.by_task_id[taskId])
+          || (locationId && fragments.by_location_id && fragments.by_location_id[locationId])
+          || (nodeId && fragments.by_node_id && fragments.by_node_id[nodeId])
+          || fragments.default
+          || null;
+      }};
+      const renderRustLiveTaskCards = (liveEventNode, taskRouteNode, viewport, focus) => {{
+        const fragment = rustLiveTaskUiFragmentForFocus(viewport, focus);
+        let rendered = false;
+        if (liveEventNode && liveEventNode.dataset && liveEventNode.dataset.rustLiveTaskUiContract) {{
+          const expectedContract = liveEventNode.dataset.rustLiveTaskUiContract || 'trillionnium_world_rust_live_task_ui_fragments_v1';
+          if (fragment && String(fragment.contract_version || '') === expectedContract && typeof fragment.live_events_html === 'string') {{
+            liveEventNode.innerHTML = fragment.live_events_html;
+            liveEventNode.dataset.renderOwner = 'rust_world_ui_renderer';
+            liveEventNode.dataset.browserUiOwner = 'input_only_focus_bridge';
+            rendered = true;
+          }}
+        }}
+        if (taskRouteNode && taskRouteNode.dataset && taskRouteNode.dataset.rustLiveTaskUiContract) {{
+          const expectedContract = taskRouteNode.dataset.rustLiveTaskUiContract || 'trillionnium_world_rust_live_task_ui_fragments_v1';
+          if (fragment && String(fragment.contract_version || '') === expectedContract && typeof fragment.task_routes_html === 'string') {{
+            taskRouteNode.innerHTML = fragment.task_routes_html;
+            taskRouteNode.dataset.renderOwner = 'rust_world_ui_renderer';
+            taskRouteNode.dataset.browserUiOwner = 'input_only_focus_bridge';
+            rendered = true;
+          }}
+        }}
+        return rendered;
+      }};
+      const rustRouteRunnerUiFragmentForFocus = (viewport, focus) => {{
         const fragments = (viewport || {{}}).rust_owned_route_runner_ui_fragments || {{}};
         const taskId = String((focus || {{}}).taskId || '').trim();
         const locationId = String((focus || {{}}).locationId || '').trim();
@@ -2239,7 +2275,7 @@ pub(super) fn real_world_map_viewport_hydration_js() -> &'static str {
         if (!lastViewport || !delta || delta.changed === false) return lastViewport;
         const patch = delta.delta || {};
         const viewport = { ...lastViewport };
-        ['active_region', 'stream_region_shards', 'visible_tile_shards', 'prefetch_queue', 'visible_markers', 'poi_hotspots', 'marker_clusters', 'player_avatars', 'avatar_task_routes', 'avatar_route_runners', 'live_event_stream', 'route_runner_handoff', 'rust_owned_route_runner_ui_fragments', 'player_density'].forEach((key) => {
+        ['active_region', 'stream_region_shards', 'visible_tile_shards', 'prefetch_queue', 'visible_markers', 'poi_hotspots', 'marker_clusters', 'player_avatars', 'avatar_task_routes', 'avatar_route_runners', 'live_event_stream', 'route_runner_handoff', 'rust_owned_live_task_ui_fragments', 'rust_owned_route_runner_ui_fragments', 'player_density'].forEach((key) => {
           if (patch[key] !== undefined) viewport[key] = patch[key];
         });
         viewport.delta_cursor = delta.next_cursor || delta.delta_cursor || viewport.delta_cursor;
@@ -2287,11 +2323,11 @@ pub(super) fn real_world_map_viewport_hydration_js() -> &'static str {
         if (shouldRender('prefetch_queue', 'visible_tile_shards') && (markerClusterTarget || !shouldRender('marker_clusters'))) {
           safeMapRender('prefetch_cards', () => renderCards(prefetchTarget, viewport.prefetch_queue || [], 'prefetch'));
         }
-        if (shouldRender('live_event_stream')) {
-          safeMapRender('live_event_cards', () => renderCards(liveEventTarget, filterLiveEventStream(viewport.live_event_stream || [], lastSelection), 'event'));
+        if (shouldRender('live_event_stream', 'rust_owned_live_task_ui_fragments')) {
+          safeMapRender('live_event_cards', () => renderRustLiveTaskCards(liveEventTarget, null, viewport, lastSelection) || renderCards(liveEventTarget, filterLiveEventStream(viewport.live_event_stream || [], lastSelection), 'event'));
         }
-        if (shouldRender('avatar_task_routes')) {
-          safeMapRender('task_route_cards', () => renderCards(taskRouteTarget, filterAvatarTaskRoutes(viewport.avatar_task_routes || [], lastSelection), 'taskRoute'));
+        if (shouldRender('avatar_task_routes', 'rust_owned_live_task_ui_fragments')) {
+          safeMapRender('task_route_cards', () => renderRustLiveTaskCards(null, taskRouteTarget, viewport, lastSelection) || renderCards(taskRouteTarget, filterAvatarTaskRoutes(viewport.avatar_task_routes || [], lastSelection), 'taskRoute'));
         }
         if (shouldRender('avatar_route_runners')) {
           safeMapRender('route_runner_cards', () => renderRustRouteRunnerCards(routeRunnerTarget, viewport, lastSelection) || renderCards(routeRunnerTarget, filterAvatarRouteRunners(viewport.avatar_route_runners || [], lastSelection), 'routeRunner'));

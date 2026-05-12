@@ -6366,6 +6366,19 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(world_html.contains("data-overlay-target=\"routeRunners\""));
     assert!(world_html.contains("world-avatar-task-routes-live"));
     assert!(world_html.contains("world-avatar-route-runners-live"));
+    assert!(world_html.contains("trillionnium_world_rust_live_task_ui_fragments_v1"));
+    assert!(world_html.contains("rust_owned_live_task_ui_fragments"));
+    assert!(world_html
+        .contains("server_rendered_live_event_and_task_route_cards_selected_by_focus_bridge"));
+    assert!(world_html.contains(
+        "data-rust-live-task-ui-contract=\"trillionnium_world_rust_live_task_ui_fragments_v1\""
+    ));
+    assert!(world_html.contains("const renderRustLiveTaskCards ="));
+    assert!(world_html.contains(
+        "renderRustLiveTaskCards(liveEventTarget, taskRouteTarget, lastViewport, focus)"
+    ));
+    assert!(world_html.contains("live_event_cards\":\"rust_rendered"));
+    assert!(world_html.contains("avatar_task_route_cards\":\"rust_rendered"));
     assert!(world_html.contains("trillionnium_world_rust_route_runner_ui_fragments_v1"));
     assert!(world_html.contains("rust_owned_route_runner_ui_fragments"));
     assert!(world_html.contains("server_rendered_runner_cards_selected_by_focus_bridge"));
