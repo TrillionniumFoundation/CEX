@@ -6391,6 +6391,15 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(world_html.contains("poi_marker_popups\":\"rust_rendered"));
     assert!(world_html.contains("avatar_route_runner_popups\":\"rust_rendered"));
     assert!(world_html.contains("player_avatar_popups\":\"rust_rendered"));
+    assert!(world_html.contains("trillionnium_world_rust_map_support_ui_fragments_v1"));
+    assert!(world_html.contains("rust_owned_map_support_ui_fragments"));
+    assert!(world_html.contains(
+        "data-rust-map-support-ui-contract=\"trillionnium_world_rust_map_support_ui_fragments_v1\""
+    ));
+    assert!(world_html.contains("server_rendered_map_support_cards_selected_by_viewport_bridge"));
+    assert!(world_html.contains("const renderRustMapSupportCards ="));
+    assert!(world_html.contains("marker_cluster_cards_html"));
+    assert!(world_html.contains("support_cards\":\"rust_rendered"));
     assert!(world_html.contains("trillionnium_world_rust_route_runner_ui_fragments_v1"));
     assert!(world_html.contains("rust_owned_route_runner_ui_fragments"));
     assert!(world_html.contains("server_rendered_runner_cards_selected_by_focus_bridge"));

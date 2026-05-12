@@ -1881,10 +1881,25 @@ Also append a one-paragraph summary to `/home/qian/.openclaw/workspace/memory/YY
 - Constraints preserved: no copied 白金英雄坛说 / Hero Tan code/text/assets/data/NPC/task tables/names, no full clone-then-replace workflow, no live OSM ingestion, no MapLibre promotion, Rust source of truth, browser input-only/click-bridge role, and no local-only score inflation.
 
 
+---
+
+#### Update 2026-05-12 13:0x CST
+
+- Continued the Rust-owned UI push into the `/world` map support widget layer:
+  - [x] Added `trillionnium_world_rust_map_support_ui_fragments_v1` for server-rendered map density summary, stream HUD chips, region shard cards, tile shard cards, POI hotspot cards, and prefetch queue cards.
+  - [x] `/world` bootstrap plus `/world/web/map-viewport` and `/world/web/map-delta` now carry `rust_owned_map_support_ui_fragments` from the Rust viewport projection.
+  - [x] `#world-map-density-summary`, `#world-map-stream-hud`, `#world-tile-shards-live`, `#world-region-shards-live`, `#world-poi-hotspots-live`, and `#world-prefetch-queue-live` now declare Rust render ownership and browser input/focus-bridge ownership.
+  - [x] Browser refresh code now uses `renderRustMapSupportCards(...)` when the fragment contract is present; generic `renderCards(...)` / `renderStreamHud(...)` remains fallback/shared compatibility for `/app` and degraded payloads.
+  - [x] Marker-cluster cards are now included in the Rust support fragment, preserving the previous `clusterTarget || prefetchTarget` panel behavior instead of hiding clusters when support fragments are present.
+  - [x] Route-runner server projections now tick on a short authoritative interval so adjacent `/world/web/map-delta` no-op/304 checks are stable while the browser keeps visual animation between Rust-projected route endpoints.
+  - [x] Web/Browser E2E gates and Rust tests now require the map-support fragment contract, bootstrap payload, and server-rendered support-card hydration policy.
+- Constraints preserved: no copied 白金英雄坛说 / Hero Tan code/text/assets/data/NPC/task tables/names, no full clone-then-replace workflow, no live OSM ingestion, no MapLibre promotion, Rust source of truth, browser input-only/focus-bridge role, and no local-only score inflation.
+
+
 ## Current Next Pointer
 
 If the next instruction is simply “continue”, start here:
 
-> **Next pointer:** Continue converting remaining `/world` dashboard/map/support widgets into Rust-owned fragment endpoints, starting with tile/prefetch/density/stream support cards and then measuring/reducing first-load HTML/script/style size: lazily hydrate secondary map/dashboard payloads only after the player uses the game shell, and keep browser code as an input-only event bridge. Do not use a copy-then-replace Hero Tan replica workflow. If the goal is score lift instead of UI/player-value work, prioritize real `TRILLIONNIUM_MULTI_NODE_LATENCY_EVIDENCE_PATH`, `TRILLIONNIUM_FIRST_BETA_COHORT_EVIDENCE_PATH`, or `TRILLIONNIUM_COMMERCIAL_LAUNCH_DRILL_EVIDENCE_PATH`. Current honest assessment remains `9.8/10` technical, `8.5/10` first internal beta, `7.0/10` commercial release.
+> **Next pointer:** Continue converting the remaining `/world` dashboard/support surfaces into Rust-owned fragment endpoints, then measure/reduce first-load HTML/script/style size: lazily hydrate secondary commerce/dashboard/event timeline payloads only after the player uses the game shell, and keep browser code as an input-only event bridge. Do not use a copy-then-replace Hero Tan replica workflow. If the goal is score lift instead of UI/player-value work, prioritize real `TRILLIONNIUM_MULTI_NODE_LATENCY_EVIDENCE_PATH`, `TRILLIONNIUM_FIRST_BETA_COHORT_EVIDENCE_PATH`, or `TRILLIONNIUM_COMMERCIAL_LAUNCH_DRILL_EVIDENCE_PATH`. Current honest assessment remains `9.8/10` technical, `8.5/10` first internal beta, `7.0/10` commercial release.
 
 Do not start live Overpass/Geofabrik ingestion yet. Do not promote MapLibre. Do not convert the web shell into a standalone JS source of truth.

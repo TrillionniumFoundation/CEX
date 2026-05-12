@@ -1335,6 +1335,42 @@ pub(super) fn real_world_map_render_cards_js(style: RealWorldMapShellCardStyle) 
         targetNode.dataset.browserUiOwner = 'input_only_focus_bridge';
         return true;
       }};
+      const renderRustMapSupportCards = (viewport) => {{
+        const fragment = (viewport || {{}}).rust_owned_map_support_ui_fragments || {{}};
+        if (String(fragment.contract_version || '') !== 'trillionnium_world_rust_map_support_ui_fragments_v1') return false;
+        const applyHtml = (node, field) => {{
+          if (!node || !node.dataset || !node.dataset.rustMapSupportUiContract || typeof fragment[field] !== 'string') return false;
+          node.innerHTML = fragment[field];
+          node.dataset.renderOwner = 'rust_world_ui_renderer';
+          node.dataset.browserUiOwner = 'input_only_focus_bridge';
+          return true;
+        }};
+        const applyText = (node, field) => {{
+          if (!node || !node.dataset || !node.dataset.rustMapSupportUiContract || typeof fragment[field] !== 'string') return false;
+          node.textContent = mapText(fragment[field]);
+          node.dataset.renderOwner = 'rust_world_ui_renderer';
+          node.dataset.browserUiOwner = 'input_only_focus_bridge';
+          return true;
+        }};
+        const supportTileTarget = (typeof tileTarget !== 'undefined') ? tileTarget : null;
+        const supportRegionTarget = (typeof regionTarget !== 'undefined') ? regionTarget : null;
+        const supportPoiTarget = (typeof poiTarget !== 'undefined') ? poiTarget : null;
+        const supportPrefetchTarget = (typeof prefetchTarget !== 'undefined') ? prefetchTarget : null;
+        const supportClusterTarget = (typeof clusterTarget !== 'undefined' && clusterTarget) ? clusterTarget : null;
+        const supportStreamHud = (typeof streamHud !== 'undefined') ? streamHud : null;
+        const supportDensitySummary = (typeof densitySummary !== 'undefined') ? densitySummary : null;
+        let rendered = false;
+        rendered = applyHtml(supportTileTarget, 'tile_cards_html') || rendered;
+        rendered = applyHtml(supportRegionTarget, 'region_cards_html') || rendered;
+        rendered = applyHtml(supportPoiTarget, 'poi_cards_html') || rendered;
+        const clusterHtml = typeof fragment.marker_cluster_cards_html === 'string' ? fragment.marker_cluster_cards_html.trim() : '';
+        const clusterRendered = clusterHtml ? applyHtml(supportClusterTarget || supportPrefetchTarget, 'marker_cluster_cards_html') : false;
+        rendered = clusterRendered || rendered;
+        if (!clusterRendered || supportClusterTarget) rendered = applyHtml(supportPrefetchTarget, 'prefetch_cards_html') || rendered;
+        rendered = applyHtml(supportStreamHud, 'stream_hud_html') || rendered;
+        rendered = applyText(supportDensitySummary, 'density_summary_text') || rendered;
+        return rendered;
+      }};
       const renderCards = (targetNode, items, kind) => {{
         if (!targetNode) return;
         targetNode.innerHTML = items.map((item) => mapViewportCardHtml(item, kind, '{style_name}')).join('');
@@ -2301,7 +2337,7 @@ pub(super) fn real_world_map_viewport_hydration_js() -> &'static str {
         if (!lastViewport || !delta || delta.changed === false) return lastViewport;
         const patch = delta.delta || {};
         const viewport = { ...lastViewport };
-        ['active_region', 'stream_region_shards', 'visible_tile_shards', 'prefetch_queue', 'visible_markers', 'poi_hotspots', 'marker_clusters', 'player_avatars', 'avatar_task_routes', 'avatar_route_runners', 'live_event_stream', 'route_runner_handoff', 'rust_owned_live_task_ui_fragments', 'rust_owned_route_runner_ui_fragments', 'rust_owned_map_popup_ui_fragments', 'player_density'].forEach((key) => {
+        ['active_region', 'stream_region_shards', 'visible_tile_shards', 'prefetch_queue', 'visible_markers', 'poi_hotspots', 'marker_clusters', 'player_avatars', 'avatar_task_routes', 'avatar_route_runners', 'live_event_stream', 'route_runner_handoff', 'rust_owned_live_task_ui_fragments', 'rust_owned_route_runner_ui_fragments', 'rust_owned_map_popup_ui_fragments', 'rust_owned_map_support_ui_fragments', 'player_density'].forEach((key) => {
           if (patch[key] !== undefined) viewport[key] = patch[key];
         });
         viewport.delta_cursor = delta.next_cursor || delta.delta_cursor || viewport.delta_cursor;
@@ -2330,24 +2366,26 @@ pub(super) fn real_world_map_viewport_hydration_js() -> &'static str {
       const renderViewportCardsAndOverlays = (viewport, changedGroups = null) => {
         const fullRender = !changedGroups;
         const shouldRender = (...groupIds) => fullRender || viewportShouldRenderGroup(changedGroups, ...groupIds);
+        const shouldRenderSupport = shouldRender('player_density', 'active_region', 'stream_region_shards', 'visible_tile_shards', 'prefetch_queue', 'poi_hotspots', 'visible_markers', 'marker_clusters', 'rust_owned_map_support_ui_fragments');
+        const rustSupportRendered = shouldRenderSupport ? !!safeMapRender('map_support_cards', () => renderRustMapSupportCards(viewport)) : false;
         if (shouldRender('player_density', 'active_region', 'stream_region_shards')) {
-          safeMapRender('stream_hud', () => renderStreamHud(viewport, lastSelection));
+          if (!rustSupportRendered) safeMapRender('stream_hud', () => renderStreamHud(viewport, lastSelection));
         }
         if (shouldRender('visible_tile_shards')) {
-          safeMapRender('tile_cards', () => renderCards(tileTarget, viewport.visible_tile_shards || [], 'tile'));
+          if (!rustSupportRendered) safeMapRender('tile_cards', () => renderCards(tileTarget, viewport.visible_tile_shards || [], 'tile'));
         }
         if (shouldRender('active_region', 'stream_region_shards')) {
-          safeMapRender('region_cards', () => renderCards(regionTarget, viewport.stream_region_shards || [viewport.active_region || {}], 'region'));
+          if (!rustSupportRendered) safeMapRender('region_cards', () => renderCards(regionTarget, viewport.stream_region_shards || [viewport.active_region || {}], 'region'));
         }
         if (shouldRender('poi_hotspots', 'visible_markers')) {
-          safeMapRender('poi_cards', () => renderCards(poiTarget, viewport.poi_hotspots || [], 'poi'));
+          if (!rustSupportRendered) safeMapRender('poi_cards', () => renderCards(poiTarget, viewport.poi_hotspots || [], 'poi'));
         }
         const markerClusterTarget = (typeof clusterTarget !== 'undefined' && clusterTarget) ? clusterTarget : null;
         if (shouldRender('marker_clusters')) {
-          safeMapRender('marker_cluster_cards', () => renderCards(markerClusterTarget || prefetchTarget, viewport.marker_clusters || [], 'cluster'));
+          if (!rustSupportRendered) safeMapRender('marker_cluster_cards', () => renderCards(markerClusterTarget || prefetchTarget, viewport.marker_clusters || [], 'cluster'));
         }
         if (shouldRender('prefetch_queue', 'visible_tile_shards') && (markerClusterTarget || !shouldRender('marker_clusters'))) {
-          safeMapRender('prefetch_cards', () => renderCards(prefetchTarget, viewport.prefetch_queue || [], 'prefetch'));
+          if (!rustSupportRendered) safeMapRender('prefetch_cards', () => renderCards(prefetchTarget, viewport.prefetch_queue || [], 'prefetch'));
         }
         if (shouldRender('live_event_stream', 'rust_owned_live_task_ui_fragments')) {
           safeMapRender('live_event_cards', () => renderRustLiveTaskCards(liveEventTarget, null, viewport, lastSelection) || renderCards(liveEventTarget, filterLiveEventStream(viewport.live_event_stream || [], lastSelection), 'event'));
@@ -2358,7 +2396,7 @@ pub(super) fn real_world_map_viewport_hydration_js() -> &'static str {
         if (shouldRender('avatar_route_runners')) {
           safeMapRender('route_runner_cards', () => renderRustRouteRunnerCards(routeRunnerTarget, viewport, lastSelection) || renderCards(routeRunnerTarget, filterAvatarRouteRunners(viewport.avatar_route_runners || [], lastSelection), 'routeRunner'));
         }
-        if (shouldRender('visible_markers', 'poi_hotspots', 'marker_clusters', 'player_avatars', 'avatar_task_routes', 'avatar_route_runners', 'live_event_stream', 'rust_owned_map_popup_ui_fragments', 'visible_tile_shards', 'prefetch_queue')) {
+        if (shouldRender('visible_markers', 'poi_hotspots', 'marker_clusters', 'player_avatars', 'avatar_task_routes', 'avatar_route_runners', 'live_event_stream', 'rust_owned_map_popup_ui_fragments', 'rust_owned_map_support_ui_fragments', 'visible_tile_shards', 'prefetch_queue')) {
           safeMapRender('viewport_overlays', () => renderViewportOverlays(viewport));
         }
         safeMapRender('overlay_controls', () => refreshOverlayControls());
@@ -2387,7 +2425,7 @@ pub(super) fn real_world_map_viewport_hydration_js() -> &'static str {
         lastViewportCursor = viewport.delta_cursor || viewport.viewport_cursor || lastViewportCursor;
         const changedGroups = normalizeViewportChangedGroups(options.changedGroups);
         const skipCardRender = options.skipCardRender === true || (changedGroups && changedGroups.size === 0);
-        if (densitySummary) {
+        if (densitySummary && (!densitySummary.dataset || !densitySummary.dataset.rustMapSupportUiContract)) {
           densitySummary.textContent = mapText(((viewport.player_density || {}).summary) || '地图密度加载中…');
         }
         if (cameraSummary) {

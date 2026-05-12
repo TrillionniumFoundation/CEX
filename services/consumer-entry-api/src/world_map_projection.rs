@@ -7,9 +7,15 @@ const TRILLIONNIUM_WORLD_MAP_READABILITY_LOD_CONTRACT_VERSION: &str =
     "trillionnium_world_map_readability_lod_v1";
 const TRILLIONNIUM_WORLD_FUTURE_ENGINE_READINESS_CONTRACT_VERSION: &str =
     "trillionnium_world_future_engine_readiness_v1";
+const TRILLIONNIUM_ROUTE_RUNNER_PROJECTION_TICK_SECONDS: i64 = 15;
 
 fn route_runner_now_epoch() -> i64 {
-    Utc::now().timestamp()
+    // Keep Rust-owned route-runner projections stable across adjacent map-delta
+    // requests. The browser animates between Rust-projected route endpoints; the
+    // server projection only needs a short authoritative tick so the 304/no-op
+    // cache contract does not fail just because a wall-clock second advanced.
+    let now = Utc::now().timestamp();
+    now - now.rem_euclid(TRILLIONNIUM_ROUTE_RUNNER_PROJECTION_TICK_SECONDS)
 }
 
 fn route_runner_terminal_bucket_status(latest_bucket: &str, latest_status: &str) -> bool {

@@ -10,6 +10,8 @@ pub(super) const TRILLIONNIUM_WORLD_RUST_LIVE_TASK_UI_FRAGMENTS_CONTRACT_VERSION
     "trillionnium_world_rust_live_task_ui_fragments_v1";
 pub(super) const TRILLIONNIUM_WORLD_RUST_MAP_POPUP_UI_FRAGMENTS_CONTRACT_VERSION: &str =
     "trillionnium_world_rust_map_popup_ui_fragments_v1";
+pub(super) const TRILLIONNIUM_WORLD_RUST_MAP_SUPPORT_UI_FRAGMENTS_CONTRACT_VERSION: &str =
+    "trillionnium_world_rust_map_support_ui_fragments_v1";
 
 fn world_user_visible_copy(value: &str) -> String {
     let mut copy = value.to_string();
@@ -3811,6 +3813,244 @@ fn first_nonempty_str<'a>(values: &[&'a str], fallback: &'a str) -> &'a str {
         .unwrap_or(fallback)
 }
 
+fn world_map_support_region_cards_html(world_viewport: &Value) -> String {
+    world_viewport
+        .get("stream_region_shards")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|region| {
+            let name = world_json_str(&region, "name");
+            let region_id = world_json_str(&region, "region_id");
+            let status = world_json_str(&region, "status");
+            let coverage = world_json_str(&region, "coverage_kind");
+            let center_lat = region
+                .get("center")
+                .and_then(|center| center.get("lat"))
+                .and_then(Value::as_f64)
+                .unwrap_or(31.230416);
+            let center_lng = region
+                .get("center")
+                .and_then(|center| center.get("lng"))
+                .and_then(Value::as_f64)
+                .unwrap_or(121.473701);
+            let zoom_focus = region
+                .get("zoom_max")
+                .and_then(Value::as_i64)
+                .unwrap_or(15)
+                .clamp(3, 19);
+            let distance_km = region
+                .get("distance_km")
+                .cloned()
+                .unwrap_or_else(|| json!(0.0));
+            let focus_button =
+                map_region_focus_button_html(center_lat, center_lng, zoom_focus, "聚焦区域");
+            format!(
+                "<article class=\"mini shard\" data-rust-support-card=\"region\"><strong>{}</strong><span>{} · {} · {} km</span><code>{}</code><div class=\"focus-stack\">{}</div></article>",
+                escape_world_visible_text(if name.trim().is_empty() { "Region" } else { name }),
+                escape_html_text(&world_map_status_label(if status.trim().is_empty() { "planned" } else { status })),
+                escape_html_text(if coverage.trim().is_empty() { "shard" } else { coverage }),
+                escape_html_text(&distance_km.to_string()),
+                escape_html_text(if region_id.trim().is_empty() { "region" } else { region_id }),
+                focus_button,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn world_map_support_poi_cards_html(world_viewport: &Value) -> String {
+    world_viewport
+        .get("poi_hotspots")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|poi| {
+            let name = world_json_str(&poi, "name");
+            let node_id = world_json_str(&poi, "node_id");
+            let node_kind = world_json_str(&poi, "node_kind");
+            let distance = poi
+                .get("distance_km")
+                .cloned()
+                .unwrap_or_else(|| json!(0.0));
+            let focus_button = map_node_focus_button_html(
+                if node_id.trim().is_empty() { "node" } else { node_id },
+                "聚焦热点",
+            );
+            format!(
+                "<article class=\"mini poi\" data-rust-support-card=\"poi\"><strong>{}</strong><span>{} · {} km</span><code>{}</code><div class=\"focus-stack\">{}</div></article>",
+                escape_world_visible_text(if name.trim().is_empty() { "POI" } else { name }),
+                escape_html_text(&world_map_status_label(if node_kind.trim().is_empty() { "poi" } else { node_kind })),
+                escape_html_text(&distance.to_string()),
+                escape_html_text(if node_id.trim().is_empty() { "node" } else { node_id }),
+                focus_button,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn world_map_support_tile_cards_html(world_viewport: &Value) -> String {
+    world_viewport
+        .get("visible_tile_shards")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .take(6)
+        .map(|tile| {
+            let tile_id = world_json_str(&tile, "tile_id");
+            let tile_z = world_json_i64(&tile, "z").max(0);
+            let tile_x = world_json_i64(&tile, "x").max(0);
+            let tile_y = world_json_i64(&tile, "y").max(0);
+            let tile_status = world_json_str(&tile, "tile_status");
+            let lod_mode = world_json_str(&tile, "lod_mode");
+            let marker_count = world_json_i64(&tile, "marker_count").max(0);
+            let focus_button = map_tile_focus_button_html(tile_z, tile_x, tile_y, "查看分片");
+            format!(
+                "<article class=\"mini tile\" data-rust-support-card=\"tile\"><strong>{}</strong><span>{} · {} 个地点</span><code>{}</code><div class=\"focus-stack\">{}</div></article>",
+                escape_html_text(&world_map_status_label(if tile_status.trim().is_empty() { "prefetch" } else { tile_status })),
+                escape_html_text(&world_map_status_label(if lod_mode.trim().is_empty() { "street_nodes" } else { lod_mode })),
+                marker_count,
+                escape_html_text(if tile_id.trim().is_empty() { "tile" } else { tile_id }),
+                focus_button,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn world_map_support_prefetch_cards_html(world_viewport: &Value) -> String {
+    world_viewport
+        .get("prefetch_queue")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .take(6)
+        .map(|tile| {
+            let tile_id = world_json_str(&tile, "tile_id");
+            let tile_z = world_json_i64(&tile, "z").max(0);
+            let tile_x = world_json_i64(&tile, "x").max(0);
+            let tile_y = world_json_i64(&tile, "y").max(0);
+            let priority = world_json_str(&tile, "priority_label");
+            let reason = world_json_str(&tile, "prefetch_reason");
+            let marker_count = world_json_i64(&tile, "marker_count").max(0);
+            let focus_button = map_tile_focus_button_html(tile_z, tile_x, tile_y, "预热分片");
+            format!(
+                "<article class=\"mini prefetch\" data-rust-support-card=\"prefetch\"><strong>{}</strong><span>{} · {} 个地点</span><code>{}</code><div class=\"focus-stack\">{}</div></article>",
+                escape_html_text(&world_map_status_label(if priority.trim().is_empty() { "warm" } else { priority })),
+                escape_html_text(&world_map_status_label(if reason.trim().is_empty() { "neighbor_tile_warmup" } else { reason })),
+                marker_count,
+                escape_html_text(if tile_id.trim().is_empty() { "tile" } else { tile_id }),
+                focus_button,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn world_map_support_marker_cluster_cards_html(world_viewport: &Value) -> String {
+    world_viewport
+        .get("marker_clusters")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|cluster| {
+            let cluster_id = first_nonempty_str(
+                &[
+                    world_json_str(&cluster, "cluster_id"),
+                    world_json_str(&cluster, "tile_id"),
+                ],
+                "marker_cluster",
+            );
+            let marker_count = world_json_i64(&cluster, "marker_count").max(0);
+            let primary_kind = world_json_str(&cluster, "primary_node_kind");
+            let render_policy = world_json_str(&cluster, "render_policy");
+            let distance = cluster
+                .get("distance_km")
+                .cloned()
+                .unwrap_or_else(|| json!(0.0));
+            let center_lat = cluster
+                .get("center")
+                .and_then(|center| center.get("lat"))
+                .and_then(Value::as_f64)
+                .unwrap_or(31.230416);
+            let center_lng = cluster
+                .get("center")
+                .and_then(|center| center.get("lng"))
+                .and_then(Value::as_f64)
+                .unwrap_or(121.473701);
+            let zoom_focus = (world_json_i64(&cluster, "z") + 1).clamp(3, 19);
+            let focus_button =
+                map_region_focus_button_html(center_lat, center_lng, zoom_focus, "展开聚合");
+            format!(
+                "<article class=\"mini cluster\" data-rust-support-card=\"cluster\"><strong>{} places cluster</strong><span>{} · {} km · {}</span><code>{}</code><div class=\"focus-stack\">{}</div></article>",
+                marker_count,
+                escape_html_text(&world_map_status_label(if primary_kind.trim().is_empty() { "mixed" } else { primary_kind })),
+                escape_html_text(&distance.to_string()),
+                escape_html_text(if render_policy.trim().is_empty() { "aggregate_marker_cluster" } else { render_policy }),
+                escape_html_text(cluster_id),
+                focus_button,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn world_map_support_stream_hud_html(world_viewport: &Value) -> String {
+    let map_player_density_mode = world_map_status_label(
+        world_viewport
+            .get("player_density")
+            .and_then(|density| density.get("mode"))
+            .and_then(Value::as_str)
+            .unwrap_or("dense"),
+    );
+    let count = |key: &str| world_viewport.get(key).and_then(Value::as_u64).unwrap_or(0);
+    format!(
+        "<span class=\"hud-chip\"><strong>{}</strong> <span data-i18n-en=\"regional shards\" data-i18n-zh=\"个区域分片\">regional shards</span></span><span class=\"hud-chip\"><strong>{}</strong> <span data-i18n-en=\"visible places\" data-i18n-zh=\"个可见地点\">visible places</span></span><span class=\"hud-chip\"><strong>{}</strong> <span data-i18n-en=\"prefetch tiles\" data-i18n-zh=\"个预热地图块\">prefetch tiles</span></span><span class=\"hud-chip\"><strong>{}</strong> <span data-i18n-en=\"live events\" data-i18n-zh=\"个实时事件\">live events</span> · {}</span><span class=\"hud-chip\"><strong>{}</strong> <span data-i18n-en=\"task routes\" data-i18n-zh=\"条任务路线\">task routes</span></span><span class=\"hud-chip\"><strong>{}</strong> <span data-i18n-en=\"moving avatars\" data-i18n-zh=\"个动态角色\">moving avatars</span></span><span class=\"hud-chip\"><strong>{}</strong> <span data-i18n-en=\"running avatars\" data-i18n-zh=\"个跑图角色\">running avatars</span></span>",
+        count("stream_region_count"),
+        count("marker_count"),
+        count("prefetch_count"),
+        count("live_event_count"),
+        escape_html_text(&map_player_density_mode),
+        count("avatar_task_route_count"),
+        count("avatar_route_runner_count"),
+        count("player_avatar_count"),
+    )
+}
+
+fn world_map_support_density_summary_text(world_viewport: &Value) -> String {
+    world_map_status_label(
+        world_viewport
+            .get("player_density")
+            .and_then(|density| density.get("summary"))
+            .and_then(Value::as_str)
+            .unwrap_or("Map density booting."),
+    )
+}
+
+pub(super) fn world_rust_map_support_ui_fragments_json(world_viewport: &Value) -> Value {
+    json!({
+        "contract_version": TRILLIONNIUM_WORLD_RUST_MAP_SUPPORT_UI_FRAGMENTS_CONTRACT_VERSION,
+        "source_of_truth": "rust_world_map_viewport_projection",
+        "render_owner": "rust_world_ui_renderer",
+        "web_role": "input_only_focus_bridge",
+        "hydration_policy": "server_rendered_map_support_cards_selected_by_viewport_bridge",
+        "density_summary_text": world_map_support_density_summary_text(world_viewport),
+        "stream_hud_html": world_map_support_stream_hud_html(world_viewport),
+        "region_cards_html": world_map_support_region_cards_html(world_viewport),
+        "tile_cards_html": world_map_support_tile_cards_html(world_viewport),
+        "poi_cards_html": world_map_support_poi_cards_html(world_viewport),
+        "marker_cluster_cards_html": world_map_support_marker_cluster_cards_html(world_viewport),
+        "prefetch_cards_html": world_map_support_prefetch_cards_html(world_viewport),
+        "support_cards": "rust_rendered",
+    })
+}
+
 fn world_live_event_card_html(event: &Value) -> String {
     let event_kind = world_json_str(event, "event_kind");
     let node_name = world_json_str(event, "node_name");
@@ -5755,6 +5995,7 @@ pub(super) async fn get_world_web_shell(
         })
         .collect::<Vec<_>>()
         .join("\n");
+    let world_map_support_ui_fragments = world_rust_map_support_ui_fragments_json(&world_viewport);
     let world_live_task_ui_fragments = world_rust_live_task_ui_fragments_json(&world_viewport);
     let world_live_event_cards_html = world_live_task_ui_fragments
         .get("default")
@@ -5916,6 +6157,10 @@ pub(super) async fn get_world_web_shell(
         object.insert(
             "rust_owned_map_popup_ui_fragments".to_string(),
             world_rust_map_popup_ui_fragments_json(Some(&world_map), Some(&world_viewport)),
+        );
+        object.insert(
+            "rust_owned_map_support_ui_fragments".to_string(),
+            world_map_support_ui_fragments.clone(),
         );
     }
     let world_map_bootstrap_bytes = serde_json::to_string(&world_map_bootstrap)
@@ -7171,7 +7416,7 @@ pub(super) async fn get_world_web_shell(
           <div class="world-map-player-summary">
             <div>
               <strong data-i18n-en="Current Status" data-i18n-zh="当前状态">Current Status</strong>
-              <p id="world-map-density-summary" class="subtitle">{map_density_summary}</p>
+              <p id="world-map-density-summary" class="subtitle" data-render-owner="rust_world_ui_renderer" data-rust-map-support-ui-contract="{rust_map_support_ui_contract}" data-browser-ui-owner="input_only_focus_bridge">{map_density_summary}</p>
               <p id="world-route-runner-handoff-summary" class="subtitle" data-next-route-status="{map_route_runner_next_route_status}" data-runner-count="{map_avatar_route_runner_count}" data-reward-claim-count="{map_route_runner_reward_claim_count}" data-next-route-count="{map_route_runner_next_route_count}" data-route-mastery-contract="{map_route_runner_mastery_contract}" data-route-mastery-tier="{map_route_runner_mastery_tier}" data-route-mastery-xp="{map_route_runner_mastery_xp}">{map_route_runner_handoff_summary}</p>
               <p id="world-map-camera-summary" class="subtitle" data-i18n-en="Camera loading…" data-i18n-zh="镜头加载中…">Camera loading…</p>
             </div>
@@ -7212,11 +7457,11 @@ pub(super) async fn get_world_web_shell(
               <article id="world-openstreetmap-attribution" class="mini osm-attribution" data-contract-version="{osm_attribution_presence_contract}" data-attribution-text="{osm_attribution_text_html}" data-database-license="{osm_database_license_html}" data-attribution-required="{osm_attribution_required}" data-attribution-visible="{osm_attribution_visible_required}" data-derived-database-tracking-required="{osm_derived_database_tracking_required}" data-public-tile-server-policy="{osm_public_tile_server_policy_html}" data-source-of-truth="rust_openstreetmap_data_provider" data-web-role="visualization_input_only"><strong>OSM attribution</strong><span>{osm_attribution_text_html} · attribution visible</span><code>{osm_database_license_html}</code><code>openstreetmap_attribution_presence_v1 · odbl_database_obligations</code><small>Keep attribution visible before live/imported OSM data or tile-provider promotion.</small></article>
               {osm_geodata_feature_cards}
             </section>
-            <div id="world-tile-shards-live" class="mini-grid">{tile_shard_cards}</div>
-            <div id="world-region-shards-live" class="mini-grid" style="margin-top:12px">{region_shard_cards}</div>
+            <div id="world-tile-shards-live" class="mini-grid" data-render-owner="rust_world_ui_renderer" data-rust-map-support-ui-contract="{rust_map_support_ui_contract}" data-browser-ui-owner="input_only_focus_bridge">{tile_shard_cards}</div>
+            <div id="world-region-shards-live" class="mini-grid" style="margin-top:12px" data-render-owner="rust_world_ui_renderer" data-rust-map-support-ui-contract="{rust_map_support_ui_contract}" data-browser-ui-owner="input_only_focus_bridge">{region_shard_cards}</div>
             <div class="mini-grid" style="margin-top:12px">{lod_layer_cards}</div>
-            <div id="world-poi-hotspots-live" class="mini-grid" style="margin-top:12px">{hotspot_cards}</div>
-            <div id="world-prefetch-queue-live" class="mini-grid" style="margin-top:12px">{prefetch_cards}</div>
+            <div id="world-poi-hotspots-live" class="mini-grid" style="margin-top:12px" data-render-owner="rust_world_ui_renderer" data-rust-map-support-ui-contract="{rust_map_support_ui_contract}" data-browser-ui-owner="input_only_focus_bridge">{hotspot_cards}</div>
+            <div id="world-prefetch-queue-live" class="mini-grid" style="margin-top:12px" data-render-owner="rust_world_ui_renderer" data-rust-map-support-ui-contract="{rust_map_support_ui_contract}" data-browser-ui-owner="input_only_focus_bridge">{prefetch_cards}</div>
             <div id="world-live-events-live" class="mini-grid" style="margin-top:12px" data-render-owner="rust_world_ui_renderer" data-rust-live-task-ui-contract="{rust_live_task_ui_contract}" data-browser-ui-owner="input_only_focus_bridge">{world_live_event_cards_html}</div>
             <h3 data-i18n-en="Avatar Task Routes" data-i18n-zh="角色任务路线">Avatar Task Routes</h3>
             <div id="world-avatar-task-routes-live" class="mini-grid" style="margin-top:12px" data-render-owner="rust_world_ui_renderer" data-rust-live-task-ui-contract="{rust_live_task_ui_contract}" data-browser-ui-owner="input_only_focus_bridge">{world_avatar_task_route_cards_html}</div>
@@ -7226,7 +7471,7 @@ pub(super) async fn get_world_web_shell(
             <p><strong>Mirror</strong>: <code>{mirror_scope}</code> · <strong>Strategy</strong>: <code>{full_mirror_strategy}</code> · <strong>Style</strong>: <code>{simplification_style}</code> · <strong>Goal</strong>: <code>{scaling_goal}</code></p>
             <p><strong>Viewport API</strong>: <code>{viewport_path}</code></p>
             <p><strong>Web Viewport</strong>: <code>{web_session_viewport_path}</code></p>
-            <div id="world-map-stream-hud" class="map-stream-hud">
+            <div id="world-map-stream-hud" class="map-stream-hud" data-render-owner="rust_world_ui_renderer" data-rust-map-support-ui-contract="{rust_map_support_ui_contract}" data-browser-ui-owner="input_only_focus_bridge">
               <span class="hud-chip"><strong>{map_stream_region_count}</strong> <span data-i18n-en="regional shards" data-i18n-zh="个区域分片">regional shards</span></span>
               <span class="hud-chip"><strong>{map_visible_marker_count}</strong> <span data-i18n-en="visible places" data-i18n-zh="个可见地点">visible places</span></span>
               <span class="hud-chip"><strong>{map_prefetch_count}</strong> <span data-i18n-en="prefetch tiles" data-i18n-zh="个预热地图块">prefetch tiles</span></span>
@@ -8303,7 +8548,7 @@ pub(super) async fn get_world_web_shell(
         lastSelection = focus;
         routeFilterMode = 'selection';
         if (lastViewport) {{
-          renderStreamHud(lastViewport, focus);
+          renderRustMapSupportCards(lastViewport) || renderStreamHud(lastViewport, focus);
           if (!renderRustLiveTaskCards(liveEventTarget, taskRouteTarget, lastViewport, focus)) {{
             renderCards(liveEventTarget, filterLiveEventStream(lastViewport.live_event_stream || [], focus), 'event');
             renderCards(taskRouteTarget, filterAvatarTaskRoutes(lastViewport.avatar_task_routes || [], focus), 'taskRoute');
@@ -8514,6 +8759,8 @@ pub(super) async fn get_world_web_shell(
             TRILLIONNIUM_WORLD_RUST_LIVE_TASK_UI_FRAGMENTS_CONTRACT_VERSION,
         rust_map_popup_ui_contract =
             TRILLIONNIUM_WORLD_RUST_MAP_POPUP_UI_FRAGMENTS_CONTRACT_VERSION,
+        rust_map_support_ui_contract =
+            TRILLIONNIUM_WORLD_RUST_MAP_SUPPORT_UI_FRAGMENTS_CONTRACT_VERSION,
         rust_route_runner_ui_contract =
             TRILLIONNIUM_WORLD_RUST_ROUTE_RUNNER_UI_FRAGMENTS_CONTRACT_VERSION,
         world_keypad_current_name = world_keypad_current_name,
