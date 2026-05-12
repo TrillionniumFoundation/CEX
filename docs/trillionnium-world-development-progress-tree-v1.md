@@ -1834,6 +1834,18 @@ Also append a one-paragraph summary to `/home/qian/.openclaw/workspace/memory/YY
 
 ---
 
+#### Update 2026-05-12 08:4x CST
+
+- Continued the Rust-owned UI push into the `/world` route/task layer:
+  - [x] Added `trillionnium_world_rust_route_ui_fragments_v1` for server-rendered route task graph, route-flow action rail, and route-status copy.
+  - [x] `/world` bootstrap now carries `rust_owned_route_ui_fragments` from the Rust route projection; the browser only selects the pre-rendered fragment for the current task/location focus.
+  - [x] `#world-route-task-graph-live`, `#world-map-route-flow-actions`, and route status elements now declare `data-render-owner="rust_world_ui_renderer"` and `data-browser-ui-owner="input_only_focus_bridge"`.
+  - [x] `/world/web/map-move` route UI fragments are returned inside `rust_owned_ui_fragments.route_ui`, keeping movement follow-up UI under Rust ownership.
+  - [x] Browser-side route-task HTML construction and dynamic action-rail button construction were removed from the `/world` route-flow path; JS keeps focus, form-autofill, and click handling only.
+- Constraints preserved: no copied 白金英雄坛说 / Hero Tan code/text/assets/data/NPC/task tables/names, no full clone-then-replace workflow, no live OSM ingestion, no MapLibre promotion, Rust source of truth, browser input-only/event-bridge role, and no local-only score inflation.
+
+---
+
 ## Current Next Pointer
 
 If the next instruction is simply “continue”, start here:

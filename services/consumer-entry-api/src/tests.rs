@@ -4938,6 +4938,22 @@ async fn world_map_move_endpoint_exposes_transition_semantics_contract() {
         room["rust_owned_ui_fragments"]["ui_ownership"]["keypad_viewport"],
         "rust_rendered"
     );
+    assert_eq!(
+        room["rust_owned_ui_fragments"]["ui_ownership"]["route_task_graph"],
+        "rust_rendered"
+    );
+    assert_eq!(
+        room["rust_owned_ui_fragments"]["route_ui"]["contract_version"],
+        "trillionnium_world_rust_route_ui_fragments_v1"
+    );
+    assert_eq!(
+        room["rust_owned_ui_fragments"]["route_ui"]["default"]["render_owner"],
+        "rust_world_ui_renderer"
+    );
+    assert_eq!(
+        room["rust_owned_ui_fragments"]["route_ui"]["default"]["web_role"],
+        "input_only_focus_bridge"
+    );
     assert!(room["rust_owned_ui_fragments"]["keypad_grid_html"]
         .as_str()
         .unwrap_or_default()
@@ -6436,24 +6452,23 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(world_html.contains("handleRouteActionButton"));
     assert!(world_html.contains("handleIndexedRouteActionButton"));
     assert!(world_html.contains("routeFilterModeFromButton"));
-    assert!(world_html.contains("routeTaskGraphActionButtonsHtml"));
-    assert!(world_html.contains("indexedRouteActionButtonHtml"));
-    assert!(world_html.contains("routeFlowActionAttrs"));
-    assert!(world_html.contains("routePlayabilityBody"));
-    assert!(world_html.contains("return routeFlowActionButtonHtml(opportunityAction, className) + routeFlowActionButtonHtml(suggestedAction, className);"));
+    assert!(world_html.contains("trillionnium_world_rust_route_ui_fragments_v1"));
+    assert!(world_html.contains("rust_owned_route_ui_fragments"));
+    assert!(world_html.contains("server_rendered_fragments_selected_by_focus_bridge"));
+    assert!(world_html
+        .contains("data-rust-route-ui-contract=\"trillionnium_world_rust_route_ui_fragments_v1\""));
+    assert!(world_html.contains("data-browser-ui-owner=\"input_only_focus_bridge\""));
+    assert!(world_html.contains("const applyRustRouteUiFragments ="));
+    assert!(world_html.contains("const rustRouteUiFragmentForFocus ="));
+    assert!(world_html.contains("route_task_graph\":\"rust_rendered"));
+    assert!(world_html.contains("route_flow_action_rail\":\"rust_rendered"));
+    assert!(world_html.contains("route_status_copy\":\"rust_rendered"));
+    assert!(world_html.contains("routeFlowActions.innerHTML = fragments.route_flow_actions_html"));
+    assert!(!world_html.contains("const actionButtons = routeTaskGraphActionButtonsHtml(task);"));
+    assert!(!world_html.contains("routeFlowActions.innerHTML = actions.join(' ');"));
     assert!(world_html
         .contains("status: task.next_opportunity_hint || task.next_opportunity_command || ''"));
-    assert!(world_html.contains("((opportunityAction || {}).status) || ((nextStep || {}).status)"));
-    assert!(world_html.contains("const effectiveNextAction = opportunityAction || nextStep || {};"));
     assert!(world_html.contains("((latestWorkItem && latestWorkItem.dataset.workOrderId) || (workItem && workItem.dataset.workOrderId) || '')"));
-    let exact_opportunity_push = world_html
-        .find("if (opportunityAction) pushRouteFlowActionButton(actions, actionKeys, opportunityAction);")
-        .expect("world route flow should render exact task opportunity");
-    let inferred_next_step_push = world_html
-        .find("if (nextStep) pushRouteFlowActionButton(actions, actionKeys, nextStep);")
-        .expect("world route flow should render inferred fallback next step");
-    assert!(exact_opportunity_push < inferred_next_step_push);
-    assert!(world_html.contains("['purchase', 'work_order', 'reopen'].includes(latestWorkBucket)"));
     assert!(world_html.contains("\"contract_version\":1"));
     assert!(world_html.contains("customer deliverable"));
     assert!(world_html.contains("evidence package, risk controls, next action"));

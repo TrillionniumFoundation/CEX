@@ -2849,6 +2849,73 @@ impl WorldRouteTaskGraphView {
         .render(class_name)
     }
 
+    pub(super) fn matches_focus(&self, task_id: Option<&str>, location_id: Option<&str>) -> bool {
+        let task_id = task_id.map(str::trim).filter(|value| !value.is_empty());
+        let location_id = location_id.map(str::trim).filter(|value| !value.is_empty());
+        if let Some(task_id) = task_id {
+            return self.task_id == task_id;
+        }
+        if let Some(location_id) = location_id {
+            return self.latest_location_id.is_empty() || self.latest_location_id == location_id;
+        }
+        true
+    }
+
+    pub(super) fn latest_location_id(&self) -> &str {
+        &self.latest_location_id
+    }
+
+    pub(super) fn route_flow_action_buttons_html(&self, class_name: &str) -> String {
+        format!(
+            "{}{}",
+            self.opportunity_action_button_html(class_name),
+            self.suggested_action_button_html(class_name)
+        )
+    }
+
+    pub(super) fn route_flow_status_text(&self) -> String {
+        format!(
+            "Adventure route: task {} · {}/{} · branch {}.",
+            self.task_id, self.latest_bucket, self.latest_status, self.next_opportunity_kind
+        )
+    }
+
+    pub(super) fn route_next_step_status_text(&self) -> String {
+        if self.next_opportunity_hint.trim().is_empty() {
+            format!(
+                "Recommended next step: {}.",
+                self.next_opportunity_action_label
+            )
+        } else {
+            self.next_opportunity_hint.clone()
+        }
+    }
+
+    pub(super) fn route_link_status_text(&self) -> String {
+        format!(
+            "Linked task route: task {} · {} events · {} contracts · {} battle reports.",
+            self.task_id, self.event_count, self.contract_count, self.completion_count
+        )
+    }
+
+    pub(super) fn action_console_status_text(&self) -> String {
+        format!(
+            "Current world action: task {} · {} · contract {} · next step {}.",
+            self.task_id,
+            if self.latest_location_id.is_empty() {
+                "route"
+            } else {
+                &self.latest_location_id
+            },
+            if self.latest_contract_id.is_empty() {
+                "no contract yet"
+            } else {
+                &self.latest_contract_id
+            },
+            self.next_opportunity_action_label
+        )
+    }
+
     fn app_card_html(&self) -> String {
         let suggested_action =
             self.suggested_action_button_html("trillionnium-app-route-flow-action");

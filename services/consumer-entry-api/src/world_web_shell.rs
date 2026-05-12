@@ -2,6 +2,8 @@ use super::*;
 
 pub(super) const TRILLIONNIUM_WORLD_RUST_OWNED_UI_SHELL_CONTRACT_VERSION: &str =
     "trillionnium_world_rust_owned_ui_shell_v1";
+pub(super) const TRILLIONNIUM_WORLD_RUST_ROUTE_UI_FRAGMENTS_CONTRACT_VERSION: &str =
+    "trillionnium_world_rust_route_ui_fragments_v1";
 
 fn world_user_visible_copy(value: &str) -> String {
     let mut copy = value.to_string();
@@ -3636,6 +3638,134 @@ fn world_keypad_state_json(
     .unwrap_or_else(|_| "{}".to_string())
 }
 
+fn world_route_task_graph_empty_card_html() -> String {
+    "<article class=\"mini task-graph\" data-render-owner=\"rust_world_ui_renderer\"><strong>No task-linked routes yet</strong><span>Create a world contract or task-linked event to grow the graph.</span><code>task graph</code></article>".to_string()
+}
+
+fn world_route_ui_task_graph_cards_html(views: &[WorldRouteTaskGraphView]) -> String {
+    let cards = views
+        .iter()
+        .map(|task| task.world_flow_card_html())
+        .collect::<Vec<_>>()
+        .join("\n");
+    if cards.is_empty() {
+        world_route_task_graph_empty_card_html()
+    } else {
+        cards
+    }
+}
+
+fn world_route_ui_focus_views(
+    all_views: &[WorldRouteTaskGraphView],
+    active_task_id: Option<&str>,
+    location_id: Option<&str>,
+) -> Vec<WorldRouteTaskGraphView> {
+    let focused = all_views
+        .iter()
+        .filter(|task| task.matches_focus(active_task_id, location_id))
+        .take(6)
+        .cloned()
+        .collect::<Vec<_>>();
+    if focused.is_empty() {
+        all_views.iter().take(6).cloned().collect()
+    } else {
+        focused
+    }
+}
+
+fn world_rust_route_ui_focus_fragment_json(
+    all_views: &[WorldRouteTaskGraphView],
+    active_task_id: Option<&str>,
+    location_id: Option<&str>,
+) -> Value {
+    let focused_views = world_route_ui_focus_views(all_views, active_task_id, location_id);
+    let primary = focused_views.first();
+    json!({
+        "contract_version": TRILLIONNIUM_WORLD_RUST_ROUTE_UI_FRAGMENTS_CONTRACT_VERSION,
+        "source_of_truth": "rust_world_route_projection",
+        "render_owner": "rust_world_ui_renderer",
+        "web_role": "input_only_focus_bridge",
+        "active_task_id": active_task_id.unwrap_or(""),
+        "location_id": location_id.unwrap_or(""),
+        "task_count": focused_views.len(),
+        "task_graph_html": world_route_ui_task_graph_cards_html(&focused_views),
+        "route_flow_actions_html": primary
+            .map(|task| task.route_flow_action_buttons_html("trillionnium-route-flow-action"))
+            .unwrap_or_default(),
+        "route_filter_status_text": if active_task_id.unwrap_or("").trim().is_empty()
+            && location_id.unwrap_or("").trim().is_empty()
+        {
+            "Route filter: showing all world activity.".to_string()
+        } else {
+            format!(
+                "Route filter: Rust-projected focus{}{}.",
+                active_task_id
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(|value| format!(" · task {value}"))
+                    .unwrap_or_default(),
+                location_id
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(|value| format!(" · location {value}"))
+                    .unwrap_or_default()
+            )
+        },
+        "route_flow_status_text": primary
+            .map(WorldRouteTaskGraphView::route_flow_status_text)
+            .unwrap_or_else(|| "Adventure route: waiting for map focus.".to_string()),
+        "route_next_step_status_text": primary
+            .map(WorldRouteTaskGraphView::route_next_step_status_text)
+            .unwrap_or_else(|| "Recommended next step: choose a map focus first.".to_string()),
+        "route_event_brief_status_text": "Event brief: Rust route projection is ready; live-event focus remains an input signal only.",
+        "route_link_status_text": primary
+            .map(WorldRouteTaskGraphView::route_link_status_text)
+            .unwrap_or_else(|| "Linked task route: none yet.".to_string()),
+        "action_console_status_text": primary
+            .map(WorldRouteTaskGraphView::action_console_status_text)
+            .unwrap_or_else(|| "Use the World Action Console to submit a new world action.".to_string()),
+        "ui_ownership": {
+            "route_task_graph": "rust_rendered",
+            "route_flow_action_rail": "rust_rendered",
+            "route_status_copy": "rust_rendered",
+            "browser": "input_only_focus_bridge"
+        }
+    })
+}
+
+pub(super) fn world_rust_route_ui_fragments_json(route_task_graph: Option<&Value>) -> Value {
+    let graph = route_task_graph.unwrap_or(&Value::Null);
+    let all_views = world_route_task_graph_views(graph, 24);
+    let mut by_task_id = Map::new();
+    let mut by_location_id = Map::new();
+    for task in &all_views {
+        if !task.task_id.trim().is_empty() && !by_task_id.contains_key(&task.task_id) {
+            by_task_id.insert(
+                task.task_id.clone(),
+                world_rust_route_ui_focus_fragment_json(&all_views, Some(&task.task_id), None),
+            );
+        }
+        let location_id = task.latest_location_id().trim();
+        if !location_id.is_empty() && !by_location_id.contains_key(location_id) {
+            by_location_id.insert(
+                location_id.to_string(),
+                world_rust_route_ui_focus_fragment_json(&all_views, None, Some(location_id)),
+            );
+        }
+    }
+    let default_fragment = world_rust_route_ui_focus_fragment_json(&all_views, None, None);
+    json!({
+        "contract_version": TRILLIONNIUM_WORLD_RUST_ROUTE_UI_FRAGMENTS_CONTRACT_VERSION,
+        "source_of_truth": "rust_world_route_projection",
+        "render_owner": "rust_world_ui_renderer",
+        "web_role": "input_only_focus_bridge",
+        "hydration_policy": "server_rendered_fragments_selected_by_focus_bridge",
+        "default": default_fragment,
+        "by_task_id": by_task_id,
+        "by_location_id": by_location_id,
+    })
+}
+
 pub(super) fn world_rust_owned_ui_fragments_json(
     world: &WorldState,
     current_node: &WorldMapNode,
@@ -3647,6 +3777,7 @@ pub(super) fn world_rust_owned_ui_fragments_json(
     map_nodes.sort_by(|left, right| {
         (left.y, left.x, left.node_id.as_str()).cmp(&(right.y, right.x, right.node_id.as_str()))
     });
+    let route_artifacts = build_world_route_artifacts(world);
     json!({
         "contract_version": TRILLIONNIUM_WORLD_RUST_OWNED_UI_SHELL_CONTRACT_VERSION,
         "source_of_truth": "rust_world_ui_renderer",
@@ -3667,11 +3798,14 @@ pub(super) fn world_rust_owned_ui_fragments_json(
         "current_name_html": escape_world_visible_text(&current_node.name),
         "current_description_html": escape_world_visible_text(&current_node.description),
         "current_exits_text": if exits.is_empty() { "none".to_string() } else { exits.join(" · ") },
+        "route_ui": world_rust_route_ui_fragments_json(Some(&route_artifacts.task_graph)),
         "ui_ownership": {
             "first_playable_shell": "rust_rendered",
             "keypad_viewport": "rust_rendered",
             "movement_buttons": "rust_rendered",
             "current_location_copy": "rust_rendered",
+            "route_task_graph": "rust_rendered",
+            "route_flow_action_rail": "rust_rendered",
             "browser": "input_only_event_bridge"
         }
     })
@@ -4670,7 +4804,14 @@ pub(super) async fn get_world_web_shell(
             .and_then(Value::as_str)
             .unwrap_or("dense"),
     );
-    let world_map_bootstrap = trillionnium_slim_map_bootstrap_json(&world_map, "world_web_shell");
+    let mut world_map_bootstrap =
+        trillionnium_slim_map_bootstrap_json(&world_map, "world_web_shell");
+    if let Some(object) = world_map_bootstrap.as_object_mut() {
+        object.insert(
+            "rust_owned_route_ui_fragments".to_string(),
+            world_rust_route_ui_fragments_json(world_map.get("route_task_graph")),
+        );
+    }
     let world_map_bootstrap_bytes = serde_json::to_string(&world_map_bootstrap)
         .map(|value| value.len())
         .unwrap_or(0);
@@ -5131,19 +5272,42 @@ pub(super) async fn get_world_web_shell(
     } else {
         event_items
     };
-    let world_route_task_graph_cards = world_map
-        .get("route_task_graph")
-        .map(|graph| world_route_task_graph_views(graph, 6))
-        .unwrap_or_default()
-        .into_iter()
-        .map(|task| task.world_flow_card_html())
-        .collect::<Vec<_>>()
-        .join("\n");
-    let world_route_task_graph_cards = if world_route_task_graph_cards.is_empty() {
-        "<article class=\"mini task-graph\"><strong>No task-linked routes yet</strong><span>Create a world contract or task-linked event to grow the graph.</span><code>task graph</code></article>".to_string()
-    } else {
-        world_route_task_graph_cards
-    };
+    let world_route_ui_fragments =
+        world_rust_route_ui_fragments_json(world_map.get("route_task_graph"));
+    let world_route_ui_default = world_route_ui_fragments
+        .get("default")
+        .cloned()
+        .unwrap_or_else(|| world_rust_route_ui_fragments_json(None)["default"].clone());
+    let world_route_task_graph_cards = world_route_ui_default
+        .get("task_graph_html")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let world_route_flow_actions_html = world_route_ui_default
+        .get("route_flow_actions_html")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let world_route_filter_status_text = world_route_ui_default
+        .get("route_filter_status_text")
+        .and_then(Value::as_str)
+        .unwrap_or("Route filter: showing all world activity.");
+    let world_route_flow_status_text = world_route_ui_default
+        .get("route_flow_status_text")
+        .and_then(Value::as_str)
+        .unwrap_or("Adventure route: waiting for map focus.");
+    let world_route_next_step_status_text = world_route_ui_default
+        .get("route_next_step_status_text")
+        .and_then(Value::as_str)
+        .unwrap_or("Recommended next step: choose a map focus first.");
+    let world_route_event_brief_status_text = world_route_ui_default
+        .get("route_event_brief_status_text")
+        .and_then(Value::as_str)
+        .unwrap_or("Event brief: waiting for live-event focus.");
+    let world_route_link_status_text = world_route_ui_default
+        .get("route_link_status_text")
+        .and_then(Value::as_str)
+        .unwrap_or("Linked task route: none yet.");
 
     let shared_map_runtime_bootstrap_js = real_world_map_runtime_bootstrap_js();
     let shared_map_runtime_primitives_js = real_world_map_runtime_primitives_js();
@@ -5924,15 +6088,15 @@ pub(super) async fn get_world_web_shell(
             <small id="world-map-focus-detail" data-i18n-en="Choose a region, tile, hotspot, or live event to drive movement and world action." data-i18n-zh="选择区域、地图块、热点或实时事件，推动移动和世界行动。">Choose a region, tile, hotspot, or live event to drive movement and world action.</small>
             <div id="world-map-action-rail" class="focus-stack"></div>
           </div>
-          <p id="world-map-route-filter-status" class="subtitle" data-i18n-en="Route filter: show all world activity." data-i18n-zh="路线筛选：显示全部世界活动。">Route filter: show all world activity.</p>
+          <p id="world-map-route-filter-status" class="subtitle" data-render-owner="rust_world_ui_renderer" data-rust-route-ui-contract="{rust_route_ui_contract}" data-browser-ui-owner="input_only_focus_bridge" data-i18n-en="Route filter: show all world activity." data-i18n-zh="路线筛选：显示全部世界活动。">{world_route_filter_status_text}</p>
           <div id="world-map-route-filter-actions" class="focus-stack">
             {shared_route_filter_buttons_html}
           </div>
-          <p id="world-map-route-flow-status" class="subtitle" data-i18n-en="Adventure route: waiting for map focus." data-i18n-zh="冒险路线：等待地图焦点。">Adventure route: waiting for map focus.</p>
-          <p id="world-map-route-next-step-status" class="subtitle" data-i18n-en="Recommended next step: choose a map focus first." data-i18n-zh="推荐下一步：先选择地图焦点。">Recommended next step: choose a map focus first.</p>
-          <p id="world-map-route-event-brief-status" class="subtitle" data-i18n-en="Event brief: waiting for live-event focus." data-i18n-zh="事件简报：等待实时事件焦点。">Event brief: waiting for live-event focus.</p>
-          <p id="world-map-route-link-status" class="subtitle" data-i18n-en="Linked task route: none yet." data-i18n-zh="关联任务路线：暂无。">Linked task route: none yet.</p>
-          <div id="world-map-route-flow-actions" class="focus-stack"></div>
+          <p id="world-map-route-flow-status" class="subtitle" data-render-owner="rust_world_ui_renderer" data-rust-route-ui-contract="{rust_route_ui_contract}" data-browser-ui-owner="input_only_focus_bridge" data-i18n-en="Adventure route: waiting for map focus." data-i18n-zh="冒险路线：等待地图焦点。">{world_route_flow_status_text}</p>
+          <p id="world-map-route-next-step-status" class="subtitle" data-render-owner="rust_world_ui_renderer" data-rust-route-ui-contract="{rust_route_ui_contract}" data-browser-ui-owner="input_only_focus_bridge" data-i18n-en="Recommended next step: choose a map focus first." data-i18n-zh="推荐下一步：先选择地图焦点。">{world_route_next_step_status_text}</p>
+          <p id="world-map-route-event-brief-status" class="subtitle" data-render-owner="rust_world_ui_renderer" data-rust-route-ui-contract="{rust_route_ui_contract}" data-browser-ui-owner="input_only_focus_bridge" data-i18n-en="Event brief: waiting for live-event focus." data-i18n-zh="事件简报：等待实时事件焦点。">{world_route_event_brief_status_text}</p>
+          <p id="world-map-route-link-status" class="subtitle" data-render-owner="rust_world_ui_renderer" data-rust-route-ui-contract="{rust_route_ui_contract}" data-browser-ui-owner="input_only_focus_bridge" data-i18n-en="Linked task route: none yet." data-i18n-zh="关联任务路线：暂无。">{world_route_link_status_text}</p>
+          <div id="world-map-route-flow-actions" class="focus-stack" data-render-owner="rust_world_ui_renderer" data-rust-route-ui-contract="{rust_route_ui_contract}" data-browser-ui-owner="input_only_focus_bridge">{world_route_flow_actions_html}</div>
           <details class="dev-details world-advanced-map-drawer">
             <summary data-i18n-en="Advanced map layers" data-i18n-zh="高级地图图层">Advanced map layers</summary>
             <section id="world-openstreetmap-geodata" class="mini-grid" data-contract-version="{osm_geodata_contract}" data-fixture-layers-contract="{osm_fixture_layers_contract}" data-map-overlay-identity-contract="{map_overlay_identity_contract}" data-semantic-role-example="mentor_training_anchor" data-provider-contract="{osm_geodata_provider_contract}" data-provider-id="{osm_geodata_provider_id}" data-source-mode="{osm_geodata_source_mode}" data-source-of-truth="rust_openstreetmap_data_provider" data-web-role="visualization_input_only" data-feature-count="{osm_geodata_feature_count}" data-legal-obligation="odbl_database_obligations" aria-label="OpenStreetMap geodata substrate" data-i18n-aria-label-en="OpenStreetMap geodata substrate" data-i18n-aria-label-zh="OpenStreetMap 地理数据底座">
@@ -6130,7 +6294,7 @@ pub(super) async fn get_world_web_shell(
     </section>
     <section class="panel world-secondary-collapsed world-secondary-detail-panel" data-secondary-dashboard-contract="trillionnium_secondary_dashboard_panels_v1" data-secondary-dashboard-role="secondary_detail_panel" data-main-experience="false" data-default-state="collapsed_on_mobile" data-primary-loop-anchor="trillionnium-tactics-game-shell" data-mobile-ia="collapsed_secondary_panel" data-deferred-payload="true">
       <h2 data-i18n-en="Quest Route Graph" data-i18n-zh="任务路线图">Quest Route Graph</h2>
-      <div id="world-route-task-graph-live" class="mini-grid">{world_route_task_graph_cards}</div>
+      <div id="world-route-task-graph-live" class="mini-grid" data-render-owner="rust_world_ui_renderer" data-rust-route-ui-contract="{rust_route_ui_contract}" data-browser-ui-owner="input_only_focus_bridge">{world_route_task_graph_cards}</div>
     </section>
     <section class="panel world-secondary-collapsed world-secondary-detail-panel" data-secondary-dashboard-contract="trillionnium_secondary_dashboard_panels_v1" data-secondary-dashboard-role="secondary_detail_panel" data-main-experience="false" data-default-state="collapsed_on_mobile" data-primary-loop-anchor="trillionnium-tactics-game-shell" data-mobile-ia="collapsed_secondary_panel" data-deferred-payload="true">
       <h2 data-i18n-en="Playable Commands" data-i18n-zh="可玩指令">Playable Commands</h2>
@@ -6178,6 +6342,60 @@ pub(super) async fn get_world_web_shell(
       {shared_map_runtime_bootstrap_js}
 
       const routeTaskGraphItems = ((((payload.route_task_graph || {{}}).tasks) || []));
+      const rustRouteUiContract = 'trillionnium_world_rust_route_ui_fragments_v1';
+      let rustRouteUiFragments = payload.rust_owned_route_ui_fragments || {{}};
+      const mergeRustRouteUiFragments = (fragments) => {{
+        if (!fragments || typeof fragments !== 'object') return false;
+        rustRouteUiFragments = {{ ...rustRouteUiFragments, ...fragments }};
+        if (fragments.default) rustRouteUiFragments.default = fragments.default;
+        if (fragments.by_task_id) rustRouteUiFragments.by_task_id = {{ ...((rustRouteUiFragments.by_task_id) || {{}}), ...fragments.by_task_id }};
+        if (fragments.by_location_id) rustRouteUiFragments.by_location_id = {{ ...((rustRouteUiFragments.by_location_id) || {{}}), ...fragments.by_location_id }};
+        return true;
+      }};
+      const rustRouteUiFragmentForFocus = (taskId, locationId) => {{
+        const normalizedTaskId = String(taskId || '').trim();
+        const normalizedLocationId = String(locationId || '').trim();
+        return (normalizedTaskId && rustRouteUiFragments.by_task_id && rustRouteUiFragments.by_task_id[normalizedTaskId])
+          || (normalizedLocationId && rustRouteUiFragments.by_location_id && rustRouteUiFragments.by_location_id[normalizedLocationId])
+          || rustRouteUiFragments.default
+          || null;
+      }};
+      const applyRustRouteUiFragments = (fragments) => {{
+        if (!fragments || String(fragments.contract_version || rustRouteUiContract) !== rustRouteUiContract) return false;
+        const markRustRouteOwner = (node) => {{
+          if (!node) return;
+          node.dataset.renderOwner = 'rust_world_ui_renderer';
+          node.dataset.rustRouteUiContract = rustRouteUiContract;
+          node.dataset.browserUiOwner = 'input_only_focus_bridge';
+        }};
+        if (routeTaskGraphTarget && typeof fragments.task_graph_html === 'string') {{
+          routeTaskGraphTarget.innerHTML = fragments.task_graph_html;
+          markRustRouteOwner(routeTaskGraphTarget);
+        }}
+        if (routeFlowActions && typeof fragments.route_flow_actions_html === 'string') {{
+          routeFlowActions.innerHTML = fragments.route_flow_actions_html;
+          markRustRouteOwner(routeFlowActions);
+        }}
+        const textTargets = [
+          [routeFilterStatus, fragments.route_filter_status_text],
+          [routeFlowStatus, fragments.route_flow_status_text],
+          [routeNextStepStatus, fragments.route_next_step_status_text],
+          [routeEventBriefStatus, fragments.route_event_brief_status_text],
+          [routeLinkStatus, fragments.route_link_status_text],
+          [actionConsoleStatus, fragments.action_console_status_text],
+        ];
+        textTargets.forEach(([node, text]) => {{
+          if (!node || typeof text !== 'string') return;
+          node.textContent = text;
+          markRustRouteOwner(node);
+        }});
+        if (target) {{
+          target.dataset.rustRouteUiContract = rustRouteUiContract;
+          target.dataset.routeUiRenderOwner = 'rust_world_ui_renderer';
+          target.dataset.routeUiBrowserRole = 'input_only_focus_bridge';
+        }}
+        return true;
+      }};
       let lastViewport = null;
       let lastViewportCursor = null;
       let mapRumFirstInteractiveSent = false;
@@ -6366,6 +6584,10 @@ pub(super) async fn get_world_web_shell(
             exitsNode.textContent = fragments.current_exits_text;
             exitsNode.dataset.renderOwner = fragments.render_owner || 'rust_world_ui_renderer';
             exitsNode.dataset.rustOwnedUiContract = fragments.contract_version;
+          }}
+          if (fragments.route_ui) {{
+            mergeRustRouteUiFragments(fragments.route_ui);
+            applyRustRouteUiFragments(rustRouteUiFragmentForFocus('', fragments.current_location_id || ''));
           }}
           state.rust_owned_ui_fragments_current_node_id = currentId;
           state.rust_owned_ui_fragments_contract_version = fragments.contract_version;
@@ -6806,13 +7028,8 @@ pub(super) async fn get_world_web_shell(
         }}
       }};
       const buildRouteActionDraft = (selection, routeContext) => buildRouteDraftBody(selection, routeContext, {{ selectionTitleFallback: routePhrase('current world route', '当前世界路线') }});
-      const renderWorldTaskGraph = (tasks) => {{
-        if (!routeTaskGraphTarget) return;
-        const visible = (tasks && tasks.length ? tasks : routeTaskGraphItems).slice(0, 6);
-        routeTaskGraphTarget.innerHTML = visible.length ? visible.map((task) => {{
-          const actionButtons = routeTaskGraphActionButtonsHtml(task);
-          return `<article class="mini task-graph"><strong>${{escapeHtml(mapText(task.task_id || 'route task / 路线任务'))}}</strong><span>${{escapeHtml(mapText(task.latest_bucket || 'event'))}} · ${{escapeHtml(mapText(task.latest_status || 'pending'))}} · ${{escapeHtml(mapText('branch / 支线'))}} ${{escapeHtml(mapText(task.next_opportunity_kind || 'contract_capture'))}}</span><code>${{escapeHtml(mapText(task.latest_location_id || task.task_id || 'route'))}}</code><small>${{escapeHtml(task.event_count ?? 0)}} ${{escapeHtml(mapText('events / 事件'))}} · ${{escapeHtml(task.contract_count ?? 0)}} ${{escapeHtml(mapText('contracts / 契约'))}} · ${{escapeHtml(task.completion_count ?? 0)}} ${{escapeHtml(mapText('battle reports / 战报'))}}</small><small>${{escapeHtml(mapText(task.outcome_summary || '战果总结待生成。'))}}</small><small><strong>${{escapeHtml(mapText('next branch / 下一条支线'))}}</strong> · ${{escapeHtml(mapText(task.next_opportunity_hint || '支线提示待生成。'))}}</small><div class="focus-stack"><code>${{escapeHtml(mapText(task.next_opportunity_command || '/world action 继续推进下一步机会。'))}}</code></div><div class="focus-stack">${{actionButtons}}</div></article>`;
-        }}).join('') : '<article class="mini task-graph"><strong>' + escapeHtml(mapText('No task-linked routes yet / 还没有任务路线')) + '</strong><span>' + escapeHtml(mapText('Create a world contract or task event to grow the route graph. / 创建世界契约或任务事件后，路线图会生长出来。')) + '</span><code>task graph</code></article>';
+      const renderWorldTaskGraph = (_tasks, activeTaskId = '', locationId = '') => {{
+        applyRustRouteUiFragments(rustRouteUiFragmentForFocus(activeTaskId, locationId));
       }};
       const findLatestVisibleByBuckets = (visibleItems, buckets) => {{
         const bucketSet = new Set(buckets);
@@ -6907,7 +7124,7 @@ pub(super) async fn get_world_web_shell(
           filteredTaskGraph = routeTaskGraphItems.filter((task) => !task.latest_location_id || String(task.latest_location_id || '').trim() === locationId);
         }}
         if (!filteredTaskGraph.length) filteredTaskGraph = routeTaskGraphItems;
-        renderWorldTaskGraph(filteredTaskGraph);
+        renderWorldTaskGraph(filteredTaskGraph, activeTaskId, locationId);
         const opportunityTask = (activeTaskId
           ? filteredTaskGraph.find((task) => String(task.task_id || '').trim() === activeTaskId)
           : null) || filteredTaskGraph[0] || null;
@@ -6934,57 +7151,8 @@ pub(super) async fn get_world_web_shell(
         if (contractId) maybeAutofillRouteInput(routeContractInputId(), contractId);
         if (listingId) maybeAutofillRouteInput(routePurchaseInputId(), listingId);
         if (routeFilterMode !== 'all' && selection) applyRouteActionDraft(locationId, draftBody, false);
-        if (routeFlowActions) {{
-          const actions = [];
-          const actionKeys = new Set();
-          if (opportunityAction) pushRouteFlowActionButton(actions, actionKeys, opportunityAction);
-          if (nextStep) pushRouteFlowActionButton(actions, actionKeys, nextStep);
-          if (locationId || draftBody) {{
-            pushRouteFlowActionButton(actions, actionKeys, buildDraftWorldAction(locationId, activeTaskId, draftBody));
-          }}
-          if (activeTaskId) {{
-            pushRouteFlowActionButton(actions, actionKeys, buildTaskFollowUpAction(selection, activeTaskId, locationId, routePhrase('Combine linked event/contract, current world-state evidence, risk, and next action', '结合关联事件/契约、当前世界状态证据、风险和下一步行动')));
-          }}
-          if (eventItem) {{
-            pushRouteFlowActionButton(actions, actionKeys, buildRouteEventTimelineAction(routePhrase('Open event lane', '打开事件线'), {{
-              eventId: String(eventItem.dataset.eventId || ''),
-              eventKind: String(eventItem.dataset.eventKind || 'world_event'),
-              eventBody: String(eventItem.dataset.eventBody || ''),
-              eventResult: String(eventItem.dataset.eventResult || ''),
-              eventTaskId: String(eventItem.dataset.taskId || ''),
-              locationId: String(eventItem.dataset.locationId || ''),
-            }}));
-          }}
-          if (activeTaskId && linkedEventItem) {{
-            pushRouteFlowActionButton(actions, actionKeys, buildRouteEventTimelineAction(routePhrase('Open linked event', '打开关联事件'), {{
-              eventId: String(linkedEventItem.dataset.eventId || ''),
-              eventKind: String(linkedEventItem.dataset.eventKind || 'world_event'),
-              eventBody: String(linkedEventItem.dataset.eventBody || ''),
-              eventResult: String(linkedEventItem.dataset.eventResult || ''),
-              eventTaskId: String(linkedEventItem.dataset.taskId || ''),
-              locationId: String(linkedEventItem.dataset.locationId || ''),
-            }}));
-          }}
-          if (workOrderId && (!latestWorkBucket || ['purchase', 'work_order', 'reopen'].includes(latestWorkBucket))) {{
-            pushRouteFlowActionButton(actions, actionKeys, buildWorldWorkLaneAction('delivery', workOrderId, {{ label: routePhrase('Advance commission', '推进委托'), locationId }}));
-          }}
-          if (contractId) {{
-            pushRouteFlowActionButton(actions, actionKeys, buildWorldContractLaneAction(contractId, {{ locationId }}));
-          }}
-          if (activeTaskId && linkedContractItem) {{
-            pushRouteFlowActionButton(actions, actionKeys, buildLinkedContractRouteAction(selection, String(linkedContractItem.dataset.contractId || ''), activeTaskId, locationId, {{ bodySuffix: routePhrase(', with evidence, rating criteria, and next step.', '，带上证据、评级标准和下一步。') }}));
-          }}
-          if (listingId) {{
-            pushRouteFlowActionButton(actions, actionKeys, buildWorldPurchaseLaneAction(listingId, {{ locationId }}));
-          }}
-          if (((nextStep || {{}}).label) === routePhrase('Open rating route', '打开评级路线') && workOrderId) {{
-            pushRouteFlowActionButton(actions, actionKeys, buildWorldWorkLaneAction('rejection', workOrderId, {{
-              locationId,
-              body: appendSelectionEventSignal(routePhrase((selection && selection.title ? selection.title : 'current route') + ': mark commission ' + workOrderId + ' as needing revision, with evidence gap, reward return, and revision route.', (selection && selection.title ? selection.title : '当前路线') + ': 标记委托 ' + workOrderId + ' 需要返工，写清证据缺口、奖励退回和修订路线。'), selection),
-            }}));
-          }}
-          routeFlowActions.innerHTML = actions.join(' ');
-        }}
+        const rustRouteUiApplied = applyRustRouteUiFragments(rustRouteUiFragmentForFocus(activeTaskId, locationId));
+        if (rustRouteUiApplied) return;
         if (!routeFlowStatus) return;
         if (routeFilterMode === 'all' || !selection) {{
           routeFlowStatus.textContent = routePhrase('Adventure route: waiting for map focus.', '冒险路线：等待地图焦点。');
@@ -7232,6 +7400,7 @@ pub(super) async fn get_world_web_shell(
         world_keypad_buttons = world_keypad_buttons,
         world_keypad_state_json = world_keypad_state_json,
         rust_owned_ui_contract = TRILLIONNIUM_WORLD_RUST_OWNED_UI_SHELL_CONTRACT_VERSION,
+        rust_route_ui_contract = TRILLIONNIUM_WORLD_RUST_ROUTE_UI_FRAGMENTS_CONTRACT_VERSION,
         world_keypad_current_name = world_keypad_current_name,
         world_keypad_current_description = world_keypad_current_description,
         world_keypad_current_coordinates = escape_html_text(&world_keypad_current_coordinates),
@@ -7264,6 +7433,12 @@ pub(super) async fn get_world_web_shell(
         standing_cards = standing_cards,
         contract_cards = contract_cards,
         world_route_task_graph_cards = world_route_task_graph_cards,
+        world_route_flow_actions_html = world_route_flow_actions_html,
+        world_route_filter_status_text = escape_html_text(world_route_filter_status_text),
+        world_route_flow_status_text = escape_html_text(world_route_flow_status_text),
+        world_route_next_step_status_text = escape_html_text(world_route_next_step_status_text),
+        world_route_event_brief_status_text = escape_html_text(world_route_event_brief_status_text),
+        world_route_link_status_text = escape_html_text(world_route_link_status_text),
         latest_contract_id = escape_html_text(&latest_contract_id),
         current_matrix_user_id = escape_html_text(current_matrix_user_id),
         event_items = event_items,
