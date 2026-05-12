@@ -368,6 +368,7 @@ pub(super) fn default_league_state() -> LeagueState {
         league_skins,
         raid_contributions: Vec::new(),
         raid_rosters: Vec::new(),
+        term_exchange_receipts: HashMap::new(),
         world: WorldState {
             world_zones,
             world_locations,
@@ -396,6 +397,7 @@ pub(super) fn default_league_state() -> LeagueState {
             world_relationships: Vec::new(),
             world_tactics_sessions: HashMap::new(),
             world_tactics_simulation_ticks: Vec::new(),
+            world_term_exchange_receipts: HashMap::new(),
         },
     }
 }

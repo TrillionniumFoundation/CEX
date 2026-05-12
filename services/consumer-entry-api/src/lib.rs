@@ -1185,6 +1185,63 @@ struct LeagueMatchEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct TermExchangeReceiptState {
+    protocol_version: String,
+    receipt_id: String,
+    intent_id: String,
+    term_id: String,
+    backend_id: String,
+    backend_kind: term_exchange_protocol::SettlementBackendKind,
+    status: term_exchange_protocol::ReceiptStatus,
+    progression_class: term_exchange_protocol::ReceiptProgressionClass,
+    settlement_reference: Option<String>,
+    ledger_entry_id: Option<String>,
+    reason: Option<String>,
+    finalized_at_epoch: i64,
+}
+
+impl From<&term_exchange_protocol::EconomicReceipt> for TermExchangeReceiptState {
+    fn from(receipt: &term_exchange_protocol::EconomicReceipt) -> Self {
+        Self {
+            protocol_version: receipt.protocol_version.clone(),
+            receipt_id: receipt.receipt_id.clone(),
+            intent_id: receipt.intent_id.clone(),
+            term_id: receipt.term_id.clone(),
+            backend_id: receipt.backend_id.clone(),
+            backend_kind: receipt.backend_kind.clone(),
+            status: receipt.status.clone(),
+            progression_class: receipt.progression_class.clone(),
+            settlement_reference: receipt.settlement_reference.clone(),
+            ledger_entry_id: receipt.ledger_entry_id.clone(),
+            reason: receipt.reason.clone(),
+            finalized_at_epoch: receipt.finalized_at_epoch,
+        }
+    }
+}
+
+fn record_league_term_exchange_receipt(
+    league: &mut LeagueState,
+    receipt: Option<TermExchangeReceiptState>,
+) {
+    if let Some(receipt) = receipt {
+        league
+            .term_exchange_receipts
+            .insert(receipt.receipt_id.clone(), receipt);
+    }
+}
+
+fn record_world_term_exchange_receipt(
+    world: &mut WorldState,
+    receipt: Option<TermExchangeReceiptState>,
+) {
+    if let Some(receipt) = receipt {
+        world
+            .world_term_exchange_receipts
+            .insert(receipt.receipt_id.clone(), receipt);
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct LeagueBattle {
     battle_id: String,
     match_id: String,
@@ -1787,6 +1844,8 @@ struct WorldState {
     world_tactics_sessions: HashMap<String, WorldTacticsGameSession>,
     #[serde(default)]
     world_tactics_simulation_ticks: Vec<WorldTacticsSimulationTick>,
+    #[serde(default)]
+    world_term_exchange_receipts: HashMap<String, TermExchangeReceiptState>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1841,6 +1900,8 @@ struct LeagueState {
     raid_contributions: Vec<LeagueRaidContribution>,
     #[serde(default)]
     raid_rosters: Vec<LeagueRaidRosterSlot>,
+    #[serde(default)]
+    term_exchange_receipts: HashMap<String, TermExchangeReceiptState>,
     #[serde(default, flatten)]
     world: WorldState,
 }

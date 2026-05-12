@@ -589,6 +589,7 @@ scripts/check-trillionnium-first-human-session.sh
 - CEX runtime plugin split: `docs/trillionnium-cex-runtime-plugin-split-v1.md` (`trillionnium_cex_runtime_plugin_v1`)
 - Term Exchange Kernel: `docs/trillionnium-term-exchange-kernel-v1.md` (`term_exchange_protocol_v1`, `trillionnium_term_exchange_kernel_v1`)
 - Term Exchange backend adapter: `trillionnium_term_exchange_backend_adapter_v1`; first migrated paths are League reward settlement, World commerce settlement lifecycle, and World contract completion settlement.
+- Typed receipt state: `TermExchangeReceiptState` persists adapter receipts into `LeagueState.term_exchange_receipts` and `WorldState.world_term_exchange_receipts` while legacy status fields remain compatible.
 
 ## 15. 当前下一步
 

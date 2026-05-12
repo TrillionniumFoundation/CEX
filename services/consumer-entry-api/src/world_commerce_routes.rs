@@ -1221,6 +1221,7 @@ pub(super) async fn chargeback_world_purchase_seller_with_ledger(
                 "seller chargeback reserve did not complete: {}",
                 reserve.status
             ))),
+            term_exchange_receipt: reserve.term_exchange_receipt,
         };
     }
     settle_world_purchase_ledger_action(
@@ -1442,8 +1443,12 @@ pub(super) async fn buy_world_listing_inner(
             ..Default::default()
         }
     };
+    let buyer_reserve_receipt = buyer_reserve.term_exchange_receipt.clone();
+    let seller_settlement_receipt = settlement.term_exchange_receipt.clone();
     let final_snapshot = {
         let mut league = state.inner.league_state.lock().await;
+        record_world_term_exchange_receipt(&mut league.world, buyer_reserve_receipt);
+        record_world_term_exchange_receipt(&mut league.world, seller_settlement_receipt);
         let indexes = build_world_indexes(&league.world);
         let mut purchase = snapshot.1.clone();
         let mut work_order = snapshot.2.clone();
@@ -2110,8 +2115,10 @@ pub(super) async fn accept_world_work_order_inner(
     };
     let buyer_consume =
         consume_world_purchase_with_ledger(&state, payload.room_id.as_deref(), &snapshot.2).await;
+    let buyer_consume_receipt = buyer_consume.term_exchange_receipt.clone();
     let final_snapshot = {
         let mut league = state.inner.league_state.lock().await;
+        record_world_term_exchange_receipt(&mut league.world, buyer_consume_receipt);
         let indexes = build_world_indexes(&league.world);
         let mut work_order = snapshot.1.clone();
         let mut purchase = snapshot.2.clone();
@@ -2474,6 +2481,7 @@ pub(super) async fn reject_world_work_order_inner(
             entry_id: snapshot.2.buyer_consume_entry_id.clone(),
             balance_after: snapshot.2.buyer_consume_balance_after,
             error: None,
+            term_exchange_receipt: None,
         }
     } else {
         refund_world_purchase_with_ledger(
@@ -2502,8 +2510,12 @@ pub(super) async fn reject_world_work_order_inner(
             ..Default::default()
         }
     };
+    let buyer_refund_receipt = buyer_refund.term_exchange_receipt.clone();
+    let seller_chargeback_receipt = seller_chargeback.term_exchange_receipt.clone();
     let final_snapshot = {
         let mut league = state.inner.league_state.lock().await;
+        record_world_term_exchange_receipt(&mut league.world, buyer_refund_receipt);
+        record_world_term_exchange_receipt(&mut league.world, seller_chargeback_receipt);
         let indexes = build_world_indexes(&league.world);
         let mut work_order = snapshot.1.clone();
         let mut purchase = snapshot.2.clone();
@@ -2867,8 +2879,12 @@ pub(super) async fn reopen_world_work_order_inner(
         seller_reopen_settlement.status.as_str(),
         "reopened_settled" | "duplicate"
     );
+    let buyer_reopen_reserve_receipt = buyer_reopen_reserve.term_exchange_receipt.clone();
+    let seller_reopen_settlement_receipt = seller_reopen_settlement.term_exchange_receipt.clone();
     let final_snapshot = {
         let mut league = state.inner.league_state.lock().await;
+        record_world_term_exchange_receipt(&mut league.world, buyer_reopen_reserve_receipt);
+        record_world_term_exchange_receipt(&mut league.world, seller_reopen_settlement_receipt);
         let indexes = build_world_indexes(&league.world);
         let mut work_order = snapshot.1.clone();
         let mut purchase = snapshot.2.clone();
@@ -3236,6 +3252,7 @@ pub(super) async fn cancel_world_work_order_inner(
             entry_id: snapshot.2.buyer_consume_entry_id.clone(),
             balance_after: snapshot.2.buyer_consume_balance_after,
             error: None,
+            term_exchange_receipt: None,
         }
     } else {
         refund_world_purchase_with_ledger(
@@ -3265,8 +3282,12 @@ pub(super) async fn cancel_world_work_order_inner(
             ..Default::default()
         }
     };
+    let buyer_cancel_refund_receipt = buyer_cancel_refund.term_exchange_receipt.clone();
+    let seller_chargeback_receipt = seller_chargeback.term_exchange_receipt.clone();
     let final_snapshot = {
         let mut league = state.inner.league_state.lock().await;
+        record_world_term_exchange_receipt(&mut league.world, buyer_cancel_refund_receipt);
+        record_world_term_exchange_receipt(&mut league.world, seller_chargeback_receipt);
         let indexes = build_world_indexes(&league.world);
         let mut work_order = snapshot.1.clone();
         let mut purchase = snapshot.2.clone();

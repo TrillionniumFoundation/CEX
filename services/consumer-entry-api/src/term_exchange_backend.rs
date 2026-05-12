@@ -92,6 +92,7 @@ impl TermExchangeBackendReceipt {
             entry_id: self.entry_id,
             balance_after: self.balance_after,
             error: self.error,
+            term_exchange_receipt: Some(TermExchangeReceiptState::from(&self.receipt)),
         }
     }
 }

@@ -1240,6 +1240,14 @@ async fn term_exchange_kernel_manifest_declares_cex_as_first_backend() {
         body["migration_status"]["split_strategy"],
         "protocol_first_then_backend_adapter_then_storage_boundary"
     );
+    assert_eq!(
+        body["state_persistence"]["league_receipt_index"],
+        "LeagueState.term_exchange_receipts"
+    );
+    assert_eq!(
+        body["state_persistence"]["world_receipt_index"],
+        "WorldState.world_term_exchange_receipts"
+    );
 }
 
 #[tokio::test]
@@ -9891,6 +9899,26 @@ async fn world_commerce_e2e_uses_real_configured_ledger_for_consume_refund_reope
             && purchase.ledger_status.as_deref() == Some("seller_chargeback_consumed")
             && purchase.buyer_ledger_status.as_deref() == Some("reopened_reserved")
             && purchase.buyer_consume_status.as_deref() == Some("refunded")));
+    assert!(league
+        .world
+        .world_term_exchange_receipts
+        .values()
+        .any(|receipt| {
+            receipt.term_id == "world_commerce_purchase"
+                && receipt.status == term_exchange_protocol::ReceiptStatus::Reserved
+                && receipt.progression_class
+                    == term_exchange_protocol::ReceiptProgressionClass::ProgressionAllowed
+        }));
+    assert!(league
+        .world
+        .world_term_exchange_receipts
+        .values()
+        .any(|receipt| {
+            receipt.term_id == "world_commerce_purchase"
+                && receipt.status == term_exchange_protocol::ReceiptStatus::SellerChargebackConsumed
+                && receipt.progression_class
+                    == term_exchange_protocol::ReceiptProgressionClass::ProgressionAllowed
+        }));
     assert!(league.world.world_economy_events.iter().any(|event| {
         event.event_kind == "seller_chargeback"
             && event.credits_delta == -(seller_net_two_credits as i64)
@@ -12490,6 +12518,12 @@ async fn league_submission_requires_ledger_settlement_before_earned_rewards() {
     assert_eq!(entry.submissions, 0);
     assert_eq!(entry.best_score, 0.0);
     assert!(league.inventory_items.is_empty());
+    assert!(league.term_exchange_receipts.values().any(|receipt| {
+        receipt.term_id == "league_reward_settlement"
+            && receipt.status == term_exchange_protocol::ReceiptStatus::SkippedMissingRoom
+            && receipt.progression_class
+                == term_exchange_protocol::ReceiptProgressionClass::RecoverableHold
+    }));
     drop(league);
 
     let (status, progression) = send_json_request(

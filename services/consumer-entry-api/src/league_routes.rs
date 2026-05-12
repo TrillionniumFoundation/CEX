@@ -993,14 +993,16 @@ pub(super) async fn post_league_web_action(
                 &reward,
             )
             .await;
-            reward.ledger_status = Some(settlement.status);
+            reward.ledger_status = Some(settlement.status.clone());
             reward.ledger_account_id = settlement.account_id;
             reward.ledger_entry_id = settlement.entry_id;
             reward.ledger_balance_after = settlement.balance_after;
             reward.ledger_error = settlement.error;
+            let settlement_receipt = settlement.term_exchange_receipt.clone();
 
             let settlement_completed = league_reward_ledger_released(&reward);
             let mut league = state.inner.league_state.lock().await;
+            record_league_term_exchange_receipt(&mut league, settlement_receipt);
             if let Some(stored_reward) = league
                 .rewards
                 .iter_mut()
@@ -1387,8 +1389,10 @@ pub(super) async fn approve_league_review(
     .await;
     let now = Utc::now().timestamp();
     let released = matches!(settlement.status.as_str(), "settled" | "duplicate");
+    let settlement_receipt = settlement.term_exchange_receipt.clone();
     let snapshot = {
         let mut league = state.inner.league_state.lock().await;
+        record_league_term_exchange_receipt(&mut league, settlement_receipt);
         if let Some(stored_submission) = league.submissions.get_mut(&submission.submission_id) {
             stored_submission.payout_status = Some(
                 if released {
@@ -2011,15 +2015,17 @@ pub(super) async fn submit_league_match(
     let settlement =
         settle_league_reward_with_ledger(&state, &payload, &matrix_user_id, &submission, &reward)
             .await;
-    reward.ledger_status = Some(settlement.status);
+    reward.ledger_status = Some(settlement.status.clone());
     reward.ledger_account_id = settlement.account_id;
     reward.ledger_entry_id = settlement.entry_id;
     reward.ledger_balance_after = settlement.balance_after;
     reward.ledger_error = settlement.error;
+    let settlement_receipt = settlement.term_exchange_receipt.clone();
 
     let settlement_completed = league_reward_ledger_released(&reward);
     let (response_player, response_entry, snapshot) = {
         let mut league = state.inner.league_state.lock().await;
+        record_league_term_exchange_receipt(&mut league, settlement_receipt);
         if let Some(stored_reward) = league
             .rewards
             .iter_mut()
@@ -2070,6 +2076,7 @@ pub(super) struct LeagueLedgerSettlement {
     pub(super) entry_id: Option<String>,
     pub(super) balance_after: Option<f64>,
     pub(super) error: Option<String>,
+    pub(super) term_exchange_receipt: Option<TermExchangeReceiptState>,
 }
 
 pub(super) async fn settle_league_reward_with_ledger(

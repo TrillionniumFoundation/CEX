@@ -214,3 +214,33 @@ Migrated call paths in this slice:
 These paths now build typed `EconomicIntent` data and receive typed `EconomicReceipt` data inside the backend adapter, then project back to legacy status fields so current endpoints, tests, and E2E contracts remain stable.
 
 Policy: world and league economic routes should call the backend adapter, not ledger HTTP directly. Remaining migration work is to store receipt references/statuses directly in World/League state instead of only legacy string fields.
+---
+
+## 8. Typed receipt state slice
+
+The adapter-created `EconomicReceipt` is now persisted into runtime state through a compact state projection:
+
+```text
+receipt_state_type   = TermExchangeReceiptState
+league_receipt_index = LeagueState.term_exchange_receipts
+world_receipt_index  = WorldState.world_term_exchange_receipts
+```
+
+Stored fields:
+
+- `protocol_version`
+- `receipt_id`
+- `intent_id`
+- `term_id`
+- `backend_id`
+- `backend_kind`
+- `status`
+- `progression_class`
+- `settlement_reference`
+- `ledger_entry_id`
+- `reason`
+- `finalized_at_epoch`
+
+Legacy status fields remain for endpoint compatibility, but World/League state now also carries typed receipt status and progression class. This is the bridge toward making domain progression read from `EconomicReceipt` instead of stringly ledger fields.
+
+Next cutover: add normalized SQL receipt tables and migrate remaining legacy-only settlement paths.

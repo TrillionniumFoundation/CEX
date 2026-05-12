@@ -2121,8 +2121,10 @@ async fn record_world_tactics_command(
         completion.ledger_entry_id = settlement.entry_id;
         completion.ledger_balance_after = settlement.balance_after;
         completion.ledger_error = settlement.error;
+        let settlement_receipt = settlement.term_exchange_receipt.clone();
         let mut final_snapshot = {
             let mut league = state.inner.league_state.lock().await;
+            record_world_term_exchange_receipt(&mut league.world, settlement_receipt);
             let indexes = build_world_indexes(&league.world);
             let settlement_completed = matches!(
                 completion.ledger_status.as_deref(),

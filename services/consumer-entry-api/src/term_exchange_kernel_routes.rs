@@ -201,6 +201,28 @@ pub(super) fn term_exchange_kernel_manifest_json(state: &AppState) -> Value {
             ],
             "direct_ledger_http_policy": "world_and_league_economic_routes_call_the_backend_adapter_not_ledger_http_directly"
         },
+        "state_persistence": {
+            "receipt_state_type": "TermExchangeReceiptState",
+            "league_receipt_index": "LeagueState.term_exchange_receipts",
+            "world_receipt_index": "WorldState.world_term_exchange_receipts",
+            "stored_fields": [
+                "protocol_version",
+                "receipt_id",
+                "intent_id",
+                "term_id",
+                "backend_id",
+                "backend_kind",
+                "status",
+                "progression_class",
+                "settlement_reference",
+                "ledger_entry_id",
+                "reason",
+                "finalized_at_epoch"
+            ],
+            "legacy_status_compatibility": true,
+            "state_json_persisted": true,
+            "normalized_sql_shadow_status": "pending_receipt_table_cutover"
+        },
         "current_cex_backend_runtime": {
             "runtime_profile": state.config().runtime_profile.as_str(),
             "ledger_base_url_configured": !state.config().ledger_base_url.trim().is_empty(),
@@ -219,10 +241,10 @@ pub(super) fn term_exchange_kernel_manifest_json(state: &AppState) -> Value {
             "primary_endpoint": TERM_EXCHANGE_KERNEL_MANIFEST_ENDPOINT
         },
         "migration_status": {
-            "status": "term_exchange_backend_adapter_introduced",
+            "status": "typed_receipt_state_persisted",
             "split_strategy": "protocol_first_then_backend_adapter_then_storage_boundary",
             "current_source_of_evidence": "CEX local-production run/* gates",
-            "next_step": "replace remaining legacy status strings with typed EconomicReceipt storage references while preserving current endpoints and E2E evidence"
+            "next_step": "add normalized SQL receipt tables and migrate remaining legacy-only settlement paths while preserving current endpoints and E2E evidence"
         }
     })
 }

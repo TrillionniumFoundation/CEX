@@ -1939,6 +1939,15 @@ Also append a one-paragraph summary to `/home/qian/.openclaw/workspace/memory/YY
 - Kernel manifest now exposes `backend_adapter_contract_version=trillionnium_term_exchange_backend_adapter_v1` and migrated call paths. Next migration pointer: store typed receipt references/statuses in World/League state rather than relying only on legacy string status fields.
 
 
+---
+
+#### Update 2026-05-12 22:2x CST
+
+- Persisted typed Term Exchange receipts into runtime state. Added compact `TermExchangeReceiptState` plus `LeagueState.term_exchange_receipts` and `WorldState.world_term_exchange_receipts`, preserving legacy ledger/status fields for current endpoint compatibility.
+- League reward settlement now records typed receipt status/progression class in league state. World commerce buy/accept/reject/reopen/cancel and World contract completion now record backend adapter receipts in world state.
+- Kernel manifest now exposes `state_persistence.receipt_state_type=TermExchangeReceiptState`, receipt indexes, stored fields, and marks normalized SQL receipt-table cutover as the next persistence step.
+
+
 ## Current Next Pointer
 
 If the next instruction is simply “continue”, start here:
