@@ -375,7 +375,7 @@ pub(super) async fn get_world_map_viewport(
         .and_then(|value| value.parse::<usize>().ok());
     let started_at = std::time::Instant::now();
     let league = state.inner.league_state.lock().await;
-    let viewport = world_map_viewport_json(
+    let mut viewport = world_map_viewport_json(
         &league.world,
         &matrix_user_id,
         lat,
@@ -384,6 +384,13 @@ pub(super) async fn get_world_map_viewport(
         radius_km,
         limit,
     );
+    let route_runner_fragments = world_rust_route_runner_ui_fragments_json(&viewport);
+    if let Some(object) = viewport.as_object_mut() {
+        object.insert(
+            "rust_owned_route_runner_ui_fragments".to_string(),
+            route_runner_fragments,
+        );
+    }
     let mut response = json_resource_response(
         viewport.clone(),
         "private, max-age=5, stale-while-revalidate=25",
@@ -453,7 +460,7 @@ pub(super) async fn get_world_web_map_viewport(
         .and_then(|value| value.parse::<usize>().ok());
     let started_at = std::time::Instant::now();
     let league = state.inner.league_state.lock().await;
-    let viewport = world_map_viewport_json(
+    let mut viewport = world_map_viewport_json(
         &league.world,
         &matrix_user_id,
         lat,
@@ -462,6 +469,13 @@ pub(super) async fn get_world_web_map_viewport(
         radius_km,
         limit,
     );
+    let route_runner_fragments = world_rust_route_runner_ui_fragments_json(&viewport);
+    if let Some(object) = viewport.as_object_mut() {
+        object.insert(
+            "rust_owned_route_runner_ui_fragments".to_string(),
+            route_runner_fragments,
+        );
+    }
     let mut response = json_resource_response(
         viewport.clone(),
         "private, max-age=5, stale-while-revalidate=25",
@@ -522,7 +536,7 @@ async fn world_map_delta_response(
         .and_then(|value| value.parse::<usize>().ok());
     let cursor = query.get("cursor").cloned();
     let league = state.inner.league_state.lock().await;
-    let delta = world_map_delta_json(
+    let mut delta = world_map_delta_json(
         &league.world,
         matrix_user_id,
         lat,
@@ -532,6 +546,28 @@ async fn world_map_delta_response(
         limit,
         cursor,
     );
+    let current_viewport = world_map_viewport_json(
+        &league.world,
+        matrix_user_id,
+        lat,
+        lng,
+        zoom,
+        radius_km,
+        limit,
+    );
+    let route_runner_fragments = world_rust_route_runner_ui_fragments_json(&current_viewport);
+    if let Some(object) = delta.as_object_mut() {
+        if let Some(patch) = object.get_mut("delta").and_then(Value::as_object_mut) {
+            patch.insert(
+                "rust_owned_route_runner_ui_fragments".to_string(),
+                route_runner_fragments.clone(),
+            );
+        }
+        object.insert(
+            "rust_owned_route_runner_ui_fragments".to_string(),
+            route_runner_fragments,
+        );
+    }
     if !delta
         .get("changed")
         .and_then(Value::as_bool)

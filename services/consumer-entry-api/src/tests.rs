@@ -6366,6 +6366,17 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(world_html.contains("data-overlay-target=\"routeRunners\""));
     assert!(world_html.contains("world-avatar-task-routes-live"));
     assert!(world_html.contains("world-avatar-route-runners-live"));
+    assert!(world_html.contains("trillionnium_world_rust_route_runner_ui_fragments_v1"));
+    assert!(world_html.contains("rust_owned_route_runner_ui_fragments"));
+    assert!(world_html.contains("server_rendered_runner_cards_selected_by_focus_bridge"));
+    assert!(world_html.contains("data-rust-route-runner-ui-contract=\"trillionnium_world_rust_route_runner_ui_fragments_v1\""));
+    assert!(world_html.contains("const renderRustRouteRunnerCards ="));
+    assert!(
+        world_html.contains("renderRustRouteRunnerCards(routeRunnerTarget, lastViewport, focus)")
+    );
+    assert!(world_html.contains("route_runner_cards\":\"rust_rendered"));
+    assert!(world_html.contains("reward_claim_action_buttons\":\"rust_rendered"));
+    assert!(world_html.contains("next_route_action_buttons\":\"rust_rendered"));
     assert!(world_html.contains("world-route-runner-handoff-summary"));
     assert!(world_html.contains("Route runner handoff:"));
     assert!(world_html.contains("data-next-route-status="));

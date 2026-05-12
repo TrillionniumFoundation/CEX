@@ -4,6 +4,8 @@ pub(super) const TRILLIONNIUM_WORLD_RUST_OWNED_UI_SHELL_CONTRACT_VERSION: &str =
     "trillionnium_world_rust_owned_ui_shell_v1";
 pub(super) const TRILLIONNIUM_WORLD_RUST_ROUTE_UI_FRAGMENTS_CONTRACT_VERSION: &str =
     "trillionnium_world_rust_route_ui_fragments_v1";
+pub(super) const TRILLIONNIUM_WORLD_RUST_ROUTE_RUNNER_UI_FRAGMENTS_CONTRACT_VERSION: &str =
+    "trillionnium_world_rust_route_runner_ui_fragments_v1";
 
 fn world_user_visible_copy(value: &str) -> String {
     let mut copy = value.to_string();
@@ -3766,6 +3768,355 @@ pub(super) fn world_rust_route_ui_fragments_json(route_task_graph: Option<&Value
     })
 }
 
+fn world_json_str<'a>(value: &'a Value, key: &str) -> &'a str {
+    value.get(key).and_then(Value::as_str).unwrap_or("")
+}
+
+fn world_json_path_str<'a>(value: &'a Value, path: &[&str]) -> &'a str {
+    let mut cursor = value;
+    for key in path {
+        cursor = match cursor.get(*key) {
+            Some(next) => next,
+            None => return "",
+        };
+    }
+    cursor.as_str().unwrap_or("")
+}
+
+fn world_json_i64(value: &Value, key: &str) -> i64 {
+    value
+        .get(key)
+        .and_then(|value| {
+            value
+                .as_i64()
+                .or_else(|| value.as_u64().and_then(|number| i64::try_from(number).ok()))
+                .or_else(|| value.as_f64().map(|number| number.round() as i64))
+        })
+        .unwrap_or(0)
+}
+
+fn world_json_f64(value: &Value, key: &str) -> f64 {
+    value.get(key).and_then(Value::as_f64).unwrap_or(0.0)
+}
+
+fn first_nonempty_str<'a>(values: &[&'a str], fallback: &'a str) -> &'a str {
+    values
+        .iter()
+        .copied()
+        .find(|value| !value.trim().is_empty())
+        .unwrap_or(fallback)
+}
+
+fn world_route_runner_hud_chip_html(label: &str) -> String {
+    format!(
+        "<span class=\"hud-chip\">{}</span>",
+        escape_world_visible_text(label)
+    )
+}
+
+fn world_route_runner_focus_button_html(runner: &Value) -> String {
+    format!(
+        "<button type=\"button\" class=\"focus-chip trillionnium-map-focus\" data-focus-kind=\"node\" data-node-id=\"{}\" data-task-id=\"{}\" data-location-id=\"{}\" data-suppress-action=\"true\">{}</button>",
+        escape_html_text(world_json_str(runner, "to_node_id")),
+        escape_html_text(world_json_str(runner, "task_id")),
+        escape_html_text(world_json_str(runner, "latest_location_id")),
+        escape_world_visible_text("Follow runner / 跟随角色"),
+    )
+}
+
+fn world_route_runner_action_button_html(
+    runner: &Value,
+    action_kind: &str,
+    class_name: &str,
+) -> String {
+    let checkpoint = runner.get("reward_checkpoint").unwrap_or(&Value::Null);
+    let action = match action_kind {
+        "reward_claim" => checkpoint
+            .get("reward_claim_action")
+            .unwrap_or(&Value::Null),
+        "next_route" => checkpoint.get("next_route_action").unwrap_or(&Value::Null),
+        _ => &Value::Null,
+    };
+    let fallback_label = match action_kind {
+        "reward_claim" => "Prepare reward claim / 准备领奖",
+        "next_route" => "Open next route / 开启下一条路线",
+        _ => "Complete checkpoint / 完成检查点",
+    };
+    let label = match action_kind {
+        "reward_claim" => first_nonempty_str(
+            &[
+                world_json_path_str(
+                    runner,
+                    &["reward_checkpoint", "reward_claim_action", "label"],
+                ),
+                world_json_str(runner, "reward_claim_label"),
+            ],
+            fallback_label,
+        ),
+        "next_route" => first_nonempty_str(
+            &[
+                world_json_path_str(runner, &["reward_checkpoint", "next_route_action", "label"]),
+                world_json_str(runner, "next_route_label"),
+            ],
+            fallback_label,
+        ),
+        _ => first_nonempty_str(
+            &[world_json_str(runner, "completion_label")],
+            fallback_label,
+        ),
+    };
+    let panel_id = world_json_str(action, "panel_id");
+    let textarea_id = world_json_str(action, "textarea_id");
+    let node_id = world_json_str(action, "node_id");
+    let task_id = world_json_str(action, "task_id");
+    let body = world_json_str(action, "body");
+    let status = world_json_str(action, "status");
+    let button = WorldRouteActionButtonView {
+        label,
+        panel_id: if panel_id.trim().is_empty() {
+            "world-action-console"
+        } else {
+            panel_id
+        },
+        input_id: "",
+        input_value: "",
+        textarea_id: if textarea_id.trim().is_empty() {
+            "world-action-body"
+        } else {
+            textarea_id
+        },
+        location_id: world_json_str(runner, "latest_location_id"),
+        target_node_id: if node_id.trim().is_empty() {
+            world_json_str(runner, "to_node_id")
+        } else {
+            node_id
+        },
+        task_id: if task_id.trim().is_empty() {
+            world_json_str(runner, "task_id")
+        } else {
+            task_id
+        },
+        contract_id: "",
+        listing_id: "",
+        work_order_id: "",
+        event_id: "",
+        event_kind: "",
+        event_body: "",
+        event_result: status,
+        event_task_id: "",
+        body: if body.trim().is_empty() {
+            match action_kind {
+                "reward_claim" => world_json_str(runner, "reward_claim_action_body"),
+                "next_route" => world_json_str(runner, "next_route_action_body"),
+                _ => world_json_str(runner, "completion_action_body"),
+            }
+        } else {
+            body
+        },
+    };
+    button.render(class_name)
+}
+
+fn world_route_runner_card_html(runner: &Value) -> String {
+    let progress =
+        (world_json_f64(runner, "progress_ratio").clamp(0.0, 1.0) * 100.0).round() as i64;
+    let remaining_meters = world_json_i64(runner, "remaining_distance_meters").max(0);
+    let eta_label = world_json_str(runner, "eta_label");
+    let checkpoint_label = world_json_path_str(runner, &["reward_checkpoint", "label"]);
+    let checkpoint_label = if checkpoint_label.trim().is_empty() {
+        world_json_str(runner, "completion_label")
+    } else {
+        checkpoint_label
+    };
+    let trace_count = runner
+        .get("runner_trace_points")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    let mastery_tier = world_json_str(runner, "route_mastery_tier");
+    let mastery_label = world_json_str(runner, "route_mastery_tier_label");
+    let mastery_xp = world_json_i64(runner, "route_mastery_xp");
+    let mastery_streak = world_json_i64(runner, "route_mastery_streak").max(1);
+    let focus_button = world_route_runner_focus_button_html(runner);
+    let completion_button = world_route_runner_action_button_html(
+        runner,
+        "completion",
+        "trillionnium-route-flow-action",
+    );
+    let reward_button = world_route_runner_action_button_html(
+        runner,
+        "reward_claim",
+        "trillionnium-route-flow-action trillionnium-reward-claim-action",
+    );
+    let next_route_button = world_route_runner_action_button_html(
+        runner,
+        "next_route",
+        "trillionnium-route-flow-action trillionnium-next-route-action",
+    );
+    let mut chips = vec![
+        world_route_runner_hud_chip_html(&format!(
+            "{}% route progress / {}% 路线进度",
+            progress, progress
+        )),
+        world_route_runner_hud_chip_html(if eta_label.trim().is_empty() {
+            "ETA pending / 预计时间待定"
+        } else {
+            eta_label
+        }),
+        world_route_runner_hud_chip_html(&format!(
+            "{} trace points / {} 个追踪点",
+            trace_count, trace_count
+        )),
+        world_route_runner_hud_chip_html(if checkpoint_label.trim().is_empty() {
+            "Reward checkpoint / 奖励检查点"
+        } else {
+            checkpoint_label
+        }),
+    ];
+    if !mastery_label.trim().is_empty() {
+        chips.push(format!(
+            "<span class=\"hud-chip\" data-route-mastery-tier=\"{}\">{}: {}</span>",
+            escape_html_text(mastery_tier),
+            escape_world_visible_text("Route mastery / 路线熟练度"),
+            escape_world_visible_text(mastery_label),
+        ));
+    }
+    chips.push(format!(
+        "<span class=\"hud-chip\" data-route-mastery-xp=\"{}\">{} XP</span>",
+        mastery_xp, mastery_xp
+    ));
+    chips.push(format!(
+        "<span class=\"hud-chip\" data-route-mastery-streak=\"{}\">{} {}</span>",
+        mastery_streak,
+        escape_world_visible_text("streak / 连续"),
+        mastery_streak,
+    ));
+    format!(
+        "<article class=\"mini runner\" data-render-owner=\"rust_world_ui_renderer\" data-rust-route-runner-ui-contract=\"{}\" data-browser-ui-owner=\"input_only_focus_bridge\" data-task-id=\"{}\" data-location-id=\"{}\"><strong>{}</strong><span>{} → {} · {}% · {}m · {} · {}</span><code>{}</code><div class=\"focus-stack\">{} {} {} {} {}</div></article>",
+        TRILLIONNIUM_WORLD_RUST_ROUTE_RUNNER_UI_FRAGMENTS_CONTRACT_VERSION,
+        escape_html_text(world_json_str(runner, "task_id")),
+        escape_html_text(world_json_str(runner, "latest_location_id")),
+        escape_world_visible_text(if world_json_str(runner, "movement_label").trim().is_empty() { "Avatar running to task / 角色正在跑向任务" } else { world_json_str(runner, "movement_label") }),
+        escape_world_visible_text(if world_json_str(runner, "from_node_name").trim().is_empty() { world_json_str(runner, "from_node_id") } else { world_json_str(runner, "from_node_name") }),
+        escape_world_visible_text(if world_json_str(runner, "to_node_name").trim().is_empty() { world_json_str(runner, "to_node_id") } else { world_json_str(runner, "to_node_name") }),
+        progress,
+        remaining_meters,
+        escape_world_visible_text(if eta_label.trim().is_empty() { "ETA pending / 预计时间待定" } else { eta_label }),
+        escape_world_visible_text(if checkpoint_label.trim().is_empty() { "Reward checkpoint / 奖励检查点" } else { checkpoint_label }),
+        escape_html_text(if world_json_str(runner, "task_id").trim().is_empty() { world_json_str(runner, "runner_id") } else { world_json_str(runner, "task_id") }),
+        focus_button,
+        completion_button,
+        reward_button,
+        next_route_button,
+        chips.join(" "),
+    )
+}
+
+fn world_route_runner_empty_card_html() -> String {
+    format!(
+        "<article class=\"mini runner\" data-render-owner=\"rust_world_ui_renderer\" data-rust-route-runner-ui-contract=\"{}\" data-browser-ui-owner=\"input_only_focus_bridge\"><strong>{}</strong><span>{}</span><code>route runners</code></article>",
+        TRILLIONNIUM_WORLD_RUST_ROUTE_RUNNER_UI_FRAGMENTS_CONTRACT_VERSION,
+        escape_world_visible_text("No route runners yet / 暂无跑图角色"),
+        escape_world_visible_text("Complete a task route to unlock reward and next-route handoff actions. / 完成任务路线后会解锁奖励和下一路线交接。"),
+    )
+}
+
+fn world_route_runner_cards_html(runners: &[Value]) -> String {
+    let cards = runners
+        .iter()
+        .map(world_route_runner_card_html)
+        .collect::<Vec<_>>()
+        .join("\n");
+    if cards.is_empty() {
+        world_route_runner_empty_card_html()
+    } else {
+        cards
+    }
+}
+
+fn world_route_runner_focus_fragment_json(
+    all_runners: &[Value],
+    active_task_id: Option<&str>,
+    location_id: Option<&str>,
+) -> Value {
+    let task_id = active_task_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let location_id = location_id.map(str::trim).filter(|value| !value.is_empty());
+    let focused = all_runners
+        .iter()
+        .filter(|runner| {
+            if let Some(task_id) = task_id {
+                return world_json_str(runner, "task_id") == task_id;
+            }
+            if let Some(location_id) = location_id {
+                let runner_location_id = world_json_str(runner, "latest_location_id");
+                return runner_location_id.is_empty() || runner_location_id == location_id;
+            }
+            true
+        })
+        .take(6)
+        .cloned()
+        .collect::<Vec<_>>();
+    let runners = if focused.is_empty() {
+        all_runners.iter().take(6).cloned().collect::<Vec<_>>()
+    } else {
+        focused
+    };
+    json!({
+        "contract_version": TRILLIONNIUM_WORLD_RUST_ROUTE_RUNNER_UI_FRAGMENTS_CONTRACT_VERSION,
+        "source_of_truth": "rust_world_map_route_runner_projection",
+        "render_owner": "rust_world_ui_renderer",
+        "web_role": "input_only_focus_bridge",
+        "active_task_id": task_id.unwrap_or(""),
+        "location_id": location_id.unwrap_or(""),
+        "runner_count": runners.len(),
+        "cards_html": world_route_runner_cards_html(&runners),
+        "ui_ownership": {
+            "route_runner_cards": "rust_rendered",
+            "reward_claim_action_buttons": "rust_rendered",
+            "next_route_action_buttons": "rust_rendered",
+            "browser": "input_only_focus_bridge"
+        }
+    })
+}
+
+pub(super) fn world_rust_route_runner_ui_fragments_json(viewport: &Value) -> Value {
+    let runners = viewport
+        .get("avatar_route_runners")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut by_task_id = Map::new();
+    let mut by_location_id = Map::new();
+    for runner in &runners {
+        let task_id = world_json_str(runner, "task_id").trim();
+        if !task_id.is_empty() && !by_task_id.contains_key(task_id) {
+            by_task_id.insert(
+                task_id.to_string(),
+                world_route_runner_focus_fragment_json(&runners, Some(task_id), None),
+            );
+        }
+        let location_id = world_json_str(runner, "latest_location_id").trim();
+        if !location_id.is_empty() && !by_location_id.contains_key(location_id) {
+            by_location_id.insert(
+                location_id.to_string(),
+                world_route_runner_focus_fragment_json(&runners, None, Some(location_id)),
+            );
+        }
+    }
+    json!({
+        "contract_version": TRILLIONNIUM_WORLD_RUST_ROUTE_RUNNER_UI_FRAGMENTS_CONTRACT_VERSION,
+        "source_of_truth": "rust_world_map_route_runner_projection",
+        "render_owner": "rust_world_ui_renderer",
+        "web_role": "input_only_focus_bridge",
+        "hydration_policy": "server_rendered_runner_cards_selected_by_focus_bridge",
+        "default": world_route_runner_focus_fragment_json(&runners, None, None),
+        "by_task_id": by_task_id,
+        "by_location_id": by_location_id,
+    })
+}
+
 pub(super) fn world_rust_owned_ui_fragments_json(
     world: &WorldState,
     current_node: &WorldMapNode,
@@ -4746,6 +5097,14 @@ pub(super) async fn get_world_web_shell(
         .and_then(|handoff| handoff.get("first_route_mastery_xp"))
         .and_then(Value::as_u64)
         .unwrap_or(0);
+    let world_route_runner_ui_fragments =
+        world_rust_route_runner_ui_fragments_json(&world_viewport);
+    let world_route_runner_cards_html = world_route_runner_ui_fragments
+        .get("default")
+        .and_then(|fragment| fragment.get("cards_html"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
     let world_route_archetype_catalog = trillionnium_world_route_archetypes_json(
         map_avatar_task_route_count as i64,
         league.world.world_listings.len() as i64,
@@ -4810,6 +5169,10 @@ pub(super) async fn get_world_web_shell(
         object.insert(
             "rust_owned_route_ui_fragments".to_string(),
             world_rust_route_ui_fragments_json(world_map.get("route_task_graph")),
+        );
+        object.insert(
+            "rust_owned_route_runner_ui_fragments".to_string(),
+            world_rust_route_runner_ui_fragments_json(&world_viewport),
         );
     }
     let world_map_bootstrap_bytes = serde_json::to_string(&world_map_bootstrap)
@@ -6115,7 +6478,7 @@ pub(super) async fn get_world_web_shell(
             <h3 data-i18n-en="Avatar Task Routes" data-i18n-zh="角色任务路线">Avatar Task Routes</h3>
             <div id="world-avatar-task-routes-live" class="mini-grid" style="margin-top:12px"></div>
             <h3 data-i18n-en="Avatar Movement" data-i18n-zh="角色跑图">Avatar Movement</h3>
-            <div id="world-avatar-route-runners-live" class="mini-grid" style="margin-top:12px"></div>
+            <div id="world-avatar-route-runners-live" class="mini-grid" style="margin-top:12px" data-render-owner="rust_world_ui_renderer" data-rust-route-runner-ui-contract="{rust_route_runner_ui_contract}" data-browser-ui-owner="input_only_focus_bridge">{world_route_runner_cards_html}</div>
             <p style="margin-top:12px"><strong>Global Real-world Map Engine</strong>: <code>{map_engine_name}</code> + <code>{tile_provider}</code></p>
             <p><strong>Mirror</strong>: <code>{mirror_scope}</code> · <strong>Strategy</strong>: <code>{full_mirror_strategy}</code> · <strong>Style</strong>: <code>{simplification_style}</code> · <strong>Goal</strong>: <code>{scaling_goal}</code></p>
             <p><strong>Viewport API</strong>: <code>{viewport_path}</code></p>
@@ -7200,7 +7563,7 @@ pub(super) async fn get_world_web_shell(
           renderStreamHud(lastViewport, focus);
           renderCards(liveEventTarget, filterLiveEventStream(lastViewport.live_event_stream || [], focus), 'event');
           renderCards(taskRouteTarget, filterAvatarTaskRoutes(lastViewport.avatar_task_routes || [], focus), 'taskRoute');
-          renderCards(routeRunnerTarget, filterAvatarRouteRunners(lastViewport.avatar_route_runners || [], focus), 'routeRunner');
+          renderRustRouteRunnerCards(routeRunnerTarget, lastViewport, focus) || renderCards(routeRunnerTarget, filterAvatarRouteRunners(lastViewport.avatar_route_runners || [], focus), 'routeRunner');
         }}
         renderFocusPanel();
         applyRouteFilters();
@@ -7401,6 +7764,8 @@ pub(super) async fn get_world_web_shell(
         world_keypad_state_json = world_keypad_state_json,
         rust_owned_ui_contract = TRILLIONNIUM_WORLD_RUST_OWNED_UI_SHELL_CONTRACT_VERSION,
         rust_route_ui_contract = TRILLIONNIUM_WORLD_RUST_ROUTE_UI_FRAGMENTS_CONTRACT_VERSION,
+        rust_route_runner_ui_contract =
+            TRILLIONNIUM_WORLD_RUST_ROUTE_RUNNER_UI_FRAGMENTS_CONTRACT_VERSION,
         world_keypad_current_name = world_keypad_current_name,
         world_keypad_current_description = world_keypad_current_description,
         world_keypad_current_coordinates = escape_html_text(&world_keypad_current_coordinates),
@@ -7433,6 +7798,7 @@ pub(super) async fn get_world_web_shell(
         standing_cards = standing_cards,
         contract_cards = contract_cards,
         world_route_task_graph_cards = world_route_task_graph_cards,
+        world_route_runner_cards_html = world_route_runner_cards_html,
         world_route_flow_actions_html = world_route_flow_actions_html,
         world_route_filter_status_text = escape_html_text(world_route_filter_status_text),
         world_route_flow_status_text = escape_html_text(world_route_flow_status_text),

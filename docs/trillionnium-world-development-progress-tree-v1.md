@@ -1846,6 +1846,17 @@ Also append a one-paragraph summary to `/home/qian/.openclaw/workspace/memory/YY
 
 ---
 
+#### Update 2026-05-12 09:5x CST
+
+- Continued the Rust-owned UI push into the `/world` route-runner handoff layer:
+  - [x] Added `trillionnium_world_rust_route_runner_ui_fragments_v1` for server-rendered route-runner cards, reward-claim buttons, next-route buttons, and route-runner status chips.
+  - [x] `/world` bootstrap plus `/world/web/map-viewport` and `/world/web/map-delta` now carry `rust_owned_route_runner_ui_fragments`, so browser refreshes select Rust-rendered card fragments instead of constructing route-runner handoff cards locally.
+  - [x] `#world-avatar-route-runners-live` declares `data-render-owner="rust_world_ui_renderer"`, the route-runner fragment contract, and `data-browser-ui-owner="input_only_focus_bridge"`.
+  - [x] Browser JS keeps focus selection and event delegation, but `renderRustRouteRunnerCards(...)` applies pre-rendered Rust fragments for `/world`; generic JS card building remains only as fallback/shared non-world compatibility.
+- Constraints preserved: no copied 白金英雄坛说 / Hero Tan code/text/assets/data/NPC/task tables/names, no full clone-then-replace workflow, no live OSM ingestion, no MapLibre promotion, Rust source of truth, browser input-only/event-bridge role, and no local-only score inflation.
+
+---
+
 ## Current Next Pointer
 
 If the next instruction is simply “continue”, start here:
