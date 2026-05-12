@@ -386,6 +386,7 @@ pub(super) async fn get_world_map_viewport(
     );
     let live_task_fragments = world_rust_live_task_ui_fragments_json(&viewport);
     let route_runner_fragments = world_rust_route_runner_ui_fragments_json(&viewport);
+    let map_popup_fragments = world_rust_map_popup_ui_fragments_json(None, Some(&viewport));
     if let Some(object) = viewport.as_object_mut() {
         object.insert(
             "rust_owned_live_task_ui_fragments".to_string(),
@@ -394,6 +395,10 @@ pub(super) async fn get_world_map_viewport(
         object.insert(
             "rust_owned_route_runner_ui_fragments".to_string(),
             route_runner_fragments,
+        );
+        object.insert(
+            "rust_owned_map_popup_ui_fragments".to_string(),
+            map_popup_fragments,
         );
     }
     let mut response = json_resource_response(
@@ -476,6 +481,7 @@ pub(super) async fn get_world_web_map_viewport(
     );
     let live_task_fragments = world_rust_live_task_ui_fragments_json(&viewport);
     let route_runner_fragments = world_rust_route_runner_ui_fragments_json(&viewport);
+    let map_popup_fragments = world_rust_map_popup_ui_fragments_json(None, Some(&viewport));
     if let Some(object) = viewport.as_object_mut() {
         object.insert(
             "rust_owned_live_task_ui_fragments".to_string(),
@@ -484,6 +490,10 @@ pub(super) async fn get_world_web_map_viewport(
         object.insert(
             "rust_owned_route_runner_ui_fragments".to_string(),
             route_runner_fragments,
+        );
+        object.insert(
+            "rust_owned_map_popup_ui_fragments".to_string(),
+            map_popup_fragments,
         );
     }
     let mut response = json_resource_response(
@@ -567,6 +577,7 @@ async fn world_map_delta_response(
     );
     let live_task_fragments = world_rust_live_task_ui_fragments_json(&current_viewport);
     let route_runner_fragments = world_rust_route_runner_ui_fragments_json(&current_viewport);
+    let map_popup_fragments = world_rust_map_popup_ui_fragments_json(None, Some(&current_viewport));
     if let Some(object) = delta.as_object_mut() {
         if let Some(patch) = object.get_mut("delta").and_then(Value::as_object_mut) {
             patch.insert(
@@ -577,6 +588,10 @@ async fn world_map_delta_response(
                 "rust_owned_route_runner_ui_fragments".to_string(),
                 route_runner_fragments.clone(),
             );
+            patch.insert(
+                "rust_owned_map_popup_ui_fragments".to_string(),
+                map_popup_fragments.clone(),
+            );
         }
         object.insert(
             "rust_owned_live_task_ui_fragments".to_string(),
@@ -585,6 +600,10 @@ async fn world_map_delta_response(
         object.insert(
             "rust_owned_route_runner_ui_fragments".to_string(),
             route_runner_fragments,
+        );
+        object.insert(
+            "rust_owned_map_popup_ui_fragments".to_string(),
+            map_popup_fragments,
         );
     }
     if !delta

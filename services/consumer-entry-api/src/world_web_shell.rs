@@ -8,6 +8,8 @@ pub(super) const TRILLIONNIUM_WORLD_RUST_ROUTE_RUNNER_UI_FRAGMENTS_CONTRACT_VERS
     "trillionnium_world_rust_route_runner_ui_fragments_v1";
 pub(super) const TRILLIONNIUM_WORLD_RUST_LIVE_TASK_UI_FRAGMENTS_CONTRACT_VERSION: &str =
     "trillionnium_world_rust_live_task_ui_fragments_v1";
+pub(super) const TRILLIONNIUM_WORLD_RUST_MAP_POPUP_UI_FRAGMENTS_CONTRACT_VERSION: &str =
+    "trillionnium_world_rust_map_popup_ui_fragments_v1";
 
 fn world_user_visible_copy(value: &str) -> String {
     let mut copy = value.to_string();
@@ -4279,6 +4281,33 @@ fn world_route_runner_action_button_html(
     button.render(class_name)
 }
 
+fn world_route_runner_mastery_chips_html(runner: &Value) -> String {
+    let mastery_tier = world_json_str(runner, "route_mastery_tier");
+    let mastery_label = world_json_str(runner, "route_mastery_tier_label");
+    let mastery_xp = world_json_i64(runner, "route_mastery_xp");
+    let mastery_streak = world_json_i64(runner, "route_mastery_streak").max(1);
+    let mut chips = Vec::new();
+    if !mastery_label.trim().is_empty() {
+        chips.push(format!(
+            "<span class=\"hud-chip\" data-route-mastery-tier=\"{}\">{}: {}</span>",
+            escape_html_text(mastery_tier),
+            escape_world_visible_text("Route mastery / 路线熟练度"),
+            escape_world_visible_text(mastery_label),
+        ));
+    }
+    chips.push(format!(
+        "<span class=\"hud-chip\" data-route-mastery-xp=\"{}\">{} XP</span>",
+        mastery_xp, mastery_xp
+    ));
+    chips.push(format!(
+        "<span class=\"hud-chip\" data-route-mastery-streak=\"{}\">{} {}</span>",
+        mastery_streak,
+        escape_world_visible_text("streak / 连续"),
+        mastery_streak,
+    ));
+    chips.join(" ")
+}
+
 fn world_route_runner_card_html(runner: &Value) -> String {
     let progress =
         (world_json_f64(runner, "progress_ratio").clamp(0.0, 1.0) * 100.0).round() as i64;
@@ -4295,10 +4324,6 @@ fn world_route_runner_card_html(runner: &Value) -> String {
         .and_then(Value::as_array)
         .map(Vec::len)
         .unwrap_or(0);
-    let mastery_tier = world_json_str(runner, "route_mastery_tier");
-    let mastery_label = world_json_str(runner, "route_mastery_tier_label");
-    let mastery_xp = world_json_i64(runner, "route_mastery_xp");
-    let mastery_streak = world_json_i64(runner, "route_mastery_streak").max(1);
     let focus_button = world_route_runner_focus_button_html(runner);
     let completion_button = world_route_runner_action_button_html(
         runner,
@@ -4335,24 +4360,7 @@ fn world_route_runner_card_html(runner: &Value) -> String {
             checkpoint_label
         }),
     ];
-    if !mastery_label.trim().is_empty() {
-        chips.push(format!(
-            "<span class=\"hud-chip\" data-route-mastery-tier=\"{}\">{}: {}</span>",
-            escape_html_text(mastery_tier),
-            escape_world_visible_text("Route mastery / 路线熟练度"),
-            escape_world_visible_text(mastery_label),
-        ));
-    }
-    chips.push(format!(
-        "<span class=\"hud-chip\" data-route-mastery-xp=\"{}\">{} XP</span>",
-        mastery_xp, mastery_xp
-    ));
-    chips.push(format!(
-        "<span class=\"hud-chip\" data-route-mastery-streak=\"{}\">{} {}</span>",
-        mastery_streak,
-        escape_world_visible_text("streak / 连续"),
-        mastery_streak,
-    ));
+    chips.push(world_route_runner_mastery_chips_html(runner));
     format!(
         "<article class=\"mini runner\" data-render-owner=\"rust_world_ui_renderer\" data-rust-route-runner-ui-contract=\"{}\" data-browser-ui-owner=\"input_only_focus_bridge\" data-task-id=\"{}\" data-location-id=\"{}\"><strong>{}</strong><span>{} → {} · {}% · {}m · {} · {}</span><code>{}</code><div class=\"focus-stack\">{} {} {} {} {}</div></article>",
         TRILLIONNIUM_WORLD_RUST_ROUTE_RUNNER_UI_FRAGMENTS_CONTRACT_VERSION,
@@ -4476,6 +4484,412 @@ pub(super) fn world_rust_route_runner_ui_fragments_json(viewport: &Value) -> Val
         "default": world_route_runner_focus_fragment_json(&runners, None, None),
         "by_task_id": by_task_id,
         "by_location_id": by_location_id,
+    })
+}
+
+fn world_map_popup_action_button_html(marker: &Value, action: &Value) -> String {
+    let action_id = first_nonempty_str(&[world_json_str(action, "action_id")], "move_here");
+    let label = first_nonempty_str(
+        &[
+            world_json_str(action, "label"),
+            world_json_str(action, "command"),
+        ],
+        "Action / 行动",
+    );
+    format!(
+        "<button type=\"button\" class=\"trillionnium-map-action\" data-render-owner=\"rust_world_ui_renderer\" data-rust-map-popup-ui-contract=\"{}\" data-browser-ui-owner=\"input_only_click_bridge\" data-node-id=\"{}\" data-action-id=\"{}\">{}</button>",
+        TRILLIONNIUM_WORLD_RUST_MAP_POPUP_UI_FRAGMENTS_CONTRACT_VERSION,
+        escape_html_text(world_json_str(marker, "node_id")),
+        escape_html_text(action_id),
+        escape_world_visible_text(label),
+    )
+}
+
+fn world_map_marker_popup_html(marker: &Value) -> String {
+    let node_id = world_json_str(marker, "node_id");
+    let actions = marker
+        .get("primary_actions")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let action_commands = actions
+        .iter()
+        .map(|action| {
+            let command = first_nonempty_str(
+                &[
+                    world_json_str(action, "command"),
+                    world_json_str(action, "label"),
+                ],
+                "",
+            );
+            if command.trim().is_empty() {
+                String::new()
+            } else {
+                format!("<br><code>{}</code>", escape_html_text(command))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let action_buttons = actions
+        .iter()
+        .map(|action| world_map_popup_action_button_html(marker, action))
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!(
+        "<div class=\"trillionnium-map-popup rust-owned-map-popup\" data-popup-kind=\"poi_marker\" data-render-owner=\"rust_world_ui_renderer\" data-rust-map-popup-ui-contract=\"{}\" data-browser-ui-owner=\"input_only_click_bridge\" data-node-id=\"{}\"><strong>{}</strong><br><code>{}</code><br>{}{}<br>{}</div>",
+        TRILLIONNIUM_WORLD_RUST_MAP_POPUP_UI_FRAGMENTS_CONTRACT_VERSION,
+        escape_html_text(node_id),
+        escape_world_visible_text(first_nonempty_str(&[world_json_str(marker, "name")], node_id)),
+        escape_html_text(node_id),
+        escape_world_visible_text(first_nonempty_str(&[world_json_str(marker, "description")], "World point / 世界地点")),
+        action_commands,
+        action_buttons,
+    )
+}
+
+fn world_route_runner_history_chips_html(runner: &Value) -> String {
+    let history = runner
+        .get("checkpoint_history")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut chips = vec![format!(
+        "<span class=\"hud-chip\">{}: {} {}</span>",
+        escape_world_visible_text("Checkpoint history / 检查点历史"),
+        history.len(),
+        escape_world_visible_text("history steps / 个历史节点"),
+    )];
+    if let Some(latest) = history.last() {
+        let latest_label = first_nonempty_str(
+            &[
+                world_json_str(latest, "label"),
+                world_json_str(latest, "stage"),
+                world_json_str(latest, "status"),
+            ],
+            "",
+        );
+        if !latest_label.trim().is_empty() {
+            chips.push(format!(
+                "<span class=\"hud-chip\">{}</span>",
+                escape_world_visible_text(latest_label),
+            ));
+        }
+    }
+    let reward_history_summary = world_json_str(runner, "reward_history_summary");
+    if !reward_history_summary.trim().is_empty() {
+        chips.push(format!(
+            "<span class=\"hud-chip\">{}</span>",
+            escape_world_visible_text(reward_history_summary),
+        ));
+    }
+    chips.join(" ")
+}
+
+fn world_agent_party_action_button_html(
+    member: &Value,
+    source: &Value,
+    class_name: &str,
+) -> String {
+    let handoff = member.get("handoff_action").unwrap_or(&Value::Null);
+    let label = first_nonempty_str(
+        &[
+            world_json_str(handoff, "label"),
+            world_json_str(member, "action_label"),
+            world_json_str(member, "display_name"),
+        ],
+        "Agent handoff / Agent 交接",
+    );
+    let button = WorldRouteActionButtonView {
+        label,
+        panel_id: first_nonempty_str(
+            &[world_json_str(handoff, "panel_id")],
+            "world-action-console",
+        ),
+        input_id: "",
+        input_value: "",
+        textarea_id: first_nonempty_str(
+            &[world_json_str(handoff, "textarea_id")],
+            "world-action-body",
+        ),
+        location_id: first_nonempty_str(
+            &[
+                world_json_str(source, "latest_location_id"),
+                world_json_str(source, "location_id"),
+            ],
+            "",
+        ),
+        target_node_id: first_nonempty_str(
+            &[
+                world_json_str(source, "to_node_id"),
+                world_json_str(source, "node_id"),
+            ],
+            "",
+        ),
+        task_id: first_nonempty_str(
+            &[
+                world_json_str(handoff, "task_id"),
+                world_json_str(source, "task_id"),
+            ],
+            "",
+        ),
+        contract_id: "",
+        listing_id: "",
+        work_order_id: "",
+        event_id: "",
+        event_kind: "",
+        event_body: "",
+        event_result: first_nonempty_str(
+            &[
+                world_json_str(handoff, "status"),
+                world_json_str(member, "state"),
+            ],
+            "",
+        ),
+        event_task_id: "",
+        body: first_nonempty_str(
+            &[
+                world_json_str(handoff, "body"),
+                world_json_str(member, "action_body"),
+                world_json_str(member, "responsibility"),
+            ],
+            "",
+        ),
+    };
+    button.render(class_name)
+}
+
+fn world_agent_party_chips_html(source: &Value, class_name: &str) -> String {
+    let party = source
+        .get("agent_party")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut chips = vec![format!(
+        "<span class=\"hud-chip\">{}: {} {}</span>",
+        escape_world_visible_text("Agent party / Agent 小队"),
+        party.len(),
+        escape_world_visible_text("party members / 个小队成员"),
+    )];
+    for member in party.iter().take(4) {
+        chips.push(format!(
+            "<span class=\"hud-chip\">{}</span>",
+            escape_world_visible_text(first_nonempty_str(
+                &[
+                    world_json_str(member, "display_name"),
+                    world_json_str(member, "role")
+                ],
+                "Agent / Agent",
+            )),
+        ));
+    }
+    for key in ["agent_party_summary", "agent_party_action_summary"] {
+        let summary = world_json_str(source, key);
+        if !summary.trim().is_empty() {
+            chips.push(format!(
+                "<span class=\"hud-chip\">{}</span>",
+                escape_world_visible_text(summary),
+            ));
+        }
+    }
+    let action_buttons = party
+        .iter()
+        .take(4)
+        .map(|member| world_agent_party_action_button_html(member, source, class_name))
+        .collect::<Vec<_>>()
+        .join(" ");
+    if !action_buttons.trim().is_empty() {
+        chips.push(action_buttons);
+    }
+    chips.join(" ")
+}
+
+fn world_route_runner_popup_html(runner: &Value) -> String {
+    let checkpoint = runner.get("reward_checkpoint").unwrap_or(&Value::Null);
+    let checkpoint_label = first_nonempty_str(
+        &[
+            world_json_str(checkpoint, "label"),
+            world_json_str(runner, "completion_label"),
+        ],
+        "Reward checkpoint / 奖励检查点",
+    );
+    let trace_count = runner
+        .get("runner_trace_points")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    let completion_button = world_route_runner_action_button_html(
+        runner,
+        "completion",
+        "trillionnium-route-flow-action trillionnium-app-route-flow-action",
+    );
+    let reward_button = world_route_runner_action_button_html(
+        runner,
+        "reward_claim",
+        "trillionnium-route-flow-action trillionnium-app-route-flow-action trillionnium-reward-claim-action",
+    );
+    let next_route_button = world_route_runner_action_button_html(
+        runner,
+        "next_route",
+        "trillionnium-route-flow-action trillionnium-app-route-flow-action trillionnium-next-route-action",
+    );
+    let mastery_chips = world_route_runner_mastery_chips_html(runner);
+    let history_chips = world_route_runner_history_chips_html(runner);
+    let party_chips = world_agent_party_chips_html(
+        runner,
+        "trillionnium-route-flow-action trillionnium-app-route-flow-action trillionnium-agent-party-action",
+    );
+    format!(
+        "<div class=\"trillionnium-map-popup rust-owned-map-popup\" data-popup-kind=\"avatar_route_runner\" data-render-owner=\"rust_world_ui_renderer\" data-rust-map-popup-ui-contract=\"{}\" data-browser-ui-owner=\"input_only_click_bridge\" data-task-id=\"{}\" data-location-id=\"{}\"><strong>{}</strong><br/><span>{} → {}</span><br/><span>{} · {} · {} {}</span><br/><span>{} · {}</span><br/><code>{}</code><br/><div class=\"focus-stack\">{} {} {} {} {} {}</div><small>{}</small></div>",
+        TRILLIONNIUM_WORLD_RUST_MAP_POPUP_UI_FRAGMENTS_CONTRACT_VERSION,
+        escape_html_text(world_json_str(runner, "task_id")),
+        escape_html_text(world_json_str(runner, "latest_location_id")),
+        escape_world_visible_text(first_nonempty_str(&[world_json_str(runner, "movement_label")], "Avatar running to task / 角色正在跑向任务")),
+        escape_world_visible_text(first_nonempty_str(&[world_json_str(runner, "from_node_name"), world_json_str(runner, "from_node_id")], "avatar")),
+        escape_world_visible_text(first_nonempty_str(&[world_json_str(runner, "to_node_name"), world_json_str(runner, "to_node_id")], "task")),
+        escape_world_visible_text(first_nonempty_str(&[world_json_str(runner, "progress_label")], "route progress / 路线进度")),
+        escape_world_visible_text(first_nonempty_str(&[world_json_str(runner, "eta_label")], "ETA / 预计")),
+        trace_count,
+        escape_world_visible_text("trace points / 个追踪点"),
+        escape_world_visible_text(checkpoint_label),
+        escape_world_visible_text(first_nonempty_str(&[world_json_str(runner, "completion_label")], "Complete checkpoint / 完成检查点")),
+        escape_html_text(world_json_str(runner, "completion_command")),
+        completion_button,
+        reward_button,
+        next_route_button,
+        mastery_chips,
+        history_chips,
+        party_chips,
+        escape_world_visible_text(first_nonempty_str(&[
+            world_json_str(runner, "next_route_sequence_summary"),
+            world_json_str(runner, "checkpoint_history_summary"),
+            world_json_str(runner, "reward_loop"),
+        ], "move → task → reward / 移动 → 任务 → 奖励")),
+    )
+}
+
+fn world_player_avatar_popup_html(avatar: &Value) -> String {
+    let party_chips = world_agent_party_chips_html(
+        avatar,
+        "trillionnium-route-flow-action trillionnium-app-route-flow-action trillionnium-agent-party-action",
+    );
+    format!(
+        "<div class=\"trillionnium-map-popup rust-owned-map-popup\" data-popup-kind=\"player_avatar\" data-render-owner=\"rust_world_ui_renderer\" data-rust-map-popup-ui-contract=\"{}\" data-browser-ui-owner=\"input_only_click_bridge\" data-node-id=\"{}\" data-matrix-user-id=\"{}\"><strong>{}</strong><br/><span>{}</span><br/><div class=\"focus-stack\">{}</div><small>{}</small></div>",
+        TRILLIONNIUM_WORLD_RUST_MAP_POPUP_UI_FRAGMENTS_CONTRACT_VERSION,
+        escape_html_text(world_json_str(avatar, "node_id")),
+        escape_html_text(world_json_str(avatar, "matrix_user_id")),
+        escape_world_visible_text(first_nonempty_str(&[world_json_str(avatar, "display_name"), world_json_str(avatar, "matrix_user_id")], "Player avatar / 玩家角色")),
+        escape_world_visible_text(first_nonempty_str(&[world_json_str(avatar, "node_name"), world_json_str(avatar, "node_id")], "World node / 世界节点")),
+        party_chips,
+        escape_world_visible_text(first_nonempty_str(&[world_json_str(avatar, "task_loop")], "move → task → reward / 移动 → 任务 → 奖励")),
+    )
+}
+
+fn insert_popup_fragment(map: &mut Map<String, Value>, key: &str, kind: &str, popup_html: String) {
+    let key = key.trim();
+    if key.is_empty() || map.contains_key(key) {
+        return;
+    }
+    map.insert(
+        key.to_string(),
+        json!({
+            "contract_version": TRILLIONNIUM_WORLD_RUST_MAP_POPUP_UI_FRAGMENTS_CONTRACT_VERSION,
+            "source_of_truth": "rust_world_map_popup_projection",
+            "render_owner": "rust_world_ui_renderer",
+            "web_role": "input_only_click_bridge",
+            "popup_kind": kind,
+            "popup_html": popup_html,
+        }),
+    );
+}
+
+pub(super) fn world_rust_map_popup_ui_fragments_json(
+    world_map: Option<&Value>,
+    viewport: Option<&Value>,
+) -> Value {
+    let markers = world_map
+        .and_then(|map| map.get("real_world_map_engine"))
+        .and_then(|engine| engine.get("markers"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let runners = viewport
+        .and_then(|viewport| viewport.get("avatar_route_runners"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let avatars = viewport
+        .and_then(|viewport| viewport.get("player_avatars"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut marker_popups_by_node_id = Map::new();
+    for marker in &markers {
+        insert_popup_fragment(
+            &mut marker_popups_by_node_id,
+            world_json_str(marker, "node_id"),
+            "poi_marker",
+            world_map_marker_popup_html(marker),
+        );
+    }
+    let mut route_runner_popups_by_task_id = Map::new();
+    let mut route_runner_popups_by_runner_id = Map::new();
+    let mut route_runner_popups_by_to_node_id = Map::new();
+    for runner in &runners {
+        let popup = world_route_runner_popup_html(runner);
+        insert_popup_fragment(
+            &mut route_runner_popups_by_task_id,
+            world_json_str(runner, "task_id"),
+            "avatar_route_runner",
+            popup.clone(),
+        );
+        insert_popup_fragment(
+            &mut route_runner_popups_by_runner_id,
+            world_json_str(runner, "runner_id"),
+            "avatar_route_runner",
+            popup.clone(),
+        );
+        insert_popup_fragment(
+            &mut route_runner_popups_by_to_node_id,
+            world_json_str(runner, "to_node_id"),
+            "avatar_route_runner",
+            popup,
+        );
+    }
+    let mut player_avatar_popups_by_node_id = Map::new();
+    let mut player_avatar_popups_by_matrix_user_id = Map::new();
+    for avatar in &avatars {
+        let popup = world_player_avatar_popup_html(avatar);
+        insert_popup_fragment(
+            &mut player_avatar_popups_by_node_id,
+            world_json_str(avatar, "node_id"),
+            "player_avatar",
+            popup.clone(),
+        );
+        insert_popup_fragment(
+            &mut player_avatar_popups_by_matrix_user_id,
+            world_json_str(avatar, "matrix_user_id"),
+            "player_avatar",
+            popup,
+        );
+    }
+    json!({
+        "contract_version": TRILLIONNIUM_WORLD_RUST_MAP_POPUP_UI_FRAGMENTS_CONTRACT_VERSION,
+        "source_of_truth": "rust_world_map_popup_projection",
+        "render_owner": "rust_world_ui_renderer",
+        "web_role": "input_only_click_bridge",
+        "hydration_policy": "server_rendered_map_popups_bound_by_browser_adapter",
+        "marker_popups_by_node_id": marker_popups_by_node_id,
+        "route_runner_popups_by_task_id": route_runner_popups_by_task_id,
+        "route_runner_popups_by_runner_id": route_runner_popups_by_runner_id,
+        "route_runner_popups_by_to_node_id": route_runner_popups_by_to_node_id,
+        "player_avatar_popups_by_node_id": player_avatar_popups_by_node_id,
+        "player_avatar_popups_by_matrix_user_id": player_avatar_popups_by_matrix_user_id,
+        "ui_ownership": {
+            "poi_marker_popups": "rust_rendered",
+            "avatar_route_runner_popups": "rust_rendered",
+            "player_avatar_popups": "rust_rendered",
+            "browser": "input_only_click_bridge"
+        }
     })
 }
 
@@ -5498,6 +5912,10 @@ pub(super) async fn get_world_web_shell(
         object.insert(
             "rust_owned_route_runner_ui_fragments".to_string(),
             world_rust_route_runner_ui_fragments_json(&world_viewport),
+        );
+        object.insert(
+            "rust_owned_map_popup_ui_fragments".to_string(),
+            world_rust_map_popup_ui_fragments_json(Some(&world_map), Some(&world_viewport)),
         );
     }
     let world_map_bootstrap_bytes = serde_json::to_string(&world_map_bootstrap)
@@ -6826,7 +7244,7 @@ pub(super) async fn get_world_web_shell(
           </div>
         </details>
         <div class="trillionnium-underlay-label" data-i18n-en="OpenClawStreetMap engine viewport · supporting layer, not the main UI" data-i18n-zh="OpenClawStreetMap 引擎视口 · 支撑层，不是主界面"><strong>OpenClawStreetMap</strong><span data-i18n-en="supporting real-world engine viewport" data-i18n-zh="底层真实世界引擎视口">supporting real-world engine viewport</span></div>
-        <div id="world-real-map" data-engine="{map_engine_id}" data-provider="{tile_provider}" aria-label="Trillionnium World Map" data-i18n-aria-label-en="Trillionnium World Map" data-i18n-aria-label-zh="Trillionnium 世界地图"></div>
+        <div id="world-real-map" data-engine="{map_engine_id}" data-provider="{tile_provider}" data-rust-map-popup-ui-contract="{rust_map_popup_ui_contract}" data-popup-render-owner="rust_world_ui_renderer" data-popup-browser-role="input_only_click_bridge" aria-label="Trillionnium World Map" data-i18n-aria-label-en="Trillionnium World Map" data-i18n-aria-label-zh="Trillionnium 世界地图"></div>
       </div>
     </section>
     <section class="world-secondary-collapsed world-secondary-detail-panel" data-secondary-dashboard-contract="trillionnium_secondary_dashboard_panels_v1" data-secondary-dashboard-role="secondary_detail_panel" data-main-experience="false" data-default-state="collapsed_on_mobile" data-primary-loop-anchor="trillionnium-tactics-game-shell" data-mobile-ia="collapsed_secondary_panel" data-deferred-payload="true">
@@ -8094,6 +8512,8 @@ pub(super) async fn get_world_web_shell(
         rust_route_ui_contract = TRILLIONNIUM_WORLD_RUST_ROUTE_UI_FRAGMENTS_CONTRACT_VERSION,
         rust_live_task_ui_contract =
             TRILLIONNIUM_WORLD_RUST_LIVE_TASK_UI_FRAGMENTS_CONTRACT_VERSION,
+        rust_map_popup_ui_contract =
+            TRILLIONNIUM_WORLD_RUST_MAP_POPUP_UI_FRAGMENTS_CONTRACT_VERSION,
         rust_route_runner_ui_contract =
             TRILLIONNIUM_WORLD_RUST_ROUTE_RUNNER_UI_FRAGMENTS_CONTRACT_VERSION,
         world_keypad_current_name = world_keypad_current_name,

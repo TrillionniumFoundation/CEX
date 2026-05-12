@@ -6379,6 +6379,18 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     ));
     assert!(world_html.contains("live_event_cards\":\"rust_rendered"));
     assert!(world_html.contains("avatar_task_route_cards\":\"rust_rendered"));
+    assert!(world_html.contains("trillionnium_world_rust_map_popup_ui_fragments_v1"));
+    assert!(world_html.contains("rust_owned_map_popup_ui_fragments"));
+    assert!(world_html.contains(
+        "data-rust-map-popup-ui-contract=\"trillionnium_world_rust_map_popup_ui_fragments_v1\""
+    ));
+    assert!(world_html.contains("server_rendered_map_popups_bound_by_browser_adapter"));
+    assert!(world_html.contains("const rustPoiMarkerPopupHtml ="));
+    assert!(world_html.contains("const rustRouteRunnerPopupHtml ="));
+    assert!(world_html.contains("const rustPlayerAvatarPopupHtml ="));
+    assert!(world_html.contains("poi_marker_popups\":\"rust_rendered"));
+    assert!(world_html.contains("avatar_route_runner_popups\":\"rust_rendered"));
+    assert!(world_html.contains("player_avatar_popups\":\"rust_rendered"));
     assert!(world_html.contains("trillionnium_world_rust_route_runner_ui_fragments_v1"));
     assert!(world_html.contains("rust_owned_route_runner_ui_fragments"));
     assert!(world_html.contains("server_rendered_runner_cards_selected_by_focus_bridge"));

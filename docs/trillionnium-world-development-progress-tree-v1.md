@@ -1868,10 +1868,23 @@ Also append a one-paragraph summary to `/home/qian/.openclaw/workspace/memory/YY
 
 ---
 
+---
+
+#### Update 2026-05-12 12:4x CST
+
+- Continued the Rust-owned UI push into the `/world` map popup/action layer:
+  - [x] Added `trillionnium_world_rust_map_popup_ui_fragments_v1` for server-rendered POI marker popups, avatar route-runner popups, player-avatar popups, route-runner action buttons, mastery/history chips, and agent-party actions.
+  - [x] `/world` bootstrap plus `/world/web/map-viewport` and `/world/web/map-delta` now carry `rust_owned_map_popup_ui_fragments`, including marker/node, route-runner, player-avatar, and fallback fragments.
+  - [x] `#world-real-map` now declares `data-rust-map-popup-ui-contract`, `data-popup-render-owner="rust_world_ui_renderer"`, and `data-popup-browser-role="input_only_click_bridge"`.
+  - [x] Browser map code now prefers `rustPoiMarkerPopupHtml(...)`, `rustRouteRunnerPopupHtml(...)`, and `rustPlayerAvatarPopupHtml(...)`; JS fallback remains only for `/app` compatibility / degraded viewport payloads.
+  - [x] Web/Browser E2E gates and Rust tests now require the popup fragment contract, bootstrap payload, and server-rendered popup hydration policy.
+- Constraints preserved: no copied 白金英雄坛说 / Hero Tan code/text/assets/data/NPC/task tables/names, no full clone-then-replace workflow, no live OSM ingestion, no MapLibre promotion, Rust source of truth, browser input-only/click-bridge role, and no local-only score inflation.
+
+
 ## Current Next Pointer
 
 If the next instruction is simply “continue”, start here:
 
-> **Next pointer:** Continue converting remaining `/world` dashboard/map/support widgets into Rust-owned fragment endpoints and then measure/reduce first-load HTML/script/style size: lazily hydrate secondary map/dashboard payloads only after the player uses the game shell, and keep browser code as an input-only event bridge. Do not use a copy-then-replace Hero Tan replica workflow. If the goal is score lift instead of UI/player-value work, prioritize real `TRILLIONNIUM_MULTI_NODE_LATENCY_EVIDENCE_PATH`, `TRILLIONNIUM_FIRST_BETA_COHORT_EVIDENCE_PATH`, or `TRILLIONNIUM_COMMERCIAL_LAUNCH_DRILL_EVIDENCE_PATH`. Current honest assessment remains `9.8/10` technical, `8.5/10` first internal beta, `7.0/10` commercial release.
+> **Next pointer:** Continue converting remaining `/world` dashboard/map/support widgets into Rust-owned fragment endpoints, starting with tile/prefetch/density/stream support cards and then measuring/reducing first-load HTML/script/style size: lazily hydrate secondary map/dashboard payloads only after the player uses the game shell, and keep browser code as an input-only event bridge. Do not use a copy-then-replace Hero Tan replica workflow. If the goal is score lift instead of UI/player-value work, prioritize real `TRILLIONNIUM_MULTI_NODE_LATENCY_EVIDENCE_PATH`, `TRILLIONNIUM_FIRST_BETA_COHORT_EVIDENCE_PATH`, or `TRILLIONNIUM_COMMERCIAL_LAUNCH_DRILL_EVIDENCE_PATH`. Current honest assessment remains `9.8/10` technical, `8.5/10` first internal beta, `7.0/10` commercial release.
 
 Do not start live Overpass/Geofabrik ingestion yet. Do not promote MapLibre. Do not convert the web shell into a standalone JS source of truth.

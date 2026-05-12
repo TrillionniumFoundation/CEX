@@ -910,7 +910,31 @@ pub(super) fn real_world_map_focus_camera_js() -> &'static str {
 }
 
 pub(super) fn real_world_map_static_marker_layers_js() -> &'static str {
-    r#"      const mapMarkerActionButtonHtml = (marker, action) => `<button type="button" class="trillionnium-map-action" data-node-id="${escapeHtml(marker.node_id)}" data-action-id="${escapeHtml(action.action_id || 'move_here')}">${escapeHtml(mapText(action.label || action.command || 'Action / 行动'))}</button>`;
+    r#"      const rustMapPopupSource = (source) => source || ((typeof payload !== 'undefined' && payload) ? payload : ((typeof app !== 'undefined' && app) ? app : {}));
+      const rustMapPopupUiFragments = (source) => {
+        const popupSource = rustMapPopupSource(source);
+        return (popupSource.rust_owned_map_popup_ui_fragments || ((popupSource.map || {}).rust_owned_map_popup_ui_fragments) || ((popupSource.delta || {}).rust_owned_map_popup_ui_fragments) || {});
+      };
+      const rustMapPopupHtml = (source, catalogName, key) => {
+        const catalog = rustMapPopupUiFragments(source)[catalogName] || {};
+        const fragment = catalog[String(key || '').trim()];
+        if (!fragment || String(fragment.contract_version || '') !== 'trillionnium_world_rust_map_popup_ui_fragments_v1') return '';
+        return typeof fragment.popup_html === 'string' ? fragment.popup_html : '';
+      };
+      const rustPoiMarkerPopupHtml = (marker, source) => rustMapPopupHtml(source, 'marker_popups_by_node_id', (marker || {}).node_id);
+      const rustRouteRunnerPopupHtml = (runner, source = lastViewport) => {
+        const taskPopup = rustMapPopupHtml(source, 'route_runner_popups_by_task_id', (runner || {}).task_id);
+        if (taskPopup) return taskPopup;
+        const runnerPopup = rustMapPopupHtml(source, 'route_runner_popups_by_runner_id', (runner || {}).runner_id);
+        if (runnerPopup) return runnerPopup;
+        return rustMapPopupHtml(source, 'route_runner_popups_by_to_node_id', (runner || {}).to_node_id);
+      };
+      const rustPlayerAvatarPopupHtml = (avatar, source = lastViewport) => {
+        const userPopup = rustMapPopupHtml(source, 'player_avatar_popups_by_matrix_user_id', (avatar || {}).matrix_user_id);
+        if (userPopup) return userPopup;
+        return rustMapPopupHtml(source, 'player_avatar_popups_by_node_id', (avatar || {}).node_id);
+      };
+      const mapMarkerActionButtonHtml = (marker, action) => `<button type="button" class="trillionnium-map-action" data-node-id="${escapeHtml(marker.node_id)}" data-action-id="${escapeHtml(action.action_id || 'move_here')}">${escapeHtml(mapText(action.label || action.command || 'Action / 行动'))}</button>`;
       (engine.route_edges || []).forEach((edge) => {
         if (!edge.from || !edge.to) return;
         mapAdapter.renderRouteLine(mapRuntime, edge.from, edge.to, { color: '#64e3ff', weight: 4, opacity: 0.82, className: 'trillionnium-active-route-line' });
@@ -918,7 +942,7 @@ pub(super) fn real_world_map_static_marker_layers_js() -> &'static str {
       (engine.markers || []).forEach((marker) => {
         const actionButtons = (marker.primary_actions || []).map((action) => mapMarkerActionButtonHtml(marker, action)).join(' ');
         const actions = (marker.primary_actions || []).map((action) => `<br><code>${escapeHtml(action.command || action.label || '')}</code>`).join('');
-        const popup = `<strong>${escapeHtml(marker.name)}</strong><br><code>${escapeHtml(marker.node_id)}</code><br>${escapeHtml(marker.description)}${actions}<br>${actionButtons}`;
+        const popup = rustPoiMarkerPopupHtml(marker) || `<strong>${escapeHtml(marker.name)}</strong><br><code>${escapeHtml(marker.node_id)}</code><br>${escapeHtml(marker.description)}${actions}<br>${actionButtons}`;
         const markerLayer = mapAdapter.renderPoiMarker(mapRuntime, marker, popup);
         markerLayerById.set(String(marker.node_id || ''), markerLayer);
       });"#
@@ -1062,7 +1086,8 @@ pub(super) fn real_world_map_overlay_render_js() -> &'static str {
           const historyChips = routeRunnerHistoryChipsHtml(runner);
           const masteryChips = routeRunnerMasteryChipsHtml(runner);
           const partyChips = agentPartyChipsHtml(runner, 'trillionnium-route-flow-action trillionnium-app-route-flow-action trillionnium-agent-party-action');
-          const popupHtml = `<strong>${escapeHtml(mapText(runner.movement_label || 'Avatar running to task / 角色正在跑向任务'))}</strong><br/><span>${escapeHtml(mapText(runner.from_node_name || runner.from_node_id || 'avatar'))} → ${escapeHtml(mapText(runner.to_node_name || runner.to_node_id || 'task'))}</span><br/><span>${escapeHtml(mapText(runner.progress_label || 'route progress / 路线进度'))} · ${escapeHtml(mapText(runner.eta_label || 'ETA / 预计'))} · ${traceCount} ${escapeHtml(mapText('trace points / 个追踪点'))}</span><br/><span>${escapeHtml(checkpointLabel)} · ${escapeHtml(mapText(runner.completion_label || 'Complete checkpoint / 完成检查点'))}</span><br/><code>${escapeHtml(runner.completion_command || '')}</code><br/><div class="focus-stack">${completionButton} ${rewardClaimButton} ${nextRouteButton} ${masteryChips} ${historyChips} ${partyChips}</div><small>${escapeHtml(mapText(runner.next_route_sequence_summary || runner.checkpoint_history_summary || runner.reward_loop || 'move → task → reward / 移动 → 任务 → 奖励'))}</small>`;
+          const fallbackPopupHtml = `<strong>${escapeHtml(mapText(runner.movement_label || 'Avatar running to task / 角色正在跑向任务'))}</strong><br/><span>${escapeHtml(mapText(runner.from_node_name || runner.from_node_id || 'avatar'))} → ${escapeHtml(mapText(runner.to_node_name || runner.to_node_id || 'task'))}</span><br/><span>${escapeHtml(mapText(runner.progress_label || 'route progress / 路线进度'))} · ${escapeHtml(mapText(runner.eta_label || 'ETA / 预计'))} · ${traceCount} ${escapeHtml(mapText('trace points / 个追踪点'))}</span><br/><span>${escapeHtml(checkpointLabel)} · ${escapeHtml(mapText(runner.completion_label || 'Complete checkpoint / 完成检查点'))}</span><br/><code>${escapeHtml(runner.completion_command || '')}</code><br/><div class="focus-stack">${completionButton} ${rewardClaimButton} ${nextRouteButton} ${masteryChips} ${historyChips} ${partyChips}</div><small>${escapeHtml(mapText(runner.next_route_sequence_summary || runner.checkpoint_history_summary || runner.reward_loop || 'move → task → reward / 移动 → 任务 → 奖励'))}</small>`;
+          const popupHtml = rustRouteRunnerPopupHtml(runner, viewport) || fallbackPopupHtml;
           const runnerLayer = mapAdapter.renderMovingAvatar(overlayLayers.routeRunners, runner, popupHtml);
           if (runnerLayer) {
             runnerLayer.bindTooltip(`${mapText(runner.movement_label || 'Avatar running to task')} · ${mapText(runner.next_action_label || runner.task_id || 'task')}`)
@@ -1076,7 +1101,8 @@ pub(super) fn real_world_map_overlay_render_js() -> &'static str {
           if (!Number.isFinite(Number(avatar.lat)) || !Number.isFinite(Number(avatar.lng))) return;
           const marker = markerById.get(String(avatar.node_id || '')) || {};
           const partyChips = agentPartyChipsHtml(avatar, 'trillionnium-route-flow-action trillionnium-app-route-flow-action trillionnium-agent-party-action');
-          const popupHtml = `<strong>${escapeHtml(mapText(avatar.display_name || avatar.matrix_user_id || 'Player avatar / 玩家角色'))}</strong><br/><span>${escapeHtml(mapText(avatar.node_name || marker.name || avatar.node_id || 'World node / 世界节点'))}</span><br/><div class="focus-stack">${partyChips}</div><small>${escapeHtml(mapText(avatar.task_loop || 'move → task → reward / 移动 → 任务 → 奖励'))}</small>`;
+          const fallbackPopupHtml = `<strong>${escapeHtml(mapText(avatar.display_name || avatar.matrix_user_id || 'Player avatar / 玩家角色'))}</strong><br/><span>${escapeHtml(mapText(avatar.node_name || marker.name || avatar.node_id || 'World node / 世界节点'))}</span><br/><div class="focus-stack">${partyChips}</div><small>${escapeHtml(mapText(avatar.task_loop || 'move → task → reward / 移动 → 任务 → 奖励'))}</small>`;
+          const popupHtml = rustPlayerAvatarPopupHtml(avatar, viewport) || fallbackPopupHtml;
           mapAdapter.renderPlayerAvatar(overlayLayers.avatars, avatar, popupHtml)
             .on('click', () => {
               focusMapSurface({ kind: 'node', nodeId: avatar.node_id, suppressAction: true });
@@ -2275,7 +2301,7 @@ pub(super) fn real_world_map_viewport_hydration_js() -> &'static str {
         if (!lastViewport || !delta || delta.changed === false) return lastViewport;
         const patch = delta.delta || {};
         const viewport = { ...lastViewport };
-        ['active_region', 'stream_region_shards', 'visible_tile_shards', 'prefetch_queue', 'visible_markers', 'poi_hotspots', 'marker_clusters', 'player_avatars', 'avatar_task_routes', 'avatar_route_runners', 'live_event_stream', 'route_runner_handoff', 'rust_owned_live_task_ui_fragments', 'rust_owned_route_runner_ui_fragments', 'player_density'].forEach((key) => {
+        ['active_region', 'stream_region_shards', 'visible_tile_shards', 'prefetch_queue', 'visible_markers', 'poi_hotspots', 'marker_clusters', 'player_avatars', 'avatar_task_routes', 'avatar_route_runners', 'live_event_stream', 'route_runner_handoff', 'rust_owned_live_task_ui_fragments', 'rust_owned_route_runner_ui_fragments', 'rust_owned_map_popup_ui_fragments', 'player_density'].forEach((key) => {
           if (patch[key] !== undefined) viewport[key] = patch[key];
         });
         viewport.delta_cursor = delta.next_cursor || delta.delta_cursor || viewport.delta_cursor;
@@ -2332,7 +2358,7 @@ pub(super) fn real_world_map_viewport_hydration_js() -> &'static str {
         if (shouldRender('avatar_route_runners')) {
           safeMapRender('route_runner_cards', () => renderRustRouteRunnerCards(routeRunnerTarget, viewport, lastSelection) || renderCards(routeRunnerTarget, filterAvatarRouteRunners(viewport.avatar_route_runners || [], lastSelection), 'routeRunner'));
         }
-        if (shouldRender('visible_markers', 'poi_hotspots', 'marker_clusters', 'player_avatars', 'avatar_task_routes', 'avatar_route_runners', 'live_event_stream', 'visible_tile_shards', 'prefetch_queue')) {
+        if (shouldRender('visible_markers', 'poi_hotspots', 'marker_clusters', 'player_avatars', 'avatar_task_routes', 'avatar_route_runners', 'live_event_stream', 'rust_owned_map_popup_ui_fragments', 'visible_tile_shards', 'prefetch_queue')) {
           safeMapRender('viewport_overlays', () => renderViewportOverlays(viewport));
         }
         safeMapRender('overlay_controls', () => refreshOverlayControls());
