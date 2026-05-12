@@ -1947,6 +1947,12 @@ Also append a one-paragraph summary to `/home/qian/.openclaw/workspace/memory/YY
 - League reward settlement now records typed receipt status/progression class in league state. World commerce buy/accept/reject/reopen/cancel and World contract completion now record backend adapter receipts in world state.
 - Kernel manifest now exposes `state_persistence.receipt_state_type=TermExchangeReceiptState`, receipt indexes, stored fields, and marks normalized SQL receipt-table cutover as the next persistence step.
 
+#### Update 2026-05-13 02:0x CST
+
+- Added normalized SQL receipt-table shadow for the Term Exchange Kernel. Migration `0026_add_term_exchange_receipt_tables.sql` creates `league_term_exchange_receipts` and `world_term_exchange_receipts` with protocol/backend/status/progression fields and indexes for intent, term/status, progression class, and backend.
+- Repository snapshot SQL now shadows typed receipt state into those tables: `LeagueState.term_exchange_receipts -> league_term_exchange_receipts` and `WorldState.world_term_exchange_receipts -> world_term_exchange_receipts`, preserving `status` and `progression_class` for future receipt-gated progression cutover.
+- Repository cutover metadata now uses migration floor `0026_add_term_exchange_receipt_tables.sql`, lists both receipt tables in the SQL cutover plan, and declares receipt-table shadow status in the Term Exchange Kernel manifest. Next pointer for this branch: add typed SQLx direct-write upserts for receipt tables, then move progression checks from legacy string statuses to `ReceiptProgressionClass`.
+
 
 ## Current Next Pointer
 

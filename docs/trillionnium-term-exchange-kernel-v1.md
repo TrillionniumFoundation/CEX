@@ -243,4 +243,24 @@ Stored fields:
 
 Legacy status fields remain for endpoint compatibility, but World/League state now also carries typed receipt status and progression class. This is the bridge toward making domain progression read from `EconomicReceipt` instead of stringly ledger fields.
 
-Next cutover: add normalized SQL receipt tables and migrate remaining legacy-only settlement paths.
+---
+
+## 9. Normalized SQL receipt-table shadow slice
+
+Typed receipts now have normalized repository tables in migration `0026_add_term_exchange_receipt_tables.sql`:
+
+- `league_term_exchange_receipts`
+- `world_term_exchange_receipts`
+
+Both tables preserve the compact receipt projection fields needed for protocol-first progression gates:
+
+- `receipt_id`, `intent_id`, `term_id`
+- `backend_id`, `backend_kind`
+- `status`
+- `progression_class`
+- `settlement_reference`, `ledger_entry_id`, `reason`
+- `finalized_at`
+
+The generated repository SQL snapshot now shadows `LeagueState.term_exchange_receipts` and `WorldState.world_term_exchange_receipts` into those tables, and the Term Exchange Kernel manifest reports `normalized_sql_shadow_status=receipt_tables_shadowed`.
+
+Current cutover boundary: SQL shadow and migration floor are in place; typed SQLx direct-write upserts for receipt tables are still the next step before final direct-write cutover.

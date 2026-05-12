@@ -9,6 +9,7 @@ pub(super) struct WorldIndexes {
     pub(super) sorted_player_position_user_ids: Vec<String>,
     pub(super) sorted_trillionnium_character_user_ids: Vec<String>,
     pub(super) sorted_tactics_session_ids: Vec<String>,
+    pub(super) sorted_world_term_exchange_receipt_ids: Vec<String>,
     pub(super) sorted_map_node_ids: Vec<String>,
     pub(super) sorted_map_node_ids_by_id: Vec<String>,
     pub(super) sorted_asset_indices_by_id: Vec<usize>,
@@ -141,6 +142,9 @@ pub(super) fn build_world_indexes(world: &WorldState) -> WorldIndexes {
     indexes.sorted_trillionnium_character_user_ids.sort();
     indexes.sorted_tactics_session_ids = world.world_tactics_sessions.keys().cloned().collect();
     indexes.sorted_tactics_session_ids.sort();
+    indexes.sorted_world_term_exchange_receipt_ids =
+        world.world_term_exchange_receipts.keys().cloned().collect();
+    indexes.sorted_world_term_exchange_receipt_ids.sort();
 
     indexes.sorted_map_node_ids = world.world_map_nodes.keys().cloned().collect();
     indexes.sorted_map_node_ids_by_id = indexes.sorted_map_node_ids.clone();

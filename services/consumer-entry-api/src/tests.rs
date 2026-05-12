@@ -31,10 +31,10 @@ use super::{
     LeagueSubmission, LeagueWebSessionClaims, MatrixMessageRequest, ProductUserIdentity,
     RateLimitCache, ReplayCache, RuntimeProfile, SessionAuthIssuerRegistryIssuer,
     SessionAuthIssuerRegistryMetadata, SessionAuthIssuerRegistryRuntimeState,
-    UserSessionAuthClaims, WorldAsset, WorldCompany, WorldContract, WorldContractCompletion,
-    WorldEconomyEvent, WorldEvent, WorldListing, WorldMapNode, WorldPlayerPosition, WorldPurchase,
-    WorldRelationship, WorldShop, WorldTrillionniumCharacter, WorldWorkCancellation,
-    WorldWorkOrder, WorldWorkRejection, DEFAULT_LEAGUE_LLM_JUDGE_TIMEOUT_MS,
+    TermExchangeReceiptState, UserSessionAuthClaims, WorldAsset, WorldCompany, WorldContract,
+    WorldContractCompletion, WorldEconomyEvent, WorldEvent, WorldListing, WorldMapNode,
+    WorldPlayerPosition, WorldPurchase, WorldRelationship, WorldShop, WorldTrillionniumCharacter,
+    WorldWorkCancellation, WorldWorkOrder, WorldWorkRejection, DEFAULT_LEAGUE_LLM_JUDGE_TIMEOUT_MS,
     DEFAULT_LEAGUE_WEB_SESSION_TTL_SECS, DEFAULT_MAX_TEXT_CHARS,
     TRILLIONNIUM_REPOSITORY_MIGRATION_FLOOR, USER_SESSION_ASSERTION_HEADER,
     USER_SESSION_SIGNATURE_HEADER, WORLD_ROUTE_ACTION_TEXTAREA_ID, WORLD_ROUTE_CONTRACTS_PANEL_ID,
@@ -663,8 +663,16 @@ fn league_sql_cutover_plan_exposes_normalized_world_tables() {
         env!("CARGO_MANIFEST_DIR")
     ))
     .expect("repository migration floor should exist");
-    assert!(repository_migration.contains("world_trillionnium_characters"));
-    assert!(repository_migration.contains("combat_numerics_state"));
+    assert!(repository_migration.contains("league_term_exchange_receipts"));
+    assert!(repository_migration.contains("world_term_exchange_receipts"));
+    assert!(repository_migration.contains("progression_class"));
+    let combat_numerics_migration = std::fs::read_to_string(format!(
+        "{}/../../migrations/0025_add_trillionnium_combat_numerics_runtime_column.sql",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .expect("combat numerics runtime migration should exist");
+    assert!(combat_numerics_migration.contains("world_trillionnium_characters"));
+    assert!(combat_numerics_migration.contains("combat_numerics_state"));
     let region_story_migration = std::fs::read_to_string(format!(
         "{}/../../migrations/0024_add_trillionnium_region_story_unlock_runtime_column.sql",
         env!("CARGO_MANIFEST_DIR")
@@ -694,6 +702,84 @@ fn league_sql_cutover_plan_exposes_normalized_world_tables() {
     .expect("equipment runtime migration should exist");
     assert!(equipment_migration.contains("inventory_items"));
     assert!(equipment_migration.contains("equipment_slots"));
+}
+
+#[test]
+fn term_exchange_receipts_shadow_sql_preserves_status_and_progression_class() {
+    let mut league = default_league_state();
+
+    let mut league_receipt = term_exchange_protocol::EconomicReceipt::new(
+        "league-receipt-approved-release",
+        "league-intent-approved-release",
+        "league_reward_settlement",
+        term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
+        term_exchange_protocol::SettlementBackendKind::Cex,
+        term_exchange_protocol::ReceiptStatus::ApprovedRelease,
+        1_778_600_001,
+    );
+    league_receipt.settlement_reference = Some("league-settlement-ref".to_string());
+    league_receipt.ledger_entry_id = Some("league-ledger-entry".to_string());
+    league.term_exchange_receipts.insert(
+        "league-receipt-approved-release".to_string(),
+        TermExchangeReceiptState::from(&league_receipt),
+    );
+
+    let mut world_receipt = term_exchange_protocol::EconomicReceipt::new(
+        "world-receipt-failed-ledger",
+        "world-intent-failed-ledger",
+        "world_commerce_lifecycle",
+        term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
+        term_exchange_protocol::SettlementBackendKind::Cex,
+        term_exchange_protocol::ReceiptStatus::FailedLedger,
+        1_778_600_002,
+    );
+    world_receipt.reason = Some("ledger timeout".to_string());
+    league.world.world_term_exchange_receipts.insert(
+        "world-receipt-failed-ledger".to_string(),
+        TermExchangeReceiptState::from(&world_receipt),
+    );
+
+    let repository_snapshot = LeagueStateRepositorySnapshot::from_league(&league).unwrap();
+    let sql = &repository_snapshot.normalized_world_shadow_sql;
+    assert!(sql.contains("insert into league_term_exchange_receipts"));
+    assert!(sql.contains("insert into world_term_exchange_receipts"));
+    assert!(sql.contains("\"receipt_id\":\"league-receipt-approved-release\""));
+    assert!(sql.contains("\"status\":\"approved_release\""));
+    assert!(sql.contains("\"progression_class\":\"progression_allowed\""));
+    assert!(sql.contains("\"receipt_id\":\"world-receipt-failed-ledger\""));
+    assert!(sql.contains("\"status\":\"failed_ledger\""));
+    assert!(sql.contains("\"progression_class\":\"recoverable_hold\""));
+    assert!(sql.contains("to_timestamp(finalized_at_epoch)"));
+
+    let cutover_tables = repository_snapshot
+        .sql_cutover_plan
+        .get("tables")
+        .and_then(Value::as_array)
+        .expect("cutover plan should list normalized tables");
+    assert!(cutover_tables.iter().any(|table| {
+        table.get("table_name").and_then(Value::as_str) == Some("league_term_exchange_receipts")
+            && table.get("row_count").and_then(Value::as_u64) == Some(1)
+            && table.get("primary_key").and_then(Value::as_str) == Some("receipt_id")
+    }));
+    assert!(cutover_tables.iter().any(|table| {
+        table.get("table_name").and_then(Value::as_str) == Some("world_term_exchange_receipts")
+            && table.get("row_count").and_then(Value::as_u64) == Some(1)
+            && table.get("primary_key").and_then(Value::as_str) == Some("receipt_id")
+    }));
+    assert_eq!(
+        repository_snapshot
+            .sql_cutover_plan
+            .get("migration_floor")
+            .and_then(Value::as_str),
+        Some("0026_add_term_exchange_receipt_tables.sql")
+    );
+
+    let command_sql = normalized_repository_command_shadow_sql(&league.world, "world_buy")
+        .unwrap()
+        .expect("world_buy should generate command-scoped SQL");
+    assert!(command_sql.contains("insert into world_term_exchange_receipts"));
+    assert!(command_sql.contains("\"receipt_id\":\"world-receipt-failed-ledger\""));
+    assert!(command_sql.contains("term_exchange_receipt_progression_class"));
 }
 
 #[test]
@@ -1247,6 +1333,28 @@ async fn term_exchange_kernel_manifest_declares_cex_as_first_backend() {
     assert_eq!(
         body["state_persistence"]["world_receipt_index"],
         "WorldState.world_term_exchange_receipts"
+    );
+    assert_eq!(
+        body["state_persistence"]["normalized_sql_shadow_status"],
+        "receipt_tables_shadowed"
+    );
+    assert_eq!(
+        body["state_persistence"]["normalized_sql_migration_floor"],
+        "0026_add_term_exchange_receipt_tables.sql"
+    );
+    assert!(body["state_persistence"]["normalized_sql_receipt_tables"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|value| value.as_str() == Some("world_term_exchange_receipts")));
+    assert!(body["state_persistence"]["sql_shadow_preserves"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|value| value.as_str() == Some("progression_class")));
+    assert_eq!(
+        body["migration_status"]["status"],
+        "typed_receipt_state_shadowed_to_normalized_sql"
     );
 }
 

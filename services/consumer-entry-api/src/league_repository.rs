@@ -1269,6 +1269,74 @@ pub(super) fn normalized_shadow_json_upsert_sql<T: Serialize>(
     ))
 }
 
+pub(super) fn normalized_term_exchange_receipts_shadow_sql(
+    table_name: &str,
+    receipts: &[&TermExchangeReceiptState],
+) -> Result<String, serde_json::Error> {
+    normalized_shadow_json_upsert_sql(
+        table_name,
+        receipts,
+        "protocol_version text, receipt_id text, intent_id text, term_id text, backend_id text, backend_kind text, status text, progression_class text, settlement_reference text, ledger_entry_id text, reason text, finalized_at_epoch bigint",
+        &[
+            "protocol_version",
+            "receipt_id",
+            "intent_id",
+            "term_id",
+            "backend_id",
+            "backend_kind",
+            "status",
+            "progression_class",
+            "settlement_reference",
+            "ledger_entry_id",
+            "reason",
+            "finalized_at",
+            "updated_at",
+        ],
+        &[
+            "protocol_version",
+            "receipt_id",
+            "intent_id",
+            "term_id",
+            "backend_id",
+            "backend_kind",
+            "status",
+            "progression_class",
+            "settlement_reference",
+            "ledger_entry_id",
+            "reason",
+            "to_timestamp(finalized_at_epoch)",
+            "now()",
+        ],
+        "receipt_id",
+        &[
+            "protocol_version",
+            "intent_id",
+            "term_id",
+            "backend_id",
+            "backend_kind",
+            "status",
+            "progression_class",
+            "settlement_reference",
+            "ledger_entry_id",
+            "reason",
+            "finalized_at",
+            "updated_at",
+        ],
+    )
+}
+
+pub(super) fn league_term_exchange_receipts_shadow_sql(
+    league: &LeagueState,
+) -> Result<String, serde_json::Error> {
+    let mut receipt_ids: Vec<&String> = league.term_exchange_receipts.keys().collect();
+    receipt_ids.sort();
+    let receipts: Vec<&TermExchangeReceiptState> = receipt_ids
+        .into_iter()
+        .filter_map(|receipt_id| league.term_exchange_receipts.get(receipt_id))
+        .collect();
+    normalized_term_exchange_receipts_shadow_sql("league_term_exchange_receipts", &receipts)
+}
+
 pub(super) fn world_state_normalized_shadow_sql(
     world: &WorldState,
 ) -> Result<String, serde_json::Error> {
@@ -1412,6 +1480,16 @@ pub(super) fn world_state_normalized_shadow_sql(
         &["tick_id", "session_id", "matrix_user_id", "room_id", "tick_index", "command", "unit_id", "target_tile", "outcome_result", "outcome_accepted", "simulation_effect", "round_before", "round_after", "action_points_before", "action_points_after", "objective_id", "objective_progress_before", "objective_progress_after", "objective_delta", "victory_state_before", "victory_state_after", "reward_status_after", "active_unit_after", "generated_encounter_id", "osm_game_overlay_id", "to_timestamp(created_at_epoch)", "source_of_truth"],
         "tick_id",
         &["session_id", "matrix_user_id", "room_id", "tick_index", "command", "unit_id", "target_tile", "outcome_result", "outcome_accepted", "simulation_effect", "round_before", "round_after", "action_points_before", "action_points_after", "objective_id", "objective_progress_before", "objective_progress_after", "objective_delta", "victory_state_before", "victory_state_after", "reward_status_after", "active_unit_after", "generated_encounter_id", "osm_game_overlay_id", "created_at", "source_of_truth"],
+    )?);
+
+    let world_term_exchange_receipts: Vec<&TermExchangeReceiptState> = indexes
+        .sorted_world_term_exchange_receipt_ids
+        .iter()
+        .filter_map(|receipt_id| world.world_term_exchange_receipts.get(receipt_id))
+        .collect();
+    sql.push_str(&normalized_term_exchange_receipts_shadow_sql(
+        "world_term_exchange_receipts",
+        &world_term_exchange_receipts,
     )?);
 
     let assets = indexed_sorted(&world.world_assets, &indexes.sorted_asset_indices_by_id);
@@ -1682,6 +1760,7 @@ pub(super) fn normalized_world_shadow_tables() -> Vec<&'static str> {
         "world_trillionnium_characters",
         "world_tactics_sessions",
         "world_tactics_simulation_ticks",
+        "world_term_exchange_receipts",
         "world_assets",
         "world_events",
         "world_relationships",
@@ -1711,6 +1790,11 @@ pub(super) fn normalized_world_shadow_sql_contract_json(generated_sql_bytes: usi
         "mode": "json_snapshot_to_normalized_world_upserts",
         "index_layer": "WorldIndexes::normalized_shadow_sorted_ids_v1",
         "sorted_vector_index_layer": "WorldIndexes::normalized_shadow_sorted_vector_indices_v1",
+        "term_exchange_receipt_tables": [
+            "league_term_exchange_receipts",
+            "world_term_exchange_receipts"
+        ],
+        "additional_repository_tables": ["league_term_exchange_receipts"],
         "table_count": tables.len(),
         "tables": tables,
         "generated_sql_bytes": generated_sql_bytes,
@@ -3888,7 +3972,7 @@ pub(super) async fn execute_normalized_repository_direct_command_write(
 }
 
 pub(super) const TRILLIONNIUM_REPOSITORY_MIGRATION_FLOOR: &str =
-    "0025_add_trillionnium_combat_numerics_runtime_column.sql";
+    "0026_add_term_exchange_receipt_tables.sql";
 const TRILLIONNIUM_REPOSITORY_FINAL_CUTOVER_PHASE: &str = "final_cutover";
 const TRILLIONNIUM_CURRENT_REPOSITORY: &str = "json_file_with_sql_snapshot";
 const TRILLIONNIUM_NEXT_REPOSITORY: &str = "normalized_sql_dual_write";
@@ -4022,6 +4106,18 @@ pub(super) fn league_state_sql_cutover_plan_json(
                 "inventory_item_id",
                 league.inventory_items.len(),
             ),
+            league_state_sql_cutover_table_json_with_normalized_count(
+                "league_term_exchange_receipts",
+                "term_exchange_receipts",
+                "receipt_id",
+                league.term_exchange_receipts.len(),
+                unique_key_count(
+                    league
+                        .term_exchange_receipts
+                        .keys()
+                        .map(|receipt_id| receipt_id.as_str()),
+                ),
+            ),
             league_state_sql_cutover_table_json(
                 "world_zones",
                 "world.world_zones",
@@ -4074,6 +4170,18 @@ pub(super) fn league_state_sql_cutover_plan_json(
                         .world_tactics_simulation_ticks
                         .iter()
                         .map(|tick| tick.tick_id.as_str()),
+                ),
+            ),
+            league_state_sql_cutover_table_json_with_normalized_count(
+                "world_term_exchange_receipts",
+                "world.world_term_exchange_receipts",
+                "receipt_id",
+                world.world_term_exchange_receipts.len(),
+                unique_key_count(
+                    world
+                        .world_term_exchange_receipts
+                        .keys()
+                        .map(|receipt_id| receipt_id.as_str()),
                 ),
             ),
             league_state_sql_cutover_table_json_with_normalized_count(
@@ -4311,6 +4419,7 @@ pub(super) fn league_state_sql_cutover_plan_json(
             "world_map",
             "world_assets",
             "world_commerce",
+            "term_exchange_receipts",
             "world_route_events",
             "league_progression"
         ],
@@ -4367,16 +4476,16 @@ pub(super) fn league_state_repository_dual_write_plan_json() -> Value {
             league_state_repository_write_set_json(
                 "world_tactics_command",
                 "WorldState tactics character/session/tick state + optional task/combat rewards",
-                &["world_trillionnium_characters", "world_tactics_sessions", "world_tactics_simulation_ticks", "world_events", "world_relationships", "world_contracts", "world_contract_completions", "world_economy_events", "league_players"],
+                &["world_trillionnium_characters", "world_tactics_sessions", "world_tactics_simulation_ticks", "world_events", "world_relationships", "world_contracts", "world_contract_completions", "world_economy_events", "world_term_exchange_receipts", "league_players"],
                 "world_tactics_simulation_ticks.tick_id",
-                &["tactics_session_fk", "tick_count", "objective_progress", "victory_reward_settlement", "task_reward_gate"]
+                &["tactics_session_fk", "tick_count", "objective_progress", "victory_reward_settlement", "task_reward_gate", "term_exchange_receipt_progression_class"]
             ),
             league_state_repository_write_set_json(
                 "world_contract_completion",
                 "WorldState contract settlement",
-                &["world_contract_completions", "world_contracts", "world_assets", "league_rewards", "league_inventory_items"],
+                &["world_contract_completions", "world_contracts", "world_assets", "world_term_exchange_receipts", "league_rewards", "league_inventory_items"],
                 "world_contract_completions.completion_id",
-                &["completion_contract_fk", "ledger_status", "reward_count"]
+                &["completion_contract_fk", "ledger_status", "reward_count", "term_exchange_receipt_progression_class"]
             ),
             league_state_repository_write_set_json(
                 "world_asset_upgrade",
@@ -4402,9 +4511,9 @@ pub(super) fn league_state_repository_dual_write_plan_json() -> Value {
             league_state_repository_write_set_json(
                 "world_buy",
                 "WorldState buyer reserve + work order open",
-                &["world_purchases", "world_work_orders", "world_relationships", "world_economy_events", "world_faction_standings", "league_players"],
+                &["world_purchases", "world_work_orders", "world_relationships", "world_economy_events", "world_faction_standings", "world_term_exchange_receipts", "league_players"],
                 "world_purchases.purchase_id",
-                &["purchase_listing_fk", "work_order_purchase_fk", "buyer_reserve_status", "buyer_seller_standings"]
+                &["purchase_listing_fk", "work_order_purchase_fk", "buyer_reserve_status", "buyer_seller_standings", "term_exchange_receipt_progression_class"]
             ),
             league_state_repository_write_set_json(
                 "world_work_deliver",
@@ -4416,30 +4525,30 @@ pub(super) fn league_state_repository_dual_write_plan_json() -> Value {
             league_state_repository_write_set_json(
                 "world_work_accept",
                 "WorldState buyer acceptance + settlement",
-                &["world_work_acceptances", "world_work_orders", "world_purchases", "world_companies", "world_economy_events", "world_faction_standings", "league_players"],
+                &["world_work_acceptances", "world_work_orders", "world_purchases", "world_companies", "world_economy_events", "world_faction_standings", "world_term_exchange_receipts", "league_players"],
                 "world_work_acceptances.acceptance_id",
-                &["acceptance_work_order_fk", "seller_settlement_status", "buyer_consume_status", "buyer_seller_progression"]
+                &["acceptance_work_order_fk", "seller_settlement_status", "buyer_consume_status", "buyer_seller_progression", "term_exchange_receipt_progression_class"]
             ),
             league_state_repository_write_set_json(
                 "world_work_reject",
                 "WorldState buyer rejection + refund",
-                &["world_work_rejections", "world_work_orders", "world_purchases", "world_economy_events", "world_faction_standings"],
+                &["world_work_rejections", "world_work_orders", "world_purchases", "world_economy_events", "world_faction_standings", "world_term_exchange_receipts"],
                 "world_work_rejections.rejection_id",
-                &["rejection_work_order_fk", "refund_status", "buyer_standing"]
+                &["rejection_work_order_fk", "refund_status", "buyer_standing", "term_exchange_receipt_progression_class"]
             ),
             league_state_repository_write_set_json(
                 "world_work_reopen",
                 "WorldState refunded order reserve reopen",
-                &["world_work_reopens", "world_work_orders", "world_purchases", "world_economy_events", "world_faction_standings"],
+                &["world_work_reopens", "world_work_orders", "world_purchases", "world_economy_events", "world_faction_standings", "world_term_exchange_receipts"],
                 "world_work_reopens.reopen_id",
-                &["reopen_work_order_fk", "reserve_status", "buyer_standing"]
+                &["reopen_work_order_fk", "reserve_status", "buyer_standing", "term_exchange_receipt_progression_class"]
             ),
             league_state_repository_write_set_json(
                 "world_work_cancel",
                 "WorldState open order cancellation",
-                &["world_work_cancellations", "world_work_orders", "world_purchases", "world_economy_events", "world_faction_standings"],
+                &["world_work_cancellations", "world_work_orders", "world_purchases", "world_economy_events", "world_faction_standings", "world_term_exchange_receipts"],
                 "world_work_cancellations.cancellation_id",
-                &["cancellation_work_order_fk", "refund_status", "buyer_standing"]
+                &["cancellation_work_order_fk", "refund_status", "buyer_standing", "term_exchange_receipt_progression_class"]
             )
         ],
         "read_switch_requirements": [
@@ -4689,7 +4798,8 @@ pub(super) fn league_state_repository_contract_json() -> Value {
             }
         ],
         "read_switch_gates": [
-            "all migrations through 0025_add_trillionnium_combat_numerics_runtime_column.sql applied",
+            "all migrations through 0026_add_term_exchange_receipt_tables.sql applied",
+            "league_and_world_term_exchange_receipt_tables_shadow_status_and_progression_class",
             "WorldState projection contexts read from repository snapshots without direct LeagueState coupling",
             "repository_audit_green",
             "repository_write_set_audit_green",
@@ -4837,7 +4947,8 @@ pub(super) struct LeagueStateRepositorySnapshot {
 impl LeagueStateRepositorySnapshot {
     pub(super) fn from_league(league: &LeagueState) -> Result<Self, serde_json::Error> {
         let state_json = serde_json::to_string_pretty(league)?;
-        let normalized_world_shadow_sql = world_state_normalized_shadow_sql(&league.world)?;
+        let mut normalized_world_shadow_sql = world_state_normalized_shadow_sql(&league.world)?;
+        normalized_world_shadow_sql.push_str(&league_term_exchange_receipts_shadow_sql(league)?);
         let state_hash = league_state_hash(league)?;
         let generated_at = Utc::now().to_rfc3339();
         let sql_cutover_plan =

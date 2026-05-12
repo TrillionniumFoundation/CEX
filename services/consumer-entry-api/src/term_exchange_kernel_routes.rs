@@ -221,7 +221,20 @@ pub(super) fn term_exchange_kernel_manifest_json(state: &AppState) -> Value {
             ],
             "legacy_status_compatibility": true,
             "state_json_persisted": true,
-            "normalized_sql_shadow_status": "pending_receipt_table_cutover"
+            "normalized_sql_shadow_status": "receipt_tables_shadowed",
+            "normalized_sql_migration_floor": "0026_add_term_exchange_receipt_tables.sql",
+            "normalized_sql_receipt_tables": [
+                "league_term_exchange_receipts",
+                "world_term_exchange_receipts"
+            ],
+            "sql_shadow_preserves": [
+                "status",
+                "progression_class",
+                "receipt_id",
+                "intent_id",
+                "backend_kind"
+            ],
+            "sql_direct_write_status": "pending_typed_sqlx_receipt_upserts"
         },
         "current_cex_backend_runtime": {
             "runtime_profile": state.config().runtime_profile.as_str(),
@@ -241,10 +254,10 @@ pub(super) fn term_exchange_kernel_manifest_json(state: &AppState) -> Value {
             "primary_endpoint": TERM_EXCHANGE_KERNEL_MANIFEST_ENDPOINT
         },
         "migration_status": {
-            "status": "typed_receipt_state_persisted",
+            "status": "typed_receipt_state_shadowed_to_normalized_sql",
             "split_strategy": "protocol_first_then_backend_adapter_then_storage_boundary",
             "current_source_of_evidence": "CEX local-production run/* gates",
-            "next_step": "add normalized SQL receipt tables and migrate remaining legacy-only settlement paths while preserving current endpoints and E2E evidence"
+            "next_step": "add typed SQLx receipt upserts to the normalized direct-write path and migrate remaining progression checks from legacy string statuses to ReceiptProgressionClass"
         }
     })
 }

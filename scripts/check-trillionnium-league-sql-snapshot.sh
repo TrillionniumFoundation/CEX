@@ -49,7 +49,7 @@ raw_normalized_world_shadow_checked = all(marker in raw for marker in [
 ])
 assert 'consumer_entry_json_v1' in raw, 'snapshot kind missing'
 assert 'sha256:' in raw, 'state hash missing'
-assert '0025_add_trillionnium_combat_numerics_runtime_column.sql' in raw, 'repository migration floor missing'
+assert '0026_add_term_exchange_receipt_tables.sql' in raw, 'repository migration floor missing'
 assert 'region_story_unlock_state' in raw, 'region/story unlock runtime column missing from SQL snapshot'
 assert 'combat_numerics_state' in raw, 'combat numerics runtime column missing from SQL snapshot'
 assert 'trillionnium_repository_cutover_v1' in raw, 'repository cutover contract missing'
@@ -80,7 +80,7 @@ repo_match = re.search(
 assert repo_match, 'repository audit insert format changed'
 repo_state_hash, migration_floor, cutover_plan_sql, shadow_validation_sql = repo_match.groups()
 assert repo_state_hash == state_hash, 'repository audit state_hash mismatch'
-assert migration_floor == '0025_add_trillionnium_combat_numerics_runtime_column.sql', migration_floor
+assert migration_floor == '0026_add_term_exchange_receipt_tables.sql', migration_floor
 cutover_plan = json.loads(cutover_plan_sql.replace("''", "'"))
 shadow_validation = json.loads(shadow_validation_sql.replace("''", "'"))
 assert cutover_plan.get('next_repository') == 'normalized_sql_dual_write', cutover_plan
