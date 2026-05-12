@@ -1930,6 +1930,15 @@ Also append a one-paragraph summary to `/home/qian/.openclaw/workspace/memory/YY
 - Added `docs/trillionnium-term-exchange-kernel-v1.md` and mirrored it to the Trillionnium repo. Architecture is now: World/domain plugins emit typed `EconomicIntent`; Term Exchange Kernel owns term/receipt/progression protocol; CEX is the first settlement backend; DEX/chain backend will implement the same `term_exchange_backend_v1` contract later.
 
 
+---
+
+#### Update 2026-05-12 20:4x CST
+
+- Added the service-layer Term Exchange backend adapter: `TermExchangeBackend`, `CexTermExchangeBackend`, `TermExchangeLedgerActionRequest`, and typed adapter receipt projection in `services/consumer-entry-api/src/term_exchange_backend.rs`.
+- Migrated the first economic call paths behind the adapter while preserving legacy endpoint responses/status strings: League reward settlement, World commerce purchase reserve/settle/consume/refund/seller-chargeback/reopen settlement, and World contract completion settlement. These now build typed `EconomicIntent` and `EconomicReceipt` values at the CEX backend boundary, then project back to `LeagueLedgerSettlement` for current state compatibility.
+- Kernel manifest now exposes `backend_adapter_contract_version=trillionnium_term_exchange_backend_adapter_v1` and migrated call paths. Next migration pointer: store typed receipt references/statuses in World/League state rather than relying only on legacy string status fields.
+
+
 ## Current Next Pointer
 
 If the next instruction is simply “continue”, start here:

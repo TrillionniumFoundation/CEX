@@ -1021,136 +1021,60 @@ pub(super) async fn settle_world_purchase_ledger_action(
             ..Default::default()
         };
     }
-    let Some(room_id) = room_id.map(str::trim).filter(|value| !value.is_empty()) else {
-        return LeagueLedgerSettlement {
-            status: "skipped_missing_room".to_string(),
-            ..Default::default()
-        };
-    };
-    let matrix_payload = MatrixMessageRequest {
-        matrix_user_id: matrix_user_id.to_string(),
-        room_id: room_id.to_string(),
-        session_id: None,
-        org_id: None,
-        message: message.to_string(),
-        capability_id: None,
-        account_id: None,
-        event_id: None,
-        idempotency_key: None,
-        metadata: None,
-    };
-    let resolved_identity = match resolve_matrix_identity(state, &matrix_payload).await {
-        Ok(identity) => identity,
-        Err(_) => {
-            return LeagueLedgerSettlement {
-                status: "failed_identity".to_string(),
-                error: Some(failure_context.to_string()),
-                ..Default::default()
-            }
-        }
-    };
-    let Some(account_id) = resolved_identity.scope.account_id.clone() else {
-        return LeagueLedgerSettlement {
-            status: "skipped_missing_account".to_string(),
-            error: Some("matrix identity did not resolve a ledger account_id".to_string()),
-            ..Default::default()
-        };
-    };
-    let Some(ledger_admin_token) = state.config().ledger_admin_token.clone() else {
-        return LeagueLedgerSettlement {
-            status: "skipped_missing_ledger_token".to_string(),
-            account_id: Some(account_id),
-            error: Some("consumer-entry ledger admin token is not configured".to_string()),
-            ..Default::default()
-        };
-    };
-    let url = format!(
-        "{}/v1/ledger/{action}",
-        state.config().ledger_base_url.trim_end_matches('/')
+    let ledger_amount = ledger_amount_credits as f64;
+    let mut extra_ledger_body = Map::new();
+    extra_ledger_body.insert(
+        "gross_amount".to_string(),
+        json!(purchase.price_credits as f64),
     );
-    let body = json!({
-        "account_id": account_id,
-        "amount": ledger_amount_credits as f64,
-        "gross_amount": purchase.price_credits as f64,
-        "market_tax_amount": if action == "grant" { (purchase.price_credits - ledger_amount_credits) as f64 } else { 0.0 },
-        "idempotency_key": idempotency_key,
-        "reference_id": reference_id,
-    });
-    let response = match state
-        .inner
-        .http
-        .post(url)
-        .header("x-admin-token", ledger_admin_token)
-        .json(&body)
-        .send()
-        .await
-    {
-        Ok(response) => response,
-        Err(err) => {
-            return LeagueLedgerSettlement {
-                status: "failed_network".to_string(),
-                account_id: body
-                    .get("account_id")
-                    .and_then(Value::as_str)
-                    .map(ToString::to_string),
-                error: Some(format!("failed to reach ledger-service: {err}")),
-                ..Default::default()
-            }
-        }
-    };
-    let status = response.status();
-    let value = match response.json::<Value>().await {
-        Ok(value) => value,
-        Err(err) => {
-            return LeagueLedgerSettlement {
-                status: "failed_bad_response".to_string(),
-                account_id: body
-                    .get("account_id")
-                    .and_then(Value::as_str)
-                    .map(ToString::to_string),
-                error: Some(format!("ledger-service returned non-json response: {err}")),
-                ..Default::default()
-            }
-        }
-    };
-    if !status.is_success() {
-        let error = value
-            .get("error")
-            .and_then(Value::as_str)
-            .unwrap_or("ledger action failed");
-        return LeagueLedgerSettlement {
-            status: if status.as_u16() == 409 {
-                "duplicate".to_string()
-            } else {
-                "failed_ledger".to_string()
+    extra_ledger_body.insert(
+        "market_tax_amount".to_string(),
+        json!(if action == "grant" {
+            (purchase.price_credits - ledger_amount_credits) as f64
+        } else {
+            0.0
+        }),
+    );
+    CexTermExchangeBackend
+        .execute_ledger_action(
+            state,
+            TermExchangeLedgerActionRequest {
+                term_id: "world_commerce_purchase".to_string(),
+                term_version: "v1".to_string(),
+                domain: "trillionnium_world".to_string(),
+                intent_id: format!("world_purchase:{}:{}", action, purchase.purchase_id),
+                intent_kind: match action {
+                    "reserve" => term_exchange_protocol::EconomicIntentKind::Reserve,
+                    "consume" => term_exchange_protocol::EconomicIntentKind::Consume,
+                    "refund" => term_exchange_protocol::EconomicIntentKind::Refund,
+                    "grant" => term_exchange_protocol::EconomicIntentKind::Settle,
+                    _ => term_exchange_protocol::EconomicIntentKind::Settle,
+                },
+                room_id: room_id.map(ToString::to_string),
+                matrix_user_id: matrix_user_id.to_string(),
+                message: message.to_string(),
+                failure_context: failure_context.to_string(),
+                ledger_action: action.to_string(),
+                success_status: success_status.to_string(),
+                idempotency_key,
+                idempotency_scope: format!("world_purchase_{action}"),
+                reference_id: Some(reference_id),
+                amount: ledger_amount,
+                amount_credits: ledger_amount_credits,
+                currency: "credits".to_string(),
+                metadata: json!({
+                    "purchase_id": purchase.purchase_id,
+                    "listing_id": purchase.listing_id,
+                    "buyer_matrix_user_id": purchase.buyer_matrix_user_id,
+                    "seller_matrix_user_id": purchase.seller_matrix_user_id,
+                    "price_credits": purchase.price_credits,
+                    "ledger_action": action,
+                }),
+                extra_ledger_body,
             },
-            account_id: body
-                .get("account_id")
-                .and_then(Value::as_str)
-                .map(ToString::to_string),
-            error: Some(format!("{}: {error}", status.as_u16())),
-            ..Default::default()
-        };
-    }
-    LeagueLedgerSettlement {
-        status: success_status.to_string(),
-        account_id: value
-            .get("account")
-            .and_then(|account| account.get("account_id"))
-            .and_then(Value::as_str)
-            .or_else(|| body.get("account_id").and_then(Value::as_str))
-            .map(ToString::to_string),
-        entry_id: value
-            .get("entry")
-            .and_then(|entry| entry.get("entry_id"))
-            .and_then(Value::as_str)
-            .map(ToString::to_string),
-        balance_after: value
-            .get("account")
-            .and_then(|account| account.get("balance"))
-            .and_then(Value::as_f64),
-        error: None,
-    }
+        )
+        .await
+        .into_legacy_settlement()
 }
 
 pub(super) async fn reserve_world_purchase_with_ledger(
@@ -3618,142 +3542,40 @@ pub(super) async fn settle_world_contract_completion_with_ledger(
             ..Default::default()
         };
     }
-    let Some(room_id) = payload
-        .room_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
-        return LeagueLedgerSettlement {
-            status: "skipped_missing_room".to_string(),
-            ..Default::default()
-        };
-    };
-    let matrix_payload = MatrixMessageRequest {
-        matrix_user_id: matrix_user_id.to_string(),
-        room_id: room_id.to_string(),
-        session_id: None,
-        org_id: None,
-        message: "world contract reward settlement".to_string(),
-        capability_id: None,
-        account_id: None,
-        event_id: None,
-        idempotency_key: None,
-        metadata: None,
-    };
-    let resolved_identity = match resolve_matrix_identity(state, &matrix_payload).await {
-        Ok(identity) => identity,
-        Err(_) => {
-            return LeagueLedgerSettlement {
-                status: "failed_identity".to_string(),
-                error: Some(
+    CexTermExchangeBackend
+        .execute_ledger_action(
+            state,
+            TermExchangeLedgerActionRequest {
+                term_id: "world_contract_completion_settlement".to_string(),
+                term_version: "v1".to_string(),
+                domain: "trillionnium_world".to_string(),
+                intent_id: format!("world_contract_completion:{}", completion.completion_id),
+                intent_kind: term_exchange_protocol::EconomicIntentKind::CompleteContract,
+                room_id: payload.room_id.clone(),
+                matrix_user_id: matrix_user_id.to_string(),
+                message: "world contract reward settlement".to_string(),
+                failure_context:
                     "matrix identity could not be resolved for world contract settlement"
                         .to_string(),
-                ),
-                ..Default::default()
-            }
-        }
-    };
-    let Some(account_id) = resolved_identity.scope.account_id.clone() else {
-        return LeagueLedgerSettlement {
-            status: "skipped_missing_account".to_string(),
-            error: Some("matrix identity did not resolve a ledger account_id".to_string()),
-            ..Default::default()
-        };
-    };
-    let Some(ledger_admin_token) = state.config().ledger_admin_token.clone() else {
-        return LeagueLedgerSettlement {
-            status: "skipped_missing_ledger_token".to_string(),
-            account_id: Some(account_id),
-            error: Some("consumer-entry ledger admin token is not configured".to_string()),
-            ..Default::default()
-        };
-    };
-    let url = format!(
-        "{}/v1/ledger/grant",
-        state.config().ledger_base_url.trim_end_matches('/')
-    );
-    let body = json!({
-        "account_id": account_id,
-        "amount": completion.reward_amount,
-        "idempotency_key": format!("world_contract_completion:{}", completion.completion_id),
-        "reference_id": contract.task_id,
-    });
-    let response = match state
-        .inner
-        .http
-        .post(url)
-        .header("x-admin-token", ledger_admin_token)
-        .json(&body)
-        .send()
-        .await
-    {
-        Ok(response) => response,
-        Err(err) => {
-            return LeagueLedgerSettlement {
-                status: "failed_network".to_string(),
-                account_id: body
-                    .get("account_id")
-                    .and_then(Value::as_str)
-                    .map(ToString::to_string),
-                error: Some(format!("failed to reach ledger-service: {err}")),
-                ..Default::default()
-            }
-        }
-    };
-    let status = response.status();
-    let value = match response.json::<Value>().await {
-        Ok(value) => value,
-        Err(err) => {
-            return LeagueLedgerSettlement {
-                status: "failed_bad_response".to_string(),
-                account_id: body
-                    .get("account_id")
-                    .and_then(Value::as_str)
-                    .map(ToString::to_string),
-                error: Some(format!("ledger-service returned non-json response: {err}")),
-                ..Default::default()
-            }
-        }
-    };
-    if !status.is_success() {
-        let error = value
-            .get("error")
-            .and_then(Value::as_str)
-            .unwrap_or("ledger grant failed");
-        return LeagueLedgerSettlement {
-            status: if status.as_u16() == 409 {
-                "duplicate".to_string()
-            } else {
-                "failed_ledger".to_string()
+                ledger_action: "grant".to_string(),
+                success_status: "settled".to_string(),
+                idempotency_key: format!("world_contract_completion:{}", completion.completion_id),
+                idempotency_scope: "world_contract_completion".to_string(),
+                reference_id: Some(contract.task_id.clone()),
+                amount: completion.reward_amount,
+                amount_credits: completion.reward_amount.round() as i64,
+                currency: "credits".to_string(),
+                metadata: json!({
+                    "contract_id": contract.contract_id,
+                    "completion_id": completion.completion_id,
+                    "task_id": contract.task_id,
+                    "payout_status": completion.payout_status,
+                }),
+                extra_ledger_body: Map::new(),
             },
-            account_id: body
-                .get("account_id")
-                .and_then(Value::as_str)
-                .map(ToString::to_string),
-            error: Some(format!("{}: {error}", status.as_u16())),
-            ..Default::default()
-        };
-    }
-    LeagueLedgerSettlement {
-        status: "settled".to_string(),
-        account_id: value
-            .get("account")
-            .and_then(|account| account.get("account_id"))
-            .and_then(Value::as_str)
-            .or_else(|| body.get("account_id").and_then(Value::as_str))
-            .map(ToString::to_string),
-        entry_id: value
-            .get("entry")
-            .and_then(|entry| entry.get("entry_id"))
-            .and_then(Value::as_str)
-            .map(ToString::to_string),
-        balance_after: value
-            .get("account")
-            .and_then(|account| account.get("balance"))
-            .and_then(Value::as_f64),
-        error: None,
-    }
+        )
+        .await
+        .into_legacy_settlement()
 }
 
 pub(super) async fn complete_world_contract_inner(

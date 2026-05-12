@@ -49,10 +49,17 @@ pub enum ReceiptStatus {
     Settled,
     Consumed,
     Refunded,
+    SellerChargebackReserved,
     SellerChargebackConsumed,
     ApprovedRelease,
+    Duplicate,
+    HeldReview,
     SkippedZeroPrice,
+    SkippedZeroReward,
     SkippedZeroSellerNet,
+    SkippedMissingRoom,
+    SkippedMissingAccount,
+    SkippedMissingLedgerToken,
     FailedNetwork,
     FailedIdentity,
     FailedLedger,
@@ -72,21 +79,27 @@ impl ReceiptStatus {
             | Self::Settled
             | Self::Consumed
             | Self::Refunded
+            | Self::SellerChargebackReserved
             | Self::SellerChargebackConsumed
-            | Self::ApprovedRelease => ReceiptProgressionClass::ProgressionAllowed,
-            Self::SkippedZeroPrice | Self::SkippedZeroSellerNet => {
+            | Self::ApprovedRelease
+            | Self::Duplicate => ReceiptProgressionClass::ProgressionAllowed,
+            Self::SkippedZeroPrice | Self::SkippedZeroReward | Self::SkippedZeroSellerNet => {
                 ReceiptProgressionClass::TerminalSkip
             }
-            Self::FailedNetwork
+            Self::HeldReview
+            | Self::SkippedMissingRoom
+            | Self::FailedNetwork
             | Self::FailedIdentity
             | Self::FailedLedger
             | Self::SellerChargebackReserveFailed
             | Self::SellerChargebackFailed
             | Self::RejectedRefundFailed
             | Self::CancelledRefundFailed => ReceiptProgressionClass::RecoverableHold,
-            Self::FailedBadResponse | Self::MissingAccount | Self::MissingLedgerToken => {
-                ReceiptProgressionClass::HardFail
-            }
+            Self::FailedBadResponse
+            | Self::SkippedMissingAccount
+            | Self::SkippedMissingLedgerToken
+            | Self::MissingAccount
+            | Self::MissingLedgerToken => ReceiptProgressionClass::HardFail,
         }
     }
 
@@ -271,6 +284,14 @@ mod tests {
         );
         assert_eq!(
             ReceiptStatus::SellerChargebackFailed.progression_class(),
+            ReceiptProgressionClass::RecoverableHold
+        );
+        assert_eq!(
+            ReceiptStatus::Duplicate.progression_class(),
+            ReceiptProgressionClass::ProgressionAllowed
+        );
+        assert_eq!(
+            ReceiptStatus::HeldReview.progression_class(),
             ReceiptProgressionClass::RecoverableHold
         );
         assert_eq!(

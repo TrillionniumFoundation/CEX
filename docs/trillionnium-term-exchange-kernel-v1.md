@@ -180,10 +180,37 @@ Landed first:
 - CEX is now declared as `cex-settlement-backend`, the first backend.
 - Legacy CEX runtime manifest endpoint remains as compatibility alias.
 
+Landed next slice:
+
+1. Added `TermExchangeBackend` trait in the service layer.
+2. Moved first direct world/league economic calls behind the CEX backend adapter.
+3. The adapter now converts backend outcomes to typed `EconomicReceipt` values at the boundary, then projects to legacy status fields for endpoint compatibility.
+
 Next:
 
-1. Add `TermExchangeBackend` trait in the service layer.
-2. Move direct world/league economic calls behind the backend adapter.
-3. Convert stringly ledger outcomes to typed `EconomicReceipt` values at mutation boundaries.
-4. Keep current CEX endpoints/E2E green during migration.
-5. Later add DEX adapter under the same `term_exchange_backend_v1` contract.
+1. Store typed receipt references/statuses in World/League state instead of relying only on legacy string fields.
+2. Keep current CEX endpoints/E2E green during migration.
+3. Later add DEX adapter under the same `term_exchange_backend_v1` contract.
+---
+
+## 7. Backend adapter slice
+
+The service layer now has a first backend adapter contract:
+
+```text
+adapter_contract_version = trillionnium_term_exchange_backend_adapter_v1
+trait                    = TermExchangeBackend
+request                  = TermExchangeLedgerActionRequest
+receipt                  = EconomicReceipt
+legacy projection         = LeagueLedgerSettlement
+```
+
+Migrated call paths in this slice:
+
+- `league_reward_settlement`
+- `world_commerce_purchase_reserve_settle_consume_refund_chargeback`
+- `world_contract_completion_settlement`
+
+These paths now build typed `EconomicIntent` data and receive typed `EconomicReceipt` data inside the backend adapter, then project back to legacy status fields so current endpoints, tests, and E2E contracts remain stable.
+
+Policy: world and league economic routes should call the backend adapter, not ledger HTTP directly. Remaining migration work is to store receipt references/statuses directly in World/League state instead of only legacy string fields.

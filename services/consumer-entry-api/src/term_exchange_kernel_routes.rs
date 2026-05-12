@@ -19,6 +19,7 @@ pub(super) fn term_exchange_kernel_manifest_json(state: &AppState) -> Value {
         "protocol": protocol_manifest_json(),
         "host_contract_version": TRILLIONNIUM_TERM_EXCHANGE_HOST_CONTRACT_VERSION,
         "backend_contract_version": TERM_EXCHANGE_BACKEND_CONTRACT_VERSION,
+        "backend_adapter_contract_version": TERM_EXCHANGE_BACKEND_ADAPTER_CONTRACT_VERSION,
         "active_backend_id": CEX_SETTLEMENT_BACKEND_ID,
         "active_backend_kind": "cex",
         "settlement_backends": [
@@ -184,6 +185,22 @@ pub(super) fn term_exchange_kernel_manifest_json(state: &AppState) -> Value {
             "domain_state_mutation_after_receipt_only": true,
             "backend_hot_swap_goal": "CEX and DEX backends implement the same Term Exchange Protocol; domain plugins keep EconomicIntent/EconomicReceipt stable."
         },
+        "current_backend_adapter": {
+            "adapter_contract_version": TERM_EXCHANGE_BACKEND_ADAPTER_CONTRACT_VERSION,
+            "adapter_id": "cex-term-exchange-backend-adapter",
+            "backend_id": CEX_SETTLEMENT_BACKEND_ID,
+            "backend_kind": "cex",
+            "trait": "TermExchangeBackend",
+            "request_type": "TermExchangeLedgerActionRequest",
+            "receipt_type": "EconomicReceipt",
+            "legacy_status_projection": "LeagueLedgerSettlement",
+            "migrated_call_paths": [
+                "league_reward_settlement",
+                "world_commerce_purchase_reserve_settle_consume_refund_chargeback",
+                "world_contract_completion_settlement"
+            ],
+            "direct_ledger_http_policy": "world_and_league_economic_routes_call_the_backend_adapter_not_ledger_http_directly"
+        },
         "current_cex_backend_runtime": {
             "runtime_profile": state.config().runtime_profile.as_str(),
             "ledger_base_url_configured": !state.config().ledger_base_url.trim().is_empty(),
@@ -202,10 +219,10 @@ pub(super) fn term_exchange_kernel_manifest_json(state: &AppState) -> Value {
             "primary_endpoint": TERM_EXCHANGE_KERNEL_MANIFEST_ENDPOINT
         },
         "migration_status": {
-            "status": "term_exchange_protocol_type_layer_introduced",
+            "status": "term_exchange_backend_adapter_introduced",
             "split_strategy": "protocol_first_then_backend_adapter_then_storage_boundary",
             "current_source_of_evidence": "CEX local-production run/* gates",
-            "next_step": "move world and league economic calls behind a TermExchangeBackend trait while preserving current endpoints and E2E evidence"
+            "next_step": "replace remaining legacy status strings with typed EconomicReceipt storage references while preserving current endpoints and E2E evidence"
         }
     })
 }

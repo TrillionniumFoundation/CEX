@@ -1220,6 +1220,19 @@ async fn term_exchange_kernel_manifest_declares_cex_as_first_backend() {
     );
     assert_eq!(body["runtime_requirements"]["fail_closed"], true);
     assert_eq!(
+        body["backend_adapter_contract_version"],
+        "trillionnium_term_exchange_backend_adapter_v1"
+    );
+    assert_eq!(
+        body["current_backend_adapter"]["trait"],
+        "TermExchangeBackend"
+    );
+    assert!(body["current_backend_adapter"]["migrated_call_paths"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|value| value.as_str() == Some("world_contract_completion_settlement")));
+    assert_eq!(
         body["legacy_compatibility"]["legacy_contract_version"],
         "trillionnium_cex_runtime_plugin_v1"
     );

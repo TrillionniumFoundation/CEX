@@ -71,6 +71,8 @@ mod health_metrics;
 use health_metrics::*;
 mod world_routes;
 use world_routes::*;
+mod term_exchange_backend;
+use term_exchange_backend::*;
 mod term_exchange_kernel_routes;
 use term_exchange_kernel_routes::*;
 mod world_commerce_routes;
