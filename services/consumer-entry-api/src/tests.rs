@@ -6400,6 +6400,15 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(world_html.contains("const renderRustMapSupportCards ="));
     assert!(world_html.contains("marker_cluster_cards_html"));
     assert!(world_html.contains("support_cards\":\"rust_rendered"));
+    assert!(world_html.contains("trillionnium_world_rust_map_focus_ui_fragments_v1"));
+    assert!(world_html.contains("rust_owned_map_focus_ui_fragments"));
+    assert!(world_html.contains(
+        "data-rust-map-focus-ui-contract=\"trillionnium_world_rust_map_focus_ui_fragments_v1\""
+    ));
+    assert!(world_html.contains("server_rendered_map_focus_action_rail_selected_by_focus_bridge"));
+    assert!(world_html.contains("const applyRustMapFocusUiFragment ="));
+    assert!(world_html.contains("const rustMapFocusUiFragmentForFocus ="));
+    assert!(world_html.contains("focus_action_rail\":\"rust_rendered"));
     assert!(world_html.contains("trillionnium_world_rust_route_runner_ui_fragments_v1"));
     assert!(world_html.contains("rust_owned_route_runner_ui_fragments"));
     assert!(world_html.contains("server_rendered_runner_cards_selected_by_focus_bridge"));

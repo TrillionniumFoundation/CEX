@@ -1896,6 +1896,20 @@ Also append a one-paragraph summary to `/home/qian/.openclaw/workspace/memory/YY
 - Constraints preserved: no copied 白金英雄坛说 / Hero Tan code/text/assets/data/NPC/task tables/names, no full clone-then-replace workflow, no live OSM ingestion, no MapLibre promotion, Rust source of truth, browser input-only/focus-bridge role, and no local-only score inflation.
 
 
+---
+
+#### Update 2026-05-12 18:0x CST
+
+- Continued the Rust-owned UI push into the `/world` map focus/action rail layer:
+  - [x] Added `trillionnium_world_rust_map_focus_ui_fragments_v1` for server-rendered focus summary, focus detail, and map action-rail buttons.
+  - [x] `/world` bootstrap plus `/world/web/map-viewport` and `/world/web/map-delta` now carry `rust_owned_map_focus_ui_fragments`, keyed by node, event, task, location, region, and tile.
+  - [x] `#world-map-focus-summary`, `#world-map-focus-detail`, and `#world-map-action-rail` now declare `data-render-owner="rust_world_ui_renderer"`, the map-focus fragment contract, and `data-browser-ui-owner="input_only_focus_bridge"`.
+  - [x] Browser JS now selects Rust-projected focus fragments for `/world`; generic `renderMapFocusPanel(...)` / JS button construction remains fallback/shared compatibility for `/app` and degraded payloads.
+  - [x] Viewport delta merging now preserves `rust_owned_map_focus_ui_fragments`, so focus/action rail ownership survives snapshot, delta, and 304-style refresh paths.
+  - [x] Web/Browser E2E gates and Rust tests now require the focus/action rail fragment contract, bootstrap payload, and server-rendered focus hydration policy.
+- Constraints preserved: no copied 白金英雄坛说 / Hero Tan code/text/assets/data/NPC/task tables/names, no full clone-then-replace workflow, no live OSM ingestion, no MapLibre promotion, Rust source of truth, browser input-only/focus-bridge role, and no local-only score inflation.
+
+
 ## Current Next Pointer
 
 If the next instruction is simply “continue”, start here:

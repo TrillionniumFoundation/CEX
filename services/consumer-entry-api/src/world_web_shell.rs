@@ -12,6 +12,8 @@ pub(super) const TRILLIONNIUM_WORLD_RUST_MAP_POPUP_UI_FRAGMENTS_CONTRACT_VERSION
     "trillionnium_world_rust_map_popup_ui_fragments_v1";
 pub(super) const TRILLIONNIUM_WORLD_RUST_MAP_SUPPORT_UI_FRAGMENTS_CONTRACT_VERSION: &str =
     "trillionnium_world_rust_map_support_ui_fragments_v1";
+pub(super) const TRILLIONNIUM_WORLD_RUST_MAP_FOCUS_UI_FRAGMENTS_CONTRACT_VERSION: &str =
+    "trillionnium_world_rust_map_focus_ui_fragments_v1";
 
 fn world_user_visible_copy(value: &str) -> String {
     let mut copy = value.to_string();
@@ -4051,6 +4053,440 @@ pub(super) fn world_rust_map_support_ui_fragments_json(world_viewport: &Value) -
     })
 }
 
+fn world_map_focus_selection_action_button_html(attrs: Vec<(&str, String)>, label: &str) -> String {
+    let attr_html = attrs
+        .into_iter()
+        .map(|(name, value)| format!(" data-{}=\"{}\"", name, escape_html_text(&value)))
+        .collect::<Vec<_>>()
+        .join("");
+    format!(
+        "<button type=\"button\" class=\"focus-chip trillionnium-selection-action\"{}>{}</button>",
+        attr_html,
+        escape_world_visible_text(label),
+    )
+}
+
+fn world_map_focus_camera_action_button_html(action_id: &str, label: &str) -> String {
+    world_map_focus_selection_action_button_html(
+        vec![
+            ("selection-kind", "camera".to_string()),
+            ("camera-action", action_id.to_string()),
+        ],
+        label,
+    )
+}
+
+fn world_map_focus_region_key(lat: f64, lng: f64, zoom: i64) -> String {
+    format!("{lat:.6},{lng:.6},{zoom}")
+}
+
+fn world_map_focus_tile_key(z: i64, x: i64, y: i64) -> String {
+    format!("{z}/{x}/{y}")
+}
+
+fn world_map_marker_by_node_id<'a>(world_viewport: &'a Value, node_id: &str) -> Option<&'a Value> {
+    let node_id = node_id.trim();
+    if node_id.is_empty() {
+        return None;
+    }
+    world_viewport
+        .get("visible_markers")
+        .and_then(Value::as_array)
+        .and_then(|markers| {
+            markers
+                .iter()
+                .find(|marker| world_json_str(marker, "node_id").trim() == node_id)
+        })
+}
+
+fn world_map_marker_primary_action_buttons_html(marker: Option<&Value>) -> String {
+    marker
+        .and_then(|marker| marker.get("primary_actions"))
+        .and_then(Value::as_array)
+        .map(|actions| {
+            let node_id = marker
+                .map(|marker| world_json_str(marker, "node_id"))
+                .unwrap_or_default();
+            actions
+                .iter()
+                .map(|action| {
+                    let action_id = first_nonempty_str(
+                        &[
+                            world_json_str(action, "action_id"),
+                            world_json_str(action, "command"),
+                        ],
+                        "move_here",
+                    );
+                    let label = first_nonempty_str(
+                        &[
+                            world_json_str(action, "label"),
+                            world_json_str(action, "command"),
+                        ],
+                        "Action / 行动",
+                    );
+                    world_map_focus_selection_action_button_html(
+                        vec![
+                            ("selection-kind", "node".to_string()),
+                            ("node-id", node_id.to_string()),
+                            ("action-id", action_id.to_string()),
+                        ],
+                        label,
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .unwrap_or_default()
+}
+
+fn world_map_focus_fragment_json(
+    kind: &str,
+    summary_text: String,
+    detail_text: String,
+    action_buttons_html: String,
+) -> Value {
+    json!({
+        "contract_version": TRILLIONNIUM_WORLD_RUST_MAP_FOCUS_UI_FRAGMENTS_CONTRACT_VERSION,
+        "source_of_truth": "rust_world_map_viewport_projection",
+        "render_owner": "rust_world_ui_renderer",
+        "web_role": "input_only_focus_bridge",
+        "focus_kind": kind,
+        "summary_text": summary_text,
+        "detail_text": detail_text,
+        "action_buttons_html": action_buttons_html,
+        "ui_ownership": {
+            "map_focus_summary": "rust_rendered",
+            "map_focus_detail": "rust_rendered",
+            "map_focus_action_rail": "rust_rendered",
+            "browser": "input_only_focus_bridge"
+        }
+    })
+}
+
+fn world_map_focus_empty_fragment_json() -> Value {
+    world_map_focus_fragment_json(
+        "empty",
+        "Waiting for map focus / 等待选择地图焦点…".to_string(),
+        "Choose a region, tile, hotspot, or live event to drive movement and world action / 选择区域、地图块、热点或实时事件，推动移动和世界行动。".to_string(),
+        String::new(),
+    )
+}
+
+fn world_map_focus_node_fragment_json(world_viewport: &Value, marker: &Value) -> Value {
+    let node_id = world_json_str(marker, "node_id");
+    let name = first_nonempty_str(&[world_json_str(marker, "name"), node_id], "热点");
+    let node_kind = first_nonempty_str(&[world_json_str(marker, "node_kind")], "热点");
+    let interaction_tags = marker
+        .get("interaction_tags")
+        .and_then(Value::as_array)
+        .map(|tags| {
+            tags.iter()
+                .filter_map(Value::as_str)
+                .take(3)
+                .collect::<Vec<_>>()
+                .join(" / ")
+        })
+        .unwrap_or_default();
+    let summary = format!(
+        "{} · {}",
+        world_map_status_label(node_kind),
+        if interaction_tags.trim().is_empty() {
+            "World interaction / 世界互动".to_string()
+        } else {
+            world_map_status_label(&interaction_tags)
+        }
+    );
+    let detail = world_map_status_label(first_nonempty_str(
+        &[world_json_str(marker, "description")],
+        "Move, inspect, collaborate, craft, or open a world action from this hotspot / 从这个热点移动、查看、协作、制作，或开启世界行动。",
+    ));
+    world_map_focus_fragment_json(
+        "node",
+        world_user_visible_copy(name),
+        format!("{} · {}", summary, detail),
+        world_map_marker_primary_action_buttons_html(world_map_marker_by_node_id(
+            world_viewport,
+            node_id,
+        )),
+    )
+}
+
+fn world_map_focus_event_fragment_json(world_viewport: &Value, event: &Value) -> Value {
+    let node_id = world_json_str(event, "node_id");
+    let marker = world_map_marker_by_node_id(world_viewport, node_id);
+    let task_id = world_json_str(event, "cex_task_id");
+    let location_id = first_nonempty_str(
+        &[
+            world_json_str(event, "location_id"),
+            marker
+                .map(|marker| world_json_str(marker, "location_id"))
+                .unwrap_or_default(),
+        ],
+        "",
+    );
+    let event_kind = first_nonempty_str(&[world_json_str(event, "event_kind")], "world_event");
+    let node_name = first_nonempty_str(
+        &[
+            world_json_str(event, "node_name"),
+            marker
+                .map(|marker| world_json_str(marker, "name"))
+                .unwrap_or_default(),
+            location_id,
+        ],
+        "热点",
+    );
+    let impact = world_json_i64(event, "impact_score").max(0);
+    let detail = first_nonempty_str(
+        &[
+            world_json_str(event, "result"),
+            world_json_str(event, "body"),
+        ],
+        "把这个实时事件推进到冒险路线和下一步世界行动。",
+    );
+    let summary = if task_id.trim().is_empty() {
+        format!("Unlinked live event / 未关联的实时事件 · impact / 影响 {impact}")
+    } else {
+        format!("Task / 任务 {task_id} · impact / 影响 {impact}")
+    };
+    world_map_focus_fragment_json(
+        "event",
+        format!(
+            "{} · {}",
+            world_map_status_label(event_kind),
+            world_user_visible_copy(node_name)
+        ),
+        format!("{} · {}", summary, world_user_visible_copy(detail)),
+        world_map_marker_primary_action_buttons_html(marker),
+    )
+}
+
+fn world_map_focus_region_fragment_json(region: &Value) -> Value {
+    let name = first_nonempty_str(&[world_json_str(region, "name")], "区域焦点");
+    let status = first_nonempty_str(&[world_json_str(region, "status")], "planned");
+    let coverage = first_nonempty_str(&[world_json_str(region, "coverage_kind")], "shard");
+    let zoom_min = world_json_i64(region, "zoom_min").clamp(3, 19);
+    let zoom_max = world_json_i64(region, "zoom_max").clamp(3, 19);
+    let density = first_nonempty_str(&[world_json_str(region, "player_density_mode")], "mixed");
+    let center_lat = region
+        .get("center")
+        .and_then(|center| center.get("lat"))
+        .and_then(Value::as_f64)
+        .unwrap_or(31.230416);
+    let center_lng = region
+        .get("center")
+        .and_then(|center| center.get("lng"))
+        .and_then(Value::as_f64)
+        .unwrap_or(121.473701);
+    let actions = [
+        world_map_focus_selection_action_button_html(
+            vec![
+                ("selection-kind", "region".to_string()),
+                ("lat", format!("{center_lat:.6}")),
+                ("lng", format!("{center_lng:.6}")),
+                ("zoom", zoom_max.to_string()),
+            ],
+            "Focus region / 聚焦区域",
+        ),
+        world_map_focus_camera_action_button_html("nearest_poi", "Nearest hotspot / 最近热点"),
+        world_map_focus_camera_action_button_html("hottest_event", "Hottest event / 高热事件"),
+    ]
+    .join(" ");
+    world_map_focus_fragment_json(
+        "region",
+        world_user_visible_copy(name),
+        format!(
+            "{} · {} · zoom / 缩放 {}-{} · density / 密度 {}",
+            world_map_status_label(status),
+            world_map_status_label(coverage),
+            zoom_min,
+            zoom_max,
+            world_map_status_label(density)
+        ),
+        actions,
+    )
+}
+
+fn world_map_focus_tile_fragment_json(tile: &Value) -> Value {
+    let z = world_json_i64(tile, "z").max(0);
+    let x = world_json_i64(tile, "x").max(0);
+    let y = world_json_i64(tile, "y").max(0);
+    let tile_id = first_nonempty_str(&[world_json_str(tile, "tile_id")], "地图分片");
+    let tile_status = first_nonempty_str(&[world_json_str(tile, "tile_status")], "地图块");
+    let lod_mode = first_nonempty_str(&[world_json_str(tile, "lod_mode")], "街区节点");
+    let marker_count = world_json_i64(tile, "marker_count").max(0);
+    let actions = [
+        world_map_focus_selection_action_button_html(
+            vec![
+                ("selection-kind", "tile".to_string()),
+                ("tile-z", z.to_string()),
+                ("tile-x", x.to_string()),
+                ("tile-y", y.to_string()),
+            ],
+            "View tile / 查看分片",
+        ),
+        world_map_focus_camera_action_button_html("nearest_poi", "Nearest hotspot / 最近热点"),
+        world_map_focus_camera_action_button_html("hottest_event", "Hottest event / 高热事件"),
+    ]
+    .join(" ");
+    world_map_focus_fragment_json(
+        "tile",
+        tile_id.to_string(),
+        format!(
+            "{} · {} places / {} 个地点 · {} · tile / 地图块 {}/{}/{}",
+            world_map_status_label(tile_status),
+            marker_count,
+            marker_count,
+            world_map_status_label(lod_mode),
+            z,
+            x,
+            y
+        ),
+        actions,
+    )
+}
+
+fn world_map_focus_insert_first(map: &mut Map<String, Value>, key: &str, fragment: &Value) {
+    let key = key.trim();
+    if !key.is_empty() && !map.contains_key(key) {
+        map.insert(key.to_string(), fragment.clone());
+    }
+}
+
+pub(super) fn world_rust_map_focus_ui_fragments_json(world_viewport: &Value) -> Value {
+    let mut by_node_id = Map::new();
+    let mut by_event_id = Map::new();
+    let mut by_task_id = Map::new();
+    let mut by_location_id = Map::new();
+    let mut by_region_key = Map::new();
+    let mut by_tile_key = Map::new();
+    let mut default_fragment = world_map_focus_empty_fragment_json();
+    let mut default_set = false;
+    let mut first_node_fragment: Option<Value> = None;
+
+    if let Some(markers) = world_viewport
+        .get("visible_markers")
+        .and_then(Value::as_array)
+    {
+        for marker in markers {
+            let fragment = world_map_focus_node_fragment_json(world_viewport, marker);
+            world_map_focus_insert_first(
+                &mut by_node_id,
+                world_json_str(marker, "node_id"),
+                &fragment,
+            );
+            world_map_focus_insert_first(
+                &mut by_location_id,
+                world_json_str(marker, "location_id"),
+                &fragment,
+            );
+            if first_node_fragment.is_none() {
+                first_node_fragment = Some(fragment.clone());
+            }
+        }
+    }
+
+    let mut region_values = Vec::new();
+    if let Some(active_region) = world_viewport.get("active_region") {
+        region_values.push(active_region.clone());
+    }
+    if let Some(regions) = world_viewport
+        .get("stream_region_shards")
+        .and_then(Value::as_array)
+    {
+        region_values.extend(regions.iter().cloned());
+    }
+    for region in region_values {
+        let center_lat = region
+            .get("center")
+            .and_then(|center| center.get("lat"))
+            .and_then(Value::as_f64)
+            .unwrap_or(31.230416);
+        let center_lng = region
+            .get("center")
+            .and_then(|center| center.get("lng"))
+            .and_then(Value::as_f64)
+            .unwrap_or(121.473701);
+        let zoom = world_json_i64(&region, "zoom_max").clamp(3, 19);
+        let fragment = world_map_focus_region_fragment_json(&region);
+        world_map_focus_insert_first(
+            &mut by_region_key,
+            &world_map_focus_region_key(center_lat, center_lng, zoom),
+            &fragment,
+        );
+        if !default_set {
+            default_fragment = fragment.clone();
+            default_set = true;
+        }
+    }
+    if !default_set {
+        if let Some(fragment) = first_node_fragment.clone() {
+            default_fragment = fragment;
+        }
+    }
+
+    if let Some(events) = world_viewport
+        .get("live_event_stream")
+        .and_then(Value::as_array)
+    {
+        for event in events {
+            let fragment = world_map_focus_event_fragment_json(world_viewport, event);
+            world_map_focus_insert_first(
+                &mut by_event_id,
+                world_json_str(event, "event_id"),
+                &fragment,
+            );
+            world_map_focus_insert_first(
+                &mut by_task_id,
+                world_json_str(event, "cex_task_id"),
+                &fragment,
+            );
+            world_map_focus_insert_first(
+                &mut by_location_id,
+                world_json_str(event, "location_id"),
+                &fragment,
+            );
+            world_map_focus_insert_first(
+                &mut by_node_id,
+                world_json_str(event, "node_id"),
+                &fragment,
+            );
+        }
+    }
+
+    let tile_sources = ["visible_tile_shards", "prefetch_queue"];
+    for key in tile_sources {
+        if let Some(tiles) = world_viewport.get(key).and_then(Value::as_array) {
+            for tile in tiles {
+                let z = world_json_i64(tile, "z").max(0);
+                let x = world_json_i64(tile, "x").max(0);
+                let y = world_json_i64(tile, "y").max(0);
+                let fragment = world_map_focus_tile_fragment_json(tile);
+                world_map_focus_insert_first(
+                    &mut by_tile_key,
+                    &world_map_focus_tile_key(z, x, y),
+                    &fragment,
+                );
+            }
+        }
+    }
+
+    json!({
+        "contract_version": TRILLIONNIUM_WORLD_RUST_MAP_FOCUS_UI_FRAGMENTS_CONTRACT_VERSION,
+        "source_of_truth": "rust_world_map_viewport_projection",
+        "render_owner": "rust_world_ui_renderer",
+        "web_role": "input_only_focus_bridge",
+        "hydration_policy": "server_rendered_map_focus_action_rail_selected_by_focus_bridge",
+        "default": default_fragment,
+        "by_node_id": by_node_id,
+        "by_event_id": by_event_id,
+        "by_task_id": by_task_id,
+        "by_location_id": by_location_id,
+        "by_region_key": by_region_key,
+        "by_tile_key": by_tile_key,
+        "focus_action_rail": "rust_rendered",
+    })
+}
+
 fn world_live_event_card_html(event: &Value) -> String {
     let event_kind = world_json_str(event, "event_kind");
     let node_name = world_json_str(event, "node_name");
@@ -6139,6 +6575,25 @@ pub(super) async fn get_world_web_shell(
             .and_then(Value::as_str)
             .unwrap_or("dense"),
     );
+    let world_map_focus_ui_fragments = world_rust_map_focus_ui_fragments_json(&world_viewport);
+    let world_map_focus_default_fragment = world_map_focus_ui_fragments
+        .get("default")
+        .unwrap_or(&Value::Null);
+    let world_map_focus_summary_text = world_map_focus_default_fragment
+        .get("summary_text")
+        .and_then(Value::as_str)
+        .unwrap_or("Waiting for map focus / 等待选择地图焦点…")
+        .to_string();
+    let world_map_focus_detail_text = world_map_focus_default_fragment
+        .get("detail_text")
+        .and_then(Value::as_str)
+        .unwrap_or("Choose a region, tile, hotspot, or live event to drive movement and world action / 选择区域、地图块、热点或实时事件，推动移动和世界行动。")
+        .to_string();
+    let world_map_focus_action_buttons_html = world_map_focus_default_fragment
+        .get("action_buttons_html")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
     let mut world_map_bootstrap =
         trillionnium_slim_map_bootstrap_json(&world_map, "world_web_shell");
     if let Some(object) = world_map_bootstrap.as_object_mut() {
@@ -6161,6 +6616,10 @@ pub(super) async fn get_world_web_shell(
         object.insert(
             "rust_owned_map_support_ui_fragments".to_string(),
             world_map_support_ui_fragments.clone(),
+        );
+        object.insert(
+            "rust_owned_map_focus_ui_fragments".to_string(),
+            world_map_focus_ui_fragments.clone(),
         );
     }
     let world_map_bootstrap_bytes = serde_json::to_string(&world_map_bootstrap)
@@ -7435,9 +7894,9 @@ pub(super) async fn get_world_web_shell(
           </div>
           <div class="mini" style="margin-top:14px;">
             <strong data-i18n-en="Map Action Rail" data-i18n-zh="地图行动栏">Map Action Rail</strong>
-            <span id="world-map-focus-summary" data-i18n-en="Waiting for map focus…" data-i18n-zh="等待选择地图焦点…">Waiting for map focus…</span>
-            <small id="world-map-focus-detail" data-i18n-en="Choose a region, tile, hotspot, or live event to drive movement and world action." data-i18n-zh="选择区域、地图块、热点或实时事件，推动移动和世界行动。">Choose a region, tile, hotspot, or live event to drive movement and world action.</small>
-            <div id="world-map-action-rail" class="focus-stack"></div>
+            <span id="world-map-focus-summary" data-render-owner="rust_world_ui_renderer" data-rust-map-focus-ui-contract="{rust_map_focus_ui_contract}" data-browser-ui-owner="input_only_focus_bridge" data-i18n-en="Waiting for map focus…" data-i18n-zh="等待选择地图焦点…">{world_map_focus_summary_text}</span>
+            <small id="world-map-focus-detail" data-render-owner="rust_world_ui_renderer" data-rust-map-focus-ui-contract="{rust_map_focus_ui_contract}" data-browser-ui-owner="input_only_focus_bridge" data-i18n-en="Choose a region, tile, hotspot, or live event to drive movement and world action." data-i18n-zh="选择区域、地图块、热点或实时事件，推动移动和世界行动。">{world_map_focus_detail_text}</small>
+            <div id="world-map-action-rail" class="focus-stack" data-render-owner="rust_world_ui_renderer" data-rust-map-focus-ui-contract="{rust_map_focus_ui_contract}" data-browser-ui-owner="input_only_focus_bridge">{world_map_focus_action_buttons_html}</div>
           </div>
           <p id="world-map-route-filter-status" class="subtitle" data-render-owner="rust_world_ui_renderer" data-rust-route-ui-contract="{rust_route_ui_contract}" data-browser-ui-owner="input_only_focus_bridge" data-i18n-en="Route filter: show all world activity." data-i18n-zh="路线筛选：显示全部世界活动。">{world_route_filter_status_text}</p>
           <div id="world-map-route-filter-actions" class="focus-stack">
@@ -7746,6 +8205,73 @@ pub(super) async fn get_world_web_shell(
           target.dataset.routeUiBrowserRole = 'input_only_focus_bridge';
         }}
         return true;
+      }};
+      const rustMapFocusUiContract = 'trillionnium_world_rust_map_focus_ui_fragments_v1';
+      let rustMapFocusUiFragments = payload.rust_owned_map_focus_ui_fragments || {{}};
+      const mergeRustMapFocusUiFragments = (fragments) => {{
+        if (!fragments || typeof fragments !== 'object') return false;
+        rustMapFocusUiFragments = {{ ...rustMapFocusUiFragments, ...fragments }};
+        if (fragments.default) rustMapFocusUiFragments.default = fragments.default;
+        ['by_node_id', 'by_event_id', 'by_task_id', 'by_location_id', 'by_region_key', 'by_tile_key'].forEach((key) => {{
+          if (fragments[key]) rustMapFocusUiFragments[key] = {{ ...((rustMapFocusUiFragments[key]) || {{}}), ...fragments[key] }};
+        }});
+        return true;
+      }};
+      const rustMapFocusRegionKey = (focus) => {{
+        const lat = Number((focus || {{}}).lat);
+        const lng = Number((focus || {{}}).lng);
+        const zoom = Number((focus || {{}}).zoom || 12);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) return '';
+        return lat.toFixed(6) + ',' + lng.toFixed(6) + ',' + String(Math.max(3, Math.min(19, Math.round(zoom))));
+      }};
+      const rustMapFocusTileKey = (focus) => {{
+        const z = String((focus || {{}}).z || '').trim();
+        const x = String((focus || {{}}).x || '').trim();
+        const y = String((focus || {{}}).y || '').trim();
+        return (z && x && y) ? (z + '/' + x + '/' + y) : '';
+      }};
+      const rustMapFocusUiFragmentForFocus = (focus) => {{
+        const source = rustMapFocusUiFragments || {{}};
+        const eventId = String((focus || {{}}).eventId || '').trim();
+        const taskId = String((focus || {{}}).taskId || '').trim();
+        const locationId = String((focus || {{}}).locationId || '').trim();
+        const nodeId = String((focus || {{}}).nodeId || '').trim();
+        const regionKey = String((focus || {{}}).kind || '') === 'region' ? rustMapFocusRegionKey(focus) : '';
+        const tileKey = String((focus || {{}}).kind || '') === 'tile' ? rustMapFocusTileKey(focus) : '';
+        return (eventId && source.by_event_id && source.by_event_id[eventId])
+          || (taskId && source.by_task_id && source.by_task_id[taskId])
+          || (locationId && source.by_location_id && source.by_location_id[locationId])
+          || (nodeId && source.by_node_id && source.by_node_id[nodeId])
+          || (regionKey && source.by_region_key && source.by_region_key[regionKey])
+          || (tileKey && source.by_tile_key && source.by_tile_key[tileKey])
+          || source.default
+          || null;
+      }};
+      const applyRustMapFocusUiFragment = (fragment) => {{
+        if (!fragment || String(fragment.contract_version || '') !== rustMapFocusUiContract) return false;
+        const markRustMapFocusOwner = (node) => {{
+          if (!node) return;
+          node.dataset.renderOwner = 'rust_world_ui_renderer';
+          node.dataset.rustMapFocusUiContract = rustMapFocusUiContract;
+          node.dataset.browserUiOwner = 'input_only_focus_bridge';
+        }};
+        let rendered = false;
+        if (focusSummary && typeof fragment.summary_text === 'string') {{
+          focusSummary.textContent = mapText(fragment.summary_text);
+          markRustMapFocusOwner(focusSummary);
+          rendered = true;
+        }}
+        if (focusDetail && typeof fragment.detail_text === 'string') {{
+          focusDetail.textContent = mapText(fragment.detail_text);
+          markRustMapFocusOwner(focusDetail);
+          rendered = true;
+        }}
+        if (actionRail && typeof fragment.action_buttons_html === 'string') {{
+          actionRail.innerHTML = fragment.action_buttons_html;
+          markRustMapFocusOwner(actionRail);
+          rendered = true;
+        }}
+        return rendered;
       }};
       let lastViewport = null;
       let lastViewportCursor = null;
@@ -8536,11 +9062,14 @@ pub(super) async fn get_world_web_shell(
       {shared_map_focus_panel_js}
 
       const renderFocusPanel = () => {{
+        const focus = lastSelection || buildDefaultFocus();
+        if (lastViewport && lastViewport.rust_owned_map_focus_ui_fragments) mergeRustMapFocusUiFragments(lastViewport.rust_owned_map_focus_ui_fragments);
+        if (applyRustMapFocusUiFragment(rustMapFocusUiFragmentForFocus(focus))) return;
         renderMapFocusPanel({{
           focusSummary,
           focusDetail,
           actionRail,
-          focus: lastSelection || buildDefaultFocus(),
+          focus,
           emptyDetail: '选择区域、地图块、热点或实时事件，推动移动和世界行动。',
         }});
       }};
@@ -8761,8 +9290,13 @@ pub(super) async fn get_world_web_shell(
             TRILLIONNIUM_WORLD_RUST_MAP_POPUP_UI_FRAGMENTS_CONTRACT_VERSION,
         rust_map_support_ui_contract =
             TRILLIONNIUM_WORLD_RUST_MAP_SUPPORT_UI_FRAGMENTS_CONTRACT_VERSION,
+        rust_map_focus_ui_contract =
+            TRILLIONNIUM_WORLD_RUST_MAP_FOCUS_UI_FRAGMENTS_CONTRACT_VERSION,
         rust_route_runner_ui_contract =
             TRILLIONNIUM_WORLD_RUST_ROUTE_RUNNER_UI_FRAGMENTS_CONTRACT_VERSION,
+        world_map_focus_summary_text = escape_html_text(&world_map_focus_summary_text),
+        world_map_focus_detail_text = escape_html_text(&world_map_focus_detail_text),
+        world_map_focus_action_buttons_html = world_map_focus_action_buttons_html,
         world_keypad_current_name = world_keypad_current_name,
         world_keypad_current_description = world_keypad_current_description,
         world_keypad_current_coordinates = escape_html_text(&world_keypad_current_coordinates),
