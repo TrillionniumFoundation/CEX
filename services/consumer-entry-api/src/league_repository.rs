@@ -1164,6 +1164,31 @@ pub(super) fn validate_normalized_repository_read_model_gate(
     {
         return Err("normalized repository read switch is enabled but normalized world-home read model is missing latest receipt metadata".to_string());
     }
+    let receipt_projection = read_model
+        .get("term_exchange_receipt_projection")
+        .and_then(Value::as_object)
+        .ok_or_else(|| "normalized repository read switch is enabled but normalized world-home read model is missing the receipt projection object".to_string())?;
+    if receipt_projection
+        .get("contract_version")
+        .and_then(Value::as_str)
+        != Some("trillionnium_term_exchange_receipt_projection_v1")
+    {
+        return Err("normalized repository read switch is enabled but normalized world-home receipt projection version is invalid".to_string());
+    }
+    if receipt_projection
+        .get("latest_receipts")
+        .and_then(Value::as_array)
+        .is_none()
+    {
+        return Err("normalized repository read switch is enabled but normalized world-home receipt projection is missing latest receipts".to_string());
+    }
+    if read_model
+        .get("term_exchange_receipts")
+        .and_then(Value::as_object)
+        .is_none()
+    {
+        return Err("normalized repository read switch is enabled but normalized world-home read model is missing the receipt state map".to_string());
+    }
     Ok(())
 }
 
@@ -1209,6 +1234,28 @@ pub(super) fn validate_normalized_repository_client_feed_read_model_gate(
         .is_none()
     {
         return Err("normalized repository read switch is enabled but normalized client-feed read model is missing typed receipt progression classes".to_string());
+    }
+    let receipt_snapshot = read_model
+        .get("term_exchange_receipts")
+        .and_then(Value::as_object)
+        .ok_or_else(|| "normalized repository read switch is enabled but normalized client-feed read model is missing the receipt snapshot".to_string())?;
+    if receipt_snapshot
+        .get("recent")
+        .and_then(Value::as_array)
+        .is_none()
+    {
+        return Err("normalized repository read switch is enabled but normalized client-feed receipt snapshot is missing recent receipts".to_string());
+    }
+    let receipt_projection = read_model
+        .get("term_exchange_receipt_projection")
+        .and_then(Value::as_object)
+        .ok_or_else(|| "normalized repository read switch is enabled but normalized client-feed read model is missing the receipt projection object".to_string())?;
+    if receipt_projection
+        .get("contract_version")
+        .and_then(Value::as_str)
+        != Some("trillionnium_term_exchange_receipt_projection_v1")
+    {
+        return Err("normalized repository read switch is enabled but normalized client-feed receipt projection version is invalid".to_string());
     }
     Ok(())
 }
@@ -4766,7 +4813,44 @@ pub(super) fn league_state_repository_dual_write_plan_json() -> Value {
 
 #[allow(dead_code)]
 pub(super) fn normalized_repository_world_home_read_model_sql() -> &'static str {
-    "select jsonb_build_object(
+    "with world_receipt_progression_classes as (
+  select coalesce(jsonb_object_agg(progression_class, receipt_count), '{}'::jsonb) as value
+  from (select progression_class, count(*) as receipt_count from world_term_exchange_receipts group by progression_class) classes
+),
+world_latest_receipts as (
+  select coalesce(jsonb_agg(jsonb_build_object(
+    'receipt_id', receipt_id,
+    'intent_id', intent_id,
+    'term_id', term_id,
+    'backend_id', backend_id,
+    'backend_kind', backend_kind,
+    'status', status,
+    'progression_class', progression_class,
+    'settlement_reference', settlement_reference,
+    'ledger_entry_id', ledger_entry_id,
+    'reason', reason,
+    'finalized_at_epoch', extract(epoch from finalized_at)::bigint
+  ) order by finalized_at desc, receipt_id desc), '[]'::jsonb) as value
+  from (select receipt_id, intent_id, term_id, backend_id, backend_kind, status, progression_class, settlement_reference, ledger_entry_id, reason, finalized_at from world_term_exchange_receipts order by finalized_at desc, receipt_id desc limit 6) latest_receipts
+),
+world_receipt_state_map as (
+  select coalesce(jsonb_object_agg(receipt_id, jsonb_build_object(
+    'protocol_version', protocol_version,
+    'receipt_id', receipt_id,
+    'intent_id', intent_id,
+    'term_id', term_id,
+    'backend_id', backend_id,
+    'backend_kind', backend_kind,
+    'status', status,
+    'progression_class', progression_class,
+    'settlement_reference', settlement_reference,
+    'ledger_entry_id', ledger_entry_id,
+    'reason', reason,
+    'finalized_at_epoch', extract(epoch from finalized_at)::bigint
+  )), '{}'::jsonb) as value
+  from world_term_exchange_receipts
+)
+select jsonb_build_object(
   'read_model_version', 'trillionnium_normalized_world_home_read_model_v1',
   'source_tables', jsonb_build_array('world_events', 'world_relationships', 'world_map_nodes', 'world_contracts', 'world_work_orders', 'world_faction_standings', 'league_term_exchange_receipts', 'world_term_exchange_receipts'),
   'world_event_count', (select count(*) from world_events),
@@ -4777,16 +4861,50 @@ pub(super) fn normalized_repository_world_home_read_model_sql() -> &'static str 
   'world_faction_standing_count', (select count(*) from world_faction_standings),
   'league_term_exchange_receipt_count', (select count(*) from league_term_exchange_receipts),
   'world_term_exchange_receipt_count', (select count(*) from world_term_exchange_receipts),
-  'world_term_exchange_receipt_progression_classes', coalesce((select jsonb_object_agg(progression_class, receipt_count) from (select progression_class, count(*) as receipt_count from world_term_exchange_receipts group by progression_class) classes), '{}'::jsonb),
+  'world_term_exchange_receipt_progression_classes', (select value from world_receipt_progression_classes),
+  'term_exchange_receipts', (select value from world_receipt_state_map),
+  'term_exchange_receipt_projection', jsonb_build_object(
+    'contract_version', 'trillionnium_term_exchange_receipt_projection_v1',
+    'source_state_path', 'WorldState.world_term_exchange_receipts',
+    'normalized_source_table', 'world_term_exchange_receipts',
+    'read_model_alignment', 'normalized_world_home_and_client_feed_receipt_probes',
+    'receipt_count', (select count(*) from world_term_exchange_receipts),
+    'progression_classes', (select value from world_receipt_progression_classes),
+    'latest_receipts', (select value from world_latest_receipts)
+  ),
   'latest_event_ids', coalesce((select jsonb_agg(event_id order by created_at desc, event_id desc) from (select event_id, created_at from world_events order by created_at desc, event_id desc limit 6) recent_events), '[]'::jsonb),
   'latest_work_order_ids', coalesce((select jsonb_agg(work_order_id order by created_at desc, work_order_id desc) from (select work_order_id, created_at from world_work_orders order by created_at desc, work_order_id desc limit 6) recent_work_orders), '[]'::jsonb),
-  'latest_world_term_exchange_receipts', coalesce((select jsonb_agg(jsonb_build_object('receipt_id', receipt_id, 'intent_id', intent_id, 'status', status, 'progression_class', progression_class) order by finalized_at desc, receipt_id desc) from (select receipt_id, intent_id, status, progression_class, finalized_at from world_term_exchange_receipts order by finalized_at desc, receipt_id desc limit 6) latest_receipts), '[]'::jsonb)
+  'latest_world_term_exchange_receipts', (select value from world_latest_receipts)
 ) as normalized_world_home_read_model"
 }
 
 #[allow(dead_code)]
 pub(super) fn normalized_repository_client_feed_read_model_sql() -> &'static str {
-    "select jsonb_build_object(
+    "with world_receipt_progression_classes as (
+  select coalesce(jsonb_object_agg(progression_class, receipt_count), '{}'::jsonb) as value
+  from (select progression_class, count(*) as receipt_count from world_term_exchange_receipts group by progression_class) classes
+),
+combined_receipt_progression_classes as (
+  select coalesce(jsonb_object_agg(progression_class, receipt_count), '{}'::jsonb) as value
+  from (select progression_class, count(*) as receipt_count from (select progression_class from league_term_exchange_receipts union all select progression_class from world_term_exchange_receipts) receipt_classes group by progression_class) classes
+),
+world_latest_receipts as (
+  select coalesce(jsonb_agg(jsonb_build_object(
+    'receipt_id', receipt_id,
+    'intent_id', intent_id,
+    'term_id', term_id,
+    'backend_id', backend_id,
+    'backend_kind', backend_kind,
+    'status', status,
+    'progression_class', progression_class,
+    'settlement_reference', settlement_reference,
+    'ledger_entry_id', ledger_entry_id,
+    'reason', reason,
+    'finalized_at_epoch', extract(epoch from finalized_at)::bigint
+  ) order by finalized_at desc, receipt_id desc), '[]'::jsonb) as value
+  from (select receipt_id, intent_id, term_id, backend_id, backend_kind, status, progression_class, settlement_reference, ledger_entry_id, reason, finalized_at from world_term_exchange_receipts order by finalized_at desc, receipt_id desc limit 6) latest_receipts
+)
+select jsonb_build_object(
   'read_model_version', 'trillionnium_normalized_client_feed_read_model_v1',
   'source_tables', jsonb_build_array(
     'world_events',
@@ -4814,7 +4932,21 @@ pub(super) fn normalized_repository_client_feed_read_model_sql() -> &'static str
   'world_economy_event_count', (select count(*) from world_economy_events),
   'league_term_exchange_receipt_count', (select count(*) from league_term_exchange_receipts),
   'world_term_exchange_receipt_count', (select count(*) from world_term_exchange_receipts),
-  'term_exchange_receipt_progression_classes', coalesce((select jsonb_object_agg(progression_class, receipt_count) from (select progression_class, count(*) as receipt_count from (select progression_class from league_term_exchange_receipts union all select progression_class from world_term_exchange_receipts) receipt_classes group by progression_class) classes), '{}'::jsonb),
+  'term_exchange_receipt_progression_classes', (select value from combined_receipt_progression_classes),
+  'term_exchange_receipts', jsonb_build_object(
+    'count', (select count(*) from world_term_exchange_receipts),
+    'progression_classes', (select value from world_receipt_progression_classes),
+    'recent', (select value from world_latest_receipts)
+  ),
+  'term_exchange_receipt_projection', jsonb_build_object(
+    'contract_version', 'trillionnium_term_exchange_receipt_projection_v1',
+    'source_state_path', 'WorldState.world_term_exchange_receipts',
+    'normalized_source_table', 'world_term_exchange_receipts',
+    'read_model_alignment', 'normalized_world_home_and_client_feed_receipt_probes',
+    'receipt_count', (select count(*) from world_term_exchange_receipts),
+    'progression_classes', (select value from world_receipt_progression_classes),
+    'latest_receipts', (select value from world_latest_receipts)
+  ),
   'feed_item_count', (
     select count(*)
     from (
@@ -4878,7 +5010,9 @@ pub(super) fn normalized_repository_read_model_contract_json() -> Value {
             "receipt_probe_fields": [
                 "world_term_exchange_receipt_count",
                 "world_term_exchange_receipt_progression_classes",
-                "latest_world_term_exchange_receipts"
+                "latest_world_term_exchange_receipts",
+                "term_exchange_receipts",
+                "term_exchange_receipt_projection"
             ],
             "parity_gate": "normalized_world_home_read_model_green",
             "startup_gate": "normalized_read_model_startup_gate_green"
@@ -4903,7 +5037,9 @@ pub(super) fn normalized_repository_read_model_contract_json() -> Value {
             "receipt_probe_fields": [
                 "league_term_exchange_receipt_count",
                 "world_term_exchange_receipt_count",
-                "term_exchange_receipt_progression_classes"
+                "term_exchange_receipt_progression_classes",
+                "term_exchange_receipts",
+                "term_exchange_receipt_projection"
             ],
             "parity_gate": "normalized_client_feed_read_model_green",
             "startup_gate": "normalized_client_feed_read_model_startup_gate_green"

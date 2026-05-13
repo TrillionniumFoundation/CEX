@@ -1111,6 +1111,9 @@ fn normalized_repository_world_home_read_model_declares_direct_sql_seam() {
     assert!(read_model_sql.contains("world_term_exchange_receipt_progression_classes"));
     assert!(read_model_sql.contains("latest_event_ids"));
     assert!(read_model_sql.contains("latest_world_term_exchange_receipts"));
+    assert!(read_model_sql.contains("term_exchange_receipts"));
+    assert!(read_model_sql.contains("term_exchange_receipt_projection"));
+    assert!(read_model_sql.contains("trillionnium_term_exchange_receipt_projection_v1"));
     let contract = normalized_repository_read_model_contract_json();
     assert_eq!(
         contract.get("contract_version").and_then(Value::as_str),
@@ -1138,6 +1141,9 @@ fn normalized_repository_world_home_read_model_declares_direct_sql_seam() {
     assert!(feed_read_model_sql.contains("league_term_exchange_receipts"));
     assert!(feed_read_model_sql.contains("world_term_exchange_receipts"));
     assert!(feed_read_model_sql.contains("term_exchange_receipt_progression_classes"));
+    assert!(feed_read_model_sql.contains("term_exchange_receipts"));
+    assert!(feed_read_model_sql.contains("term_exchange_receipt_projection"));
+    assert!(feed_read_model_sql.contains("trillionnium_term_exchange_receipt_projection_v1"));
     assert!(feed_read_model_sql.contains("latest_feed_items"));
     assert_eq!(
         contract
@@ -1153,20 +1159,33 @@ fn normalized_repository_world_home_read_model_declares_direct_sql_seam() {
             .and_then(Value::as_str),
         Some("normalized_client_feed_read_model_startup_gate_green")
     );
-    assert!(contract
+    let world_home_receipt_probe_fields = contract
         .get("world_home")
         .and_then(|world_home| world_home.get("receipt_probe_fields"))
         .and_then(Value::as_array)
-        .is_some_and(|fields| fields.iter().any(
-            |field| field.as_str() == Some("world_term_exchange_receipt_progression_classes")
-        )));
-    assert!(contract
+        .cloned()
+        .unwrap_or_default();
+    assert!(world_home_receipt_probe_fields
+        .iter()
+        .any(|field| field.as_str() == Some("world_term_exchange_receipt_progression_classes")));
+    assert!(world_home_receipt_probe_fields
+        .iter()
+        .any(|field| field.as_str() == Some("term_exchange_receipt_projection")));
+    let client_feed_receipt_probe_fields = contract
         .get("client_feed")
         .and_then(|client_feed| client_feed.get("receipt_probe_fields"))
         .and_then(Value::as_array)
-        .is_some_and(|fields| fields
-            .iter()
-            .any(|field| field.as_str() == Some("term_exchange_receipt_progression_classes"))));
+        .cloned()
+        .unwrap_or_default();
+    assert!(client_feed_receipt_probe_fields
+        .iter()
+        .any(|field| field.as_str() == Some("term_exchange_receipt_progression_classes")));
+    assert!(client_feed_receipt_probe_fields
+        .iter()
+        .any(|field| field.as_str() == Some("term_exchange_receipts")));
+    assert!(client_feed_receipt_probe_fields
+        .iter()
+        .any(|field| field.as_str() == Some("term_exchange_receipt_projection")));
 }
 
 #[test]

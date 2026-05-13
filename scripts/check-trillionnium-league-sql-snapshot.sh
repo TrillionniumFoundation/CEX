@@ -146,11 +146,15 @@ if read_model_contract:
     assert 'league_term_exchange_receipts' in ((read_model_contract.get('world_home') or {}).get('source_tables') or []), repository_contract
     assert 'world_term_exchange_receipts' in ((read_model_contract.get('world_home') or {}).get('source_tables') or []), repository_contract
     assert 'world_term_exchange_receipt_progression_classes' in ((read_model_contract.get('world_home') or {}).get('receipt_probe_fields') or []), repository_contract
+    assert 'term_exchange_receipts' in ((read_model_contract.get('world_home') or {}).get('receipt_probe_fields') or []), repository_contract
+    assert 'term_exchange_receipt_projection' in ((read_model_contract.get('world_home') or {}).get('receipt_probe_fields') or []), repository_contract
     assert ((read_model_contract.get('client_feed') or {}).get('read_model_version') == 'trillionnium_normalized_client_feed_read_model_v1'), repository_contract
     assert ((read_model_contract.get('client_feed') or {}).get('startup_gate') in (None, 'normalized_client_feed_read_model_startup_gate_green')), repository_contract
     assert 'league_term_exchange_receipts' in ((read_model_contract.get('client_feed') or {}).get('source_tables') or []), repository_contract
     assert 'world_term_exchange_receipts' in ((read_model_contract.get('client_feed') or {}).get('source_tables') or []), repository_contract
     assert 'term_exchange_receipt_progression_classes' in ((read_model_contract.get('client_feed') or {}).get('receipt_probe_fields') or []), repository_contract
+    assert 'term_exchange_receipts' in ((read_model_contract.get('client_feed') or {}).get('receipt_probe_fields') or []), repository_contract
+    assert 'term_exchange_receipt_projection' in ((read_model_contract.get('client_feed') or {}).get('receipt_probe_fields') or []), repository_contract
     raw_read_model_contract_checked = True
 if raw_dual_write_plan_checked:
     assert any(
@@ -359,12 +363,16 @@ if endpoint is not None:
     assert 'league_term_exchange_receipts' in ((endpoint_read_model_contract.get('world_home') or {}).get('source_tables') or []), endpoint
     assert 'world_term_exchange_receipts' in ((endpoint_read_model_contract.get('world_home') or {}).get('source_tables') or []), endpoint
     assert 'world_term_exchange_receipt_progression_classes' in ((endpoint_read_model_contract.get('world_home') or {}).get('receipt_probe_fields') or []), endpoint
+    assert 'term_exchange_receipts' in ((endpoint_read_model_contract.get('world_home') or {}).get('receipt_probe_fields') or []), endpoint
+    assert 'term_exchange_receipt_projection' in ((endpoint_read_model_contract.get('world_home') or {}).get('receipt_probe_fields') or []), endpoint
     if (endpoint_read_model_contract.get('world_home') or {}).get('startup_gate') is not None:
         assert (endpoint_read_model_contract.get('world_home') or {}).get('startup_gate') == 'normalized_read_model_startup_gate_green', endpoint
     assert (endpoint_read_model_contract.get('client_feed') or {}).get('read_model_version') == 'trillionnium_normalized_client_feed_read_model_v1', endpoint
     assert 'league_term_exchange_receipts' in ((endpoint_read_model_contract.get('client_feed') or {}).get('source_tables') or []), endpoint
     assert 'world_term_exchange_receipts' in ((endpoint_read_model_contract.get('client_feed') or {}).get('source_tables') or []), endpoint
     assert 'term_exchange_receipt_progression_classes' in ((endpoint_read_model_contract.get('client_feed') or {}).get('receipt_probe_fields') or []), endpoint
+    assert 'term_exchange_receipts' in ((endpoint_read_model_contract.get('client_feed') or {}).get('receipt_probe_fields') or []), endpoint
+    assert 'term_exchange_receipt_projection' in ((endpoint_read_model_contract.get('client_feed') or {}).get('receipt_probe_fields') or []), endpoint
     if (endpoint_read_model_contract.get('client_feed') or {}).get('startup_gate') is not None:
         assert (endpoint_read_model_contract.get('client_feed') or {}).get('startup_gate') == 'normalized_client_feed_read_model_startup_gate_green', endpoint
     assert endpoint_validation.get('validation_version') == 'trillionnium_sql_shadow_validation_v1', endpoint
