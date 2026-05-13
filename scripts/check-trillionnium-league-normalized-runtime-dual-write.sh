@@ -1126,6 +1126,11 @@ if ! grep -q '"normalized_client_app_feed_overlay_green"' "$TMP_DIR/read-switch-
   cat "$TMP_DIR/read-switch-health.json" >&2
   exit 1
 fi
+if ! grep -q '"normalized_client_app_feed_overlay_startup_gate_green"' "$TMP_DIR/read-switch-health.json"; then
+  echo "read-switch health did not expose the client-app feed overlay startup gate" >&2
+  cat "$TMP_DIR/read-switch-health.json" >&2
+  exit 1
+fi
 
 curl -fsS "$READ_SWITCH_URL/v1/world/home" > "$TMP_DIR/read-switch-world-home.json"
 if ! grep -q "$SMOKE_BODY" "$TMP_DIR/read-switch-world-home.json"; then
@@ -1245,6 +1250,8 @@ select jsonb_build_object(
   'runtime_direct_write_checked', true,
   'runtime_world_home_read_model_checked', true,
   'runtime_client_feed_read_model_checked', true,
+  'runtime_client_app_feed_overlay_checked', true,
+  'runtime_client_app_feed_overlay_startup_gate_checked', true,
   'snapshot_rows', (select count(*) from league_state_snapshots),
   'world_map_node_rows_after_direct_write', (select count(*) from world_map_nodes),
   'world_player_position_rows_after_direct_write', (select count(*) from world_player_positions where matrix_user_id = '@runtime-dual:local.dev'),

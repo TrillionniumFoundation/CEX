@@ -159,6 +159,7 @@ if read_model_contract:
     assert ((read_model_contract.get('client_app') or {}).get('source_read_model') == 'client_feed'), repository_contract
     assert ((read_model_contract.get('client_app') or {}).get('overlay_helper') == 'apply_normalized_client_app_receipt_read_model'), repository_contract
     assert ((read_model_contract.get('client_app') or {}).get('parity_gate') == 'normalized_client_app_feed_overlay_green'), repository_contract
+    assert ((read_model_contract.get('client_app') or {}).get('startup_gate') == 'normalized_client_app_feed_overlay_startup_gate_green'), repository_contract
     assert 'feed.term_exchange_receipt_projection' in ((read_model_contract.get('client_app') or {}).get('receipt_probe_fields') or []), repository_contract
     raw_read_model_contract_checked = True
 if raw_dual_write_plan_checked:
@@ -191,7 +192,7 @@ if raw_dual_write_plan_checked:
     assert 'repository_write_set_audit_green' in requirements, cutover_plan
     assert 'normalized_runtime_dual_write_gate_green' in requirements, cutover_plan
     assert 'normalized_runtime_read_switch_gate_green' in requirements, cutover_plan
-    if 'normalized_world_home_read_model_green' in requirements and 'normalized_client_feed_read_model_green' in requirements and 'normalized_client_app_feed_overlay_green' in requirements:
+    if 'normalized_world_home_read_model_green' in requirements and 'normalized_client_feed_read_model_green' in requirements and 'normalized_client_app_feed_overlay_green' in requirements and 'normalized_client_app_feed_overlay_startup_gate_green' in requirements:
         raw_read_model_contract_checked = True
 assert write_set_audit.get('audit_version') == 'trillionnium_repository_write_set_audit_v1', cutover_plan
 assert write_set_audit.get('table') == 'league_state_repository_write_set_audits', cutover_plan
@@ -202,6 +203,7 @@ raw_runtime_gates_checked = (
     and 'normalized_world_home_read_model_green' in (repository_contract.get('read_switch_gates') or [])
     and 'normalized_client_feed_read_model_green' in (repository_contract.get('read_switch_gates') or [])
     and 'normalized_client_app_feed_overlay_green' in (repository_contract.get('read_switch_gates') or [])
+    and 'normalized_client_app_feed_overlay_startup_gate_green' in (repository_contract.get('read_switch_gates') or [])
 )
 assert shadow_validation.get('validation_version') == 'trillionnium_sql_shadow_validation_v1', shadow_validation
 assert shadow_validation.get('mode') == 'row_count_parity', shadow_validation
@@ -304,6 +306,7 @@ if endpoint is not None:
     assert 'normalized_world_home_read_model_green' in endpoint_requirements, endpoint
     assert 'normalized_client_feed_read_model_green' in endpoint_requirements, endpoint
     assert 'normalized_client_app_feed_overlay_green' in endpoint_requirements, endpoint
+    assert 'normalized_client_app_feed_overlay_startup_gate_green' in endpoint_requirements, endpoint
     assert endpoint_write_set_audit.get('audit_version') == 'trillionnium_repository_write_set_audit_v1', endpoint
     assert endpoint_runtime_validation.get('script') == 'scripts/check-trillionnium-league-normalized-runtime-dual-write.sh', endpoint
     assert 'verify_command_scoped_world_table_upserts' in (endpoint_runtime_validation.get('checks') or []), endpoint
@@ -344,6 +347,7 @@ if endpoint is not None:
     assert 'verify_normalized_world_home_read_model_sql' in (endpoint_runtime_validation.get('checks') or []), endpoint
     assert 'verify_normalized_client_feed_read_model_sql' in (endpoint_runtime_validation.get('checks') or []), endpoint
     assert 'verify_normalized_client_app_feed_overlay' in (endpoint_runtime_validation.get('checks') or []), endpoint
+    assert 'verify_normalized_client_app_feed_overlay_startup_gate' in (endpoint_runtime_validation.get('checks') or []), endpoint
     assert 'normalized_repository_command_shadow_sql' in (endpoint_state_boundary.get('runtime_command_write_sql_helper') or ''), endpoint
     if endpoint_state_boundary.get('runtime_direct_write_helper') is not None:
         assert 'execute_normalized_repository_direct_command_write' in (endpoint_state_boundary.get('runtime_direct_write_helper') or ''), endpoint
@@ -387,6 +391,7 @@ if endpoint is not None:
     assert (endpoint_read_model_contract.get('client_app') or {}).get('source_read_model') == 'client_feed', endpoint
     assert (endpoint_read_model_contract.get('client_app') or {}).get('overlay_helper') == 'apply_normalized_client_app_receipt_read_model', endpoint
     assert (endpoint_read_model_contract.get('client_app') or {}).get('parity_gate') == 'normalized_client_app_feed_overlay_green', endpoint
+    assert (endpoint_read_model_contract.get('client_app') or {}).get('startup_gate') == 'normalized_client_app_feed_overlay_startup_gate_green', endpoint
     assert 'feed.term_exchange_receipt_projection' in ((endpoint_read_model_contract.get('client_app') or {}).get('receipt_probe_fields') or []), endpoint
     assert endpoint_validation.get('validation_version') == 'trillionnium_sql_shadow_validation_v1', endpoint
     assert endpoint_normalized_world_shadow.get('contract_version') == 'trillionnium_normalized_world_shadow_sql_v1', endpoint
@@ -433,11 +438,14 @@ assert 'verify_command_scoped_world_table_upserts' in (effective_runtime_validat
 assert 'verify_normalized_world_home_read_model_sql' in (effective_runtime_validation.get('checks') or []), effective_runtime_validation
 assert 'verify_normalized_client_feed_read_model_sql' in (effective_runtime_validation.get('checks') or []), effective_runtime_validation
 assert 'verify_normalized_client_app_feed_overlay' in (effective_runtime_validation.get('checks') or []), effective_runtime_validation
+assert 'verify_normalized_client_app_feed_overlay_startup_gate' in (effective_runtime_validation.get('checks') or []), effective_runtime_validation
 assert 'repository_write_set_audit_green' in (effective_contract.get('read_switch_gates') or []), effective_contract
 if 'normalized_read_model_startup_gate_green' in (effective_contract.get('read_switch_gates') or []):
     assert ((effective_contract.get('read_model_contract') or {}).get('world_home') or {}).get('startup_gate') == 'normalized_read_model_startup_gate_green', effective_contract
 if 'normalized_client_feed_read_model_startup_gate_green' in (effective_contract.get('read_switch_gates') or []):
     assert ((effective_contract.get('read_model_contract') or {}).get('client_feed') or {}).get('startup_gate') == 'normalized_client_feed_read_model_startup_gate_green', effective_contract
+assert 'normalized_client_app_feed_overlay_startup_gate_green' in (effective_contract.get('read_switch_gates') or []), effective_contract
+assert ((effective_contract.get('read_model_contract') or {}).get('client_app') or {}).get('startup_gate') == 'normalized_client_app_feed_overlay_startup_gate_green', effective_contract
 assert 'normalized_world_home_read_model_green' in (effective_contract.get('read_switch_gates') or []), effective_contract
 assert 'normalized_client_feed_read_model_green' in (effective_contract.get('read_switch_gates') or []), effective_contract
 assert 'normalized_client_app_feed_overlay_green' in (effective_contract.get('read_switch_gates') or []), effective_contract

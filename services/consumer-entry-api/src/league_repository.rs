@@ -1108,9 +1108,13 @@ pub(super) async fn load_league_state_from_normalized_repository(
             });
     pool.close().await;
     validate_normalized_repository_read_model_gate(&world_home_read_model?)?;
-    validate_normalized_repository_client_feed_read_model_gate(&client_feed_read_model?)?;
-    serde_json::from_str::<LeagueState>(&state_json)
-        .map_err(|err| format!("failed to deserialize normalized repository state snapshot: {err}"))
+    let client_feed_read_model = client_feed_read_model?;
+    validate_normalized_repository_client_feed_read_model_gate(&client_feed_read_model)?;
+    let state = serde_json::from_str::<LeagueState>(&state_json).map_err(|err| {
+        format!("failed to deserialize normalized repository state snapshot: {err}")
+    })?;
+    validate_normalized_repository_client_app_feed_overlay_gate(&state, &client_feed_read_model)?;
+    Ok(state)
 }
 
 pub(super) fn validate_normalized_repository_read_model_gate(
@@ -1256,6 +1260,83 @@ pub(super) fn validate_normalized_repository_client_feed_read_model_gate(
         != Some("trillionnium_term_exchange_receipt_projection_v1")
     {
         return Err("normalized repository read switch is enabled but normalized client-feed receipt projection version is invalid".to_string());
+    }
+    Ok(())
+}
+
+pub(super) fn validate_normalized_repository_client_app_feed_overlay_gate(
+    league: &LeagueState,
+    client_feed_read_model: &Value,
+) -> Result<(), String> {
+    validate_normalized_repository_client_feed_read_model_gate(client_feed_read_model)?;
+    let matrix_user_id = league
+        .players_by_matrix_user
+        .values()
+        .map(|player| player.matrix_user_id.as_str())
+        .min()
+        .unwrap_or("@alice:local.dev");
+    let mut app = client_app_json(league, matrix_user_id);
+    apply_normalized_client_app_receipt_read_model(&mut app, client_feed_read_model).map_err(
+        |err| {
+            format!(
+                "normalized repository read switch is enabled but normalized client-app feed overlay failed: {err}"
+            )
+        },
+    )?;
+
+    if app
+        .pointer("/normalized_receipt_read_model/source")
+        .and_then(Value::as_str)
+        != Some("normalized_sql_client_app_feed_overlay")
+    {
+        return Err("normalized repository read switch is enabled but normalized client-app feed overlay marker is missing".to_string());
+    }
+    if app
+        .pointer("/feed/normalized_receipt_read_model/source")
+        .and_then(Value::as_str)
+        != Some("normalized_sql_client_feed_read_model")
+    {
+        return Err("normalized repository read switch is enabled but normalized client-app embedded feed marker is missing".to_string());
+    }
+    if app.pointer("/feed/source_count").and_then(Value::as_u64) != Some(8) {
+        return Err("normalized repository read switch is enabled but normalized client-app embedded feed source count drifted".to_string());
+    }
+    if !app
+        .pointer("/feed/sources")
+        .and_then(Value::as_array)
+        .is_some_and(|sources| {
+            sources
+                .iter()
+                .any(|source| source.as_str() == Some("term_exchange_receipts"))
+        })
+    {
+        return Err("normalized repository read switch is enabled but normalized client-app embedded feed is missing term_exchange_receipts source".to_string());
+    }
+    if app
+        .pointer("/feed/term_exchange_receipt_projection/runtime_read_model_source")
+        .and_then(Value::as_str)
+        != Some("normalized_sql_client_feed_read_model")
+    {
+        return Err("normalized repository read switch is enabled but normalized client-app embedded receipt projection source is missing".to_string());
+    }
+    if app
+        .pointer("/playability_coach/context/feed_read_model_source")
+        .and_then(Value::as_str)
+        != Some("normalized_sql_client_feed_read_model")
+    {
+        return Err("normalized repository read switch is enabled but normalized client-app playability context did not use the SQL feed read model".to_string());
+    }
+    for path in [
+        "/playability_coach/economy_retention_ops/live_counts/feed_read_model_source",
+        "/economy_retention_ops/live_counts/feed_read_model_source",
+    ] {
+        if app.pointer(path).and_then(Value::as_str)
+            != Some("normalized_sql_client_feed_read_model")
+        {
+            return Err(format!(
+                "normalized repository read switch is enabled but normalized client-app economy retention source marker is missing at {path}"
+            ));
+        }
     }
     Ok(())
 }
@@ -4871,6 +4952,7 @@ pub(super) fn league_state_repository_dual_write_plan_json() -> Value {
             "normalized_world_home_read_model_green",
             "normalized_client_feed_read_model_green",
             "normalized_client_app_feed_overlay_green",
+            "normalized_client_app_feed_overlay_startup_gate_green",
             "web_e2e_green",
             "matrix_live_e2e_green"
         ]
@@ -5126,7 +5208,7 @@ pub(super) fn normalized_repository_read_model_contract_json() -> Value {
                 "feed.term_exchange_receipts"
             ],
             "parity_gate": "normalized_client_app_feed_overlay_green",
-            "startup_gate": "normalized_client_feed_read_model_startup_gate_green"
+            "startup_gate": "normalized_client_app_feed_overlay_startup_gate_green"
         }
     })
 }
@@ -5212,6 +5294,7 @@ pub(super) fn league_state_repository_contract_json() -> Value {
                 "verify_normalized_world_home_read_model_sql",
                 "verify_normalized_client_feed_read_model_sql",
                 "verify_normalized_client_app_feed_overlay",
+                "verify_normalized_client_app_feed_overlay_startup_gate",
                 "relaunch_consumer_entry_api_with_normalized_read_switch",
                 "verify_read_switch_hydrates_dual_written_world_state"
             ]
@@ -5256,6 +5339,7 @@ pub(super) fn league_state_repository_contract_json() -> Value {
             "normalized_world_home_read_model_green",
             "normalized_client_feed_read_model_green",
             "normalized_client_app_feed_overlay_green",
+            "normalized_client_app_feed_overlay_startup_gate_green",
             "web_e2e_green",
             "matrix_live_e2e_green",
             "json_sql_row_count_parity_green"

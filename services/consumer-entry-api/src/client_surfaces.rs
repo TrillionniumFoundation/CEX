@@ -1391,29 +1391,32 @@ pub(super) fn apply_normalized_client_app_receipt_read_model(
         }),
     );
 
-    if let Some(context) = app_object
+    let context = app_object
         .get_mut("playability_coach")
         .and_then(Value::as_object_mut)
         .and_then(|coach| coach.get_mut("context"))
         .and_then(Value::as_object_mut)
-    {
-        context.insert("feed_item_count".to_string(), json!(feed_item_count));
-        context.insert(
-            "feed_read_model_source".to_string(),
-            json!("normalized_sql_client_feed_read_model"),
-        );
-    }
+        .ok_or_else(|| "client-app projection missing playability coach context".to_string())?;
+    context.insert("feed_item_count".to_string(), json!(feed_item_count));
+    context.insert(
+        "feed_read_model_source".to_string(),
+        json!("normalized_sql_client_feed_read_model"),
+    );
     for path in [
         "/playability_coach/economy_retention_ops/live_counts",
         "/economy_retention_ops/live_counts",
     ] {
-        if let Some(live_counts) = app.pointer_mut(path).and_then(Value::as_object_mut) {
-            live_counts.insert("feed_item_count".to_string(), json!(feed_item_count));
-            live_counts.insert(
-                "feed_read_model_source".to_string(),
-                json!("normalized_sql_client_feed_read_model"),
-            );
-        }
+        let live_counts = app
+            .pointer_mut(path)
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| {
+                format!("client-app projection missing economy retention live counts at {path}")
+            })?;
+        live_counts.insert("feed_item_count".to_string(), json!(feed_item_count));
+        live_counts.insert(
+            "feed_read_model_source".to_string(),
+            json!("normalized_sql_client_feed_read_model"),
+        );
     }
     Ok(())
 }

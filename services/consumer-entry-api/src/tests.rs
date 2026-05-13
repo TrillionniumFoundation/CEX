@@ -25,8 +25,9 @@ use super::{
     openstreetmap_provider_mode_status_json, parse_csv_list, project_consumer_status,
     prune_rate_limit_cache, real_world_map_engine_json, resolve_chat_identity,
     session_auth_issuer_registry_active_key_diff_json, sign_user_session_assertion,
-    validate_text_payload, world_home_json, world_map_delta_json, world_map_json,
-    world_map_viewport_json, world_route_ui_contract_json, world_tactics_board_projection_json,
+    validate_normalized_repository_client_app_feed_overlay_gate, validate_text_payload,
+    world_home_json, world_map_delta_json, world_map_json, world_map_viewport_json,
+    world_route_ui_contract_json, world_tactics_board_projection_json,
     world_trillionnium_character_projection_json, AppState, AppStateInner, ConsumerEntryConfig,
     ConsumerEntryMetrics, CreateChatTaskRequest, IdentityBindingAuditState, IdentityBindingEntry,
     IdentityBindingMetadata, IdentityBindingRevisionApprovalState, IdentityBindingStore,
@@ -315,6 +316,9 @@ fn league_sql_cutover_plan_exposes_normalized_world_tables() {
     assert!(read_switch_requirements
         .iter()
         .any(|gate| gate == "normalized_client_app_feed_overlay_green"));
+    assert!(read_switch_requirements
+        .iter()
+        .any(|gate| gate == "normalized_client_app_feed_overlay_startup_gate_green"));
     assert!(dual_write_plan
         .get("write_sets")
         .and_then(Value::as_array)
@@ -480,6 +484,14 @@ fn league_sql_cutover_plan_exposes_normalized_world_tables() {
             .and_then(Value::as_str),
         Some("normalized_client_app_feed_overlay_green")
     );
+    assert_eq!(
+        repository_contract
+            .get("read_model_contract")
+            .and_then(|contract| contract.get("client_app"))
+            .and_then(|client_app| client_app.get("startup_gate"))
+            .and_then(Value::as_str),
+        Some("normalized_client_app_feed_overlay_startup_gate_green")
+    );
     assert!(repository_contract
         .get("runtime_validation")
         .and_then(|runtime| runtime.get("checks"))
@@ -495,7 +507,10 @@ fn league_sql_cutover_plan_exposes_normalized_world_tables() {
                 .any(|check| check == "verify_normalized_client_feed_read_model_sql")
             && checks
                 .iter()
-                .any(|check| check == "verify_normalized_client_app_feed_overlay")));
+                .any(|check| check == "verify_normalized_client_app_feed_overlay")
+            && checks.iter().any(|check| {
+                check == "verify_normalized_client_app_feed_overlay_startup_gate"
+            })));
     assert!(repository_contract
         .get("read_switch_gates")
         .and_then(Value::as_array)
@@ -527,6 +542,9 @@ fn league_sql_cutover_plan_exposes_normalized_world_tables() {
                 && gates
                     .iter()
                     .any(|gate| gate == "normalized_client_app_feed_overlay_green")
+                && gates
+                    .iter()
+                    .any(|gate| gate == "normalized_client_app_feed_overlay_startup_gate_green")
         }));
     assert_eq!(
         repository_contract
@@ -1229,6 +1247,13 @@ fn normalized_repository_world_home_read_model_declares_direct_sql_seam() {
             .and_then(Value::as_str),
         Some("client_feed")
     );
+    assert_eq!(
+        contract
+            .get("client_app")
+            .and_then(|client_app| client_app.get("startup_gate"))
+            .and_then(Value::as_str),
+        Some("normalized_client_app_feed_overlay_startup_gate_green")
+    );
     let client_app_receipt_probe_fields = contract
         .get("client_app")
         .and_then(|client_app| client_app.get("receipt_probe_fields"))
@@ -1519,7 +1544,7 @@ async fn term_exchange_kernel_manifest_declares_cex_as_first_backend() {
     );
     assert_eq!(
         body["state_persistence"]["runtime_receipt_projection_status"],
-        "typed_receipts_projected_and_sql_read_model_hydrated_for_read_client_app_and_command_home_surfaces"
+        "typed_receipts_projected_sql_read_model_hydrated_and_startup_gated_for_read_client_app_and_command_home_surfaces"
     );
     assert_eq!(
         body["migration_status"]["status"],
@@ -7864,6 +7889,81 @@ fn client_app_can_overlay_normalized_receipt_read_model() {
         item.get("feed_kind").and_then(Value::as_str) == Some("term_exchange_receipt")
             && item.get("receipt_id").and_then(Value::as_str) == Some("sql-app-receipt-1")
     }));
+
+    let mut malformed_app = client_app_json(&league, "@alice:local.dev");
+    malformed_app
+        .get_mut("playability_coach")
+        .and_then(Value::as_object_mut)
+        .expect("playability coach object")
+        .remove("context");
+    let err = apply_normalized_client_app_receipt_read_model(&mut malformed_app, &read_model)
+        .expect_err("client-app overlay should fail closed without playability context");
+    assert!(err.contains("client-app projection missing playability coach context"));
+}
+
+#[test]
+fn normalized_repository_client_app_overlay_gate_validates_startup_surface() {
+    let league = default_league_state();
+    let receipt = json!({
+        "receipt_id": "sql-startup-app-receipt-1",
+        "intent_id": "sql-startup-app-intent-1",
+        "term_id": "world_commerce_lifecycle",
+        "backend_id": term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
+        "backend_kind": "cex",
+        "status": "settled",
+        "progression_class": "progression_allowed",
+        "settlement_reference": "sql-startup-app-settlement-1",
+        "ledger_entry_id": "sql-startup-app-ledger-1",
+        "reason": null,
+        "finalized_at_epoch": 1_778_631_301,
+    });
+    let read_model = json!({
+        "read_model_version": "trillionnium_normalized_client_feed_read_model_v1",
+        "source_tables": [
+            "world_events",
+            "world_contracts",
+            "world_purchases",
+            "world_work_orders",
+            "world_work_deliveries",
+            "world_work_acceptances",
+            "world_work_rejections",
+            "world_work_reopens",
+            "world_work_cancellations",
+            "world_economy_events",
+            "league_term_exchange_receipts",
+            "world_term_exchange_receipts"
+        ],
+        "latest_feed_items": [{"source": "world_term_exchange_receipt", "id": "sql-startup-app-receipt-1"}],
+        "term_exchange_receipt_progression_classes": {"progression_allowed": 1},
+        "term_exchange_receipts": {
+            "count": 1,
+            "progression_classes": {"progression_allowed": 1},
+            "recent": [receipt.clone()]
+        },
+        "term_exchange_receipt_projection": {
+            "contract_version": "trillionnium_term_exchange_receipt_projection_v1",
+            "source_state_path": "WorldState.world_term_exchange_receipts",
+            "normalized_source_table": "world_term_exchange_receipts",
+            "read_model_alignment": "normalized_world_home_client_feed_and_client_app_receipt_probes",
+            "receipt_count": 1,
+            "progression_classes": {"progression_allowed": 1},
+            "latest_receipts": [receipt]
+        }
+    });
+
+    validate_normalized_repository_client_app_feed_overlay_gate(&league, &read_model).expect(
+        "client-app startup overlay gate should pass for normalized client-feed read model",
+    );
+
+    let mut invalid_read_model = read_model.clone();
+    invalid_read_model
+        .as_object_mut()
+        .expect("read model object")
+        .remove("term_exchange_receipt_projection");
+    let err =
+        validate_normalized_repository_client_app_feed_overlay_gate(&league, &invalid_read_model)
+            .expect_err("startup overlay gate should reject incomplete read model");
+    assert!(err.contains("client-feed read model is missing the receipt projection object"));
 }
 
 #[test]
