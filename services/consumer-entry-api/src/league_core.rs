@@ -1104,6 +1104,39 @@ pub(super) fn league_loadout_for_player(league: &LeagueState, matrix_user_id: &s
         .unwrap_or_else(default_league_loadout)
 }
 
+pub(super) fn league_reward_receipt_progression_allows(
+    league: &LeagueState,
+    reward: &LeagueReward,
+) -> Option<bool> {
+    let intent_id = format!("league_reward:{}", reward.reward_id);
+    league
+        .term_exchange_receipts
+        .values()
+        .filter(|receipt| receipt.intent_id == intent_id)
+        .max_by(|left, right| {
+            left.finalized_at_epoch
+                .cmp(&right.finalized_at_epoch)
+                .then_with(|| left.receipt_id.cmp(&right.receipt_id))
+        })
+        .map(|receipt| {
+            receipt.progression_class
+                == term_exchange_protocol::ReceiptProgressionClass::ProgressionAllowed
+        })
+}
+
+pub(super) fn league_reward_ledger_released_from_state(
+    league: &LeagueState,
+    reward: &LeagueReward,
+) -> bool {
+    if let Some(typed_released) = league_reward_receipt_progression_allows(league, reward) {
+        return typed_released;
+    }
+    matches!(
+        reward.ledger_status.as_deref(),
+        Some("settled") | Some("duplicate")
+    )
+}
+
 pub(super) fn league_successful_task_count(league: &LeagueState, matrix_user_id: &str) -> i64 {
     let league_submissions = league
         .submissions
@@ -1113,10 +1146,7 @@ pub(super) fn league_successful_task_count(league: &LeagueState, matrix_user_id:
             let released = payout_status == "eligible" || payout_status == "approved_release";
             let ledger_released = league.rewards.iter().any(|reward| {
                 reward.reward_id == league_hash_id("reward", &submission.submission_id)
-                    && matches!(
-                        reward.ledger_status.as_deref(),
-                        Some("settled") | Some("duplicate")
-                    )
+                    && league_reward_ledger_released_from_state(league, reward)
             });
             submission.matrix_user_id == matrix_user_id
                 && submission.score >= 60.0
@@ -1132,9 +1162,9 @@ pub(super) fn league_successful_task_count(league: &LeagueState, matrix_user_id:
             completion.matrix_user_id == matrix_user_id
                 && completion.score >= 60.0
                 && completion.payout_status == "eligible"
-                && matches!(
-                    completion.ledger_status.as_deref(),
-                    Some("settled") | Some("duplicate")
+                && world_commerce_routes::world_contract_completion_released(
+                    &league.world,
+                    completion,
                 )
         })
         .count() as i64;

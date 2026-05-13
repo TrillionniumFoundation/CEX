@@ -239,7 +239,7 @@ pub(super) fn term_exchange_kernel_manifest_json(state: &AppState) -> Value {
             "sql_direct_write_mode": "typed_sqlx_receipt_upserts_from_repository_snapshot",
             "progression_source": "ReceiptProgressionClass_prefers_typed_receipts_with_legacy_status_fallback",
             "normalized_receipt_read_model_probe_status": "receipt_projection_objects_exposed_in_world_home_client_feed_and_client_app",
-            "runtime_receipt_projection_status": "typed_receipts_projected_sql_read_model_hydrated_and_startup_gated_for_read_client_app_and_command_home_surfaces"
+            "runtime_receipt_projection_status": "typed_receipts_drive_world_commerce_recovery_and_sql_read_model_surfaces"
         },
         "current_cex_backend_runtime": {
             "runtime_profile": state.config().runtime_profile.as_str(),
@@ -259,10 +259,10 @@ pub(super) fn term_exchange_kernel_manifest_json(state: &AppState) -> Value {
             "primary_endpoint": TERM_EXCHANGE_KERNEL_MANIFEST_ENDPOINT
         },
         "migration_status": {
-            "status": "typed_receipt_progression_read_model_and_projection_probes_active",
+            "status": "typed_receipt_progression_runtime_recovery_read_model_and_projection_gates_active",
             "split_strategy": "protocol_first_then_backend_adapter_then_storage_boundary",
             "current_source_of_evidence": "CEX local-production run/* gates",
-            "next_step": "keep legacy status fields compatible while switching more world/client projections to typed receipt-backed normalized read models"
+            "next_step": "keep legacy status fields compatible as display fallbacks while typed receipts remain the runtime progression source of truth"
         }
     })
 }

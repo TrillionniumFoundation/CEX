@@ -1785,12 +1785,7 @@ fn first_maturity_matrix_user_id(league: &LeagueState) -> String {
     let settled_reward_ids = league
         .rewards
         .iter()
-        .filter(|reward| {
-            matches!(
-                reward.ledger_status.as_deref(),
-                Some("settled") | Some("duplicate")
-            )
-        })
+        .filter(|reward| league_reward_ledger_released_from_state(league, reward))
         .map(|reward| reward.reward_id.clone())
         .collect::<HashSet<_>>();
     let mut successful_task_counts: HashMap<String, i64> = HashMap::new();
@@ -1811,10 +1806,7 @@ fn first_maturity_matrix_user_id(league: &LeagueState) -> String {
     for completion in &league.world.world_contract_completions {
         if completion.score >= 60.0
             && completion.payout_status == "eligible"
-            && matches!(
-                completion.ledger_status.as_deref(),
-                Some("settled") | Some("duplicate")
-            )
+            && world_commerce_routes::world_contract_completion_released(&league.world, completion)
         {
             inc(&mut successful_task_counts, &completion.matrix_user_id, 1);
         }
@@ -2212,29 +2204,37 @@ fn trillionnium_world_maturity_axes_json(
         .world_contract_completions
         .iter()
         .filter(|completion| {
-            completion.ledger_status.as_deref() == Some("settled")
+            world_commerce_routes::world_contract_completion_released(world, completion)
                 || completion.payout_status == "settled"
         })
         .count();
     let reserved_purchase_count = world
         .world_purchases
         .iter()
-        .filter(|purchase| purchase.buyer_ledger_status.as_deref() == Some("reserved"))
+        .filter(|purchase| {
+            world_commerce_routes::world_purchase_buyer_reserve_active(world, purchase)
+        })
         .count();
     let consumed_purchase_count = world
         .world_purchases
         .iter()
-        .filter(|purchase| purchase.buyer_consume_status.as_deref() == Some("consumed"))
+        .filter(|purchase| {
+            world_commerce_routes::world_purchase_buyer_consume_completed(world, purchase)
+        })
         .count();
     let refunded_rejection_count = world
         .world_work_rejections
         .iter()
-        .filter(|rejection| rejection.refund_status == "refunded")
+        .filter(|rejection| {
+            world_commerce_routes::world_work_rejection_refund_completed(world, rejection)
+        })
         .count();
     let refunded_cancellation_count = world
         .world_work_cancellations
         .iter()
-        .filter(|cancellation| cancellation.refund_status == "refunded")
+        .filter(|cancellation| {
+            world_commerce_routes::world_work_cancellation_refund_completed(world, cancellation)
+        })
         .count();
     let normalized_db_configured =
         maturity_bool(league_repository_runtime, "normalized_database_configured");
@@ -2742,29 +2742,37 @@ fn trillionnium_world_playability_scorecard_json(
         .world_contract_completions
         .iter()
         .filter(|completion| {
-            completion.ledger_status.as_deref() == Some("settled")
+            world_commerce_routes::world_contract_completion_released(world, completion)
                 || completion.payout_status == "settled"
         })
         .count();
     let reserved_purchase_count = world
         .world_purchases
         .iter()
-        .filter(|purchase| purchase.buyer_ledger_status.as_deref() == Some("reserved"))
+        .filter(|purchase| {
+            world_commerce_routes::world_purchase_buyer_reserve_active(world, purchase)
+        })
         .count();
     let consumed_purchase_count = world
         .world_purchases
         .iter()
-        .filter(|purchase| purchase.buyer_consume_status.as_deref() == Some("consumed"))
+        .filter(|purchase| {
+            world_commerce_routes::world_purchase_buyer_consume_completed(world, purchase)
+        })
         .count();
     let refunded_rejection_count = world
         .world_work_rejections
         .iter()
-        .filter(|rejection| rejection.refund_status == "refunded")
+        .filter(|rejection| {
+            world_commerce_routes::world_work_rejection_refund_completed(world, rejection)
+        })
         .count();
     let refunded_cancellation_count = world
         .world_work_cancellations
         .iter()
-        .filter(|cancellation| cancellation.refund_status == "refunded")
+        .filter(|cancellation| {
+            world_commerce_routes::world_work_cancellation_refund_completed(world, cancellation)
+        })
         .count();
     let latest_submission = league
         .submissions
@@ -3335,29 +3343,37 @@ fn trillionnium_world_closed_beta_prototype_json(
         .world_contract_completions
         .iter()
         .filter(|completion| {
-            completion.ledger_status.as_deref() == Some("settled")
+            world_commerce_routes::world_contract_completion_released(world, completion)
                 || completion.payout_status == "settled"
         })
         .count();
     let reserved_purchase_count = world
         .world_purchases
         .iter()
-        .filter(|purchase| purchase.buyer_ledger_status.as_deref() == Some("reserved"))
+        .filter(|purchase| {
+            world_commerce_routes::world_purchase_buyer_reserve_active(world, purchase)
+        })
         .count();
     let consumed_purchase_count = world
         .world_purchases
         .iter()
-        .filter(|purchase| purchase.buyer_consume_status.as_deref() == Some("consumed"))
+        .filter(|purchase| {
+            world_commerce_routes::world_purchase_buyer_consume_completed(world, purchase)
+        })
         .count();
     let refunded_rejection_count = world
         .world_work_rejections
         .iter()
-        .filter(|rejection| rejection.refund_status == "refunded")
+        .filter(|rejection| {
+            world_commerce_routes::world_work_rejection_refund_completed(world, rejection)
+        })
         .count();
     let refunded_cancellation_count = world
         .world_work_cancellations
         .iter()
-        .filter(|cancellation| cancellation.refund_status == "refunded")
+        .filter(|cancellation| {
+            world_commerce_routes::world_work_cancellation_refund_completed(world, cancellation)
+        })
         .count();
 
     let normalized_db_configured =
@@ -3674,29 +3690,37 @@ fn trillionnium_world_real_user_beta_json(
         .world_contract_completions
         .iter()
         .filter(|completion| {
-            completion.ledger_status.as_deref() == Some("settled")
+            world_commerce_routes::world_contract_completion_released(world, completion)
                 || completion.payout_status == "settled"
         })
         .count();
     let reserved_purchase_count = world
         .world_purchases
         .iter()
-        .filter(|purchase| purchase.buyer_ledger_status.as_deref() == Some("reserved"))
+        .filter(|purchase| {
+            world_commerce_routes::world_purchase_buyer_reserve_active(world, purchase)
+        })
         .count();
     let consumed_purchase_count = world
         .world_purchases
         .iter()
-        .filter(|purchase| purchase.buyer_consume_status.as_deref() == Some("consumed"))
+        .filter(|purchase| {
+            world_commerce_routes::world_purchase_buyer_consume_completed(world, purchase)
+        })
         .count();
     let refunded_rejection_count = world
         .world_work_rejections
         .iter()
-        .filter(|rejection| rejection.refund_status == "refunded")
+        .filter(|rejection| {
+            world_commerce_routes::world_work_rejection_refund_completed(world, rejection)
+        })
         .count();
     let refunded_cancellation_count = world
         .world_work_cancellations
         .iter()
-        .filter(|cancellation| cancellation.refund_status == "refunded")
+        .filter(|cancellation| {
+            world_commerce_routes::world_work_cancellation_refund_completed(world, cancellation)
+        })
         .count();
     let normalized_db_configured =
         maturity_bool(league_repository_runtime, "normalized_database_configured");
@@ -4115,17 +4139,23 @@ fn trillionnium_world_public_commercial_product_json(
     let reserved_purchase_count = world
         .world_purchases
         .iter()
-        .filter(|purchase| purchase.buyer_ledger_status.as_deref() == Some("reserved"))
+        .filter(|purchase| {
+            world_commerce_routes::world_purchase_buyer_reserve_active(world, purchase)
+        })
         .count();
     let consumed_purchase_count = world
         .world_purchases
         .iter()
-        .filter(|purchase| purchase.buyer_consume_status.as_deref() == Some("consumed"))
+        .filter(|purchase| {
+            world_commerce_routes::world_purchase_buyer_consume_completed(world, purchase)
+        })
         .count();
     let refunded_rejection_count = world
         .world_work_rejections
         .iter()
-        .filter(|rejection| rejection.refund_status == "refunded")
+        .filter(|rejection| {
+            world_commerce_routes::world_work_rejection_refund_completed(world, rejection)
+        })
         .count();
     let rereserved_reopen_count = world
         .world_work_reopens
@@ -4135,13 +4165,15 @@ fn trillionnium_world_public_commercial_product_json(
     let refunded_cancellation_count = world
         .world_work_cancellations
         .iter()
-        .filter(|cancellation| cancellation.refund_status == "refunded")
+        .filter(|cancellation| {
+            world_commerce_routes::world_work_cancellation_refund_completed(world, cancellation)
+        })
         .count();
     let settled_contract_completion_count = world
         .world_contract_completions
         .iter()
         .filter(|completion| {
-            completion.ledger_status.as_deref() == Some("settled")
+            world_commerce_routes::world_contract_completion_released(world, completion)
                 || completion.payout_status == "settled"
         })
         .count();

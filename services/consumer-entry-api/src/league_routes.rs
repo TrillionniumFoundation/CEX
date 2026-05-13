@@ -1000,7 +1000,8 @@ pub(super) async fn post_league_web_action(
             reward.ledger_error = settlement.error.clone();
             let settlement_receipt = settlement.term_exchange_receipt.clone();
 
-            let settlement_completed = league_reward_ledger_released(&reward, Some(&settlement));
+            let settlement_completed =
+                league_reward_ledger_released(None, &reward, Some(&settlement));
             let mut league = state.inner.league_state.lock().await;
             record_league_term_exchange_receipt(&mut league, settlement_receipt);
             if let Some(stored_reward) = league
@@ -1225,19 +1226,21 @@ fn league_submission_for_reward<'a>(
         .find(|submission| league_hash_id("reward", &submission.submission_id) == reward.reward_id)
 }
 
-fn league_reward_already_released(reward: &LeagueReward) -> bool {
-    matches!(
-        reward.ledger_status.as_deref(),
-        Some("settled") | Some("duplicate")
-    ) || reward.review_status.as_deref() == Some("approved")
+fn league_reward_already_released(league: &LeagueState, reward: &LeagueReward) -> bool {
+    league_reward_ledger_released_from_state(league, reward)
+        || reward.review_status.as_deref() == Some("approved")
 }
 
 fn league_reward_ledger_released(
+    league: Option<&LeagueState>,
     reward: &LeagueReward,
     settlement: Option<&LeagueLedgerSettlement>,
 ) -> bool {
     if let Some(settlement) = settlement {
         return settlement.progression_allowed(&["settled", "duplicate"]);
+    }
+    if let Some(league) = league {
+        return league_reward_ledger_released_from_state(league, reward);
     }
     matches!(
         reward.ledger_status.as_deref(),
@@ -1358,7 +1361,7 @@ pub(super) async fn approve_league_review(
             )
                 .into_response();
         };
-        if league_reward_already_released(&reward) {
+        if league_reward_already_released(&league, &reward) {
             return (
                 StatusCode::CONFLICT,
                 Json(json!({ "error": "league reward already released", "reward_id": reward_id })),
@@ -1394,7 +1397,7 @@ pub(super) async fn approve_league_review(
     )
     .await;
     let now = Utc::now().timestamp();
-    let released = matches!(settlement.status.as_str(), "settled" | "duplicate");
+    let released = settlement.progression_allowed(&["settled", "duplicate"]);
     let settlement_receipt = settlement.term_exchange_receipt.clone();
     let snapshot = {
         let mut league = state.inner.league_state.lock().await;
@@ -1502,7 +1505,7 @@ pub(super) async fn reject_league_review(
                 .into_response();
         };
         let reward = league.rewards[reward_index].clone();
-        if league_reward_already_released(&reward) {
+        if league_reward_already_released(&league, &reward) {
             return (
                 StatusCode::CONFLICT,
                 Json(json!({ "error": "league reward already released", "reward_id": reward_id })),
@@ -2028,7 +2031,7 @@ pub(super) async fn submit_league_match(
     reward.ledger_error = settlement.error.clone();
     let settlement_receipt = settlement.term_exchange_receipt.clone();
 
-    let settlement_completed = league_reward_ledger_released(&reward, Some(&settlement));
+    let settlement_completed = league_reward_ledger_released(None, &reward, Some(&settlement));
     let (response_player, response_entry, snapshot) = {
         let mut league = state.inner.league_state.lock().await;
         record_league_term_exchange_receipt(&mut league, settlement_receipt);
@@ -2397,12 +2400,7 @@ pub(super) async fn get_league_player_rewards(
         .collect();
     let total_earned: f64 = rewards
         .iter()
-        .filter(|reward| {
-            matches!(
-                reward.ledger_status.as_deref(),
-                Some("settled") | Some("duplicate")
-            )
-        })
+        .filter(|reward| league_reward_ledger_released_from_state(&league, reward))
         .map(|reward| reward.amount)
         .sum();
     (

@@ -12,10 +12,10 @@ use super::{
     build_world_route_artifacts, client_app_json, client_feed_json, default_league_state,
     default_world_node_id, encode_league_web_session, evaluate_identity_binding_reload_governance,
     get_client_app_web_shell, get_world_web_shell, league_hash_id, league_hidden_test_event,
-    league_state_hash, league_state_repository_write_set_for_command,
-    league_state_sql_cutover_plan_json, league_state_sql_shadow_validation_json,
-    load_identity_binding_revision_approval_state, load_identity_binding_store,
-    load_rate_limit_cache, load_session_auth_issuer_registry,
+    league_reward_ledger_released_from_state, league_state_hash,
+    league_state_repository_write_set_for_command, league_state_sql_cutover_plan_json,
+    league_state_sql_shadow_validation_json, load_identity_binding_revision_approval_state,
+    load_identity_binding_store, load_rate_limit_cache, load_session_auth_issuer_registry,
     load_session_auth_issuer_registry_revision_approval_state,
     normalized_repository_client_feed_read_model_sql, normalized_repository_command_shadow_sql,
     normalized_repository_direct_write_contract_json,
@@ -27,7 +27,9 @@ use super::{
     session_auth_issuer_registry_active_key_diff_json, sign_user_session_assertion,
     validate_normalized_repository_client_app_feed_overlay_gate, validate_text_payload,
     world_commerce_routes::{
-        world_contract_completion_released, world_purchase_seller_settlement_active,
+        world_contract_completion_released, world_purchase_buyer_consume_completed,
+        world_purchase_buyer_reserve_active, world_purchase_rejection_settlement_released,
+        world_purchase_seller_settlement_active, world_work_rejection_refund_completed,
     },
     world_home_json, world_map_delta_json, world_map_json, world_map_viewport_json,
     world_route_ui_contract_json, world_tactics_board_projection_json,
@@ -994,6 +996,252 @@ fn typed_contract_completion_receipts_drive_world_task_progression() {
 }
 
 #[test]
+fn typed_purchase_reserve_and_consume_receipts_drive_health_helpers() {
+    let mut world = default_league_state().world;
+    let mut purchase = WorldPurchase {
+        purchase_id: "purchase-typed-buyer-flow".to_string(),
+        listing_id: "listing-typed-buyer-flow".to_string(),
+        shop_id: "shop-typed-buyer-flow".to_string(),
+        company_id: "company-typed-buyer-flow".to_string(),
+        buyer_matrix_user_id: "@buyer:local.dev".to_string(),
+        seller_matrix_user_id: "@seller:local.dev".to_string(),
+        price_credits: 25,
+        status: "accepted".to_string(),
+        ledger_status: Some("settled".to_string()),
+        ledger_account_id: None,
+        ledger_entry_id: None,
+        ledger_balance_after: None,
+        ledger_error: None,
+        buyer_ledger_status: Some("failed_ledger".to_string()),
+        buyer_ledger_account_id: None,
+        buyer_ledger_entry_id: None,
+        buyer_ledger_balance_after: None,
+        buyer_ledger_error: None,
+        buyer_consume_status: Some("failed_ledger".to_string()),
+        buyer_consume_entry_id: None,
+        buyer_consume_balance_after: None,
+        buyer_consume_error: None,
+        created_at_epoch: 1_778_650_020,
+    };
+    assert!(!world_purchase_buyer_reserve_active(&world, &purchase));
+    assert!(!world_purchase_buyer_consume_completed(&world, &purchase));
+
+    let reserve_receipt = term_exchange_protocol::EconomicReceipt::new(
+        "receipt:world_purchase:reserve:purchase-typed-buyer-flow",
+        "world_purchase:reserve:purchase-typed-buyer-flow",
+        "world_commerce_purchase",
+        term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
+        term_exchange_protocol::SettlementBackendKind::Cex,
+        term_exchange_protocol::ReceiptStatus::Reserved,
+        1_778_650_021,
+    );
+    let consume_receipt = term_exchange_protocol::EconomicReceipt::new(
+        "receipt:world_purchase:consume:purchase-typed-buyer-flow",
+        "world_purchase:consume:purchase-typed-buyer-flow",
+        "world_commerce_purchase",
+        term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
+        term_exchange_protocol::SettlementBackendKind::Cex,
+        term_exchange_protocol::ReceiptStatus::Consumed,
+        1_778_650_022,
+    );
+    world.world_term_exchange_receipts.insert(
+        reserve_receipt.receipt_id.clone(),
+        TermExchangeReceiptState::from(&reserve_receipt),
+    );
+    world.world_term_exchange_receipts.insert(
+        consume_receipt.receipt_id.clone(),
+        TermExchangeReceiptState::from(&consume_receipt),
+    );
+    assert!(world_purchase_buyer_reserve_active(&world, &purchase));
+    assert!(world_purchase_buyer_consume_completed(&world, &purchase));
+
+    purchase.buyer_consume_status = Some("consumed".to_string());
+    let hard_fail_consume_receipt = term_exchange_protocol::EconomicReceipt::new(
+        "receipt:world_purchase:consume:purchase-typed-buyer-flow",
+        "world_purchase:consume:purchase-typed-buyer-flow",
+        "world_commerce_purchase",
+        term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
+        term_exchange_protocol::SettlementBackendKind::Cex,
+        term_exchange_protocol::ReceiptStatus::MissingLedgerToken,
+        1_778_650_023,
+    );
+    world.world_term_exchange_receipts.insert(
+        hard_fail_consume_receipt.receipt_id.clone(),
+        TermExchangeReceiptState::from(&hard_fail_consume_receipt),
+    );
+    assert!(!world_purchase_buyer_consume_completed(&world, &purchase));
+}
+
+#[test]
+fn typed_league_reward_receipts_drive_reward_progression() {
+    let mut league = default_league_state();
+    let mut reward = LeagueReward {
+        reward_id: "reward-typed-progression".to_string(),
+        match_id: "match-typed-progression".to_string(),
+        entry_id: "entry-typed-progression".to_string(),
+        player_id: "player-typed-progression".to_string(),
+        matrix_user_id: "@player:local.dev".to_string(),
+        amount: 12.0,
+        currency_unit: "credit".to_string(),
+        reason: "typed reward progression".to_string(),
+        ledger_status: Some("failed_ledger".to_string()),
+        ledger_account_id: None,
+        ledger_entry_id: None,
+        ledger_balance_after: None,
+        ledger_error: None,
+        review_status: None,
+        reviewed_by: None,
+        review_note: None,
+        reviewed_at_epoch: None,
+        created_at_epoch: 1_778_650_025,
+    };
+    assert!(!league_reward_ledger_released_from_state(&league, &reward));
+
+    let settled_receipt = term_exchange_protocol::EconomicReceipt::new(
+        "receipt:league_reward:reward-typed-progression",
+        "league_reward:reward-typed-progression",
+        "league_reward_settlement",
+        term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
+        term_exchange_protocol::SettlementBackendKind::Cex,
+        term_exchange_protocol::ReceiptStatus::Settled,
+        1_778_650_026,
+    );
+    league.term_exchange_receipts.insert(
+        settled_receipt.receipt_id.clone(),
+        TermExchangeReceiptState::from(&settled_receipt),
+    );
+    assert!(league_reward_ledger_released_from_state(&league, &reward));
+
+    reward.ledger_status = Some("settled".to_string());
+    let failed_receipt = term_exchange_protocol::EconomicReceipt::new(
+        "receipt:league_reward:reward-typed-progression",
+        "league_reward:reward-typed-progression",
+        "league_reward_settlement",
+        term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
+        term_exchange_protocol::SettlementBackendKind::Cex,
+        term_exchange_protocol::ReceiptStatus::MissingLedgerToken,
+        1_778_650_027,
+    );
+    league.term_exchange_receipts.insert(
+        failed_receipt.receipt_id.clone(),
+        TermExchangeReceiptState::from(&failed_receipt),
+    );
+    assert!(!league_reward_ledger_released_from_state(&league, &reward));
+}
+
+#[test]
+fn typed_refund_and_chargeback_receipts_drive_world_reopen_progression() {
+    let mut world = default_league_state().world;
+    let purchase = WorldPurchase {
+        purchase_id: "purchase-typed-recovery".to_string(),
+        listing_id: "listing-typed-recovery".to_string(),
+        shop_id: "shop-typed-recovery".to_string(),
+        company_id: "company-typed-recovery".to_string(),
+        buyer_matrix_user_id: "@buyer:local.dev".to_string(),
+        seller_matrix_user_id: "@seller:local.dev".to_string(),
+        price_credits: 25,
+        status: "rejected_refunded".to_string(),
+        ledger_status: Some("seller_chargeback_failed".to_string()),
+        ledger_account_id: None,
+        ledger_entry_id: None,
+        ledger_balance_after: None,
+        ledger_error: None,
+        buyer_ledger_status: Some("reserved".to_string()),
+        buyer_ledger_account_id: None,
+        buyer_ledger_entry_id: None,
+        buyer_ledger_balance_after: None,
+        buyer_ledger_error: None,
+        buyer_consume_status: Some("failed_ledger".to_string()),
+        buyer_consume_entry_id: None,
+        buyer_consume_balance_after: None,
+        buyer_consume_error: None,
+        created_at_epoch: 1_778_650_030,
+    };
+    let work_order = WorldWorkOrder {
+        work_order_id: "work-typed-recovery".to_string(),
+        purchase_id: purchase.purchase_id.clone(),
+        listing_id: purchase.listing_id.clone(),
+        buyer_matrix_user_id: purchase.buyer_matrix_user_id.clone(),
+        seller_matrix_user_id: purchase.seller_matrix_user_id.clone(),
+        company_id: purchase.company_id.clone(),
+        status: "rejected_refunded".to_string(),
+        brief: "typed recovery".to_string(),
+        value_score: 80,
+        created_at_epoch: 1_778_650_031,
+    };
+    let rejection = WorldWorkRejection {
+        rejection_id: "rejection-typed-recovery".to_string(),
+        work_order_id: work_order.work_order_id.clone(),
+        matrix_user_id: purchase.buyer_matrix_user_id.clone(),
+        body: "typed refund".to_string(),
+        status: "rejected_refunded".to_string(),
+        refund_status: "failed_ledger".to_string(),
+        created_at_epoch: 1_778_650_032,
+    };
+    world.world_purchases.push(purchase.clone());
+    world.world_work_orders.push(work_order.clone());
+    world.world_work_rejections.push(rejection.clone());
+    assert!(!world_work_rejection_refund_completed(&world, &rejection));
+    assert!(!world_purchase_rejection_settlement_released(
+        &world,
+        &purchase,
+        &work_order.work_order_id,
+    ));
+
+    let refund_receipt = term_exchange_protocol::EconomicReceipt::new(
+        "receipt:world_purchase:refund:purchase-typed-recovery:rejection-typed-recovery",
+        "world_purchase:refund:purchase-typed-recovery:rejection-typed-recovery",
+        "world_commerce_purchase",
+        term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
+        term_exchange_protocol::SettlementBackendKind::Cex,
+        term_exchange_protocol::ReceiptStatus::Refunded,
+        1_778_650_033,
+    );
+    let chargeback_receipt = term_exchange_protocol::EconomicReceipt::new(
+        "receipt:world_purchase_seller_chargeback_consume:purchase-typed-recovery:rejection-typed-recovery",
+        "world_purchase_seller_chargeback_consume:purchase-typed-recovery:rejection-typed-recovery",
+        "world_commerce_purchase",
+        term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
+        term_exchange_protocol::SettlementBackendKind::Cex,
+        term_exchange_protocol::ReceiptStatus::SellerChargebackConsumed,
+        1_778_650_034,
+    );
+    world.world_term_exchange_receipts.insert(
+        refund_receipt.receipt_id.clone(),
+        TermExchangeReceiptState::from(&refund_receipt),
+    );
+    world.world_term_exchange_receipts.insert(
+        chargeback_receipt.receipt_id.clone(),
+        TermExchangeReceiptState::from(&chargeback_receipt),
+    );
+    assert!(world_work_rejection_refund_completed(&world, &rejection));
+    assert!(world_purchase_rejection_settlement_released(
+        &world,
+        &purchase,
+        &work_order.work_order_id,
+    ));
+
+    let failed_chargeback_receipt = term_exchange_protocol::EconomicReceipt::new(
+        "receipt:world_purchase_seller_chargeback_consume:purchase-typed-recovery:rejection-typed-recovery",
+        "world_purchase_seller_chargeback_consume:purchase-typed-recovery:rejection-typed-recovery",
+        "world_commerce_purchase",
+        term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
+        term_exchange_protocol::SettlementBackendKind::Cex,
+        term_exchange_protocol::ReceiptStatus::SellerChargebackFailed,
+        1_778_650_035,
+    );
+    world.world_term_exchange_receipts.insert(
+        failed_chargeback_receipt.receipt_id.clone(),
+        TermExchangeReceiptState::from(&failed_chargeback_receipt),
+    );
+    assert!(!world_purchase_rejection_settlement_released(
+        &world,
+        &purchase,
+        &work_order.work_order_id,
+    ));
+}
+
+#[test]
 fn normalized_repository_command_shadow_sql_uses_write_set_tables() {
     let mut league = default_league_state();
     league.world.world_player_positions.insert(
@@ -1665,11 +1913,11 @@ async fn term_exchange_kernel_manifest_declares_cex_as_first_backend() {
     );
     assert_eq!(
         body["state_persistence"]["runtime_receipt_projection_status"],
-        "typed_receipts_projected_sql_read_model_hydrated_and_startup_gated_for_read_client_app_and_command_home_surfaces"
+        "typed_receipts_drive_world_commerce_recovery_and_sql_read_model_surfaces"
     );
     assert_eq!(
         body["migration_status"]["status"],
-        "typed_receipt_progression_read_model_and_projection_probes_active"
+        "typed_receipt_progression_runtime_recovery_read_model_and_projection_gates_active"
     );
 }
 

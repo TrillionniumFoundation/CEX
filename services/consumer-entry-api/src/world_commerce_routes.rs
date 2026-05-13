@@ -17,6 +17,14 @@ pub(super) fn world_purchase_seller_settlement_active(
     world: &WorldState,
     purchase: &WorldPurchase,
 ) -> bool {
+    let reopen_settlement_intent_prefix =
+        format!("world_purchase_reopen_settlement:{}:", purchase.purchase_id);
+    if let Some(receipt) = latest_world_term_exchange_receipt_for_intent_prefix(
+        world,
+        &reopen_settlement_intent_prefix,
+    ) {
+        return world_receipt_allows_progression(receipt);
+    }
     let settlement_intent_id = format!("world_purchase:grant:{}", purchase.purchase_id);
     if let Some(receipt) = world_term_exchange_receipt_for_intent(world, &settlement_intent_id) {
         return world_receipt_allows_progression(receipt);
@@ -27,13 +35,187 @@ pub(super) fn world_purchase_seller_settlement_active(
     )
 }
 
-fn world_purchase_rejection_settlement_released(purchase: &WorldPurchase) -> bool {
+pub(super) fn world_purchase_buyer_reserve_active(
+    world: &WorldState,
+    purchase: &WorldPurchase,
+) -> bool {
+    let reserve_intent_id = format!("world_purchase:reserve:{}", purchase.purchase_id);
+    if let Some(receipt) = world_term_exchange_receipt_for_intent(world, &reserve_intent_id) {
+        return world_receipt_allows_progression(receipt);
+    }
+    let reopen_reserve_intent_prefix =
+        format!("world_purchase_reopen_reserve:{}:", purchase.purchase_id);
+    if let Some(receipt) =
+        latest_world_term_exchange_receipt_for_intent_prefix(world, &reopen_reserve_intent_prefix)
+    {
+        return world_receipt_allows_progression(receipt);
+    }
+    matches!(
+        purchase.buyer_ledger_status.as_deref(),
+        Some("reserved") | Some("duplicate") | Some("reopened_reserved")
+    )
+}
+
+pub(super) fn world_purchase_buyer_consume_completed(
+    world: &WorldState,
+    purchase: &WorldPurchase,
+) -> bool {
+    let consume_intent_id = format!("world_purchase:consume:{}", purchase.purchase_id);
+    if let Some(receipt) = world_term_exchange_receipt_for_intent(world, &consume_intent_id) {
+        return world_receipt_allows_progression(receipt);
+    }
+    matches!(
+        purchase.buyer_consume_status.as_deref(),
+        Some("consumed") | Some("duplicate")
+    )
+}
+
+fn world_purchase_buyer_refund_completed(
+    world: &WorldState,
+    purchase: &WorldPurchase,
+    refund_scope: Option<&str>,
+) -> bool {
+    if let Some(scope) = refund_scope {
+        let refund_intent_id = format!("world_purchase:refund:{}:{}", purchase.purchase_id, scope);
+        if let Some(receipt) = world_term_exchange_receipt_for_intent(world, &refund_intent_id) {
+            return world_receipt_allows_progression(receipt);
+        }
+    } else {
+        let refund_intent_prefix = format!("world_purchase:refund:{}:", purchase.purchase_id);
+        if let Some(receipt) =
+            latest_world_term_exchange_receipt_for_intent_prefix(world, &refund_intent_prefix)
+        {
+            return world_receipt_allows_progression(receipt);
+        }
+    }
+    matches!(purchase.buyer_consume_status.as_deref(), Some("refunded"))
+}
+
+fn world_purchase_seller_chargeback_cleared(
+    world: &WorldState,
+    purchase: &WorldPurchase,
+    chargeback_scope: Option<&str>,
+) -> bool {
+    if let Some(scope) = chargeback_scope {
+        let consume_intent_id = format!(
+            "world_purchase_seller_chargeback_consume:{}:{}",
+            purchase.purchase_id, scope
+        );
+        if let Some(receipt) = world_term_exchange_receipt_for_intent(world, &consume_intent_id) {
+            return world_receipt_allows_progression_or_terminal_skip(receipt);
+        }
+    } else {
+        let consume_intent_prefix = format!(
+            "world_purchase_seller_chargeback_consume:{}:",
+            purchase.purchase_id
+        );
+        if let Some(receipt) =
+            latest_world_term_exchange_receipt_for_intent_prefix(world, &consume_intent_prefix)
+        {
+            return world_receipt_allows_progression_or_terminal_skip(receipt);
+        }
+    }
+    matches!(
+        purchase.ledger_status.as_deref(),
+        Some("seller_chargeback_consumed") | Some("skipped_zero_seller_net")
+    )
+}
+
+fn world_purchase_seller_chargeback_recoverable_hold(
+    world: &WorldState,
+    purchase: &WorldPurchase,
+    chargeback_scope: &str,
+) -> bool {
+    let consume_intent_id = format!(
+        "world_purchase_seller_chargeback_consume:{}:{}",
+        purchase.purchase_id, chargeback_scope
+    );
+    let reserve_intent_id = format!(
+        "world_purchase_seller_chargeback_reserve:{}:{}",
+        purchase.purchase_id, chargeback_scope
+    );
+    [consume_intent_id, reserve_intent_id]
+        .iter()
+        .filter_map(|intent_id| world_term_exchange_receipt_for_intent(world, intent_id))
+        .max_by(|left, right| {
+            left.finalized_at_epoch
+                .cmp(&right.finalized_at_epoch)
+                .then_with(|| left.receipt_id.cmp(&right.receipt_id))
+        })
+        .map(|receipt| {
+            receipt.progression_class
+                == term_exchange_protocol::ReceiptProgressionClass::RecoverableHold
+        })
+        .unwrap_or(false)
+}
+
+pub(super) fn world_purchase_rejection_settlement_released(
+    world: &WorldState,
+    purchase: &WorldPurchase,
+    work_order_id: &str,
+) -> bool {
+    let rejection_scope = latest_world_rejection_scope_for_work_order(world, work_order_id);
     purchase.status == "rejected_refunded"
-        && matches!(purchase.buyer_consume_status.as_deref(), Some("refunded"))
-        && matches!(
-            purchase.ledger_status.as_deref(),
-            Some("seller_chargeback_consumed")
-        )
+        && world_purchase_buyer_refund_completed(world, purchase, rejection_scope.as_deref())
+        && world_purchase_seller_chargeback_cleared(world, purchase, rejection_scope.as_deref())
+}
+
+fn world_purchase_for_work_order<'a>(
+    world: &'a WorldState,
+    work_order_id: &str,
+) -> Option<&'a WorldPurchase> {
+    let work_order = world
+        .world_work_orders
+        .iter()
+        .find(|work_order| work_order.work_order_id == work_order_id)?;
+    world
+        .world_purchases
+        .iter()
+        .find(|purchase| purchase.purchase_id == work_order.purchase_id)
+}
+
+fn latest_world_rejection_scope_for_work_order(
+    world: &WorldState,
+    work_order_id: &str,
+) -> Option<String> {
+    world
+        .world_work_rejections
+        .iter()
+        .rev()
+        .find(|rejection| rejection.work_order_id == work_order_id)
+        .map(|rejection| rejection.rejection_id.clone())
+}
+
+fn latest_world_cancellation_scope_for_work_order(
+    world: &WorldState,
+    work_order_id: &str,
+) -> Option<String> {
+    world
+        .world_work_cancellations
+        .iter()
+        .rev()
+        .find(|cancellation| cancellation.work_order_id == work_order_id)
+        .map(|cancellation| cancellation.cancellation_id.clone())
+}
+
+pub(super) fn world_work_rejection_refund_completed(
+    world: &WorldState,
+    rejection: &WorldWorkRejection,
+) -> bool {
+    let Some(purchase) = world_purchase_for_work_order(world, &rejection.work_order_id) else {
+        return rejection.refund_status == "refunded";
+    };
+    world_purchase_buyer_refund_completed(world, purchase, Some(&rejection.rejection_id))
+}
+
+pub(super) fn world_work_cancellation_refund_completed(
+    world: &WorldState,
+    cancellation: &WorldWorkCancellation,
+) -> bool {
+    let Some(purchase) = world_purchase_for_work_order(world, &cancellation.work_order_id) else {
+        return cancellation.refund_status == "refunded";
+    };
+    world_purchase_buyer_refund_completed(world, purchase, Some(&cancellation.cancellation_id))
 }
 
 fn world_term_exchange_receipt_for_intent<'a>(
@@ -48,7 +230,27 @@ fn world_term_exchange_receipt_for_intent<'a>(
             world
                 .world_term_exchange_receipts
                 .values()
-                .find(|receipt| receipt.intent_id == intent_id)
+                .filter(|receipt| receipt.intent_id == intent_id)
+                .max_by(|left, right| {
+                    left.finalized_at_epoch
+                        .cmp(&right.finalized_at_epoch)
+                        .then_with(|| left.receipt_id.cmp(&right.receipt_id))
+                })
+        })
+}
+
+fn latest_world_term_exchange_receipt_for_intent_prefix<'a>(
+    world: &'a WorldState,
+    intent_prefix: &str,
+) -> Option<&'a TermExchangeReceiptState> {
+    world
+        .world_term_exchange_receipts
+        .values()
+        .filter(|receipt| receipt.intent_id.starts_with(intent_prefix))
+        .max_by(|left, right| {
+            left.finalized_at_epoch
+                .cmp(&right.finalized_at_epoch)
+                .then_with(|| left.receipt_id.cmp(&right.receipt_id))
         })
 }
 
@@ -1217,11 +1419,19 @@ pub(super) async fn chargeback_world_purchase_seller_with_ledger(
         purchase.ledger_status.as_deref(),
         Some("seller_chargeback_failed")
     );
-    let seller_settlement_active = {
+    let (seller_settlement_active, typed_retrying_failed_chargeback) = {
         let league = state.inner.league_state.lock().await;
-        world_purchase_seller_settlement_active(&league.world, purchase)
+        (
+            world_purchase_seller_settlement_active(&league.world, purchase),
+            world_purchase_seller_chargeback_recoverable_hold(
+                &league.world,
+                purchase,
+                chargeback_scope,
+            ),
+        )
     };
-    if !seller_settlement_active && !retrying_failed_chargeback {
+    if !seller_settlement_active && !retrying_failed_chargeback && !typed_retrying_failed_chargeback
+    {
         return LeagueLedgerSettlement {
             status: "skipped_seller_not_settled".to_string(),
             account_id: purchase.ledger_account_id.clone(),
@@ -2434,10 +2644,15 @@ pub(super) async fn reject_world_work_order_inner(
                 .into_response();
         };
         let purchase_seed = league.world.world_purchases[purchase_index].clone();
+        let rejection_refund_scope = latest_world_rejection_scope_for_work_order(
+            &league.world,
+            &work_order_seed.work_order_id,
+        );
         let retry_chargeback_only = work_order_seed.status == "rejected_chargeback_failed"
-            && matches!(
-                purchase_seed.buyer_consume_status.as_deref(),
-                Some("refunded")
+            && world_purchase_buyer_refund_completed(
+                &league.world,
+                &purchase_seed,
+                rejection_refund_scope.as_deref(),
             );
         let retry_status = if retry_chargeback_only {
             "pending_chargeback"
@@ -2848,7 +3063,11 @@ pub(super) async fn reopen_world_work_order_inner(
                 .into_response();
         };
         let purchase_seed = league.world.world_purchases[purchase_index].clone();
-        if !world_purchase_rejection_settlement_released(&purchase_seed) {
+        if !world_purchase_rejection_settlement_released(
+            &league.world,
+            &purchase_seed,
+            &work_order_seed.work_order_id,
+        ) {
             return (
                 StatusCode::CONFLICT,
                 Json(json!({
@@ -3196,10 +3415,15 @@ pub(super) async fn cancel_world_work_order_inner(
                 .into_response();
         };
         let purchase_seed = league.world.world_purchases[purchase_index].clone();
+        let cancellation_refund_scope = latest_world_cancellation_scope_for_work_order(
+            &league.world,
+            &work_order_seed.work_order_id,
+        );
         let retry_chargeback_only = work_order_seed.status == "cancelled_chargeback_failed"
-            && matches!(
-                purchase_seed.buyer_consume_status.as_deref(),
-                Some("refunded")
+            && world_purchase_buyer_refund_completed(
+                &league.world,
+                &purchase_seed,
+                cancellation_refund_scope.as_deref(),
             );
         let retry_status = if retry_chargeback_only {
             "pending_chargeback"
