@@ -1469,7 +1469,7 @@ async fn term_exchange_kernel_manifest_declares_cex_as_first_backend() {
     );
     assert_eq!(
         body["state_persistence"]["runtime_receipt_projection_status"],
-        "typed_receipts_projected_and_sql_read_model_hydrated_when_read_switch_active"
+        "typed_receipts_projected_and_sql_read_model_hydrated_for_read_and_command_home_surfaces"
     );
     assert_eq!(
         body["migration_status"]["status"],

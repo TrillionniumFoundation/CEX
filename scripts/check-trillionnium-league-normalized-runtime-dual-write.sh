@@ -1128,6 +1128,71 @@ if ! grep -q "$SMOKE_BODY" "$TMP_DIR/read-switch-world-home.json"; then
   cat "$TMP_DIR/read-switch-world-home.json" >&2
   exit 1
 fi
+if ! grep -q '"source":"normalized_sql_world_home_read_model"' "$TMP_DIR/read-switch-world-home.json"; then
+  echo "read-switch world home did not expose normalized SQL receipt read-model source" >&2
+  cat "$TMP_DIR/read-switch-world-home.json" >&2
+  exit 1
+fi
+
+READ_SWITCH_ACTION_STATUS="$TMP_DIR/read-switch-world-action-status.txt"
+if ! curl -sS -o "$TMP_DIR/read-switch-world-action-response.json" -w '%{http_code}' -X POST "$READ_SWITCH_URL/v1/world/action" \
+  -H 'content-type: application/json' \
+  -d '{"matrix_user_id":"@runtime-dual:local.dev","room_id":"!runtime-dual:local.dev","location_id":"zbj-market-gate","body":"Read-switch command response home hydration proof with deliverable, evidence, risk gate, acceptance standard, and next action."}' \
+  > "$READ_SWITCH_ACTION_STATUS"; then
+  echo "read-switch world_action curl failed" >&2
+  tail -120 "$READ_SWITCH_LOG" >&2 || true
+  cat "$TMP_DIR/read-switch-world-action-response.json" >&2 || true
+  exit 1
+fi
+if [[ "$(cat "$READ_SWITCH_ACTION_STATUS")" != "200" ]]; then
+  echo "read-switch world_action returned HTTP $(cat "$READ_SWITCH_ACTION_STATUS")" >&2
+  cat "$TMP_DIR/read-switch-world-action-response.json" >&2 || true
+  echo >&2
+  tail -120 "$READ_SWITCH_LOG" >&2 || true
+  exit 1
+fi
+node - "$TMP_DIR/read-switch-world-action-response.json" <<'NODE'
+const fs = require('fs');
+const body = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const home = body.home || {};
+const source = home.normalized_receipt_read_model && home.normalized_receipt_read_model.source;
+const projectionSource = home.term_exchange_receipt_projection && home.term_exchange_receipt_projection.runtime_read_model_source;
+const count = Number(home.counts && home.counts.term_exchange_receipts || 0);
+if (source !== 'normalized_sql_world_home_read_model' || projectionSource !== 'normalized_sql_world_home_read_model' || count < 1) {
+  console.error(JSON.stringify({ source, projectionSource, count, home }, null, 2));
+  process.exit(1);
+}
+NODE
+
+READ_SWITCH_TACTICS_STATUS="$TMP_DIR/read-switch-world-tactics-status.txt"
+if ! curl -sS -o "$TMP_DIR/read-switch-world-tactics-response.json" -w '%{http_code}' -X POST "$READ_SWITCH_URL/v1/world/tactics/command" \
+  -H 'content-type: application/json' \
+  -d '{"matrix_user_id":"@runtime-dual:local.dev","room_id":"!runtime-dual:local.dev","command":"select_unit","unit_id":"lord","target_tile":"F5","body":"Read-switch tactics response home hydration proof."}' \
+  > "$READ_SWITCH_TACTICS_STATUS"; then
+  echo "read-switch world_tactics_command curl failed" >&2
+  tail -120 "$READ_SWITCH_LOG" >&2 || true
+  cat "$TMP_DIR/read-switch-world-tactics-response.json" >&2 || true
+  exit 1
+fi
+if [[ "$(cat "$READ_SWITCH_TACTICS_STATUS")" != "200" ]]; then
+  echo "read-switch world_tactics_command returned HTTP $(cat "$READ_SWITCH_TACTICS_STATUS")" >&2
+  cat "$TMP_DIR/read-switch-world-tactics-response.json" >&2 || true
+  echo >&2
+  tail -120 "$READ_SWITCH_LOG" >&2 || true
+  exit 1
+fi
+node - "$TMP_DIR/read-switch-world-tactics-response.json" <<'NODE'
+const fs = require('fs');
+const body = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const home = body.home || {};
+const source = home.normalized_receipt_read_model && home.normalized_receipt_read_model.source;
+const projectionSource = home.term_exchange_receipt_projection && home.term_exchange_receipt_projection.runtime_read_model_source;
+const count = Number(home.counts && home.counts.term_exchange_receipts || 0);
+if (source !== 'normalized_sql_world_home_read_model' || projectionSource !== 'normalized_sql_world_home_read_model' || count < 1) {
+  console.error(JSON.stringify({ source, projectionSource, count, home }, null, 2));
+  process.exit(1);
+}
+NODE
 
 run_tmp_sql "
 select jsonb_build_object(

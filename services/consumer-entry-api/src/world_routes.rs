@@ -1496,7 +1496,7 @@ pub(super) async fn post_world_action(
     } else {
         None
     };
-    let snapshot = match record_world_action(&state, payload).await {
+    let mut snapshot = match record_world_action(&state, payload).await {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -1504,6 +1504,15 @@ pub(super) async fn post_world_action(
         persist_league_state_after_command(&state, &snapshot.0, "world_action").await
     {
         return response;
+    }
+    if let Err(err) =
+        hydrate_world_home_receipts_from_normalized_read_model(&state, &mut snapshot.3).await
+    {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": err })),
+        )
+            .into_response();
     }
     (
         StatusCode::OK,
@@ -2261,7 +2270,7 @@ pub(super) async fn post_world_tactics_command(
         state.inner.metrics.inc_ingress_auth_failures();
         return response;
     }
-    let snapshot = match record_world_tactics_command(&state, payload).await {
+    let mut snapshot = match record_world_tactics_command(&state, payload).await {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -2269,6 +2278,15 @@ pub(super) async fn post_world_tactics_command(
         persist_league_state_after_command(&state, &snapshot.0, "world_tactics_command").await
     {
         return response;
+    }
+    if let Err(err) =
+        hydrate_world_home_receipts_from_normalized_read_model(&state, &mut snapshot.3).await
+    {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": err })),
+        )
+            .into_response();
     }
     (
         StatusCode::OK,
