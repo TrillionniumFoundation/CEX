@@ -238,8 +238,8 @@ pub(super) fn term_exchange_kernel_manifest_json(state: &AppState) -> Value {
             "sql_direct_write_helper": "upsert_normalized_term_exchange_receipt_tables",
             "sql_direct_write_mode": "typed_sqlx_receipt_upserts_from_repository_snapshot",
             "progression_source": "ReceiptProgressionClass_prefers_typed_receipts_with_legacy_status_fallback",
-            "normalized_receipt_read_model_probe_status": "receipt_progression_classes_exposed_in_world_home_and_client_feed",
-            "runtime_receipt_projection_status": "typed_receipts_projected_in_world_home_and_client_feed"
+            "normalized_receipt_read_model_probe_status": "receipt_projection_objects_exposed_in_world_home_and_client_feed",
+            "runtime_receipt_projection_status": "typed_receipts_projected_and_sql_read_model_hydrated_when_read_switch_active"
         },
         "current_cex_backend_runtime": {
             "runtime_profile": state.config().runtime_profile.as_str(),

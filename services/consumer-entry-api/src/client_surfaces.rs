@@ -783,6 +783,36 @@ pub(super) fn build_client_feed_snapshots(
     }
 }
 
+pub(super) fn term_exchange_receipt_feed_item_json(receipt: &Value) -> Value {
+    let receipt_id = receipt
+        .get("receipt_id")
+        .and_then(Value::as_str)
+        .unwrap_or("term_exchange_receipt");
+    let status = receipt
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let progression_class = receipt
+        .get("progression_class")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    json!({
+        "feed_kind": "term_exchange_receipt",
+        "source": "term_exchange_receipts",
+        "receipt_id": receipt_id,
+        "intent_id": receipt.get("intent_id").cloned().unwrap_or(Value::Null),
+        "term_id": receipt.get("term_id").cloned().unwrap_or(Value::Null),
+        "backend_id": receipt.get("backend_id").cloned().unwrap_or(Value::Null),
+        "backend_kind": receipt.get("backend_kind").cloned().unwrap_or(Value::Null),
+        "status": status,
+        "progression_class": progression_class,
+        "title": format!("Term Exchange receipt {}", receipt_id),
+        "summary": format!("{} · {}", status, progression_class),
+        "detail": format!("receipt {} · status {} · progression {}", receipt_id, status, progression_class),
+        "created_at_epoch": receipt.get("finalized_at_epoch").cloned().unwrap_or_else(|| json!(0)),
+    })
+}
+
 pub(super) fn build_client_feed_items(
     world: &WorldState,
     indexes: &WorldIndexes,
@@ -976,35 +1006,7 @@ pub(super) fn build_client_feed_items(
             .recent_term_exchange_receipts
             .iter()
             .take(4)
-            .map(|receipt| {
-                let receipt_id = receipt
-                    .get("receipt_id")
-                    .and_then(Value::as_str)
-                    .unwrap_or("term_exchange_receipt");
-                let status = receipt
-                    .get("status")
-                    .and_then(Value::as_str)
-                    .unwrap_or("unknown");
-                let progression_class = receipt
-                    .get("progression_class")
-                    .and_then(Value::as_str)
-                    .unwrap_or("unknown");
-                json!({
-                    "feed_kind": "term_exchange_receipt",
-                    "source": "term_exchange_receipts",
-                    "receipt_id": receipt_id,
-                    "intent_id": receipt.get("intent_id").cloned().unwrap_or(Value::Null),
-                    "term_id": receipt.get("term_id").cloned().unwrap_or(Value::Null),
-                    "backend_id": receipt.get("backend_id").cloned().unwrap_or(Value::Null),
-                    "backend_kind": receipt.get("backend_kind").cloned().unwrap_or(Value::Null),
-                    "status": status,
-                    "progression_class": progression_class,
-                    "title": format!("Term Exchange receipt {}", receipt_id),
-                    "summary": format!("{} · {}", status, progression_class),
-                    "detail": format!("receipt {} · status {} · progression {}", receipt_id, status, progression_class),
-                    "created_at_epoch": receipt.get("finalized_at_epoch").cloned().unwrap_or_else(|| json!(0)),
-                })
-            }),
+            .map(term_exchange_receipt_feed_item_json),
     );
     items.extend(snapshots.nearby_agents.iter().take(4).map(|agent| {
         let name = agent.get("name").and_then(Value::as_str).unwrap_or("Agent");
@@ -1266,6 +1268,91 @@ pub(super) fn decorate_client_feed_items(items: &mut [Value]) {
     });
 }
 
+pub(super) fn sort_client_feed_items_by_created_at(items: &mut [Value]) {
+    items.sort_by(|left, right| {
+        right
+            .get("created_at_epoch")
+            .and_then(Value::as_i64)
+            .cmp(&left.get("created_at_epoch").and_then(Value::as_i64))
+    });
+}
+
+pub(super) fn apply_normalized_client_feed_receipt_read_model(
+    feed: &mut Value,
+    read_model: &Value,
+) -> Result<(), String> {
+    validate_normalized_repository_client_feed_read_model_gate(read_model)?;
+    let receipt_snapshot = read_model
+        .get("term_exchange_receipts")
+        .cloned()
+        .ok_or_else(|| {
+            "normalized client-feed read model missing term_exchange_receipts".to_string()
+        })?;
+    let recent_receipts = receipt_snapshot
+        .get("recent")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut receipt_projection = read_model
+        .get("term_exchange_receipt_projection")
+        .cloned()
+        .ok_or_else(|| {
+            "normalized client-feed read model missing term_exchange_receipt_projection".to_string()
+        })?;
+    if let Some(projection) = receipt_projection.as_object_mut() {
+        projection.insert(
+            "runtime_read_model_source".to_string(),
+            json!("normalized_sql_client_feed_read_model"),
+        );
+    }
+    let feed_object = feed
+        .as_object_mut()
+        .ok_or_else(|| "client-feed projection is not a JSON object".to_string())?;
+    let snapshots = feed_object
+        .get_mut("snapshots")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| "client-feed projection missing snapshots object".to_string())?;
+    snapshots.insert("term_exchange_receipts".to_string(), receipt_snapshot);
+    feed_object.insert(
+        "term_exchange_receipt_projection".to_string(),
+        receipt_projection,
+    );
+    feed_object.insert(
+        "normalized_receipt_read_model".to_string(),
+        json!({
+            "active": true,
+            "source": "normalized_sql_client_feed_read_model",
+            "read_model_version": read_model.get("read_model_version").cloned().unwrap_or(Value::Null),
+            "source_tables": read_model.get("source_tables").cloned().unwrap_or_else(|| json!([])),
+            "receipt_count": read_model
+                .get("term_exchange_receipts")
+                .and_then(|snapshot| snapshot.get("count"))
+                .cloned()
+                .unwrap_or(Value::Null),
+        }),
+    );
+    let item_count = {
+        let items = feed_object
+            .get_mut("items")
+            .and_then(Value::as_array_mut)
+            .ok_or_else(|| "client-feed projection missing items array".to_string())?;
+        items.retain(|item| {
+            item.get("feed_kind").and_then(Value::as_str) != Some("term_exchange_receipt")
+        });
+        let mut receipt_items: Vec<Value> = recent_receipts
+            .iter()
+            .take(4)
+            .map(term_exchange_receipt_feed_item_json)
+            .collect();
+        decorate_client_feed_items(&mut receipt_items);
+        items.extend(receipt_items);
+        sort_client_feed_items_by_created_at(items);
+        items.len()
+    };
+    feed_object.insert("item_count".to_string(), json!(item_count));
+    Ok(())
+}
+
 #[derive(Debug, Clone)]
 pub(super) struct ClientFeedProjectionContext<'a> {
     world: &'a WorldState,
@@ -1316,12 +1403,7 @@ impl<'a> ClientFeedProjectionContext<'a> {
         let mut items =
             build_client_feed_items(self.world, &indexes, &route_task_views, &snapshots);
         decorate_client_feed_items(&mut items);
-        items.sort_by(|left, right| {
-            right
-                .get("created_at_epoch")
-                .and_then(Value::as_i64)
-                .cmp(&left.get("created_at_epoch").and_then(Value::as_i64))
-        });
+        sort_client_feed_items_by_created_at(&mut items);
 
         json!({
             "kind": "trillionnium_client_feed",

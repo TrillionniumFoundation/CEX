@@ -1,7 +1,9 @@
 use super::{
-    authorize_league_web_session, authorize_league_web_session_readonly, authorize_user_session,
-    build_chat_identity_scope, build_chat_org_rate_limit_key, build_chat_rate_limit_key,
-    build_chat_replay_key, build_chat_request_fingerprint, build_chat_room_rate_limit_key,
+    apply_normalized_client_feed_receipt_read_model,
+    apply_normalized_world_home_receipt_read_model, authorize_league_web_session,
+    authorize_league_web_session_readonly, authorize_user_session, build_chat_identity_scope,
+    build_chat_org_rate_limit_key, build_chat_rate_limit_key, build_chat_replay_key,
+    build_chat_request_fingerprint, build_chat_room_rate_limit_key,
     build_chat_session_rate_limit_key, build_chat_user_rate_limit_key, build_matrix_identity_scope,
     build_matrix_org_rate_limit_key, build_matrix_rate_limit_key, build_matrix_replay_key,
     build_matrix_room_rate_limit_key, build_matrix_session_rate_limit_key,
@@ -1463,11 +1465,11 @@ async fn term_exchange_kernel_manifest_declares_cex_as_first_backend() {
     );
     assert_eq!(
         body["state_persistence"]["normalized_receipt_read_model_probe_status"],
-        "receipt_progression_classes_exposed_in_world_home_and_client_feed"
+        "receipt_projection_objects_exposed_in_world_home_and_client_feed"
     );
     assert_eq!(
         body["state_persistence"]["runtime_receipt_projection_status"],
-        "typed_receipts_projected_in_world_home_and_client_feed"
+        "typed_receipts_projected_and_sql_read_model_hydrated_when_read_switch_active"
     );
     assert_eq!(
         body["migration_status"]["status"],
@@ -2468,6 +2470,77 @@ fn world_home_projects_term_exchange_receipt_state() {
         home.pointer("/term_exchange_receipt_projection/latest_receipts/0/status")
             .and_then(Value::as_str),
         Some("failed_ledger")
+    );
+}
+
+#[test]
+fn world_home_can_overlay_normalized_receipt_read_model() {
+    let league = default_league_state();
+    let mut home = world_home_json(&league);
+    let receipt = json!({
+        "protocol_version": "term_exchange_protocol_v1",
+        "receipt_id": "sql-world-receipt-1",
+        "intent_id": "sql-world-intent-1",
+        "term_id": "world_commerce_lifecycle",
+        "backend_id": term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
+        "backend_kind": "cex",
+        "status": "settled",
+        "progression_class": "progression_allowed",
+        "settlement_reference": "sql-settlement-1",
+        "ledger_entry_id": "sql-ledger-1",
+        "reason": null,
+        "finalized_at_epoch": 1_778_631_001,
+    });
+    let read_model = json!({
+        "read_model_version": "trillionnium_normalized_world_home_read_model_v1",
+        "source_tables": [
+            "world_events",
+            "world_relationships",
+            "world_map_nodes",
+            "world_contracts",
+            "world_work_orders",
+            "world_faction_standings",
+            "league_term_exchange_receipts",
+            "world_term_exchange_receipts"
+        ],
+        "world_map_node_count": 1,
+        "world_term_exchange_receipt_count": 1,
+        "world_term_exchange_receipt_progression_classes": {"progression_allowed": 1},
+        "latest_world_term_exchange_receipts": [receipt.clone()],
+        "term_exchange_receipts": {"sql-world-receipt-1": receipt.clone()},
+        "term_exchange_receipt_projection": {
+            "contract_version": "trillionnium_term_exchange_receipt_projection_v1",
+            "source_state_path": "WorldState.world_term_exchange_receipts",
+            "normalized_source_table": "world_term_exchange_receipts",
+            "read_model_alignment": "normalized_world_home_and_client_feed_receipt_probes",
+            "receipt_count": 1,
+            "progression_classes": {"progression_allowed": 1},
+            "latest_receipts": [receipt]
+        }
+    });
+
+    apply_normalized_world_home_receipt_read_model(&mut home, &read_model)
+        .expect("apply normalized world-home receipt read model");
+
+    assert_eq!(
+        home.pointer("/counts/term_exchange_receipts")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        home.pointer("/normalized_receipt_read_model/source")
+            .and_then(Value::as_str),
+        Some("normalized_sql_world_home_read_model")
+    );
+    assert_eq!(
+        home.pointer("/term_exchange_receipts/sql-world-receipt-1/status")
+            .and_then(Value::as_str),
+        Some("settled")
+    );
+    assert_eq!(
+        home.pointer("/term_exchange_receipt_projection/runtime_read_model_source")
+            .and_then(Value::as_str),
+        Some("normalized_sql_world_home_read_model")
     );
 }
 
@@ -7544,6 +7617,98 @@ fn client_feed_json_aggregates_mobile_shell_sources() {
             .and_then(Value::as_u64)
             .unwrap_or(0)
             >= 1
+    );
+}
+
+#[test]
+fn client_feed_can_overlay_normalized_receipt_read_model() {
+    let league = default_league_state();
+    let mut feed = client_feed_json(&league, "@alice:local.dev");
+    let receipt = json!({
+        "receipt_id": "sql-feed-receipt-1",
+        "intent_id": "sql-feed-intent-1",
+        "term_id": "world_commerce_lifecycle",
+        "backend_id": term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
+        "backend_kind": "cex",
+        "status": "settled",
+        "progression_class": "progression_allowed",
+        "settlement_reference": "sql-feed-settlement-1",
+        "ledger_entry_id": "sql-feed-ledger-1",
+        "reason": null,
+        "finalized_at_epoch": 1_778_631_101,
+    });
+    let read_model = json!({
+        "read_model_version": "trillionnium_normalized_client_feed_read_model_v1",
+        "source_tables": [
+            "world_events",
+            "world_contracts",
+            "world_purchases",
+            "world_work_orders",
+            "world_work_deliveries",
+            "world_work_acceptances",
+            "world_work_rejections",
+            "world_work_reopens",
+            "world_work_cancellations",
+            "world_economy_events",
+            "league_term_exchange_receipts",
+            "world_term_exchange_receipts"
+        ],
+        "latest_feed_items": [{"source": "world_term_exchange_receipt", "id": "sql-feed-receipt-1"}],
+        "term_exchange_receipt_progression_classes": {"progression_allowed": 1},
+        "term_exchange_receipts": {
+            "count": 1,
+            "progression_classes": {"progression_allowed": 1},
+            "recent": [receipt.clone()]
+        },
+        "term_exchange_receipt_projection": {
+            "contract_version": "trillionnium_term_exchange_receipt_projection_v1",
+            "source_state_path": "WorldState.world_term_exchange_receipts",
+            "normalized_source_table": "world_term_exchange_receipts",
+            "read_model_alignment": "normalized_world_home_and_client_feed_receipt_probes",
+            "receipt_count": 1,
+            "progression_classes": {"progression_allowed": 1},
+            "latest_receipts": [receipt]
+        }
+    });
+
+    apply_normalized_client_feed_receipt_read_model(&mut feed, &read_model)
+        .expect("apply normalized client-feed receipt read model");
+
+    assert_eq!(
+        feed.pointer("/normalized_receipt_read_model/source")
+            .and_then(Value::as_str),
+        Some("normalized_sql_client_feed_read_model")
+    );
+    assert_eq!(
+        feed.pointer("/snapshots/term_exchange_receipts/count")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        feed.pointer("/term_exchange_receipt_projection/runtime_read_model_source")
+            .and_then(Value::as_str),
+        Some("normalized_sql_client_feed_read_model")
+    );
+    let feed_items = feed
+        .get("items")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let receipt_item = feed_items
+        .iter()
+        .find(|item| item.get("receipt_id").and_then(Value::as_str) == Some("sql-feed-receipt-1"))
+        .expect("normalized receipt feed item");
+    assert_eq!(
+        receipt_item.get("feed_kind").and_then(Value::as_str),
+        Some("term_exchange_receipt")
+    );
+    assert_eq!(
+        receipt_item.get("feed_group").and_then(Value::as_str),
+        Some("commerce")
+    );
+    assert_eq!(
+        receipt_item.get("action_label").and_then(Value::as_str),
+        Some("查看结算")
     );
 }
 

@@ -1260,6 +1260,71 @@ pub(super) fn validate_normalized_repository_client_feed_read_model_gate(
     Ok(())
 }
 
+fn normalized_repository_runtime_read_model_database_url(
+    config: &ConsumerEntryConfig,
+) -> Result<Option<&str>, String> {
+    if !config.league_normalized_read_switch_enabled {
+        return Ok(None);
+    }
+    config.league_normalized_database_url.as_deref().map(Some).ok_or_else(|| {
+        "CONSUMER_ENTRY_LEAGUE_NORMALIZED_READ_SWITCH_ENABLED=true requires CONSUMER_ENTRY_LEAGUE_NORMALIZED_DATABASE_URL for normalized receipt read-model hydration"
+            .to_string()
+    })
+}
+
+async fn fetch_normalized_repository_runtime_read_model(
+    config: &ConsumerEntryConfig,
+    sql: &'static str,
+    label: &str,
+) -> Result<Option<Value>, String> {
+    let Some(database_url) = normalized_repository_runtime_read_model_database_url(config)? else {
+        return Ok(None);
+    };
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(database_url)
+        .await
+        .map_err(|err| {
+            format!("failed to connect normalized repository database for {label}: {err}")
+        })?;
+    let read_model = sqlx::query_scalar::<_, Value>(sql)
+        .fetch_one(&pool)
+        .await
+        .map_err(|err| format!("failed to fetch normalized repository {label} read model: {err}"));
+    pool.close().await;
+    read_model.map(Some)
+}
+
+pub(super) async fn load_normalized_repository_world_home_read_model_for_runtime(
+    config: &ConsumerEntryConfig,
+) -> Result<Option<Value>, String> {
+    let read_model = fetch_normalized_repository_runtime_read_model(
+        config,
+        normalized_repository_world_home_read_model_sql(),
+        "world-home",
+    )
+    .await?;
+    if let Some(read_model) = read_model.as_ref() {
+        validate_normalized_repository_read_model_gate(read_model)?;
+    }
+    Ok(read_model)
+}
+
+pub(super) async fn load_normalized_repository_client_feed_read_model_for_runtime(
+    config: &ConsumerEntryConfig,
+) -> Result<Option<Value>, String> {
+    let read_model = fetch_normalized_repository_runtime_read_model(
+        config,
+        normalized_repository_client_feed_read_model_sql(),
+        "client-feed",
+    )
+    .await?;
+    if let Some(read_model) = read_model.as_ref() {
+        validate_normalized_repository_client_feed_read_model_gate(read_model)?;
+    }
+    Ok(read_model)
+}
+
 pub(super) fn merge_default_league_state(state: &mut LeagueState) {
     let defaults = default_league_state();
     for (match_id, league_match) in defaults.matches {

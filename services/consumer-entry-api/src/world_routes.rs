@@ -1017,12 +1017,20 @@ pub(super) async fn get_client_feed_home(
         )
             .into_response();
     };
-    let league = state.inner.league_state.lock().await;
-    (
-        StatusCode::OK,
-        Json(client_feed_json(&league, &matrix_user_id)),
-    )
-        .into_response()
+    let mut feed = {
+        let league = state.inner.league_state.lock().await;
+        client_feed_json(&league, &matrix_user_id)
+    };
+    if let Err(err) =
+        hydrate_client_feed_receipts_from_normalized_read_model(&state, &mut feed).await
+    {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": err })),
+        )
+            .into_response();
+    }
+    (StatusCode::OK, Json(feed)).into_response()
 }
 
 pub(super) async fn get_client_web_feed_home(
@@ -1049,12 +1057,32 @@ pub(super) async fn get_client_web_feed_home(
             )
         })
         .unwrap_or_else(|| "@alice:local.dev".to_string());
-    let league = state.inner.league_state.lock().await;
-    (
-        StatusCode::OK,
-        Json(client_feed_json(&league, &matrix_user_id)),
-    )
-        .into_response()
+    let mut feed = {
+        let league = state.inner.league_state.lock().await;
+        client_feed_json(&league, &matrix_user_id)
+    };
+    if let Err(err) =
+        hydrate_client_feed_receipts_from_normalized_read_model(&state, &mut feed).await
+    {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": err })),
+        )
+            .into_response();
+    }
+    (StatusCode::OK, Json(feed)).into_response()
+}
+
+async fn hydrate_client_feed_receipts_from_normalized_read_model(
+    state: &AppState,
+    feed: &mut Value,
+) -> Result<(), String> {
+    if let Some(read_model) =
+        load_normalized_repository_client_feed_read_model_for_runtime(state.config()).await?
+    {
+        apply_normalized_client_feed_receipt_read_model(feed, &read_model)?;
+    }
+    Ok(())
 }
 
 pub(super) async fn post_world_web_map_move(
@@ -1140,8 +1168,32 @@ pub(super) async fn get_world_home(State(state): State<AppState>, headers: Heade
         state.inner.metrics.inc_ingress_auth_failures();
         return response;
     }
-    let league = state.inner.league_state.lock().await;
-    (StatusCode::OK, Json(world_home_json(&league))).into_response()
+    let mut home = {
+        let league = state.inner.league_state.lock().await;
+        world_home_json(&league)
+    };
+    if let Err(err) =
+        hydrate_world_home_receipts_from_normalized_read_model(&state, &mut home).await
+    {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": err })),
+        )
+            .into_response();
+    }
+    (StatusCode::OK, Json(home)).into_response()
+}
+
+async fn hydrate_world_home_receipts_from_normalized_read_model(
+    state: &AppState,
+    home: &mut Value,
+) -> Result<(), String> {
+    if let Some(read_model) =
+        load_normalized_repository_world_home_read_model_for_runtime(state.config()).await?
+    {
+        apply_normalized_world_home_receipt_read_model(home, &read_model)?;
+    }
+    Ok(())
 }
 
 async fn create_world_contract_task(

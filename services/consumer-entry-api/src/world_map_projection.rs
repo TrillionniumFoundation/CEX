@@ -250,6 +250,63 @@ pub(super) fn world_term_exchange_receipt_projection_json(
     })
 }
 
+pub(super) fn apply_normalized_world_home_receipt_read_model(
+    home: &mut Value,
+    read_model: &Value,
+) -> Result<(), String> {
+    validate_normalized_repository_read_model_gate(read_model)?;
+    let receipt_count = read_model
+        .get("world_term_exchange_receipt_count")
+        .cloned()
+        .or_else(|| {
+            read_model
+                .get("term_exchange_receipt_projection")
+                .and_then(|projection| projection.get("receipt_count"))
+                .cloned()
+        })
+        .unwrap_or_else(|| json!(0));
+    let receipt_map = read_model
+        .get("term_exchange_receipts")
+        .cloned()
+        .ok_or_else(|| {
+            "normalized world-home read model missing term_exchange_receipts".to_string()
+        })?;
+    let mut receipt_projection = read_model
+        .get("term_exchange_receipt_projection")
+        .cloned()
+        .ok_or_else(|| {
+            "normalized world-home read model missing term_exchange_receipt_projection".to_string()
+        })?;
+    if let Some(projection) = receipt_projection.as_object_mut() {
+        projection.insert(
+            "runtime_read_model_source".to_string(),
+            json!("normalized_sql_world_home_read_model"),
+        );
+    }
+    let home_object = home
+        .as_object_mut()
+        .ok_or_else(|| "world-home projection is not a JSON object".to_string())?;
+    if let Some(counts) = home_object.get_mut("counts").and_then(Value::as_object_mut) {
+        counts.insert("term_exchange_receipts".to_string(), receipt_count.clone());
+    }
+    home_object.insert("term_exchange_receipts".to_string(), receipt_map);
+    home_object.insert(
+        "term_exchange_receipt_projection".to_string(),
+        receipt_projection,
+    );
+    home_object.insert(
+        "normalized_receipt_read_model".to_string(),
+        json!({
+            "active": true,
+            "source": "normalized_sql_world_home_read_model",
+            "read_model_version": read_model.get("read_model_version").cloned().unwrap_or(Value::Null),
+            "source_tables": read_model.get("source_tables").cloned().unwrap_or_else(|| json!([])),
+            "receipt_count": receipt_count,
+        }),
+    );
+    Ok(())
+}
+
 impl<'a> WorldHomeProjectionContext<'a> {
     fn new(world: &'a WorldState) -> Self {
         Self {
