@@ -1447,8 +1447,12 @@ async fn term_exchange_kernel_manifest_declares_cex_as_first_backend() {
         "receipt_progression_classes_exposed_in_world_home_and_client_feed"
     );
     assert_eq!(
+        body["state_persistence"]["runtime_receipt_projection_status"],
+        "typed_receipts_projected_in_world_home_and_client_feed"
+    );
+    assert_eq!(
         body["migration_status"]["status"],
-        "typed_receipt_progression_and_read_model_probes_active"
+        "typed_receipt_progression_read_model_and_projection_probes_active"
     );
 }
 
@@ -2139,6 +2143,14 @@ fn world_client_surfaces_expose_projection_layer_contracts() {
         .unwrap()
         .iter()
         .any(|lane| lane["lane_id"] == "p1_strategy_depth"));
+    assert_eq!(
+        home["term_exchange_receipt_projection"]["contract_version"],
+        "trillionnium_term_exchange_receipt_projection_v1"
+    );
+    assert_eq!(
+        home["term_exchange_receipt_projection"]["source_state_path"],
+        "WorldState.world_term_exchange_receipts"
+    );
 
     let map = world_map_json(&league, matrix_user_id);
     assert_eq!(map["projection_layer"], "world_map_projection_v1");
@@ -2392,6 +2404,52 @@ fn world_client_surfaces_expose_projection_layer_contracts() {
             assert_hidden_test_ready_prompt(command, &route_command_body(command));
         }
     }
+}
+
+#[test]
+fn world_home_projects_term_exchange_receipt_state() {
+    let mut league = default_league_state();
+    let mut receipt = term_exchange_protocol::EconomicReceipt::new(
+        "world-receipt-home-1",
+        "world-intent-home-1",
+        "world_commerce_lifecycle",
+        term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
+        term_exchange_protocol::SettlementBackendKind::Cex,
+        term_exchange_protocol::ReceiptStatus::FailedLedger,
+        1_777_300_001,
+    );
+    receipt.reason = Some("temporary ledger outage".to_string());
+    league.world.world_term_exchange_receipts.insert(
+        "world-receipt-home-1".to_string(),
+        TermExchangeReceiptState::from(&receipt),
+    );
+
+    let home = world_home_json(&league);
+    assert_eq!(
+        home.pointer("/counts/term_exchange_receipts")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        home.pointer("/term_exchange_receipt_projection/receipt_count")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        home.pointer("/term_exchange_receipt_projection/progression_classes/recoverable_hold")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        home.pointer("/term_exchange_receipt_projection/latest_receipts/0/receipt_id")
+            .and_then(Value::as_str),
+        Some("world-receipt-home-1")
+    );
+    assert_eq!(
+        home.pointer("/term_exchange_receipt_projection/latest_receipts/0/status")
+            .and_then(Value::as_str),
+        Some("failed_ledger")
+    );
 }
 
 #[test]
@@ -7312,6 +7370,20 @@ fn client_feed_json_aggregates_mobile_shell_sources() {
             ledger_error: None,
             created_at_epoch: 1_777_297_702,
         });
+    let mut receipt = term_exchange_protocol::EconomicReceipt::new(
+        "world-receipt-feed-1",
+        "world-intent-feed-1",
+        "world_commerce_lifecycle",
+        term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
+        term_exchange_protocol::SettlementBackendKind::Cex,
+        term_exchange_protocol::ReceiptStatus::Settled,
+        1_777_297_703,
+    );
+    receipt.ledger_entry_id = Some("ledger-feed-1".to_string());
+    league.world.world_term_exchange_receipts.insert(
+        "world-receipt-feed-1".to_string(),
+        TermExchangeReceiptState::from(&receipt),
+    );
 
     let feed = client_feed_json(&league, "@alice:local.dev");
     assert_eq!(
@@ -7327,7 +7399,7 @@ fn client_feed_json_aggregates_mobile_shell_sources() {
             .and_then(Value::as_str),
         Some(WORLD_ROUTE_ACTION_TEXTAREA_ID)
     );
-    assert_eq!(feed.get("source_count").and_then(Value::as_u64), Some(7));
+    assert_eq!(feed.get("source_count").and_then(Value::as_u64), Some(8));
     assert!(feed
         .get("sources")
         .and_then(Value::as_array)
@@ -7335,6 +7407,13 @@ fn client_feed_json_aggregates_mobile_shell_sources() {
         .unwrap_or_default()
         .iter()
         .any(|source| source == "route_runner_handoff"));
+    assert!(feed
+        .get("sources")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .any(|source| source == "term_exchange_receipts"));
     assert_eq!(
         feed.pointer("/route_runner_handoff/contract_version")
             .and_then(Value::as_str),
@@ -7364,6 +7443,10 @@ fn client_feed_json_aggregates_mobile_shell_sources() {
     assert!(feed_items
         .iter()
         .any(|item| item.get("feed_kind").and_then(Value::as_str) == Some("completion")));
+    assert!(feed_items.iter().any(|item| {
+        item.get("feed_kind").and_then(Value::as_str) == Some("term_exchange_receipt")
+            && item.get("progression_class").and_then(Value::as_str) == Some("progression_allowed")
+    }));
     let live_event_item = feed_items
         .iter()
         .find(|item| item.get("feed_kind").and_then(Value::as_str) == Some("live_event"))
@@ -7426,6 +7509,16 @@ fn client_feed_json_aggregates_mobile_shell_sources() {
             .map(std::vec::Vec::len)
             .unwrap_or(0)
             > 0
+    );
+    assert_eq!(
+        feed.pointer("/snapshots/term_exchange_receipts/count")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        feed.pointer("/snapshots/term_exchange_receipts/progression_classes/progression_allowed")
+            .and_then(Value::as_u64),
+        Some(1)
     );
     assert!(
         feed.pointer("/snapshots/social/entity_count")

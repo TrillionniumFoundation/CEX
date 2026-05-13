@@ -122,7 +122,7 @@ impl ClientRouteWorldContext {
 pub(super) fn client_feed_group_for_kind(feed_kind: &str) -> &str {
     match feed_kind {
         "route_runner_handoff" => "route_task",
-        "commerce_purchase" | "work_order" | "delivery" => "commerce",
+        "commerce_purchase" | "work_order" | "delivery" | "term_exchange_receipt" => "commerce",
         "social_agent" => "social",
         _ => feed_kind,
     }
@@ -659,6 +659,7 @@ pub(super) struct ClientFeedSnapshots {
     recent_purchases: Vec<Value>,
     recent_work_orders: Vec<Value>,
     recent_deliveries: Vec<Value>,
+    recent_term_exchange_receipts: Vec<Value>,
 }
 
 pub(super) fn build_client_feed_snapshots(
@@ -768,6 +769,7 @@ pub(super) fn build_client_feed_snapshots(
         })
     })
     .collect();
+    let recent_term_exchange_receipts = latest_world_term_exchange_receipts_json(world, indexes, 6);
 
     ClientFeedSnapshots {
         live_event_stream,
@@ -777,6 +779,7 @@ pub(super) fn build_client_feed_snapshots(
         recent_purchases,
         recent_work_orders,
         recent_deliveries,
+        recent_term_exchange_receipts,
     }
 }
 
@@ -968,6 +971,41 @@ pub(super) fn build_client_feed_items(
             "created_at_epoch": delivery.get("created_at_epoch").cloned().unwrap_or_else(|| json!(0)),
         })
     }));
+    items.extend(
+        snapshots
+            .recent_term_exchange_receipts
+            .iter()
+            .take(4)
+            .map(|receipt| {
+                let receipt_id = receipt
+                    .get("receipt_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("term_exchange_receipt");
+                let status = receipt
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown");
+                let progression_class = receipt
+                    .get("progression_class")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown");
+                json!({
+                    "feed_kind": "term_exchange_receipt",
+                    "source": "term_exchange_receipts",
+                    "receipt_id": receipt_id,
+                    "intent_id": receipt.get("intent_id").cloned().unwrap_or(Value::Null),
+                    "term_id": receipt.get("term_id").cloned().unwrap_or(Value::Null),
+                    "backend_id": receipt.get("backend_id").cloned().unwrap_or(Value::Null),
+                    "backend_kind": receipt.get("backend_kind").cloned().unwrap_or(Value::Null),
+                    "status": status,
+                    "progression_class": progression_class,
+                    "title": format!("Term Exchange receipt {}", receipt_id),
+                    "summary": format!("{} · {}", status, progression_class),
+                    "detail": format!("receipt {} · status {} · progression {}", receipt_id, status, progression_class),
+                    "created_at_epoch": receipt.get("finalized_at_epoch").cloned().unwrap_or_else(|| json!(0)),
+                })
+            }),
+    );
     items.extend(snapshots.nearby_agents.iter().take(4).map(|agent| {
         let name = agent.get("name").and_then(Value::as_str).unwrap_or("Agent");
         let entity_kind = agent
@@ -1176,6 +1214,21 @@ pub(super) fn decorate_delivery_feed_item(object: &mut serde_json::Map<String, V
     );
 }
 
+pub(super) fn decorate_term_exchange_receipt_feed_item(
+    object: &mut serde_json::Map<String, Value>,
+) {
+    let title = client_feed_object_string(object, "title", "Term Exchange receipt");
+    let receipt_id = client_feed_object_string(object, "receipt_id", "");
+    ClientFeedActionTarget::from_route_target(world_route_action_console_target(
+        "查看结算",
+        format!(
+            "{}: inspect receipt {}, progression class, and whether the next route can advance.",
+            title, receipt_id
+        ),
+    ))
+    .apply(object);
+}
+
 pub(super) fn decorate_social_agent_feed_item(object: &mut serde_json::Map<String, Value>) {
     let title = client_feed_object_string(object, "title", "Agent");
     ClientFeedActionTarget::from_route_target(world_route_action_console_target(
@@ -1206,6 +1259,7 @@ pub(super) fn decorate_client_feed_items(items: &mut [Value]) {
             "commerce_purchase" => decorate_purchase_feed_item(object),
             "work_order" => decorate_work_order_feed_item(object),
             "delivery" => decorate_delivery_feed_item(object),
+            "term_exchange_receipt" => decorate_term_exchange_receipt_feed_item(object),
             "social_agent" => decorate_social_agent_feed_item(object),
             _ => {}
         }
@@ -1279,7 +1333,7 @@ impl<'a> ClientFeedProjectionContext<'a> {
             "web_session_path": "/app/web/feed",
             "active_region_id": active_region_id,
             "item_count": items.len(),
-            "source_count": 7,
+            "source_count": 8,
             "sources": [
                 "live_event_stream",
                 "route_preview",
@@ -1287,6 +1341,7 @@ impl<'a> ClientFeedProjectionContext<'a> {
                 "route_runner_handoff",
                 "contract_snapshot",
                 "adventure_snapshot",
+                "term_exchange_receipts",
                 "social_snapshot"
             ],
             "items": items,
@@ -1312,6 +1367,11 @@ impl<'a> ClientFeedProjectionContext<'a> {
                     "recent_purchases": snapshots.recent_purchases,
                     "recent_work_orders": snapshots.recent_work_orders,
                     "recent_deliveries": snapshots.recent_deliveries,
+                },
+                "term_exchange_receipts": {
+                    "count": self.world.world_term_exchange_receipts.len(),
+                    "progression_classes": world_term_exchange_receipt_progression_classes_json(self.world),
+                    "recent": snapshots.recent_term_exchange_receipts,
                 },
                 "social": {
                     "nearby_agents": snapshots.nearby_agents,

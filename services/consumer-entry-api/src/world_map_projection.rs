@@ -169,6 +169,87 @@ pub(super) struct WorldHomeProjectionContext<'a> {
     indexes: WorldIndexes,
 }
 
+pub(super) fn term_exchange_receipt_value_text<T: Serialize>(value: &T) -> String {
+    serde_json::to_value(value)
+        .ok()
+        .and_then(|value| value.as_str().map(ToString::to_string))
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+pub(super) fn sorted_world_term_exchange_receipts<'a>(
+    world: &'a WorldState,
+    indexes: &WorldIndexes,
+) -> Vec<&'a TermExchangeReceiptState> {
+    let mut receipts: Vec<&TermExchangeReceiptState> = indexes
+        .sorted_world_term_exchange_receipt_ids
+        .iter()
+        .filter_map(|receipt_id| world.world_term_exchange_receipts.get(receipt_id))
+        .collect();
+    receipts.sort_by(|left, right| {
+        right
+            .finalized_at_epoch
+            .cmp(&left.finalized_at_epoch)
+            .then_with(|| right.receipt_id.cmp(&left.receipt_id))
+    });
+    receipts
+}
+
+pub(super) fn world_term_exchange_receipt_snapshot_json(
+    receipt: &TermExchangeReceiptState,
+) -> Value {
+    json!({
+        "receipt_id": &receipt.receipt_id,
+        "intent_id": &receipt.intent_id,
+        "term_id": &receipt.term_id,
+        "backend_id": &receipt.backend_id,
+        "backend_kind": term_exchange_receipt_value_text(&receipt.backend_kind),
+        "status": term_exchange_receipt_value_text(&receipt.status),
+        "progression_class": term_exchange_receipt_value_text(&receipt.progression_class),
+        "settlement_reference": &receipt.settlement_reference,
+        "ledger_entry_id": &receipt.ledger_entry_id,
+        "reason": &receipt.reason,
+        "finalized_at_epoch": receipt.finalized_at_epoch,
+    })
+}
+
+pub(super) fn world_term_exchange_receipt_progression_classes_json(world: &WorldState) -> Value {
+    let mut counts = std::collections::BTreeMap::<String, usize>::new();
+    for receipt in world.world_term_exchange_receipts.values() {
+        *counts
+            .entry(term_exchange_receipt_value_text(&receipt.progression_class))
+            .or_default() += 1;
+    }
+    json!(counts)
+}
+
+pub(super) fn latest_world_term_exchange_receipts_json(
+    world: &WorldState,
+    indexes: &WorldIndexes,
+    limit: usize,
+) -> Vec<Value> {
+    sorted_world_term_exchange_receipts(world, indexes)
+        .into_iter()
+        .take(limit)
+        .map(world_term_exchange_receipt_snapshot_json)
+        .collect()
+}
+
+pub(super) fn world_term_exchange_receipt_projection_json(
+    world: &WorldState,
+    indexes: &WorldIndexes,
+    limit: usize,
+) -> Value {
+    json!({
+        "contract_version": "trillionnium_term_exchange_receipt_projection_v1",
+        "source_state_path": "WorldState.world_term_exchange_receipts",
+        "normalized_source_table": "world_term_exchange_receipts",
+        "read_model_alignment": "normalized_world_home_and_client_feed_receipt_probes",
+        "receipt_count": world.world_term_exchange_receipts.len(),
+        "progression_classes": world_term_exchange_receipt_progression_classes_json(world),
+        "latest_receipts": latest_world_term_exchange_receipts_json(world, indexes, limit),
+    })
+}
+
 impl<'a> WorldHomeProjectionContext<'a> {
     fn new(world: &'a WorldState) -> Self {
         Self {
@@ -275,6 +356,7 @@ impl<'a> WorldHomeProjectionContext<'a> {
             "faction_standings": self.world.world_faction_standings.len(),
             "contracts": self.world.world_contracts.len(),
             "contract_completions": self.world.world_contract_completions.len(),
+            "term_exchange_receipts": self.world.world_term_exchange_receipts.len(),
             "events": self.world.world_events.len(),
             "relationships": self.world.world_relationships.len(),
         })
@@ -364,6 +446,14 @@ impl<'a> WorldHomeProjectionContext<'a> {
         fields.insert(
             "contract_completions".to_string(),
             json!(self.world.world_contract_completions),
+        );
+        fields.insert(
+            "term_exchange_receipts".to_string(),
+            json!(self.world.world_term_exchange_receipts),
+        );
+        fields.insert(
+            "term_exchange_receipt_projection".to_string(),
+            world_term_exchange_receipt_projection_json(self.world, &self.indexes, 6),
         );
         fields.insert("recent_events".to_string(), json!(self.recent_events()));
         fields
