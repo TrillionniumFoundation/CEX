@@ -15688,6 +15688,20 @@ async fn health_endpoint_exposes_identity_governance_overview() {
                     && check["passed"] == true
             )
     );
+    assert!(
+        body["trillionnium_world_maturity"]["axes"]["technical_alpha"]["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|check| check["check_id"] == "world_home_receipt_overlay_green")
+    );
+    assert!(
+        body["trillionnium_world_maturity"]["axes"]["technical_alpha"]["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|check| check["check_id"] == "world_home_receipt_overlay_error_absent")
+    );
     assert_eq!(
         body["trillionnium_world_closed_beta_prototype"]["contract_version"],
         "trillionnium_world_closed_beta_prototype_v1"

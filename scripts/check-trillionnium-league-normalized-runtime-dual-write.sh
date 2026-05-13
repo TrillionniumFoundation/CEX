@@ -1126,6 +1126,16 @@ if ! grep -q '"normalized_client_app_feed_overlay_green"' "$TMP_DIR/read-switch-
   cat "$TMP_DIR/read-switch-health.json" >&2
   exit 1
 fi
+if ! grep -q '"world_home_receipt_overlay_green"' "$TMP_DIR/read-switch-health.json"; then
+  echo "read-switch health did not expose the world-home receipt overlay gate" >&2
+  cat "$TMP_DIR/read-switch-health.json" >&2
+  exit 1
+fi
+if ! grep -q '"world_home_receipt_overlay_error_absent"' "$TMP_DIR/read-switch-health.json"; then
+  echo "read-switch health did not expose the world-home receipt overlay error gate" >&2
+  cat "$TMP_DIR/read-switch-health.json" >&2
+  exit 1
+fi
 if ! grep -q '"normalized_client_app_feed_overlay_startup_gate_green"' "$TMP_DIR/read-switch-health.json"; then
   echo "read-switch health did not expose the client-app feed overlay startup gate" >&2
   cat "$TMP_DIR/read-switch-health.json" >&2
