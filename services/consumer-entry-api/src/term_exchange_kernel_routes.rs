@@ -236,7 +236,9 @@ pub(super) fn term_exchange_kernel_manifest_json(state: &AppState) -> Value {
             ],
             "sql_direct_write_status": "typed_sqlx_receipt_upserts_active",
             "sql_direct_write_helper": "upsert_normalized_term_exchange_receipt_tables",
-            "sql_direct_write_mode": "typed_sqlx_receipt_upserts_from_repository_snapshot"
+            "sql_direct_write_mode": "typed_sqlx_receipt_upserts_from_repository_snapshot",
+            "progression_source": "ReceiptProgressionClass_prefers_typed_receipts_with_legacy_status_fallback",
+            "normalized_receipt_read_model_probe_status": "receipt_progression_classes_exposed_in_world_home_and_client_feed"
         },
         "current_cex_backend_runtime": {
             "runtime_profile": state.config().runtime_profile.as_str(),
@@ -256,10 +258,10 @@ pub(super) fn term_exchange_kernel_manifest_json(state: &AppState) -> Value {
             "primary_endpoint": TERM_EXCHANGE_KERNEL_MANIFEST_ENDPOINT
         },
         "migration_status": {
-            "status": "typed_receipt_state_direct_written_to_normalized_sql",
+            "status": "typed_receipt_progression_and_read_model_probes_active",
             "split_strategy": "protocol_first_then_backend_adapter_then_storage_boundary",
             "current_source_of_evidence": "CEX local-production run/* gates",
-            "next_step": "migrate remaining progression checks from legacy string statuses to ReceiptProgressionClass and add normalized receipt read-model probes"
+            "next_step": "keep legacy status fields compatible while expanding normalized receipt read-switch coverage toward final projection cutover"
         }
     })
 }

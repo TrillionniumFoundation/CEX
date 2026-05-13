@@ -265,4 +265,4 @@ The generated repository SQL snapshot shadows `LeagueState.term_exchange_receipt
 
 The normalized direct-write path now also upserts both receipt tables through `upsert_normalized_term_exchange_receipt_tables` before rollback/audit snapshot export. Supported world command writes and final-cutover non-world snapshot writes persist the typed `TermExchangeReceiptState` projection with `status` and `progression_class` intact.
 
-Current cutover boundary: receipt tables are shadowed and direct-written. The next storage/progression slice is to move remaining legacy string-status progression checks onto `ReceiptProgressionClass` and add normalized receipt read-model probes.
+Current cutover boundary: receipt tables are shadowed/direct-written, progression decisions prefer typed `ReceiptProgressionClass` when a receipt exists, and legacy string fields remain as endpoint/read-model compatibility fallbacks. The normalized world-home and client-feed read-model seams now expose receipt-table counts, latest receipt metadata, and typed progression-class probes so the read switch can gate receipt-backed projection cutover.

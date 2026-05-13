@@ -27,16 +27,16 @@ use super::{
     world_trillionnium_character_projection_json, AppState, AppStateInner, ConsumerEntryConfig,
     ConsumerEntryMetrics, CreateChatTaskRequest, IdentityBindingAuditState, IdentityBindingEntry,
     IdentityBindingMetadata, IdentityBindingRevisionApprovalState, IdentityBindingStore,
-    IdentityBindings, LeagueMatchEntry, LeaguePlayer, LeagueReward, LeagueStateRepositorySnapshot,
-    LeagueSubmission, LeagueWebSessionClaims, MatrixMessageRequest, ProductUserIdentity,
-    RateLimitCache, ReplayCache, RuntimeProfile, SessionAuthIssuerRegistryIssuer,
-    SessionAuthIssuerRegistryMetadata, SessionAuthIssuerRegistryRuntimeState,
-    TermExchangeReceiptState, UserSessionAuthClaims, WorldAsset, WorldCompany, WorldContract,
-    WorldContractCompletion, WorldEconomyEvent, WorldEvent, WorldListing, WorldMapNode,
-    WorldPlayerPosition, WorldPurchase, WorldRelationship, WorldShop, WorldTrillionniumCharacter,
-    WorldWorkCancellation, WorldWorkOrder, WorldWorkRejection, DEFAULT_LEAGUE_LLM_JUDGE_TIMEOUT_MS,
-    DEFAULT_LEAGUE_WEB_SESSION_TTL_SECS, DEFAULT_MAX_TEXT_CHARS,
-    TRILLIONNIUM_REPOSITORY_MIGRATION_FLOOR, USER_SESSION_ASSERTION_HEADER,
+    IdentityBindings, LeagueLedgerSettlement, LeagueMatchEntry, LeaguePlayer, LeagueReward,
+    LeagueStateRepositorySnapshot, LeagueSubmission, LeagueWebSessionClaims, MatrixMessageRequest,
+    ProductUserIdentity, RateLimitCache, ReplayCache, RuntimeProfile,
+    SessionAuthIssuerRegistryIssuer, SessionAuthIssuerRegistryMetadata,
+    SessionAuthIssuerRegistryRuntimeState, TermExchangeReceiptState, UserSessionAuthClaims,
+    WorldAsset, WorldCompany, WorldContract, WorldContractCompletion, WorldEconomyEvent,
+    WorldEvent, WorldListing, WorldMapNode, WorldPlayerPosition, WorldPurchase, WorldRelationship,
+    WorldShop, WorldTrillionniumCharacter, WorldWorkCancellation, WorldWorkOrder,
+    WorldWorkRejection, DEFAULT_LEAGUE_LLM_JUDGE_TIMEOUT_MS, DEFAULT_LEAGUE_WEB_SESSION_TTL_SECS,
+    DEFAULT_MAX_TEXT_CHARS, TRILLIONNIUM_REPOSITORY_MIGRATION_FLOOR, USER_SESSION_ASSERTION_HEADER,
     USER_SESSION_SIGNATURE_HEADER, WORLD_ROUTE_ACTION_TEXTAREA_ID, WORLD_ROUTE_CONTRACTS_PANEL_ID,
     WORLD_ROUTE_CONTRACT_INPUT_ID, WORLD_ROUTE_WORK_DELIVER_TEXTAREA_ID,
 };
@@ -783,6 +783,49 @@ fn term_exchange_receipts_shadow_sql_preserves_status_and_progression_class() {
 }
 
 #[test]
+fn typed_term_exchange_progression_class_drives_settlement_helpers() {
+    let hard_fail_receipt = term_exchange_protocol::EconomicReceipt::new(
+        "receipt:hard-fail-skip",
+        "intent:hard-fail-skip",
+        "world_commerce_purchase",
+        term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
+        term_exchange_protocol::SettlementBackendKind::Cex,
+        term_exchange_protocol::ReceiptStatus::SkippedMissingAccount,
+        1_778_600_003,
+    );
+    let hard_fail_settlement = LeagueLedgerSettlement {
+        status: "skipped_missing_account".to_string(),
+        term_exchange_receipt: Some(TermExchangeReceiptState::from(&hard_fail_receipt)),
+        ..Default::default()
+    };
+    assert!(!hard_fail_settlement.progression_allowed(&["skipped_missing_account"]));
+    assert!(!hard_fail_settlement.terminal_skip());
+
+    let terminal_skip_receipt = term_exchange_protocol::EconomicReceipt::new(
+        "receipt:terminal-skip",
+        "intent:terminal-skip",
+        "world_commerce_purchase",
+        term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
+        term_exchange_protocol::SettlementBackendKind::Cex,
+        term_exchange_protocol::ReceiptStatus::SkippedZeroSellerNet,
+        1_778_600_004,
+    );
+    let terminal_skip_settlement = LeagueLedgerSettlement {
+        status: "skipped_zero_seller_net".to_string(),
+        term_exchange_receipt: Some(TermExchangeReceiptState::from(&terminal_skip_receipt)),
+        ..Default::default()
+    };
+    assert!(!terminal_skip_settlement.progression_allowed(&["skipped_zero_seller_net"]));
+    assert!(terminal_skip_settlement.terminal_skip());
+
+    let legacy_synthetic_skip = LeagueLedgerSettlement {
+        status: "skipped_seller_not_settled".to_string(),
+        ..Default::default()
+    };
+    assert!(legacy_synthetic_skip.terminal_skip());
+}
+
+#[test]
 fn normalized_repository_command_shadow_sql_uses_write_set_tables() {
     let mut league = default_league_state();
     league.world.world_player_positions.insert(
@@ -1063,7 +1106,11 @@ fn normalized_repository_world_home_read_model_declares_direct_sql_seam() {
     assert!(read_model_sql.contains("from world_events"));
     assert!(read_model_sql.contains("from world_relationships"));
     assert!(read_model_sql.contains("from world_map_nodes"));
+    assert!(read_model_sql.contains("league_term_exchange_receipts"));
+    assert!(read_model_sql.contains("world_term_exchange_receipts"));
+    assert!(read_model_sql.contains("world_term_exchange_receipt_progression_classes"));
     assert!(read_model_sql.contains("latest_event_ids"));
+    assert!(read_model_sql.contains("latest_world_term_exchange_receipts"));
     let contract = normalized_repository_read_model_contract_json();
     assert_eq!(
         contract.get("contract_version").and_then(Value::as_str),
@@ -1088,6 +1135,9 @@ fn normalized_repository_world_home_read_model_declares_direct_sql_seam() {
     assert!(feed_read_model_sql.contains("from world_purchases"));
     assert!(feed_read_model_sql.contains("from world_work_orders"));
     assert!(feed_read_model_sql.contains("from world_work_acceptances"));
+    assert!(feed_read_model_sql.contains("league_term_exchange_receipts"));
+    assert!(feed_read_model_sql.contains("world_term_exchange_receipts"));
+    assert!(feed_read_model_sql.contains("term_exchange_receipt_progression_classes"));
     assert!(feed_read_model_sql.contains("latest_feed_items"));
     assert_eq!(
         contract
@@ -1103,6 +1153,20 @@ fn normalized_repository_world_home_read_model_declares_direct_sql_seam() {
             .and_then(Value::as_str),
         Some("normalized_client_feed_read_model_startup_gate_green")
     );
+    assert!(contract
+        .get("world_home")
+        .and_then(|world_home| world_home.get("receipt_probe_fields"))
+        .and_then(Value::as_array)
+        .is_some_and(|fields| fields.iter().any(
+            |field| field.as_str() == Some("world_term_exchange_receipt_progression_classes")
+        )));
+    assert!(contract
+        .get("client_feed")
+        .and_then(|client_feed| client_feed.get("receipt_probe_fields"))
+        .and_then(Value::as_array)
+        .is_some_and(|fields| fields
+            .iter()
+            .any(|field| field.as_str() == Some("term_exchange_receipt_progression_classes"))));
 }
 
 #[test]
@@ -1375,8 +1439,16 @@ async fn term_exchange_kernel_manifest_declares_cex_as_first_backend() {
         "upsert_normalized_term_exchange_receipt_tables"
     );
     assert_eq!(
+        body["state_persistence"]["progression_source"],
+        "ReceiptProgressionClass_prefers_typed_receipts_with_legacy_status_fallback"
+    );
+    assert_eq!(
+        body["state_persistence"]["normalized_receipt_read_model_probe_status"],
+        "receipt_progression_classes_exposed_in_world_home_and_client_feed"
+    );
+    assert_eq!(
         body["migration_status"]["status"],
-        "typed_receipt_state_direct_written_to_normalized_sql"
+        "typed_receipt_progression_and_read_model_probes_active"
     );
 }
 

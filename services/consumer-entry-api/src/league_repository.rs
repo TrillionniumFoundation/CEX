@@ -1121,13 +1121,26 @@ pub(super) fn validate_normalized_repository_read_model_gate(
     {
         return Err("normalized repository read switch is enabled but normalized world-home read model version is invalid".to_string());
     }
-    let source_table_count = read_model
+    let source_tables = read_model
         .get("source_tables")
         .and_then(Value::as_array)
-        .map(Vec::len)
+        .cloned()
         .unwrap_or_default();
-    if source_table_count < 6 {
+    if source_tables.len() < 8 {
         return Err("normalized repository read switch is enabled but normalized world-home read model source table coverage is incomplete".to_string());
+    }
+    for required_table in [
+        "league_term_exchange_receipts",
+        "world_term_exchange_receipts",
+    ] {
+        if !source_tables
+            .iter()
+            .any(|table| table.as_str() == Some(required_table))
+        {
+            return Err(format!(
+                "normalized repository read switch is enabled but normalized world-home read model is missing receipt source table {required_table}"
+            ));
+        }
     }
     if read_model
         .get("world_map_node_count")
@@ -1136,6 +1149,20 @@ pub(super) fn validate_normalized_repository_read_model_gate(
         == 0
     {
         return Err("normalized repository read switch is enabled but normalized world-home read model has no map nodes".to_string());
+    }
+    if read_model
+        .get("world_term_exchange_receipt_progression_classes")
+        .and_then(Value::as_object)
+        .is_none()
+    {
+        return Err("normalized repository read switch is enabled but normalized world-home read model is missing typed receipt progression classes".to_string());
+    }
+    if read_model
+        .get("latest_world_term_exchange_receipts")
+        .and_then(Value::as_array)
+        .is_none()
+    {
+        return Err("normalized repository read switch is enabled but normalized world-home read model is missing latest receipt metadata".to_string());
     }
     Ok(())
 }
@@ -1148,13 +1175,26 @@ pub(super) fn validate_normalized_repository_client_feed_read_model_gate(
     {
         return Err("normalized repository read switch is enabled but normalized client-feed read model version is invalid".to_string());
     }
-    let source_table_count = read_model
+    let source_tables = read_model
         .get("source_tables")
         .and_then(Value::as_array)
-        .map(Vec::len)
+        .cloned()
         .unwrap_or_default();
-    if source_table_count < 9 {
+    if source_tables.len() < 12 {
         return Err("normalized repository read switch is enabled but normalized client-feed read model source table coverage is incomplete".to_string());
+    }
+    for required_table in [
+        "league_term_exchange_receipts",
+        "world_term_exchange_receipts",
+    ] {
+        if !source_tables
+            .iter()
+            .any(|table| table.as_str() == Some(required_table))
+        {
+            return Err(format!(
+                "normalized repository read switch is enabled but normalized client-feed read model is missing receipt source table {required_table}"
+            ));
+        }
     }
     if read_model
         .get("latest_feed_items")
@@ -1162,6 +1202,13 @@ pub(super) fn validate_normalized_repository_client_feed_read_model_gate(
         .is_none()
     {
         return Err("normalized repository read switch is enabled but normalized client-feed read model is missing latest_feed_items".to_string());
+    }
+    if read_model
+        .get("term_exchange_receipt_progression_classes")
+        .and_then(Value::as_object)
+        .is_none()
+    {
+        return Err("normalized repository read switch is enabled but normalized client-feed read model is missing typed receipt progression classes".to_string());
     }
     Ok(())
 }
@@ -4721,15 +4768,19 @@ pub(super) fn league_state_repository_dual_write_plan_json() -> Value {
 pub(super) fn normalized_repository_world_home_read_model_sql() -> &'static str {
     "select jsonb_build_object(
   'read_model_version', 'trillionnium_normalized_world_home_read_model_v1',
-  'source_tables', jsonb_build_array('world_events', 'world_relationships', 'world_map_nodes', 'world_contracts', 'world_work_orders', 'world_faction_standings'),
+  'source_tables', jsonb_build_array('world_events', 'world_relationships', 'world_map_nodes', 'world_contracts', 'world_work_orders', 'world_faction_standings', 'league_term_exchange_receipts', 'world_term_exchange_receipts'),
   'world_event_count', (select count(*) from world_events),
   'world_relationship_count', (select count(*) from world_relationships),
   'world_map_node_count', (select count(*) from world_map_nodes),
   'world_contract_count', (select count(*) from world_contracts),
   'world_work_order_count', (select count(*) from world_work_orders),
   'world_faction_standing_count', (select count(*) from world_faction_standings),
+  'league_term_exchange_receipt_count', (select count(*) from league_term_exchange_receipts),
+  'world_term_exchange_receipt_count', (select count(*) from world_term_exchange_receipts),
+  'world_term_exchange_receipt_progression_classes', coalesce((select jsonb_object_agg(progression_class, receipt_count) from (select progression_class, count(*) as receipt_count from world_term_exchange_receipts group by progression_class) classes), '{}'::jsonb),
   'latest_event_ids', coalesce((select jsonb_agg(event_id order by created_at desc, event_id desc) from (select event_id, created_at from world_events order by created_at desc, event_id desc limit 6) recent_events), '[]'::jsonb),
-  'latest_work_order_ids', coalesce((select jsonb_agg(work_order_id order by created_at desc, work_order_id desc) from (select work_order_id, created_at from world_work_orders order by created_at desc, work_order_id desc limit 6) recent_work_orders), '[]'::jsonb)
+  'latest_work_order_ids', coalesce((select jsonb_agg(work_order_id order by created_at desc, work_order_id desc) from (select work_order_id, created_at from world_work_orders order by created_at desc, work_order_id desc limit 6) recent_work_orders), '[]'::jsonb),
+  'latest_world_term_exchange_receipts', coalesce((select jsonb_agg(jsonb_build_object('receipt_id', receipt_id, 'intent_id', intent_id, 'status', status, 'progression_class', progression_class) order by finalized_at desc, receipt_id desc) from (select receipt_id, intent_id, status, progression_class, finalized_at from world_term_exchange_receipts order by finalized_at desc, receipt_id desc limit 6) latest_receipts), '[]'::jsonb)
 ) as normalized_world_home_read_model"
 }
 
@@ -4747,7 +4798,9 @@ pub(super) fn normalized_repository_client_feed_read_model_sql() -> &'static str
     'world_work_rejections',
     'world_work_reopens',
     'world_work_cancellations',
-    'world_economy_events'
+    'world_economy_events',
+    'league_term_exchange_receipts',
+    'world_term_exchange_receipts'
   ),
   'world_event_count', (select count(*) from world_events),
   'world_contract_count', (select count(*) from world_contracts),
@@ -4759,6 +4812,9 @@ pub(super) fn normalized_repository_client_feed_read_model_sql() -> &'static str
   'world_work_reopen_count', (select count(*) from world_work_reopens),
   'world_work_cancellation_count', (select count(*) from world_work_cancellations),
   'world_economy_event_count', (select count(*) from world_economy_events),
+  'league_term_exchange_receipt_count', (select count(*) from league_term_exchange_receipts),
+  'world_term_exchange_receipt_count', (select count(*) from world_term_exchange_receipts),
+  'term_exchange_receipt_progression_classes', coalesce((select jsonb_object_agg(progression_class, receipt_count) from (select progression_class, count(*) as receipt_count from (select progression_class from league_term_exchange_receipts union all select progression_class from world_term_exchange_receipts) receipt_classes group by progression_class) classes), '{}'::jsonb),
   'feed_item_count', (
     select count(*)
     from (
@@ -4772,6 +4828,8 @@ pub(super) fn normalized_repository_client_feed_read_model_sql() -> &'static str
       union all select reopen_id from world_work_reopens
       union all select cancellation_id from world_work_cancellations
       union all select economy_event_id from world_economy_events
+      union all select receipt_id from league_term_exchange_receipts
+      union all select receipt_id from world_term_exchange_receipts
     ) feed_items
   ),
   'latest_feed_items', coalesce((
@@ -4789,6 +4847,8 @@ pub(super) fn normalized_repository_client_feed_read_model_sql() -> &'static str
         union all select 'work_reopen', reopen_id, created_at from world_work_reopens
         union all select 'work_cancellation', cancellation_id, created_at from world_work_cancellations
         union all select 'economy_event', economy_event_id, created_at from world_economy_events
+        union all select 'league_term_exchange_receipt', receipt_id, finalized_at from league_term_exchange_receipts
+        union all select 'world_term_exchange_receipt', receipt_id, finalized_at from world_term_exchange_receipts
       ) raw_feed_items
       order by created_at desc, item_id desc
       limit 12
@@ -4811,7 +4871,14 @@ pub(super) fn normalized_repository_read_model_contract_json() -> Value {
                 "world_map_nodes",
                 "world_contracts",
                 "world_work_orders",
-                "world_faction_standings"
+                "world_faction_standings",
+                "league_term_exchange_receipts",
+                "world_term_exchange_receipts"
+            ],
+            "receipt_probe_fields": [
+                "world_term_exchange_receipt_count",
+                "world_term_exchange_receipt_progression_classes",
+                "latest_world_term_exchange_receipts"
             ],
             "parity_gate": "normalized_world_home_read_model_green",
             "startup_gate": "normalized_read_model_startup_gate_green"
@@ -4829,7 +4896,14 @@ pub(super) fn normalized_repository_read_model_contract_json() -> Value {
                 "world_work_rejections",
                 "world_work_reopens",
                 "world_work_cancellations",
-                "world_economy_events"
+                "world_economy_events",
+                "league_term_exchange_receipts",
+                "world_term_exchange_receipts"
+            ],
+            "receipt_probe_fields": [
+                "league_term_exchange_receipt_count",
+                "world_term_exchange_receipt_count",
+                "term_exchange_receipt_progression_classes"
             ],
             "parity_gate": "normalized_client_feed_read_model_green",
             "startup_gate": "normalized_client_feed_read_model_startup_gate_green"

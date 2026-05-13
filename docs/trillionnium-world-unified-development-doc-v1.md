@@ -596,7 +596,7 @@ scripts/check-trillionnium-first-human-session.sh
 
 如果下一条指令是“继续”，优先做：
 
-1. Term Exchange 方向：把剩余 progression checks 从 legacy string status 迁到 `ReceiptProgressionClass`，并补 normalized receipt read-model probes。
+1. Term Exchange 方向：继续保持 legacy status API 兼容，同时把 normalized receipt read-model probes 推向 read-switch/final projection cutover。
 2. World UI 方向：继续审计 `/world` 残留 browser-built secondary/dashboard/commerce/timeline UI，把剩余面板改成 Rust-owned fragment + lazy hydration。
 3. 不新增 live OSM、不提升 MapLibre、不引入 Hero Tan copy workflow。
 4. 若目标是评分提升，而不是 UI/player-value，则先补真实 evidence path：

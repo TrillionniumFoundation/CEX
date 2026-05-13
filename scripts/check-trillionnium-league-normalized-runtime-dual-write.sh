@@ -800,15 +800,19 @@ begin
   end if;
   select jsonb_build_object(
     'read_model_version', 'trillionnium_normalized_world_home_read_model_v1',
-    'source_tables', jsonb_build_array('world_events', 'world_relationships', 'world_map_nodes', 'world_contracts', 'world_work_orders', 'world_faction_standings'),
+    'source_tables', jsonb_build_array('world_events', 'world_relationships', 'world_map_nodes', 'world_contracts', 'world_work_orders', 'world_faction_standings', 'league_term_exchange_receipts', 'world_term_exchange_receipts'),
     'world_event_count', (select count(*) from world_events),
     'world_relationship_count', (select count(*) from world_relationships),
     'world_map_node_count', (select count(*) from world_map_nodes),
     'world_contract_count', (select count(*) from world_contracts),
     'world_work_order_count', (select count(*) from world_work_orders),
     'world_faction_standing_count', (select count(*) from world_faction_standings),
+    'league_term_exchange_receipt_count', (select count(*) from league_term_exchange_receipts),
+    'world_term_exchange_receipt_count', (select count(*) from world_term_exchange_receipts),
+    'world_term_exchange_receipt_progression_classes', coalesce((select jsonb_object_agg(progression_class, receipt_count) from (select progression_class, count(*) as receipt_count from world_term_exchange_receipts group by progression_class) classes), '{}'::jsonb),
     'latest_event_ids', coalesce((select jsonb_agg(event_id order by created_at desc, event_id desc) from (select event_id, created_at from world_events order by created_at desc, event_id desc limit 6) recent_events), '[]'::jsonb),
-    'latest_work_order_ids', coalesce((select jsonb_agg(work_order_id order by created_at desc, work_order_id desc) from (select work_order_id, created_at from world_work_orders order by created_at desc, work_order_id desc limit 6) recent_work_orders), '[]'::jsonb)
+    'latest_work_order_ids', coalesce((select jsonb_agg(work_order_id order by created_at desc, work_order_id desc) from (select work_order_id, created_at from world_work_orders order by created_at desc, work_order_id desc limit 6) recent_work_orders), '[]'::jsonb),
+    'latest_world_term_exchange_receipts', coalesce((select jsonb_agg(jsonb_build_object('receipt_id', receipt_id, 'intent_id', intent_id, 'status', status, 'progression_class', progression_class) order by finalized_at desc, receipt_id desc) from (select receipt_id, intent_id, status, progression_class, finalized_at from world_term_exchange_receipts order by finalized_at desc, receipt_id desc limit 6) latest_receipts), '[]'::jsonb)
   ) into read_model;
   if read_model->>'read_model_version' <> 'trillionnium_normalized_world_home_read_model_v1' then
     raise exception 'runtime normalized world home read model version mismatch: %', read_model;
@@ -822,9 +826,18 @@ begin
   if jsonb_array_length(read_model->'latest_event_ids') < 1 then
     raise exception 'runtime normalized world home read model missing latest events: %', read_model;
   end if;
+  if (read_model->>'world_term_exchange_receipt_count')::bigint < 1 then
+    raise exception 'runtime normalized world home read model missing world Term Exchange receipts: %', read_model;
+  end if;
+  if not (read_model->'world_term_exchange_receipt_progression_classes' ? 'progression_allowed') then
+    raise exception 'runtime normalized world home read model missing typed receipt progression class probe: %', read_model;
+  end if;
+  if jsonb_array_length(read_model->'latest_world_term_exchange_receipts') < 1 then
+    raise exception 'runtime normalized world home read model missing latest Term Exchange receipts: %', read_model;
+  end if;
   select jsonb_build_object(
     'read_model_version', 'trillionnium_normalized_client_feed_read_model_v1',
-    'source_tables', jsonb_build_array('world_events', 'world_contracts', 'world_purchases', 'world_work_orders', 'world_work_deliveries', 'world_work_acceptances', 'world_work_rejections', 'world_work_reopens', 'world_work_cancellations', 'world_economy_events'),
+    'source_tables', jsonb_build_array('world_events', 'world_contracts', 'world_purchases', 'world_work_orders', 'world_work_deliveries', 'world_work_acceptances', 'world_work_rejections', 'world_work_reopens', 'world_work_cancellations', 'world_economy_events', 'league_term_exchange_receipts', 'world_term_exchange_receipts'),
     'world_event_count', (select count(*) from world_events),
     'world_contract_count', (select count(*) from world_contracts),
     'world_purchase_count', (select count(*) from world_purchases),
@@ -835,6 +848,9 @@ begin
     'world_work_reopen_count', (select count(*) from world_work_reopens),
     'world_work_cancellation_count', (select count(*) from world_work_cancellations),
     'world_economy_event_count', (select count(*) from world_economy_events),
+    'league_term_exchange_receipt_count', (select count(*) from league_term_exchange_receipts),
+    'world_term_exchange_receipt_count', (select count(*) from world_term_exchange_receipts),
+    'term_exchange_receipt_progression_classes', coalesce((select jsonb_object_agg(progression_class, receipt_count) from (select progression_class, count(*) as receipt_count from (select progression_class from league_term_exchange_receipts union all select progression_class from world_term_exchange_receipts) receipt_classes group by progression_class) classes), '{}'::jsonb),
     'feed_item_count', (
       select count(*)
       from (
@@ -848,6 +864,8 @@ begin
         union all select reopen_id from world_work_reopens
         union all select cancellation_id from world_work_cancellations
         union all select economy_event_id from world_economy_events
+        union all select receipt_id from league_term_exchange_receipts
+        union all select receipt_id from world_term_exchange_receipts
       ) feed_items
     ),
     'latest_feed_items', coalesce((
@@ -865,6 +883,8 @@ begin
           union all select 'work_reopen', reopen_id, created_at from world_work_reopens
           union all select 'work_cancellation', cancellation_id, created_at from world_work_cancellations
           union all select 'economy_event', economy_event_id, created_at from world_economy_events
+          union all select 'league_term_exchange_receipt', receipt_id, finalized_at from league_term_exchange_receipts
+          union all select 'world_term_exchange_receipt', receipt_id, finalized_at from world_term_exchange_receipts
         ) raw_feed_items
         order by created_at desc, item_id desc
         limit 12
@@ -879,6 +899,12 @@ begin
   end if;
   if jsonb_array_length(read_model->'latest_feed_items') < 1 then
     raise exception 'runtime normalized client feed read model missing latest feed items: %', read_model;
+  end if;
+  if (read_model->>'world_term_exchange_receipt_count')::bigint < 1 then
+    raise exception 'runtime normalized client feed read model missing world Term Exchange receipts: %', read_model;
+  end if;
+  if not (read_model->'term_exchange_receipt_progression_classes' ? 'progression_allowed') then
+    raise exception 'runtime normalized client feed read model missing typed receipt progression class probe: %', read_model;
   end if;
 end
 \$\$;

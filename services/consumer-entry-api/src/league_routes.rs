@@ -994,13 +994,13 @@ pub(super) async fn post_league_web_action(
             )
             .await;
             reward.ledger_status = Some(settlement.status.clone());
-            reward.ledger_account_id = settlement.account_id;
-            reward.ledger_entry_id = settlement.entry_id;
+            reward.ledger_account_id = settlement.account_id.clone();
+            reward.ledger_entry_id = settlement.entry_id.clone();
             reward.ledger_balance_after = settlement.balance_after;
-            reward.ledger_error = settlement.error;
+            reward.ledger_error = settlement.error.clone();
             let settlement_receipt = settlement.term_exchange_receipt.clone();
 
-            let settlement_completed = league_reward_ledger_released(&reward);
+            let settlement_completed = league_reward_ledger_released(&reward, Some(&settlement));
             let mut league = state.inner.league_state.lock().await;
             record_league_term_exchange_receipt(&mut league, settlement_receipt);
             if let Some(stored_reward) = league
@@ -1232,7 +1232,13 @@ fn league_reward_already_released(reward: &LeagueReward) -> bool {
     ) || reward.review_status.as_deref() == Some("approved")
 }
 
-fn league_reward_ledger_released(reward: &LeagueReward) -> bool {
+fn league_reward_ledger_released(
+    reward: &LeagueReward,
+    settlement: Option<&LeagueLedgerSettlement>,
+) -> bool {
+    if let Some(settlement) = settlement {
+        return settlement.progression_allowed(&["settled", "duplicate"]);
+    }
     matches!(
         reward.ledger_status.as_deref(),
         Some("settled") | Some("duplicate")
@@ -2016,13 +2022,13 @@ pub(super) async fn submit_league_match(
         settle_league_reward_with_ledger(&state, &payload, &matrix_user_id, &submission, &reward)
             .await;
     reward.ledger_status = Some(settlement.status.clone());
-    reward.ledger_account_id = settlement.account_id;
-    reward.ledger_entry_id = settlement.entry_id;
+    reward.ledger_account_id = settlement.account_id.clone();
+    reward.ledger_entry_id = settlement.entry_id.clone();
     reward.ledger_balance_after = settlement.balance_after;
-    reward.ledger_error = settlement.error;
+    reward.ledger_error = settlement.error.clone();
     let settlement_receipt = settlement.term_exchange_receipt.clone();
 
-    let settlement_completed = league_reward_ledger_released(&reward);
+    let settlement_completed = league_reward_ledger_released(&reward, Some(&settlement));
     let (response_player, response_entry, snapshot) = {
         let mut league = state.inner.league_state.lock().await;
         record_league_term_exchange_receipt(&mut league, settlement_receipt);
@@ -2077,6 +2083,41 @@ pub(super) struct LeagueLedgerSettlement {
     pub(super) balance_after: Option<f64>,
     pub(super) error: Option<String>,
     pub(super) term_exchange_receipt: Option<TermExchangeReceiptState>,
+}
+
+impl LeagueLedgerSettlement {
+    pub(super) fn progression_allowed(&self, legacy_allowed_statuses: &[&str]) -> bool {
+        if let Some(receipt) = self.term_exchange_receipt.as_ref() {
+            return receipt.progression_class
+                == term_exchange_protocol::ReceiptProgressionClass::ProgressionAllowed;
+        }
+        legacy_allowed_statuses
+            .iter()
+            .any(|status| self.status == *status)
+    }
+
+    pub(super) fn terminal_skip(&self) -> bool {
+        if let Some(receipt) = self.term_exchange_receipt.as_ref() {
+            return receipt.progression_class
+                == term_exchange_protocol::ReceiptProgressionClass::TerminalSkip;
+        }
+        self.status.starts_with("skipped")
+    }
+
+    #[allow(dead_code)]
+    pub(super) fn progression_allowed_or_terminal_skip(
+        &self,
+        legacy_allowed_statuses: &[&str],
+    ) -> bool {
+        if let Some(receipt) = self.term_exchange_receipt.as_ref() {
+            return matches!(
+                receipt.progression_class,
+                term_exchange_protocol::ReceiptProgressionClass::ProgressionAllowed
+                    | term_exchange_protocol::ReceiptProgressionClass::TerminalSkip
+            );
+        }
+        self.progression_allowed(legacy_allowed_statuses) || self.status.starts_with("skipped")
+    }
 }
 
 pub(super) async fn settle_league_reward_with_ledger(

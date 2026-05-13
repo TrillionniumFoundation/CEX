@@ -29,7 +29,38 @@ fn world_purchase_rejection_settlement_released(purchase: &WorldPurchase) -> boo
         )
 }
 
-fn world_contract_completion_released(completion: &WorldContractCompletion) -> bool {
+fn world_term_exchange_receipt_for_intent<'a>(
+    world: &'a WorldState,
+    intent_id: &str,
+) -> Option<&'a TermExchangeReceiptState> {
+    let receipt_id = format!("receipt:{intent_id}");
+    world
+        .world_term_exchange_receipts
+        .get(&receipt_id)
+        .or_else(|| {
+            world
+                .world_term_exchange_receipts
+                .values()
+                .find(|receipt| receipt.intent_id == intent_id)
+        })
+}
+
+fn world_receipt_allows_progression_or_terminal_skip(receipt: &TermExchangeReceiptState) -> bool {
+    matches!(
+        receipt.progression_class,
+        term_exchange_protocol::ReceiptProgressionClass::ProgressionAllowed
+            | term_exchange_protocol::ReceiptProgressionClass::TerminalSkip
+    )
+}
+
+fn world_contract_completion_released(
+    world: &WorldState,
+    completion: &WorldContractCompletion,
+) -> bool {
+    let intent_id = format!("world_contract_completion:{}", completion.completion_id);
+    if let Some(receipt) = world_term_exchange_receipt_for_intent(world, &intent_id) {
+        return world_receipt_allows_progression_or_terminal_skip(receipt);
+    }
     matches!(
         completion.ledger_status.as_deref(),
         Some("settled") | Some("duplicate") | Some("skipped_zero_reward")
@@ -1208,10 +1239,7 @@ pub(super) async fn chargeback_world_purchase_seller_with_ledger(
         Some(seller_net_credits),
     )
     .await;
-    if !matches!(
-        reserve.status.as_str(),
-        "seller_chargeback_reserved" | "duplicate"
-    ) {
+    if !reserve.progression_allowed(&["seller_chargeback_reserved", "duplicate"]) {
         return LeagueLedgerSettlement {
             status: "seller_chargeback_reserve_failed".to_string(),
             account_id: reserve.account_id,
@@ -1429,9 +1457,8 @@ pub(super) async fn buy_world_listing_inner(
     let local_dev_ledger_bypass =
         matches!(state.config().runtime_profile, RuntimeProfile::LocalDev)
             && buyer_reserve.status.starts_with("skipped");
-    let buyer_reserved = buyer_reserve.status == "reserved"
-        || buyer_reserve.status == "duplicate"
-        || local_dev_ledger_bypass;
+    let buyer_reserved =
+        buyer_reserve.progression_allowed(&["reserved", "duplicate"]) || local_dev_ledger_bypass;
     let settlement = if buyer_reserved {
         settle_world_purchase_with_ledger(&state, &payload, &snapshot.1).await
     } else {
@@ -1457,7 +1484,7 @@ pub(super) async fn buy_world_listing_inner(
         let mut economy_event = None;
         let mut seller_standing = None;
         let mut buyer_standing = None;
-        let released = settlement.status == "settled" || settlement.status == "duplicate";
+        let released = settlement.progression_allowed(&["settled", "duplicate"]);
         purchase.buyer_ledger_status = Some(buyer_reserve.status.clone());
         purchase.buyer_ledger_account_id = buyer_reserve.account_id.clone();
         purchase.buyer_ledger_entry_id = buyer_reserve.entry_id.clone();
@@ -2125,8 +2152,7 @@ pub(super) async fn accept_world_work_order_inner(
         let mut acceptance = snapshot.3.clone();
         let mut economy_event = None;
         let mut standing = None;
-        let buyer_consumed =
-            buyer_consume.status == "consumed" || buyer_consume.status == "duplicate";
+        let buyer_consumed = buyer_consume.progression_allowed(&["consumed", "duplicate"]);
         purchase.buyer_consume_status = Some(buyer_consume.status.clone());
         purchase.buyer_consume_entry_id = buyer_consume.entry_id.clone();
         purchase.buyer_consume_balance_after = buyer_consume.balance_after;
@@ -2492,7 +2518,7 @@ pub(super) async fn reject_world_work_order_inner(
         )
         .await
     };
-    let buyer_refunded = buyer_refund.status == "refunded" || buyer_refund.status == "duplicate";
+    let buyer_refunded = buyer_refund.progression_allowed(&["refunded", "duplicate"]);
     let seller_chargeback = if buyer_refunded {
         chargeback_world_purchase_seller_with_ledger(
             &state,
@@ -2523,12 +2549,9 @@ pub(super) async fn reject_world_work_order_inner(
         let mut economy_event = None;
         let mut standing = None;
         let seller_charged_back = buyer_refunded
-            && matches!(
-                seller_chargeback.status.as_str(),
-                "seller_chargeback_consumed" | "duplicate"
-            );
-        let seller_chargeback_cleared = buyer_refunded
-            && (seller_charged_back || seller_chargeback.status.starts_with("skipped"));
+            && seller_chargeback.progression_allowed(&["seller_chargeback_consumed", "duplicate"]);
+        let seller_chargeback_cleared =
+            buyer_refunded && (seller_charged_back || seller_chargeback.terminal_skip());
         purchase.buyer_consume_status = Some(if buyer_refunded {
             "refunded".to_string()
         } else {
@@ -2551,7 +2574,7 @@ pub(super) async fn reject_world_work_order_inner(
         if buyer_refunded {
             purchase.ledger_status = Some(if seller_charged_back {
                 "seller_chargeback_consumed".to_string()
-            } else if seller_chargeback.status.starts_with("skipped") {
+            } else if seller_chargeback.terminal_skip() {
                 seller_chargeback.status.clone()
             } else {
                 "seller_chargeback_failed".to_string()
@@ -2855,8 +2878,7 @@ pub(super) async fn reopen_world_work_order_inner(
         &snapshot.3,
     )
     .await;
-    let buyer_reserved =
-        buyer_reopen_reserve.status == "reserved" || buyer_reopen_reserve.status == "duplicate";
+    let buyer_reserved = buyer_reopen_reserve.progression_allowed(&["reserved", "duplicate"]);
     let seller_reopen_settlement = if buyer_reserved {
         settle_reopened_world_purchase_with_ledger(
             &state,
@@ -2875,10 +2897,8 @@ pub(super) async fn reopen_world_work_order_inner(
             ..Default::default()
         }
     };
-    let seller_resettled = matches!(
-        seller_reopen_settlement.status.as_str(),
-        "reopened_settled" | "duplicate"
-    );
+    let seller_resettled =
+        seller_reopen_settlement.progression_allowed(&["reopened_settled", "duplicate"]);
     let buyer_reopen_reserve_receipt = buyer_reopen_reserve.term_exchange_receipt.clone();
     let seller_reopen_settlement_receipt = seller_reopen_settlement.term_exchange_receipt.clone();
     let final_snapshot = {
@@ -3263,8 +3283,7 @@ pub(super) async fn cancel_world_work_order_inner(
         )
         .await
     };
-    let buyer_refunded =
-        buyer_cancel_refund.status == "refunded" || buyer_cancel_refund.status == "duplicate";
+    let buyer_refunded = buyer_cancel_refund.progression_allowed(&["refunded", "duplicate"]);
     let seller_chargeback = if buyer_refunded {
         chargeback_world_purchase_seller_with_ledger(
             &state,
@@ -3295,12 +3314,9 @@ pub(super) async fn cancel_world_work_order_inner(
         let mut economy_event = None;
         let mut standing = None;
         let seller_charged_back = buyer_refunded
-            && matches!(
-                seller_chargeback.status.as_str(),
-                "seller_chargeback_consumed" | "duplicate"
-            );
-        let seller_chargeback_cleared = buyer_refunded
-            && (seller_charged_back || seller_chargeback.status.starts_with("skipped"));
+            && seller_chargeback.progression_allowed(&["seller_chargeback_consumed", "duplicate"]);
+        let seller_chargeback_cleared =
+            buyer_refunded && (seller_charged_back || seller_chargeback.terminal_skip());
         purchase.buyer_consume_status = Some(if buyer_refunded {
             "refunded".to_string()
         } else {
@@ -3321,7 +3337,7 @@ pub(super) async fn cancel_world_work_order_inner(
             "cancelled_refund_failed".to_string()
         };
         if buyer_refunded {
-            if seller_charged_back || !seller_chargeback.status.starts_with("skipped") {
+            if seller_charged_back || !seller_chargeback.terminal_skip() {
                 purchase.ledger_status = Some(if seller_charged_back {
                     "seller_chargeback_consumed".to_string()
                 } else {
@@ -3635,7 +3651,7 @@ pub(super) async fn complete_world_contract_inner(
                 .iter()
                 .any(|completion| {
                     completion.contract_id == contract.contract_id
-                        && world_contract_completion_released(completion)
+                        && world_contract_completion_released(&league.world, completion)
                 });
         if released_completion_exists || world_contract_completion_final(&contract) {
             return (
@@ -3717,18 +3733,17 @@ pub(super) async fn complete_world_contract_inner(
         &completion,
     )
     .await;
-    completion.ledger_status = Some(settlement.status);
+    let settlement_completed = settlement.progression_allowed(&["settled", "duplicate"]);
+    let settlement_receipt = settlement.term_exchange_receipt.clone();
+    completion.ledger_status = Some(settlement.status.clone());
     completion.ledger_account_id = settlement.account_id;
     completion.ledger_entry_id = settlement.entry_id;
     completion.ledger_balance_after = settlement.balance_after;
     completion.ledger_error = settlement.error;
     let snapshot = {
         let mut league = state.inner.league_state.lock().await;
+        record_world_term_exchange_receipt(&mut league.world, settlement_receipt);
         let indexes = build_world_indexes(&league.world);
-        let settlement_completed = matches!(
-            completion.ledger_status.as_deref(),
-            Some("settled") | Some("duplicate")
-        );
         indexes.replace_contract_completion_by_id(&mut league.world, &completion);
         if settlement_completed {
             let mut player = ensure_league_player(&mut league, &matrix_user_id, None);
