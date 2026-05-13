@@ -1553,13 +1553,6 @@ fn world_trillionnium_task_id(task_archetype_id: &str) -> String {
     format!("trillionnium-task:{task_archetype_id}")
 }
 
-fn world_tactics_contract_completion_released(completion: &WorldContractCompletion) -> bool {
-    matches!(
-        completion.ledger_status.as_deref(),
-        Some("settled") | Some("duplicate")
-    )
-}
-
 fn latest_open_trillionnium_task_contract_index(
     world: &WorldState,
     matrix_user_id: &str,
@@ -1575,7 +1568,7 @@ fn latest_open_trillionnium_task_contract_index(
             let released_completion_exists =
                 world.world_contract_completions.iter().any(|completion| {
                     completion.contract_id == contract.contract_id
-                        && world_tactics_contract_completion_released(completion)
+                        && world_contract_completion_released(world, completion)
                 });
             if contract.actor_matrix_user_id == matrix_user_id
                 && contract.task_id == task_id
@@ -2196,6 +2189,7 @@ async fn record_world_tactics_command(
             &completion,
         )
         .await;
+        let settlement_completed = settlement.progression_allowed(&["settled", "duplicate"]);
         completion.ledger_status = Some(settlement.status.clone());
         completion.ledger_account_id = settlement.account_id;
         completion.ledger_entry_id = settlement.entry_id;
@@ -2206,10 +2200,6 @@ async fn record_world_tactics_command(
             let mut league = state.inner.league_state.lock().await;
             record_world_term_exchange_receipt(&mut league.world, settlement_receipt);
             let indexes = build_world_indexes(&league.world);
-            let settlement_completed = matches!(
-                completion.ledger_status.as_deref(),
-                Some("settled") | Some("duplicate")
-            );
             let mut updated_contract = snapshot.4.clone();
             indexes.replace_contract_completion_by_id(&mut league.world, &completion);
             if settlement_completed {

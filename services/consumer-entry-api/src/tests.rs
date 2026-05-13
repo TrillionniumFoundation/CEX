@@ -26,6 +26,9 @@ use super::{
     prune_rate_limit_cache, real_world_map_engine_json, resolve_chat_identity,
     session_auth_issuer_registry_active_key_diff_json, sign_user_session_assertion,
     validate_normalized_repository_client_app_feed_overlay_gate, validate_text_payload,
+    world_commerce_routes::{
+        world_contract_completion_released, world_purchase_seller_settlement_active,
+    },
     world_home_json, world_map_delta_json, world_map_json, world_map_viewport_json,
     world_route_ui_contract_json, world_tactics_board_projection_json,
     world_trillionnium_character_projection_json, AppState, AppStateInner, ConsumerEntryConfig,
@@ -870,6 +873,124 @@ fn typed_term_exchange_progression_class_drives_settlement_helpers() {
         ..Default::default()
     };
     assert!(legacy_synthetic_skip.terminal_skip());
+}
+
+#[test]
+fn typed_purchase_settlement_receipts_drive_world_commerce_progression() {
+    let mut world = default_league_state().world;
+    let mut purchase = WorldPurchase {
+        purchase_id: "purchase-typed-settlement".to_string(),
+        listing_id: "listing-typed-settlement".to_string(),
+        shop_id: "shop-typed-settlement".to_string(),
+        company_id: "company-typed-settlement".to_string(),
+        buyer_matrix_user_id: "@buyer:local.dev".to_string(),
+        seller_matrix_user_id: "@seller:local.dev".to_string(),
+        price_credits: 25,
+        status: "reserved".to_string(),
+        ledger_status: Some("failed_ledger".to_string()),
+        ledger_account_id: None,
+        ledger_entry_id: None,
+        ledger_balance_after: None,
+        ledger_error: None,
+        buyer_ledger_status: Some("reserved".to_string()),
+        buyer_ledger_account_id: None,
+        buyer_ledger_entry_id: None,
+        buyer_ledger_balance_after: None,
+        buyer_ledger_error: None,
+        buyer_consume_status: Some("pending_acceptance".to_string()),
+        buyer_consume_entry_id: None,
+        buyer_consume_balance_after: None,
+        buyer_consume_error: None,
+        created_at_epoch: 1_778_650_000,
+    };
+    assert!(!world_purchase_seller_settlement_active(&world, &purchase,));
+
+    let settled_receipt = term_exchange_protocol::EconomicReceipt::new(
+        "receipt:world_purchase:grant:purchase-typed-settlement",
+        "world_purchase:grant:purchase-typed-settlement",
+        "world_commerce_purchase",
+        term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
+        term_exchange_protocol::SettlementBackendKind::Cex,
+        term_exchange_protocol::ReceiptStatus::Settled,
+        1_778_650_001,
+    );
+    world.world_term_exchange_receipts.insert(
+        settled_receipt.receipt_id.clone(),
+        TermExchangeReceiptState::from(&settled_receipt),
+    );
+    assert!(world_purchase_seller_settlement_active(&world, &purchase,));
+
+    purchase.ledger_status = Some("settled".to_string());
+    let hard_fail_receipt = term_exchange_protocol::EconomicReceipt::new(
+        "receipt:world_purchase:grant:purchase-typed-settlement",
+        "world_purchase:grant:purchase-typed-settlement",
+        "world_commerce_purchase",
+        term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
+        term_exchange_protocol::SettlementBackendKind::Cex,
+        term_exchange_protocol::ReceiptStatus::SkippedMissingLedgerToken,
+        1_778_650_002,
+    );
+    world.world_term_exchange_receipts.insert(
+        hard_fail_receipt.receipt_id.clone(),
+        TermExchangeReceiptState::from(&hard_fail_receipt),
+    );
+    assert!(!world_purchase_seller_settlement_active(&world, &purchase,));
+}
+
+#[test]
+fn typed_contract_completion_receipts_drive_world_task_progression() {
+    let mut world = default_league_state().world;
+    let mut completion = WorldContractCompletion {
+        completion_id: "completion-typed-settlement".to_string(),
+        contract_id: "contract-typed-settlement".to_string(),
+        matrix_user_id: "@seller:local.dev".to_string(),
+        body: "typed completion".to_string(),
+        score: 91.0,
+        grade: "A".to_string(),
+        reward_amount: 12.0,
+        judge_status: "passed".to_string(),
+        payout_status: "queued".to_string(),
+        anti_cheat_flags: Vec::new(),
+        score_events: Vec::new(),
+        ledger_status: Some("failed_ledger".to_string()),
+        ledger_account_id: None,
+        ledger_entry_id: None,
+        ledger_balance_after: None,
+        ledger_error: None,
+        created_at_epoch: 1_778_650_010,
+    };
+    assert!(!world_contract_completion_released(&world, &completion,));
+
+    let settled_receipt = term_exchange_protocol::EconomicReceipt::new(
+        "receipt:world_contract_completion:completion-typed-settlement",
+        "world_contract_completion:completion-typed-settlement",
+        "world_contract_completion",
+        term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
+        term_exchange_protocol::SettlementBackendKind::Cex,
+        term_exchange_protocol::ReceiptStatus::Settled,
+        1_778_650_011,
+    );
+    world.world_term_exchange_receipts.insert(
+        settled_receipt.receipt_id.clone(),
+        TermExchangeReceiptState::from(&settled_receipt),
+    );
+    assert!(world_contract_completion_released(&world, &completion,));
+
+    completion.ledger_status = Some("settled".to_string());
+    let hard_fail_receipt = term_exchange_protocol::EconomicReceipt::new(
+        "receipt:world_contract_completion:completion-typed-settlement",
+        "world_contract_completion:completion-typed-settlement",
+        "world_contract_completion",
+        term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
+        term_exchange_protocol::SettlementBackendKind::Cex,
+        term_exchange_protocol::ReceiptStatus::SkippedMissingLedgerToken,
+        1_778_650_012,
+    );
+    world.world_term_exchange_receipts.insert(
+        hard_fail_receipt.receipt_id.clone(),
+        TermExchangeReceiptState::from(&hard_fail_receipt),
+    );
+    assert!(!world_contract_completion_released(&world, &completion,));
 }
 
 #[test]

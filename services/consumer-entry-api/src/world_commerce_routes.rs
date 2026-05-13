@@ -13,7 +13,14 @@ fn world_seller_net_credits_for_price(price_credits: i64) -> i64 {
         .max(0)
 }
 
-fn world_purchase_seller_settlement_active(purchase: &WorldPurchase) -> bool {
+pub(super) fn world_purchase_seller_settlement_active(
+    world: &WorldState,
+    purchase: &WorldPurchase,
+) -> bool {
+    let settlement_intent_id = format!("world_purchase:grant:{}", purchase.purchase_id);
+    if let Some(receipt) = world_term_exchange_receipt_for_intent(world, &settlement_intent_id) {
+        return world_receipt_allows_progression(receipt);
+    }
     matches!(
         purchase.ledger_status.as_deref(),
         Some("settled") | Some("duplicate") | Some("reopened_settled")
@@ -45,6 +52,10 @@ fn world_term_exchange_receipt_for_intent<'a>(
         })
 }
 
+fn world_receipt_allows_progression(receipt: &TermExchangeReceiptState) -> bool {
+    receipt.progression_class == term_exchange_protocol::ReceiptProgressionClass::ProgressionAllowed
+}
+
 fn world_receipt_allows_progression_or_terminal_skip(receipt: &TermExchangeReceiptState) -> bool {
     matches!(
         receipt.progression_class,
@@ -53,7 +64,7 @@ fn world_receipt_allows_progression_or_terminal_skip(receipt: &TermExchangeRecei
     )
 }
 
-fn world_contract_completion_released(
+pub(super) fn world_contract_completion_released(
     world: &WorldState,
     completion: &WorldContractCompletion,
 ) -> bool {
@@ -1206,7 +1217,11 @@ pub(super) async fn chargeback_world_purchase_seller_with_ledger(
         purchase.ledger_status.as_deref(),
         Some("seller_chargeback_failed")
     );
-    if !world_purchase_seller_settlement_active(purchase) && !retrying_failed_chargeback {
+    let seller_settlement_active = {
+        let league = state.inner.league_state.lock().await;
+        world_purchase_seller_settlement_active(&league.world, purchase)
+    };
+    if !seller_settlement_active && !retrying_failed_chargeback {
         return LeagueLedgerSettlement {
             status: "skipped_seller_not_settled".to_string(),
             account_id: purchase.ledger_account_id.clone(),
@@ -1833,7 +1848,7 @@ pub(super) async fn deliver_world_work_order_inner(
                 .into_response();
         };
         let purchase_seed = league.world.world_purchases[purchase_index].clone();
-        if !world_purchase_seller_settlement_active(&purchase_seed) {
+        if !world_purchase_seller_settlement_active(&league.world, &purchase_seed) {
             return (
                 StatusCode::CONFLICT,
                 Json(json!({
@@ -2101,7 +2116,7 @@ pub(super) async fn accept_world_work_order_inner(
                 .into_response();
         };
         let purchase_seed = league.world.world_purchases[purchase_index].clone();
-        if !world_purchase_seller_settlement_active(&purchase_seed) {
+        if !world_purchase_seller_settlement_active(&league.world, &purchase_seed) {
             return (
                 StatusCode::CONFLICT,
                 Json(json!({
