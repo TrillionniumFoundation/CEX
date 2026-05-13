@@ -30,6 +30,7 @@ use super::{
         world_contract_completion_released, world_purchase_buyer_consume_completed,
         world_purchase_buyer_reserve_active, world_purchase_rejection_settlement_released,
         world_purchase_seller_settlement_active, world_work_rejection_refund_completed,
+        world_work_reopen_reserve_completed,
     },
     world_home_json, world_map_delta_json, world_map_json, world_map_viewport_json,
     world_route_ui_contract_json, world_tactics_board_projection_json,
@@ -44,8 +45,9 @@ use super::{
     WorldAsset, WorldCompany, WorldContract, WorldContractCompletion, WorldEconomyEvent,
     WorldEvent, WorldListing, WorldMapNode, WorldPlayerPosition, WorldPurchase, WorldRelationship,
     WorldShop, WorldTrillionniumCharacter, WorldWorkCancellation, WorldWorkOrder,
-    WorldWorkRejection, DEFAULT_LEAGUE_LLM_JUDGE_TIMEOUT_MS, DEFAULT_LEAGUE_WEB_SESSION_TTL_SECS,
-    DEFAULT_MAX_TEXT_CHARS, TRILLIONNIUM_REPOSITORY_MIGRATION_FLOOR, USER_SESSION_ASSERTION_HEADER,
+    WorldWorkRejection, WorldWorkReopen, DEFAULT_LEAGUE_LLM_JUDGE_TIMEOUT_MS,
+    DEFAULT_LEAGUE_WEB_SESSION_TTL_SECS, DEFAULT_MAX_TEXT_CHARS,
+    TRILLIONNIUM_REPOSITORY_MIGRATION_FLOOR, USER_SESSION_ASSERTION_HEADER,
     USER_SESSION_SIGNATURE_HEADER, WORLD_ROUTE_ACTION_TEXTAREA_ID, WORLD_ROUTE_CONTRACTS_PANEL_ID,
     WORLD_ROUTE_CONTRACT_INPUT_ID, WORLD_ROUTE_WORK_DELIVER_TEXTAREA_ID,
 };
@@ -1070,6 +1072,76 @@ fn typed_purchase_reserve_and_consume_receipts_drive_health_helpers() {
         TermExchangeReceiptState::from(&hard_fail_consume_receipt),
     );
     assert!(!world_purchase_buyer_consume_completed(&world, &purchase));
+}
+
+#[test]
+fn typed_reopen_reserve_receipts_drive_health_helpers() {
+    let mut world = default_league_state().world;
+    let purchase = WorldPurchase {
+        purchase_id: "purchase-typed-reopen-reserve".to_string(),
+        listing_id: "listing-typed-reopen-reserve".to_string(),
+        shop_id: "shop-typed-reopen-reserve".to_string(),
+        company_id: "company-typed-reopen-reserve".to_string(),
+        buyer_matrix_user_id: "@buyer:local.dev".to_string(),
+        seller_matrix_user_id: "@seller:local.dev".to_string(),
+        price_credits: 25,
+        status: "reopened_reserved".to_string(),
+        ledger_status: Some("reopened_settled".to_string()),
+        ledger_account_id: None,
+        ledger_entry_id: None,
+        ledger_balance_after: None,
+        ledger_error: None,
+        buyer_ledger_status: Some("reopened_reserved".to_string()),
+        buyer_ledger_account_id: None,
+        buyer_ledger_entry_id: None,
+        buyer_ledger_balance_after: None,
+        buyer_ledger_error: None,
+        buyer_consume_status: Some("failed_ledger".to_string()),
+        buyer_consume_entry_id: None,
+        buyer_consume_balance_after: None,
+        buyer_consume_error: None,
+        created_at_epoch: 1_778_650_040,
+    };
+    let work_order = WorldWorkOrder {
+        work_order_id: "work-typed-reopen-reserve".to_string(),
+        purchase_id: purchase.purchase_id.clone(),
+        listing_id: purchase.listing_id.clone(),
+        buyer_matrix_user_id: purchase.buyer_matrix_user_id.clone(),
+        seller_matrix_user_id: purchase.seller_matrix_user_id.clone(),
+        company_id: purchase.company_id.clone(),
+        status: "reopened_reserved".to_string(),
+        brief: "typed reopen reserve".to_string(),
+        value_score: 80,
+        created_at_epoch: 1_778_650_041,
+    };
+    let reopen = WorldWorkReopen {
+        reopen_id: "reopen-typed-reserve".to_string(),
+        work_order_id: work_order.work_order_id.clone(),
+        matrix_user_id: purchase.buyer_matrix_user_id.clone(),
+        body: "typed reopen reserve".to_string(),
+        status: "reopened_reserved".to_string(),
+        reserve_status: "reserved".to_string(),
+        created_at_epoch: 1_778_650_042,
+    };
+    world.world_purchases.push(purchase.clone());
+    world.world_work_orders.push(work_order);
+    world.world_work_reopens.push(reopen.clone());
+    assert!(world_work_reopen_reserve_completed(&world, &reopen));
+
+    let hard_fail_reopen_reserve_receipt = term_exchange_protocol::EconomicReceipt::new(
+        "receipt:world_purchase_reopen_reserve:purchase-typed-reopen-reserve:reopen-typed-reserve",
+        "world_purchase_reopen_reserve:purchase-typed-reopen-reserve:reopen-typed-reserve",
+        "world_commerce_purchase",
+        term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
+        term_exchange_protocol::SettlementBackendKind::Cex,
+        term_exchange_protocol::ReceiptStatus::MissingLedgerToken,
+        1_778_650_043,
+    );
+    world.world_term_exchange_receipts.insert(
+        hard_fail_reopen_reserve_receipt.receipt_id.clone(),
+        TermExchangeReceiptState::from(&hard_fail_reopen_reserve_receipt),
+    );
+    assert!(!world_work_reopen_reserve_completed(&world, &reopen));
 }
 
 #[test]

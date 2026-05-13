@@ -2205,7 +2205,6 @@ fn trillionnium_world_maturity_axes_json(
         .iter()
         .filter(|completion| {
             world_commerce_routes::world_contract_completion_released(world, completion)
-                || completion.payout_status == "settled"
         })
         .count();
     let reserved_purchase_count = world
@@ -2743,7 +2742,6 @@ fn trillionnium_world_playability_scorecard_json(
         .iter()
         .filter(|completion| {
             world_commerce_routes::world_contract_completion_released(world, completion)
-                || completion.payout_status == "settled"
         })
         .count();
     let reserved_purchase_count = world
@@ -3344,7 +3342,6 @@ fn trillionnium_world_closed_beta_prototype_json(
         .iter()
         .filter(|completion| {
             world_commerce_routes::world_contract_completion_released(world, completion)
-                || completion.payout_status == "settled"
         })
         .count();
     let reserved_purchase_count = world
@@ -3691,7 +3688,6 @@ fn trillionnium_world_real_user_beta_json(
         .iter()
         .filter(|completion| {
             world_commerce_routes::world_contract_completion_released(world, completion)
-                || completion.payout_status == "settled"
         })
         .count();
     let reserved_purchase_count = world
@@ -4160,7 +4156,7 @@ fn trillionnium_world_public_commercial_product_json(
     let rereserved_reopen_count = world
         .world_work_reopens
         .iter()
-        .filter(|reopen| reopen.reserve_status == "reserved")
+        .filter(|reopen| world_commerce_routes::world_work_reopen_reserve_completed(world, reopen))
         .count();
     let refunded_cancellation_count = world
         .world_work_cancellations
@@ -4174,7 +4170,6 @@ fn trillionnium_world_public_commercial_product_json(
         .iter()
         .filter(|completion| {
             world_commerce_routes::world_contract_completion_released(world, completion)
-                || completion.payout_status == "settled"
         })
         .count();
     let economy_event_credit_volume = world

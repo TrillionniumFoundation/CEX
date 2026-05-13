@@ -160,6 +160,23 @@ pub(super) fn world_purchase_rejection_settlement_released(
         && world_purchase_seller_chargeback_cleared(world, purchase, rejection_scope.as_deref())
 }
 
+pub(super) fn world_work_reopen_reserve_completed(
+    world: &WorldState,
+    reopen: &WorldWorkReopen,
+) -> bool {
+    if let Some(purchase) = world_purchase_for_work_order(world, &reopen.work_order_id) {
+        let reopen_reserve_intent_prefix =
+            format!("world_purchase_reopen_reserve:{}:", purchase.purchase_id);
+        if let Some(receipt) = latest_world_term_exchange_receipt_for_intent_prefix(
+            world,
+            &reopen_reserve_intent_prefix,
+        ) {
+            return world_receipt_allows_progression(receipt);
+        }
+    }
+    matches!(reopen.reserve_status.as_str(), "reserved" | "duplicate")
+}
+
 fn world_purchase_for_work_order<'a>(
     world: &'a WorldState,
     work_order_id: &str,
