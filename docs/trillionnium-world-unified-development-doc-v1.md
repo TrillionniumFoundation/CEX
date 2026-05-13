@@ -4,9 +4,9 @@
 **目标仓库**：<https://github.com/TrillionniumFoundation/Trillionnium>
 **当前孵化实现**：`/home/qian/.openclaw/workspace/CEX`
 **合并来源**：Dropbox `rust_geo_mmo_development_doc_v0_4_execution_ready.md`、CEX 已落地代码、CEX 现有 Trillionnium/World 文档与运行证据
-**当前代码基线**：CEX `111af46 feat: gate rust-owned map focus ui fragments`
-**文档状态**：统一执行版；用于后续拆票、验收、迁移到 Trillionnium 主仓、Alpha/公开测试准入评审
-**修订日期**：2026-05-12
+**当前代码基线**：CEX `a8508df fix: gate health metrics on typed receipts`
+**文档状态**：统一执行版；CEX incubator/source-of-evidence 已同步到 Term Exchange typed receipt runtime closeout，后续用于拆票、验收、迁移到 Trillionnium 主仓、Alpha/公开测试准入评审
+**修订日期**：2026-05-13
 
 ---
 
@@ -48,18 +48,19 @@ CEX 当前已经不是纯文档阶段。可作为 Trillionnium World 的孵化�
 
 最新本地证据来自 CEX 本地 production runtime：
 
-- Head：`111af46 feat: gate rust-owned map focus ui fragments`
+- Head：`a8508df fix: gate health metrics on typed receipts`
 - SQL snapshot：`run/linux-runtime/entry-config/league-state-snapshot.sql`
-- 最新 SQL state hash：`sha256:56a08eb92d1f50c1e9402801193b3d24ca52b1efe7d5a96daac323677c808569`
-- Web E2E：`run/league-web/web-e2e-summary-1778568027.json`，`ok=true`
+- 最新 SQL state hash：`sha256:c438f35e5d1722175e2e095ad877025bc9c7fbbaef7d258f1b7a14089e4370d2`
+- Normalized runtime dual-write/read-switch：temp DB `cex_normalized_runtime_1778661039_319748`，world-home / client-feed / client-app overlay gates green，`world_term_exchange_receipt_rows_after_direct_write=8`
+- Web E2E：`run/league-web/web-e2e-summary-1778661371.json`，`ok=true`，client feed `source_count=8`，Term Exchange receipt projection source `normalized_sql_client_feed_read_model`，receipt item count 4
 - Browser E2E：`run/league-browser/browser-e2e-summary-1778568045-1918845.json`，`ok=true`，request failure gate green，unclassified=0
 - First-human E2E：`run/first-human-session/browser-e2e-summary-1778568310-1924693.json`，`ok=true`，request/page errors=0
-- Full Rust tests before latest UI slice：`cargo test -p consumer-entry-api -- --nocapture --test-threads=1`，136 passed
-- Clippy：`cargo clippy -p consumer-entry-api -- -D warnings` passed
+- Full Rust tests：`cargo test -p consumer-entry-api -- --nocapture --test-threads=1`，153 passed
+- Clippy：`cargo clippy -p consumer-entry-api --all-targets -- -D warnings` passed
 - Local production status：8 个 HTTP service + worker healthy
 - 最新 honest assessment 基线：technical 约 `9.8/10`，first internal beta `8.5/10`，commercial release `7.0/10`
 
-重要限制：first-beta 9+ 与 commercial 8+ 仍需要真实 cohort / commercial drill / multi-node 或 live-traffic 证据，不能靠 localhost 继续刷分。
+重要限制：first-beta 9+ 与 commercial 8+ 仍需要真实 cohort / commercial drill / multi-node 或 live-traffic 证据，不能靠 localhost 继续刷分。当前 `scripts/check-production-readiness.sh` 的代码/运行时检查已通过，但 DB backup/restore drill 与 monitoring deploy metadata evidence 已超过 24h freshness 窗口，刷新前不能宣称 production signoff 当前为 green。
 
 ---
 
