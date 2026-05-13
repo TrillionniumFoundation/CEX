@@ -993,12 +993,19 @@ pub(super) async fn get_client_app_home(
         )
             .into_response();
     };
-    let league = state.inner.league_state.lock().await;
-    (
-        StatusCode::OK,
-        Json(client_app_json(&league, &matrix_user_id)),
-    )
-        .into_response()
+    let mut app = {
+        let league = state.inner.league_state.lock().await;
+        client_app_json(&league, &matrix_user_id)
+    };
+    if let Err(err) = hydrate_client_app_receipts_from_normalized_read_model(&state, &mut app).await
+    {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": err })),
+        )
+            .into_response();
+    }
+    (StatusCode::OK, Json(app)).into_response()
 }
 
 pub(super) async fn get_client_feed_home(
@@ -1081,6 +1088,18 @@ async fn hydrate_client_feed_receipts_from_normalized_read_model(
         load_normalized_repository_client_feed_read_model_for_runtime(state.config()).await?
     {
         apply_normalized_client_feed_receipt_read_model(feed, &read_model)?;
+    }
+    Ok(())
+}
+
+async fn hydrate_client_app_receipts_from_normalized_read_model(
+    state: &AppState,
+    app: &mut Value,
+) -> Result<(), String> {
+    if let Some(read_model) =
+        load_normalized_repository_client_feed_read_model_for_runtime(state.config()).await?
+    {
+        apply_normalized_client_app_receipt_read_model(app, &read_model)?;
     }
     Ok(())
 }

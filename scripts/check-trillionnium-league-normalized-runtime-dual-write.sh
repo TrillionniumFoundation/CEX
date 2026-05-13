@@ -1134,6 +1134,40 @@ if ! grep -q '"source":"normalized_sql_world_home_read_model"' "$TMP_DIR/read-sw
   exit 1
 fi
 
+curl -fsS "$READ_SWITCH_URL/v1/client/app/%40runtime-dual%3Alocal.dev" > "$TMP_DIR/read-switch-client-app.json"
+node - "$TMP_DIR/read-switch-client-app.json" <<'NODE'
+const fs = require('fs');
+const app = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const topSource = app.normalized_receipt_read_model && app.normalized_receipt_read_model.source;
+const feed = app.feed || {};
+const feedSource = feed.normalized_receipt_read_model && feed.normalized_receipt_read_model.source;
+const projectionSource = feed.term_exchange_receipt_projection && feed.term_exchange_receipt_projection.runtime_read_model_source;
+const feedItemCount = Number(feed.item_count || 0);
+const coachFeedCount = Number((((app.playability_coach || {}).context || {}).feed_item_count) || 0);
+const liveCountsFeedCount = Number((((app.economy_retention_ops || {}).live_counts || {}).feed_item_count) || 0);
+const receiptItems = (feed.items || []).filter((item) => item.feed_kind === 'term_exchange_receipt');
+if (
+  topSource !== 'normalized_sql_client_app_feed_overlay' ||
+  feedSource !== 'normalized_sql_client_feed_read_model' ||
+  projectionSource !== 'normalized_sql_client_feed_read_model' ||
+  receiptItems.length < 1 ||
+  feedItemCount < receiptItems.length ||
+  coachFeedCount !== feedItemCount ||
+  liveCountsFeedCount !== feedItemCount
+) {
+  console.error(JSON.stringify({
+    topSource,
+    feedSource,
+    projectionSource,
+    receiptItemCount: receiptItems.length,
+    feedItemCount,
+    coachFeedCount,
+    liveCountsFeedCount,
+  }, null, 2));
+  process.exit(1);
+}
+NODE
+
 READ_SWITCH_ACTION_STATUS="$TMP_DIR/read-switch-world-action-status.txt"
 if ! curl -sS -o "$TMP_DIR/read-switch-world-action-response.json" -w '%{http_code}' -X POST "$READ_SWITCH_URL/v1/world/action" \
   -H 'content-type: application/json' \

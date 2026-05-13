@@ -1,4 +1,5 @@
 use super::{
+    apply_normalized_client_app_receipt_read_model,
     apply_normalized_client_feed_receipt_read_model,
     apply_normalized_world_home_receipt_read_model, authorize_league_web_session,
     authorize_league_web_session_readonly, authorize_user_session, build_chat_identity_scope,
@@ -7710,6 +7711,110 @@ fn client_feed_can_overlay_normalized_receipt_read_model() {
         receipt_item.get("action_label").and_then(Value::as_str),
         Some("查看结算")
     );
+}
+
+#[test]
+fn client_app_can_overlay_normalized_receipt_read_model() {
+    let league = default_league_state();
+    let mut app = client_app_json(&league, "@alice:local.dev");
+    let receipt = json!({
+        "receipt_id": "sql-app-receipt-1",
+        "intent_id": "sql-app-intent-1",
+        "term_id": "world_commerce_lifecycle",
+        "backend_id": term_exchange_protocol::CEX_SETTLEMENT_BACKEND_ID,
+        "backend_kind": "cex",
+        "status": "settled",
+        "progression_class": "progression_allowed",
+        "settlement_reference": "sql-app-settlement-1",
+        "ledger_entry_id": "sql-app-ledger-1",
+        "reason": null,
+        "finalized_at_epoch": 1_778_631_201,
+    });
+    let read_model = json!({
+        "read_model_version": "trillionnium_normalized_client_feed_read_model_v1",
+        "source_tables": [
+            "world_events",
+            "world_contracts",
+            "world_purchases",
+            "world_work_orders",
+            "world_work_deliveries",
+            "world_work_acceptances",
+            "world_work_rejections",
+            "world_work_reopens",
+            "world_work_cancellations",
+            "world_economy_events",
+            "league_term_exchange_receipts",
+            "world_term_exchange_receipts"
+        ],
+        "latest_feed_items": [{"source": "world_term_exchange_receipt", "id": "sql-app-receipt-1"}],
+        "term_exchange_receipt_progression_classes": {"progression_allowed": 1},
+        "term_exchange_receipts": {
+            "count": 1,
+            "progression_classes": {"progression_allowed": 1},
+            "recent": [receipt.clone()]
+        },
+        "term_exchange_receipt_projection": {
+            "contract_version": "trillionnium_term_exchange_receipt_projection_v1",
+            "source_state_path": "WorldState.world_term_exchange_receipts",
+            "normalized_source_table": "world_term_exchange_receipts",
+            "read_model_alignment": "normalized_world_home_and_client_feed_receipt_probes",
+            "receipt_count": 1,
+            "progression_classes": {"progression_allowed": 1},
+            "latest_receipts": [receipt]
+        }
+    });
+
+    apply_normalized_client_app_receipt_read_model(&mut app, &read_model)
+        .expect("apply normalized client-app receipt read model");
+
+    assert_eq!(
+        app.pointer("/normalized_receipt_read_model/source")
+            .and_then(Value::as_str),
+        Some("normalized_sql_client_app_feed_overlay")
+    );
+    assert_eq!(
+        app.pointer("/feed/normalized_receipt_read_model/source")
+            .and_then(Value::as_str),
+        Some("normalized_sql_client_feed_read_model")
+    );
+    assert_eq!(
+        app.pointer("/feed/snapshots/term_exchange_receipts/count")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    let feed_item_count = app
+        .pointer("/feed/item_count")
+        .and_then(Value::as_u64)
+        .expect("feed item count");
+    assert_eq!(
+        app.pointer("/playability_coach/context/feed_item_count")
+            .and_then(Value::as_u64),
+        Some(feed_item_count)
+    );
+    assert_eq!(
+        app.pointer("/playability_coach/context/feed_read_model_source")
+            .and_then(Value::as_str),
+        Some("normalized_sql_client_feed_read_model")
+    );
+    assert_eq!(
+        app.pointer("/economy_retention_ops/live_counts/feed_item_count")
+            .and_then(Value::as_u64),
+        Some(feed_item_count)
+    );
+    assert_eq!(
+        app.pointer("/playability_coach/economy_retention_ops/live_counts/feed_item_count")
+            .and_then(Value::as_u64),
+        Some(feed_item_count)
+    );
+    let feed_items = app
+        .pointer("/feed/items")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    assert!(feed_items.iter().any(|item| {
+        item.get("feed_kind").and_then(Value::as_str) == Some("term_exchange_receipt")
+            && item.get("receipt_id").and_then(Value::as_str) == Some("sql-app-receipt-1")
+    }));
 }
 
 #[test]

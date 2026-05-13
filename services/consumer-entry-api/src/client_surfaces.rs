@@ -1353,6 +1353,71 @@ pub(super) fn apply_normalized_client_feed_receipt_read_model(
     Ok(())
 }
 
+pub(super) fn apply_normalized_client_app_receipt_read_model(
+    app: &mut Value,
+    read_model: &Value,
+) -> Result<(), String> {
+    validate_normalized_repository_client_feed_read_model_gate(read_model)?;
+    let (feed_item_count, receipt_count) = {
+        let app_object = app
+            .as_object_mut()
+            .ok_or_else(|| "client-app projection is not a JSON object".to_string())?;
+        let feed = app_object
+            .get_mut("feed")
+            .ok_or_else(|| "client-app projection missing feed object".to_string())?;
+        apply_normalized_client_feed_receipt_read_model(feed, read_model)?;
+        let feed_item_count = feed.get("item_count").and_then(Value::as_u64).unwrap_or(0);
+        let receipt_count = feed
+            .pointer("/normalized_receipt_read_model/receipt_count")
+            .cloned()
+            .unwrap_or(Value::Null);
+        (feed_item_count, receipt_count)
+    };
+
+    let app_object = app
+        .as_object_mut()
+        .ok_or_else(|| "client-app projection is not a JSON object".to_string())?;
+    app_object.insert(
+        "normalized_receipt_read_model".to_string(),
+        json!({
+            "active": true,
+            "source": "normalized_sql_client_app_feed_overlay",
+            "feed_source": "normalized_sql_client_feed_read_model",
+            "read_model_version": read_model.get("read_model_version").cloned().unwrap_or(Value::Null),
+            "source_tables": read_model.get("source_tables").cloned().unwrap_or_else(|| json!([])),
+            "receipt_count": receipt_count,
+            "embedded_feed_item_count": feed_item_count,
+            "playability_coach_context_updated": true,
+        }),
+    );
+
+    if let Some(context) = app_object
+        .get_mut("playability_coach")
+        .and_then(Value::as_object_mut)
+        .and_then(|coach| coach.get_mut("context"))
+        .and_then(Value::as_object_mut)
+    {
+        context.insert("feed_item_count".to_string(), json!(feed_item_count));
+        context.insert(
+            "feed_read_model_source".to_string(),
+            json!("normalized_sql_client_feed_read_model"),
+        );
+    }
+    for path in [
+        "/playability_coach/economy_retention_ops/live_counts",
+        "/economy_retention_ops/live_counts",
+    ] {
+        if let Some(live_counts) = app.pointer_mut(path).and_then(Value::as_object_mut) {
+            live_counts.insert("feed_item_count".to_string(), json!(feed_item_count));
+            live_counts.insert(
+                "feed_read_model_source".to_string(),
+                json!("normalized_sql_client_feed_read_model"),
+            );
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone)]
 pub(super) struct ClientFeedProjectionContext<'a> {
     world: &'a WorldState,
