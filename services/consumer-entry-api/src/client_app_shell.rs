@@ -485,8 +485,17 @@ pub(super) async fn get_client_app_web_shell(
         .as_ref()
         .map(|session| session.matrix_user_id.as_str())
         .unwrap_or("@alice:local.dev");
-    let league = state.inner.league_state.lock().await;
-    let app = client_app_json(&league, current_matrix_user_id);
+    let mut app = {
+        let league = state.inner.league_state.lock().await;
+        client_app_json(&league, current_matrix_user_id)
+    };
+    if let Err(err) = hydrate_client_app_receipts_from_normalized_read_model(&state, &mut app).await
+    {
+        return Html(format!(
+            "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><title>Trillionnium World read model unavailable</title></head><body><main><h1>Trillionnium World read model unavailable</h1><p data-error=\"normalized-client-app-read-model\">{}</p></main></body></html>",
+            escape_html_text(&err)
+        ));
+    }
     let modules = app
         .get("modules")
         .and_then(Value::as_array)
@@ -2598,5 +2607,8 @@ pub(super) async fn get_client_app_web_shell_response(
     headers: HeaderMap,
 ) -> Response {
     let html = get_client_app_web_shell(State(state), headers).await.0;
+    if html.contains("data-error=\"normalized-client-app-read-model\"") {
+        return (StatusCode::INTERNAL_SERVER_ERROR, Html(html)).into_response();
+    }
     html_resource_response(html, "trillionnium_world_map_app_shell_payload_v1")
 }

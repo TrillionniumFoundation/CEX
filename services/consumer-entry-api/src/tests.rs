@@ -312,6 +312,9 @@ fn league_sql_cutover_plan_exposes_normalized_world_tables() {
     assert!(read_switch_requirements
         .iter()
         .any(|gate| gate == "normalized_client_feed_read_model_green"));
+    assert!(read_switch_requirements
+        .iter()
+        .any(|gate| gate == "normalized_client_app_feed_overlay_green"));
     assert!(dual_write_plan
         .get("write_sets")
         .and_then(Value::as_array)
@@ -414,7 +417,8 @@ fn league_sql_cutover_plan_exposes_normalized_world_tables() {
         .and_then(Value::as_str)
         .is_some_and(|seam| seam.contains("league_state_snapshots")
             && seam.contains("normalized world-home read-model")
-            && seam.contains("normalized client-feed read-model")));
+            && seam.contains("normalized client-feed read-model")
+            && seam.contains("client-app feed overlay")));
     assert!(repository_contract
         .get("state_boundary")
         .and_then(|boundary| boundary.get("runtime_command_write_sql_helper"))
@@ -460,6 +464,22 @@ fn league_sql_cutover_plan_exposes_normalized_world_tables() {
             .and_then(Value::as_str),
         Some("normalized_client_feed_read_model_startup_gate_green")
     );
+    assert_eq!(
+        repository_contract
+            .get("read_model_contract")
+            .and_then(|contract| contract.get("client_app"))
+            .and_then(|client_app| client_app.get("read_model_version"))
+            .and_then(Value::as_str),
+        Some("trillionnium_normalized_client_app_receipt_overlay_v1")
+    );
+    assert_eq!(
+        repository_contract
+            .get("read_model_contract")
+            .and_then(|contract| contract.get("client_app"))
+            .and_then(|client_app| client_app.get("parity_gate"))
+            .and_then(Value::as_str),
+        Some("normalized_client_app_feed_overlay_green")
+    );
     assert!(repository_contract
         .get("runtime_validation")
         .and_then(|runtime| runtime.get("checks"))
@@ -472,7 +492,10 @@ fn league_sql_cutover_plan_exposes_normalized_world_tables() {
                 .any(|check| check == "verify_normalized_world_home_read_model_sql")
             && checks
                 .iter()
-                .any(|check| check == "verify_normalized_client_feed_read_model_sql")));
+                .any(|check| check == "verify_normalized_client_feed_read_model_sql")
+            && checks
+                .iter()
+                .any(|check| check == "verify_normalized_client_app_feed_overlay")));
     assert!(repository_contract
         .get("read_switch_gates")
         .and_then(Value::as_array)
@@ -501,6 +524,9 @@ fn league_sql_cutover_plan_exposes_normalized_world_tables() {
                 && gates
                     .iter()
                     .any(|gate| gate == "normalized_client_feed_read_model_green")
+                && gates
+                    .iter()
+                    .any(|gate| gate == "normalized_client_app_feed_overlay_green")
         }));
     assert_eq!(
         repository_contract
@@ -1189,6 +1215,29 @@ fn normalized_repository_world_home_read_model_declares_direct_sql_seam() {
     assert!(client_feed_receipt_probe_fields
         .iter()
         .any(|field| field.as_str() == Some("term_exchange_receipt_projection")));
+    assert_eq!(
+        contract
+            .get("client_app")
+            .and_then(|client_app| client_app.get("read_model_version"))
+            .and_then(Value::as_str),
+        Some("trillionnium_normalized_client_app_receipt_overlay_v1")
+    );
+    assert_eq!(
+        contract
+            .get("client_app")
+            .and_then(|client_app| client_app.get("source_read_model"))
+            .and_then(Value::as_str),
+        Some("client_feed")
+    );
+    let client_app_receipt_probe_fields = contract
+        .get("client_app")
+        .and_then(|client_app| client_app.get("receipt_probe_fields"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    assert!(client_app_receipt_probe_fields
+        .iter()
+        .any(|field| field.as_str() == Some("feed.term_exchange_receipt_projection")));
 }
 
 #[test]
@@ -1466,11 +1515,11 @@ async fn term_exchange_kernel_manifest_declares_cex_as_first_backend() {
     );
     assert_eq!(
         body["state_persistence"]["normalized_receipt_read_model_probe_status"],
-        "receipt_projection_objects_exposed_in_world_home_and_client_feed"
+        "receipt_projection_objects_exposed_in_world_home_client_feed_and_client_app"
     );
     assert_eq!(
         body["state_persistence"]["runtime_receipt_projection_status"],
-        "typed_receipts_projected_and_sql_read_model_hydrated_for_read_and_command_home_surfaces"
+        "typed_receipts_projected_and_sql_read_model_hydrated_for_read_client_app_and_command_home_surfaces"
     );
     assert_eq!(
         body["migration_status"]["status"],
@@ -2513,7 +2562,7 @@ fn world_home_can_overlay_normalized_receipt_read_model() {
             "contract_version": "trillionnium_term_exchange_receipt_projection_v1",
             "source_state_path": "WorldState.world_term_exchange_receipts",
             "normalized_source_table": "world_term_exchange_receipts",
-            "read_model_alignment": "normalized_world_home_and_client_feed_receipt_probes",
+            "read_model_alignment": "normalized_world_home_client_feed_and_client_app_receipt_probes",
             "receipt_count": 1,
             "progression_classes": {"progression_allowed": 1},
             "latest_receipts": [receipt]
@@ -7665,7 +7714,7 @@ fn client_feed_can_overlay_normalized_receipt_read_model() {
             "contract_version": "trillionnium_term_exchange_receipt_projection_v1",
             "source_state_path": "WorldState.world_term_exchange_receipts",
             "normalized_source_table": "world_term_exchange_receipts",
-            "read_model_alignment": "normalized_world_home_and_client_feed_receipt_probes",
+            "read_model_alignment": "normalized_world_home_client_feed_and_client_app_receipt_probes",
             "receipt_count": 1,
             "progression_classes": {"progression_allowed": 1},
             "latest_receipts": [receipt]
@@ -7757,7 +7806,7 @@ fn client_app_can_overlay_normalized_receipt_read_model() {
             "contract_version": "trillionnium_term_exchange_receipt_projection_v1",
             "source_state_path": "WorldState.world_term_exchange_receipts",
             "normalized_source_table": "world_term_exchange_receipts",
-            "read_model_alignment": "normalized_world_home_and_client_feed_receipt_probes",
+            "read_model_alignment": "normalized_world_home_client_feed_and_client_app_receipt_probes",
             "receipt_count": 1,
             "progression_classes": {"progression_allowed": 1},
             "latest_receipts": [receipt]

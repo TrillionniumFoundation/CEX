@@ -243,7 +243,7 @@ pub(super) fn world_term_exchange_receipt_projection_json(
         "contract_version": "trillionnium_term_exchange_receipt_projection_v1",
         "source_state_path": "WorldState.world_term_exchange_receipts",
         "normalized_source_table": "world_term_exchange_receipts",
-        "read_model_alignment": "normalized_world_home_and_client_feed_receipt_probes",
+        "read_model_alignment": "normalized_world_home_client_feed_and_client_app_receipt_probes",
         "receipt_count": world.world_term_exchange_receipts.len(),
         "progression_classes": world_term_exchange_receipt_progression_classes_json(world),
         "latest_receipts": latest_world_term_exchange_receipts_json(world, indexes, limit),

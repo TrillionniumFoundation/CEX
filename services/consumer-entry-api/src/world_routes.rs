@@ -1080,7 +1080,7 @@ pub(super) async fn get_client_web_feed_home(
     (StatusCode::OK, Json(feed)).into_response()
 }
 
-async fn hydrate_client_feed_receipts_from_normalized_read_model(
+pub(super) async fn hydrate_client_feed_receipts_from_normalized_read_model(
     state: &AppState,
     feed: &mut Value,
 ) -> Result<(), String> {
@@ -1092,7 +1092,7 @@ async fn hydrate_client_feed_receipts_from_normalized_read_model(
     Ok(())
 }
 
-async fn hydrate_client_app_receipts_from_normalized_read_model(
+pub(super) async fn hydrate_client_app_receipts_from_normalized_read_model(
     state: &AppState,
     app: &mut Value,
 ) -> Result<(), String> {

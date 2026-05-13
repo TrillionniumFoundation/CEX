@@ -852,7 +852,7 @@ begin
       'contract_version', 'trillionnium_term_exchange_receipt_projection_v1',
       'source_state_path', 'WorldState.world_term_exchange_receipts',
       'normalized_source_table', 'world_term_exchange_receipts',
-      'read_model_alignment', 'normalized_world_home_and_client_feed_receipt_probes',
+      'read_model_alignment', 'normalized_world_home_client_feed_and_client_app_receipt_probes',
       'receipt_count', (select count(*) from world_term_exchange_receipts),
       'progression_classes', (select value from world_receipt_progression_classes),
       'latest_receipts', (select value from world_latest_receipts)
@@ -940,7 +940,7 @@ begin
       'contract_version', 'trillionnium_term_exchange_receipt_projection_v1',
       'source_state_path', 'WorldState.world_term_exchange_receipts',
       'normalized_source_table', 'world_term_exchange_receipts',
-      'read_model_alignment', 'normalized_world_home_and_client_feed_receipt_probes',
+      'read_model_alignment', 'normalized_world_home_client_feed_and_client_app_receipt_probes',
       'receipt_count', (select count(*) from world_term_exchange_receipts),
       'progression_classes', (select value from world_receipt_progression_classes),
       'latest_receipts', (select value from world_latest_receipts)
@@ -1116,8 +1116,13 @@ if ! grep -q '"normalized_read_switch_gate":"latest_snapshot_requires_repository
   cat "$TMP_DIR/read-switch-health.json" >&2
   exit 1
 fi
-if ! grep -q '"normalized_read_switch_source_of_truth_gate":"latest_snapshot_requires_repository_audit_write_set_audit_and_normalized_world_home_and_client_feed_read_models"' "$TMP_DIR/read-switch-health.json"; then
+if ! grep -q '"normalized_read_switch_source_of_truth_gate":"latest_snapshot_requires_repository_audit_write_set_audit_and_normalized_world_home_client_feed_and_client_app_read_models"' "$TMP_DIR/read-switch-health.json"; then
   echo "read-switch health did not expose normalized read-model source-of-truth gate" >&2
+  cat "$TMP_DIR/read-switch-health.json" >&2
+  exit 1
+fi
+if ! grep -q '"normalized_client_app_feed_overlay_green"' "$TMP_DIR/read-switch-health.json"; then
+  echo "read-switch health did not expose the client-app feed overlay gate" >&2
   cat "$TMP_DIR/read-switch-health.json" >&2
   exit 1
 fi

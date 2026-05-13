@@ -1894,6 +1894,8 @@ struct HealthWorldProjection {
     matrix_user_id: String,
     app: Value,
     route_artifacts: WorldRouteArtifacts,
+    client_app_receipt_overlay_green: bool,
+    client_app_receipt_overlay_error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1921,12 +1923,65 @@ pub(super) struct HealthWorldReadinessBundleCache {
 }
 
 impl HealthWorldProjection {
-    fn new(league: &LeagueState) -> Self {
+    fn new(
+        league: &LeagueState,
+        client_feed_read_model: Option<&Value>,
+        normalized_read_switch_active: bool,
+        client_feed_read_model_error: Option<String>,
+    ) -> Self {
         let matrix_user_id = first_maturity_matrix_user_id(league);
+        let mut app = client_app_json(league, matrix_user_id.as_str());
+        let mut client_app_receipt_overlay_error = client_feed_read_model_error;
+        let mut client_app_receipt_overlay_green = !normalized_read_switch_active;
+        if let Some(read_model) = client_feed_read_model {
+            match apply_normalized_client_app_receipt_read_model(&mut app, read_model) {
+                Ok(()) => {
+                    let app_source = app
+                        .get("normalized_receipt_read_model")
+                        .and_then(|marker| marker.get("source"))
+                        .and_then(Value::as_str);
+                    let feed_source = app
+                        .get("feed")
+                        .and_then(|feed| feed.get("normalized_receipt_read_model"))
+                        .and_then(|marker| marker.get("source"))
+                        .and_then(Value::as_str);
+                    client_app_receipt_overlay_green = app_source
+                        == Some("normalized_sql_client_app_feed_overlay")
+                        && feed_source == Some("normalized_sql_client_feed_read_model");
+                    if !client_app_receipt_overlay_green {
+                        client_app_receipt_overlay_error = Some(
+                            "client-app normalized receipt overlay markers were missing"
+                                .to_string(),
+                        );
+                    }
+                }
+                Err(err) => {
+                    client_app_receipt_overlay_green = false;
+                    client_app_receipt_overlay_error = Some(err);
+                }
+            }
+        } else if normalized_read_switch_active && client_app_receipt_overlay_error.is_none() {
+            client_app_receipt_overlay_error = Some(
+                "normalized client-feed read model unavailable for client-app overlay".to_string(),
+            );
+        }
+        if let Some(err) = client_app_receipt_overlay_error.as_ref() {
+            if let Some(obj) = app.as_object_mut() {
+                obj.insert(
+                    "normalized_receipt_read_model_error".to_string(),
+                    json!({
+                        "source": "normalized_sql_client_app_feed_overlay",
+                        "message": err,
+                    }),
+                );
+            }
+        }
         Self {
-            app: client_app_json(league, matrix_user_id.as_str()),
+            app,
             route_artifacts: build_world_route_artifacts(&league.world),
             matrix_user_id,
+            client_app_receipt_overlay_green,
+            client_app_receipt_overlay_error,
         }
     }
 }
@@ -1957,9 +2012,28 @@ async fn trillionnium_world_readiness_bundle(
         }
     }
 
+    let normalized_read_switch_active = state.config().league_normalized_read_switch_enabled
+        && state.config().league_normalized_database_url.is_some();
+    let client_feed_read_model_result =
+        load_normalized_repository_client_feed_read_model_for_runtime(state.config()).await;
+    let client_feed_read_model_error = match &client_feed_read_model_result {
+        Ok(Some(_)) => None,
+        Ok(None) if normalized_read_switch_active => Some(
+            "normalized client-feed read model not loaded while read switch is active".to_string(),
+        ),
+        Ok(None) => None,
+        Err(err) => Some(err.clone()),
+    };
+    let client_feed_read_model = client_feed_read_model_result.ok().flatten();
+
     let bundle = {
         let league = state.inner.league_state.lock().await;
-        let projection = HealthWorldProjection::new(&league);
+        let projection = HealthWorldProjection::new(
+            &league,
+            client_feed_read_model.as_ref(),
+            normalized_read_switch_active,
+            client_feed_read_model_error,
+        );
         let maturity = trillionnium_world_maturity_axes_json(
             &league,
             state.config(),
@@ -2105,12 +2179,16 @@ fn trillionnium_world_maturity_axes_json(
         league_repository_runtime,
         "normalized_read_switch_source_of_truth_gate",
     ) == Some(
-        "latest_snapshot_requires_repository_audit_write_set_audit_and_normalized_world_home_and_client_feed_read_models",
+        "latest_snapshot_requires_repository_audit_write_set_audit_and_normalized_world_home_client_feed_and_client_app_read_models",
     );
     let normalized_read_models_active = maturity_str(
         league_repository_runtime,
         "normalized_source_of_truth_read_models",
-    ) == Some("world_home_and_client_feed");
+    ) == Some("world_home_client_feed_and_client_app")
+        && projection.client_app_receipt_overlay_green;
+    let client_app_receipt_overlay_green = projection.client_app_receipt_overlay_green;
+    let client_app_receipt_overlay_error_absent =
+        projection.client_app_receipt_overlay_error.is_none();
     let direct_write_supported_commands = league_repository_runtime
         .get("normalized_direct_write_supported_commands")
         .and_then(Value::as_array)
@@ -2148,7 +2226,9 @@ fn trillionnium_world_maturity_axes_json(
             ("normalized_read_switch_active", normalized_read_switch_active),
             ("effective_repository_is_normalized", effective_repository_is_normalized),
             ("source_of_truth_gate_green", source_of_truth_gate_green),
-            ("world_home_and_client_feed_read_models_active", normalized_read_models_active),
+            ("world_home_client_feed_and_client_app_read_models_active", normalized_read_models_active),
+            ("client_app_receipt_overlay_green", client_app_receipt_overlay_green),
+            ("client_app_receipt_overlay_error_absent", client_app_receipt_overlay_error_absent),
             ("sql_snapshot_path_configured", config.league_sql_snapshot_path.is_some()),
             ("json_state_rollback_path_configured", config.league_state_path.is_some()),
             ("direct_write_commands_cover_world_loop", direct_write_supported_commands >= 10),
@@ -3220,7 +3300,8 @@ fn trillionnium_world_closed_beta_prototype_json(
     let normalized_read_models_active = maturity_str(
         league_repository_runtime,
         "normalized_source_of_truth_read_models",
-    ) == Some("world_home_and_client_feed");
+    ) == Some("world_home_client_feed_and_client_app")
+        && projection.client_app_receipt_overlay_green;
     let direct_write_supported_commands = league_repository_runtime
         .get("normalized_direct_write_supported_commands")
         .and_then(Value::as_array)
@@ -3557,7 +3638,8 @@ fn trillionnium_world_real_user_beta_json(
     let normalized_read_models_active = maturity_str(
         league_repository_runtime,
         "normalized_source_of_truth_read_models",
-    ) == Some("world_home_and_client_feed");
+    ) == Some("world_home_client_feed_and_client_app")
+        && projection.client_app_receipt_overlay_green;
     let direct_write_supported_commands = league_repository_runtime
         .get("normalized_direct_write_supported_commands")
         .and_then(Value::as_array)
@@ -4018,7 +4100,8 @@ fn trillionnium_world_public_commercial_product_json(
     let normalized_read_models_active = maturity_str(
         league_repository_runtime,
         "normalized_source_of_truth_read_models",
-    ) == Some("world_home_and_client_feed");
+    ) == Some("world_home_client_feed_and_client_app")
+        && projection.client_app_receipt_overlay_green;
     let session_auth_configured = config.require_session_auth
         && (!config
             .session_auth_secret

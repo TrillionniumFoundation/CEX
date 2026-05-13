@@ -4870,6 +4870,7 @@ pub(super) fn league_state_repository_dual_write_plan_json() -> Value {
             "normalized_runtime_read_switch_gate_green",
             "normalized_world_home_read_model_green",
             "normalized_client_feed_read_model_green",
+            "normalized_client_app_feed_overlay_green",
             "web_e2e_green",
             "matrix_live_e2e_green"
         ]
@@ -4932,7 +4933,7 @@ select jsonb_build_object(
     'contract_version', 'trillionnium_term_exchange_receipt_projection_v1',
     'source_state_path', 'WorldState.world_term_exchange_receipts',
     'normalized_source_table', 'world_term_exchange_receipts',
-    'read_model_alignment', 'normalized_world_home_and_client_feed_receipt_probes',
+    'read_model_alignment', 'normalized_world_home_client_feed_and_client_app_receipt_probes',
     'receipt_count', (select count(*) from world_term_exchange_receipts),
     'progression_classes', (select value from world_receipt_progression_classes),
     'latest_receipts', (select value from world_latest_receipts)
@@ -5007,7 +5008,7 @@ select jsonb_build_object(
     'contract_version', 'trillionnium_term_exchange_receipt_projection_v1',
     'source_state_path', 'WorldState.world_term_exchange_receipts',
     'normalized_source_table', 'world_term_exchange_receipts',
-    'read_model_alignment', 'normalized_world_home_and_client_feed_receipt_probes',
+    'read_model_alignment', 'normalized_world_home_client_feed_and_client_app_receipt_probes',
     'receipt_count', (select count(*) from world_term_exchange_receipts),
     'progression_classes', (select value from world_receipt_progression_classes),
     'latest_receipts', (select value from world_latest_receipts)
@@ -5108,6 +5109,24 @@ pub(super) fn normalized_repository_read_model_contract_json() -> Value {
             ],
             "parity_gate": "normalized_client_feed_read_model_green",
             "startup_gate": "normalized_client_feed_read_model_startup_gate_green"
+        },
+        "client_app": {
+            "read_model_version": "trillionnium_normalized_client_app_receipt_overlay_v1",
+            "source_read_model": "client_feed",
+            "overlay_helper": "apply_normalized_client_app_receipt_read_model",
+            "embedded_targets": [
+                "feed",
+                "playability_coach.context.feed_item_count",
+                "economy_retention_ops.live_counts.feed_item_count"
+            ],
+            "receipt_probe_fields": [
+                "normalized_receipt_read_model",
+                "feed.normalized_receipt_read_model",
+                "feed.term_exchange_receipt_projection",
+                "feed.term_exchange_receipts"
+            ],
+            "parity_gate": "normalized_client_app_feed_overlay_green",
+            "startup_gate": "normalized_client_feed_read_model_startup_gate_green"
         }
     })
 }
@@ -5162,7 +5181,7 @@ pub(super) fn league_state_repository_contract_json() -> Value {
             "world_index_boundary": "WorldIndexes rebuilt from WorldState per projection/command batch",
             "world_write_boundary": "world command handlers mutate in-memory LeagueState.world and persist supported world commands through normalized SQL typed direct writes as the primary repository path",
             "runtime_dual_write_seam": "persist_league_state applies direct typed SQLx command helpers for declared world commands to CONSUMER_ENTRY_LEAGUE_NORMALIZED_DATABASE_URL when CONSUMER_ENTRY_LEAGUE_NORMALIZED_FINAL_CUTOVER_ENABLED=true, while JSON/snapshot artifacts remain export and rollback outputs",
-            "runtime_read_switch_seam": "startup can hydrate LeagueState from the latest normalized repository league_state_snapshots JSON export after repository audit, write-set audit, normalized world-home read-model, and normalized client-feed read-model gates pass when CONSUMER_ENTRY_LEAGUE_NORMALIZED_READ_SWITCH_ENABLED=true",
+            "runtime_read_switch_seam": "startup can hydrate LeagueState from the latest normalized repository league_state_snapshots JSON export after repository audit, write-set audit, normalized world-home read-model, normalized client-feed read-model, and client-app feed overlay gates pass when CONSUMER_ENTRY_LEAGUE_NORMALIZED_READ_SWITCH_ENABLED=true",
             "runtime_command_write_sql_helper": "normalized_repository_command_shadow_sql is retained only as legacy rollback/export test support; final cutover rejects unsupported world commands instead of generated-SQL fallback",
             "runtime_direct_write_helper": "execute_normalized_repository_direct_command_write applies typed SQLx upserts for supported commands while snapshot/export/audit artifacts remain rollback-only",
             "runtime_read_model_sql_helper": "normalized_repository_world_home_read_model_sql and normalized_repository_client_feed_read_model_sql expose direct normalized SQL read-model seams for world home/feed parity before projections leave the JSON export snapshot"
@@ -5192,6 +5211,7 @@ pub(super) fn league_state_repository_contract_json() -> Value {
                 "verify_normalized_world_event_rows",
                 "verify_normalized_world_home_read_model_sql",
                 "verify_normalized_client_feed_read_model_sql",
+                "verify_normalized_client_app_feed_overlay",
                 "relaunch_consumer_entry_api_with_normalized_read_switch",
                 "verify_read_switch_hydrates_dual_written_world_state"
             ]
@@ -5235,6 +5255,7 @@ pub(super) fn league_state_repository_contract_json() -> Value {
             "normalized_runtime_read_switch_gate_green",
             "normalized_world_home_read_model_green",
             "normalized_client_feed_read_model_green",
+            "normalized_client_app_feed_overlay_green",
             "web_e2e_green",
             "matrix_live_e2e_green",
             "json_sql_row_count_parity_green"
@@ -5620,9 +5641,9 @@ impl LeagueStateRepositorySnapshot {
                 "direct_write_mode": "typed_sqlx_command_helpers_for_supported_commands_with_generated_sql_fallback",
                 "unknown_command_mode": "audit_only_no_full_world_snapshot_fallback",
                 "read_switch_gate": "latest_snapshot_requires_repository_audit_and_write_set_audit",
-                "read_switch_source_of_truth_gate": "latest_snapshot_requires_repository_audit_write_set_audit_and_normalized_world_home_and_client_feed_read_models",
+                "read_switch_source_of_truth_gate": "latest_snapshot_requires_repository_audit_write_set_audit_and_normalized_world_home_client_feed_and_client_app_read_models",
                 "read_model_contract": normalized_repository_read_model_contract_json(),
-                "read_boundary": "startup can hydrate LeagueState from the latest normalized repository league_state_snapshots JSON export only after repository audit, write-set audit, normalized world-home read-model, and normalized client-feed read-model gates pass when CONSUMER_ENTRY_LEAGUE_NORMALIZED_READ_SWITCH_ENABLED=true",
+                "read_boundary": "startup can hydrate LeagueState from the latest normalized repository league_state_snapshots JSON export only after repository audit, write-set audit, normalized world-home read-model, normalized client-feed read-model, and client-app feed overlay gates pass when CONSUMER_ENTRY_LEAGUE_NORMALIZED_READ_SWITCH_ENABLED=true",
             },
             "sql_cutover_plan": self.sql_cutover_plan,
             "sql_shadow_validation": self.sql_shadow_validation,
@@ -5861,7 +5882,7 @@ pub(super) fn league_repository_runtime_json(config: &ConsumerEntryConfig) -> Va
         "normalized_final_cutover_enabled": config.league_normalized_final_cutover_enabled,
         "normalized_final_cutover_active": normalized_final_cutover_active,
         "normalized_source_of_truth_read_models": if normalized_read_switch_active {
-            "world_home_and_client_feed"
+            "world_home_client_feed_and_client_app"
         } else {
             "not_active"
         },
@@ -5894,7 +5915,7 @@ pub(super) fn league_repository_runtime_json(config: &ConsumerEntryConfig) -> Va
             "audit_only_no_full_world_snapshot_fallback"
         },
         "normalized_read_switch_gate": "latest_snapshot_requires_repository_audit_and_write_set_audit",
-        "normalized_read_switch_source_of_truth_gate": "latest_snapshot_requires_repository_audit_write_set_audit_and_normalized_world_home_and_client_feed_read_models",
+        "normalized_read_switch_source_of_truth_gate": "latest_snapshot_requires_repository_audit_write_set_audit_and_normalized_world_home_client_feed_and_client_app_read_models",
         "normalized_read_model_contract": normalized_repository_read_model_contract_json(),
         "dual_write_env": "CONSUMER_ENTRY_LEAGUE_NORMALIZED_DUAL_WRITE_ENABLED",
         "read_switch_env": "CONSUMER_ENTRY_LEAGUE_NORMALIZED_READ_SWITCH_ENABLED",
