@@ -178,6 +178,16 @@ else
     if ! jq -e '.trillionnium_world_playability_scorecard.user_metric_overall_score == 10 and .trillionnium_world_playability_scorecard.user_metric_overall_percent == 100 and .trillionnium_world_playability_scorecard.user_metric_overall_status == "converged"' "$consumer_health_file" >/dev/null; then
       fail 'production runtime requires Trillionnium five user playability metrics at 10/10'
     fi
+    if ! jq -e '
+      .trillionnium_world_maturity.cex_trillionnium_world_runtime_adapter_green == true
+      and .trillionnium_world_maturity.cex_trillionnium_world_runtime_adapter_readiness.contract_version == "cex_trillionnium_world_production_adapter_v1"
+      and .trillionnium_world_maturity.cex_trillionnium_world_runtime_adapter_readiness.protocol_contract == "trillionnium_world_runtime_adapter_v1"
+      and .trillionnium_world_maturity.cex_trillionnium_world_runtime_adapter_readiness.status == "cex_production_adapter_bridge_ready"
+      and .trillionnium_world_maturity.cex_trillionnium_world_runtime_adapter_readiness.repository.source_of_truth == "cex_league_repository_normalized_world_tables"
+      and all(.trillionnium_world_maturity.cex_trillionnium_world_runtime_adapter_readiness.standalone_runtime_adapter_readiness.statuses[]; .status == "cex_production_impl_connected" and .production_adapter_trait_ready == true)
+    ' "$consumer_health_file" >/dev/null; then
+      fail 'production runtime requires CEX Trillionnium world adapter readiness gate green'
+    fi
     for playability_axis in technical_reliability first_playable_completeness real_player_comprehension_cost long_term_replayability economy_social_strategy_depth; do
       if ! jq -e --arg axis "$playability_axis" '.trillionnium_world_playability_scorecard.user_metric_axes[$axis].score == 10 and .trillionnium_world_playability_scorecard.user_metric_axes[$axis].remaining_checks == []' "$consumer_health_file" >/dev/null; then
         fail "production runtime requires Trillionnium playability axis $playability_axis at 10/10"

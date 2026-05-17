@@ -42,5 +42,6 @@ check_metric gateway "$GATEWAY_BASE_URL/metrics" '^cex_gateway_operator_signal_a
 
 if [[ "$CEX_ENABLE_ENTRY_SERVICES" == "1" ]]; then
   check_metric consumer-entry "$CONSUMER_ENTRY_BASE_URL/metrics" '^cex_consumer_entry_task_create_requests_total [0-9]+$'
+  check_metric consumer-entry "$CONSUMER_ENTRY_BASE_URL/metrics" '^cex_consumer_entry_trillionnium_world_runtime_adapter_green 1$'
   check_metric matrix-entry "$MATRIX_ENTRY_BASE_URL/metrics" '^cex_matrix_entry_event_requests_total [0-9]+$'
 fi
