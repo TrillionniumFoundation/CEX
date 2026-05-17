@@ -2276,7 +2276,7 @@ pub(super) fn world_map_prefetch_queue_json(
             (priority_score, enriched)
         })
         .collect();
-    queue.sort_by(|left, right| right.0.cmp(&left.0));
+    queue.sort_by_key(|item| std::cmp::Reverse(item.0));
     queue
         .into_iter()
         .take(budget)
@@ -2308,7 +2308,7 @@ pub(super) fn world_map_live_event_stream_json(
         .flat_map(|event_indices| event_indices.iter().rev().take(limit))
         .filter_map(|index| world.world_events.get(*index).map(|event| (*index, event)))
         .collect();
-    event_candidates.sort_by(|left, right| right.0.cmp(&left.0));
+    event_candidates.sort_by_key(|candidate| std::cmp::Reverse(candidate.0));
 
     for (_, event) in event_candidates.into_iter().take(limit) {
         if let Some(marker) = marker_by_location.get(&event.location_id) {

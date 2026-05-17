@@ -317,7 +317,7 @@ pub(super) async fn get_league_web_shell(
             ),
         ));
     }
-    timeline_items.sort_by(|left, right| right.0.cmp(&left.0));
+    timeline_items.sort_by_key(|item| std::cmp::Reverse(item.0));
     let timeline = timeline_items
         .into_iter()
         .take(10)

@@ -19,6 +19,9 @@ sha2 = "0.10"
 sqlx.workspace = true
 shared-tracing = { path = "../../crates/shared-tracing" }
 term-exchange-protocol.workspace = true
+trnm-world-api = { path = "../../../Trillionnium/trillionnium/crates/trnm-world-api" }
+trnm-world-domain = { path = "../../../Trillionnium/trillionnium/crates/trnm-world-domain" }
+trnm-world-projection = { path = "../../../Trillionnium/trillionnium/crates/trnm-world-projection" }
 
 [dev-dependencies]
 ledger-service = { path = "../ledger-service" }

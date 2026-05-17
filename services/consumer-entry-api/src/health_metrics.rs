@@ -26,11 +26,7 @@ fn maturity_axis_json(
 ) -> Value {
     let total = checks.len();
     let passed = checks.iter().filter(|(_, passed)| *passed).count();
-    let percent = if total == 0 {
-        0
-    } else {
-        ((passed * 100) / total) as u64
-    };
+    let percent = (passed * 100).checked_div(total).unwrap_or_default() as u64;
     let remaining_checks = checks
         .iter()
         .filter_map(|(check_id, passed)| (!*passed).then_some(*check_id))
@@ -50,6 +46,43 @@ fn maturity_axis_json(
         "remaining_checks": remaining_checks,
         "checks": checks_json,
     })
+}
+
+fn cex_trillionnium_world_adapter_readiness_green(readiness: &Value) -> bool {
+    readiness.get("contract_version").and_then(Value::as_str)
+        == Some("cex_trillionnium_world_production_adapter_v1")
+        && readiness.get("protocol_contract").and_then(Value::as_str)
+            == Some("trillionnium_world_runtime_adapter_v1")
+        && readiness.get("domain_contract").and_then(Value::as_str)
+            == Some("trillionnium_world_domain_v1")
+        && readiness.get("status").and_then(Value::as_str)
+            == Some("cex_production_adapter_bridge_ready")
+        && readiness
+            .pointer("/repository/source_of_truth")
+            .and_then(Value::as_str)
+            == Some("cex_league_repository_normalized_world_tables")
+        && readiness
+            .pointer("/identity/adapter_contract")
+            .and_then(Value::as_str)
+            == Some("cex_trillionnium_world_production_adapter_v1")
+        && readiness
+            .pointer("/session/source_of_truth")
+            .and_then(Value::as_str)
+            == Some("cex_existing_web_and_api_session_guards")
+        && readiness
+            .pointer("/standalone_runtime_adapter_readiness/statuses")
+            .and_then(Value::as_array)
+            .is_some_and(|statuses| {
+                !statuses.is_empty()
+                    && statuses.iter().all(|status| {
+                        status.get("status").and_then(Value::as_str)
+                            == Some("cex_production_impl_connected")
+                            && status
+                                .get("production_adapter_trait_ready")
+                                .and_then(Value::as_bool)
+                                == Some(true)
+                    })
+            })
 }
 
 fn playability_axis_json(
@@ -2261,6 +2294,10 @@ fn trillionnium_world_maturity_axes_json(
     let client_app_receipt_overlay_green = projection.client_app_receipt_overlay_green;
     let client_app_receipt_overlay_error_absent =
         projection.client_app_receipt_overlay_error.is_none();
+    let cex_trillionnium_world_adapter_readiness =
+        cex_trillionnium_world_adapter_readiness_json_for_league(league);
+    let cex_trillionnium_world_adapter_green =
+        cex_trillionnium_world_adapter_readiness_green(&cex_trillionnium_world_adapter_readiness);
     let direct_write_supported_commands = league_repository_runtime
         .get("normalized_direct_write_supported_commands")
         .and_then(Value::as_array)
@@ -2303,6 +2340,7 @@ fn trillionnium_world_maturity_axes_json(
             ("world_home_receipt_overlay_error_absent", world_home_receipt_overlay_error_absent),
             ("client_app_receipt_overlay_green", client_app_receipt_overlay_green),
             ("client_app_receipt_overlay_error_absent", client_app_receipt_overlay_error_absent),
+            ("cex_trillionnium_world_runtime_adapter_green", cex_trillionnium_world_adapter_green),
             ("sql_snapshot_path_configured", config.league_sql_snapshot_path.is_some()),
             ("json_state_rollback_path_configured", config.league_state_path.is_some()),
             ("direct_write_commands_cover_world_loop", direct_write_supported_commands >= 10),
@@ -2426,6 +2464,8 @@ fn trillionnium_world_maturity_axes_json(
         "matrix_user_id": matrix_user_id,
         "axis_order": ["first_playable", "technical_alpha", "beta_readiness", "full_vision"],
         "axes": axes,
+        "cex_trillionnium_world_runtime_adapter_green": cex_trillionnium_world_adapter_green,
+        "cex_trillionnium_world_runtime_adapter_readiness": cex_trillionnium_world_adapter_readiness,
     })
 }
 
@@ -4831,6 +4871,10 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
         .clone();
     let trillionnium_world_playability_scorecard =
         trillionnium_world_readiness.playability_scorecard;
+    let cex_trillionnium_world_runtime_adapter_green = trillionnium_world_maturity
+        .get("cex_trillionnium_world_runtime_adapter_green")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let empty_route_runner_handoff_gate = json!({});
     let playability_route_runner_handoff_gate = trillionnium_world_playability_scorecard
         .get("route_runner_handoff_gate")
@@ -5241,6 +5285,8 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
             "cex_consumer_entry_trillionnium_world_maturity_beta_readiness_percent {}\n",
             "# TYPE cex_consumer_entry_trillionnium_world_maturity_full_vision_percent gauge\n",
             "cex_consumer_entry_trillionnium_world_maturity_full_vision_percent {}\n",
+            "# TYPE cex_consumer_entry_trillionnium_world_runtime_adapter_green gauge\n",
+            "cex_consumer_entry_trillionnium_world_runtime_adapter_green {}\n",
             "# TYPE cex_consumer_entry_trillionnium_world_closed_beta_prototype_overall_percent gauge\n",
             "cex_consumer_entry_trillionnium_world_closed_beta_prototype_overall_percent {}\n",
             "# TYPE cex_consumer_entry_trillionnium_world_closed_beta_prototype_product_loop_percent gauge\n",
@@ -5853,6 +5899,7 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
         maturity_axis_percent(&trillionnium_world_maturity, "technical_alpha"),
         maturity_axis_percent(&trillionnium_world_maturity, "beta_readiness"),
         maturity_axis_percent(&trillionnium_world_maturity, "full_vision"),
+        gauge_bool(cex_trillionnium_world_runtime_adapter_green),
         trillionnium_world_closed_beta_prototype
             .get("overall_percent")
             .and_then(Value::as_u64)

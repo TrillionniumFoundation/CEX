@@ -9,8 +9,9 @@ use super::{
     build_matrix_org_rate_limit_key, build_matrix_rate_limit_key, build_matrix_replay_key,
     build_matrix_room_rate_limit_key, build_matrix_session_rate_limit_key,
     build_matrix_user_rate_limit_key, build_router, build_world_indexes,
-    build_world_route_artifacts, client_app_json, client_feed_json, default_league_state,
-    default_world_node_id, encode_league_web_session, evaluate_identity_binding_reload_governance,
+    build_world_route_artifacts, cex_trillionnium_world_adapter_readiness_json_for_league,
+    client_app_json, client_feed_json, default_league_state, default_world_node_id,
+    encode_league_web_session, evaluate_identity_binding_reload_governance,
     get_client_app_web_shell, get_world_web_shell, league_hash_id, league_hidden_test_event,
     league_reward_ledger_released_from_state, league_state_hash,
     league_state_repository_write_set_for_command, league_state_sql_cutover_plan_json,
@@ -756,6 +757,127 @@ fn league_sql_cutover_plan_exposes_normalized_world_tables() {
     .expect("equipment runtime migration should exist");
     assert!(equipment_migration.contains("inventory_items"));
     assert!(equipment_migration.contains("equipment_slots"));
+}
+
+#[test]
+fn cex_trillionnium_world_adapter_readiness_connects_protocol_layer() {
+    let mut league = default_league_state();
+    league.world.world_events.push(WorldEvent {
+        event_id: "adapter-event-1".to_string(),
+        actor_matrix_user_id: "adapter-user".to_string(),
+        room_id: Some("adapter-room".to_string()),
+        location_id: "mirror-city".to_string(),
+        event_kind: "adapter_readiness".to_string(),
+        body: "adapter readiness event".to_string(),
+        result: "ready".to_string(),
+        impact_score: 1,
+        cex_task_id: Some("adapter-task-1".to_string()),
+        cex_status: Some("ready".to_string()),
+        created_at_epoch: 1_778_600_001,
+    });
+    league.world.world_contracts.push(WorldContract {
+        contract_id: "adapter-contract-1".to_string(),
+        event_id: "adapter-event-1".to_string(),
+        actor_matrix_user_id: "adapter-user".to_string(),
+        location_id: "mirror-city".to_string(),
+        task_id: "adapter-task-1".to_string(),
+        title: "Adapter readiness".to_string(),
+        body: "Bridge CEX world records into Trillionnium protocol traits.".to_string(),
+        status: "open".to_string(),
+        cex_status: Some("ready".to_string()),
+        value_score: 1,
+        created_at_epoch: 1_778_600_001,
+    });
+    let readiness = cex_trillionnium_world_adapter_readiness_json_for_league(&league);
+
+    assert_eq!(
+        readiness.get("protocol_contract").and_then(Value::as_str),
+        Some("trillionnium_world_runtime_adapter_v1")
+    );
+    assert_eq!(
+        readiness.get("status").and_then(Value::as_str),
+        Some("cex_production_adapter_bridge_ready")
+    );
+    assert_eq!(
+        readiness
+            .pointer("/repository/source_of_truth")
+            .and_then(Value::as_str),
+        Some("cex_league_repository_normalized_world_tables")
+    );
+    assert_eq!(
+        readiness
+            .pointer("/identity/adapter_contract")
+            .and_then(Value::as_str),
+        Some("cex_trillionnium_world_production_adapter_v1")
+    );
+    assert_eq!(
+        readiness
+            .pointer("/session/source_of_truth")
+            .and_then(Value::as_str),
+        Some("cex_existing_web_and_api_session_guards")
+    );
+    assert!(
+        readiness
+            .pointer("/standalone_world_counts/nodes")
+            .and_then(Value::as_u64)
+            .unwrap_or_default()
+            > 0
+    );
+    assert!(
+        readiness
+            .pointer("/route_records/total")
+            .and_then(Value::as_u64)
+            .unwrap_or_default()
+            > 0
+    );
+    assert!(readiness
+        .pointer("/standalone_runtime_adapter_readiness/statuses")
+        .and_then(Value::as_array)
+        .expect("runtime adapter statuses")
+        .iter()
+        .all(|status| status.get("status").and_then(Value::as_str)
+            == Some("cex_production_impl_connected")));
+}
+
+#[tokio::test]
+async fn trillionnium_world_adapter_readiness_endpoint_exposes_protocol_layer() {
+    let app = build_router(AppState::new(test_config()));
+    let (status, body) = send_identity_request(
+        &app,
+        "GET",
+        "/v1/trillionnium/world/adapters/readiness",
+        &[],
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["contract_version"],
+        "cex_trillionnium_world_production_adapter_v1"
+    );
+    assert_eq!(
+        body["protocol_contract"],
+        "trillionnium_world_runtime_adapter_v1"
+    );
+    assert_eq!(body["domain_contract"], "trillionnium_world_domain_v1");
+    assert_eq!(body["status"], "cex_production_adapter_bridge_ready");
+    assert_eq!(
+        body["repository"]["source_of_truth"],
+        "cex_league_repository_normalized_world_tables"
+    );
+    assert!(body["route_records"]["total"].as_u64().is_some());
+    assert!(
+        body["standalone_world_counts"]["nodes"]
+            .as_u64()
+            .unwrap_or_default()
+            > 0
+    );
+    assert!(body["standalone_runtime_adapter_readiness"]["statuses"]
+        .as_array()
+        .expect("runtime adapter statuses")
+        .iter()
+        .all(|status| status["production_adapter_trait_ready"] == true
+            && status["status"] == "cex_production_impl_connected"));
 }
 
 #[test]
@@ -16144,6 +16266,25 @@ async fn health_endpoint_exposes_identity_governance_overview() {
             .any(|check| check["check_id"] == "world_home_receipt_overlay_error_absent")
     );
     assert_eq!(
+        body["trillionnium_world_maturity"]["cex_trillionnium_world_runtime_adapter_green"],
+        true
+    );
+    assert_eq!(
+        body["trillionnium_world_maturity"]["cex_trillionnium_world_runtime_adapter_readiness"]
+            ["protocol_contract"],
+        "trillionnium_world_runtime_adapter_v1"
+    );
+    assert!(
+        body["trillionnium_world_maturity"]["axes"]["technical_alpha"]["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(
+                |check| check["check_id"] == "cex_trillionnium_world_runtime_adapter_green"
+                    && check["passed"] == true
+            )
+    );
+    assert_eq!(
         body["trillionnium_world_closed_beta_prototype"]["contract_version"],
         "trillionnium_world_closed_beta_prototype_v1"
     );
@@ -16808,6 +16949,7 @@ async fn metrics_endpoint_exposes_identity_governance_gauges() {
     assert!(body.contains("cex_consumer_entry_trillionnium_world_maturity_technical_alpha_percent"));
     assert!(body.contains("cex_consumer_entry_trillionnium_world_maturity_beta_readiness_percent"));
     assert!(body.contains("cex_consumer_entry_trillionnium_world_maturity_full_vision_percent"));
+    assert!(body.contains("cex_consumer_entry_trillionnium_world_runtime_adapter_green 1"));
     assert!(body
         .contains("cex_consumer_entry_trillionnium_world_closed_beta_prototype_overall_percent"));
     assert!(body.contains(

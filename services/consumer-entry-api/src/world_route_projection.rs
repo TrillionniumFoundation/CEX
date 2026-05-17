@@ -630,7 +630,7 @@ impl<'a> WorldRouteProjectionContext<'a> {
     }
 
     fn task_graph_item(&self, task_id: String, mut items: Vec<WorldRoutePreviewItem>) -> Value {
-        items.sort_by(|left, right| right.created_at_epoch.cmp(&left.created_at_epoch));
+        items.sort_by_key(|item| std::cmp::Reverse(item.created_at_epoch));
         let latest = items.first().cloned();
         let latest_bucket = latest
             .as_ref()
@@ -848,7 +848,7 @@ impl<'a> WorldRouteProjectionContext<'a> {
 
         let mut tactics_sessions: Vec<&WorldTacticsGameSession> =
             world.world_tactics_sessions.values().collect();
-        tactics_sessions.sort_by(|left, right| right.updated_at_epoch.cmp(&left.updated_at_epoch));
+        tactics_sessions.sort_by_key(|session| std::cmp::Reverse(session.updated_at_epoch));
         for session in tactics_sessions.into_iter().take(8) {
             items.push(self.tactics_session_preview_item(session));
         }

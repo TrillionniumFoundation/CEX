@@ -177,6 +177,11 @@ These endpoints are the current implementation surface, not the final plugin ABI
 - Move direct ledger HTTP calls behind the adapter.
 - Keep existing endpoint behavior unchanged.
 - Test with current CEX adapter and local fake only in local-dev tests.
+- Current CEX-to-Trillionnium world adapter seam is now exposed by
+  `GET /v1/trillionnium/world/adapters/readiness`: it implements the
+  standalone `trillionnium_world_runtime_adapter_v1` identity/session/repository/
+  ledger/evidence/metrics traits against CEX `LeagueState` / `WorldState`, and
+  `/health` gates it as `cex_trillionnium_world_runtime_adapter_green`.
 
 ### M2 — Economic intent/receipt types
 

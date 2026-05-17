@@ -41,6 +41,10 @@ CEX 当前已经不是纯文档阶段。可作为 Trillionnium World 的孵化�
 - `WorldState` 已从 `LeagueState` 中拆出第一层世界边界，并保留旧 JSON/持久化兼容。
 - World 数据已覆盖：地图节点、玩家位置、角色、战术会话、公司、商店、listing、purchase、work order、delivery/accept/reject/reopen/cancel、faction、economy event、route runner、tactics、task/NPC loop。
 - Ledger-backed commerce 已具备 reserve / seller settlement / buyer consume / refund / seller chargeback / recovery / fail-closed 的回归测试与 runtime gate。
+- CEX-to-Trillionnium runtime adapter seam 已开始接入：`consumer-entry-api` 通过
+  `/v1/trillionnium/world/adapters/readiness` 暴露
+  `trillionnium_world_runtime_adapter_v1` 的生产 adapter readiness，并在 `/health`
+  technical alpha 轴中门禁 `cex_trillionnium_world_runtime_adapter_green`。
 - `/world`、`/app`、Matrix commands、web session/CSRF、本地 production runtime、SQL snapshot、health/metrics、browser/web/first-human E2E 均已存在。
 - 当前 Rust-owned UI 工作已推进到 `/world` shell、route UI、route-runner UI、live-event/task-route cards、map popup、map support cards、map focus/action rail。
 

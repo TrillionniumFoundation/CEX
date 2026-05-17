@@ -77,6 +77,8 @@ mod term_exchange_kernel_routes;
 use term_exchange_kernel_routes::*;
 mod world_commerce_routes;
 use world_commerce_routes::*;
+mod trillionnium_world_adapters;
+use trillionnium_world_adapters::*;
 mod world_web_shell;
 use world_web_shell::*;
 mod league_routes;
@@ -4154,6 +4156,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/v1/league/home", get(get_league_home))
         .route("/v1/league/world", get(get_league_world))
         .route("/v1/world/home", get(get_world_home))
+        .route(
+            "/v1/trillionnium/world/adapters/readiness",
+            get(get_trillionnium_world_adapter_readiness),
+        )
         .route("/v1/client/app/:matrix_user_id", get(get_client_app_home))
         .route("/v1/client/feed/:matrix_user_id", get(get_client_feed_home))
         .route("/v1/world/map/:matrix_user_id", get(get_world_map))
