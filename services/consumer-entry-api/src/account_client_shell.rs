@@ -1,6 +1,61 @@
 use super::*;
+use argon2::{
+    password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
+    Argon2,
+};
 
-const GAME_ACCOUNT_CLIENT_CONTRACT: &str = "trillionnium_game_account_client_v1";
+pub(super) const GAME_ACCOUNT_CLIENT_CONTRACT: &str = "trillionnium_game_account_client_v1";
+const GAME_ACCOUNT_PASSWORD_AUTH_CONTRACT: &str = "trillionnium_game_account_password_auth_v1";
+const GAME_ACCOUNT_SESSION_STATUS_CONTRACT: &str = "trillionnium_game_account_session_status_v1";
+const GAME_ACCOUNT_LOCAL_PROFILE_KEY: &str = "trillionnium.account.profile.v1";
+const GAME_ACCOUNT_DEFAULT_DOMAIN: &str = "trillionnium.local";
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(super) struct GameAccountRegistry {
+    version: u64,
+    accounts: HashMap<String, GameAccountRecord>,
+}
+
+impl Default for GameAccountRegistry {
+    fn default() -> Self {
+        Self {
+            version: 1,
+            accounts: HashMap::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct GameAccountRecord {
+    matrix_user_id: String,
+    display_name: Option<String>,
+    room_id: Option<String>,
+    password_hash: String,
+    created_at_epoch: i64,
+    updated_at_epoch: i64,
+    last_login_epoch: Option<i64>,
+    disabled: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct GameAccountPasswordRequest {
+    matrix_user_id: Option<String>,
+    handle: Option<String>,
+    display_name: Option<String>,
+    password: String,
+    room_id: Option<String>,
+    session_id: Option<String>,
+}
+
+pub(super) fn load_game_account_registry(config: &ConsumerEntryConfig) -> GameAccountRegistry {
+    let Some(path) = config.game_account_registry_path.as_deref() else {
+        return GameAccountRegistry::default();
+    };
+    let Ok(bytes) = fs::read(path) else {
+        return GameAccountRegistry::default();
+    };
+    serde_json::from_slice::<GameAccountRegistry>(&bytes).unwrap_or_default()
+}
 
 pub(super) async fn get_game_account_client_shell_response(
     State(state): State<AppState>,
@@ -9,11 +64,172 @@ pub(super) async fn get_game_account_client_shell_response(
     let web_session = authorize_league_web_session_readonly(&state, &headers, true)
         .ok()
         .flatten();
-    let html = game_account_client_shell_html(&state, web_session.as_ref());
+    let html = game_account_client_shell_html(&state, web_session.as_ref()).await;
     html_resource_response(html, GAME_ACCOUNT_CLIENT_CONTRACT)
 }
 
-fn game_account_client_shell_html(
+pub(super) async fn get_game_account_session_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    match authorize_league_web_session_readonly(&state, &headers, true) {
+        Ok(session) => {
+            Json(game_account_session_status_json(&state, session.as_ref()).await).into_response()
+        }
+        Err(response) => response,
+    }
+}
+
+pub(super) async fn post_game_account_logout(State(state): State<AppState>) -> Response {
+    (
+        StatusCode::OK,
+        [(
+            header::SET_COOKIE,
+            game_account_session_clear_cookie(state.config()),
+        )],
+        Json(json!({
+            "kind": "game_account_logout",
+            "contract_version": GAME_ACCOUNT_SESSION_STATUS_CONTRACT,
+            "logged_out": true,
+            "session_cookie_cleared": true,
+        })),
+    )
+        .into_response()
+}
+
+pub(super) async fn post_game_account_register(
+    State(state): State<AppState>,
+    Json(payload): Json<GameAccountPasswordRequest>,
+) -> Response {
+    if let Err(response) = ensure_game_account_password_auth_enabled(&state) {
+        return response;
+    }
+    let matrix_user_id =
+        match normalize_game_account_matrix_user(&payload, state.config()) {
+            Some(value) => value,
+            None => return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "error": "valid handle or matrix_user_id is required",
+                    "expected": "handle with 3-40 letters/digits/._- or explicit @user:domain id",
+                })),
+            )
+                .into_response(),
+        };
+    if let Err(response) = validate_game_account_password(&payload.password, state.config()) {
+        return response;
+    }
+
+    let now = Utc::now().timestamp();
+    let password_hash = match hash_game_account_password(&payload.password) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    let display_name = normalize_optional_account_text(payload.display_name.as_deref());
+    let room_id = normalize_optional_account_text(payload.room_id.as_deref());
+    let session_id = normalize_optional_account_text(payload.session_id.as_deref())
+        .or_else(|| Some("registered-browser".to_string()));
+    let record = GameAccountRecord {
+        matrix_user_id: matrix_user_id.clone(),
+        display_name: display_name.clone(),
+        room_id: room_id.clone(),
+        password_hash,
+        created_at_epoch: now,
+        updated_at_epoch: now,
+        last_login_epoch: Some(now),
+        disabled: false,
+    };
+
+    {
+        let mut registry = state.inner.game_account_registry.lock().await;
+        if registry.accounts.contains_key(&matrix_user_id) {
+            return (
+                StatusCode::CONFLICT,
+                Json(json!({ "error": "game account already exists" })),
+            )
+                .into_response();
+        }
+        registry.accounts.insert(matrix_user_id.clone(), record);
+        if let Err(err) = persist_game_account_registry(state.config(), &registry) {
+            registry.accounts.remove(&matrix_user_id);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("failed to persist game account registry: {err}") })),
+            )
+                .into_response();
+        }
+    }
+
+    issue_game_account_session_response(
+        &state,
+        matrix_user_id,
+        display_name,
+        room_id,
+        session_id,
+        "registered",
+    )
+}
+
+pub(super) async fn post_game_account_login(
+    State(state): State<AppState>,
+    Json(payload): Json<GameAccountPasswordRequest>,
+) -> Response {
+    if let Err(response) = ensure_game_account_password_auth_enabled(&state) {
+        return response;
+    }
+    let matrix_user_id = match normalize_game_account_matrix_user(&payload, state.config()) {
+        Some(value) => value,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "valid handle or matrix_user_id is required" })),
+            )
+                .into_response()
+        }
+    };
+    let record = {
+        let registry = state.inner.game_account_registry.lock().await;
+        registry.accounts.get(&matrix_user_id).cloned()
+    };
+    let Some(mut record) = record.filter(|record| !record.disabled) else {
+        return invalid_game_account_credentials_response();
+    };
+    if !verify_game_account_password(&payload.password, &record.password_hash) {
+        return invalid_game_account_credentials_response();
+    }
+
+    let now = Utc::now().timestamp();
+    record.last_login_epoch = Some(now);
+    record.updated_at_epoch = now;
+    let room_id =
+        normalize_optional_account_text(payload.room_id.as_deref()).or(record.room_id.clone());
+    let session_id = normalize_optional_account_text(payload.session_id.as_deref())
+        .or_else(|| Some("returning-browser".to_string()));
+    {
+        let mut registry = state.inner.game_account_registry.lock().await;
+        registry
+            .accounts
+            .insert(matrix_user_id.clone(), record.clone());
+        if let Err(err) = persist_game_account_registry(state.config(), &registry) {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("failed to persist game account login: {err}") })),
+            )
+                .into_response();
+        }
+    }
+
+    issue_game_account_session_response(
+        &state,
+        matrix_user_id,
+        record.display_name,
+        room_id,
+        session_id,
+        "logged_in",
+    )
+}
+
+async fn game_account_client_shell_html(
     state: &AppState,
     web_session: Option<&LeagueWebSessionClaims>,
 ) -> String {
@@ -29,43 +245,67 @@ fn game_account_client_shell_html(
         .unwrap_or("none");
     let session_mode = if session_active {
         "signed_game_session_active"
+    } else if state.config().game_account_password_auth_enabled {
+        "self_serve_game_account_password_auth_available"
     } else if matches!(state.config().runtime_profile, RuntimeProfile::LocalDev) {
         "local_dev_session_can_be_minted_from_player_id"
     } else {
         "signed_upstream_user_session_required"
     };
     let production_requires_signed_upstream =
-        !matches!(state.config().runtime_profile, RuntimeProfile::LocalDev);
+        !matches!(state.config().runtime_profile, RuntimeProfile::LocalDev)
+            && !state.config().game_account_password_auth_enabled;
+    let account_count = {
+        let registry = state.inner.game_account_registry.lock().await;
+        registry.accounts.len()
+    };
+    let password_auth_enabled = state.config().game_account_password_auth_enabled;
+    let registry_persistence = state
+        .config()
+        .game_account_registry_path
+        .as_deref()
+        .unwrap_or("memory_only");
     let readiness = json!({
         "contract_version": GAME_ACCOUNT_CLIENT_CONTRACT,
         "status": "game_account_client_shell_ready",
         "client_surface": "/account",
         "alternate_surface": "/game/account",
         "session_endpoint": "/league/web/session",
+        "session_status_endpoint": "/account/session",
+        "register_endpoint": "/account/register",
+        "login_endpoint": "/account/login",
+        "logout_endpoint": "/account/logout",
+        "password_auth_contract_version": GAME_ACCOUNT_PASSWORD_AUTH_CONTRACT,
+        "session_status_contract_version": GAME_ACCOUNT_SESSION_STATUS_CONTRACT,
         "session_cookie": {
             "name": state.config().league_web_session_cookie_name,
             "http_only": true,
             "same_site": "Lax",
-            "csrf_required_for_mutations": true
+            "csrf_required_for_gameplay_mutations": true
         },
         "flows": {
             "register": {
                 "form_id": "account-register-form",
-                "client_storage": "localStorage:trillionnium.account.profile.v1",
-                "server_bridge": "/league/web/session",
-                "password_auth_implemented": false,
+                "endpoint": "/account/register",
+                "client_storage": format!("localStorage:{GAME_ACCOUNT_LOCAL_PROFILE_KEY}"),
+                "password_auth_implemented": true,
+                "password_auth_enabled": password_auth_enabled,
+                "password_hash": "argon2id",
                 "credential_storage_in_browser": false
             },
             "login": {
                 "form_id": "account-login-form",
-                "server_bridge": "/league/web/session",
-                "password_auth_implemented": false,
+                "endpoint": "/account/login",
+                "password_auth_implemented": true,
+                "password_auth_enabled": password_auth_enabled,
+                "password_hash": "argon2id",
                 "credential_storage_in_browser": false
             },
             "logout": {
                 "button_id": "account-logout-button",
+                "endpoint": "/account/logout",
                 "client_clears_local_profile": true,
-                "server_cookie_expiry_endpoint": "not_yet_implemented"
+                "server_cookie_expiry_endpoint": "/account/logout"
             }
         },
         "session_state": {
@@ -75,9 +315,16 @@ fn game_account_client_shell_html(
             "room_id": web_session.and_then(|session| session.room_id.as_deref()),
             "session_id": web_session.and_then(|session| session.session_id.as_deref())
         },
+        "password_auth": {
+            "enabled": password_auth_enabled,
+            "registry_persistence": registry_persistence,
+            "registered_account_count": account_count,
+            "minimum_password_chars": state.config().game_account_password_min_chars,
+            "default_local_domain": state.config().game_account_local_domain
+        },
         "production_boundary": {
-            "requires_signed_upstream_user_session": production_requires_signed_upstream,
-            "self_serve_password_registration_backend": false,
+            "requires_signed_upstream_user_session_when_password_auth_disabled": production_requires_signed_upstream,
+            "self_serve_password_registration_backend": password_auth_enabled,
             "public_launch_credit": false,
             "client_submits_intent_only": true
         },
@@ -93,6 +340,16 @@ fn game_account_client_shell_html(
         "true"
     } else {
         "false"
+    };
+    let password_auth_attr = if password_auth_enabled {
+        "true"
+    } else {
+        "false"
+    };
+    let disabled_attr = if password_auth_enabled {
+        ""
+    } else {
+        " disabled"
     };
 
     let mut html = String::new();
@@ -115,6 +372,9 @@ fn game_account_client_shell_html(
     html.push_str("    button, .link-button { min-height: 40px; border: 0; border-radius: 6px; padding: 10px 13px; background: #172033; color: #fff; font-weight: 750; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; }\n");
     html.push_str("    button.secondary { background: #e8edf4; color: #172033; }\n");
     html.push_str(
+        "    button:disabled { background: #cbd5e1; color: #64748b; cursor: not-allowed; }\n",
+    );
+    html.push_str(
         "    .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }\n",
     );
     html.push_str("    .muted { color: #64748b; font-size: .92rem; }\n");
@@ -125,7 +385,9 @@ fn game_account_client_shell_html(
     html.push_str("    @media (max-width: 820px) { header, .grid, .forms { display: block; } .panel { margin-top: 14px; } }\n");
     html.push_str("  </style>\n</head>\n");
     html.push_str("<body data-contract=\"trillionnium_game_account_client_v1\">\n");
-    html.push_str("<main id=\"game-account-client\" data-public-launch-credit=\"false\" data-client-submits-intent-only=\"true\">\n");
+    html.push_str("<main id=\"game-account-client\" data-public-launch-credit=\"false\" data-client-submits-intent-only=\"true\" data-password-auth-implemented=\"true\" data-password-auth-enabled=\"");
+    html.push_str(password_auth_attr);
+    html.push_str("\">\n");
     html.push_str("  <header>\n    <div>\n");
     html.push_str("      <p class=\"muted\">Trillionnium World</p>\n");
     html.push_str("      <h1>Player Account</h1>\n");
@@ -135,27 +397,33 @@ fn game_account_client_shell_html(
     html.push_str("  <section class=\"grid\">\n");
     html.push_str("    <div class=\"panel\">\n");
     html.push_str("      <h2>Register or Sign In</h2>\n");
-    html.push_str("      <p class=\"muted\">This client creates a signed game web session through <code>/league/web/session</code>. In production, that bridge requires an upstream signed user session; the browser never stores passwords or ingress tokens.</p>\n");
+    html.push_str("      <p class=\"muted\">This client creates a signed game web session. Self-serve password auth uses Argon2id when enabled; otherwise production delegates session minting to the signed upstream user-session issuer.</p>\n");
     html.push_str("      <div class=\"forms\">\n");
-    html.push_str("        <form id=\"account-register-form\" data-account-flow=\"register\" data-session-endpoint=\"/league/web/session\">\n");
+    html.push_str("        <form id=\"account-register-form\" data-account-flow=\"register\" data-account-endpoint=\"/account/register\" data-session-endpoint=\"/league/web/session\">\n");
     html.push_str("          <h3>Create player profile</h3>\n");
-    html.push_str("          <label>Player ID <input name=\"matrix_user_id\" autocomplete=\"username\" placeholder=\"@player:trillionnium.local\" required /></label>\n");
+    html.push_str("          <label>Handle <input name=\"handle\" autocomplete=\"username\" placeholder=\"playername\" required /></label>\n");
     html.push_str("          <label>Display name <input name=\"display_name\" autocomplete=\"nickname\" placeholder=\"Player name\" /></label>\n");
+    html.push_str("          <label>Password <input name=\"password\" type=\"password\" autocomplete=\"new-password\" minlength=\"");
+    html.push_str(&state.config().game_account_password_min_chars.to_string());
+    html.push_str("\" required /></label>\n");
     html.push_str("          <label>Room ID <input name=\"room_id\" placeholder=\"!lobby:trillionnium.local\" /></label>\n");
     html.push_str("          <label>Session ID <input name=\"session_id\" placeholder=\"first-device\" /></label>\n");
-    html.push_str(
-        "          <div class=\"actions\"><button type=\"submit\">Create session</button></div>\n",
-    );
+    html.push_str("          <div class=\"actions\"><button type=\"submit\"");
+    html.push_str(disabled_attr);
+    html.push_str(">Create account</button></div>\n");
     html.push_str("        </form>\n");
-    html.push_str("        <form id=\"account-login-form\" data-account-flow=\"login\" data-session-endpoint=\"/league/web/session\">\n");
+    html.push_str("        <form id=\"account-login-form\" data-account-flow=\"login\" data-account-endpoint=\"/account/login\" data-session-endpoint=\"/league/web/session\">\n");
     html.push_str("          <h3>Sign in</h3>\n");
-    html.push_str("          <label>Player ID <input name=\"matrix_user_id\" autocomplete=\"username\" placeholder=\"@player:trillionnium.local\" required /></label>\n");
+    html.push_str("          <label>Handle or Player ID <input name=\"handle\" autocomplete=\"username\" placeholder=\"playername or @player:domain\" required /></label>\n");
+    html.push_str("          <label>Password <input name=\"password\" type=\"password\" autocomplete=\"current-password\" required /></label>\n");
     html.push_str("          <label>Room ID <input name=\"room_id\" placeholder=\"!lobby:trillionnium.local\" /></label>\n");
     html.push_str("          <label>Session ID <input name=\"session_id\" placeholder=\"returning-device\" /></label>\n");
-    html.push_str("          <div class=\"actions\"><button type=\"submit\">Sign in</button><button id=\"account-logout-button\" class=\"secondary\" type=\"button\">Forget local profile</button></div>\n");
+    html.push_str("          <div class=\"actions\"><button type=\"submit\"");
+    html.push_str(disabled_attr);
+    html.push_str(">Sign in</button><button id=\"account-logout-button\" class=\"secondary\" type=\"button\">Log out</button></div>\n");
     html.push_str("        </form>\n");
     html.push_str("      </div>\n");
-    html.push_str("      <p class=\"muted\">Password registration is intentionally not implemented in this shell; production login is delegated to the signed upstream user-session issuer before a game session is minted.</p>\n");
+    html.push_str("      <p class=\"muted\">The browser never stores passwords or game-session tokens. The server session cookie is HttpOnly, SameSite=Lax, and used with CSRF for gameplay mutations.</p>\n");
     html.push_str("    </div>\n");
     html.push_str("    <aside class=\"panel status\" id=\"account-session-status\" aria-live=\"polite\" data-session-active=\"");
     html.push_str(active_attr);
@@ -182,7 +450,7 @@ fn game_account_client_shell_html(
     html.push_str("  </section>\n");
     html.push_str("  <section class=\"panel warn\" id=\"account-production-boundary\">\n");
     html.push_str("    <h2>Boundary</h2>\n");
-    html.push_str("    <p>This is the game account client shell and session bridge. It does not claim self-serve password auth, public-launch readiness, or authority over gameplay state.</p>\n");
+    html.push_str("    <p>This is the game account client and signed session bridge. It does not claim public-launch readiness or authority over gameplay state.</p>\n");
     html.push_str("  </section>\n");
     html.push_str("  <script id=\"account-client-readiness\" type=\"application/json\">");
     html.push_str(&readiness_json);
@@ -205,7 +473,7 @@ fn game_account_client_shell_html(
     try {
       const profile = JSON.parse(localStorage.getItem(profileKey) || "{}");
       for (const form of document.querySelectorAll("form[data-account-flow]")) {
-        for (const key of ["matrix_user_id", "room_id", "session_id"]) {
+        for (const key of ["handle", "matrix_user_id", "room_id", "session_id"]) {
           if (profile[key] && form.elements[key]) form.elements[key].value = profile[key];
         }
       }
@@ -216,38 +484,52 @@ fn game_account_client_shell_html(
     const form = event.currentTarget;
     const data = Object.fromEntries(new FormData(form).entries());
     const payload = {
-      matrix_user_id: String(data.matrix_user_id || "").trim(),
+      handle: String(data.handle || "").trim() || null,
+      matrix_user_id: String(data.matrix_user_id || "").trim() || null,
+      display_name: String(data.display_name || "").trim() || null,
+      password: String(data.password || ""),
       room_id: String(data.room_id || "").trim() || null,
       session_id: String(data.session_id || "").trim() || form.dataset.accountFlow
     };
-    if (!payload.matrix_user_id) {
-      updateStatus("Player ID is required.", "warn");
+    if (!payload.handle && !payload.matrix_user_id) {
+      updateStatus("Handle or Player ID is required.", "warn");
       return;
     }
-    localStorage.setItem(profileKey, JSON.stringify({ ...payload, display_name: data.display_name || "" }));
     try {
-      const response = await fetch("/league/web/session", {
+      const response = await fetch(form.dataset.accountEndpoint, {
         method: "POST",
         credentials: "same-origin",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(payload)
       });
+      const body = await response.json().catch(async () => ({ error: await response.text() }));
       if (!response.ok) {
-        const body = await response.text();
-        updateStatus("Session bridge rejected the request (" + response.status + "). " + body, "warn");
+        updateStatus("Account request rejected (" + response.status + "). " + (body.error || "unknown error"), "warn");
         return;
       }
-      updateStatus("Signed game session created. Open the game, world, or league surface.", "status");
+      localStorage.setItem(profileKey, JSON.stringify({
+        handle: payload.handle,
+        matrix_user_id: body.matrix_user_id || payload.matrix_user_id,
+        display_name: body.display_name || payload.display_name || "",
+        room_id: body.room_id || payload.room_id || "",
+        session_id: body.session_id || payload.session_id || ""
+      }));
+      status.setAttribute("data-session-active", "true");
+      updateStatus("Signed game session ready. Open the game, world, or league surface.", "status");
     } catch (error) {
-      updateStatus("Session request failed: " + error, "warn");
+      updateStatus("Account request failed: " + error, "warn");
     }
   };
   for (const form of document.querySelectorAll("form[data-account-flow]")) {
     form.addEventListener("submit", submit);
   }
-  document.getElementById("account-logout-button")?.addEventListener("click", () => {
+  document.getElementById("account-logout-button")?.addEventListener("click", async () => {
     localStorage.removeItem(profileKey);
-    updateStatus("Local profile cleared. Server HttpOnly session cookies expire by TTL.", "status");
+    try {
+      await fetch("/account/logout", { method: "POST", credentials: "same-origin" });
+    } catch (_) {}
+    status.setAttribute("data-session-active", "false");
+    updateStatus("Signed game session cleared.", "status");
   });
   restoreProfile();
 })();
@@ -255,4 +537,254 @@ fn game_account_client_shell_html(
     html.push_str("  </script>\n");
     html.push_str("</main>\n</body>\n</html>\n");
     html
+}
+
+async fn game_account_session_status_json(
+    state: &AppState,
+    web_session: Option<&LeagueWebSessionClaims>,
+) -> Value {
+    let profile = if let Some(session) = web_session {
+        let registry = state.inner.game_account_registry.lock().await;
+        registry
+            .accounts
+            .get(&session.matrix_user_id)
+            .map(|record| {
+                json!({
+                    "matrix_user_id": record.matrix_user_id,
+                    "display_name": record.display_name,
+                    "room_id": record.room_id,
+                    "created_at_epoch": record.created_at_epoch,
+                    "last_login_epoch": record.last_login_epoch,
+                    "disabled": record.disabled,
+                })
+            })
+    } else {
+        None
+    };
+    json!({
+        "kind": "game_account_session_status",
+        "contract_version": GAME_ACCOUNT_SESSION_STATUS_CONTRACT,
+        "active": web_session.is_some(),
+        "session": web_session.map(|session| json!({
+            "matrix_user_id": session.matrix_user_id,
+            "room_id": session.room_id,
+            "session_id": session.session_id,
+            "expires_at_epoch": session.expires_at_epoch,
+            "csrf": session.csrf,
+        })),
+        "profile": profile,
+        "password_auth": {
+            "implemented": true,
+            "enabled": state.config().game_account_password_auth_enabled,
+            "register_endpoint": "/account/register",
+            "login_endpoint": "/account/login",
+            "logout_endpoint": "/account/logout",
+        },
+        "public_launch_credit": false,
+    })
+}
+
+fn ensure_game_account_password_auth_enabled(state: &AppState) -> Result<(), Response> {
+    if !state.config().game_account_password_auth_enabled {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(json!({
+                "error": "game account password auth is disabled",
+                "enable_with": "CONSUMER_ENTRY_GAME_ACCOUNT_PASSWORD_AUTH_ENABLED=true",
+                "session_endpoint": "/league/web/session",
+            })),
+        )
+            .into_response());
+    }
+    if league_web_session_secret(state.config()).is_none() {
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "league web session secret is required for account login" })),
+        )
+            .into_response());
+    }
+    Ok(())
+}
+
+fn normalize_game_account_matrix_user(
+    payload: &GameAccountPasswordRequest,
+    config: &ConsumerEntryConfig,
+) -> Option<String> {
+    let raw = payload
+        .matrix_user_id
+        .as_deref()
+        .or(payload.handle.as_deref())?
+        .trim();
+    if raw.starts_with('@') {
+        return normalize_league_matrix_user(raw);
+    }
+    let handle = raw.trim_start_matches('@').to_ascii_lowercase();
+    if !(3..=40).contains(&handle.len()) {
+        return None;
+    }
+    if !handle
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.'))
+    {
+        return None;
+    }
+    let domain = config
+        .game_account_local_domain
+        .trim()
+        .trim_start_matches(':')
+        .trim_start_matches('@')
+        .trim();
+    let domain = if domain.is_empty() {
+        GAME_ACCOUNT_DEFAULT_DOMAIN
+    } else {
+        domain
+    };
+    Some(format!("@{}:{}", handle, domain))
+}
+
+fn normalize_optional_account_text(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.chars().take(160).collect::<String>())
+}
+
+fn validate_game_account_password(
+    password: &str,
+    config: &ConsumerEntryConfig,
+) -> Result<(), Response> {
+    if password.chars().count() < config.game_account_password_min_chars {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": "password is too short",
+                "minimum_chars": config.game_account_password_min_chars,
+            })),
+        )
+            .into_response());
+    }
+    Ok(())
+}
+
+fn hash_game_account_password(password: &str) -> Result<String, Response> {
+    let salt = SaltString::generate(&mut OsRng);
+    Argon2::default()
+        .hash_password(password.as_bytes(), &salt)
+        .map(|hash| hash.to_string())
+        .map_err(|err| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("failed to hash account password: {err}") })),
+            )
+                .into_response()
+        })
+}
+
+fn verify_game_account_password(password: &str, password_hash: &str) -> bool {
+    let Ok(parsed_hash) = PasswordHash::new(password_hash) else {
+        return false;
+    };
+    Argon2::default()
+        .verify_password(password.as_bytes(), &parsed_hash)
+        .is_ok()
+}
+
+fn invalid_game_account_credentials_response() -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(json!({ "error": "invalid game account credentials" })),
+    )
+        .into_response()
+}
+
+fn persist_game_account_registry(
+    config: &ConsumerEntryConfig,
+    registry: &GameAccountRegistry,
+) -> Result<(), String> {
+    let Some(path) = config.game_account_registry_path.as_deref() else {
+        return Ok(());
+    };
+    if let Some(parent) = StdPath::new(path).parent() {
+        fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+    }
+    let bytes = serde_json::to_vec_pretty(registry).map_err(|err| err.to_string())?;
+    fs::write(path, bytes).map_err(|err| err.to_string())
+}
+
+fn issue_game_account_session_response(
+    state: &AppState,
+    matrix_user_id: String,
+    display_name: Option<String>,
+    room_id: Option<String>,
+    session_id: Option<String>,
+    status: &'static str,
+) -> Response {
+    let Some(secret) = league_web_session_secret(state.config()) else {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "league web session secret is not configured" })),
+        )
+            .into_response();
+    };
+    let now = Utc::now().timestamp();
+    let csrf = league_web_csrf(secret, &matrix_user_id, room_id.as_deref(), now);
+    let claims = LeagueWebSessionClaims {
+        version: 1,
+        matrix_user_id: matrix_user_id.clone(),
+        room_id: room_id.clone(),
+        session_id: session_id.clone(),
+        csrf,
+        issued_at_epoch: now,
+        expires_at_epoch: now + state.config().league_web_session_ttl_secs as i64,
+    };
+    let token = match encode_league_web_session(&claims, secret) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    (
+        StatusCode::OK,
+        [(
+            header::SET_COOKIE,
+            game_account_session_cookie(state.config(), &token),
+        )],
+        Json(json!({
+            "kind": "game_account_session",
+            "contract_version": GAME_ACCOUNT_PASSWORD_AUTH_CONTRACT,
+            "status": status,
+            "matrix_user_id": matrix_user_id,
+            "display_name": display_name,
+            "room_id": room_id,
+            "session_id": session_id,
+            "csrf": claims.csrf,
+            "expires_at_epoch": claims.expires_at_epoch,
+            "session_status_endpoint": "/account/session",
+            "logout_endpoint": "/account/logout",
+            "public_launch_credit": false,
+        })),
+    )
+        .into_response()
+}
+
+fn game_account_session_cookie(config: &ConsumerEntryConfig, token: &str) -> String {
+    let secure = if matches!(config.runtime_profile, RuntimeProfile::LocalDev) {
+        ""
+    } else {
+        "; Secure"
+    };
+    format!(
+        "{}={}; Path=/; HttpOnly; SameSite=Lax; Max-Age={}{}",
+        config.league_web_session_cookie_name, token, config.league_web_session_ttl_secs, secure,
+    )
+}
+
+fn game_account_session_clear_cookie(config: &ConsumerEntryConfig) -> String {
+    let secure = if matches!(config.runtime_profile, RuntimeProfile::LocalDev) {
+        ""
+    } else {
+        "; Secure"
+    };
+    format!(
+        "{}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0{}",
+        config.league_web_session_cookie_name, secure,
+    )
 }

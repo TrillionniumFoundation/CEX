@@ -33,7 +33,7 @@ Already available:
 - A server-rendered web game shell is available at `GET /league` on `consumer-entry-api`, showing the Trillionnium League lobby, match cards, live stats, leaderboard, rewards, playable commands, guild halls, current loadout, replay timeline, and a local-dev Web Battle Console.
 - The web shell now has local-dev playable forms via `POST /league/web/action` for join/guild/team/raid/draft/submit, plus a battle timeline/replay panel that shows ledger settlement state.
 - Production Web session gate is active: `/league/web/session` can mint an HttpOnly SameSite web session cookie from signed upstream auth, and `/league/web/action` uses signed session + CSRF outside local-dev while preserving the local-dev playable shell.
-- First game account client shell is active at `GET /account` and `GET /game/account`: it exposes player register/sign-in forms that bridge into `/league/web/session`, reflects the current signed game session, and keeps browser storage to a local display/profile hint. It is not a self-serve password auth backend and does not count as public-launch account readiness.
+- First game account client is active at `GET /account` and `GET /game/account`: it exposes player register/sign-in forms, optional self-serve Argon2id password registration/login through `POST /account/register` and `POST /account/login`, server-verifiable status through `GET /account/session`, logout through `POST /account/logout`, and signed game-session cookies compatible with `/league/web/session`. It still does not count as public-launch account readiness without real external account/security review evidence.
 - Trillionnium Client App first slice is active: `GET /app` and `GET /v1/client/app/:matrix_user_id` expose a mobile-style shell that integrates World Map (global real-world Leaflet/OpenStreetMap mirror with lightweight Hero's Tale + Gather LOD overlays), Face Duel (Pokémon-like nearby battle via `face-duel-001`), Social (WeChat/Telegram-like room/contact layer), Wallet (Alipay-like credit wallet), and Progression (门派/skills/tools/skins/XP/level). Matrix `/app`, `/duel nearby <出招>`, `/social`, `/pay`, `/progression`, `/skills`, `/tools`, and `/skins` project these modules back into the room.
 - Trillionnium World first slice is active: `GET /v1/world/home` returns zones/locations/detailed map nodes/player positions/Agent residents/assets/upgrades/companies/shops/listings/purchases/work orders/work deliveries/work acceptances/work rejections/work reopens/work cancellations/factions/economy events/contracts/completions, `GET /v1/world/map/:matrix_user_id` and `POST /v1/world/map/move` power a Hero's Tale + Gather style text map, `GET /v1/world/map/:matrix_user_id/viewport` now exposes the map-engine viewport contract for active region shards / Web Mercator tile shards / LOD / nearby POIs, `/world/web/map-viewport` mirrors that viewport stream into the signed web shell for live Leaflet hydration, `POST /v1/world/action` records free-form reality-mirror actions, Matrix `/world action <自由行动>` mutates world state, `GET /world` exposes a playable web World shell with a real-world Leaflet/OpenStreetMap map panel plus live tile/region/POI viewport hydration and CSRF-protected map-move/action/asset/company/listing/buy/work-deliver/work-accept/work-reject/work-reopen/work-cancel/contract consoles, `/contract <委托内容>` creates a real CEX task-backed World Contract, `/complete <contract-id> <交付内容>` scores/settles/upgrades World state, `/upgrade <asset-id|latest> <升级内容>` grows persistent World assets, `/company <asset-id|latest> <公司方案>` launches an operating company/shop from an asset, `/sell <company-id|latest> <服务/商品>` publishes a priced listing, `/buy <listing-id|latest> <需求>` creates a purchase + work order with buyer ledger reserve plus seller ledger settlement/faction standing, `/work deliver <work-id|latest> <交付内容>` records fulfillment proof, `/work accept <work-id|latest> <验收内容>` closes the service loop while attempting buyer ledger consume, `/work reject <work-id|latest> <拒收原因>` rejects delivered work while attempting buyer ledger refund, `/work reopen <work-id|latest> <返工要求>` re-reserves buyer funds so a rejected order can be redelivered, and `/work cancel <work-id|latest> <取消原因>` cancels open work before delivery while attempting buyer ledger refund; `/map` and `/go <direction|node-id>` expose fine-grained map exploration and position persistence.
 
@@ -371,7 +371,7 @@ Use `LedgerEntry.reference_type` values:
 
 Build after Matrix loop proves gameplay.
 
-Status: first server-rendered shell implemented at `/league`, with a same-origin account/session client shell at `/account` and `/game/account`.
+Status: first server-rendered shell implemented at `/league`, with a same-origin account/session client at `/account` and `/game/account`.
 
 Recommended stack can be decided later, but screens should be stable now:
 
@@ -383,12 +383,15 @@ Recommended stack can be decided later, but screens should be stable now:
 - `/league/guilds/:id` guild hall
 - `/league/wallet` wallet/rewards
 
-The current `/league` shell is intentionally same-origin and server-rendered, so it can show live local state without exposing ingress tokens to browser JavaScript. `/account` and `/game/account` now provide the first browser account surface for register/sign-in intent and signed game-session creation through `/league/web/session`; production still depends on upstream signed user-session issuance, not browser-stored passwords.
+The current `/league` shell is intentionally same-origin and server-rendered, so it can show live local state without exposing ingress tokens to browser JavaScript. `/account` and `/game/account` now provide a browser account surface for register/sign-in, optional server-side Argon2id password auth, signed game-session creation, current session status, and logout. Password auth is disabled unless explicitly configured with a registry path and session secret.
 
 ## Production Web Session Gate
 
 - `POST /league/web/session` issues a signed League web session cookie.
-- `GET /account` and `GET /game/account` expose the game account client shell for register/sign-in intent, local profile hint storage, and current session status.
+- `GET /account` and `GET /game/account` expose the game account client for register/sign-in, local profile hint storage, and current session status.
+- `POST /account/register` creates a game account with Argon2id password hash when `CONSUMER_ENTRY_GAME_ACCOUNT_PASSWORD_AUTH_ENABLED=true`, persists it to the configured registry path, and mints the same HttpOnly signed game-session cookie.
+- `POST /account/login` verifies the Argon2id password hash and mints a fresh signed game-session cookie.
+- `GET /account/session` reports the current signed game-session status; `POST /account/logout` expires the server cookie.
 - In local-dev, the session endpoint may be used directly for E2E; in beta/production it requires the existing signed user-session headers and request fingerprint `league-web-session:<matrix_user_id>:<room_id>:<session_id>` with source kind `league_web_session`.
 - The cookie is HttpOnly, SameSite=Lax, and Secure outside local-dev.
 - `/league/web/action` binds the acting player to the signed session and checks the submitted CSRF token before mutating League state.
@@ -397,6 +400,10 @@ The current `/league` shell is intentionally same-origin and server-rendered, so
   - `CONSUMER_ENTRY_LEAGUE_WEB_SESSION_SECRET` / `CONSUMER_ENTRY_WEB_SESSION_SECRET`
   - `CONSUMER_ENTRY_LEAGUE_WEB_SESSION_COOKIE`
   - `CONSUMER_ENTRY_LEAGUE_WEB_SESSION_TTL_SECS`
+  - `CONSUMER_ENTRY_GAME_ACCOUNT_PASSWORD_AUTH_ENABLED`
+  - `CONSUMER_ENTRY_GAME_ACCOUNT_REGISTRY_PATH`
+  - `CONSUMER_ENTRY_GAME_ACCOUNT_PASSWORD_MIN_CHARS`
+  - `CONSUMER_ENTRY_GAME_ACCOUNT_LOCAL_DOMAIN`
 
 ## Judge Pipeline v2
 

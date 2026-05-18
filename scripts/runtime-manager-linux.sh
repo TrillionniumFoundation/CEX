@@ -132,13 +132,14 @@ ensure_entry_runtime_config() {
   fi
 
   mkdir -p "$ENTRY_CONFIG_DIR"
-  local bindings_path registry_path approvals_path audit_path league_state_path league_sql_snapshot_path matrix_recent_event_store_path matrix_rate_limit_store_path
+  local bindings_path registry_path approvals_path audit_path league_state_path league_sql_snapshot_path game_account_registry_path matrix_recent_event_store_path matrix_rate_limit_store_path
   bindings_path="${CONSUMER_ENTRY_IDENTITY_BINDINGS_PATH:-$ENTRY_CONFIG_DIR/identity-bindings.json}"
   registry_path="${CONSUMER_ENTRY_IDENTITY_REGISTRY_PATH:-$ENTRY_CONFIG_DIR/identity-registry.json}"
   approvals_path="${CONSUMER_ENTRY_IDENTITY_BINDING_APPROVED_REVISIONS_PATH:-$ENTRY_CONFIG_DIR/identity-approved-revisions.json}"
   audit_path="${CONSUMER_ENTRY_IDENTITY_BINDING_AUDIT_LOG_PATH:-$ENTRY_CONFIG_DIR/identity-binding-audit.jsonl}"
   league_state_path="${CONSUMER_ENTRY_LEAGUE_STATE_PATH:-$ENTRY_CONFIG_DIR/league-state.json}"
   league_sql_snapshot_path="${CONSUMER_ENTRY_LEAGUE_SQL_SNAPSHOT_PATH:-$ENTRY_CONFIG_DIR/league-state-snapshot.sql}"
+  game_account_registry_path="${CONSUMER_ENTRY_GAME_ACCOUNT_REGISTRY_PATH:-$ENTRY_CONFIG_DIR/game-account-registry.json}"
   matrix_recent_event_store_path="${MATRIX_ENTRY_RECENT_EVENT_STORE_PATH:-$ENTRY_CONFIG_DIR/matrix-entry-recent-events.json}"
   matrix_rate_limit_store_path="${MATRIX_ENTRY_RATE_LIMIT_STORE_PATH:-$ENTRY_CONFIG_DIR/matrix-entry-rate-limit.json}"
 
@@ -204,6 +205,7 @@ JSON
   export CONSUMER_ENTRY_IDENTITY_BINDING_AUDIT_LOG_PATH="$audit_path"
   export CONSUMER_ENTRY_LEAGUE_STATE_PATH="$league_state_path"
   export CONSUMER_ENTRY_LEAGUE_SQL_SNAPSHOT_PATH="$league_sql_snapshot_path"
+  export CONSUMER_ENTRY_GAME_ACCOUNT_REGISTRY_PATH="$game_account_registry_path"
   export MATRIX_ENTRY_RECENT_EVENT_STORE_PATH="$matrix_recent_event_store_path"
   export MATRIX_ENTRY_RATE_LIMIT_STORE_PATH="$matrix_rate_limit_store_path"
   export CONSUMER_ENTRY_INGRESS_TOKEN="${CONSUMER_ENTRY_INGRESS_TOKEN:-local-dev-entry-ingress-token}"

@@ -19,6 +19,7 @@ const DEFAULT_LEAGUE_LLM_JUDGE_TIMEOUT_MS: u64 = 2500;
 const DEFAULT_LEAGUE_WEB_SESSION_TTL_SECS: u64 = 3600;
 const DEFAULT_SESSION_AUTH_MAX_CLOCK_SKEW_SECS: u64 = 300;
 const DEFAULT_SESSION_AUTH_MAX_TTL_SECS: u64 = 900;
+const DEFAULT_GAME_ACCOUNT_PASSWORD_MIN_CHARS: usize = 8;
 const WORLD_MAP_RUM_RECENT_WINDOW: usize = 512;
 const USER_SESSION_ASSERTION_HEADER: &str = "x-cex-user-session";
 const USER_SESSION_SIGNATURE_HEADER: &str = "x-cex-user-session-signature";
@@ -104,6 +105,7 @@ struct AppStateInner {
     identity_binding_audit_state: RwLock<IdentityBindingAuditState>,
     session_auth_issuer_registry_state: StdRwLock<SessionAuthIssuerRegistryRuntimeState>,
     league_state: Mutex<LeagueState>,
+    game_account_registry: Mutex<GameAccountRegistry>,
     health_world_readiness_cache_generation: AtomicU64,
     health_world_readiness_cache: Mutex<Option<HealthWorldReadinessBundleCache>>,
     rate_limits: Mutex<RateLimitCache>,
@@ -2312,10 +2314,15 @@ pub struct ConsumerEntryConfig {
     pub league_web_session_secret: Option<String>,
     pub league_web_session_cookie_name: String,
     pub league_web_session_ttl_secs: u64,
+    pub game_account_password_auth_enabled: bool,
+    pub game_account_registry_path: Option<String>,
+    pub game_account_password_min_chars: usize,
+    pub game_account_local_domain: String,
 }
 
 impl ConsumerEntryConfig {
     pub fn from_env() -> Self {
+        let runtime_profile = RuntimeProfile::from_env();
         let session_auth_issuer_registry_path = first_present_env(&[
             "CONSUMER_ENTRY_SESSION_AUTH_ISSUER_REGISTRY_PATH",
             "CEX_SESSION_AUTH_ISSUER_REGISTRY_PATH",
@@ -2326,7 +2333,7 @@ impl ConsumerEntryConfig {
             session_auth_issuer_registry_metadata.load_error.clone();
 
         Self {
-            runtime_profile: RuntimeProfile::from_env(),
+            runtime_profile,
             bind_addr: env::var("CONSUMER_ENTRY_BIND_ADDR")
                 .unwrap_or_else(|_| "127.0.0.1:8090".to_string()),
             cex_gateway_base_url: env::var("CEX_GATEWAY_BASE_URL")
@@ -2555,7 +2562,7 @@ impl ConsumerEntryConfig {
             ),
             league_web_session_required: boolean_env(
                 "CONSUMER_ENTRY_LEAGUE_WEB_SESSION_REQUIRED",
-                !matches!(RuntimeProfile::from_env(), RuntimeProfile::LocalDev),
+                !matches!(runtime_profile, RuntimeProfile::LocalDev),
             ),
             league_web_session_secret: first_present_env(&[
                 "CONSUMER_ENTRY_LEAGUE_WEB_SESSION_SECRET",
@@ -2570,6 +2577,23 @@ impl ConsumerEntryConfig {
                 "CONSUMER_ENTRY_LEAGUE_WEB_SESSION_TTL_SECS",
                 DEFAULT_LEAGUE_WEB_SESSION_TTL_SECS,
             ),
+            game_account_password_auth_enabled: boolean_env(
+                "CONSUMER_ENTRY_GAME_ACCOUNT_PASSWORD_AUTH_ENABLED",
+                false,
+            ),
+            game_account_registry_path: first_present_env(&[
+                "CONSUMER_ENTRY_GAME_ACCOUNT_REGISTRY_PATH",
+                "CEX_GAME_ACCOUNT_REGISTRY_PATH",
+            ]),
+            game_account_password_min_chars: positive_usize_env(
+                "CONSUMER_ENTRY_GAME_ACCOUNT_PASSWORD_MIN_CHARS",
+                DEFAULT_GAME_ACCOUNT_PASSWORD_MIN_CHARS,
+            ),
+            game_account_local_domain: env::var("CONSUMER_ENTRY_GAME_ACCOUNT_LOCAL_DOMAIN")
+                .ok()
+                .map(|value| value.trim().to_ascii_lowercase())
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| "trillionnium.local".to_string()),
         }
     }
 
@@ -2636,6 +2660,13 @@ impl ConsumerEntryConfig {
                         .to_string(),
                 );
             }
+            if self.game_account_password_auth_enabled && self.game_account_registry_path.is_none()
+            {
+                errors.push(
+                    "beta/production game account password auth requires CONSUMER_ENTRY_GAME_ACCOUNT_REGISTRY_PATH"
+                        .to_string(),
+                );
+            }
             if self.session_auth_issuer_registry_require_approved_revision {
                 let approval_state =
                     load_session_auth_issuer_registry_revision_approval_state(self);
@@ -2696,6 +2727,20 @@ impl ConsumerEntryConfig {
                 errors.push(
                     "beta/production profile requires non-default CEX_GATEWAY_API_KEY".to_string(),
                 );
+            }
+        }
+
+        if self.game_account_password_auth_enabled {
+            if league_web_session_secret(self).is_none() {
+                errors.push(
+                    "game account password auth requires CONSUMER_ENTRY_LEAGUE_WEB_SESSION_SECRET or CONSUMER_ENTRY_SESSION_AUTH_SECRET"
+                        .to_string(),
+                );
+            }
+            if self.game_account_password_min_chars < DEFAULT_GAME_ACCOUNT_PASSWORD_MIN_CHARS {
+                errors.push(format!(
+                    "game account password auth requires password min chars >= {DEFAULT_GAME_ACCOUNT_PASSWORD_MIN_CHARS}"
+                ));
             }
         }
 
@@ -4065,6 +4110,7 @@ impl AppState {
         };
         let rate_limits = load_rate_limit_cache(&config);
         let replay_cache = load_replay_cache(&config);
+        let game_account_registry = load_game_account_registry(&config);
         let metrics = ConsumerEntryMetrics::default();
         if identity_binding_audit_state.last_status != "written"
             && config.identity_binding_audit_log_path.is_some()
@@ -4081,6 +4127,7 @@ impl AppState {
                     session_auth_issuer_registry_state,
                 ),
                 league_state: Mutex::new(league_state),
+                game_account_registry: Mutex::new(game_account_registry),
                 health_world_readiness_cache_generation: AtomicU64::new(0),
                 health_world_readiness_cache: Mutex::new(None),
                 rate_limits: Mutex::new(rate_limits),
@@ -4118,6 +4165,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/app", get(get_client_app_web_shell_response))
         .route("/account", get(get_game_account_client_shell_response))
         .route("/game/account", get(get_game_account_client_shell_response))
+        .route("/account/session", get(get_game_account_session_status))
+        .route("/account/register", post(post_game_account_register))
+        .route("/account/login", post(post_game_account_login))
+        .route("/account/logout", post(post_game_account_logout))
         .route("/league", get(get_league_web_shell))
         .route("/world", get(get_world_web_shell_response))
         .route("/league/web/session", post(post_league_web_session))

@@ -15,8 +15,9 @@ use super::{
     get_client_app_web_shell, get_world_web_shell, league_hash_id, league_hidden_test_event,
     league_reward_ledger_released_from_state, league_state_hash,
     league_state_repository_write_set_for_command, league_state_sql_cutover_plan_json,
-    league_state_sql_shadow_validation_json, load_identity_binding_revision_approval_state,
-    load_identity_binding_store, load_rate_limit_cache, load_session_auth_issuer_registry,
+    league_state_sql_shadow_validation_json, load_game_account_registry,
+    load_identity_binding_revision_approval_state, load_identity_binding_store,
+    load_rate_limit_cache, load_session_auth_issuer_registry,
     load_session_auth_issuer_registry_revision_approval_state,
     normalized_repository_client_feed_read_model_sql, normalized_repository_command_shadow_sql,
     normalized_repository_direct_write_contract_json,
@@ -46,9 +47,9 @@ use super::{
     WorldAsset, WorldCompany, WorldContract, WorldContractCompletion, WorldEconomyEvent,
     WorldEvent, WorldListing, WorldMapNode, WorldPlayerPosition, WorldPurchase, WorldRelationship,
     WorldShop, WorldTrillionniumCharacter, WorldWorkCancellation, WorldWorkOrder,
-    WorldWorkRejection, WorldWorkReopen, DEFAULT_LEAGUE_LLM_JUDGE_TIMEOUT_MS,
-    DEFAULT_LEAGUE_WEB_SESSION_TTL_SECS, DEFAULT_MAX_TEXT_CHARS,
-    TRILLIONNIUM_REPOSITORY_MIGRATION_FLOOR, USER_SESSION_ASSERTION_HEADER,
+    WorldWorkRejection, WorldWorkReopen, DEFAULT_GAME_ACCOUNT_PASSWORD_MIN_CHARS,
+    DEFAULT_LEAGUE_LLM_JUDGE_TIMEOUT_MS, DEFAULT_LEAGUE_WEB_SESSION_TTL_SECS,
+    DEFAULT_MAX_TEXT_CHARS, TRILLIONNIUM_REPOSITORY_MIGRATION_FLOOR, USER_SESSION_ASSERTION_HEADER,
     USER_SESSION_SIGNATURE_HEADER, WORLD_ROUTE_ACTION_TEXTAREA_ID, WORLD_ROUTE_CONTRACTS_PANEL_ID,
     WORLD_ROUTE_CONTRACT_INPUT_ID, WORLD_ROUTE_WORK_DELIVER_TEXTAREA_ID,
 };
@@ -1913,6 +1914,10 @@ fn test_config() -> ConsumerEntryConfig {
         league_web_session_secret: None,
         league_web_session_cookie_name: "cex_league_session".to_string(),
         league_web_session_ttl_secs: DEFAULT_LEAGUE_WEB_SESSION_TTL_SECS,
+        game_account_password_auth_enabled: false,
+        game_account_registry_path: None,
+        game_account_password_min_chars: DEFAULT_GAME_ACCOUNT_PASSWORD_MIN_CHARS,
+        game_account_local_domain: "trillionnium.local".to_string(),
     }
 }
 
@@ -1925,6 +1930,7 @@ fn test_state(
         metadata: config.session_auth_issuer_registry_metadata.clone(),
         registry: config.session_auth_issuer_registry.clone(),
     };
+    let game_account_registry = load_game_account_registry(&config);
     AppState {
         inner: Arc::new(AppStateInner {
             http: Client::new(),
@@ -1947,6 +1953,7 @@ fn test_state(
             identity_binding_audit_state: RwLock::new(IdentityBindingAuditState::default()),
             session_auth_issuer_registry_state: StdRwLock::new(session_auth_issuer_registry_state),
             league_state: Mutex::new(default_league_state()),
+            game_account_registry: Mutex::new(game_account_registry),
             health_world_readiness_cache_generation: AtomicU64::new(0),
             health_world_readiness_cache: Mutex::new(None),
             rate_limits: Mutex::new(RateLimitCache::default()),
@@ -2017,10 +2024,15 @@ async fn game_account_client_shell_exposes_register_login_session_bridge() {
         assert!(body.contains(r#"id="account-session-status""#));
         assert!(body.contains(r#"id="account-client-readiness""#));
         assert!(body.contains("/league/web/session"));
+        assert!(body.contains("/account/register"));
+        assert!(body.contains("/account/login"));
+        assert!(body.contains("/account/logout"));
         assert!(body.contains("password_auth_implemented"));
         assert!(body.contains("public_launch_credit"));
         assert!(body.contains(r#"data-public-launch-credit="false""#));
         assert!(body.contains(r#"data-client-submits-intent-only="true""#));
+        assert!(body.contains(r#"data-password-auth-implemented="true""#));
+        assert!(body.contains(r#"data-password-auth-enabled="false""#));
         assert!(body.contains(r#"data-session-active="false""#));
     }
 }
@@ -2055,6 +2067,139 @@ async fn game_account_client_shell_reflects_signed_game_session_cookie() {
     assert!(body.contains("@alice:local.dev"));
     assert!(body.contains("!room:local.dev"));
     assert!(body.contains("account-client"));
+}
+
+#[tokio::test]
+async fn game_account_password_register_login_status_logout_roundtrip() {
+    let temp_path = temp_identity_bindings_path("game-account-password-roundtrip");
+    let mut config = test_config();
+    config.league_web_session_secret = Some("game-account-password-secret".to_string());
+    config.game_account_password_auth_enabled = true;
+    config.game_account_registry_path = Some(temp_path.to_string_lossy().to_string());
+    let app = build_router(AppState::new(config));
+
+    let password = "correct horse 123";
+    let (register_status, register_headers, register_body) =
+        send_json_request_with_response_headers(
+            &app,
+            "POST",
+            "/account/register",
+            &[],
+            json!({
+                "handle": "Pilot_One",
+                "display_name": "Pilot One",
+                "password": password,
+                "room_id": "!lobby:local.dev",
+                "session_id": "first-browser",
+            }),
+        )
+        .await;
+    assert_eq!(register_status, StatusCode::OK);
+    assert_eq!(
+        register_body["contract_version"],
+        "trillionnium_game_account_password_auth_v1"
+    );
+    assert_eq!(
+        register_body["matrix_user_id"],
+        "@pilot_one:trillionnium.local"
+    );
+    assert_eq!(register_body["display_name"], "Pilot One");
+    assert_eq!(register_body["public_launch_credit"], false);
+    assert!(register_body.get("password").is_none());
+    let set_cookie = register_headers
+        .get("set-cookie")
+        .and_then(|value| value.to_str().ok())
+        .expect("register set-cookie");
+    assert!(set_cookie.contains("cex_league_session="));
+    assert!(set_cookie.contains("HttpOnly"));
+    assert!(set_cookie.contains("SameSite=Lax"));
+    let session_cookie = set_cookie
+        .split(';')
+        .next()
+        .expect("cookie pair")
+        .to_string();
+
+    let registry_body = fs::read_to_string(&temp_path).expect("read game account registry");
+    assert!(registry_body.contains("@pilot_one:trillionnium.local"));
+    assert!(registry_body.contains("$argon2"));
+    assert!(!registry_body.contains(password));
+
+    let (duplicate_status, duplicate_body) = send_json_request(
+        &app,
+        "POST",
+        "/account/register",
+        &[],
+        json!({
+            "handle": "pilot_one",
+            "password": password,
+        }),
+    )
+    .await;
+    assert_eq!(duplicate_status, StatusCode::CONFLICT);
+    assert_eq!(duplicate_body["error"], "game account already exists");
+
+    let (session_status, _session_headers, session_body) = send_text_request_with_headers(
+        &app,
+        "GET",
+        "/account/session",
+        &[("cookie", &session_cookie)],
+    )
+    .await;
+    assert_eq!(session_status, StatusCode::OK);
+    let session_json: Value = serde_json::from_str(&session_body).expect("session status json");
+    assert_eq!(session_json["active"], true);
+    assert_eq!(
+        session_json["session"]["matrix_user_id"],
+        "@pilot_one:trillionnium.local"
+    );
+    assert_eq!(session_json["profile"]["display_name"], "Pilot One");
+
+    let (bad_login_status, bad_login_body) = send_json_request(
+        &app,
+        "POST",
+        "/account/login",
+        &[],
+        json!({
+            "handle": "pilot_one",
+            "password": "wrong password",
+        }),
+    )
+    .await;
+    assert_eq!(bad_login_status, StatusCode::UNAUTHORIZED);
+    assert_eq!(bad_login_body["error"], "invalid game account credentials");
+
+    let (login_status, login_headers, login_body) = send_json_request_with_response_headers(
+        &app,
+        "POST",
+        "/account/login",
+        &[],
+        json!({
+            "handle": "pilot_one",
+            "password": password,
+            "session_id": "returning-browser",
+        }),
+    )
+    .await;
+    assert_eq!(login_status, StatusCode::OK);
+    assert_eq!(login_body["status"], "logged_in");
+    assert_eq!(login_body["session_id"], "returning-browser");
+    assert!(login_headers
+        .get("set-cookie")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .contains("cex_league_session="));
+
+    let (logout_status, logout_headers, logout_body) =
+        send_text_request_with_headers(&app, "POST", "/account/logout", &[]).await;
+    assert_eq!(logout_status, StatusCode::OK);
+    assert!(logout_headers
+        .get("set-cookie")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .contains("Max-Age=0"));
+    assert!(logout_body.contains("game_account_logout"));
+
+    let _ = std::fs::remove_file(&temp_path);
 }
 
 #[tokio::test]
@@ -14616,6 +14761,42 @@ async fn send_json_request(
     let body: Value = serde_json::from_slice(&bytes).expect("decode json response body");
 
     (status, body)
+}
+
+async fn send_json_request_with_response_headers(
+    app: &axum::Router,
+    method: &str,
+    uri: &str,
+    headers: &[(&str, &str)],
+    body: Value,
+) -> (StatusCode, HeaderMap, Value) {
+    let mut request = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("content-type", "application/json");
+
+    for (name, value) in headers {
+        request = request.header(*name, *value);
+    }
+
+    let request = request
+        .body(Body::from(
+            serde_json::to_vec(&body).expect("serialize request body"),
+        ))
+        .expect("build request body");
+    let response = app
+        .clone()
+        .oneshot(request)
+        .await
+        .expect("request response");
+    let status = response.status();
+    let headers = response.headers().clone();
+    let bytes = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read response body bytes");
+    let body: Value = serde_json::from_slice(&bytes).expect("decode json response body");
+
+    (status, headers, body)
 }
 
 async fn start_real_ledger_service_for_world_e2e() -> (String, String) {
