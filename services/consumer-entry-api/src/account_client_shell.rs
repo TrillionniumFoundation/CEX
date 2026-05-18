@@ -99,6 +99,7 @@ pub(super) async fn post_game_account_logout(State(state): State<AppState>) -> R
 
 pub(super) async fn post_game_account_register(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(payload): Json<GameAccountPasswordRequest>,
 ) -> Response {
     if let Err(response) = ensure_game_account_password_auth_enabled(&state) {
@@ -116,6 +117,11 @@ pub(super) async fn post_game_account_register(
             )
                 .into_response(),
         };
+    if let Err(response) =
+        enforce_game_account_auth_rate_limits(&state, &headers, "register", &matrix_user_id).await
+    {
+        return response;
+    }
     if let Err(response) = validate_game_account_password(&payload.password, state.config()) {
         return response;
     }
@@ -172,6 +178,7 @@ pub(super) async fn post_game_account_register(
 
 pub(super) async fn post_game_account_login(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(payload): Json<GameAccountPasswordRequest>,
 ) -> Response {
     if let Err(response) = ensure_game_account_password_auth_enabled(&state) {
@@ -187,6 +194,11 @@ pub(super) async fn post_game_account_login(
                 .into_response()
         }
     };
+    if let Err(response) =
+        enforce_game_account_auth_rate_limits(&state, &headers, "login", &matrix_user_id).await
+    {
+        return response;
+    }
     let record = {
         let registry = state.inner.game_account_registry.lock().await;
         registry.accounts.get(&matrix_user_id).cloned()
@@ -320,6 +332,8 @@ async fn game_account_client_shell_html(
             "registry_persistence": registry_persistence,
             "registered_account_count": account_count,
             "minimum_password_chars": state.config().game_account_password_min_chars,
+            "auth_rate_limit_max_requests": state.config().game_account_auth_rate_limit_max_requests,
+            "auth_rate_limit_window_secs": state.config().rate_limit_window_secs,
             "default_local_domain": state.config().game_account_local_domain
         },
         "production_boundary": {
@@ -604,6 +618,62 @@ fn ensure_game_account_password_auth_enabled(state: &AppState) -> Result<(), Res
             .into_response());
     }
     Ok(())
+}
+
+async fn enforce_game_account_auth_rate_limits(
+    state: &AppState,
+    headers: &HeaderMap,
+    action: &str,
+    matrix_user_id: &str,
+) -> Result<(), Response> {
+    let max_requests = state.config().game_account_auth_rate_limit_max_requests;
+    let account_key = format!("game-account-auth:{action}:account:{matrix_user_id}");
+    enforce_rate_limit(
+        state,
+        account_key,
+        max_requests,
+        "consumer_entry_game_account_auth_rate_limited",
+        RateLimitBucketKind::User,
+    )
+    .await?;
+
+    let source_key = format!(
+        "game-account-auth:{action}:source:{}",
+        game_account_auth_source_key(headers)
+    );
+    enforce_rate_limit(
+        state,
+        source_key,
+        max_requests,
+        "consumer_entry_game_account_source_rate_limited",
+        RateLimitBucketKind::SourceScope,
+    )
+    .await
+}
+
+fn game_account_auth_source_key(headers: &HeaderMap) -> String {
+    headers
+        .get("x-forwarded-for")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(',').next())
+        .or_else(|| {
+            headers
+                .get("x-real-ip")
+                .and_then(|value| value.to_str().ok())
+        })
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("direct")
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '.' | ':' | '-' | '_') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .take(96)
+        .collect()
 }
 
 fn normalize_game_account_matrix_user(

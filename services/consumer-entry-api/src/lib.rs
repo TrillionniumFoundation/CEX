@@ -20,6 +20,7 @@ const DEFAULT_LEAGUE_WEB_SESSION_TTL_SECS: u64 = 3600;
 const DEFAULT_SESSION_AUTH_MAX_CLOCK_SKEW_SECS: u64 = 300;
 const DEFAULT_SESSION_AUTH_MAX_TTL_SECS: u64 = 900;
 const DEFAULT_GAME_ACCOUNT_PASSWORD_MIN_CHARS: usize = 8;
+const DEFAULT_GAME_ACCOUNT_AUTH_RATE_LIMIT_MAX_REQUESTS: usize = 5;
 const WORLD_MAP_RUM_RECENT_WINDOW: usize = 512;
 const USER_SESSION_ASSERTION_HEADER: &str = "x-cex-user-session";
 const USER_SESSION_SIGNATURE_HEADER: &str = "x-cex-user-session-signature";
@@ -2317,6 +2318,7 @@ pub struct ConsumerEntryConfig {
     pub game_account_password_auth_enabled: bool,
     pub game_account_registry_path: Option<String>,
     pub game_account_password_min_chars: usize,
+    pub game_account_auth_rate_limit_max_requests: usize,
     pub game_account_local_domain: String,
 }
 
@@ -2589,6 +2591,10 @@ impl ConsumerEntryConfig {
                 "CONSUMER_ENTRY_GAME_ACCOUNT_PASSWORD_MIN_CHARS",
                 DEFAULT_GAME_ACCOUNT_PASSWORD_MIN_CHARS,
             ),
+            game_account_auth_rate_limit_max_requests: positive_usize_env(
+                "CONSUMER_ENTRY_GAME_ACCOUNT_AUTH_RATE_LIMIT_MAX_REQUESTS",
+                DEFAULT_GAME_ACCOUNT_AUTH_RATE_LIMIT_MAX_REQUESTS,
+            ),
             game_account_local_domain: env::var("CONSUMER_ENTRY_GAME_ACCOUNT_LOCAL_DOMAIN")
                 .ok()
                 .map(|value| value.trim().to_ascii_lowercase())
@@ -2741,6 +2747,12 @@ impl ConsumerEntryConfig {
                 errors.push(format!(
                     "game account password auth requires password min chars >= {DEFAULT_GAME_ACCOUNT_PASSWORD_MIN_CHARS}"
                 ));
+            }
+            if self.game_account_auth_rate_limit_max_requests == 0 {
+                errors.push(
+                    "game account password auth requires CONSUMER_ENTRY_GAME_ACCOUNT_AUTH_RATE_LIMIT_MAX_REQUESTS > 0"
+                        .to_string(),
+                );
             }
         }
 
@@ -3884,6 +3896,7 @@ fn max_rate_limit_entries(config: &ConsumerEntryConfig) -> usize {
         config.rate_limit_room_max_requests,
         config.rate_limit_session_max_requests,
         config.rate_limit_org_max_requests,
+        config.game_account_auth_rate_limit_max_requests,
     ]
     .into_iter()
     .max()

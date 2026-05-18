@@ -391,6 +391,7 @@ The current `/league` shell is intentionally same-origin and server-rendered, so
 - `GET /account` and `GET /game/account` expose the game account client for register/sign-in, local profile hint storage, and current session status.
 - `POST /account/register` creates a game account with Argon2id password hash when `CONSUMER_ENTRY_GAME_ACCOUNT_PASSWORD_AUTH_ENABLED=true`, persists it to the configured registry path, and mints the same HttpOnly signed game-session cookie.
 - `POST /account/login` verifies the Argon2id password hash and mints a fresh signed game-session cookie.
+- Register/login attempts are rate-limited by normalized account id and request source before password verification.
 - `GET /account/session` reports the current signed game-session status; `POST /account/logout` expires the server cookie.
 - In local-dev, the session endpoint may be used directly for E2E; in beta/production it requires the existing signed user-session headers and request fingerprint `league-web-session:<matrix_user_id>:<room_id>:<session_id>` with source kind `league_web_session`.
 - The cookie is HttpOnly, SameSite=Lax, and Secure outside local-dev.
@@ -403,6 +404,7 @@ The current `/league` shell is intentionally same-origin and server-rendered, so
   - `CONSUMER_ENTRY_GAME_ACCOUNT_PASSWORD_AUTH_ENABLED`
   - `CONSUMER_ENTRY_GAME_ACCOUNT_REGISTRY_PATH`
   - `CONSUMER_ENTRY_GAME_ACCOUNT_PASSWORD_MIN_CHARS`
+  - `CONSUMER_ENTRY_GAME_ACCOUNT_AUTH_RATE_LIMIT_MAX_REQUESTS`
   - `CONSUMER_ENTRY_GAME_ACCOUNT_LOCAL_DOMAIN`
 
 ## Judge Pipeline v2

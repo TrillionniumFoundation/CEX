@@ -47,9 +47,10 @@ use super::{
     WorldAsset, WorldCompany, WorldContract, WorldContractCompletion, WorldEconomyEvent,
     WorldEvent, WorldListing, WorldMapNode, WorldPlayerPosition, WorldPurchase, WorldRelationship,
     WorldShop, WorldTrillionniumCharacter, WorldWorkCancellation, WorldWorkOrder,
-    WorldWorkRejection, WorldWorkReopen, DEFAULT_GAME_ACCOUNT_PASSWORD_MIN_CHARS,
-    DEFAULT_LEAGUE_LLM_JUDGE_TIMEOUT_MS, DEFAULT_LEAGUE_WEB_SESSION_TTL_SECS,
-    DEFAULT_MAX_TEXT_CHARS, TRILLIONNIUM_REPOSITORY_MIGRATION_FLOOR, USER_SESSION_ASSERTION_HEADER,
+    WorldWorkRejection, WorldWorkReopen, DEFAULT_GAME_ACCOUNT_AUTH_RATE_LIMIT_MAX_REQUESTS,
+    DEFAULT_GAME_ACCOUNT_PASSWORD_MIN_CHARS, DEFAULT_LEAGUE_LLM_JUDGE_TIMEOUT_MS,
+    DEFAULT_LEAGUE_WEB_SESSION_TTL_SECS, DEFAULT_MAX_TEXT_CHARS,
+    TRILLIONNIUM_REPOSITORY_MIGRATION_FLOOR, USER_SESSION_ASSERTION_HEADER,
     USER_SESSION_SIGNATURE_HEADER, WORLD_ROUTE_ACTION_TEXTAREA_ID, WORLD_ROUTE_CONTRACTS_PANEL_ID,
     WORLD_ROUTE_CONTRACT_INPUT_ID, WORLD_ROUTE_WORK_DELIVER_TEXTAREA_ID,
 };
@@ -1917,6 +1918,8 @@ fn test_config() -> ConsumerEntryConfig {
         game_account_password_auth_enabled: false,
         game_account_registry_path: None,
         game_account_password_min_chars: DEFAULT_GAME_ACCOUNT_PASSWORD_MIN_CHARS,
+        game_account_auth_rate_limit_max_requests:
+            DEFAULT_GAME_ACCOUNT_AUTH_RATE_LIMIT_MAX_REQUESTS,
         game_account_local_domain: "trillionnium.local".to_string(),
     }
 }
@@ -2028,6 +2031,7 @@ async fn game_account_client_shell_exposes_register_login_session_bridge() {
         assert!(body.contains("/account/login"));
         assert!(body.contains("/account/logout"));
         assert!(body.contains("password_auth_implemented"));
+        assert!(body.contains("auth_rate_limit_max_requests"));
         assert!(body.contains("public_launch_credit"));
         assert!(body.contains(r#"data-public-launch-credit="false""#));
         assert!(body.contains(r#"data-client-submits-intent-only="true""#));
@@ -2198,6 +2202,53 @@ async fn game_account_password_register_login_status_logout_roundtrip() {
         .unwrap_or_default()
         .contains("Max-Age=0"));
     assert!(logout_body.contains("game_account_logout"));
+
+    let _ = std::fs::remove_file(&temp_path);
+}
+
+#[tokio::test]
+async fn game_account_password_auth_rate_limits_repeated_attempts() {
+    let temp_path = temp_identity_bindings_path("game-account-rate-limit");
+    let mut config = test_config();
+    config.league_web_session_secret = Some("game-account-rate-secret".to_string());
+    config.game_account_password_auth_enabled = true;
+    config.game_account_registry_path = Some(temp_path.to_string_lossy().to_string());
+    config.game_account_auth_rate_limit_max_requests = 2;
+    let app = build_router(AppState::new(config));
+
+    for index in 0..2 {
+        let (status, body) = send_json_request(
+            &app,
+            "POST",
+            "/account/login",
+            &[("x-real-ip", "203.0.113.5")],
+            json!({
+                "handle": "ratepilot",
+                "password": format!("wrong-{index}"),
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert_eq!(body["error"], "invalid game account credentials");
+    }
+
+    let (limited_status, limited_body) = send_json_request(
+        &app,
+        "POST",
+        "/account/login",
+        &[("x-real-ip", "203.0.113.5")],
+        json!({
+            "handle": "ratepilot",
+            "password": "still-wrong",
+        }),
+    )
+    .await;
+    assert_eq!(limited_status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(
+        limited_body["error"],
+        "consumer_entry_game_account_auth_rate_limited"
+    );
+    assert_eq!(limited_body["rate_limit_bucket"], "user");
 
     let _ = std::fs::remove_file(&temp_path);
 }
