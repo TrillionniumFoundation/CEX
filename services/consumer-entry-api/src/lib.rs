@@ -153,6 +153,7 @@ struct ConsumerEntryMetrics {
     game_account_password_change_successes: AtomicU64,
     game_account_password_change_failures: AtomicU64,
     game_account_session_refresh_successes: AtomicU64,
+    game_account_session_revoke_successes: AtomicU64,
     game_account_auth_rate_limited: AtomicU64,
     replay_hits: AtomicU64,
     world_map_rum_samples: AtomicU64,
@@ -292,6 +293,11 @@ impl ConsumerEntryMetrics {
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    fn inc_game_account_session_revoke_successes(&self) {
+        self.game_account_session_revoke_successes
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     fn inc_game_account_auth_rate_limited(&self) {
         self.game_account_auth_rate_limited
             .fetch_add(1, Ordering::Relaxed);
@@ -391,6 +397,7 @@ impl ConsumerEntryMetrics {
             "password_change_successes": self.game_account_password_change_successes.load(Ordering::Relaxed),
             "password_change_failures": self.game_account_password_change_failures.load(Ordering::Relaxed),
             "session_refresh_successes": self.game_account_session_refresh_successes.load(Ordering::Relaxed),
+            "session_revoke_successes": self.game_account_session_revoke_successes.load(Ordering::Relaxed),
             "auth_rate_limited": self.game_account_auth_rate_limited.load(Ordering::Relaxed),
             "passwords_tokens_or_cookie_values_logged": false,
         })
@@ -2243,6 +2250,8 @@ struct LeagueWebSessionClaims {
     room_id: Option<String>,
     session_id: Option<String>,
     csrf: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    game_account_session_generation: Option<u64>,
     issued_at_epoch: i64,
     expires_at_epoch: i64,
 }
@@ -4246,6 +4255,10 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/account/session/refresh",
             post(post_game_account_session_refresh),
+        )
+        .route(
+            "/account/session/revoke",
+            post(post_game_account_session_revoke),
         )
         .route("/account/register", post(post_game_account_register))
         .route("/account/login", post(post_game_account_login))

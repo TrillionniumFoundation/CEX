@@ -280,6 +280,13 @@ fn authorize_league_web_session_inner(
         )
             .into_response());
     }
+    if let Some(session_generation) = claims.game_account_session_generation {
+        validate_game_account_session_generation(
+            state,
+            &claims.matrix_user_id,
+            session_generation,
+        )?;
+    }
     Ok(Some(claims))
 }
 

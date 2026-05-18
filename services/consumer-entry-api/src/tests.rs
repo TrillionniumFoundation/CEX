@@ -1982,6 +1982,7 @@ fn league_web_session_readonly_validates_cookie_without_requiring_csrf() {
         room_id: Some("!room:local.dev".to_string()),
         session_id: Some("readonly-test".to_string()),
         csrf: "csrf-readonly-test".to_string(),
+        game_account_session_generation: None,
         issued_at_epoch: Utc::now().timestamp(),
         expires_at_epoch: Utc::now().timestamp() + 300,
     };
@@ -2026,6 +2027,7 @@ async fn game_account_client_shell_exposes_register_login_session_bridge() {
         assert!(body.contains(r#"id="account-login-form""#));
         assert!(body.contains(r#"id="account-password-change-form""#));
         assert!(body.contains(r#"id="account-session-refresh-button""#));
+        assert!(body.contains(r#"id="account-session-revoke-button""#));
         assert!(body.contains(r#"id="account-session-status""#));
         assert!(body.contains(r#"id="account-client-readiness""#));
         assert!(body.contains("/league/web/session"));
@@ -2033,6 +2035,7 @@ async fn game_account_client_shell_exposes_register_login_session_bridge() {
         assert!(body.contains("/account/login"));
         assert!(body.contains("/account/password/change"));
         assert!(body.contains("/account/session/refresh"));
+        assert!(body.contains("/account/session/revoke"));
         assert!(body.contains("/account/logout"));
         assert!(body.contains("password_auth_implemented"));
         assert!(body.contains("auth_rate_limit_max_requests"));
@@ -2060,6 +2063,7 @@ async fn game_account_client_shell_reflects_signed_game_session_cookie() {
         room_id: Some("!room:local.dev".to_string()),
         session_id: Some("account-client".to_string()),
         csrf: "csrf-account-client".to_string(),
+        game_account_session_generation: None,
         issued_at_epoch: Utc::now().timestamp(),
         expires_at_epoch: Utc::now().timestamp() + 300,
     };
@@ -2179,7 +2183,7 @@ async fn game_account_password_register_login_status_logout_roundtrip() {
     assert_eq!(bad_change_status, StatusCode::UNAUTHORIZED);
     assert_eq!(bad_change_body["error"], "invalid game account credentials");
 
-    let (change_status, change_body) = send_json_request(
+    let (change_status, change_headers, change_body) = send_json_request_with_response_headers(
         &app,
         "POST",
         "/account/password/change",
@@ -2195,7 +2199,30 @@ async fn game_account_password_register_login_status_logout_roundtrip() {
     assert_eq!(change_body["kind"], "game_account_password_change");
     assert_eq!(change_body["status"], "password_changed");
     assert_eq!(change_body["active_session_preserved"], true);
+    assert_eq!(change_body["game_account_session_generation"], 2);
     assert!(change_body.get("password").is_none());
+    let change_set_cookie = change_headers
+        .get("set-cookie")
+        .and_then(|value| value.to_str().ok())
+        .expect("password change set-cookie");
+    assert!(change_set_cookie.contains("cex_league_session="));
+    let changed_session_cookie = change_set_cookie
+        .split(';')
+        .next()
+        .expect("changed cookie pair")
+        .to_string();
+    let change_csrf = change_body["csrf"].as_str().expect("change csrf");
+
+    let (stale_session_status, _stale_session_headers, stale_session_body) =
+        send_text_request_with_headers(
+            &app,
+            "GET",
+            "/account/session",
+            &[("cookie", &session_cookie)],
+        )
+        .await;
+    assert_eq!(stale_session_status, StatusCode::UNAUTHORIZED);
+    assert!(stale_session_body.contains("revoked"));
 
     let registry_body = fs::read_to_string(&temp_path).expect("read updated game account registry");
     assert!(registry_body.contains("@pilot_one:trillionnium.local"));
@@ -2237,20 +2264,14 @@ async fn game_account_password_register_login_status_logout_roundtrip() {
         .and_then(|value| value.to_str().ok())
         .expect("login set-cookie");
     assert!(login_set_cookie.contains("cex_league_session="));
-    let login_session_cookie = login_set_cookie
-        .split(';')
-        .next()
-        .expect("login cookie pair")
-        .to_string();
-    let login_csrf = login_body["csrf"].as_str().expect("login csrf");
 
     let (refresh_status, refresh_headers, refresh_body) = send_json_request_with_response_headers(
         &app,
         "POST",
         "/account/session/refresh",
-        &[("cookie", &login_session_cookie)],
+        &[("cookie", &changed_session_cookie)],
         json!({
-            "csrf": login_csrf,
+            "csrf": change_csrf,
             "session_id": "refreshed-browser",
         }),
     )
@@ -2258,7 +2279,8 @@ async fn game_account_password_register_login_status_logout_roundtrip() {
     assert_eq!(refresh_status, StatusCode::OK);
     assert_eq!(refresh_body["status"], "session_refreshed");
     assert_eq!(refresh_body["session_id"], "refreshed-browser");
-    assert_ne!(refresh_body["csrf"], login_body["csrf"]);
+    assert_eq!(refresh_body["game_account_session_generation"], 2);
+    assert_ne!(refresh_body["csrf"], change_body["csrf"]);
     let refresh_set_cookie = refresh_headers
         .get("set-cookie")
         .and_then(|value| value.to_str().ok())
@@ -2270,13 +2292,39 @@ async fn game_account_password_register_login_status_logout_roundtrip() {
         .expect("refresh cookie pair")
         .to_string();
 
-    let (logout_status, logout_headers, logout_body) = send_text_request_with_headers(
+    let refresh_csrf = refresh_body["csrf"].as_str().expect("refresh csrf");
+    let (revoke_status, revoke_headers, revoke_body) = send_json_request_with_response_headers(
         &app,
         "POST",
-        "/account/logout",
+        "/account/session/revoke",
         &[("cookie", &refreshed_session_cookie)],
+        json!({ "csrf": refresh_csrf }),
     )
     .await;
+    assert_eq!(revoke_status, StatusCode::OK);
+    assert_eq!(revoke_body["kind"], "game_account_session_revoke");
+    assert_eq!(revoke_body["status"], "sessions_revoked");
+    assert_eq!(revoke_body["revoked_game_account_sessions"], true);
+    assert_eq!(revoke_body["game_account_session_generation"], 3);
+    assert!(revoke_headers
+        .get("set-cookie")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .contains("Max-Age=0"));
+
+    let (revoked_session_status, _revoked_session_headers, revoked_session_body) =
+        send_text_request_with_headers(
+            &app,
+            "GET",
+            "/account/session",
+            &[("cookie", &refreshed_session_cookie)],
+        )
+        .await;
+    assert_eq!(revoked_session_status, StatusCode::UNAUTHORIZED);
+    assert!(revoked_session_body.contains("revoked"));
+
+    let (logout_status, logout_headers, logout_body) =
+        send_text_request_with_headers(&app, "POST", "/account/logout", &[]).await;
     assert_eq!(logout_status, StatusCode::OK);
     assert!(logout_headers
         .get("set-cookie")
@@ -2299,6 +2347,9 @@ async fn game_account_password_register_login_status_logout_roundtrip() {
     );
     assert!(
         metrics_body.contains("cex_consumer_entry_game_account_session_refresh_successes_total 1")
+    );
+    assert!(
+        metrics_body.contains("cex_consumer_entry_game_account_session_revoke_successes_total 1")
     );
     assert!(metrics_body.contains("cex_consumer_entry_game_account_auth_rate_limited_total 0"));
 

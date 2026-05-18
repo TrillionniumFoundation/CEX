@@ -736,6 +736,7 @@ pub(super) async fn post_league_web_session(
         room_id: payload.room_id.clone(),
         session_id: payload.session_id.clone(),
         csrf,
+        game_account_session_generation: None,
         issued_at_epoch: now,
         expires_at_epoch: now + state.config().league_web_session_ttl_secs as i64,
     };

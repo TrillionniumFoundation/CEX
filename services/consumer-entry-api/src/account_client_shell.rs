@@ -25,12 +25,18 @@ impl Default for GameAccountRegistry {
     }
 }
 
+fn default_game_account_session_generation() -> u64 {
+    1
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct GameAccountRecord {
     matrix_user_id: String,
     display_name: Option<String>,
     room_id: Option<String>,
     password_hash: String,
+    #[serde(default = "default_game_account_session_generation")]
+    session_generation: u64,
     created_at_epoch: i64,
     updated_at_epoch: i64,
     last_login_epoch: Option<i64>,
@@ -58,6 +64,11 @@ pub(super) struct GameAccountPasswordChangeRequest {
 pub(super) struct GameAccountSessionRefreshRequest {
     csrf: Option<String>,
     session_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct GameAccountSessionRevokeRequest {
+    csrf: Option<String>,
 }
 
 pub(super) fn load_game_account_registry(config: &ConsumerEntryConfig) -> GameAccountRegistry {
@@ -154,6 +165,7 @@ pub(super) async fn post_game_account_register(
         display_name: display_name.clone(),
         room_id: room_id.clone(),
         password_hash,
+        session_generation: default_game_account_session_generation(),
         created_at_epoch: now,
         updated_at_epoch: now,
         last_login_epoch: Some(now),
@@ -188,6 +200,8 @@ pub(super) async fn post_game_account_register(
         room_id,
         session_id,
         "registered",
+        default_game_account_session_generation(),
+        "game_account_session",
     )
 }
 
@@ -256,6 +270,8 @@ pub(super) async fn post_game_account_login(
         room_id,
         session_id,
         "logged_in",
+        record.session_generation,
+        "game_account_session",
     )
 }
 
@@ -331,7 +347,15 @@ pub(super) async fn post_game_account_password_change(
         Ok(value) => value,
         Err(response) => return response,
     };
+    record.session_generation = record.session_generation.saturating_add(1);
     record.updated_at_epoch = Utc::now().timestamp();
+    let display_name = record.display_name.clone();
+    let room_id = web_session.room_id.clone().or(record.room_id.clone());
+    let session_id = web_session
+        .session_id
+        .clone()
+        .or_else(|| Some("password-changed-browser".to_string()));
+    let session_generation = record.session_generation;
     {
         let mut registry = state.inner.game_account_registry.lock().await;
         registry
@@ -355,20 +379,16 @@ pub(super) async fn post_game_account_password_change(
         .inner
         .metrics
         .inc_game_account_password_change_successes();
-    (
-        StatusCode::OK,
-        Json(json!({
-            "kind": "game_account_password_change",
-            "contract_version": GAME_ACCOUNT_PASSWORD_AUTH_CONTRACT,
-            "status": "password_changed",
-            "matrix_user_id": web_session.matrix_user_id,
-            "active_session_preserved": true,
-            "session_status_endpoint": "/account/session",
-            "public_launch_credit": false,
-            "passwords_tokens_or_cookie_values_logged": false,
-        })),
+    issue_game_account_session_response(
+        &state,
+        web_session.matrix_user_id,
+        display_name,
+        room_id,
+        session_id,
+        "password_changed",
+        session_generation,
+        "game_account_password_change",
     )
-        .into_response()
 }
 
 pub(super) async fn post_game_account_session_refresh(
@@ -395,10 +415,11 @@ pub(super) async fn post_game_account_session_refresh(
         let registry = state.inner.game_account_registry.lock().await;
         registry.accounts.get(&web_session.matrix_user_id).cloned()
     };
-    if profile.as_ref().is_some_and(|record| record.disabled) {
+    let Some(profile) = profile.filter(|record| !record.disabled) else {
         return invalid_game_account_credentials_response();
-    }
-    let display_name = profile.and_then(|record| record.display_name);
+    };
+    let session_generation = profile.session_generation;
+    let display_name = profile.display_name;
     let session_id = normalize_optional_account_text(payload.session_id.as_deref())
         .or(web_session.session_id.clone())
         .or_else(|| Some("refreshed-browser".to_string()));
@@ -414,7 +435,79 @@ pub(super) async fn post_game_account_session_refresh(
         web_session.room_id,
         session_id,
         "session_refreshed",
+        session_generation,
+        "game_account_session",
     )
+}
+
+pub(super) async fn post_game_account_session_revoke(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<GameAccountSessionRevokeRequest>,
+) -> Response {
+    let web_session = match authorize_league_web_session(&state, &headers, payload.csrf.as_deref())
+    {
+        Ok(Some(session)) => session,
+        Ok(None) => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({
+                    "error": "active game account session is required",
+                    "session_status_endpoint": "/account/session",
+                })),
+            )
+                .into_response()
+        }
+        Err(response) => return response,
+    };
+
+    let session_generation = {
+        let mut registry = state.inner.game_account_registry.lock().await;
+        let Some(record) = registry.accounts.get_mut(&web_session.matrix_user_id) else {
+            return invalid_game_account_credentials_response();
+        };
+        if record.disabled {
+            return invalid_game_account_credentials_response();
+        }
+        record.session_generation = record.session_generation.saturating_add(1);
+        record.updated_at_epoch = Utc::now().timestamp();
+        let session_generation = record.session_generation;
+        if let Err(err) = persist_game_account_registry(state.config(), &registry) {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "error": format!("failed to persist game account session revocation: {err}")
+                })),
+            )
+                .into_response();
+        }
+        session_generation
+    };
+
+    state
+        .inner
+        .metrics
+        .inc_game_account_session_revoke_successes();
+    (
+        StatusCode::OK,
+        [(
+            header::SET_COOKIE,
+            game_account_session_clear_cookie(state.config()),
+        )],
+        Json(json!({
+            "kind": "game_account_session_revoke",
+            "contract_version": GAME_ACCOUNT_SESSION_STATUS_CONTRACT,
+            "status": "sessions_revoked",
+            "matrix_user_id": web_session.matrix_user_id,
+            "revoked_game_account_sessions": true,
+            "game_account_session_generation": session_generation,
+            "session_cookie_cleared": true,
+            "session_status_endpoint": "/account/session",
+            "public_launch_credit": false,
+            "passwords_tokens_or_cookie_values_logged": false,
+        })),
+    )
+        .into_response()
 }
 
 async fn game_account_client_shell_html(
@@ -461,6 +554,7 @@ async fn game_account_client_shell_html(
         "session_endpoint": "/league/web/session",
         "session_status_endpoint": "/account/session",
         "session_refresh_endpoint": "/account/session/refresh",
+        "session_revoke_endpoint": "/account/session/revoke",
         "register_endpoint": "/account/register",
         "login_endpoint": "/account/login",
         "password_change_endpoint": "/account/password/change",
@@ -506,6 +600,14 @@ async fn game_account_client_shell_html(
                 "csrf_required": true,
                 "rotates_session_cookie": true,
                 "rotates_csrf": true
+            },
+            "session_revoke": {
+                "button_id": "account-session-revoke-button",
+                "endpoint": "/account/session/revoke",
+                "requires_active_session": true,
+                "csrf_required": true,
+                "revokes_all_game_account_sessions": true,
+                "clears_session_cookie": true
             },
             "logout": {
                 "button_id": "account-logout-button",
@@ -572,6 +674,7 @@ async fn game_account_client_shell_html(
         " disabled"
     };
     let session_refresh_disabled_attr = if session_active { "" } else { " disabled" };
+    let session_revoke_disabled_attr = if session_active { "" } else { " disabled" };
     let csrf_attr = web_session
         .map(|session| escape_html_text(&session.csrf))
         .unwrap_or_default();
@@ -649,7 +752,9 @@ async fn game_account_client_shell_html(
     html.push_str(disabled_attr);
     html.push_str(">Sign in</button><button id=\"account-session-refresh-button\" class=\"secondary\" type=\"button\"");
     html.push_str(session_refresh_disabled_attr);
-    html.push_str(">Refresh session</button><button id=\"account-logout-button\" class=\"secondary\" type=\"button\">Log out</button></div>\n");
+    html.push_str(">Refresh session</button><button id=\"account-session-revoke-button\" class=\"secondary\" type=\"button\"");
+    html.push_str(session_revoke_disabled_attr);
+    html.push_str(">Log out all</button><button id=\"account-logout-button\" class=\"secondary\" type=\"button\">Log out</button></div>\n");
     html.push_str("        </form>\n");
     html.push_str("      </div>\n");
     html.push_str("      <form id=\"account-password-change-form\" data-account-flow=\"password-change\" data-account-endpoint=\"/account/password/change\">\n");
@@ -718,7 +823,9 @@ async fn game_account_client_shell_html(
   const setPasswordChangeReady = (csrf) => {
     const form = document.getElementById("account-password-change-form");
     const refreshButton = document.getElementById("account-session-refresh-button");
+    const revokeButton = document.getElementById("account-session-revoke-button");
     if (refreshButton) refreshButton.disabled = !csrf;
+    if (revokeButton) revokeButton.disabled = !csrf;
     if (!form) return;
     if (form.elements.csrf) {
       form.elements.csrf.value = csrf || "";
@@ -848,6 +955,32 @@ async fn game_account_client_shell_html(
       updateStatus("Session refresh failed: " + error, "warn");
     }
   });
+  document.getElementById("account-session-revoke-button")?.addEventListener("click", async () => {
+    const csrf = currentCsrf();
+    if (!csrf) {
+      updateStatus("Active game session CSRF is missing.", "warn");
+      return;
+    }
+    try {
+      const response = await fetch("/account/session/revoke", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ csrf })
+      });
+      const body = await response.json().catch(async () => ({ error: await response.text() }));
+      if (!response.ok) {
+        updateStatus("Session revoke rejected (" + response.status + "). " + (body.error || "unknown error"), "warn");
+        return;
+      }
+      localStorage.removeItem(profileKey);
+      status.setAttribute("data-session-active", "false");
+      setPasswordChangeReady("");
+      updateStatus("All signed game sessions revoked.", "status");
+    } catch (error) {
+      updateStatus("Session revoke failed: " + error, "warn");
+    }
+  });
   restoreProfile();
 })();
 "#);
@@ -888,12 +1021,14 @@ async fn game_account_session_status_json(
             "session_id": session.session_id,
             "expires_at_epoch": session.expires_at_epoch,
             "csrf": session.csrf,
+            "game_account_session_generation": session.game_account_session_generation,
         })),
         "profile": profile,
         "password_auth": {
             "implemented": true,
             "enabled": state.config().game_account_password_auth_enabled,
             "session_refresh_endpoint": "/account/session/refresh",
+            "session_revoke_endpoint": "/account/session/revoke",
             "register_endpoint": "/account/register",
             "login_endpoint": "/account/login",
             "password_change_endpoint": "/account/password/change",
@@ -1076,6 +1211,34 @@ fn new_game_account_csrf() -> String {
     SaltString::generate(&mut OsRng).to_string()
 }
 
+pub(super) fn validate_game_account_session_generation(
+    state: &AppState,
+    matrix_user_id: &str,
+    session_generation: u64,
+) -> Result<(), Response> {
+    let registry = state.inner.game_account_registry.try_lock().map_err(|_| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": "game account session registry is busy" })),
+        )
+            .into_response()
+    })?;
+    let Some(record) = registry.accounts.get(matrix_user_id) else {
+        return Err(invalid_game_account_credentials_response());
+    };
+    if record.disabled || record.session_generation != session_generation {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(json!({
+                "error": "game account session has been revoked",
+                "session_status_endpoint": "/account/session",
+            })),
+        )
+            .into_response());
+    }
+    Ok(())
+}
+
 fn invalid_game_account_credentials_response() -> Response {
     (
         StatusCode::UNAUTHORIZED,
@@ -1105,6 +1268,8 @@ fn issue_game_account_session_response(
     room_id: Option<String>,
     session_id: Option<String>,
     status: &'static str,
+    session_generation: u64,
+    kind: &'static str,
 ) -> Response {
     let Some(secret) = league_web_session_secret(state.config()) else {
         return (
@@ -1121,6 +1286,7 @@ fn issue_game_account_session_response(
         room_id: room_id.clone(),
         session_id: session_id.clone(),
         csrf,
+        game_account_session_generation: Some(session_generation),
         issued_at_epoch: now,
         expires_at_epoch: now + state.config().league_web_session_ttl_secs as i64,
     };
@@ -1135,7 +1301,7 @@ fn issue_game_account_session_response(
             game_account_session_cookie(state.config(), &token),
         )],
         Json(json!({
-            "kind": "game_account_session",
+            "kind": kind,
             "contract_version": GAME_ACCOUNT_PASSWORD_AUTH_CONTRACT,
             "status": status,
             "matrix_user_id": matrix_user_id,
@@ -1143,11 +1309,15 @@ fn issue_game_account_session_response(
             "room_id": room_id,
             "session_id": session_id,
             "csrf": claims.csrf,
+            "game_account_session_generation": session_generation,
+            "active_session_preserved": matches!(status, "password_changed" | "session_refreshed"),
             "expires_at_epoch": claims.expires_at_epoch,
             "session_status_endpoint": "/account/session",
             "session_refresh_endpoint": "/account/session/refresh",
+            "session_revoke_endpoint": "/account/session/revoke",
             "logout_endpoint": "/account/logout",
             "public_launch_credit": false,
+            "passwords_tokens_or_cookie_values_logged": false,
         })),
     )
         .into_response()
