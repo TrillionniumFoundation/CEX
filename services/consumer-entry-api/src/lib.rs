@@ -150,6 +150,7 @@ struct ConsumerEntryMetrics {
     game_account_login_successes: AtomicU64,
     game_account_login_failures: AtomicU64,
     game_account_logout_successes: AtomicU64,
+    game_account_profile_updates: AtomicU64,
     game_account_password_change_successes: AtomicU64,
     game_account_password_change_failures: AtomicU64,
     game_account_session_refresh_successes: AtomicU64,
@@ -278,6 +279,11 @@ impl ConsumerEntryMetrics {
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    fn inc_game_account_profile_updates(&self) {
+        self.game_account_profile_updates
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     fn inc_game_account_password_change_successes(&self) {
         self.game_account_password_change_successes
             .fetch_add(1, Ordering::Relaxed);
@@ -394,6 +400,7 @@ impl ConsumerEntryMetrics {
             "login_successes": self.game_account_login_successes.load(Ordering::Relaxed),
             "login_failures": self.game_account_login_failures.load(Ordering::Relaxed),
             "logout_successes": self.game_account_logout_successes.load(Ordering::Relaxed),
+            "profile_updates": self.game_account_profile_updates.load(Ordering::Relaxed),
             "password_change_successes": self.game_account_password_change_successes.load(Ordering::Relaxed),
             "password_change_failures": self.game_account_password_change_failures.load(Ordering::Relaxed),
             "session_refresh_successes": self.game_account_session_refresh_successes.load(Ordering::Relaxed),
@@ -4252,6 +4259,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/account", get(get_game_account_client_shell_response))
         .route("/game/account", get(get_game_account_client_shell_response))
         .route("/account/session", get(get_game_account_session_status))
+        .route(
+            "/account/profile",
+            get(get_game_account_profile).post(post_game_account_profile),
+        )
         .route(
             "/account/session/refresh",
             post(post_game_account_session_refresh),

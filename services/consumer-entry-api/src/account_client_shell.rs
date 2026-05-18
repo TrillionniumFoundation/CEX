@@ -71,6 +71,13 @@ pub(super) struct GameAccountSessionRevokeRequest {
     csrf: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub(super) struct GameAccountProfileUpdateRequest {
+    display_name: Option<String>,
+    room_id: Option<String>,
+    csrf: Option<String>,
+}
+
 pub(super) fn load_game_account_registry(config: &ConsumerEntryConfig) -> GameAccountRegistry {
     let Some(path) = config.game_account_registry_path.as_deref() else {
         return GameAccountRegistry::default();
@@ -350,7 +357,7 @@ pub(super) async fn post_game_account_password_change(
     record.session_generation = record.session_generation.saturating_add(1);
     record.updated_at_epoch = Utc::now().timestamp();
     let display_name = record.display_name.clone();
-    let room_id = web_session.room_id.clone().or(record.room_id.clone());
+    let room_id = record.room_id.clone().or(web_session.room_id.clone());
     let session_id = web_session
         .session_id
         .clone()
@@ -420,6 +427,7 @@ pub(super) async fn post_game_account_session_refresh(
     };
     let session_generation = profile.session_generation;
     let display_name = profile.display_name;
+    let room_id = profile.room_id.or(web_session.room_id.clone());
     let session_id = normalize_optional_account_text(payload.session_id.as_deref())
         .or(web_session.session_id.clone())
         .or_else(|| Some("refreshed-browser".to_string()));
@@ -432,7 +440,7 @@ pub(super) async fn post_game_account_session_refresh(
         &state,
         web_session.matrix_user_id,
         display_name,
-        web_session.room_id,
+        room_id,
         session_id,
         "session_refreshed",
         session_generation,
@@ -510,6 +518,128 @@ pub(super) async fn post_game_account_session_revoke(
         .into_response()
 }
 
+pub(super) async fn get_game_account_profile(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let web_session = match authorize_league_web_session_readonly(&state, &headers, false) {
+        Ok(Some(session)) => session,
+        Ok(None) => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({
+                    "error": "active game account session is required",
+                    "session_status_endpoint": "/account/session",
+                })),
+            )
+                .into_response()
+        }
+        Err(response) => return response,
+    };
+    let record = {
+        let registry = state.inner.game_account_registry.lock().await;
+        registry.accounts.get(&web_session.matrix_user_id).cloned()
+    };
+    let Some(record) = record.filter(|record| !record.disabled) else {
+        return invalid_game_account_credentials_response();
+    };
+    Json(json!({
+        "kind": "game_account_profile",
+        "contract_version": GAME_ACCOUNT_SESSION_STATUS_CONTRACT,
+        "status": "profile_loaded",
+        "profile": game_account_profile_json(&record),
+        "matrix_user_id": record.matrix_user_id,
+        "display_name": record.display_name,
+        "room_id": record.room_id,
+        "session_status_endpoint": "/account/session",
+        "profile_endpoint": "/account/profile",
+        "public_launch_credit": false,
+        "passwords_tokens_or_cookie_values_logged": false,
+    }))
+    .into_response()
+}
+
+pub(super) async fn post_game_account_profile(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<GameAccountProfileUpdateRequest>,
+) -> Response {
+    let Some(csrf) = payload
+        .csrf
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({ "error": "game account profile csrf token is required" })),
+        )
+            .into_response();
+    };
+    let web_session = match authorize_league_web_session(&state, &headers, Some(csrf)) {
+        Ok(Some(session)) => session,
+        Ok(None) => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({
+                    "error": "active game account session is required",
+                    "session_status_endpoint": "/account/session",
+                })),
+            )
+                .into_response()
+        }
+        Err(response) => return response,
+    };
+
+    let updated_record = {
+        let mut registry = state.inner.game_account_registry.lock().await;
+        let Some(record) = registry.accounts.get_mut(&web_session.matrix_user_id) else {
+            return invalid_game_account_credentials_response();
+        };
+        if record.disabled {
+            return invalid_game_account_credentials_response();
+        }
+        let previous_record = record.clone();
+        if payload.display_name.is_some() {
+            record.display_name = normalize_optional_account_text(payload.display_name.as_deref());
+        }
+        if payload.room_id.is_some() {
+            record.room_id = normalize_optional_account_text(payload.room_id.as_deref());
+        }
+        record.updated_at_epoch = Utc::now().timestamp();
+        let updated_record = record.clone();
+        if let Err(err) = persist_game_account_registry(state.config(), &registry) {
+            registry
+                .accounts
+                .insert(web_session.matrix_user_id.clone(), previous_record);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "error": format!("failed to persist game account profile: {err}")
+                })),
+            )
+                .into_response();
+        }
+        updated_record
+    };
+
+    state.inner.metrics.inc_game_account_profile_updates();
+    Json(json!({
+        "kind": "game_account_profile",
+        "contract_version": GAME_ACCOUNT_SESSION_STATUS_CONTRACT,
+        "status": "profile_updated",
+        "profile": game_account_profile_json(&updated_record),
+        "matrix_user_id": updated_record.matrix_user_id,
+        "display_name": updated_record.display_name,
+        "room_id": updated_record.room_id,
+        "session_status_endpoint": "/account/session",
+        "profile_endpoint": "/account/profile",
+        "public_launch_credit": false,
+        "passwords_tokens_or_cookie_values_logged": false,
+    }))
+    .into_response()
+}
+
 async fn game_account_client_shell_html(
     state: &AppState,
     web_session: Option<&LeagueWebSessionClaims>,
@@ -536,9 +666,17 @@ async fn game_account_client_shell_html(
     let production_requires_signed_upstream =
         !matches!(state.config().runtime_profile, RuntimeProfile::LocalDev)
             && !state.config().game_account_password_auth_enabled;
-    let account_count = {
+    let (account_count, profile_display_name, profile_room_id) = {
         let registry = state.inner.game_account_registry.lock().await;
-        registry.accounts.len()
+        let session_record =
+            web_session.and_then(|session| registry.accounts.get(&session.matrix_user_id));
+        (
+            registry.accounts.len(),
+            session_record.and_then(|record| record.display_name.clone()),
+            session_record
+                .and_then(|record| record.room_id.clone())
+                .or_else(|| web_session.and_then(|session| session.room_id.clone())),
+        )
     };
     let password_auth_enabled = state.config().game_account_password_auth_enabled;
     let registry_persistence = state
@@ -553,6 +691,7 @@ async fn game_account_client_shell_html(
         "alternate_surface": "/game/account",
         "session_endpoint": "/league/web/session",
         "session_status_endpoint": "/account/session",
+        "profile_endpoint": "/account/profile",
         "session_refresh_endpoint": "/account/session/refresh",
         "session_revoke_endpoint": "/account/session/revoke",
         "register_endpoint": "/account/register",
@@ -584,6 +723,15 @@ async fn game_account_client_shell_html(
                 "password_auth_enabled": password_auth_enabled,
                 "password_hash": "argon2id",
                 "credential_storage_in_browser": false
+            },
+            "profile": {
+                "form_id": "account-profile-form",
+                "endpoint": "/account/profile",
+                "requires_active_session": true,
+                "csrf_required": true,
+                "client_storage": format!("localStorage:{GAME_ACCOUNT_LOCAL_PROFILE_KEY}"),
+                "credential_storage_in_browser": false,
+                "passwords_tokens_or_cookie_values_logged": false
             },
             "password_change": {
                 "form_id": "account-password-change-form",
@@ -673,10 +821,19 @@ async fn game_account_client_shell_html(
     } else {
         " disabled"
     };
+    let profile_disabled_attr = if session_active { "" } else { " disabled" };
     let session_refresh_disabled_attr = if session_active { "" } else { " disabled" };
     let session_revoke_disabled_attr = if session_active { "" } else { " disabled" };
     let csrf_attr = web_session
         .map(|session| escape_html_text(&session.csrf))
+        .unwrap_or_default();
+    let profile_display_name_attr = profile_display_name
+        .as_deref()
+        .map(escape_html_text)
+        .unwrap_or_default();
+    let profile_room_id_attr = profile_room_id
+        .as_deref()
+        .map(escape_html_text)
         .unwrap_or_default();
 
     let mut html = String::new();
@@ -695,7 +852,7 @@ async fn game_account_client_shell_html(
     html.push_str("    .panel { background: #fff; border: 1px solid #dce2ea; border-radius: 8px; padding: 18px; box-shadow: 0 1px 2px rgba(15, 23, 42, .04); }\n");
     html.push_str("    .forms { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }\n");
     html.push_str(
-        "    .forms form[data-account-flow=\"password-change\"] { grid-column: 1 / -1; }\n",
+        "    .forms form[data-account-flow=\"password-change\"], .forms form[data-account-flow=\"profile\"] { grid-column: 1 / -1; }\n",
     );
     html.push_str("    label { display: grid; gap: 6px; margin-top: 10px; font-size: .88rem; font-weight: 650; color: #334155; }\n");
     html.push_str("    input { width: 100%; box-sizing: border-box; border: 1px solid #cbd5e1; border-radius: 6px; padding: 10px 11px; font: inherit; }\n");
@@ -757,6 +914,25 @@ async fn game_account_client_shell_html(
     html.push_str(">Log out all</button><button id=\"account-logout-button\" class=\"secondary\" type=\"button\">Log out</button></div>\n");
     html.push_str("        </form>\n");
     html.push_str("      </div>\n");
+    html.push_str("      <form id=\"account-profile-form\" data-account-flow=\"profile\" data-account-endpoint=\"/account/profile\">\n");
+    html.push_str("        <h3>Profile</h3>\n");
+    html.push_str("        <input type=\"hidden\" name=\"csrf\" value=\"");
+    html.push_str(&csrf_attr);
+    html.push_str("\" />\n");
+    html.push_str("        <label>Display name <input name=\"display_name\" autocomplete=\"nickname\" value=\"");
+    html.push_str(&profile_display_name_attr);
+    html.push('"');
+    html.push_str(profile_disabled_attr);
+    html.push_str(" /></label>\n");
+    html.push_str("        <label>Default room <input name=\"room_id\" value=\"");
+    html.push_str(&profile_room_id_attr);
+    html.push('"');
+    html.push_str(profile_disabled_attr);
+    html.push_str(" /></label>\n");
+    html.push_str("        <div class=\"actions\"><button type=\"submit\"");
+    html.push_str(profile_disabled_attr);
+    html.push_str(">Save profile</button></div>\n");
+    html.push_str("      </form>\n");
     html.push_str("      <form id=\"account-password-change-form\" data-account-flow=\"password-change\" data-account-endpoint=\"/account/password/change\">\n");
     html.push_str("        <h3>Change password</h3>\n");
     html.push_str("        <input type=\"hidden\" name=\"csrf\" value=\"");
@@ -821,29 +997,37 @@ async fn game_account_client_shell_html(
     status.appendChild(note);
   };
   const setPasswordChangeReady = (csrf) => {
-    const form = document.getElementById("account-password-change-form");
+    const sessionForms = [
+      document.getElementById("account-profile-form"),
+      document.getElementById("account-password-change-form")
+    ].filter(Boolean);
     const refreshButton = document.getElementById("account-session-refresh-button");
     const revokeButton = document.getElementById("account-session-revoke-button");
     if (refreshButton) refreshButton.disabled = !csrf;
     if (revokeButton) revokeButton.disabled = !csrf;
-    if (!form) return;
-    if (form.elements.csrf) {
-      form.elements.csrf.value = csrf || "";
-      form.elements.csrf.defaultValue = csrf || "";
-    }
-    for (const field of form.querySelectorAll("input, button")) {
-      if (field.name !== "csrf") field.disabled = !csrf;
+    for (const form of sessionForms) {
+      if (form.elements.csrf) {
+        form.elements.csrf.value = csrf || "";
+        form.elements.csrf.defaultValue = csrf || "";
+      }
+      for (const field of form.querySelectorAll("input, button")) {
+        if (field.name !== "csrf") field.disabled = !csrf;
+      }
     }
   };
   const currentCsrf = () => {
-    const form = document.getElementById("account-password-change-form");
-    return String(form?.elements?.csrf?.value || "").trim();
+    for (const id of ["account-profile-form", "account-password-change-form"]) {
+      const form = document.getElementById(id);
+      const csrf = String(form?.elements?.csrf?.value || "").trim();
+      if (csrf) return csrf;
+    }
+    return "";
   };
   const restoreProfile = () => {
     try {
       const profile = JSON.parse(localStorage.getItem(profileKey) || "{}");
       for (const form of document.querySelectorAll("form[data-account-flow]")) {
-        for (const key of ["handle", "matrix_user_id", "room_id", "session_id"]) {
+        for (const key of ["handle", "matrix_user_id", "display_name", "room_id", "session_id"]) {
           if (profile[key] && form.elements[key]) form.elements[key].value = profile[key];
         }
       }
@@ -853,6 +1037,40 @@ async fn game_account_client_shell_html(
     event.preventDefault();
     const form = event.currentTarget;
     const data = Object.fromEntries(new FormData(form).entries());
+    if (form.dataset.accountFlow === "profile") {
+      const payload = {
+        display_name: String(data.display_name || "").trim() || null,
+        room_id: String(data.room_id || "").trim() || null,
+        csrf: String(data.csrf || "").trim() || null
+      };
+      try {
+        const response = await fetch(form.dataset.accountEndpoint, {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        const body = await response.json().catch(async () => ({ error: await response.text() }));
+        if (!response.ok) {
+          updateStatus("Profile update rejected (" + response.status + "). " + (body.error || "unknown error"), "warn");
+          return;
+        }
+        let existing = {};
+        try {
+          existing = JSON.parse(localStorage.getItem(profileKey) || "{}");
+        } catch (_) {}
+        localStorage.setItem(profileKey, JSON.stringify({
+          ...existing,
+          matrix_user_id: body.matrix_user_id || existing.matrix_user_id || "",
+          display_name: body.display_name || "",
+          room_id: body.room_id || ""
+        }));
+        updateStatus("Profile saved for the active game session.", "status");
+      } catch (error) {
+        updateStatus("Profile update failed: " + error, "warn");
+      }
+      return;
+    }
     if (form.dataset.accountFlow === "password-change") {
       const payload = {
         old_password: String(data.old_password || ""),
@@ -871,7 +1089,7 @@ async fn game_account_client_shell_html(
           updateStatus("Password change rejected (" + response.status + "). " + (body.error || "unknown error"), "warn");
           return;
         }
-        const csrf = payload.csrf;
+        const csrf = body.csrf || "";
         form.reset();
         setPasswordChangeReady(csrf);
         updateStatus("Password changed. Current game session remains active.", "status");
@@ -998,16 +1216,7 @@ async fn game_account_session_status_json(
         registry
             .accounts
             .get(&session.matrix_user_id)
-            .map(|record| {
-                json!({
-                    "matrix_user_id": record.matrix_user_id,
-                    "display_name": record.display_name,
-                    "room_id": record.room_id,
-                    "created_at_epoch": record.created_at_epoch,
-                    "last_login_epoch": record.last_login_epoch,
-                    "disabled": record.disabled,
-                })
-            })
+            .map(game_account_profile_json)
     } else {
         None
     };
@@ -1027,6 +1236,7 @@ async fn game_account_session_status_json(
         "password_auth": {
             "implemented": true,
             "enabled": state.config().game_account_password_auth_enabled,
+            "profile_endpoint": "/account/profile",
             "session_refresh_endpoint": "/account/session/refresh",
             "session_revoke_endpoint": "/account/session/revoke",
             "register_endpoint": "/account/register",
@@ -1035,6 +1245,23 @@ async fn game_account_session_status_json(
             "logout_endpoint": "/account/logout",
         },
         "public_launch_credit": false,
+    })
+}
+
+fn game_account_profile_json(record: &GameAccountRecord) -> Value {
+    json!({
+        "matrix_user_id": record.matrix_user_id,
+        "display_name": record.display_name,
+        "room_id": record.room_id,
+        "created_at_epoch": record.created_at_epoch,
+        "updated_at_epoch": record.updated_at_epoch,
+        "last_login_epoch": record.last_login_epoch,
+        "disabled": record.disabled,
+        "game_account_session_generation": record.session_generation,
+        "profile_endpoint": "/account/profile",
+        "session_status_endpoint": "/account/session",
+        "public_launch_credit": false,
+        "passwords_tokens_or_cookie_values_logged": false,
     })
 }
 
@@ -1076,9 +1303,8 @@ async fn enforce_game_account_auth_rate_limits(
         RateLimitBucketKind::User,
     )
     .await
-    .map_err(|response| {
+    .inspect_err(|_response| {
         state.inner.metrics.inc_game_account_auth_rate_limited();
-        response
     })?;
 
     let source_key = format!(
@@ -1093,9 +1319,8 @@ async fn enforce_game_account_auth_rate_limits(
         RateLimitBucketKind::SourceScope,
     )
     .await
-    .map_err(|response| {
+    .inspect_err(|_response| {
         state.inner.metrics.inc_game_account_auth_rate_limited();
-        response
     })
 }
 

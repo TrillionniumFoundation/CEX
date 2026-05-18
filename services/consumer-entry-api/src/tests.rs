@@ -2025,6 +2025,7 @@ async fn game_account_client_shell_exposes_register_login_session_bridge() {
         assert!(body.contains("trillionnium_game_account_client_v1"));
         assert!(body.contains(r#"id="account-register-form""#));
         assert!(body.contains(r#"id="account-login-form""#));
+        assert!(body.contains(r#"id="account-profile-form""#));
         assert!(body.contains(r#"id="account-password-change-form""#));
         assert!(body.contains(r#"id="account-session-refresh-button""#));
         assert!(body.contains(r#"id="account-session-revoke-button""#));
@@ -2033,6 +2034,7 @@ async fn game_account_client_shell_exposes_register_login_session_bridge() {
         assert!(body.contains("/league/web/session"));
         assert!(body.contains("/account/register"));
         assert!(body.contains("/account/login"));
+        assert!(body.contains("/account/profile"));
         assert!(body.contains("/account/password/change"));
         assert!(body.contains("/account/session/refresh"));
         assert!(body.contains("/account/session/revoke"));
@@ -2167,6 +2169,60 @@ async fn game_account_password_register_login_status_logout_roundtrip() {
     );
     assert_eq!(session_json["profile"]["display_name"], "Pilot One");
     let csrf = register_body["csrf"].as_str().expect("register csrf");
+
+    let (profile_get_status, profile_get_headers, profile_get_body) =
+        send_text_request_with_headers(
+            &app,
+            "GET",
+            "/account/profile",
+            &[("cookie", &session_cookie)],
+        )
+        .await;
+    assert_eq!(profile_get_status, StatusCode::OK);
+    assert!(profile_get_headers.get("set-cookie").is_none());
+    let profile_get_json: Value = serde_json::from_str(&profile_get_body).expect("profile json");
+    assert_eq!(profile_get_json["kind"], "game_account_profile");
+    assert_eq!(profile_get_json["status"], "profile_loaded");
+    assert_eq!(profile_get_json["display_name"], "Pilot One");
+
+    let (profile_update_status, profile_update_body) = send_json_request(
+        &app,
+        "POST",
+        "/account/profile",
+        &[("cookie", &session_cookie)],
+        json!({
+            "display_name": "Pilot Prime",
+            "room_id": "!prime:local.dev",
+            "csrf": csrf,
+        }),
+    )
+    .await;
+    assert_eq!(profile_update_status, StatusCode::OK);
+    assert_eq!(profile_update_body["kind"], "game_account_profile");
+    assert_eq!(profile_update_body["status"], "profile_updated");
+    assert_eq!(profile_update_body["display_name"], "Pilot Prime");
+    assert_eq!(profile_update_body["room_id"], "!prime:local.dev");
+    assert!(profile_update_body.get("password").is_none());
+
+    let (session_after_profile_status, _session_after_profile_headers, session_after_profile_body) =
+        send_text_request_with_headers(
+            &app,
+            "GET",
+            "/account/session",
+            &[("cookie", &session_cookie)],
+        )
+        .await;
+    assert_eq!(session_after_profile_status, StatusCode::OK);
+    let session_after_profile_json: Value =
+        serde_json::from_str(&session_after_profile_body).expect("session after profile json");
+    assert_eq!(
+        session_after_profile_json["profile"]["display_name"],
+        "Pilot Prime"
+    );
+    assert_eq!(
+        session_after_profile_json["profile"]["room_id"],
+        "!prime:local.dev"
+    );
 
     let (bad_change_status, bad_change_body) = send_json_request(
         &app,
@@ -2339,6 +2395,7 @@ async fn game_account_password_register_login_status_logout_roundtrip() {
     assert!(metrics_body.contains("cex_consumer_entry_game_account_login_successes_total 1"));
     assert!(metrics_body.contains("cex_consumer_entry_game_account_login_failures_total 1"));
     assert!(metrics_body.contains("cex_consumer_entry_game_account_logout_successes_total 1"));
+    assert!(metrics_body.contains("cex_consumer_entry_game_account_profile_updates_total 1"));
     assert!(
         metrics_body.contains("cex_consumer_entry_game_account_password_change_successes_total 1")
     );
