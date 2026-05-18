@@ -2025,12 +2025,14 @@ async fn game_account_client_shell_exposes_register_login_session_bridge() {
         assert!(body.contains(r#"id="account-register-form""#));
         assert!(body.contains(r#"id="account-login-form""#));
         assert!(body.contains(r#"id="account-password-change-form""#));
+        assert!(body.contains(r#"id="account-session-refresh-button""#));
         assert!(body.contains(r#"id="account-session-status""#));
         assert!(body.contains(r#"id="account-client-readiness""#));
         assert!(body.contains("/league/web/session"));
         assert!(body.contains("/account/register"));
         assert!(body.contains("/account/login"));
         assert!(body.contains("/account/password/change"));
+        assert!(body.contains("/account/session/refresh"));
         assert!(body.contains("/account/logout"));
         assert!(body.contains("password_auth_implemented"));
         assert!(body.contains("auth_rate_limit_max_requests"));
@@ -2230,14 +2232,51 @@ async fn game_account_password_register_login_status_logout_roundtrip() {
     assert_eq!(login_status, StatusCode::OK);
     assert_eq!(login_body["status"], "logged_in");
     assert_eq!(login_body["session_id"], "returning-browser");
-    assert!(login_headers
+    let login_set_cookie = login_headers
         .get("set-cookie")
         .and_then(|value| value.to_str().ok())
-        .unwrap_or_default()
-        .contains("cex_league_session="));
+        .expect("login set-cookie");
+    assert!(login_set_cookie.contains("cex_league_session="));
+    let login_session_cookie = login_set_cookie
+        .split(';')
+        .next()
+        .expect("login cookie pair")
+        .to_string();
+    let login_csrf = login_body["csrf"].as_str().expect("login csrf");
 
-    let (logout_status, logout_headers, logout_body) =
-        send_text_request_with_headers(&app, "POST", "/account/logout", &[]).await;
+    let (refresh_status, refresh_headers, refresh_body) = send_json_request_with_response_headers(
+        &app,
+        "POST",
+        "/account/session/refresh",
+        &[("cookie", &login_session_cookie)],
+        json!({
+            "csrf": login_csrf,
+            "session_id": "refreshed-browser",
+        }),
+    )
+    .await;
+    assert_eq!(refresh_status, StatusCode::OK);
+    assert_eq!(refresh_body["status"], "session_refreshed");
+    assert_eq!(refresh_body["session_id"], "refreshed-browser");
+    assert_ne!(refresh_body["csrf"], login_body["csrf"]);
+    let refresh_set_cookie = refresh_headers
+        .get("set-cookie")
+        .and_then(|value| value.to_str().ok())
+        .expect("refresh set-cookie");
+    assert!(refresh_set_cookie.contains("cex_league_session="));
+    let refreshed_session_cookie = refresh_set_cookie
+        .split(';')
+        .next()
+        .expect("refresh cookie pair")
+        .to_string();
+
+    let (logout_status, logout_headers, logout_body) = send_text_request_with_headers(
+        &app,
+        "POST",
+        "/account/logout",
+        &[("cookie", &refreshed_session_cookie)],
+    )
+    .await;
     assert_eq!(logout_status, StatusCode::OK);
     assert!(logout_headers
         .get("set-cookie")
@@ -2257,6 +2296,9 @@ async fn game_account_password_register_login_status_logout_roundtrip() {
     );
     assert!(
         metrics_body.contains("cex_consumer_entry_game_account_password_change_failures_total 1")
+    );
+    assert!(
+        metrics_body.contains("cex_consumer_entry_game_account_session_refresh_successes_total 1")
     );
     assert!(metrics_body.contains("cex_consumer_entry_game_account_auth_rate_limited_total 0"));
 

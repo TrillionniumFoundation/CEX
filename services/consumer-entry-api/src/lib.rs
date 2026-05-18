@@ -152,6 +152,7 @@ struct ConsumerEntryMetrics {
     game_account_logout_successes: AtomicU64,
     game_account_password_change_successes: AtomicU64,
     game_account_password_change_failures: AtomicU64,
+    game_account_session_refresh_successes: AtomicU64,
     game_account_auth_rate_limited: AtomicU64,
     replay_hits: AtomicU64,
     world_map_rum_samples: AtomicU64,
@@ -286,6 +287,11 @@ impl ConsumerEntryMetrics {
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    fn inc_game_account_session_refresh_successes(&self) {
+        self.game_account_session_refresh_successes
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     fn inc_game_account_auth_rate_limited(&self) {
         self.game_account_auth_rate_limited
             .fetch_add(1, Ordering::Relaxed);
@@ -384,6 +390,7 @@ impl ConsumerEntryMetrics {
             "logout_successes": self.game_account_logout_successes.load(Ordering::Relaxed),
             "password_change_successes": self.game_account_password_change_successes.load(Ordering::Relaxed),
             "password_change_failures": self.game_account_password_change_failures.load(Ordering::Relaxed),
+            "session_refresh_successes": self.game_account_session_refresh_successes.load(Ordering::Relaxed),
             "auth_rate_limited": self.game_account_auth_rate_limited.load(Ordering::Relaxed),
             "passwords_tokens_or_cookie_values_logged": false,
         })
@@ -4236,6 +4243,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/account", get(get_game_account_client_shell_response))
         .route("/game/account", get(get_game_account_client_shell_response))
         .route("/account/session", get(get_game_account_session_status))
+        .route(
+            "/account/session/refresh",
+            post(post_game_account_session_refresh),
+        )
         .route("/account/register", post(post_game_account_register))
         .route("/account/login", post(post_game_account_login))
         .route(

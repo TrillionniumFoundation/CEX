@@ -54,6 +54,12 @@ pub(super) struct GameAccountPasswordChangeRequest {
     csrf: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub(super) struct GameAccountSessionRefreshRequest {
+    csrf: Option<String>,
+    session_id: Option<String>,
+}
+
 pub(super) fn load_game_account_registry(config: &ConsumerEntryConfig) -> GameAccountRegistry {
     let Some(path) = config.game_account_registry_path.as_deref() else {
         return GameAccountRegistry::default();
@@ -365,6 +371,52 @@ pub(super) async fn post_game_account_password_change(
         .into_response()
 }
 
+pub(super) async fn post_game_account_session_refresh(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<GameAccountSessionRefreshRequest>,
+) -> Response {
+    let web_session = match authorize_league_web_session(&state, &headers, payload.csrf.as_deref())
+    {
+        Ok(Some(session)) => session,
+        Ok(None) => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({
+                    "error": "active game account session is required",
+                    "session_status_endpoint": "/account/session",
+                })),
+            )
+                .into_response()
+        }
+        Err(response) => return response,
+    };
+    let profile = {
+        let registry = state.inner.game_account_registry.lock().await;
+        registry.accounts.get(&web_session.matrix_user_id).cloned()
+    };
+    if profile.as_ref().is_some_and(|record| record.disabled) {
+        return invalid_game_account_credentials_response();
+    }
+    let display_name = profile.and_then(|record| record.display_name);
+    let session_id = normalize_optional_account_text(payload.session_id.as_deref())
+        .or(web_session.session_id.clone())
+        .or_else(|| Some("refreshed-browser".to_string()));
+
+    state
+        .inner
+        .metrics
+        .inc_game_account_session_refresh_successes();
+    issue_game_account_session_response(
+        &state,
+        web_session.matrix_user_id,
+        display_name,
+        web_session.room_id,
+        session_id,
+        "session_refreshed",
+    )
+}
+
 async fn game_account_client_shell_html(
     state: &AppState,
     web_session: Option<&LeagueWebSessionClaims>,
@@ -408,6 +460,7 @@ async fn game_account_client_shell_html(
         "alternate_surface": "/game/account",
         "session_endpoint": "/league/web/session",
         "session_status_endpoint": "/account/session",
+        "session_refresh_endpoint": "/account/session/refresh",
         "register_endpoint": "/account/register",
         "login_endpoint": "/account/login",
         "password_change_endpoint": "/account/password/change",
@@ -445,6 +498,14 @@ async fn game_account_client_shell_html(
                 "csrf_required": true,
                 "password_hash": "argon2id",
                 "credential_storage_in_browser": false
+            },
+            "session_refresh": {
+                "button_id": "account-session-refresh-button",
+                "endpoint": "/account/session/refresh",
+                "requires_active_session": true,
+                "csrf_required": true,
+                "rotates_session_cookie": true,
+                "rotates_csrf": true
             },
             "logout": {
                 "button_id": "account-logout-button",
@@ -510,6 +571,7 @@ async fn game_account_client_shell_html(
     } else {
         " disabled"
     };
+    let session_refresh_disabled_attr = if session_active { "" } else { " disabled" };
     let csrf_attr = web_session
         .map(|session| escape_html_text(&session.csrf))
         .unwrap_or_default();
@@ -585,7 +647,9 @@ async fn game_account_client_shell_html(
     html.push_str("          <label>Session ID <input name=\"session_id\" placeholder=\"returning-device\" /></label>\n");
     html.push_str("          <div class=\"actions\"><button type=\"submit\"");
     html.push_str(disabled_attr);
-    html.push_str(">Sign in</button><button id=\"account-logout-button\" class=\"secondary\" type=\"button\">Log out</button></div>\n");
+    html.push_str(">Sign in</button><button id=\"account-session-refresh-button\" class=\"secondary\" type=\"button\"");
+    html.push_str(session_refresh_disabled_attr);
+    html.push_str(">Refresh session</button><button id=\"account-logout-button\" class=\"secondary\" type=\"button\">Log out</button></div>\n");
     html.push_str("        </form>\n");
     html.push_str("      </div>\n");
     html.push_str("      <form id=\"account-password-change-form\" data-account-flow=\"password-change\" data-account-endpoint=\"/account/password/change\">\n");
@@ -653,6 +717,8 @@ async fn game_account_client_shell_html(
   };
   const setPasswordChangeReady = (csrf) => {
     const form = document.getElementById("account-password-change-form");
+    const refreshButton = document.getElementById("account-session-refresh-button");
+    if (refreshButton) refreshButton.disabled = !csrf;
     if (!form) return;
     if (form.elements.csrf) {
       form.elements.csrf.value = csrf || "";
@@ -661,6 +727,10 @@ async fn game_account_client_shell_html(
     for (const field of form.querySelectorAll("input, button")) {
       if (field.name !== "csrf") field.disabled = !csrf;
     }
+  };
+  const currentCsrf = () => {
+    const form = document.getElementById("account-password-change-form");
+    return String(form?.elements?.csrf?.value || "").trim();
   };
   const restoreProfile = () => {
     try {
@@ -753,6 +823,31 @@ async fn game_account_client_shell_html(
     setPasswordChangeReady("");
     updateStatus("Signed game session cleared.", "status");
   });
+  document.getElementById("account-session-refresh-button")?.addEventListener("click", async () => {
+    const csrf = currentCsrf();
+    if (!csrf) {
+      updateStatus("Active game session CSRF is missing.", "warn");
+      return;
+    }
+    try {
+      const response = await fetch("/account/session/refresh", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ csrf })
+      });
+      const body = await response.json().catch(async () => ({ error: await response.text() }));
+      if (!response.ok) {
+        updateStatus("Session refresh rejected (" + response.status + "). " + (body.error || "unknown error"), "warn");
+        return;
+      }
+      setPasswordChangeReady(body.csrf || "");
+      status.setAttribute("data-session-active", "true");
+      updateStatus("Signed game session refreshed.", "status");
+    } catch (error) {
+      updateStatus("Session refresh failed: " + error, "warn");
+    }
+  });
   restoreProfile();
 })();
 "#);
@@ -798,6 +893,7 @@ async fn game_account_session_status_json(
         "password_auth": {
             "implemented": true,
             "enabled": state.config().game_account_password_auth_enabled,
+            "session_refresh_endpoint": "/account/session/refresh",
             "register_endpoint": "/account/register",
             "login_endpoint": "/account/login",
             "password_change_endpoint": "/account/password/change",
@@ -976,6 +1072,10 @@ fn verify_game_account_password(password: &str, password_hash: &str) -> bool {
         .is_ok()
 }
 
+fn new_game_account_csrf() -> String {
+    SaltString::generate(&mut OsRng).to_string()
+}
+
 fn invalid_game_account_credentials_response() -> Response {
     (
         StatusCode::UNAUTHORIZED,
@@ -1014,7 +1114,7 @@ fn issue_game_account_session_response(
             .into_response();
     };
     let now = Utc::now().timestamp();
-    let csrf = league_web_csrf(secret, &matrix_user_id, room_id.as_deref(), now);
+    let csrf = new_game_account_csrf();
     let claims = LeagueWebSessionClaims {
         version: 1,
         matrix_user_id: matrix_user_id.clone(),
@@ -1045,6 +1145,7 @@ fn issue_game_account_session_response(
             "csrf": claims.csrf,
             "expires_at_epoch": claims.expires_at_epoch,
             "session_status_endpoint": "/account/session",
+            "session_refresh_endpoint": "/account/session/refresh",
             "logout_endpoint": "/account/logout",
             "public_launch_credit": false,
         })),

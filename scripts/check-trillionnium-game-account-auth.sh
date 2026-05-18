@@ -22,7 +22,7 @@ Validates the Trillionnium game-account register/login/password-change client co
 
 Default mode is non-mutating and checks:
   - /account renders the account client contract and embedded readiness JSON,
-  - register/login/password-change/session/logout endpoints are advertised,
+  - register/login/password-change/session-refresh/session/logout endpoints are advertised,
   - browser credential storage stays disabled,
   - public_launch_credit remains false,
   - /account/session without a cookie reports active=false,
@@ -30,7 +30,7 @@ Default mode is non-mutating and checks:
 
 Mutating mode is opt-in through --mutating or CEX_GAME_ACCOUNT_AUTH_MUTATING_SMOKE=1.
 It requires password auth to be enabled, registers one unique test account, verifies
-session/password-change/logout, checks the registry stores Argon2id rather than plaintext, and proves
+session/password-change/session-refresh/logout, checks the registry stores Argon2id rather than plaintext, and proves
 repeated bad login attempts eventually hit the auth rate limit.
 EOF
 }
@@ -183,6 +183,7 @@ expected_paths = {
     "client_surface": "/account",
     "alternate_surface": "/game/account",
     "session_status_endpoint": "/account/session",
+    "session_refresh_endpoint": "/account/session/refresh",
     "register_endpoint": "/account/register",
     "login_endpoint": "/account/login",
     "password_change_endpoint": "/account/password/change",
@@ -195,6 +196,7 @@ flows = readiness.get("flows") if isinstance(readiness.get("flows"), dict) else 
 register = flows.get("register") if isinstance(flows.get("register"), dict) else {}
 login = flows.get("login") if isinstance(flows.get("login"), dict) else {}
 password_change = flows.get("password_change") if isinstance(flows.get("password_change"), dict) else {}
+session_refresh = flows.get("session_refresh") if isinstance(flows.get("session_refresh"), dict) else {}
 logout = flows.get("logout") if isinstance(flows.get("logout"), dict) else {}
 for flow_name, flow in (("register", register), ("login", login)):
     require(
@@ -216,6 +218,12 @@ require("password_change_requires_active_session", password_change.get("requires
 require("password_change_csrf_required", password_change.get("csrf_required") is True, password_change.get("csrf_required"))
 require("password_change_password_hash_argon2id", password_change.get("password_hash") == "argon2id", password_change.get("password_hash"))
 require("password_change_credential_storage_disabled", password_change.get("credential_storage_in_browser") is False, password_change.get("credential_storage_in_browser"))
+require("session_refresh_endpoint_visible", session_refresh.get("endpoint") == "/account/session/refresh", session_refresh.get("endpoint"))
+require("session_refresh_button_id", session_refresh.get("button_id") == "account-session-refresh-button", session_refresh.get("button_id"))
+require("session_refresh_requires_active_session", session_refresh.get("requires_active_session") is True, session_refresh.get("requires_active_session"))
+require("session_refresh_csrf_required", session_refresh.get("csrf_required") is True, session_refresh.get("csrf_required"))
+require("session_refresh_rotates_session_cookie", session_refresh.get("rotates_session_cookie") is True, session_refresh.get("rotates_session_cookie"))
+require("session_refresh_rotates_csrf", session_refresh.get("rotates_csrf") is True, session_refresh.get("rotates_csrf"))
 
 production_boundary = readiness.get("production_boundary") if isinstance(readiness.get("production_boundary"), dict) else {}
 require(
@@ -252,6 +260,7 @@ for metric_name in (
     "cex_consumer_entry_game_account_logout_successes_total",
     "cex_consumer_entry_game_account_password_change_successes_total",
     "cex_consumer_entry_game_account_password_change_failures_total",
+    "cex_consumer_entry_game_account_session_refresh_successes_total",
     "cex_consumer_entry_game_account_auth_rate_limited_total",
 ):
     require(f"metric_visible_{metric_name}", metric_name in metrics_text, None)
@@ -277,6 +286,7 @@ require(
 require("session_no_cookie_inactive", session.get("active") is False, session.get("active"))
 session_password_auth = session.get("password_auth") if isinstance(session.get("password_auth"), dict) else {}
 require("session_password_auth_implemented", session_password_auth.get("implemented") is True, session_password_auth.get("implemented"))
+require("session_refresh_endpoint_status_visible", session_password_auth.get("session_refresh_endpoint") == "/account/session/refresh", session_password_auth.get("session_refresh_endpoint"))
 require("session_password_change_endpoint_visible", session_password_auth.get("password_change_endpoint") == "/account/password/change", session_password_auth.get("password_change_endpoint"))
 require("session_public_launch_credit_false", session.get("public_launch_credit") is False, session.get("public_launch_credit"))
 
@@ -297,6 +307,7 @@ summary = {
     "password_auth_enabled": password_auth_enabled,
     "password_auth_implemented": register.get("password_auth_implemented") is True and login.get("password_auth_implemented") is True,
     "password_change_endpoint": password_change.get("endpoint"),
+    "session_refresh_endpoint": session_refresh.get("endpoint"),
     "registry_persistence": registry_persistence,
     "minimum_password_chars": min_chars,
     "auth_rate_limit_max_requests": auth_limit,
@@ -331,6 +342,7 @@ if [[ "$MUTATING_SMOKE" == "1" ]]; then
     register_json="$tmpdir/register.json"
     session_after_register_json="$tmpdir/session-after-register.json"
     password_change_json="$tmpdir/password-change.json"
+    session_refresh_json="$tmpdir/session-refresh.json"
     old_login_json="$tmpdir/old-login.json"
     new_login_json="$tmpdir/new-login.json"
     logout_json="$tmpdir/logout.json"
@@ -358,6 +370,8 @@ if [[ "$MUTATING_SMOKE" == "1" ]]; then
     csrf="$(jq -r '.session.csrf // .csrf // ""' "$session_after_register_json" 2>/dev/null || printf '')"
     password_change_payload="$(jq -n --arg old_password "$password" --arg new_password "$new_password" --arg csrf "$csrf" '{old_password: $old_password, new_password: $new_password, csrf: $csrf}')"
     password_change_http="$(curl -sS -o "$password_change_json" -w '%{http_code}' -b "$cookie_jar" -H 'content-type: application/json' --data "$password_change_payload" "$BASE_URL/account/password/change" || printf '000')"
+    session_refresh_payload="$(jq -n --arg csrf "$csrf" --arg session_id "refresh-$session_id" '{csrf: $csrf, session_id: $session_id}')"
+    session_refresh_http="$(curl -sS -o "$session_refresh_json" -w '%{http_code}' -b "$cookie_jar" -c "$cookie_jar" -H 'content-type: application/json' --data "$session_refresh_payload" "$BASE_URL/account/session/refresh" || printf '000')"
     old_login_payload="$(jq -n --arg handle "$handle" --arg password "$password" --arg session_id "old-$session_id" '{handle: $handle, password: $password, session_id: $session_id}')"
     old_login_http="$(curl -sS -o "$old_login_json" -w '%{http_code}' -H 'content-type: application/json' --data "$old_login_payload" "$BASE_URL/account/login" || printf '000')"
     new_login_payload="$(jq -n --arg handle "$handle" --arg password "$new_password" --arg room_id "$room_id" --arg session_id "changed-$session_id" '{handle: $handle, password: $password, room_id: $room_id, session_id: $session_id}')"
@@ -384,7 +398,7 @@ if [[ "$MUTATING_SMOKE" == "1" ]]; then
       fi
     fi
 
-    python3 - "$summary_tmp" "$mutation_tmp" "$register_json" "$session_after_register_json" "$password_change_json" "$old_login_json" "$new_login_json" "$logout_json" "$bad_login_json" "$register_http" "$session_after_register_http" "$password_change_http" "$old_login_http" "$new_login_http" "$logout_http" "$rate_limit_http" "$registry_checked" "$registry_argon2id" "$registry_plaintext_absent" "$rate_attempts" <<'PY'
+    python3 - "$summary_tmp" "$mutation_tmp" "$register_json" "$session_after_register_json" "$password_change_json" "$session_refresh_json" "$old_login_json" "$new_login_json" "$logout_json" "$bad_login_json" "$register_http" "$session_after_register_http" "$password_change_http" "$session_refresh_http" "$old_login_http" "$new_login_http" "$logout_http" "$rate_limit_http" "$registry_checked" "$registry_argon2id" "$registry_plaintext_absent" "$rate_attempts" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -394,21 +408,23 @@ out_path = Path(sys.argv[2])
 register_path = Path(sys.argv[3])
 session_path = Path(sys.argv[4])
 password_change_path = Path(sys.argv[5])
-old_login_path = Path(sys.argv[6])
-new_login_path = Path(sys.argv[7])
-logout_path = Path(sys.argv[8])
-bad_login_path = Path(sys.argv[9])
-register_http = sys.argv[10]
-session_http = sys.argv[11]
-password_change_http = sys.argv[12]
-old_login_http = sys.argv[13]
-new_login_http = sys.argv[14]
-logout_http = sys.argv[15]
-rate_limit_http = sys.argv[16]
-registry_checked = sys.argv[17] == "true"
-registry_argon2id = sys.argv[18] == "true"
-registry_plaintext_absent = sys.argv[19] == "true"
-rate_attempts = int(sys.argv[20])
+session_refresh_path = Path(sys.argv[6])
+old_login_path = Path(sys.argv[7])
+new_login_path = Path(sys.argv[8])
+logout_path = Path(sys.argv[9])
+bad_login_path = Path(sys.argv[10])
+register_http = sys.argv[11]
+session_http = sys.argv[12]
+password_change_http = sys.argv[13]
+session_refresh_http = sys.argv[14]
+old_login_http = sys.argv[15]
+new_login_http = sys.argv[16]
+logout_http = sys.argv[17]
+rate_limit_http = sys.argv[18]
+registry_checked = sys.argv[19] == "true"
+registry_argon2id = sys.argv[20] == "true"
+registry_plaintext_absent = sys.argv[21] == "true"
+rate_attempts = int(sys.argv[22])
 
 def read_json(path):
     try:
@@ -421,6 +437,7 @@ summary = json.loads(summary_path.read_text())
 register = read_json(register_path)
 session = read_json(session_path)
 password_change = read_json(password_change_path)
+session_refresh = read_json(session_refresh_path)
 old_login = read_json(old_login_path)
 new_login = read_json(new_login_path)
 logout = read_json(logout_path)
@@ -443,6 +460,9 @@ require("mutating_password_change_http_200", password_change_http == "200", {"ht
 require("mutating_password_change_kind", password_change.get("kind") == "game_account_password_change", password_change.get("kind"))
 require("mutating_password_change_status", password_change.get("status") == "password_changed", password_change.get("status"))
 require("mutating_password_change_session_preserved", password_change.get("active_session_preserved") is True, password_change.get("active_session_preserved"))
+require("mutating_session_refresh_http_200", session_refresh_http == "200", {"http_status": session_refresh_http, "body": session_refresh})
+require("mutating_session_refresh_status", session_refresh.get("status") == "session_refreshed", session_refresh.get("status"))
+require("mutating_session_refresh_csrf_rotated", bool(session_refresh.get("csrf")) and session_refresh.get("csrf") != session.get("session", {}).get("csrf"), {"new": session_refresh.get("csrf"), "old": session.get("session", {}).get("csrf")})
 require("mutating_old_password_rejected", old_login_http == "401", {"http_status": old_login_http, "body": old_login})
 require("mutating_new_password_login_http_200", new_login_http == "200", {"http_status": new_login_http, "body": new_login})
 require("mutating_logout_http_200", logout_http == "200", {"http_status": logout_http, "body": logout})
@@ -460,6 +480,7 @@ mutation = {
     "register_http_status": register_http,
     "session_http_status": session_http,
     "password_change_http_status": password_change_http,
+    "session_refresh_http_status": session_refresh_http,
     "old_password_login_http_status": old_login_http,
     "new_password_login_http_status": new_login_http,
     "logout_http_status": logout_http,
