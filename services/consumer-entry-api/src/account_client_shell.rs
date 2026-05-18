@@ -81,6 +81,7 @@ pub(super) async fn get_game_account_session_status(
 }
 
 pub(super) async fn post_game_account_logout(State(state): State<AppState>) -> Response {
+    state.inner.metrics.inc_game_account_logout_successes();
     (
         StatusCode::OK,
         [(
@@ -166,6 +167,7 @@ pub(super) async fn post_game_account_register(
         }
     }
 
+    state.inner.metrics.inc_game_account_register_successes();
     issue_game_account_session_response(
         &state,
         matrix_user_id,
@@ -204,9 +206,11 @@ pub(super) async fn post_game_account_login(
         registry.accounts.get(&matrix_user_id).cloned()
     };
     let Some(mut record) = record.filter(|record| !record.disabled) else {
+        state.inner.metrics.inc_game_account_login_failures();
         return invalid_game_account_credentials_response();
     };
     if !verify_game_account_password(&payload.password, &record.password_hash) {
+        state.inner.metrics.inc_game_account_login_failures();
         return invalid_game_account_credentials_response();
     }
 
@@ -231,6 +235,7 @@ pub(super) async fn post_game_account_login(
         }
     }
 
+    state.inner.metrics.inc_game_account_login_successes();
     issue_game_account_session_response(
         &state,
         matrix_user_id,
@@ -335,6 +340,13 @@ async fn game_account_client_shell_html(
             "auth_rate_limit_max_requests": state.config().game_account_auth_rate_limit_max_requests,
             "auth_rate_limit_window_secs": state.config().rate_limit_window_secs,
             "default_local_domain": state.config().game_account_local_domain
+        },
+        "observability": {
+            "contract_version": "trillionnium_game_account_auth_observability_v1",
+            "metrics_endpoint": "/metrics",
+            "health_metrics_path": "/health.metrics.game_account_auth",
+            "event_scope": "aggregate_no_password_no_token",
+            "passwords_tokens_or_cookie_values_logged": false
         },
         "production_boundary": {
             "requires_signed_upstream_user_session_when_password_auth_disabled": production_requires_signed_upstream,
@@ -635,7 +647,11 @@ async fn enforce_game_account_auth_rate_limits(
         "consumer_entry_game_account_auth_rate_limited",
         RateLimitBucketKind::User,
     )
-    .await?;
+    .await
+    .map_err(|response| {
+        state.inner.metrics.inc_game_account_auth_rate_limited();
+        response
+    })?;
 
     let source_key = format!(
         "game-account-auth:{action}:source:{}",
@@ -649,6 +665,10 @@ async fn enforce_game_account_auth_rate_limits(
         RateLimitBucketKind::SourceScope,
     )
     .await
+    .map_err(|response| {
+        state.inner.metrics.inc_game_account_auth_rate_limited();
+        response
+    })
 }
 
 fn game_account_auth_source_key(headers: &HeaderMap) -> String {

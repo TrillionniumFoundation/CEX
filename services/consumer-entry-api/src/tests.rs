@@ -2203,6 +2203,14 @@ async fn game_account_password_register_login_status_logout_roundtrip() {
         .contains("Max-Age=0"));
     assert!(logout_body.contains("game_account_logout"));
 
+    let (metrics_status, metrics_body) = send_metrics_request(&app).await;
+    assert_eq!(metrics_status, StatusCode::OK);
+    assert!(metrics_body.contains("cex_consumer_entry_game_account_register_successes_total 1"));
+    assert!(metrics_body.contains("cex_consumer_entry_game_account_login_successes_total 1"));
+    assert!(metrics_body.contains("cex_consumer_entry_game_account_login_failures_total 1"));
+    assert!(metrics_body.contains("cex_consumer_entry_game_account_logout_successes_total 1"));
+    assert!(metrics_body.contains("cex_consumer_entry_game_account_auth_rate_limited_total 0"));
+
     let _ = std::fs::remove_file(&temp_path);
 }
 
@@ -2249,6 +2257,11 @@ async fn game_account_password_auth_rate_limits_repeated_attempts() {
         "consumer_entry_game_account_auth_rate_limited"
     );
     assert_eq!(limited_body["rate_limit_bucket"], "user");
+
+    let (metrics_status, metrics_body) = send_metrics_request(&app).await;
+    assert_eq!(metrics_status, StatusCode::OK);
+    assert!(metrics_body.contains("cex_consumer_entry_game_account_login_failures_total 2"));
+    assert!(metrics_body.contains("cex_consumer_entry_game_account_auth_rate_limited_total 1"));
 
     let _ = std::fs::remove_file(&temp_path);
 }

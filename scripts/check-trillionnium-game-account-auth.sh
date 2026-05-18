@@ -90,10 +90,12 @@ trap cleanup EXIT
 client_headers="$tmpdir/account.headers"
 client_html="$tmpdir/account.html"
 session_json="$tmpdir/account-session.json"
+metrics_txt="$tmpdir/metrics.txt"
 client_http="$(curl -sS -D "$client_headers" -o "$client_html" -w '%{http_code}' "$BASE_URL/account" || printf '000')"
 session_http="$(curl -sS -o "$session_json" -w '%{http_code}' "$BASE_URL/account/session" || printf '000')"
+metrics_http="$(curl -sS -o "$metrics_txt" -w '%{http_code}' "$BASE_URL/metrics" || printf '000')"
 
-python3 - "$client_headers" "$client_html" "$session_json" "$summary_tmp" "$BASE_URL" "$CHECKED_AT" "$CONTRACT_VERSION" "$client_http" "$session_http" "${CEX_READINESS_MODE:-}" <<'PY'
+python3 - "$client_headers" "$client_html" "$session_json" "$metrics_txt" "$summary_tmp" "$BASE_URL" "$CHECKED_AT" "$CONTRACT_VERSION" "$client_http" "$session_http" "$metrics_http" "${CEX_READINESS_MODE:-}" <<'PY'
 import html
 import json
 import re
@@ -103,13 +105,15 @@ from pathlib import Path
 headers_path = Path(sys.argv[1])
 html_path = Path(sys.argv[2])
 session_path = Path(sys.argv[3])
-summary_path = Path(sys.argv[4])
-base_url = sys.argv[5]
-checked_at = int(sys.argv[6])
-contract_version = sys.argv[7]
-client_http = sys.argv[8]
-session_http = sys.argv[9]
-readiness_mode = sys.argv[10] or "unknown"
+metrics_path = Path(sys.argv[4])
+summary_path = Path(sys.argv[5])
+base_url = sys.argv[6]
+checked_at = int(sys.argv[7])
+contract_version = sys.argv[8]
+client_http = sys.argv[9]
+session_http = sys.argv[10]
+metrics_http = sys.argv[11]
+readiness_mode = sys.argv[12] or "unknown"
 
 failures = []
 
@@ -126,6 +130,7 @@ def read_text(path):
 headers_text = read_text(headers_path)
 client_body = read_text(html_path)
 session_text = read_text(session_path)
+metrics_text = read_text(metrics_path)
 client_header_contract = ""
 for line in headers_text.splitlines():
     if ":" not in line:
@@ -157,6 +162,7 @@ except json.JSONDecodeError as exc:
 
 require("account_http_200", client_http == "200", {"http_status": client_http})
 require("session_http_200", session_http == "200", {"http_status": session_http})
+require("metrics_http_200", metrics_http == "200", {"http_status": metrics_http})
 require(
     "account_resource_contract_header",
     client_header_contract == "trillionnium_game_account_client_v1",
@@ -216,6 +222,7 @@ require(
 )
 
 password_auth = readiness.get("password_auth") if isinstance(readiness.get("password_auth"), dict) else {}
+observability = readiness.get("observability") if isinstance(readiness.get("observability"), dict) else {}
 password_auth_enabled = password_auth.get("enabled") is True
 auth_limit = password_auth.get("auth_rate_limit_max_requests")
 auth_window = password_auth.get("auth_rate_limit_window_secs")
@@ -224,6 +231,20 @@ registry_persistence = password_auth.get("registry_persistence")
 require("password_min_chars_at_least_8", isinstance(min_chars, int) and min_chars >= 8, min_chars)
 require("auth_rate_limit_positive", isinstance(auth_limit, int) and auth_limit > 0, auth_limit)
 require("auth_rate_limit_window_positive", isinstance(auth_window, int) and auth_window > 0, auth_window)
+require(
+    "observability_contract",
+    observability.get("contract_version") == "trillionnium_game_account_auth_observability_v1",
+    observability.get("contract_version"),
+)
+require("observability_no_secret_logging", observability.get("passwords_tokens_or_cookie_values_logged") is False, observability.get("passwords_tokens_or_cookie_values_logged"))
+for metric_name in (
+    "cex_consumer_entry_game_account_register_successes_total",
+    "cex_consumer_entry_game_account_login_successes_total",
+    "cex_consumer_entry_game_account_login_failures_total",
+    "cex_consumer_entry_game_account_logout_successes_total",
+    "cex_consumer_entry_game_account_auth_rate_limited_total",
+):
+    require(f"metric_visible_{metric_name}", metric_name in metrics_text, None)
 if password_auth_enabled:
     require(
         "password_auth_registry_persistent_when_enabled",
@@ -258,6 +279,7 @@ summary = {
     "failures": failures,
     "client_http_status": client_http,
     "session_http_status": session_http,
+    "metrics_http_status": metrics_http,
     "client_header_contract": client_header_contract,
     "client_contract": readiness.get("contract_version"),
     "session_contract": session.get("contract_version"),
@@ -269,6 +291,8 @@ summary = {
     "auth_rate_limit_window_secs": auth_window,
     "public_launch_credit": production_boundary.get("public_launch_credit"),
     "client_submits_intent_only": production_boundary.get("client_submits_intent_only"),
+    "observability_contract": observability.get("contract_version"),
+    "observability_no_secret_logging": observability.get("passwords_tokens_or_cookie_values_logged"),
     "session_without_cookie_active": session.get("active"),
     "mutating_smoke": {"requested": False, "ok": None, "skipped": True},
 }

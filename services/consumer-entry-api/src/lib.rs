@@ -146,6 +146,11 @@ struct ConsumerEntryMetrics {
     ingress_auth_failures: AtomicU64,
     session_auth_successes: AtomicU64,
     session_auth_failures: AtomicU64,
+    game_account_register_successes: AtomicU64,
+    game_account_login_successes: AtomicU64,
+    game_account_login_failures: AtomicU64,
+    game_account_logout_successes: AtomicU64,
+    game_account_auth_rate_limited: AtomicU64,
     replay_hits: AtomicU64,
     world_map_rum_samples: AtomicU64,
     world_map_rum_first_interactive_ms_sum: AtomicU64,
@@ -249,6 +254,31 @@ impl ConsumerEntryMetrics {
         self.session_auth_failures.fetch_add(1, Ordering::Relaxed);
     }
 
+    fn inc_game_account_register_successes(&self) {
+        self.game_account_register_successes
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn inc_game_account_login_successes(&self) {
+        self.game_account_login_successes
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn inc_game_account_login_failures(&self) {
+        self.game_account_login_failures
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn inc_game_account_logout_successes(&self) {
+        self.game_account_logout_successes
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn inc_game_account_auth_rate_limited(&self) {
+        self.game_account_auth_rate_limited
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     fn inc_replay_hits(&self) {
         self.replay_hits.fetch_add(1, Ordering::Relaxed);
     }
@@ -326,9 +356,22 @@ impl ConsumerEntryMetrics {
             "ingress_auth_failures": self.ingress_auth_failures.load(Ordering::Relaxed),
             "session_auth_successes": self.session_auth_successes.load(Ordering::Relaxed),
             "session_auth_failures": self.session_auth_failures.load(Ordering::Relaxed),
+            "game_account_auth": self.game_account_auth_snapshot(),
             "replay_hits": self.replay_hits.load(Ordering::Relaxed),
             "world_map_rum": self.world_map_rum_snapshot(),
             "world_map_delta": self.world_map_delta_snapshot(),
+        })
+    }
+
+    fn game_account_auth_snapshot(&self) -> Value {
+        json!({
+            "contract_version": "trillionnium_game_account_auth_observability_v1",
+            "register_successes": self.game_account_register_successes.load(Ordering::Relaxed),
+            "login_successes": self.game_account_login_successes.load(Ordering::Relaxed),
+            "login_failures": self.game_account_login_failures.load(Ordering::Relaxed),
+            "logout_successes": self.game_account_logout_successes.load(Ordering::Relaxed),
+            "auth_rate_limited": self.game_account_auth_rate_limited.load(Ordering::Relaxed),
+            "passwords_tokens_or_cookie_values_logged": false,
         })
     }
 

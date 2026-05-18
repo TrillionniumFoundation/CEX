@@ -5135,6 +5135,16 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
             "cex_consumer_entry_session_auth_successes_total {}\n",
             "# TYPE cex_consumer_entry_session_auth_failures_total counter\n",
             "cex_consumer_entry_session_auth_failures_total {}\n",
+            "# TYPE cex_consumer_entry_game_account_register_successes_total counter\n",
+            "cex_consumer_entry_game_account_register_successes_total {}\n",
+            "# TYPE cex_consumer_entry_game_account_login_successes_total counter\n",
+            "cex_consumer_entry_game_account_login_successes_total {}\n",
+            "# TYPE cex_consumer_entry_game_account_login_failures_total counter\n",
+            "cex_consumer_entry_game_account_login_failures_total {}\n",
+            "# TYPE cex_consumer_entry_game_account_logout_successes_total counter\n",
+            "cex_consumer_entry_game_account_logout_successes_total {}\n",
+            "# TYPE cex_consumer_entry_game_account_auth_rate_limited_total counter\n",
+            "cex_consumer_entry_game_account_auth_rate_limited_total {}\n",
             "# TYPE cex_consumer_entry_replay_hits_total counter\n",
             "cex_consumer_entry_replay_hits_total {}\n",
             "# TYPE cex_consumer_entry_trillionnium_world_map_rum_samples_total counter\n",
@@ -5573,6 +5583,31 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
             .inner
             .metrics
             .session_auth_failures
+            .load(Ordering::Relaxed),
+        state
+            .inner
+            .metrics
+            .game_account_register_successes
+            .load(Ordering::Relaxed),
+        state
+            .inner
+            .metrics
+            .game_account_login_successes
+            .load(Ordering::Relaxed),
+        state
+            .inner
+            .metrics
+            .game_account_login_failures
+            .load(Ordering::Relaxed),
+        state
+            .inner
+            .metrics
+            .game_account_logout_successes
+            .load(Ordering::Relaxed),
+        state
+            .inner
+            .metrics
+            .game_account_auth_rate_limited
             .load(Ordering::Relaxed),
         state.inner.metrics.replay_hits.load(Ordering::Relaxed),
         state
