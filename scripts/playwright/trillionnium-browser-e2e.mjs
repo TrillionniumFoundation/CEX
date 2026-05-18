@@ -234,8 +234,11 @@ async function assertAccountSessionBridge(page, selector, returnTo, label) {
   assert(await count(page, selector) === 1, `${label} account session bridge missing`);
   const bridge = await page.locator(selector).first().evaluate((node) => ({
     contractVersion: node.dataset.contractVersion || null,
+    playerIdentityContract: node.dataset.playerIdentityContract || null,
     sessionActive: node.dataset.sessionActive || null,
     authState: node.dataset.authState || null,
+    profileBound: node.dataset.profileBound || null,
+    identitySource: node.dataset.identitySource || null,
     accountEndpoint: node.dataset.accountEndpoint || null,
     profileEndpoint: node.dataset.profileEndpoint || null,
     returnTo: node.dataset.returnTo || null,
@@ -247,8 +250,10 @@ async function assertAccountSessionBridge(page, selector, returnTo, label) {
   }));
   const href = await page.locator(`${selector} a`).first().getAttribute('href');
   assert(bridge.contractVersion === 'trillionnium_game_account_surface_session_v1', `${label} account bridge contract mismatch`, bridge);
+  assert(bridge.playerIdentityContract === 'trillionnium_game_account_player_identity_binding_v1', `${label} account player identity contract mismatch`, bridge);
   assert(bridge.sessionActive === 'true', `${label} account bridge should show signed session`, bridge);
   assert(bridge.authState === 'upstream_signed_session' || bridge.authState === 'game_account_signed_session', `${label} account bridge auth state mismatch`, bridge);
+  assert(bridge.profileBound === 'false' && bridge.identitySource === 'signed_session', `${label} account bridge should not invent a profile for upstream-only session`, bridge);
   assert(bridge.accountEndpoint === '/account' && bridge.profileEndpoint === '/account/profile', `${label} account bridge endpoints missing`, bridge);
   assert(bridge.returnTo === returnTo && href === `/account?return_to=${returnTo}`, `${label} account bridge return target mismatch`, { bridge, href });
   assert(bridge.matrixUserId === matrixUserId && bridge.roomId === roomId, `${label} account bridge player or room mismatch`, bridge);
@@ -976,6 +981,7 @@ async function main() {
   assert(await count(page, '#world-mobile-primary-cta.cta') === 1, 'world mobile primary CTA missing');
   assert(await count(page, '#world-mobile-route-first-sheet .world-route-stepper span') === 3, 'world mobile route-first stepper missing');
   const worldFirstHumanScreen = await assertWorldFirstHumanScreen(page, '/world English system language');
+  assert(await count(page, '#world-first-human-loop[data-account-identity-contract="trillionnium_game_account_player_identity_binding_v1"][data-account-profile-bound="false"][data-account-identity-source="signed_session"]') === 1, 'world first-human account identity binding contract missing');
   steps.push({ name: 'world_first_human_screen_four_questions', ok: true, ...worldFirstHumanScreen });
   assert(await count(page, '#world-openstreetmap-provider-readiness[data-contract-version="openstreetmap_provider_readiness_v1"][data-fixture-mode-green="true"][data-live-modes-fail-closed="true"][data-live-network-ingestion-enabled="false"][data-production-ingestion-enabled="false"]') === 1, 'world OSM provider readiness/fail-closed contract missing');
   assert(await count(page, '#world-openstreetmap-geodata-freshness[data-contract-version="openstreetmap_geodata_freshness_v1"][data-fixture-static-snapshot="true"][data-wall-clock-freshness-applies="false"][data-live-data-freshness-applies="false"][data-staleness-gate-green="true"][data-stale-live-ingestion-blocked="true"][data-fixture-snapshot-age-seconds="0"]') === 1, 'world OSM geodata freshness/staleness contract missing');
@@ -1512,6 +1518,7 @@ async function main() {
       real_world_map: true,
       feed_api_hydration: true,
       account_session_bridge: true,
+      account_player_identity_binding: true,
       route_runner_handoff_contract: true,
       route_runner_handoff_dom: true,
       world_map_move: true,

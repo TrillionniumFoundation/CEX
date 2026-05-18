@@ -184,6 +184,8 @@ for needle in ['Trillionnium World', 'Global-first open world', '面向海外首
     assert needle in world_html, needle
 for needle in ['world-account-session-card', 'trillionnium_game_account_surface_session_v1', 'data-session-active="false"', '/account?return_to=/world']:
     assert needle in world_html, ('world_account_session_bridge', needle)
+for needle in ['trillionnium_game_account_player_identity_binding_v1', 'data-account-profile-bound="false"']:
+    assert needle in world_html, ('world_account_identity_binding', needle)
 
 matrix_user_id = '@alice:local.dev'
 marker = f'web-e2e-{int(time.time())}'
@@ -209,7 +211,7 @@ for needle in ['app-account-session-card', 'trillionnium_game_account_surface_se
     assert needle in app_session_html, ('app_session_account_bridge', needle)
 world_session_status, world_session_html = get('/world', headers=cookie_header)
 assert world_session_status == 200, world_session_status
-for needle in ['world-account-session-card', 'trillionnium_game_account_surface_session_v1', 'data-session-active="true"', 'data-auth-state="upstream_signed_session"', matrix_user_id, room_id, '/account?return_to=/world']:
+for needle in ['world-account-session-card', 'trillionnium_game_account_surface_session_v1', 'trillionnium_game_account_player_identity_binding_v1', 'data-session-active="true"', 'data-auth-state="upstream_signed_session"', 'data-account-profile-bound="false"', 'data-account-identity-source="signed_session"', matrix_user_id, room_id, '/account?return_to=/world']:
     assert needle in world_session_html, ('world_session_account_bridge', needle)
 app_status, app_html = get('/app')
 assert app_status == 200 and 'Trillionnium World' in app_html and '移动世界壳 v1' in app_html, app_status

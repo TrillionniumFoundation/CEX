@@ -130,7 +130,7 @@ For an explicit game-account gate outside full production readiness:
 CEX_GAME_ACCOUNT_AUTH_MUTATING_SMOKE=1 ./scripts/check-trillionnium-game-account-auth.sh
 ```
 
-The default account gate is read-only. It also requires allowlisted account return links, the `/app` and `/world` account-session bridge cards, aggregate account-auth counters on `/metrics`, and the account readiness JSON to declare `trillionnium_game_account_auth_observability_v1` with no password/token/cookie logging. The mutating smoke requires password auth to be enabled and verifies register/session/profile/password-change/session-refresh/session-revoke/logout, Argon2id registry storage, plaintext absence, old-password rejection, new-password login, CSRF rotation, all-device revocation, and bad-login rate limiting.
+The default account gate is read-only. It also requires allowlisted account return links, the `/app` and `/world` account-session bridge cards, the `/world` account identity binding contract, aggregate account-auth counters on `/metrics`, and the account readiness JSON to declare `trillionnium_game_account_auth_observability_v1` with no password/token/cookie logging. The mutating smoke requires password auth to be enabled and verifies register/session/profile/password-change/session-refresh/session-revoke/logout, account-profile identity binding on the `/world` first-human surface, Argon2id registry storage, plaintext absence, old-password rejection, new-password login, CSRF rotation, all-device revocation, and bad-login rate limiting.
 
 For a bounded runtime soak that repeats runtime status, metrics smoke, operator signals, and worker-queue checks, while probing the live provider at the beginning and end when configured:
 

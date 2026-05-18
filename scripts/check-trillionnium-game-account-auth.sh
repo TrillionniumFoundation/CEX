@@ -26,12 +26,13 @@ Default mode is non-mutating and checks:
   - browser credential storage stays disabled,
   - public_launch_credit remains false,
   - /account return_to stays allowlisted and /app plus /world expose Account CTAs,
+  - /world exposes the game-account player identity binding contract,
   - /account/session without a cookie reports active=false,
   - password auth posture is coherent when enabled.
 
 Mutating mode is opt-in through --mutating or CEX_GAME_ACCOUNT_AUTH_MUTATING_SMOKE=1.
 It requires password auth to be enabled, registers one unique test account, verifies
-session/profile/password-change/session-refresh/session-revoke/logout, checks the registry stores Argon2id rather than plaintext, and proves
+session/profile/password-change/session-refresh/session-revoke/logout, checks the profile binds into the /world first-human surface, checks the registry stores Argon2id rather than plaintext, and proves
 repeated bad login attempts eventually hit the auth rate limit.
 EOF
 }
@@ -209,6 +210,7 @@ require("account_world_return_to_whitelisted", 'href="/world">Open Game' in acco
 require("account_unsafe_return_to_app", 'href="/app">Open Game' in account_unsafe_body and '"return_to": "/app"' in account_unsafe_body and "https://example.test" not in account_unsafe_body, None)
 require("app_account_session_bridge", all(token in app_body for token in ["app-account-session-card", "trillionnium_game_account_surface_session_v1", 'data-session-active="false"', 'data-auth-state="signed_session_required"', "/account?return_to=/app"]), None)
 require("world_account_session_bridge", all(token in world_body for token in ["world-account-session-card", "trillionnium_game_account_surface_session_v1", 'data-session-active="false"', "/account?return_to=/world"]), None)
+require("world_account_identity_binding_contract", all(token in world_body for token in ["trillionnium_game_account_player_identity_binding_v1", 'data-account-profile-bound="false"']), None)
 
 expected_paths = {
     "client_surface": "/account",
@@ -362,6 +364,7 @@ summary = {
     "default_return_to": readiness.get("return_to"),
     "app_account_session_bridge": all(token in app_body for token in ["app-account-session-card", "trillionnium_game_account_surface_session_v1", 'data-session-active="false"', "/account?return_to=/app"]),
     "world_account_session_bridge": all(token in world_body for token in ["world-account-session-card", "trillionnium_game_account_surface_session_v1", 'data-session-active="false"', "/account?return_to=/world"]),
+    "world_account_identity_binding_contract": all(token in world_body for token in ["trillionnium_game_account_player_identity_binding_v1", 'data-account-profile-bound="false"']),
     "session_contract": session.get("contract_version"),
     "password_auth_enabled": password_auth_enabled,
     "password_auth_implemented": register.get("password_auth_implemented") is True and login.get("password_auth_implemented") is True,
@@ -403,6 +406,7 @@ if [[ "$MUTATING_SMOKE" == "1" ]]; then
     register_json="$tmpdir/register.json"
     session_after_register_json="$tmpdir/session-after-register.json"
     profile_json="$tmpdir/profile.json"
+    world_after_profile_html="$tmpdir/world-after-profile.html"
     password_change_json="$tmpdir/password-change.json"
     session_refresh_json="$tmpdir/session-refresh.json"
     old_login_json="$tmpdir/old-login.json"
@@ -435,6 +439,7 @@ if [[ "$MUTATING_SMOKE" == "1" ]]; then
     csrf="$(jq -r '.session.csrf // .csrf // ""' "$session_after_register_json" 2>/dev/null || printf '')"
     profile_payload="$(jq -n --arg display_name "$updated_display_name" --arg room_id "$updated_room_id" --arg csrf "$csrf" '{display_name: $display_name, room_id: $room_id, csrf: $csrf}')"
     profile_http="$(curl -sS -o "$profile_json" -w '%{http_code}' -b "$cookie_jar" -H 'content-type: application/json' --data "$profile_payload" "$BASE_URL/account/profile" || printf '000')"
+    world_after_profile_http="$(curl -sS -o "$world_after_profile_html" -w '%{http_code}' -b "$cookie_jar" "$BASE_URL/world?first_human_session=1" || printf '000')"
     password_change_payload="$(jq -n --arg old_password "$password" --arg new_password "$new_password" --arg csrf "$csrf" '{old_password: $old_password, new_password: $new_password, csrf: $csrf}')"
     password_change_http="$(curl -sS -o "$password_change_json" -w '%{http_code}' -b "$cookie_jar" -c "$cookie_jar" -H 'content-type: application/json' --data "$password_change_payload" "$BASE_URL/account/password/change" || printf '000')"
     password_change_csrf="$(jq -r '.csrf // ""' "$password_change_json" 2>/dev/null || printf '')"
@@ -469,7 +474,7 @@ if [[ "$MUTATING_SMOKE" == "1" ]]; then
       fi
     fi
 
-    python3 - "$summary_tmp" "$mutation_tmp" "$register_json" "$session_after_register_json" "$profile_json" "$password_change_json" "$session_refresh_json" "$old_login_json" "$new_login_json" "$session_revoke_json" "$logout_json" "$bad_login_json" "$register_http" "$session_after_register_http" "$profile_http" "$password_change_http" "$session_refresh_http" "$old_login_http" "$new_login_http" "$session_revoke_http" "$logout_http" "$rate_limit_http" "$registry_checked" "$registry_argon2id" "$registry_plaintext_absent" "$rate_attempts" "$updated_display_name" "$updated_room_id" <<'PY'
+    python3 - "$summary_tmp" "$mutation_tmp" "$register_json" "$session_after_register_json" "$profile_json" "$world_after_profile_html" "$password_change_json" "$session_refresh_json" "$old_login_json" "$new_login_json" "$session_revoke_json" "$logout_json" "$bad_login_json" "$register_http" "$session_after_register_http" "$profile_http" "$world_after_profile_http" "$password_change_http" "$session_refresh_http" "$old_login_http" "$new_login_http" "$session_revoke_http" "$logout_http" "$rate_limit_http" "$registry_checked" "$registry_argon2id" "$registry_plaintext_absent" "$rate_attempts" "$updated_display_name" "$updated_room_id" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -479,29 +484,31 @@ out_path = Path(sys.argv[2])
 register_path = Path(sys.argv[3])
 session_path = Path(sys.argv[4])
 profile_path = Path(sys.argv[5])
-password_change_path = Path(sys.argv[6])
-session_refresh_path = Path(sys.argv[7])
-old_login_path = Path(sys.argv[8])
-new_login_path = Path(sys.argv[9])
-session_revoke_path = Path(sys.argv[10])
-logout_path = Path(sys.argv[11])
-bad_login_path = Path(sys.argv[12])
-register_http = sys.argv[13]
-session_http = sys.argv[14]
-profile_http = sys.argv[15]
-password_change_http = sys.argv[16]
-session_refresh_http = sys.argv[17]
-old_login_http = sys.argv[18]
-new_login_http = sys.argv[19]
-session_revoke_http = sys.argv[20]
-logout_http = sys.argv[21]
-rate_limit_http = sys.argv[22]
-registry_checked = sys.argv[23] == "true"
-registry_argon2id = sys.argv[24] == "true"
-registry_plaintext_absent = sys.argv[25] == "true"
-rate_attempts = int(sys.argv[26])
-updated_display_name = sys.argv[27]
-updated_room_id = sys.argv[28]
+world_after_profile_path = Path(sys.argv[6])
+password_change_path = Path(sys.argv[7])
+session_refresh_path = Path(sys.argv[8])
+old_login_path = Path(sys.argv[9])
+new_login_path = Path(sys.argv[10])
+session_revoke_path = Path(sys.argv[11])
+logout_path = Path(sys.argv[12])
+bad_login_path = Path(sys.argv[13])
+register_http = sys.argv[14]
+session_http = sys.argv[15]
+profile_http = sys.argv[16]
+world_after_profile_http = sys.argv[17]
+password_change_http = sys.argv[18]
+session_refresh_http = sys.argv[19]
+old_login_http = sys.argv[20]
+new_login_http = sys.argv[21]
+session_revoke_http = sys.argv[22]
+logout_http = sys.argv[23]
+rate_limit_http = sys.argv[24]
+registry_checked = sys.argv[25] == "true"
+registry_argon2id = sys.argv[26] == "true"
+registry_plaintext_absent = sys.argv[27] == "true"
+rate_attempts = int(sys.argv[28])
+updated_display_name = sys.argv[29]
+updated_room_id = sys.argv[30]
 
 def read_json(path):
     try:
@@ -514,6 +521,7 @@ summary = json.loads(summary_path.read_text())
 register = read_json(register_path)
 session = read_json(session_path)
 profile = read_json(profile_path)
+world_after_profile_body = world_after_profile_path.read_text(errors="replace") if world_after_profile_path.exists() else ""
 password_change = read_json(password_change_path)
 session_refresh = read_json(session_refresh_path)
 old_login = read_json(old_login_path)
@@ -541,6 +549,19 @@ require("mutating_profile_status", profile.get("status") == "profile_updated", p
 require("mutating_profile_display_name", profile.get("display_name") == updated_display_name, profile.get("display_name"))
 require("mutating_profile_room_id", profile.get("room_id") == updated_room_id, profile.get("room_id"))
 require("mutating_profile_no_secret_logging", profile.get("passwords_tokens_or_cookie_values_logged") is False, profile.get("passwords_tokens_or_cookie_values_logged"))
+require("mutating_world_after_profile_http_200", world_after_profile_http == "200", {"http_status": world_after_profile_http})
+require(
+    "mutating_world_profile_identity_binding",
+    all(token in world_after_profile_body for token in [
+        "trillionnium_game_account_player_identity_binding_v1",
+        'data-account-profile-bound="true"',
+        'data-account-identity-source="game_account_profile"',
+        'data-profile-bound="true"',
+        updated_display_name,
+        updated_room_id,
+    ]),
+    None,
+)
 require("mutating_password_change_http_200", password_change_http == "200", {"http_status": password_change_http, "body": password_change})
 require("mutating_password_change_kind", password_change.get("kind") == "game_account_password_change", password_change.get("kind"))
 require("mutating_password_change_status", password_change.get("status") == "password_changed", password_change.get("status"))
@@ -568,6 +589,8 @@ mutation = {
     "register_http_status": register_http,
     "session_http_status": session_http,
     "profile_http_status": profile_http,
+    "world_after_profile_http_status": world_after_profile_http,
+    "world_profile_identity_binding": all(token in world_after_profile_body for token in ["trillionnium_game_account_player_identity_binding_v1", 'data-account-profile-bound="true"', 'data-account-identity-source="game_account_profile"', updated_display_name, updated_room_id]),
     "password_change_http_status": password_change_http,
     "session_refresh_http_status": session_refresh_http,
     "old_password_login_http_status": old_login_http,

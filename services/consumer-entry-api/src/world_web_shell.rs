@@ -5665,6 +5665,17 @@ pub(super) async fn get_world_web_shell(
     } else {
         "只读世界：提交行动前需要先获取签名 /league/web/session。"
     };
+    let game_account_player_identity =
+        game_account_player_identity_binding(&state, web_session.as_ref(), local_play_session)
+            .await;
+    let world_account_session_card = game_account_surface_session_card_html(
+        &state,
+        web_session.as_ref(),
+        "world",
+        "/world",
+        local_play_session,
+    )
+    .await;
     let recovery_notice_html = if query.contains_key("recovery") {
         r#"<article id="world-action-recovery-card" class="mini recovery-card" data-recovery="world_action_failure">
           <strong data-i18n-en="Recovery route ready" data-i18n-zh="恢复路线已准备">Recovery route ready</strong>
@@ -6254,10 +6265,14 @@ pub(super) async fn get_world_web_shell(
         .get("title")
         .and_then(Value::as_str)
         .unwrap_or("初入Trillionnium");
-    let trillionnium_display_name = trillionnium_character
+    let rust_trillionnium_display_name = trillionnium_character
         .get("display_name")
         .and_then(Value::as_str)
         .unwrap_or("镜城游侠");
+    let trillionnium_display_name = game_account_player_identity
+        .display_name
+        .as_deref()
+        .unwrap_or(rust_trillionnium_display_name);
     let viewport_path = world_viewport
         .get("viewport_path")
         .and_then(Value::as_str)
@@ -7149,15 +7164,6 @@ pub(super) async fn get_world_web_shell(
         real_world_map_render_cards_js(RealWorldMapShellCardStyle::WorldMini);
     let world_header_language_switcher =
         trillionnium_language_inline_switcher_html("trillionnium-world-language-select");
-    let world_account_session_card = game_account_surface_session_card_html(
-        &state,
-        web_session.as_ref(),
-        "world",
-        "/world",
-        local_play_session,
-    )
-    .await;
-
     Html(format!(
         r#"<!doctype html>
 <html lang="zh-CN">
@@ -7728,7 +7734,7 @@ pub(super) async fn get_world_web_shell(
           <aside class="world-keypad-sidecar" aria-label="Movement controls" data-i18n-aria-label-en="Movement controls" data-i18n-aria-label-zh="移动控制">
             <article class="world-keypad-quest-brief" data-contract-version="trillionnium_world_first_screen_four_questions_v1">
               <strong data-i18n-en="First screen: move the character" data-i18n-zh="首屏：先操纵人物移动">First screen: move the character</strong>
-          <div id="world-first-human-loop" class="world-first-human-loop" data-contract-version="trillionnium_first_human_session_v1" data-first-screen-contract="trillionnium_world_first_screen_four_questions_v1" data-visible-question-count="4" data-source-of-truth="rust_trillionnium_game_state" data-web-role="player_orientation_only">
+          <div id="world-first-human-loop" class="world-first-human-loop" data-contract-version="trillionnium_first_human_session_v1" data-first-screen-contract="trillionnium_world_first_screen_four_questions_v1" data-account-identity-contract="{game_account_player_identity_contract}" data-account-profile-bound="{game_account_profile_bound}" data-account-session-active="{game_account_session_active}" data-account-identity-source="{game_account_player_identity_source}" data-account-display-name="{game_account_player_display_name}" data-account-matrix-user-id="{game_account_matrix_user_id}" data-account-room-id="{game_account_room_id}" data-visible-question-count="4" data-source-of-truth="rust_trillionnium_game_state" data-web-role="player_orientation_only">
             <article data-first-human-question="who"><span data-i18n-en="Who" data-i18n-zh="我是谁">Who</span><b data-i18n-en="{trillionnium_display_name_en}" data-i18n-zh="{trillionnium_display_name_zh}">{trillionnium_display_name_en}</b><small data-i18n-en="{trillionnium_title_en}" data-i18n-zh="{trillionnium_title_zh}">{trillionnium_title_en}</small></article>
             <article data-first-human-question="where"><span data-i18n-en="Where" data-i18n-zh="去哪">Where</span><b data-i18n-en="Real-street objective" data-i18n-zh="真实街巷目标">Real-street objective</b><small data-i18n-en="One visible route, not every dashboard." data-i18n-zh="只看一条路线，不先看所有仪表盘。">One visible route, not every dashboard.</small></article>
             <article data-first-human-question="click"><span data-i18n-en="Click" data-i18n-zh="点什么">Click</span><b data-i18n-en="Enter tactics board" data-i18n-zh="进入战棋棋盘">Enter tactics board</b><small data-i18n-en="Select unit → target → command." data-i18n-zh="选单位 → 选目标 → 下指令。">Select unit → target → command.</small></article>
@@ -7826,7 +7832,7 @@ pub(super) async fn get_world_web_shell(
           {tactics_player_hud}
           <aside class="tactics-command-card" aria-label="Tactics command menu" data-i18n-aria-label-en="Tactics command menu" data-i18n-aria-label-zh="战棋指令菜单">
             <h3 data-i18n-en="Tactics command menu" data-i18n-zh="战棋指令菜单">Tactics command menu</h3>
-            <div class="tactics-base-note" data-source-of-truth="rust_trillionnium_character"><strong data-i18n-en="{trillionnium_display_name_en}" data-i18n-zh="{trillionnium_display_name_zh}">{trillionnium_display_name_en}</strong><span data-i18n-en="{trillionnium_title_en}" data-i18n-zh="{trillionnium_title_zh}">{trillionnium_title_en}</span></div>
+            <div class="tactics-base-note" data-source-of-truth="rust_trillionnium_character" data-account-identity-contract="{game_account_player_identity_contract}" data-account-profile-bound="{game_account_profile_bound}" data-account-identity-source="{game_account_player_identity_source}"><strong data-i18n-en="{trillionnium_display_name_en}" data-i18n-zh="{trillionnium_display_name_zh}">{trillionnium_display_name_en}</strong><span data-i18n-en="{trillionnium_title_en}" data-i18n-zh="{trillionnium_title_zh}">{trillionnium_title_en}</span></div>
             {trillionnium_status_lines}
             {tactics_session_state}
             <div class="tactics-stat-line"><span data-i18n-en="Orders" data-i18n-zh="军令">Orders</span><div class="tactics-meter"><span style="width:86%"></span></div><b>{map_avatar_route_runner_count}</b></div>
@@ -9270,6 +9276,33 @@ pub(super) async fn get_world_web_shell(
         trillionnium_combat_numerics_runtime = trillionnium_combat_numerics_runtime,
         trillionnium_region_story_unlock_runtime = trillionnium_region_story_unlock_runtime,
         trillionnium_status_lines = trillionnium_status_lines,
+        game_account_player_identity_contract =
+            escape_html_text(game_account_player_identity.contract_version),
+        game_account_profile_bound = if game_account_player_identity.profile_bound {
+            "true"
+        } else {
+            "false"
+        },
+        game_account_session_active = if game_account_player_identity.session_active {
+            "true"
+        } else {
+            "false"
+        },
+        game_account_player_identity_source =
+            escape_html_text(game_account_player_identity.identity_source),
+        game_account_player_display_name = escape_html_text(trillionnium_display_name),
+        game_account_matrix_user_id = escape_html_text(
+            game_account_player_identity
+                .matrix_user_id
+                .as_deref()
+                .unwrap_or("")
+        ),
+        game_account_room_id = escape_html_text(
+            game_account_player_identity
+                .room_id
+                .as_deref()
+                .unwrap_or("none")
+        ),
         trillionnium_display_name_en = escape_html_text(world_trillionnium_visible_english(
             trillionnium_display_name
         )),

@@ -2102,8 +2102,11 @@ async fn game_account_client_shell_reflects_signed_game_session_cookie() {
     assert_eq!(app_status, StatusCode::OK);
     assert!(app_body.contains(r#"id="app-account-session-card""#));
     assert!(app_body.contains("trillionnium_game_account_surface_session_v1"));
+    assert!(app_body.contains("trillionnium_game_account_player_identity_binding_v1"));
     assert!(app_body.contains(r#"data-session-active="true""#));
     assert!(app_body.contains(r#"data-auth-state="upstream_signed_session""#));
+    assert!(app_body.contains(r#"data-profile-bound="false""#));
+    assert!(app_body.contains(r#"data-identity-source="signed_session""#));
     assert!(app_body.contains(r#"data-return-to="/app""#));
     assert!(app_body.contains(r#"/account?return_to=/app"#));
     assert!(app_body.contains("@alice:local.dev"));
@@ -2114,8 +2117,11 @@ async fn game_account_client_shell_reflects_signed_game_session_cookie() {
     assert_eq!(world_status, StatusCode::OK);
     assert!(world_body.contains(r#"id="world-account-session-card""#));
     assert!(world_body.contains("trillionnium_game_account_surface_session_v1"));
+    assert!(world_body.contains("trillionnium_game_account_player_identity_binding_v1"));
     assert!(world_body.contains(r#"data-session-active="true""#));
     assert!(world_body.contains(r#"data-auth-state="upstream_signed_session""#));
+    assert!(world_body.contains(r#"data-profile-bound="false""#));
+    assert!(world_body.contains(r#"data-identity-source="signed_session""#));
     assert!(world_body.contains(r#"data-return-to="/world""#));
     assert!(world_body.contains(r#"/account?return_to=/world"#));
     assert!(world_body.contains("@alice:local.dev"));
@@ -2262,6 +2268,30 @@ async fn game_account_password_register_login_status_logout_roundtrip() {
         session_after_profile_json["profile"]["room_id"],
         "!prime:local.dev"
     );
+
+    let (world_after_profile_status, _world_after_profile_headers, world_after_profile_body) =
+        send_text_request_with_headers(
+            &app,
+            "GET",
+            "/world?first_human_session=1",
+            &[("cookie", &session_cookie)],
+        )
+        .await;
+    assert_eq!(world_after_profile_status, StatusCode::OK);
+    assert!(
+        world_after_profile_body.contains("trillionnium_game_account_player_identity_binding_v1")
+    );
+    assert!(world_after_profile_body.contains(r#"data-account-profile-bound="true""#));
+    assert!(world_after_profile_body.contains(r#"data-account-session-active="true""#));
+    assert!(
+        world_after_profile_body.contains(r#"data-account-identity-source="game_account_profile""#)
+    );
+    assert!(world_after_profile_body.contains(r#"data-account-display-name="Pilot Prime""#));
+    assert!(world_after_profile_body
+        .contains(r#"data-account-matrix-user-id="@pilot_one:trillionnium.local""#));
+    assert!(world_after_profile_body.contains(r#"data-account-room-id="!prime:local.dev""#));
+    assert!(world_after_profile_body.contains(r#"data-profile-bound="true""#));
+    assert!(world_after_profile_body.contains("Pilot Prime"));
 
     let (bad_change_status, bad_change_body) = send_json_request(
         &app,

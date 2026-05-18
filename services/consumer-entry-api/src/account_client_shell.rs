@@ -7,6 +7,8 @@ use argon2::{
 pub(super) const GAME_ACCOUNT_CLIENT_CONTRACT: &str = "trillionnium_game_account_client_v1";
 pub(super) const GAME_ACCOUNT_SURFACE_SESSION_CONTRACT: &str =
     "trillionnium_game_account_surface_session_v1";
+pub(super) const GAME_ACCOUNT_PLAYER_IDENTITY_CONTRACT: &str =
+    "trillionnium_game_account_player_identity_binding_v1";
 const GAME_ACCOUNT_PASSWORD_AUTH_CONTRACT: &str = "trillionnium_game_account_password_auth_v1";
 const GAME_ACCOUNT_SESSION_STATUS_CONTRACT: &str = "trillionnium_game_account_session_status_v1";
 const GAME_ACCOUNT_LOCAL_PROFILE_KEY: &str = "trillionnium.account.profile.v1";
@@ -1224,6 +1226,79 @@ pub(super) fn game_account_return_to_path(raw: Option<&str>) -> &'static str {
     }
 }
 
+#[derive(Clone, Debug, Default)]
+pub(super) struct GameAccountPlayerIdentityBinding {
+    pub contract_version: &'static str,
+    pub session_active: bool,
+    pub profile_bound: bool,
+    pub auth_state: &'static str,
+    pub identity_source: &'static str,
+    pub display_name: Option<String>,
+    pub matrix_user_id: Option<String>,
+    pub room_id: Option<String>,
+}
+
+pub(super) async fn game_account_player_identity_binding(
+    state: &AppState,
+    web_session: Option<&LeagueWebSessionClaims>,
+    local_play_session: bool,
+) -> GameAccountPlayerIdentityBinding {
+    if let Some(session) = web_session {
+        let record = {
+            let registry = state.inner.game_account_registry.lock().await;
+            registry
+                .accounts
+                .get(&session.matrix_user_id)
+                .filter(|record| !record.disabled)
+                .cloned()
+        };
+        let profile_bound = record.is_some();
+        let display_name = record
+            .as_ref()
+            .and_then(|record| record.display_name.clone());
+        let room_id = record
+            .as_ref()
+            .and_then(|record| record.room_id.clone())
+            .or_else(|| session.room_id.clone());
+        return GameAccountPlayerIdentityBinding {
+            contract_version: GAME_ACCOUNT_PLAYER_IDENTITY_CONTRACT,
+            session_active: true,
+            profile_bound,
+            auth_state: if session.game_account_session_generation.is_some() {
+                "game_account_signed_session"
+            } else {
+                "upstream_signed_session"
+            },
+            identity_source: if display_name.is_some() {
+                "game_account_profile"
+            } else {
+                "signed_session"
+            },
+            display_name,
+            matrix_user_id: Some(session.matrix_user_id.clone()),
+            room_id,
+        };
+    }
+    GameAccountPlayerIdentityBinding {
+        contract_version: GAME_ACCOUNT_PLAYER_IDENTITY_CONTRACT,
+        session_active: false,
+        profile_bound: false,
+        auth_state: if local_play_session {
+            "local_play_no_account"
+        } else {
+            "signed_session_required"
+        },
+        identity_source: if local_play_session {
+            "local_play_session"
+        } else {
+            "rust_world_character"
+        },
+        display_name: None,
+        matrix_user_id: None,
+        room_id: None,
+    }
+}
+
 pub(super) async fn game_account_surface_session_card_html(
     state: &AppState,
     web_session: Option<&LeagueWebSessionClaims>,
@@ -1241,65 +1316,54 @@ pub(super) async fn game_account_surface_session_card_html(
         format!("{surface_id}-account-session-card")
     };
     let account_href = format!("/account?return_to={return_to}");
-    let (session_active, auth_state, display_name, matrix_user_id, room_id, cta_label, headline) =
-        if let Some(session) = web_session {
-            let (display_name, room_id) = {
-                let registry = state.inner.game_account_registry.lock().await;
-                registry
-                    .accounts
-                    .get(&session.matrix_user_id)
-                    .filter(|record| !record.disabled)
-                    .map(|record| {
-                        (
-                            record.display_name.clone(),
-                            record.room_id.clone().or_else(|| session.room_id.clone()),
-                        )
-                    })
-                    .unwrap_or_else(|| (None, session.room_id.clone()))
-            };
-            let auth_state = if session.game_account_session_generation.is_some() {
-                "game_account_signed_session"
+    let identity =
+        game_account_player_identity_binding(state, web_session, local_play_session).await;
+    let display_name = identity.display_name.clone().unwrap_or_else(|| {
+        identity.matrix_user_id.clone().unwrap_or_else(|| {
+            if local_play_session {
+                "Local play session".to_string()
             } else {
-                "upstream_signed_session"
-            };
-            (
-                true,
-                auth_state,
-                display_name.unwrap_or_else(|| session.matrix_user_id.clone()),
-                session.matrix_user_id.clone(),
-                room_id.unwrap_or_else(|| "none".to_string()),
-                "Manage account",
-                "Signed in",
-            )
-        } else if local_play_session {
-            (
-                false,
-                "local_play_no_account",
-                "Local play session".to_string(),
-                String::new(),
-                "none".to_string(),
-                "Sign in",
-                "Local play",
-            )
-        } else {
-            (
-                false,
-                "signed_session_required",
-                "No player account".to_string(),
-                String::new(),
-                "none".to_string(),
-                "Sign in",
-                "Account required",
-            )
-        };
-    let active_attr = if session_active { "true" } else { "false" };
+                "No player account".to_string()
+            }
+        })
+    });
+    let matrix_user_id = identity.matrix_user_id.clone().unwrap_or_default();
+    let room_id = identity
+        .room_id
+        .clone()
+        .unwrap_or_else(|| "none".to_string());
+    let cta_label = if identity.session_active {
+        "Manage account"
+    } else {
+        "Sign in"
+    };
+    let headline = if identity.session_active {
+        "Signed in"
+    } else if local_play_session {
+        "Local play"
+    } else {
+        "Account required"
+    };
+    let active_attr = if identity.session_active {
+        "true"
+    } else {
+        "false"
+    };
+    let profile_bound_attr = if identity.profile_bound {
+        "true"
+    } else {
+        "false"
+    };
     format!(
-        "<section id=\"{}\" class=\"account-session-bridge\" data-contract-version=\"{}\" data-account-surface=\"{}\" data-session-active=\"{}\" data-auth-state=\"{}\" data-account-endpoint=\"/account\" data-profile-endpoint=\"/account/profile\" data-return-to=\"{}\" data-matrix-user-id=\"{}\" data-room-id=\"{}\" data-public-launch-credit=\"false\" data-passwords-tokens-or-cookie-values-logged=\"false\"><div><strong>{}</strong><span>{}</span><small>{}</small></div><a href=\"{}\">{}</a></section>",
+        "<section id=\"{}\" class=\"account-session-bridge\" data-contract-version=\"{}\" data-player-identity-contract=\"{}\" data-account-surface=\"{}\" data-session-active=\"{}\" data-auth-state=\"{}\" data-profile-bound=\"{}\" data-identity-source=\"{}\" data-account-endpoint=\"/account\" data-profile-endpoint=\"/account/profile\" data-return-to=\"{}\" data-matrix-user-id=\"{}\" data-room-id=\"{}\" data-public-launch-credit=\"false\" data-passwords-tokens-or-cookie-values-logged=\"false\"><div><strong>{}</strong><span>{}</span><small>{}</small></div><a href=\"{}\">{}</a></section>",
         escape_html_text(&card_id),
         GAME_ACCOUNT_SURFACE_SESSION_CONTRACT,
+        identity.contract_version,
         escape_html_text(surface),
         active_attr,
-        auth_state,
+        identity.auth_state,
+        profile_bound_attr,
+        identity.identity_source,
         escape_html_text(return_to),
         escape_html_text(&matrix_user_id),
         escape_html_text(&room_id),
