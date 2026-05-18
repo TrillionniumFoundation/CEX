@@ -393,6 +393,7 @@ The current `/league` shell is intentionally same-origin and server-rendered, so
 - `POST /account/login` verifies the Argon2id password hash and mints a fresh signed game-session cookie.
 - Register/login attempts are rate-limited by normalized account id and request source before password verification.
 - `GET /account/session` reports the current signed game-session status; `POST /account/logout` expires the server cookie.
+- `scripts/check-trillionnium-game-account-auth.sh` gates the account client contract, endpoint advertisement, no-cookie session status, password-auth posture, rate-limit configuration, and public-launch boundary. Its default mode is read-only; `--mutating` is opt-in for local/password-auth smoke and verifies register/session/logout, Argon2id registry storage, plaintext absence, and bad-login rate limiting.
 - In local-dev, the session endpoint may be used directly for E2E; in beta/production it requires the existing signed user-session headers and request fingerprint `league-web-session:<matrix_user_id>:<room_id>:<session_id>` with source kind `league_web_session`.
 - The cookie is HttpOnly, SameSite=Lax, and Secure outside local-dev.
 - `/league/web/action` binds the acting player to the signed session and checks the submitted CSRF token before mutating League state.
@@ -406,6 +407,7 @@ The current `/league` shell is intentionally same-origin and server-rendered, so
   - `CONSUMER_ENTRY_GAME_ACCOUNT_PASSWORD_MIN_CHARS`
   - `CONSUMER_ENTRY_GAME_ACCOUNT_AUTH_RATE_LIMIT_MAX_REQUESTS`
   - `CONSUMER_ENTRY_GAME_ACCOUNT_LOCAL_DOMAIN`
+  - `CEX_GAME_ACCOUNT_AUTH_MUTATING_SMOKE` for explicitly enabling the mutating gate smoke outside production signoff.
 
 ## Judge Pipeline v2
 

@@ -475,6 +475,21 @@ else
   fail 'runtime status'
 fi
 
+section 'game account auth readiness'
+account_auth_summary="$(mktemp)"
+if bash "$SCRIPT_DIR/check-trillionnium-game-account-auth.sh" \
+  --summary-file "$account_auth_summary" \
+  --quiet; then
+  account_password_enabled="$(jq -r '.password_auth_enabled // false' "$account_auth_summary")"
+  account_auth_limit="$(jq -r '.auth_rate_limit_max_requests // "unknown"' "$account_auth_summary")"
+  account_registry_persistence="$(jq -r '.registry_persistence // "unknown"' "$account_auth_summary")"
+  pass "game account auth readiness (password_auth_enabled=$account_password_enabled, auth_rate_limit_max_requests=$account_auth_limit, registry=$account_registry_persistence)"
+else
+  fail 'game account auth readiness gate failed'
+  jq -r '.failures[]? | "  - " + (.check_id // "unknown") + (if .detail == null then "" else " " + (.detail | tostring) end)' "$account_auth_summary" >&2 || true
+fi
+rm -f "$account_auth_summary"
+
 section 'execution policy posture'
 if [[ "$CEX_READINESS_MODE" == "local" ]]; then
   pass 'local readiness posture selected (execution policy posture checks skipped)'
