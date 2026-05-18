@@ -230,6 +230,33 @@ async function assertRouteRunnerHandoffDom(page, selector, label) {
   return dom;
 }
 
+async function assertAccountSessionBridge(page, selector, returnTo, label) {
+  assert(await count(page, selector) === 1, `${label} account session bridge missing`);
+  const bridge = await page.locator(selector).first().evaluate((node) => ({
+    contractVersion: node.dataset.contractVersion || null,
+    sessionActive: node.dataset.sessionActive || null,
+    authState: node.dataset.authState || null,
+    accountEndpoint: node.dataset.accountEndpoint || null,
+    profileEndpoint: node.dataset.profileEndpoint || null,
+    returnTo: node.dataset.returnTo || null,
+    matrixUserId: node.dataset.matrixUserId || null,
+    roomId: node.dataset.roomId || null,
+    publicLaunchCredit: node.dataset.publicLaunchCredit || null,
+    secretLogging: node.dataset.passwordsTokensOrCookieValuesLogged || null,
+    text: node.textContent || '',
+  }));
+  const href = await page.locator(`${selector} a`).first().getAttribute('href');
+  assert(bridge.contractVersion === 'trillionnium_game_account_surface_session_v1', `${label} account bridge contract mismatch`, bridge);
+  assert(bridge.sessionActive === 'true', `${label} account bridge should show signed session`, bridge);
+  assert(bridge.authState === 'upstream_signed_session' || bridge.authState === 'game_account_signed_session', `${label} account bridge auth state mismatch`, bridge);
+  assert(bridge.accountEndpoint === '/account' && bridge.profileEndpoint === '/account/profile', `${label} account bridge endpoints missing`, bridge);
+  assert(bridge.returnTo === returnTo && href === `/account?return_to=${returnTo}`, `${label} account bridge return target mismatch`, { bridge, href });
+  assert(bridge.matrixUserId === matrixUserId && bridge.roomId === roomId, `${label} account bridge player or room mismatch`, bridge);
+  assert(bridge.publicLaunchCredit === 'false' && bridge.secretLogging === 'false', `${label} account bridge safety attributes missing`, bridge);
+  assert(bridge.text.includes(matrixUserId) && bridge.text.includes(roomId), `${label} account bridge visible player/room copy missing`, bridge);
+  return bridge;
+}
+
 async function clickAndWaitForNavigationOrSettle(page, locator) {
   await Promise.all([
     page.waitForLoadState('domcontentloaded').catch(() => null),
@@ -587,6 +614,7 @@ async function main() {
   const requestFailures = [];
   const steps = [];
   const routeRunnerHandoffCoverage = {};
+  const accountSessionBridgeCoverage = {};
 
   const browser = await chromium.launch({
     executablePath,
@@ -670,6 +698,13 @@ async function main() {
 
   await page.goto('/app?lang=en', { waitUntil: 'domcontentloaded', timeout: 30_000 });
   await page.waitForSelector('#real-world-map', { timeout: 15_000 });
+  accountSessionBridgeCoverage.app = await assertAccountSessionBridge(
+    page,
+    '#app-account-session-card',
+    '/app',
+    '/app',
+  );
+  steps.push({ name: 'app_account_session_bridge', ok: true });
   await page.waitForFunction(() => document.documentElement.getAttribute('data-ui-language') === 'en', { timeout: 10_000 });
   assert((await page.title()).includes('Trillionnium World Mobile'), 'app title missing');
   const englishTabs = await page.$$eval('nav.app-bottom-tabs [data-app-tab]', (tabs) => tabs.map((tab) => tab.textContent.trim()));
@@ -922,6 +957,13 @@ async function main() {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.goto('/world?lang=en', { waitUntil: 'domcontentloaded', timeout: 30_000 });
   await page.waitForSelector('#world-real-map', { timeout: 15_000 });
+  accountSessionBridgeCoverage.world = await assertAccountSessionBridge(
+    page,
+    '#world-account-session-card',
+    '/world',
+    '/world',
+  );
+  steps.push({ name: 'world_account_session_bridge', ok: true });
   assert((await page.title()).includes('Trillionnium World'), 'world title missing');
   const worldBodyText = await page.locator('body').innerText({ timeout: 10_000 });
   for (const needle of ['Global-first open world', 'World Action Console', 'Bounties', 'Submit']) {
@@ -1469,6 +1511,7 @@ async function main() {
       mobile_ux_live_status: true,
       real_world_map: true,
       feed_api_hydration: true,
+      account_session_bridge: true,
       route_runner_handoff_contract: true,
       route_runner_handoff_dom: true,
       world_map_move: true,
@@ -1495,6 +1538,7 @@ async function main() {
       expires_at_epoch: webSession.expires_at_epoch,
     },
     steps,
+    account_session_bridge: accountSessionBridgeCoverage,
     route_runner_handoff: routeRunnerHandoffCoverage,
     request_failure_gate: requestFailureGate,
     console_messages: consoleMessages.slice(0, 20),

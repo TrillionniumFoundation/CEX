@@ -25,6 +25,7 @@ Default mode is non-mutating and checks:
   - register/login/profile/password-change/session-refresh/session-revoke/session/logout endpoints are advertised,
   - browser credential storage stays disabled,
   - public_launch_credit remains false,
+  - /account return_to stays allowlisted and /app plus /world expose Account CTAs,
   - /account/session without a cookie reports active=false,
   - password auth posture is coherent when enabled.
 
@@ -91,11 +92,19 @@ client_headers="$tmpdir/account.headers"
 client_html="$tmpdir/account.html"
 session_json="$tmpdir/account-session.json"
 metrics_txt="$tmpdir/metrics.txt"
+account_world_html="$tmpdir/account-world-return.html"
+account_unsafe_html="$tmpdir/account-unsafe-return.html"
+app_html="$tmpdir/app.html"
+world_html="$tmpdir/world.html"
 client_http="$(curl -sS -D "$client_headers" -o "$client_html" -w '%{http_code}' "$BASE_URL/account" || printf '000')"
+account_world_http="$(curl -sS -o "$account_world_html" -w '%{http_code}' "$BASE_URL/account?return_to=/world" || printf '000')"
+account_unsafe_http="$(curl -sS -o "$account_unsafe_html" -w '%{http_code}' "$BASE_URL/account?return_to=https://example.test" || printf '000')"
+app_http="$(curl -sS -o "$app_html" -w '%{http_code}' "$BASE_URL/app" || printf '000')"
+world_http="$(curl -sS -o "$world_html" -w '%{http_code}' "$BASE_URL/world" || printf '000')"
 session_http="$(curl -sS -o "$session_json" -w '%{http_code}' "$BASE_URL/account/session" || printf '000')"
 metrics_http="$(curl -sS -o "$metrics_txt" -w '%{http_code}' "$BASE_URL/metrics" || printf '000')"
 
-python3 - "$client_headers" "$client_html" "$session_json" "$metrics_txt" "$summary_tmp" "$BASE_URL" "$CHECKED_AT" "$CONTRACT_VERSION" "$client_http" "$session_http" "$metrics_http" "${CEX_READINESS_MODE:-}" <<'PY'
+python3 - "$client_headers" "$client_html" "$session_json" "$metrics_txt" "$account_world_html" "$account_unsafe_html" "$app_html" "$world_html" "$summary_tmp" "$BASE_URL" "$CHECKED_AT" "$CONTRACT_VERSION" "$client_http" "$account_world_http" "$account_unsafe_http" "$app_http" "$world_http" "$session_http" "$metrics_http" "${CEX_READINESS_MODE:-}" <<'PY'
 import html
 import json
 import re
@@ -106,14 +115,22 @@ headers_path = Path(sys.argv[1])
 html_path = Path(sys.argv[2])
 session_path = Path(sys.argv[3])
 metrics_path = Path(sys.argv[4])
-summary_path = Path(sys.argv[5])
-base_url = sys.argv[6]
-checked_at = int(sys.argv[7])
-contract_version = sys.argv[8]
-client_http = sys.argv[9]
-session_http = sys.argv[10]
-metrics_http = sys.argv[11]
-readiness_mode = sys.argv[12] or "unknown"
+account_world_path = Path(sys.argv[5])
+account_unsafe_path = Path(sys.argv[6])
+app_path = Path(sys.argv[7])
+world_path = Path(sys.argv[8])
+summary_path = Path(sys.argv[9])
+base_url = sys.argv[10]
+checked_at = int(sys.argv[11])
+contract_version = sys.argv[12]
+client_http = sys.argv[13]
+account_world_http = sys.argv[14]
+account_unsafe_http = sys.argv[15]
+app_http = sys.argv[16]
+world_http = sys.argv[17]
+session_http = sys.argv[18]
+metrics_http = sys.argv[19]
+readiness_mode = sys.argv[20] or "unknown"
 
 failures = []
 
@@ -129,6 +146,10 @@ def read_text(path):
 
 headers_text = read_text(headers_path)
 client_body = read_text(html_path)
+account_world_body = read_text(account_world_path)
+account_unsafe_body = read_text(account_unsafe_path)
+app_body = read_text(app_path)
+world_body = read_text(world_path)
 session_text = read_text(session_path)
 metrics_text = read_text(metrics_path)
 client_header_contract = ""
@@ -161,6 +182,10 @@ except json.JSONDecodeError as exc:
     require("session_json_parse", False, str(exc))
 
 require("account_http_200", client_http == "200", {"http_status": client_http})
+require("account_return_to_world_http_200", account_world_http == "200", {"http_status": account_world_http})
+require("account_return_to_unsafe_http_200", account_unsafe_http == "200", {"http_status": account_unsafe_http})
+require("app_http_200", app_http == "200", {"http_status": app_http})
+require("world_http_200", world_http == "200", {"http_status": world_http})
 require("session_http_200", session_http == "200", {"http_status": session_http})
 require("metrics_http_200", metrics_http == "200", {"http_status": metrics_http})
 require(
@@ -178,6 +203,12 @@ require(
     readiness.get("contract_version") == "trillionnium_game_account_client_v1",
     readiness.get("contract_version"),
 )
+require("account_default_return_to_app", readiness.get("return_to") == "/app", readiness.get("return_to"))
+require("account_default_open_game_app", 'href="/app">Open Game' in client_body, None)
+require("account_world_return_to_whitelisted", 'href="/world">Open Game' in account_world_body and '"return_to": "/world"' in account_world_body, None)
+require("account_unsafe_return_to_app", 'href="/app">Open Game' in account_unsafe_body and '"return_to": "/app"' in account_unsafe_body and "https://example.test" not in account_unsafe_body, None)
+require("app_account_session_bridge", all(token in app_body for token in ["app-account-session-card", "trillionnium_game_account_surface_session_v1", 'data-session-active="false"', 'data-auth-state="signed_session_required"', "/account?return_to=/app"]), None)
+require("world_account_session_bridge", all(token in world_body for token in ["world-account-session-card", "trillionnium_game_account_surface_session_v1", 'data-session-active="false"', "/account?return_to=/world"]), None)
 
 expected_paths = {
     "client_surface": "/account",
@@ -320,10 +351,17 @@ summary = {
     "ok": len(failures) == 0,
     "failures": failures,
     "client_http_status": client_http,
+    "account_return_to_world_http_status": account_world_http,
+    "account_return_to_unsafe_http_status": account_unsafe_http,
+    "app_http_status": app_http,
+    "world_http_status": world_http,
     "session_http_status": session_http,
     "metrics_http_status": metrics_http,
     "client_header_contract": client_header_contract,
     "client_contract": readiness.get("contract_version"),
+    "default_return_to": readiness.get("return_to"),
+    "app_account_session_bridge": all(token in app_body for token in ["app-account-session-card", "trillionnium_game_account_surface_session_v1", 'data-session-active="false"', "/account?return_to=/app"]),
+    "world_account_session_bridge": all(token in world_body for token in ["world-account-session-card", "trillionnium_game_account_surface_session_v1", 'data-session-active="false"', "/account?return_to=/world"]),
     "session_contract": session.get("contract_version"),
     "password_auth_enabled": password_auth_enabled,
     "password_auth_implemented": register.get("password_auth_implemented") is True and login.get("password_auth_implemented") is True,

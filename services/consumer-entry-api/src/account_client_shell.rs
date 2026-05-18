@@ -5,6 +5,8 @@ use argon2::{
 };
 
 pub(super) const GAME_ACCOUNT_CLIENT_CONTRACT: &str = "trillionnium_game_account_client_v1";
+pub(super) const GAME_ACCOUNT_SURFACE_SESSION_CONTRACT: &str =
+    "trillionnium_game_account_surface_session_v1";
 const GAME_ACCOUNT_PASSWORD_AUTH_CONTRACT: &str = "trillionnium_game_account_password_auth_v1";
 const GAME_ACCOUNT_SESSION_STATUS_CONTRACT: &str = "trillionnium_game_account_session_status_v1";
 const GAME_ACCOUNT_LOCAL_PROFILE_KEY: &str = "trillionnium.account.profile.v1";
@@ -91,11 +93,13 @@ pub(super) fn load_game_account_registry(config: &ConsumerEntryConfig) -> GameAc
 pub(super) async fn get_game_account_client_shell_response(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Query(query): Query<HashMap<String, String>>,
 ) -> Response {
     let web_session = authorize_league_web_session_readonly(&state, &headers, true)
         .ok()
         .flatten();
-    let html = game_account_client_shell_html(&state, web_session.as_ref()).await;
+    let return_to = game_account_return_to_path(query.get("return_to").map(String::as_str));
+    let html = game_account_client_shell_html(&state, web_session.as_ref(), return_to).await;
     html_resource_response(html, GAME_ACCOUNT_CLIENT_CONTRACT)
 }
 
@@ -643,6 +647,7 @@ pub(super) async fn post_game_account_profile(
 async fn game_account_client_shell_html(
     state: &AppState,
     web_session: Option<&LeagueWebSessionClaims>,
+    return_to: &'static str,
 ) -> String {
     let session_active = web_session.is_some();
     let session_player = web_session
@@ -793,6 +798,7 @@ async fn game_account_client_shell_html(
             "public_launch_credit": false,
             "client_submits_intent_only": true
         },
+        "return_to": return_to,
         "next_routes": ["/app", "/world", "/league"]
     });
     let readiness_json = serde_json::to_string_pretty(&readiness)
@@ -879,7 +885,9 @@ async fn game_account_client_shell_html(
     html.push_str("      <p class=\"muted\">Trillionnium World</p>\n");
     html.push_str("      <h1>Player Account</h1>\n");
     html.push_str("    </div>\n");
-    html.push_str("    <a class=\"link-button\" href=\"/app\">Open Game</a>\n");
+    html.push_str("    <a class=\"link-button\" href=\"");
+    html.push_str(return_to);
+    html.push_str("\">Open Game</a>\n");
     html.push_str("  </header>\n");
     html.push_str("  <section class=\"grid\">\n");
     html.push_str("    <div class=\"panel\">\n");
@@ -1205,6 +1213,102 @@ async fn game_account_client_shell_html(
     html.push_str("  </script>\n");
     html.push_str("</main>\n</body>\n</html>\n");
     html
+}
+
+pub(super) fn game_account_return_to_path(raw: Option<&str>) -> &'static str {
+    match raw.map(str::trim) {
+        Some("/world") => "/world",
+        Some("/league") => "/league",
+        Some("/app") | None => "/app",
+        _ => "/app",
+    }
+}
+
+pub(super) async fn game_account_surface_session_card_html(
+    state: &AppState,
+    web_session: Option<&LeagueWebSessionClaims>,
+    surface: &str,
+    return_to: &'static str,
+    local_play_session: bool,
+) -> String {
+    let surface_id = surface
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric() || *ch == '-')
+        .collect::<String>();
+    let card_id = if surface_id.is_empty() {
+        "game-account-session-card".to_string()
+    } else {
+        format!("{surface_id}-account-session-card")
+    };
+    let account_href = format!("/account?return_to={return_to}");
+    let (session_active, auth_state, display_name, matrix_user_id, room_id, cta_label, headline) =
+        if let Some(session) = web_session {
+            let (display_name, room_id) = {
+                let registry = state.inner.game_account_registry.lock().await;
+                registry
+                    .accounts
+                    .get(&session.matrix_user_id)
+                    .filter(|record| !record.disabled)
+                    .map(|record| {
+                        (
+                            record.display_name.clone(),
+                            record.room_id.clone().or_else(|| session.room_id.clone()),
+                        )
+                    })
+                    .unwrap_or_else(|| (None, session.room_id.clone()))
+            };
+            let auth_state = if session.game_account_session_generation.is_some() {
+                "game_account_signed_session"
+            } else {
+                "upstream_signed_session"
+            };
+            (
+                true,
+                auth_state,
+                display_name.unwrap_or_else(|| session.matrix_user_id.clone()),
+                session.matrix_user_id.clone(),
+                room_id.unwrap_or_else(|| "none".to_string()),
+                "Manage account",
+                "Signed in",
+            )
+        } else if local_play_session {
+            (
+                false,
+                "local_play_no_account",
+                "Local play session".to_string(),
+                String::new(),
+                "none".to_string(),
+                "Sign in",
+                "Local play",
+            )
+        } else {
+            (
+                false,
+                "signed_session_required",
+                "No player account".to_string(),
+                String::new(),
+                "none".to_string(),
+                "Sign in",
+                "Account required",
+            )
+        };
+    let active_attr = if session_active { "true" } else { "false" };
+    format!(
+        "<section id=\"{}\" class=\"account-session-bridge\" data-contract-version=\"{}\" data-account-surface=\"{}\" data-session-active=\"{}\" data-auth-state=\"{}\" data-account-endpoint=\"/account\" data-profile-endpoint=\"/account/profile\" data-return-to=\"{}\" data-matrix-user-id=\"{}\" data-room-id=\"{}\" data-public-launch-credit=\"false\" data-passwords-tokens-or-cookie-values-logged=\"false\"><div><strong>{}</strong><span>{}</span><small>{}</small></div><a href=\"{}\">{}</a></section>",
+        escape_html_text(&card_id),
+        GAME_ACCOUNT_SURFACE_SESSION_CONTRACT,
+        escape_html_text(surface),
+        active_attr,
+        auth_state,
+        escape_html_text(return_to),
+        escape_html_text(&matrix_user_id),
+        escape_html_text(&room_id),
+        escape_html_text(headline),
+        escape_html_text(&display_name),
+        escape_html_text(&room_id),
+        escape_html_text(&account_href),
+        escape_html_text(cta_label),
+    )
 }
 
 async fn game_account_session_status_json(

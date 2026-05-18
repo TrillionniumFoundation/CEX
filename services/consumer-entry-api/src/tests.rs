@@ -2047,7 +2047,22 @@ async fn game_account_client_shell_exposes_register_login_session_bridge() {
         assert!(body.contains(r#"data-password-auth-implemented="true""#));
         assert!(body.contains(r#"data-password-auth-enabled="false""#));
         assert!(body.contains(r#"data-session-active="false""#));
+        assert!(body.contains(r#""return_to": "/app""#));
+        assert!(body.contains(r#"href="/app">Open Game"#));
     }
+    let (world_return_status, _headers, world_return_body) =
+        send_text_request_with_headers(&app, "GET", "/account?return_to=/world", &[]).await;
+    assert_eq!(world_return_status, StatusCode::OK);
+    assert!(world_return_body.contains(r#""return_to": "/world""#));
+    assert!(world_return_body.contains(r#"href="/world">Open Game"#));
+
+    let (unsafe_return_status, _headers, unsafe_return_body) =
+        send_text_request_with_headers(&app, "GET", "/account?return_to=https://example.test", &[])
+            .await;
+    assert_eq!(unsafe_return_status, StatusCode::OK);
+    assert!(unsafe_return_body.contains(r#""return_to": "/app""#));
+    assert!(unsafe_return_body.contains(r#"href="/app">Open Game"#));
+    assert!(!unsafe_return_body.contains("https://example.test"));
 }
 
 #[tokio::test]
@@ -2081,6 +2096,30 @@ async fn game_account_client_shell_reflects_signed_game_session_cookie() {
     assert!(body.contains("@alice:local.dev"));
     assert!(body.contains("!room:local.dev"));
     assert!(body.contains("account-client"));
+
+    let (app_status, _headers, app_body) =
+        send_text_request_with_headers(&app, "GET", "/app", &[("cookie", &cookie_header)]).await;
+    assert_eq!(app_status, StatusCode::OK);
+    assert!(app_body.contains(r#"id="app-account-session-card""#));
+    assert!(app_body.contains("trillionnium_game_account_surface_session_v1"));
+    assert!(app_body.contains(r#"data-session-active="true""#));
+    assert!(app_body.contains(r#"data-auth-state="upstream_signed_session""#));
+    assert!(app_body.contains(r#"data-return-to="/app""#));
+    assert!(app_body.contains(r#"/account?return_to=/app"#));
+    assert!(app_body.contains("@alice:local.dev"));
+    assert!(app_body.contains("!room:local.dev"));
+
+    let (world_status, _headers, world_body) =
+        send_text_request_with_headers(&app, "GET", "/world", &[("cookie", &cookie_header)]).await;
+    assert_eq!(world_status, StatusCode::OK);
+    assert!(world_body.contains(r#"id="world-account-session-card""#));
+    assert!(world_body.contains("trillionnium_game_account_surface_session_v1"));
+    assert!(world_body.contains(r#"data-session-active="true""#));
+    assert!(world_body.contains(r#"data-auth-state="upstream_signed_session""#));
+    assert!(world_body.contains(r#"data-return-to="/world""#));
+    assert!(world_body.contains(r#"/account?return_to=/world"#));
+    assert!(world_body.contains("@alice:local.dev"));
+    assert!(world_body.contains("!room:local.dev"));
 }
 
 #[tokio::test]
@@ -7251,6 +7290,11 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(app_html.contains("createRealWorldMapAdapter"));
     assert!(app_html.contains("leaflet_renderer_adapter_v1"));
     assert!(app_html.contains("maplibre_gl_v1"));
+    assert!(app_html.contains(r#"id="app-account-session-card""#));
+    assert!(app_html.contains("trillionnium_game_account_surface_session_v1"));
+    assert!(app_html.contains(r#"data-session-active="false""#));
+    assert!(app_html.contains(r#"data-auth-state="signed_session_required""#));
+    assert!(app_html.contains(r#"/account?return_to=/app"#));
     assert!(app_html.contains("const mapRuntime"));
     assert!(app_html.contains("truncated_runtime_bootstrap_with_lazy_delta_hydration"));
     assert!(app_html.contains("data-cache-contract=\"trillionnium_world_map_payload_cache_v1\""));
@@ -7514,6 +7558,10 @@ async fn web_map_shells_render_live_event_task_focus_metadata() {
     assert!(world_html.contains("mapViewportCardHtml"));
     assert!(world_html.contains("world-mobile-primary-cta"));
     assert!(world_html.contains("data-primary-cta-count=\"1\""));
+    assert!(world_html.contains(r#"id="world-account-session-card""#));
+    assert!(world_html.contains("trillionnium_game_account_surface_session_v1"));
+    assert!(world_html.contains(r#"data-session-active="false""#));
+    assert!(world_html.contains(r#"/account?return_to=/world"#));
     assert!(world_html.contains("Pick route"));
     assert!(world_html.contains("Submit proof"));
     assert!(world_html.contains("Claim reward"));

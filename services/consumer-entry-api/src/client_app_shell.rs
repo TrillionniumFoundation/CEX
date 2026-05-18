@@ -1398,6 +1398,9 @@ pub(super) async fn get_client_app_web_shell(
         real_world_map_render_cards_js(RealWorldMapShellCardStyle::AppModule);
     let app_header_language_switcher =
         trillionnium_language_inline_switcher_html("trillionnium-app-language-select");
+    let app_account_session_card =
+        game_account_surface_session_card_html(&state, web_session.as_ref(), "app", "/app", false)
+            .await;
     Html(format!(
         r#"<!doctype html>
 <html lang="zh-CN">
@@ -1488,6 +1491,12 @@ pub(super) async fn get_client_app_web_shell(
     .app-ux-pill {{ display:inline-flex; align-items:center; max-width:100%; border:1px solid rgba(100,227,255,.22); background:rgba(100,227,255,.08); color:var(--cyan); border-radius:999px; padding:6px 10px; font-size:12px; font-weight:900; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
     .app-ux-pill[data-state="loading"] {{ color:var(--gold); border-color:rgba(248,195,91,.32); background:rgba(248,195,91,.1); }}
     .app-ux-pill[data-state="offline"], .app-ux-pill[data-state="fallback"] {{ color:#ffb48a; border-color:rgba(255,180,138,.32); background:rgba(255,120,70,.1); }}
+    .account-session-bridge {{ display:flex; align-items:center; justify-content:space-between; gap:12px; margin:12px 0 0; padding:12px 14px; border:1px solid rgba(100,227,255,.22); border-radius:18px; background:rgba(100,227,255,.075); }}
+    .account-session-bridge > div {{ min-width:0; display:grid; gap:3px; }}
+    .account-session-bridge strong {{ color:var(--gold); }}
+    .account-session-bridge span,.account-session-bridge small {{ color:var(--muted); overflow-wrap:anywhere; }}
+    .account-session-bridge a {{ min-height:40px; display:inline-flex; align-items:center; justify-content:center; padding:0 12px; border:1px solid rgba(248,195,91,.28); border-radius:999px; background:rgba(248,195,91,.1); color:var(--gold); text-decoration:none; font-weight:900; white-space:nowrap; }}
+    .account-session-bridge[data-session-active="true"] {{ border-color:rgba(125,255,155,.32); background:rgba(125,255,155,.06); }}
     .app-search-empty {{ display:none; margin-top:10px; border:1px dashed rgba(255,255,255,.16); border-radius:16px; padding:10px 12px; color:var(--muted); background:rgba(255,255,255,.04); }}
     .app-search-empty.is-visible {{ display:block; }}
     .sr-only {{ position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }}
@@ -1670,6 +1679,7 @@ pub(super) async fn get_client_app_web_shell(
       <span id="app-ux-status-pill" class="app-ux-pill" data-state="ready" data-i18n-en="Ready · World" data-i18n-zh="已就绪 · 世界">Ready · World</span>
       <span id="app-ux-live-status" class="sr-only" data-i18n-en="Adventure ready" data-i18n-zh="冒险体验已准备完成">Adventure ready</span>
     </div>
+    {}
     <div id="app-search-empty-state" class="app-search-empty" role="status" aria-live="polite" data-i18n-en="No results · Try another keyword or tab." data-i18n-zh="无匹配结果 · 换个关键词或切换底部 Tab。">No results · Try another keyword or tab.</div>
   </header>
   <nav class="app-bottom-tabs" aria-label="Main navigation" data-i18n-aria-label-en="Main navigation" data-i18n-aria-label-zh="主导航" role="tablist">
@@ -2519,6 +2529,7 @@ pub(super) async fn get_client_app_web_shell(
 </body>
 </html>"#,
         escape_client_app_visible_text(current_node),
+        app_account_session_card,
         escape_client_app_visible_text(onboarding_label),
         escape_client_app_visible_text(onboarding_goal),
         escape_client_app_visible_text(&client_app_readiness_label(onboarding_completion_target)),

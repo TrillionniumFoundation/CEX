@@ -7149,6 +7149,14 @@ pub(super) async fn get_world_web_shell(
         real_world_map_render_cards_js(RealWorldMapShellCardStyle::WorldMini);
     let world_header_language_switcher =
         trillionnium_language_inline_switcher_html("trillionnium-world-language-select");
+    let world_account_session_card = game_account_surface_session_card_html(
+        &state,
+        web_session.as_ref(),
+        "world",
+        "/world",
+        local_play_session,
+    )
+    .await;
 
     Html(format!(
         r#"<!doctype html>
@@ -7169,6 +7177,7 @@ pub(super) async fn get_world_web_shell(
     .hero-card,.card,.panel {{ border:1px solid rgba(255,255,255,.11); background:linear-gradient(145deg,rgba(255,255,255,.09),rgba(255,255,255,.035)); box-shadow:0 24px 80px rgba(0,0,0,.35); backdrop-filter: blur(14px); border-radius:24px; }}
     .hero-card,.panel,.card {{ padding:24px; }}
     .world-hero-main {{ min-height:350px; display:grid; align-content:center; gap:16px; }}
+    .world-hero-main {{ position:relative; }}
     .world-hero-kicker {{ display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }}
     .world-hero-title {{ display:grid; gap:10px; }}
     .world-hero-actions {{ display:flex; flex-wrap:wrap; gap:10px; margin-top:2px; }}
@@ -7365,6 +7374,12 @@ pub(super) async fn get_world_web_shell(
     .world-first-human-loop small {{ color:var(--muted); font-size:11px; line-height:1.22; overflow-wrap:anywhere; }}
     .world-mobile-promise {{ display:flex; flex-wrap:wrap; gap:8px; }}
     .world-mobile-promise span {{ border:1px solid rgba(100,227,255,.2); background:rgba(100,227,255,.075); color:var(--cyan); border-radius:999px; padding:8px 11px; font-size:12px; font-weight:850; }}
+    .account-session-bridge {{ display:flex; align-items:center; justify-content:space-between; gap:12px; margin:2px 0 0; padding:12px 14px; border:1px solid rgba(100,227,255,.22); border-radius:18px; background:rgba(100,227,255,.075); }}
+    .account-session-bridge > div {{ min-width:0; display:grid; gap:3px; }}
+    .account-session-bridge strong {{ color:var(--gold); }}
+    .account-session-bridge span,.account-session-bridge small {{ color:var(--muted); overflow-wrap:anywhere; }}
+    .account-session-bridge a {{ min-height:40px; display:inline-flex; align-items:center; justify-content:center; padding:0 12px; border:1px solid rgba(248,195,91,.28); border-radius:999px; background:rgba(248,195,91,.1); color:var(--gold); text-decoration:none; font-weight:900; white-space:nowrap; }}
+    .account-session-bridge[data-session-active="true"] {{ border-color:rgba(125,255,155,.32); background:rgba(125,255,155,.06); }}
     .hero-card {{ display:grid; gap:14px; align-content:space-between; }}
     .hero-card strong {{ color:var(--gold); font-size:22px; }}
     .language-switcher {{ display:inline-flex; align-items:center; gap:8px; width:max-content; max-width:100%; border:1px solid rgba(100,227,255,.24); background:rgba(255,255,255,.065); color:var(--cyan); border-radius:999px; padding:6px 8px 6px 10px; font-size:12px; font-weight:900; }}
@@ -7526,6 +7541,12 @@ pub(super) async fn get_world_web_shell(
       header.world-hero {{ padding:12px 14px 6px; gap:8px; }}
       .world-hero-main {{ min-height:auto; gap:8px; }}
       .world-hero-kicker {{ gap:8px; }}
+      .world-hero-main > .account-session-bridge {{ position:absolute; top:0; right:0; z-index:4; width:min(178px,44vw); display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:5px; margin:0; padding:5px 6px; border-radius:10px; background:rgba(7,10,18,.86); backdrop-filter:blur(10px); }}
+      .world-hero-main > .account-session-bridge > div {{ gap:1px; overflow:hidden; }}
+      .world-hero-main > .account-session-bridge strong {{ font-size:9px; line-height:1; }}
+      .world-hero-main > .account-session-bridge span,
+      .world-hero-main > .account-session-bridge small {{ max-height:10px; font-size:8px; line-height:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }}
+      .world-hero-main > .account-session-bridge a {{ min-height:28px; padding:0 7px; font-size:9px; }}
       h1 {{ font-size:clamp(36px,13vw,54px); letter-spacing:-.068em; }}
       h2 {{ margin-bottom:10px; }}
       .subtitle {{ font-size:14px; line-height:1.42; }}
@@ -7681,6 +7702,7 @@ pub(super) async fn get_world_web_shell(
         <span data-i18n-en="Capture objective" data-i18n-zh="占领目标">Capture objective</span>
         <span data-i18n-en="Reward / XP" data-i18n-zh="奖励 / XP">Reward / XP</span>
       </div>
+      {world_account_session_card}
       <div id="world-hero-mobile-actions" class="world-hero-actions" data-contract-version="trillionnium_mobile_single_primary_cta_v1" data-first-screen-decision-contract="trillionnium_world_map_first_screen_decision_v1" data-parity-source="app-mobile-primary-cta" data-primary-cta-count="1" data-first-screen-loop="pick_route_submit_proof_claim_reward">
         <section id="world-mobile-route-first-sheet" class="world-mobile-action-sheet" aria-label="World mobile one route first" data-i18n-aria-label-en="World mobile one route first" data-i18n-aria-label-zh="世界移动端一条路线优先" data-game-first-shell-contract="trillionnium_world_game_first_playable_shell_v1" data-source-of-truth="rust_world_state_projection" data-web-role="input_only_visualization" data-heavy-panels-policy="secondary_collapsed_deferred">
           <strong data-i18n-en="Current route" data-i18n-zh="当前路线">Current route</strong>
@@ -9344,6 +9366,7 @@ pub(super) async fn get_world_web_shell(
         language_runtime_script = trillionnium_language_runtime_script(),
         world_map_data_json = world_map_data_json,
         world_map_bootstrap_bytes = world_map_bootstrap_bytes,
+        world_account_session_card = world_account_session_card,
     ))
 }
 
