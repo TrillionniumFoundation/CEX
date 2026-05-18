@@ -2000,6 +2000,64 @@ fn league_web_session_readonly_validates_cookie_without_requiring_csrf() {
 }
 
 #[tokio::test]
+async fn game_account_client_shell_exposes_register_login_session_bridge() {
+    let app = build_router(AppState::new(test_config()));
+    for path in ["/account", "/game/account"] {
+        let (status, headers, body) = send_text_request_with_headers(&app, "GET", path, &[]).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            headers
+                .get("x-trillionnium-resource-contract")
+                .and_then(|value| value.to_str().ok()),
+            Some("trillionnium_game_account_client_v1")
+        );
+        assert!(body.contains("trillionnium_game_account_client_v1"));
+        assert!(body.contains(r#"id="account-register-form""#));
+        assert!(body.contains(r#"id="account-login-form""#));
+        assert!(body.contains(r#"id="account-session-status""#));
+        assert!(body.contains(r#"id="account-client-readiness""#));
+        assert!(body.contains("/league/web/session"));
+        assert!(body.contains("password_auth_implemented"));
+        assert!(body.contains("public_launch_credit"));
+        assert!(body.contains(r#"data-public-launch-credit="false""#));
+        assert!(body.contains(r#"data-client-submits-intent-only="true""#));
+        assert!(body.contains(r#"data-session-active="false""#));
+    }
+}
+
+#[tokio::test]
+async fn game_account_client_shell_reflects_signed_game_session_cookie() {
+    let mut config = test_config();
+    config.runtime_profile = RuntimeProfile::Production;
+    config.league_web_session_required = true;
+    config.league_web_session_secret = Some("account-session-secret".to_string());
+    let cookie_name = config.league_web_session_cookie_name.clone();
+    let secret = config.league_web_session_secret.clone().unwrap();
+    let app = build_router(AppState::new(config));
+    let claims = LeagueWebSessionClaims {
+        version: 1,
+        matrix_user_id: "@alice:local.dev".to_string(),
+        room_id: Some("!room:local.dev".to_string()),
+        session_id: Some("account-client".to_string()),
+        csrf: "csrf-account-client".to_string(),
+        issued_at_epoch: Utc::now().timestamp(),
+        expires_at_epoch: Utc::now().timestamp() + 300,
+    };
+    let token = encode_league_web_session(&claims, &secret).unwrap();
+    let cookie_header = format!("{cookie_name}={token}");
+    let (status, _headers, body) =
+        send_text_request_with_headers(&app, "GET", "/account", &[("cookie", &cookie_header)])
+            .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains(r#"data-session-active="true""#));
+    assert!(body.contains(r#"data-production-requires-signed-upstream="true""#));
+    assert!(body.contains("signed_game_session_active"));
+    assert!(body.contains("@alice:local.dev"));
+    assert!(body.contains("!room:local.dev"));
+    assert!(body.contains("account-client"));
+}
+
+#[tokio::test]
 async fn term_exchange_kernel_manifest_declares_cex_as_first_backend() {
     let app = build_router(AppState::new(test_config()));
     let (status, body) = send_identity_request(

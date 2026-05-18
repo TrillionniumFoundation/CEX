@@ -83,6 +83,8 @@ mod world_web_shell;
 use world_web_shell::*;
 mod league_routes;
 use league_routes::*;
+mod account_client_shell;
+use account_client_shell::*;
 mod client_app_shell;
 use client_app_shell::*;
 mod client_surfaces;
@@ -4114,6 +4116,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/health", get(health))
         .route("/metrics", get(metrics))
         .route("/app", get(get_client_app_web_shell_response))
+        .route("/account", get(get_game_account_client_shell_response))
+        .route("/game/account", get(get_game_account_client_shell_response))
         .route("/league", get(get_league_web_shell))
         .route("/world", get(get_world_web_shell_response))
         .route("/league/web/session", post(post_league_web_session))
