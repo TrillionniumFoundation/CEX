@@ -5143,6 +5143,10 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
             "cex_consumer_entry_game_account_login_failures_total {}\n",
             "# TYPE cex_consumer_entry_game_account_logout_successes_total counter\n",
             "cex_consumer_entry_game_account_logout_successes_total {}\n",
+            "# TYPE cex_consumer_entry_game_account_password_change_successes_total counter\n",
+            "cex_consumer_entry_game_account_password_change_successes_total {}\n",
+            "# TYPE cex_consumer_entry_game_account_password_change_failures_total counter\n",
+            "cex_consumer_entry_game_account_password_change_failures_total {}\n",
             "# TYPE cex_consumer_entry_game_account_auth_rate_limited_total counter\n",
             "cex_consumer_entry_game_account_auth_rate_limited_total {}\n",
             "# TYPE cex_consumer_entry_replay_hits_total counter\n",
@@ -5603,6 +5607,16 @@ pub(super) async fn metrics(State(state): State<AppState>) -> Response {
             .inner
             .metrics
             .game_account_logout_successes
+            .load(Ordering::Relaxed),
+        state
+            .inner
+            .metrics
+            .game_account_password_change_successes
+            .load(Ordering::Relaxed),
+        state
+            .inner
+            .metrics
+            .game_account_password_change_failures
             .load(Ordering::Relaxed),
         state
             .inner

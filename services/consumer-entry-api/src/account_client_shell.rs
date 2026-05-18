@@ -47,6 +47,13 @@ pub(super) struct GameAccountPasswordRequest {
     session_id: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub(super) struct GameAccountPasswordChangeRequest {
+    old_password: String,
+    new_password: String,
+    csrf: Option<String>,
+}
+
 pub(super) fn load_game_account_registry(config: &ConsumerEntryConfig) -> GameAccountRegistry {
     let Some(path) = config.game_account_registry_path.as_deref() else {
         return GameAccountRegistry::default();
@@ -246,6 +253,118 @@ pub(super) async fn post_game_account_login(
     )
 }
 
+pub(super) async fn post_game_account_password_change(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<GameAccountPasswordChangeRequest>,
+) -> Response {
+    if let Err(response) = ensure_game_account_password_auth_enabled(&state) {
+        return response;
+    }
+    let web_session = match authorize_league_web_session(&state, &headers, payload.csrf.as_deref())
+    {
+        Ok(Some(session)) => session,
+        Ok(None) => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({
+                    "error": "active game account session is required",
+                    "session_status_endpoint": "/account/session",
+                })),
+            )
+                .into_response()
+        }
+        Err(response) => return response,
+    };
+    if let Err(response) = enforce_game_account_auth_rate_limits(
+        &state,
+        &headers,
+        "password-change",
+        &web_session.matrix_user_id,
+    )
+    .await
+    {
+        return response;
+    }
+    if let Err(response) = validate_game_account_password(&payload.new_password, state.config()) {
+        return response;
+    }
+
+    let record = {
+        let registry = state.inner.game_account_registry.lock().await;
+        registry.accounts.get(&web_session.matrix_user_id).cloned()
+    };
+    let Some(mut record) = record.filter(|record| !record.disabled) else {
+        state
+            .inner
+            .metrics
+            .inc_game_account_password_change_failures();
+        return invalid_game_account_credentials_response();
+    };
+    if !verify_game_account_password(&payload.old_password, &record.password_hash) {
+        state
+            .inner
+            .metrics
+            .inc_game_account_password_change_failures();
+        return invalid_game_account_credentials_response();
+    }
+    if verify_game_account_password(&payload.new_password, &record.password_hash) {
+        state
+            .inner
+            .metrics
+            .inc_game_account_password_change_failures();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "new password must be different" })),
+        )
+            .into_response();
+    }
+
+    let previous_record = record.clone();
+    record.password_hash = match hash_game_account_password(&payload.new_password) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    record.updated_at_epoch = Utc::now().timestamp();
+    {
+        let mut registry = state.inner.game_account_registry.lock().await;
+        registry
+            .accounts
+            .insert(web_session.matrix_user_id.clone(), record);
+        if let Err(err) = persist_game_account_registry(state.config(), &registry) {
+            registry
+                .accounts
+                .insert(web_session.matrix_user_id.clone(), previous_record);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "error": format!("failed to persist game account password change: {err}")
+                })),
+            )
+                .into_response();
+        }
+    }
+
+    state
+        .inner
+        .metrics
+        .inc_game_account_password_change_successes();
+    (
+        StatusCode::OK,
+        Json(json!({
+            "kind": "game_account_password_change",
+            "contract_version": GAME_ACCOUNT_PASSWORD_AUTH_CONTRACT,
+            "status": "password_changed",
+            "matrix_user_id": web_session.matrix_user_id,
+            "active_session_preserved": true,
+            "session_status_endpoint": "/account/session",
+            "public_launch_credit": false,
+            "passwords_tokens_or_cookie_values_logged": false,
+        })),
+    )
+        .into_response()
+}
+
 async fn game_account_client_shell_html(
     state: &AppState,
     web_session: Option<&LeagueWebSessionClaims>,
@@ -291,6 +410,7 @@ async fn game_account_client_shell_html(
         "session_status_endpoint": "/account/session",
         "register_endpoint": "/account/register",
         "login_endpoint": "/account/login",
+        "password_change_endpoint": "/account/password/change",
         "logout_endpoint": "/account/logout",
         "password_auth_contract_version": GAME_ACCOUNT_PASSWORD_AUTH_CONTRACT,
         "session_status_contract_version": GAME_ACCOUNT_SESSION_STATUS_CONTRACT,
@@ -315,6 +435,14 @@ async fn game_account_client_shell_html(
                 "endpoint": "/account/login",
                 "password_auth_implemented": true,
                 "password_auth_enabled": password_auth_enabled,
+                "password_hash": "argon2id",
+                "credential_storage_in_browser": false
+            },
+            "password_change": {
+                "form_id": "account-password-change-form",
+                "endpoint": "/account/password/change",
+                "requires_active_session": true,
+                "csrf_required": true,
                 "password_hash": "argon2id",
                 "credential_storage_in_browser": false
             },
@@ -345,7 +473,7 @@ async fn game_account_client_shell_html(
             "contract_version": "trillionnium_game_account_auth_observability_v1",
             "metrics_endpoint": "/metrics",
             "health_metrics_path": "/health.metrics.game_account_auth",
-            "event_scope": "aggregate_no_password_no_token",
+            "event_scope": "aggregate_no_password_no_token_no_cookie",
             "passwords_tokens_or_cookie_values_logged": false
         },
         "production_boundary": {
@@ -377,6 +505,14 @@ async fn game_account_client_shell_html(
     } else {
         " disabled"
     };
+    let password_change_disabled_attr = if password_auth_enabled && session_active {
+        ""
+    } else {
+        " disabled"
+    };
+    let csrf_attr = web_session
+        .map(|session| escape_html_text(&session.csrf))
+        .unwrap_or_default();
 
     let mut html = String::new();
     html.push_str("<!doctype html>\n<html lang=\"en\">\n<head>\n");
@@ -393,6 +529,9 @@ async fn game_account_client_shell_html(
     html.push_str("    .grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 360px); gap: 16px; align-items: start; }\n");
     html.push_str("    .panel { background: #fff; border: 1px solid #dce2ea; border-radius: 8px; padding: 18px; box-shadow: 0 1px 2px rgba(15, 23, 42, .04); }\n");
     html.push_str("    .forms { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }\n");
+    html.push_str(
+        "    .forms form[data-account-flow=\"password-change\"] { grid-column: 1 / -1; }\n",
+    );
     html.push_str("    label { display: grid; gap: 6px; margin-top: 10px; font-size: .88rem; font-weight: 650; color: #334155; }\n");
     html.push_str("    input { width: 100%; box-sizing: border-box; border: 1px solid #cbd5e1; border-radius: 6px; padding: 10px 11px; font: inherit; }\n");
     html.push_str("    button, .link-button { min-height: 40px; border: 0; border-radius: 6px; padding: 10px 13px; background: #172033; color: #fff; font-weight: 750; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; }\n");
@@ -449,6 +588,23 @@ async fn game_account_client_shell_html(
     html.push_str(">Sign in</button><button id=\"account-logout-button\" class=\"secondary\" type=\"button\">Log out</button></div>\n");
     html.push_str("        </form>\n");
     html.push_str("      </div>\n");
+    html.push_str("      <form id=\"account-password-change-form\" data-account-flow=\"password-change\" data-account-endpoint=\"/account/password/change\">\n");
+    html.push_str("        <h3>Change password</h3>\n");
+    html.push_str("        <input type=\"hidden\" name=\"csrf\" value=\"");
+    html.push_str(&csrf_attr);
+    html.push_str("\" />\n");
+    html.push_str("        <label>Current password <input name=\"old_password\" type=\"password\" autocomplete=\"current-password\" required");
+    html.push_str(password_change_disabled_attr);
+    html.push_str(" /></label>\n");
+    html.push_str("        <label>New password <input name=\"new_password\" type=\"password\" autocomplete=\"new-password\" minlength=\"");
+    html.push_str(&state.config().game_account_password_min_chars.to_string());
+    html.push_str("\" required");
+    html.push_str(password_change_disabled_attr);
+    html.push_str(" /></label>\n");
+    html.push_str("        <div class=\"actions\"><button type=\"submit\"");
+    html.push_str(password_change_disabled_attr);
+    html.push_str(">Change password</button></div>\n");
+    html.push_str("      </form>\n");
     html.push_str("      <p class=\"muted\">The browser never stores passwords or game-session tokens. The server session cookie is HttpOnly, SameSite=Lax, and used with CSRF for gameplay mutations.</p>\n");
     html.push_str("    </div>\n");
     html.push_str("    <aside class=\"panel status\" id=\"account-session-status\" aria-live=\"polite\" data-session-active=\"");
@@ -495,6 +651,17 @@ async fn game_account_client_shell_html(
     note.textContent = message;
     status.appendChild(note);
   };
+  const setPasswordChangeReady = (csrf) => {
+    const form = document.getElementById("account-password-change-form");
+    if (!form) return;
+    if (form.elements.csrf) {
+      form.elements.csrf.value = csrf || "";
+      form.elements.csrf.defaultValue = csrf || "";
+    }
+    for (const field of form.querySelectorAll("input, button")) {
+      if (field.name !== "csrf") field.disabled = !csrf;
+    }
+  };
   const restoreProfile = () => {
     try {
       const profile = JSON.parse(localStorage.getItem(profileKey) || "{}");
@@ -509,6 +676,33 @@ async fn game_account_client_shell_html(
     event.preventDefault();
     const form = event.currentTarget;
     const data = Object.fromEntries(new FormData(form).entries());
+    if (form.dataset.accountFlow === "password-change") {
+      const payload = {
+        old_password: String(data.old_password || ""),
+        new_password: String(data.new_password || ""),
+        csrf: String(data.csrf || "").trim() || null
+      };
+      try {
+        const response = await fetch(form.dataset.accountEndpoint, {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        const body = await response.json().catch(async () => ({ error: await response.text() }));
+        if (!response.ok) {
+          updateStatus("Password change rejected (" + response.status + "). " + (body.error || "unknown error"), "warn");
+          return;
+        }
+        const csrf = payload.csrf;
+        form.reset();
+        setPasswordChangeReady(csrf);
+        updateStatus("Password changed. Current game session remains active.", "status");
+      } catch (error) {
+        updateStatus("Password change failed: " + error, "warn");
+      }
+      return;
+    }
     const payload = {
       handle: String(data.handle || "").trim() || null,
       matrix_user_id: String(data.matrix_user_id || "").trim() || null,
@@ -541,6 +735,7 @@ async fn game_account_client_shell_html(
         session_id: body.session_id || payload.session_id || ""
       }));
       status.setAttribute("data-session-active", "true");
+      setPasswordChangeReady(body.csrf || "");
       updateStatus("Signed game session ready. Open the game, world, or league surface.", "status");
     } catch (error) {
       updateStatus("Account request failed: " + error, "warn");
@@ -555,6 +750,7 @@ async fn game_account_client_shell_html(
       await fetch("/account/logout", { method: "POST", credentials: "same-origin" });
     } catch (_) {}
     status.setAttribute("data-session-active", "false");
+    setPasswordChangeReady("");
     updateStatus("Signed game session cleared.", "status");
   });
   restoreProfile();
@@ -604,6 +800,7 @@ async fn game_account_session_status_json(
             "enabled": state.config().game_account_password_auth_enabled,
             "register_endpoint": "/account/register",
             "login_endpoint": "/account/login",
+            "password_change_endpoint": "/account/password/change",
             "logout_endpoint": "/account/logout",
         },
         "public_launch_credit": false,

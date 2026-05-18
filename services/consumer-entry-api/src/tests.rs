@@ -2024,11 +2024,13 @@ async fn game_account_client_shell_exposes_register_login_session_bridge() {
         assert!(body.contains("trillionnium_game_account_client_v1"));
         assert!(body.contains(r#"id="account-register-form""#));
         assert!(body.contains(r#"id="account-login-form""#));
+        assert!(body.contains(r#"id="account-password-change-form""#));
         assert!(body.contains(r#"id="account-session-status""#));
         assert!(body.contains(r#"id="account-client-readiness""#));
         assert!(body.contains("/league/web/session"));
         assert!(body.contains("/account/register"));
         assert!(body.contains("/account/login"));
+        assert!(body.contains("/account/password/change"));
         assert!(body.contains("/account/logout"));
         assert!(body.contains("password_auth_implemented"));
         assert!(body.contains("auth_rate_limit_max_requests"));
@@ -2083,6 +2085,7 @@ async fn game_account_password_register_login_status_logout_roundtrip() {
     let app = build_router(AppState::new(config));
 
     let password = "correct horse 123";
+    let new_password = "new correct horse 456";
     let (register_status, register_headers, register_body) =
         send_json_request_with_response_headers(
             &app,
@@ -2157,20 +2160,60 @@ async fn game_account_password_register_login_status_logout_roundtrip() {
         "@pilot_one:trillionnium.local"
     );
     assert_eq!(session_json["profile"]["display_name"], "Pilot One");
+    let csrf = register_body["csrf"].as_str().expect("register csrf");
 
-    let (bad_login_status, bad_login_body) = send_json_request(
+    let (bad_change_status, bad_change_body) = send_json_request(
+        &app,
+        "POST",
+        "/account/password/change",
+        &[("cookie", &session_cookie)],
+        json!({
+            "old_password": "wrong password",
+            "new_password": new_password,
+            "csrf": csrf,
+        }),
+    )
+    .await;
+    assert_eq!(bad_change_status, StatusCode::UNAUTHORIZED);
+    assert_eq!(bad_change_body["error"], "invalid game account credentials");
+
+    let (change_status, change_body) = send_json_request(
+        &app,
+        "POST",
+        "/account/password/change",
+        &[("cookie", &session_cookie)],
+        json!({
+            "old_password": password,
+            "new_password": new_password,
+            "csrf": csrf,
+        }),
+    )
+    .await;
+    assert_eq!(change_status, StatusCode::OK);
+    assert_eq!(change_body["kind"], "game_account_password_change");
+    assert_eq!(change_body["status"], "password_changed");
+    assert_eq!(change_body["active_session_preserved"], true);
+    assert!(change_body.get("password").is_none());
+
+    let registry_body = fs::read_to_string(&temp_path).expect("read updated game account registry");
+    assert!(registry_body.contains("@pilot_one:trillionnium.local"));
+    assert!(registry_body.contains("$argon2"));
+    assert!(!registry_body.contains(password));
+    assert!(!registry_body.contains(new_password));
+
+    let (old_login_status, old_login_body) = send_json_request(
         &app,
         "POST",
         "/account/login",
         &[],
         json!({
             "handle": "pilot_one",
-            "password": "wrong password",
+            "password": password,
         }),
     )
     .await;
-    assert_eq!(bad_login_status, StatusCode::UNAUTHORIZED);
-    assert_eq!(bad_login_body["error"], "invalid game account credentials");
+    assert_eq!(old_login_status, StatusCode::UNAUTHORIZED);
+    assert_eq!(old_login_body["error"], "invalid game account credentials");
 
     let (login_status, login_headers, login_body) = send_json_request_with_response_headers(
         &app,
@@ -2179,7 +2222,7 @@ async fn game_account_password_register_login_status_logout_roundtrip() {
         &[],
         json!({
             "handle": "pilot_one",
-            "password": password,
+            "password": new_password,
             "session_id": "returning-browser",
         }),
     )
@@ -2209,6 +2252,12 @@ async fn game_account_password_register_login_status_logout_roundtrip() {
     assert!(metrics_body.contains("cex_consumer_entry_game_account_login_successes_total 1"));
     assert!(metrics_body.contains("cex_consumer_entry_game_account_login_failures_total 1"));
     assert!(metrics_body.contains("cex_consumer_entry_game_account_logout_successes_total 1"));
+    assert!(
+        metrics_body.contains("cex_consumer_entry_game_account_password_change_successes_total 1")
+    );
+    assert!(
+        metrics_body.contains("cex_consumer_entry_game_account_password_change_failures_total 1")
+    );
     assert!(metrics_body.contains("cex_consumer_entry_game_account_auth_rate_limited_total 0"));
 
     let _ = std::fs::remove_file(&temp_path);

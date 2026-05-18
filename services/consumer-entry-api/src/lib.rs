@@ -150,6 +150,8 @@ struct ConsumerEntryMetrics {
     game_account_login_successes: AtomicU64,
     game_account_login_failures: AtomicU64,
     game_account_logout_successes: AtomicU64,
+    game_account_password_change_successes: AtomicU64,
+    game_account_password_change_failures: AtomicU64,
     game_account_auth_rate_limited: AtomicU64,
     replay_hits: AtomicU64,
     world_map_rum_samples: AtomicU64,
@@ -274,6 +276,16 @@ impl ConsumerEntryMetrics {
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    fn inc_game_account_password_change_successes(&self) {
+        self.game_account_password_change_successes
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn inc_game_account_password_change_failures(&self) {
+        self.game_account_password_change_failures
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     fn inc_game_account_auth_rate_limited(&self) {
         self.game_account_auth_rate_limited
             .fetch_add(1, Ordering::Relaxed);
@@ -370,6 +382,8 @@ impl ConsumerEntryMetrics {
             "login_successes": self.game_account_login_successes.load(Ordering::Relaxed),
             "login_failures": self.game_account_login_failures.load(Ordering::Relaxed),
             "logout_successes": self.game_account_logout_successes.load(Ordering::Relaxed),
+            "password_change_successes": self.game_account_password_change_successes.load(Ordering::Relaxed),
+            "password_change_failures": self.game_account_password_change_failures.load(Ordering::Relaxed),
             "auth_rate_limited": self.game_account_auth_rate_limited.load(Ordering::Relaxed),
             "passwords_tokens_or_cookie_values_logged": false,
         })
@@ -4224,6 +4238,10 @@ pub fn build_router(state: AppState) -> Router {
         .route("/account/session", get(get_game_account_session_status))
         .route("/account/register", post(post_game_account_register))
         .route("/account/login", post(post_game_account_login))
+        .route(
+            "/account/password/change",
+            post(post_game_account_password_change),
+        )
         .route("/account/logout", post(post_game_account_logout))
         .route("/league", get(get_league_web_shell))
         .route("/world", get(get_world_web_shell_response))
