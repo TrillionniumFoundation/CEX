@@ -245,6 +245,20 @@ stop_worker() {
   pkill -f "$WORKER_SCRIPT run" 2>/dev/null || true
 }
 
+start_detached() {
+  local pidfile="$1"
+  local log_file="$2"
+  shift 2
+
+  if command -v setsid >/dev/null 2>&1; then
+    setsid "$@" >"$log_file" 2>&1 </dev/null &
+  else
+    nohup "$@" >"$log_file" 2>&1 </dev/null &
+  fi
+
+  echo $! >"$pidfile"
+}
+
 start_worker() {
   if [[ "$CEX_ENABLE_QUEUED_WORKER" != "1" ]]; then
     echo "==> queued worker disabled (CEX_ENABLE_QUEUED_WORKER=$CEX_ENABLE_QUEUED_WORKER)"
@@ -252,8 +266,7 @@ start_worker() {
   fi
   cex_require_cmd python3
   echo "==> starting $WORKER_NAME"
-  nohup bash "$WORKER_SCRIPT" run > "$LOG_DIR/$WORKER_NAME.log" 2>&1 &
-  echo $! > "$PID_DIR/$WORKER_NAME.pid"
+  start_detached "$PID_DIR/$WORKER_NAME.pid" "$LOG_DIR/$WORKER_NAME.log" bash "$WORKER_SCRIPT" run
 }
 
 ensure_binary() {
@@ -296,8 +309,7 @@ start_runtime() {
   for svc in "${SERVICES[@]}"; do
     bin="$PROJECT_ROOT/target/debug/$svc"
     echo "==> starting $svc"
-    nohup "$bin" > "$LOG_DIR/$svc.log" 2>&1 &
-    echo $! > "$PID_DIR/$svc.pid"
+    start_detached "$PID_DIR/$svc.pid" "$LOG_DIR/$svc.log" "$bin"
     sleep 0.3
   done
 }
