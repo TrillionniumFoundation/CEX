@@ -70,12 +70,13 @@ pub(super) fn cex_trillionnium_world_adapter_readiness_json_for_league(
             "real_user_recovery_drill": "release_gated"
         },
         "session": {
-            "source_of_truth": "cex_ingress_token_and_optional_signed_session"
+            "source_of_truth": "cex_signed_player_session_and_account_ownership_required",
+            "shared_client_entry_token": false
         },
         "repository": {
             "source_of_truth": "cex_postgres_trnm_economic_intents_and_receipts",
             "status": "atomic_intent_receipt_and_reconciliation_cursor_persistence_ready",
-            "migration_floor": "0028_add_trnm_seller_hold_and_identity_recovery.sql"
+            "migration_floor": "0029_add_trnm_value_entitlements_and_player_sessions.sql"
         },
         "ledger": {
             "source_of_truth": "cex_postgres_ledger_and_escrow_backend",

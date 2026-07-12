@@ -2,6 +2,7 @@ mod native_economy;
 pub mod postgres;
 
 use async_trait::async_trait;
+use serde_json::Value;
 use std::sync::Arc;
 use term_exchange_protocol::{EconomicIntent, EconomicReceipt, WalletSnapshot};
 use uuid::Uuid;
@@ -12,6 +13,17 @@ pub struct TrnmPlayerIdentityRecord {
     pub account_id: Uuid,
     pub recovery_generation: i64,
     pub status: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TrnmPlayerSessionRecord {
+    pub session_id: Uuid,
+    pub player_id: String,
+    pub account_id: Uuid,
+    pub device_id: String,
+    pub recovery_generation: i64,
+    pub issued_at_epoch: i64,
+    pub expires_at_epoch: i64,
 }
 
 use crate::state::{AccountRecord, LedgerEntryRecord};
@@ -29,9 +41,15 @@ pub enum LedgerActionError {
     Other(String),
 }
 
+// Session creation is an atomic persistence boundary and keeps all signed-session fields explicit.
+#[allow(clippy::too_many_arguments)]
 #[async_trait]
 pub trait LedgerRepository {
     fn persistence_ready(&self) -> bool {
+        false
+    }
+
+    async fn persistence_healthy(&self) -> bool {
         false
     }
 
@@ -98,6 +116,76 @@ pub trait LedgerRepository {
     ) -> Result<TrnmPlayerIdentityRecord, LedgerActionError> {
         Err(LedgerActionError::RepositoryUnavailable(
             "TRNM player identity repository is unavailable".to_string(),
+        ))
+    }
+
+    async fn set_trnm_player_identity_status(
+        &self,
+        _player_id: &str,
+        _status: &str,
+    ) -> Result<TrnmPlayerIdentityRecord, LedgerActionError> {
+        Err(LedgerActionError::RepositoryUnavailable(
+            "TRNM player identity status repository is unavailable".to_string(),
+        ))
+    }
+
+    async fn create_trnm_player_session(
+        &self,
+        _player_id: &str,
+        _recovery_key: &str,
+        _device_id: &str,
+        _session_id: Uuid,
+        _token_hash: &str,
+        _issued_at_epoch: i64,
+        _expires_at_epoch: i64,
+    ) -> Result<TrnmPlayerSessionRecord, LedgerActionError> {
+        Err(LedgerActionError::RepositoryUnavailable(
+            "TRNM player session repository is unavailable".to_string(),
+        ))
+    }
+
+    async fn authenticate_trnm_player_identity(
+        &self,
+        _player_id: &str,
+        _recovery_key: &str,
+    ) -> Result<TrnmPlayerIdentityRecord, LedgerActionError> {
+        Err(LedgerActionError::RepositoryUnavailable(
+            "TRNM player identity repository is unavailable".to_string(),
+        ))
+    }
+
+    async fn verify_trnm_player_session(
+        &self,
+        _session_id: Uuid,
+        _token_hash: &str,
+        _actor_id: &str,
+        _account_id: Uuid,
+        _recovery_generation: i64,
+    ) -> Result<TrnmPlayerSessionRecord, LedgerActionError> {
+        Err(LedgerActionError::RepositoryUnavailable(
+            "TRNM player session repository is unavailable".to_string(),
+        ))
+    }
+
+    async fn revoke_trnm_player_session(
+        &self,
+        _session_id: Uuid,
+        _reason: &str,
+    ) -> Result<(), LedgerActionError> {
+        Err(LedgerActionError::RepositoryUnavailable(
+            "TRNM player session repository is unavailable".to_string(),
+        ))
+    }
+
+    async fn list_trnm_economic_receipts(&self) -> Result<Vec<EconomicReceipt>, LedgerActionError> {
+        Err(LedgerActionError::RepositoryUnavailable(
+            "TRNM receipt listing is unavailable".to_string(),
+        ))
+    }
+
+    async fn maintain_trnm_native_economy(&self) -> Result<Value, LedgerActionError> {
+        Err(LedgerActionError::RepositoryUnavailable(
+            "TRNM economy maintenance is unavailable".to_string(),
         ))
     }
 }

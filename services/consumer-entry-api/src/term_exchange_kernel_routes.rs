@@ -313,9 +313,15 @@ pub(super) async fn post_trnm_economic_intent(
     headers: HeaderMap,
     Json(payload): Json<TrnmEconomicIntentRequest>,
 ) -> Response {
-    if let Err(response) = authorize_ingress(&headers, state.config()) {
-        state.inner.metrics.inc_ingress_auth_failures();
-        return response;
+    let player_session = headers
+        .get("x-trnm-player-session")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    if player_session.is_none() {
+        if let Err(response) = authorize_ingress(&headers, state.config()) {
+            state.inner.metrics.inc_ingress_auth_failures();
+            return response;
+        }
     }
     if let Err(error) = payload.intent.validate() {
         return (StatusCode::BAD_REQUEST, Json(json!({"error": error}))).into_response();
@@ -331,15 +337,13 @@ pub(super) async fn post_trnm_economic_intent(
         "{}/v1/trnm/economy/intents",
         state.config().ledger_base_url.trim_end_matches('/')
     );
-    let response = match state
-        .inner
-        .http
-        .post(url)
-        .header("x-admin-token", token)
-        .json(&payload)
-        .send()
-        .await
-    {
+    let mut request = state.inner.http.post(url).header("x-admin-token", token);
+    request = if let Some(session) = player_session {
+        request.header("x-trnm-player-session", session)
+    } else {
+        request.header("x-trnm-system-operation", "true")
+    };
+    let response = match request.json(&payload).send().await {
         Ok(response) => response,
         Err(error) => {
             return (
@@ -383,9 +387,15 @@ pub(super) async fn post_trnm_wallet_snapshot(
     headers: HeaderMap,
     Json(payload): Json<TrnmWalletRequest>,
 ) -> Response {
-    if let Err(response) = authorize_ingress(&headers, state.config()) {
-        state.inner.metrics.inc_ingress_auth_failures();
-        return response;
+    let player_session = headers
+        .get("x-trnm-player-session")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    if player_session.is_none() {
+        if let Err(response) = authorize_ingress(&headers, state.config()) {
+            state.inner.metrics.inc_ingress_auth_failures();
+            return response;
+        }
     }
     if payload.actor_id.trim().is_empty() || payload.account_id.trim().is_empty() {
         return (
@@ -405,15 +415,13 @@ pub(super) async fn post_trnm_wallet_snapshot(
         "{}/v1/trnm/economy/wallet",
         state.config().ledger_base_url.trim_end_matches('/')
     );
-    let response = match state
-        .inner
-        .http
-        .post(url)
-        .header("x-admin-token", token)
-        .json(&payload)
-        .send()
-        .await
-    {
+    let mut request = state.inner.http.post(url).header("x-admin-token", token);
+    request = if let Some(session) = player_session {
+        request.header("x-trnm-player-session", session)
+    } else {
+        request.header("x-trnm-system-operation", "true")
+    };
+    let response = match request.json(&payload).send().await {
         Ok(response) => response,
         Err(error) => {
             return (
@@ -436,4 +444,82 @@ pub(super) async fn post_trnm_wallet_snapshot(
         )
             .into_response(),
     }
+}
+
+pub(super) async fn post_trnm_receipt_projection_rebuild(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(response) = authorize_ingress(&headers, state.config()) {
+        state.inner.metrics.inc_ingress_auth_failures();
+        return response;
+    }
+    let Some(token) = state.config().ledger_admin_token.as_deref() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"error": "ledger admin token is not configured"})),
+        )
+            .into_response();
+    };
+    let url = format!(
+        "{}/v1/trnm/economy/receipts",
+        state.config().ledger_base_url.trim_end_matches('/')
+    );
+    let receipts =
+        match state
+            .inner
+            .http
+            .get(url)
+            .header("x-admin-token", token)
+            .send()
+            .await
+        {
+            Ok(response) if response.status().is_success() => {
+                match response.json::<Vec<EconomicReceipt>>().await {
+                    Ok(receipts) => receipts,
+                    Err(error) => return (
+                        StatusCode::BAD_GATEWAY,
+                        Json(json!({"error": format!("invalid receipt rebuild payload: {error}")})),
+                    )
+                        .into_response(),
+                }
+            }
+            Ok(response) => return (
+                StatusCode::BAD_GATEWAY,
+                Json(
+                    json!({"error": format!("ledger receipt rebuild HTTP {}", response.status())}),
+                ),
+            )
+                .into_response(),
+            Err(error) => {
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(json!({"error": format!("ledger receipt rebuild unavailable: {error}")})),
+                )
+                    .into_response()
+            }
+        };
+    let league_snapshot = {
+        let mut league = state.inner.league_state.lock().await;
+        league.term_exchange_receipts.clear();
+        for receipt in &receipts {
+            record_league_term_exchange_receipt(
+                &mut league,
+                Some(TermExchangeReceiptState::from(receipt)),
+            );
+        }
+        league.clone()
+    };
+    if let Err(response) = persist_league_state(&state, &league_snapshot).await {
+        return response;
+    }
+    (
+        StatusCode::OK,
+        Json(json!({
+            "rebuilt": true,
+            "authoritative_receipts": receipts.len(),
+            "projected_receipts": league_snapshot.term_exchange_receipts.len(),
+        })),
+    )
+        .into_response()
 }

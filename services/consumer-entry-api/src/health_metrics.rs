@@ -67,7 +67,7 @@ fn cex_trillionnium_world_adapter_readiness_green(readiness: &Value) -> bool {
         && readiness
             .pointer("/session/source_of_truth")
             .and_then(Value::as_str)
-            == Some("cex_ingress_token_and_optional_signed_session")
+            == Some("cex_signed_player_session_and_account_ownership_required")
         && readiness
             .pointer("/standalone_runtime_adapter_readiness/statuses")
             .and_then(Value::as_array)

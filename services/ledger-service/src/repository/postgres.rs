@@ -6,6 +6,7 @@ use uuid::Uuid;
 use crate::{
     repository::{
         LedgerActionError, LedgerRepository, LedgerRepositoryHandle, TrnmPlayerIdentityRecord,
+        TrnmPlayerSessionRecord,
     },
     state::{AccountRecord, LedgerEntryRecord},
 };
@@ -282,6 +283,16 @@ impl LedgerRepository for PostgresLedgerRepository {
         self.pool.is_some()
     }
 
+    async fn persistence_healthy(&self) -> bool {
+        match &self.pool {
+            Some(pool) => sqlx::query_scalar::<_, i32>("select 1")
+                .fetch_one(pool)
+                .await
+                .is_ok(),
+            None => false,
+        }
+    }
+
     async fn create_account(&self, account: &AccountRecord) -> Result<(), String> {
         let pool = self
             .pool
@@ -459,5 +470,80 @@ impl LedgerRepository for PostgresLedgerRepository {
     ) -> Result<TrnmPlayerIdentityRecord, LedgerActionError> {
         self.recover_trnm_native_player_identity(player_id, recovery_key, new_recovery_key)
             .await
+    }
+
+    async fn set_trnm_player_identity_status(
+        &self,
+        player_id: &str,
+        status: &str,
+    ) -> Result<TrnmPlayerIdentityRecord, LedgerActionError> {
+        self.set_trnm_native_player_identity_status(player_id, status)
+            .await
+    }
+
+    async fn create_trnm_player_session(
+        &self,
+        player_id: &str,
+        recovery_key: &str,
+        device_id: &str,
+        session_id: Uuid,
+        token_hash: &str,
+        issued_at_epoch: i64,
+        expires_at_epoch: i64,
+    ) -> Result<TrnmPlayerSessionRecord, LedgerActionError> {
+        self.create_trnm_native_player_session(
+            player_id,
+            recovery_key,
+            device_id,
+            session_id,
+            token_hash,
+            issued_at_epoch,
+            expires_at_epoch,
+        )
+        .await
+    }
+
+    async fn authenticate_trnm_player_identity(
+        &self,
+        player_id: &str,
+        recovery_key: &str,
+    ) -> Result<TrnmPlayerIdentityRecord, LedgerActionError> {
+        self.authenticate_trnm_native_player_identity(player_id, recovery_key)
+            .await
+    }
+
+    async fn verify_trnm_player_session(
+        &self,
+        session_id: Uuid,
+        token_hash: &str,
+        actor_id: &str,
+        account_id: Uuid,
+        recovery_generation: i64,
+    ) -> Result<TrnmPlayerSessionRecord, LedgerActionError> {
+        self.verify_trnm_native_player_session(
+            session_id,
+            token_hash,
+            actor_id,
+            account_id,
+            recovery_generation,
+        )
+        .await
+    }
+
+    async fn revoke_trnm_player_session(
+        &self,
+        session_id: Uuid,
+        reason: &str,
+    ) -> Result<(), LedgerActionError> {
+        self.revoke_trnm_native_player_session(session_id, reason)
+            .await
+    }
+
+    async fn list_trnm_economic_receipts(&self) -> Result<Vec<EconomicReceipt>, LedgerActionError> {
+        self.list_trnm_native_receipts().await
+    }
+
+    async fn maintain_trnm_native_economy(&self) -> Result<serde_json::Value, LedgerActionError> {
+        self.run_trnm_native_maintenance().await
     }
 }

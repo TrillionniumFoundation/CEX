@@ -25,6 +25,26 @@ one balance change.
 The temporary restore database and second ledger are removed on exit. The
 primary services and database remain authoritative.
 
+For physical recovery run:
+
+```bash
+scripts/check-trnm-postgres-pitr-failover.sh
+scripts/check-trnm-postgres-pitr-failover.sh --chaos
+scripts/check-trnm-postgres-streaming-standby-chaos.sh
+```
+
+PostgreSQL is configured with `wal_level=replica`, `archive_mode=on`, a
+separate WAL archive volume and a 60-second archive timeout. The physical gate
+takes a full `pg_basebackup`, writes markers around a named restore point,
+replays archived WAL into an isolated instance, proves the later marker is
+absent, promotes the restored instance and writes to it. `--chaos` also stops
+the primary container, verifies ledger fail-closed and the promoted recovery
+instance alive, then restores the primary service.
+The streaming-standby drill takes a second physical copy with `standby.signal`,
+waits for a primary marker to replay, stops the primary, verifies ledger
+readiness fails closed, promotes the standby writable and restores the original
+single-node service.
+
 ## Recovery sequence
 
 1. Stop `cex-trnm-consumer.service` and `cex-trnm-ledger.service` before a
@@ -32,7 +52,7 @@ primary services and database remain authoritative.
    to the in-memory repository.
 2. Preserve the failed database volume and service logs before changing state.
 3. Restore the latest verified logical backup into a new database, apply every
-   migration through `0028_add_trnm_seller_hold_and_identity_recovery.sql`, and
+   migration through `0029_add_trnm_value_entitlements_and_player_sessions.sql`, and
    run the automated gate against that database.
 4. Verify account non-negative constraints, one receipt per intent, escrow
    state constraints and reconciliation cursors before changing the service
@@ -45,14 +65,13 @@ primary services and database remain authoritative.
 
 ## PITR and HA boundary
 
-The checked-in gate proves logical backup/restore and same-database
-cross-instance exactly-once behavior. Point-in-time recovery additionally
-requires an operator-owned physical base-backup schedule, continuous WAL
-archival, retention policy, encryption/key rotation and a timed restore drill.
-High availability additionally requires replicated PostgreSQL, fencing,
-failover orchestration and a cross-node chaos test. Those are deployment
-infrastructure gates and remain blocked until an actual target environment is
-provided and exercised.
+The checked-in gates now prove logical backup/restore, same-database
+cross-instance exactly-once, a physical base backup, continuous local WAL
+archival, point-in-time restore and same-host promotion. Production high
+availability still requires a genuinely separate standby host, replication
+slot monitoring, quorum/fencing, failover orchestration, encrypted off-host
+retention and cross-node network-partition tests. Same-host promotion must not
+be described as regional or multi-node HA.
 
 Suggested operational objectives for the trusted system market are RPO <= 15
 minutes and RTO <= 60 minutes. Public player trading must define stricter

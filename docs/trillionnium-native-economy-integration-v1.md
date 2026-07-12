@@ -9,7 +9,7 @@ native client.
 ## Protocol ownership
 
 The stable protocol is owned by the Trillionnium repository in
-`trnm-economy-protocol` (`term_exchange_protocol_v2`, package `2.2.0`). This
+`trnm-economy-protocol` (`term_exchange_protocol_v2`, package `2.3.0`). This
 CEX workspace vendors and pins that exact pure crate version under `vendor/`,
 so an independent checkout does not require a sibling repository path. The old
 CEX-local v1 crate is removed and represented only by `QUARANTINED.md` plus Git
@@ -22,6 +22,7 @@ Current endpoints:
 - `GET /v1/trillionnium/economy/adapters/readiness`
 - `POST /v1/trillionnium/economy/intents`
 - `POST /v1/trillionnium/economy/wallet`
+- `POST /v1/trillionnium/economy/projection/rebuild` (internal maintenance)
 
 The old World adapter readiness route remains a compatibility alias. It is not
 the current contract.
@@ -41,12 +42,24 @@ failures return non-progressing responses; a bad protocol payload is rejected.
 TRNM namespaces connected campaign and intent identifiers by the bound account,
 while CEX still enforces global intent and `(scope,key)` uniqueness.
 
+Positive `ReleaseReward` requires a CEX-verifiable
+`ServerSignedValueEntitlementV1`. The signature binds actor, account, source
+battle, source ID, intent, amount, UTC budget day and expiry. PostgreSQL
+consumes each entitlement once and enforces 100 credits per event and 300 per
+account/day in the ledger transaction. `CompleteContract` must carry zero
+value. A client-authored amount without the trusted entitlement is rejected.
+
 The wallet endpoint reads the configured ledger, persists the actor/account
-reconciliation cursor and returns the protocol `WalletSnapshot`. Ingress
-authentication remains governed by the normal consumer-entry configuration.
+reconciliation cursor and returns the protocol `WalletSnapshot`. Player routes
+require `trnm_player_session_v1`, signed by CEX and persisted as a token hash
+with player/account ownership, device, recovery generation, expiry and
+revocation. Recovery, suspension and closure revoke live sessions. The
+consumer shared entry token is retained only for internal service maintenance
+and is not a distributable native-client credential.
 
 Migrations `0027_add_trnm_native_economy_persistence.sql` and
-`0028_add_trnm_seller_hold_and_identity_recovery.sql` supply unique intent,
+`0028_add_trnm_seller_hold_and_identity_recovery.sql` and
+`0029_add_trnm_value_entitlements_and_player_sessions.sql` supply unique intent,
 idempotency, receipt, cursor and escrow constraints. Formal release services
 are installed as `cex-trnm-ledger.service` and
 `cex-trnm-consumer.service`; `LEDGER_FAIL_FAST=true` makes PostgreSQL absence a
@@ -54,6 +67,9 @@ startup blocker, not a trigger for memory fallback. PostgreSQL itself uses the
 existing durable Docker volume with an `unless-stopped` restart policy. After
 building the two release binaries, `scripts/install-trnm-economy-systemd.sh`
 reproducibly installs and enables the services.
+The installer also enables `cex-trnm-economy-maintenance.timer`; its five-minute
+job releases matured seller holds, alerts on overdue holds and reconstructs the
+consumer receipt projection from PostgreSQL.
 
 Admin-protected native identity registration and rotating recovery credentials
 persist with generation and immutable audit records. This is a software
@@ -72,8 +88,14 @@ tests remain green for read compatibility.
 an isolated database and races one intent through two ledger instances to prove
 database-enforced exactly-once. The TRNM-side native-client gate drives the Bevy
 input system through purchase, service restart, UI projection and cancellation.
-The recovery sequence and the still-open physical base-backup, WAL/PITR and HA
-boundary are recorded in `trnm-economy-disaster-recovery-v1.md`.
+`scripts/check-trnm-value-entitlement-and-session.sh` proves entitlement,
+budget, ownership, device recovery, revocation and suspension policy.
+`scripts/check-trnm-postgres-pitr-failover.sh` takes a physical base backup,
+restores archived WAL to a named restore point and promotes the restored
+instance writable. `scripts/check-trnm-postgres-streaming-standby-chaos.sh`
+also proves same-host streaming replay, primary-stop detection and promotion.
+The remaining multi-host HA boundary is recorded in
+`trnm-economy-disaster-recovery-v1.md`.
 
 This proves persistent local production-profile integration. It does not claim
 high availability, public CEX exposure, legal/commercial readiness or public

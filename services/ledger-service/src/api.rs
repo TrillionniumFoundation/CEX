@@ -4,15 +4,21 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use chrono::{Datelike, Utc};
+use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use shared_config::{
     admin_principal_allows_org, admin_principal_has_scope, authorize_scoped_admin_from_map,
     AdminAuthorizationFailure, AdminPrincipal,
 };
 use term_exchange_protocol::{
-    EconomicIntent, EconomicIntentKind, EconomicReceipt, ReceiptStatus, SettlementBackendKind,
-    WalletSnapshot, CEX_SETTLEMENT_BACKEND_ID,
+    EconomicIntent, EconomicIntentKind, EconomicReceipt, ReceiptStatus,
+    ServerSignedValueEntitlementV1, SettlementBackendKind, ValueEntitlementSource, WalletSnapshot,
+    BATTLE_WALLET_REWARD_PER_EVENT_CAP, CEX_SETTLEMENT_BACKEND_ID,
+    SERVER_SIGNED_VALUE_ENTITLEMENT_CONTRACT, SERVER_SIGNED_VALUE_ENTITLEMENT_METADATA_KEY,
 };
 use uuid::Uuid;
 
@@ -71,21 +77,114 @@ pub struct TrnmIdentityRecoverRequest {
     pub new_recovery_key: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrnmIdentityStatusRequest {
+    pub player_id: String,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrnmPlayerSessionIssueRequest {
+    pub player_id: String,
+    pub recovery_key: String,
+    pub device_id: String,
+    #[serde(default = "default_session_lifetime_seconds")]
+    pub lifetime_seconds: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrnmPlayerSessionRevokeRequest {
+    pub session_id: String,
+    #[serde(default = "default_session_revoke_reason")]
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrnmPlayerSessionResponse {
+    pub contract_version: String,
+    pub session_token: String,
+    pub session_id: String,
+    pub player_id: String,
+    pub account_id: String,
+    pub device_id: String,
+    pub recovery_generation: i64,
+    pub issued_at_epoch: i64,
+    pub expires_at_epoch: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TrnmPlayerSessionClaimsV1 {
+    contract_version: String,
+    session_id: String,
+    player_id: String,
+    account_id: String,
+    device_id: String,
+    recovery_generation: i64,
+    issued_at_epoch: i64,
+    expires_at_epoch: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrnmValueEntitlementIssueRequest {
+    pub actor_id: String,
+    pub account_id: String,
+    pub source: ValueEntitlementSource,
+    pub source_id: String,
+    pub intent_id: String,
+    pub amount_credits: i64,
+    #[serde(default = "default_entitlement_lifetime_seconds")]
+    pub lifetime_seconds: i64,
+}
+
+const PLAYER_SESSION_CONTRACT_VERSION: &str = "trnm_player_session_v1";
+const PLAYER_SESSION_HEADER: &str = "x-trnm-player-session";
+const SYSTEM_OPERATION_HEADER: &str = "x-trnm-system-operation";
+
+fn default_session_lifetime_seconds() -> i64 {
+    3_600
+}
+
+fn default_entitlement_lifetime_seconds() -> i64 {
+    600
+}
+
+fn default_session_revoke_reason() -> String {
+    "player_requested".to_string()
+}
+
 pub async fn health() -> &'static str {
     "ledger-service ok"
 }
 
-pub async fn trnm_economy_readiness(State(state): State<AppState>) -> impl IntoResponse {
-    Json(json!({
-        "status": if state.fail_fast && state.repository.persistence_ready() { "ok" } else { "blocked" },
-        "profile": "trnm-economy-production",
-        "fail_fast": state.fail_fast,
-        "postgres_persistent": state.repository.persistence_ready(),
-        "atomic_intent_receipts": true,
-        "escrow": true,
-        "seller_payout_hold": true,
-        "player_identity_recovery": true,
-    }))
+pub async fn trnm_economy_readiness(State(state): State<AppState>) -> Response {
+    let persistence_healthy = state.repository.persistence_healthy().await;
+    let ready = state.fail_fast && state.repository.persistence_ready() && persistence_healthy;
+    let status = if ready {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+    (
+        status,
+        Json(json!({
+            "status": if ready { "ok" } else { "blocked" },
+            "profile": "trnm-economy-production",
+            "fail_fast": state.fail_fast,
+            "postgres_persistent": state.repository.persistence_ready(),
+            "postgres_healthy": persistence_healthy,
+            "atomic_intent_receipts": true,
+            "escrow": true,
+            "seller_payout_hold": true,
+            "player_identity_recovery": true,
+            "server_signed_value_entitlement": true,
+            "player_session_account_ownership": true,
+            "wallet_reward_per_event_cap": BATTLE_WALLET_REWARD_PER_EVENT_CAP,
+            "complete_contract_zero_value_only": true,
+            "seller_hold_sweeper": true,
+            "receipt_projection_rebuild_source": "postgresql",
+        })),
+    )
+        .into_response()
 }
 
 pub async fn post_trnm_identity_register(
@@ -141,12 +240,197 @@ pub async fn post_trnm_identity_recover(
     }
 }
 
+pub async fn post_trnm_identity_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<TrnmIdentityStatusRequest>,
+) -> Response {
+    if let Err(response) = authorize_ledger_admin(&state, &headers, &["ledger:manage"]) {
+        return response;
+    }
+    match state
+        .repository
+        .set_trnm_player_identity_status(&request.player_id, &request.status)
+        .await
+    {
+        Ok(identity) => (StatusCode::OK, Json(identity)).into_response(),
+        Err(error) => repository_error_response(error).into_response(),
+    }
+}
+
+pub async fn post_trnm_player_session_issue(
+    State(state): State<AppState>,
+    Json(request): Json<TrnmPlayerSessionIssueRequest>,
+) -> Response {
+    let identity = match state
+        .repository
+        .authenticate_trnm_player_identity(&request.player_id, &request.recovery_key)
+        .await
+    {
+        Ok(identity) => identity,
+        Err(error) => return repository_error_response(error).into_response(),
+    };
+    let now = Utc::now().timestamp();
+    let lifetime = request.lifetime_seconds.clamp(60, 86_400);
+    let session_id = Uuid::new_v4();
+    let claims = TrnmPlayerSessionClaimsV1 {
+        contract_version: PLAYER_SESSION_CONTRACT_VERSION.to_string(),
+        session_id: session_id.to_string(),
+        player_id: identity.player_id.clone(),
+        account_id: identity.account_id.to_string(),
+        device_id: request.device_id.clone(),
+        recovery_generation: identity.recovery_generation,
+        issued_at_epoch: now,
+        expires_at_epoch: now.saturating_add(lifetime),
+    };
+    let session_token = match sign_player_session(&state, &claims) {
+        Ok(token) => token,
+        Err(error) => return internal_error_response(error),
+    };
+    let token_hash = sha256_hex(session_token.as_bytes());
+    let record = match state
+        .repository
+        .create_trnm_player_session(
+            &request.player_id,
+            &request.recovery_key,
+            &request.device_id,
+            session_id,
+            &token_hash,
+            claims.issued_at_epoch,
+            claims.expires_at_epoch,
+        )
+        .await
+    {
+        Ok(record) => record,
+        Err(error) => return repository_error_response(error).into_response(),
+    };
+    (
+        StatusCode::CREATED,
+        Json(TrnmPlayerSessionResponse {
+            contract_version: PLAYER_SESSION_CONTRACT_VERSION.to_string(),
+            session_token,
+            session_id: record.session_id.to_string(),
+            player_id: record.player_id,
+            account_id: record.account_id.to_string(),
+            device_id: record.device_id,
+            recovery_generation: record.recovery_generation,
+            issued_at_epoch: record.issued_at_epoch,
+            expires_at_epoch: record.expires_at_epoch,
+        }),
+    )
+        .into_response()
+}
+
+pub async fn post_trnm_player_session_revoke(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<TrnmPlayerSessionRevokeRequest>,
+) -> Response {
+    let session_id = match Uuid::parse_str(&request.session_id) {
+        Ok(value) => value,
+        Err(_) => return bad_request_response("session_id must be a UUID"),
+    };
+    let claims = match player_session_claims_from_headers(&state, &headers) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    if claims.session_id != request.session_id {
+        return unauthorized_response("a player session may only revoke itself");
+    }
+    match state
+        .repository
+        .revoke_trnm_player_session(session_id, &request.reason)
+        .await
+    {
+        Ok(()) => (StatusCode::OK, Json(json!({"revoked": true}))).into_response(),
+        Err(error) => repository_error_response(error).into_response(),
+    }
+}
+
+pub async fn post_trnm_value_entitlement_issue(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<TrnmValueEntitlementIssueRequest>,
+) -> Response {
+    if let Err(response) = authorize_ledger_admin(&state, &headers, &["ledger:manage"]) {
+        return response;
+    }
+    if request.amount_credits <= 0
+        || request.amount_credits > BATTLE_WALLET_REWARD_PER_EVENT_CAP
+        || !matches!(request.source, ValueEntitlementSource::Battle)
+    {
+        return bad_request_response(
+            "only positive battle entitlements within the per-event cap may mint wallet value",
+        );
+    }
+    if Uuid::parse_str(&request.account_id).is_err()
+        || request.actor_id.trim().is_empty()
+        || request.source_id.trim().is_empty()
+        || request.intent_id.trim().is_empty()
+    {
+        return bad_request_response("entitlement actor/account/source/intent is invalid");
+    }
+    let now = Utc::now();
+    let lifetime = request.lifetime_seconds.clamp(60, 3_600);
+    let budget_day = (now.year() as u32) * 10_000 + now.month() * 100 + now.day();
+    let mut entitlement = ServerSignedValueEntitlementV1 {
+        contract_version: SERVER_SIGNED_VALUE_ENTITLEMENT_CONTRACT.to_string(),
+        entitlement_id: format!("trnm-entitlement:{}", Uuid::new_v4()),
+        issuer: "cex-trusted-game-authority".to_string(),
+        key_id: state.entitlement_key_id.as_ref().clone(),
+        actor_id: request.actor_id,
+        account_id: request.account_id,
+        source: request.source,
+        source_id: request.source_id,
+        intent_id: request.intent_id,
+        amount_credits: request.amount_credits,
+        currency: "wallet_credits".to_string(),
+        budget_day,
+        issued_at_epoch: now.timestamp(),
+        expires_at_epoch: now.timestamp().saturating_add(lifetime),
+        signature: String::new(),
+    };
+    entitlement.signature = match sign_entitlement(&state, &entitlement) {
+        Ok(signature) => signature,
+        Err(error) => return internal_error_response(error),
+    };
+    (StatusCode::CREATED, Json(entitlement)).into_response()
+}
+
+pub async fn get_trnm_economic_receipts(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(response) =
+        authorize_ledger_admin(&state, &headers, &["ledger:read", "ledger:manage"])
+    {
+        return response;
+    }
+    match state.repository.list_trnm_economic_receipts().await {
+        Ok(receipts) => (StatusCode::OK, Json(receipts)).into_response(),
+        Err(error) => repository_error_response(error).into_response(),
+    }
+}
+
+pub async fn post_trnm_economy_maintenance(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(response) = authorize_ledger_admin(&state, &headers, &["ledger:manage"]) {
+        return response;
+    }
+    match state.repository.maintain_trnm_native_economy().await {
+        Ok(report) => (StatusCode::OK, Json(report)).into_response(),
+        Err(error) => repository_error_response(error).into_response(),
+    }
+}
+
 pub async fn post_trnm_economic_intent(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<TrnmEconomicIntentRequest>,
 ) -> Response {
-    if let Err(response) = authorize_ledger_admin(&state, &headers, &["ledger:manage"]) {
+    if let Err(response) = authorize_trnm_economy_intent(&state, &headers, &request.intent).await {
         return response;
     }
     if let Err(error) = request.intent.validate() {
@@ -158,6 +442,9 @@ pub async fn post_trnm_economic_intent(
             }),
         )
             .into_response();
+    }
+    if let Err(response) = validate_value_authorization(&state, &request.intent) {
+        return response;
     }
     match state
         .repository
@@ -267,11 +554,6 @@ pub async fn post_trnm_wallet_snapshot(
     headers: HeaderMap,
     Json(request): Json<TrnmWalletRequest>,
 ) -> Response {
-    if let Err(response) =
-        authorize_ledger_admin(&state, &headers, &["ledger:read", "ledger:manage"])
-    {
-        return response;
-    }
     if request.actor_id.trim().is_empty() {
         return (
             StatusCode::BAD_REQUEST,
@@ -295,6 +577,11 @@ pub async fn post_trnm_wallet_snapshot(
                 .into_response()
         }
     };
+    if let Err(response) =
+        authorize_trnm_account(&state, &headers, &request.actor_id, account_id).await
+    {
+        return response;
+    }
     match state
         .repository
         .reconcile_trnm_wallet(&request.actor_id, account_id, request.reconciliation_cursor)
@@ -321,6 +608,255 @@ pub async fn post_trnm_wallet_snapshot(
         }
         Err(error) => repository_error_response(error).into_response(),
     }
+}
+
+async fn authorize_trnm_economy_intent(
+    state: &AppState,
+    headers: &HeaderMap,
+    intent: &EconomicIntent,
+) -> Result<(), Response> {
+    let actor = intent
+        .actors
+        .first()
+        .ok_or_else(|| bad_request_response("TRNM economic intent requires a primary actor"))?;
+    let account_id = actor
+        .account_id
+        .as_deref()
+        .and_then(|value| Uuid::parse_str(value).ok())
+        .ok_or_else(|| bad_request_response("TRNM actor account_id must be a UUID"))?;
+    authorize_trnm_account(state, headers, &actor.actor_id, account_id).await
+}
+
+async fn authorize_trnm_account(
+    state: &AppState,
+    headers: &HeaderMap,
+    actor_id: &str,
+    account_id: Uuid,
+) -> Result<(), Response> {
+    if headers
+        .get(SYSTEM_OPERATION_HEADER)
+        .and_then(|value| value.to_str().ok())
+        == Some("true")
+    {
+        if !state.allow_system_economy_operations {
+            return Err(unauthorized_response(
+                "trusted system economy operations are disabled",
+            ));
+        }
+        authorize_ledger_admin(state, headers, &["ledger:manage"])?;
+        return Ok(());
+    }
+
+    if headers.contains_key(PLAYER_SESSION_HEADER) {
+        let claims = player_session_claims_from_headers(state, headers)?;
+        if claims.player_id != actor_id || claims.account_id != account_id.to_string() {
+            return Err(unauthorized_response(
+                "player session does not own the requested actor/account",
+            ));
+        }
+        state
+            .repository
+            .verify_trnm_player_session(
+                Uuid::parse_str(&claims.session_id)
+                    .map_err(|_| unauthorized_response("invalid player session id"))?,
+                &sha256_hex(
+                    headers
+                        .get(PLAYER_SESSION_HEADER)
+                        .and_then(|value| value.to_str().ok())
+                        .unwrap_or_default()
+                        .as_bytes(),
+                ),
+                actor_id,
+                account_id,
+                claims.recovery_generation,
+            )
+            .await
+            .map_err(|error| repository_error_response(error).into_response())?;
+        return Ok(());
+    }
+
+    if !state.require_player_session {
+        authorize_ledger_admin(state, headers, &["ledger:manage"])?;
+        return Ok(());
+    }
+    Err(unauthorized_response(
+        "x-trnm-player-session is required for player economy requests",
+    ))
+}
+
+// Axum responses intentionally carry the complete fail-closed HTTP error at this boundary.
+#[allow(clippy::result_large_err)]
+fn validate_value_authorization(state: &AppState, intent: &EconomicIntent) -> Result<(), Response> {
+    let amount = intent.amount_credits.unwrap_or_default();
+    if matches!(intent.kind, EconomicIntentKind::CompleteContract) {
+        if amount != 0 {
+            return Err(bad_request_response(
+                "CompleteContract is audit-only and must have amount_credits=0",
+            ));
+        }
+        return Ok(());
+    }
+    if !matches!(intent.kind, EconomicIntentKind::ReleaseReward) || amount <= 0 {
+        return Ok(());
+    }
+    if amount > BATTLE_WALLET_REWARD_PER_EVENT_CAP {
+        return Err(bad_request_response(
+            "ReleaseReward exceeds the server-enforced per-event cap",
+        ));
+    }
+    let value = intent
+        .metadata
+        .get(SERVER_SIGNED_VALUE_ENTITLEMENT_METADATA_KEY)
+        .ok_or_else(|| unauthorized_response("server-signed value entitlement is required"))?;
+    let entitlement: ServerSignedValueEntitlementV1 = serde_json::from_value(value.clone())
+        .map_err(|_| unauthorized_response("value entitlement cannot be decoded"))?;
+    entitlement
+        .validate_shape()
+        .map_err(|error| unauthorized_response(&error))?;
+    let actor = intent
+        .actors
+        .first()
+        .ok_or_else(|| bad_request_response("TRNM economic intent requires a primary actor"))?;
+    if entitlement.key_id != *state.entitlement_key_id
+        || entitlement.actor_id != actor.actor_id
+        || entitlement.account_id != actor.account_id.clone().unwrap_or_default()
+        || entitlement.intent_id != intent.intent_id
+        || entitlement.amount_credits != amount
+        || !matches!(entitlement.source, ValueEntitlementSource::Battle)
+    {
+        return Err(unauthorized_response(
+            "value entitlement does not bind this battle reward intent",
+        ));
+    }
+    let now = Utc::now();
+    let today = (now.year() as u32) * 10_000 + now.month() * 100 + now.day();
+    if entitlement.budget_day != today
+        || entitlement.issued_at_epoch > now.timestamp().saturating_add(30)
+        || entitlement.expires_at_epoch < now.timestamp()
+    {
+        return Err(unauthorized_response(
+            "value entitlement is expired or outside today's wallet budget",
+        ));
+    }
+    let payload = entitlement
+        .signing_payload()
+        .map_err(|error| unauthorized_response(&error))?;
+    verify_hmac_base64(
+        state.entitlement_signing_secret.as_bytes(),
+        &payload,
+        &entitlement.signature,
+    )
+    .map_err(|error| unauthorized_response(&error))
+}
+
+fn sign_entitlement(
+    state: &AppState,
+    entitlement: &ServerSignedValueEntitlementV1,
+) -> Result<String, String> {
+    sign_hmac_base64(
+        state.entitlement_signing_secret.as_bytes(),
+        &entitlement.signing_payload()?,
+    )
+}
+
+fn sign_player_session(
+    state: &AppState,
+    claims: &TrnmPlayerSessionClaimsV1,
+) -> Result<String, String> {
+    let payload = serde_json::to_vec(claims)
+        .map_err(|error| format!("encode player session failed: {error}"))?;
+    let signature = sign_hmac_base64(state.player_session_signing_secret.as_bytes(), &payload)?;
+    Ok(format!("{}.{}", URL_SAFE_NO_PAD.encode(payload), signature))
+}
+
+// Returning the complete Axum response keeps authentication failures uniform at every route.
+#[allow(clippy::result_large_err)]
+fn player_session_claims_from_headers(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<TrnmPlayerSessionClaimsV1, Response> {
+    let token = headers
+        .get(PLAYER_SESSION_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| unauthorized_response("x-trnm-player-session is required"))?;
+    let (payload_encoded, signature) = token
+        .split_once('.')
+        .ok_or_else(|| unauthorized_response("player session token is malformed"))?;
+    let payload = URL_SAFE_NO_PAD
+        .decode(payload_encoded)
+        .map_err(|_| unauthorized_response("player session payload is malformed"))?;
+    verify_hmac_base64(
+        state.player_session_signing_secret.as_bytes(),
+        &payload,
+        signature,
+    )
+    .map_err(|error| unauthorized_response(&error))?;
+    let claims: TrnmPlayerSessionClaimsV1 = serde_json::from_slice(&payload)
+        .map_err(|_| unauthorized_response("player session claims are malformed"))?;
+    if claims.contract_version != PLAYER_SESSION_CONTRACT_VERSION
+        || claims.expires_at_epoch < Utc::now().timestamp()
+        || claims.issued_at_epoch > Utc::now().timestamp().saturating_add(30)
+    {
+        return Err(unauthorized_response(
+            "player session is expired or invalid",
+        ));
+    }
+    Ok(claims)
+}
+
+fn sign_hmac_base64(secret: &[u8], payload: &[u8]) -> Result<String, String> {
+    let mut mac = Hmac::<Sha256>::new_from_slice(secret)
+        .map_err(|_| "invalid HMAC signing secret".to_string())?;
+    mac.update(payload);
+    Ok(URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes()))
+}
+
+fn verify_hmac_base64(secret: &[u8], payload: &[u8], signature: &str) -> Result<(), String> {
+    let decoded = URL_SAFE_NO_PAD
+        .decode(signature)
+        .map_err(|_| "invalid HMAC signature encoding".to_string())?;
+    let mut mac = Hmac::<Sha256>::new_from_slice(secret)
+        .map_err(|_| "invalid HMAC verification secret".to_string())?;
+    mac.update(payload);
+    mac.verify_slice(&decoded)
+        .map_err(|_| "HMAC signature verification failed".to_string())
+}
+
+fn sha256_hex(value: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(value))
+}
+
+fn bad_request_response(message: &str) -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(ErrorResponse {
+            error: message.to_string(),
+            message: None,
+        }),
+    )
+        .into_response()
+}
+
+fn unauthorized_response(message: &str) -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(ErrorResponse {
+            error: message.to_string(),
+            message: None,
+        }),
+    )
+        .into_response()
+}
+
+fn internal_error_response(message: String) -> Response {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(ErrorResponse {
+            error: message,
+            message: None,
+        }),
+    )
+        .into_response()
 }
 
 pub async fn metrics(State(state): State<AppState>) -> impl IntoResponse {

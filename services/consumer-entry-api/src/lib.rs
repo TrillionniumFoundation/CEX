@@ -4325,6 +4325,10 @@ pub fn build_router(state: AppState) -> Router {
             "/v1/trillionnium/economy/wallet",
             post(post_trnm_wallet_snapshot),
         )
+        .route(
+            "/v1/trillionnium/economy/projection/rebuild",
+            post(post_trnm_receipt_projection_rebuild),
+        )
         .route("/v1/league/home", get(get_league_home))
         .route("/v1/league/world", get(get_league_world))
         .route("/v1/world/home", get(get_world_home))

@@ -816,7 +816,7 @@ fn cex_trillionnium_world_adapter_readiness_connects_protocol_layer() {
         readiness
             .pointer("/session/source_of_truth")
             .and_then(Value::as_str),
-        Some("cex_ingress_token_and_optional_signed_session")
+        Some("cex_signed_player_session_and_account_ownership_required")
     );
     assert!(
         readiness
@@ -2698,13 +2698,26 @@ async fn trnm_native_economy_real_ledger_is_exactly_once_and_supports_recovery_f
     let state = AppState::new(config);
     let app = build_router(state.clone());
 
-    let reward = trnm_economic_intent_json(
+    let mut reward = trnm_economic_intent_json(
         "trnm-reward-1",
         "release_reward",
         &account_id,
         25,
         "trnm-reward-key-1",
     );
+    reward["intent"]["metadata"]
+        [term_exchange_protocol::SERVER_SIGNED_VALUE_ENTITLEMENT_METADATA_KEY] =
+        issue_real_trnm_value_entitlement(
+            &http,
+            &ledger_base_url,
+            &ledger_admin_token,
+            "trnm-e2e-player",
+            &account_id,
+            "trnm-reward-1",
+            "battle:trnm-reward-1",
+            25,
+        )
+        .await;
     let (status, first) = send_json_request(
         &app,
         "POST",
@@ -15370,6 +15383,38 @@ async fn create_real_ledger_account(
         .as_str()
         .expect("created ledger account id")
         .to_string()
+}
+
+async fn issue_real_trnm_value_entitlement(
+    http: &Client,
+    ledger_base_url: &str,
+    admin_token: &str,
+    actor_id: &str,
+    account_id: &str,
+    intent_id: &str,
+    source_id: &str,
+    amount_credits: i64,
+) -> Value {
+    let response = http
+        .post(format!("{}/v1/trnm/economy/entitlements", ledger_base_url))
+        .header("x-admin-token", admin_token)
+        .json(&json!({
+            "actor_id": actor_id,
+            "account_id": account_id,
+            "source": "battle",
+            "source_id": source_id,
+            "intent_id": intent_id,
+            "amount_credits": amount_credits,
+            "lifetime_seconds": 600
+        }))
+        .send()
+        .await
+        .expect("issue real TRNM value entitlement");
+    assert_eq!(response.status(), reqwest::StatusCode::CREATED);
+    response
+        .json::<Value>()
+        .await
+        .expect("decode real TRNM value entitlement")
 }
 
 async fn apply_real_ledger_action(

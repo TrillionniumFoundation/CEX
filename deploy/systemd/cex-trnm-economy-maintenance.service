@@ -1,0 +1,9 @@
+[Unit]
+Description=CEX TRNM seller-hold sweep and receipt projection rebuild
+After=cex-trnm-ledger.service cex-trnm-consumer.service
+Requires=cex-trnm-ledger.service cex-trnm-consumer.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/qian/.openclaw/workspace/CEX
+ExecStart=/home/qian/.openclaw/workspace/CEX/scripts/run-trnm-economy-maintenance.sh

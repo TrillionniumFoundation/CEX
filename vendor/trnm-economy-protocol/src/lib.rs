@@ -14,6 +14,9 @@ pub const TRNM_ECONOMY_POLICY_VERSION: &str = "trnm_economy_policy_v1";
 pub const BATTLE_WALLET_REWARD_PER_EVENT_CAP: i64 = 100;
 pub const BATTLE_WALLET_REWARD_DAILY_CAP: i64 = 300;
 pub const SELLER_REVERSIBLE_WINDOW_SECONDS: i64 = 86_400;
+pub const SERVER_SIGNED_VALUE_ENTITLEMENT_CONTRACT: &str =
+    "trnm_server_signed_value_entitlement_v1";
+pub const SERVER_SIGNED_VALUE_ENTITLEMENT_METADATA_KEY: &str = "server_signed_value_entitlement";
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TrnmEconomyPolicy {
@@ -35,6 +38,60 @@ impl Default for TrnmEconomyPolicy {
             seller_reversible_window_seconds: SELLER_REVERSIBLE_WINDOW_SECONDS,
             public_player_market_enabled: false,
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ValueEntitlementSource {
+    Battle,
+    Contract,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ServerSignedValueEntitlementV1 {
+    pub contract_version: String,
+    pub entitlement_id: String,
+    pub issuer: String,
+    pub key_id: String,
+    pub actor_id: String,
+    pub account_id: String,
+    pub source: ValueEntitlementSource,
+    pub source_id: String,
+    pub intent_id: String,
+    pub amount_credits: i64,
+    pub currency: String,
+    pub budget_day: u32,
+    pub issued_at_epoch: i64,
+    pub expires_at_epoch: i64,
+    pub signature: String,
+}
+
+impl ServerSignedValueEntitlementV1 {
+    pub fn signing_payload(&self) -> Result<Vec<u8>, String> {
+        let mut unsigned = self.clone();
+        unsigned.signature.clear();
+        serde_json::to_vec(&unsigned)
+            .map_err(|error| format!("encode value entitlement failed: {error}"))
+    }
+
+    pub fn validate_shape(&self) -> Result<(), String> {
+        if self.contract_version != SERVER_SIGNED_VALUE_ENTITLEMENT_CONTRACT
+            || self.entitlement_id.trim().is_empty()
+            || self.issuer.trim().is_empty()
+            || self.key_id.trim().is_empty()
+            || self.actor_id.trim().is_empty()
+            || self.account_id.trim().is_empty()
+            || self.source_id.trim().is_empty()
+            || self.intent_id.trim().is_empty()
+            || self.amount_credits <= 0
+            || self.currency != "wallet_credits"
+            || self.expires_at_epoch < self.issued_at_epoch
+            || self.signature.trim().is_empty()
+        {
+            return Err("value entitlement violates the TRNM signed-value boundary".to_string());
+        }
+        Ok(())
     }
 }
 
@@ -392,6 +449,7 @@ pub fn cex_settlement_backend_manifest(active: bool) -> SettlementBackendManifes
             "refund",
             "seller_chargeback",
             "reward_release",
+            "server_signed_value_entitlement",
             "audit_receipts",
             "reconciliation",
         ]
@@ -409,7 +467,7 @@ pub fn protocol_manifest_json() -> Value {
         "kernel_contract_version": TERM_EXCHANGE_KERNEL_CONTRACT_VERSION,
         "backend_contract_version": TERM_EXCHANGE_BACKEND_CONTRACT_VERSION,
         "domain": "trnm_game",
-        "core_types": ["EconomicIntent", "EconomicReceipt", "ReceiptStatus", "ReceiptProgressionClass", "SettlementBackendManifest", "IdempotencyKey", "ActorRef", "AssetRef"],
+        "core_types": ["EconomicIntent", "EconomicReceipt", "ServerSignedValueEntitlementV1", "ReceiptStatus", "ReceiptProgressionClass", "SettlementBackendManifest", "IdempotencyKey", "ActorRef", "AssetRef"],
         "asset_classes": ["bound_gameplay_item", "tradeable_item", "wallet_credit", "temporary_battle_resource"],
         "currency_classes": ["soft_credits", "wallet_credits", "temporary_battle_resource"],
         "economy_policy": TrnmEconomyPolicy::default(),
@@ -452,5 +510,31 @@ mod tests {
         assert_eq!(policy.battle_wallet_reward_daily_cap, 300);
         assert_eq!(policy.seller_reversible_window_seconds, 86_400);
         assert!(!policy.public_player_market_enabled);
+    }
+
+    #[test]
+    fn server_signed_value_entitlement_has_a_stable_unsigned_payload() {
+        let entitlement = ServerSignedValueEntitlementV1 {
+            contract_version: SERVER_SIGNED_VALUE_ENTITLEMENT_CONTRACT.to_string(),
+            entitlement_id: "entitlement-1".to_string(),
+            issuer: "trnm-authority".to_string(),
+            key_id: "key-1".to_string(),
+            actor_id: "player-1".to_string(),
+            account_id: "11111111-1111-1111-1111-111111111111".to_string(),
+            source: ValueEntitlementSource::Battle,
+            source_id: "battle-1".to_string(),
+            intent_id: "intent-1".to_string(),
+            amount_credits: 80,
+            currency: "wallet_credits".to_string(),
+            budget_day: 1,
+            issued_at_epoch: 100,
+            expires_at_epoch: 160,
+            signature: "signature".to_string(),
+        };
+        entitlement.validate_shape().unwrap();
+        let payload = entitlement.signing_payload().unwrap();
+        assert!(String::from_utf8(payload)
+            .unwrap()
+            .contains("\"signature\":\"\""));
     }
 }

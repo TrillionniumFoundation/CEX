@@ -36,6 +36,11 @@ pub struct AppState {
     pub repository: LedgerRepositoryHandle,
     pub fail_fast: bool,
     pub admin_tokens: Arc<HashMap<String, AdminPrincipal>>,
+    pub entitlement_signing_secret: Arc<String>,
+    pub entitlement_key_id: Arc<String>,
+    pub player_session_signing_secret: Arc<String>,
+    pub require_player_session: bool,
+    pub allow_system_economy_operations: bool,
 }
 
 impl AppState {
@@ -51,6 +56,25 @@ impl AppState {
             repository,
             fail_fast,
             admin_tokens: Arc::new(load_admin_tokens()),
+            entitlement_signing_secret: Arc::new(required_secret(
+                "TRNM_VALUE_ENTITLEMENT_SIGNING_SECRET",
+                fail_fast,
+                "local-development-entitlement-secret-change-me",
+            )),
+            entitlement_key_id: Arc::new(
+                std::env::var("TRNM_VALUE_ENTITLEMENT_KEY_ID")
+                    .unwrap_or_else(|_| "trnm-local-entitlement-v1".to_string()),
+            ),
+            player_session_signing_secret: Arc::new(required_secret(
+                "TRNM_PLAYER_SESSION_SIGNING_SECRET",
+                fail_fast,
+                "local-development-player-session-secret-change-me",
+            )),
+            require_player_session: env_flag("TRNM_REQUIRE_PLAYER_SESSION", fail_fast),
+            allow_system_economy_operations: env_flag(
+                "TRNM_ALLOW_SYSTEM_ECONOMY_OPERATIONS",
+                false,
+            ),
         }
     }
 
@@ -83,7 +107,27 @@ impl AppState {
             repository,
             fail_fast,
             admin_tokens: Arc::new(admin_tokens),
+            entitlement_signing_secret: Arc::new("test-entitlement-secret".to_string()),
+            entitlement_key_id: Arc::new("test-entitlement-key".to_string()),
+            player_session_signing_secret: Arc::new("test-player-session-secret".to_string()),
+            require_player_session: false,
+            allow_system_economy_operations: true,
         }
+    }
+}
+
+fn env_flag(name: &str, default: bool) -> bool {
+    std::env::var(name)
+        .ok()
+        .map(|value| matches!(value.trim(), "1" | "true" | "TRUE" | "yes" | "YES"))
+        .unwrap_or(default)
+}
+
+fn required_secret(name: &str, fail_fast: bool, development_fallback: &str) -> String {
+    match std::env::var(name).ok().filter(|value| value.len() >= 24) {
+        Some(value) => value,
+        None if fail_fast => panic!("{name} must be configured with at least 24 characters"),
+        None => development_fallback.to_string(),
     }
 }
 

@@ -49,6 +49,9 @@ ledger_binary="$CEX_PROJECT_ROOT/target/release/ledger-service"
 CURRENT_PHASE="secondary-ledger-start"
 DATABASE_URL="$(cex_effective_database_url)" LEDGER_FAIL_FAST=true \
   LEDGER_BIND_ADDR=127.0.0.1:7012 LEDGER_ADMIN_TOKEN="$ADMIN_TOKEN" \
+  TRNM_VALUE_ENTITLEMENT_SIGNING_SECRET="trnm-entitlement-signing-v1:$IDENTITY_ADMIN_TOKEN" \
+  TRNM_PLAYER_SESSION_SIGNING_SECRET="trnm-player-session-signing-v1:$IDENTITY_ADMIN_TOKEN" \
+  TRNM_REQUIRE_PLAYER_SESSION=true TRNM_ALLOW_SYSTEM_ECONOMY_OPERATIONS=true \
   "$ledger_binary" >"$WORK_DIR/secondary-ledger.log" 2>&1 &
 SECONDARY_PID=$!
 for _ in $(seq 1 60); do
@@ -60,18 +63,24 @@ curl -fsS "$SECONDARY_URL/v1/trnm/economy/readiness" | jq -e '.status == "ok"' >
 account_id="$(curl -fsS "$PRIMARY_URL/v1/accounts" -H "x-admin-token: $ADMIN_TOKEN" \
   -H 'content-type: application/json' --data-binary "$(jq -cn \
     '{org_id:"00000000-0000-0000-0000-00000000ce01",account_type:"trnm-dr",currency_unit:"credit",initial_balance:0}')" | jq -er '.account_id')"
-intent="$(jq -cn --arg run "$RUN_ID" --arg account "$account_id" '{intent:{
+entitlement="$(curl -fsS "$PRIMARY_URL/v1/trnm/economy/entitlements" \
+  -H "x-admin-token: $ADMIN_TOKEN" -H 'content-type: application/json' \
+  --data-binary "$(jq -cn --arg run "$RUN_ID" --arg account "$account_id" \
+  '{actor_id:$run,account_id:$account,source:"battle",source_id:($run+":battle"),intent_id:($run+":reward"),amount_credits:25}')")"
+intent="$(jq -cn --arg run "$RUN_ID" --arg account "$account_id" --argjson entitlement "$entitlement" '{intent:{
   protocol_version:"term_exchange_protocol_v2",intent_id:($run+":reward"),
-  term_id:"trnm-dr",term_version:"2.2.0",domain:"trnm_game",kind:"release_reward",
+  term_id:"trnm-dr",term_version:"2.3.0",domain:"trnm_game",kind:"release_reward",
   idempotency_key:{scope:"trnm-dr",key:($run+":reward")},
   actors:[{actor_id:$run,actor_kind:"player",account_id:$account}],assets:[],
-  amount_credits:25,currency:"credit",metadata:{cross_instance:true},created_at_epoch:(now|floor)}}')"
+  amount_credits:25,currency:"credit",metadata:{cross_instance:true,server_signed_value_entitlement:$entitlement},created_at_epoch:(now|floor)}}')"
 
 CURRENT_PHASE="cross-instance-race"
 curl -fsS "$PRIMARY_URL/v1/trnm/economy/intents" -H "x-admin-token: $ADMIN_TOKEN" \
+  -H 'x-trnm-system-operation: true' \
   -H 'content-type: application/json' --data-binary "$intent" >"$WORK_DIR/primary.json" &
 p1=$!
 curl -fsS "$SECONDARY_URL/v1/trnm/economy/intents" -H "x-admin-token: $ADMIN_TOKEN" \
+  -H 'x-trnm-system-operation: true' \
   -H 'content-type: application/json' --data-binary "$intent" >"$WORK_DIR/secondary.json" &
 p2=$!
 wait "$p1" "$p2"
@@ -89,4 +98,5 @@ CURRENT_PHASE="report"
 jq -n --arg run_id "$RUN_ID" --argjson backup "$primary_counts" \
   --argjson restored "$restored_counts" --argjson exactly_once "$db_exactly_once" \
   '{status:"passed",run_id:$run_id,backup_restore:{primary:$backup,restored:$restored,logical_row_count_parity:true},
-    cross_instance_exactly_once:$exactly_once,postgres_dump_nonempty:true,pitr_boundary:"logical backup/restore proven; physical base backup and WAL archival remain deployment-specific"}'
+    cross_instance_exactly_once:$exactly_once,postgres_dump_nonempty:true,
+    pitr_boundary:"logical restore and cross-instance race proven here; physical WAL/PITR is proven by check-trnm-postgres-pitr-failover.sh; multi-host HA remains external"}'

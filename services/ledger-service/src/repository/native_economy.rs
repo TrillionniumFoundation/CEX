@@ -1,14 +1,19 @@
-use chrono::Utc;
+use chrono::{TimeZone, Utc};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::{Postgres, Row, Transaction};
 use term_exchange_protocol::{
     EconomicIntent, EconomicIntentKind, EconomicReceipt, ReceiptProgressionClass, ReceiptStatus,
-    SettlementBackendKind, WalletSnapshot, CEX_SETTLEMENT_BACKEND_ID,
+    ServerSignedValueEntitlementV1, SettlementBackendKind, ValueEntitlementSource, WalletSnapshot,
+    BATTLE_WALLET_REWARD_DAILY_CAP, CEX_SETTLEMENT_BACKEND_ID,
+    SERVER_SIGNED_VALUE_ENTITLEMENT_METADATA_KEY,
 };
 use uuid::Uuid;
 
-use super::{postgres::PostgresLedgerRepository, LedgerActionError, TrnmPlayerIdentityRecord};
+use super::{
+    postgres::PostgresLedgerRepository, LedgerActionError, TrnmPlayerIdentityRecord,
+    TrnmPlayerSessionRecord,
+};
 use crate::state::AccountRecord;
 
 const DEFAULT_SELLER_REVERSIBLE_WINDOW_SECONDS: i64 = 86_400;
@@ -113,12 +118,23 @@ impl PostgresLedgerRepository {
         });
 
         let result = match intent.kind {
-            EconomicIntentKind::ReleaseReward | EconomicIntentKind::CompleteContract => {
+            EconomicIntentKind::CompleteContract => {
+                if amount != 0 {
+                    return Err(LedgerActionError::IdentityRejected(
+                        "CompleteContract is audit-only and must have amount_credits=0".to_string(),
+                    ));
+                }
+                receipt.status = ReceiptStatus::SkippedZeroReward;
+                receipt.progression_class = receipt.status.progression_class();
+                Ok(())
+            }
+            EconomicIntentKind::ReleaseReward => {
                 if amount <= 0 {
                     receipt.status = ReceiptStatus::SkippedZeroReward;
                     receipt.progression_class = receipt.status.progression_class();
                     Ok(())
                 } else {
+                    consume_value_entitlement(&mut tx, intent, account_id, amount).await?;
                     let mut account = load_account_for_update(&mut tx, account_id).await?;
                     account.balance += amount as f64;
                     update_account(&mut tx, &account).await?;
@@ -127,11 +143,7 @@ impl PostgresLedgerRepository {
                         account_id,
                         "credit",
                         amount,
-                        if matches!(intent.kind, EconomicIntentKind::CompleteContract) {
-                            "complete_contract"
-                        } else {
-                            "release_reward"
-                        },
+                        "release_reward",
                         &intent.idempotency_key.key,
                     )
                     .await?;
@@ -337,6 +349,15 @@ impl PostgresLedgerRepository {
         .execute(&mut *tx)
         .await
         .map_err(|error| db_error("rotate TRNM recovery credential", error))?;
+        sqlx::query(
+            "update trnm_player_sessions
+             set revoked_at = now(), revoke_reason = 'identity_recovered'
+             where player_id = $1 and revoked_at is null",
+        )
+        .bind(player_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|error| db_error("revoke sessions after identity recovery", error))?;
         append_identity_audit(&mut tx, player_id, generation, "recovered", &new_hash).await?;
         tx.commit()
             .await
@@ -347,6 +368,325 @@ impl PostgresLedgerRepository {
             recovery_generation: generation,
             status,
         })
+    }
+
+    pub(super) async fn set_trnm_native_player_identity_status(
+        &self,
+        player_id: &str,
+        status: &str,
+    ) -> Result<TrnmPlayerIdentityRecord, LedgerActionError> {
+        if !matches!(status, "active" | "suspended" | "closed") {
+            return Err(LedgerActionError::Other(
+                "identity status must be active, suspended, or closed".to_string(),
+            ));
+        }
+        let pool = self.pool.as_ref().ok_or_else(|| {
+            LedgerActionError::RepositoryUnavailable("postgres pool not initialized".to_string())
+        })?;
+        let mut tx = pool
+            .begin()
+            .await
+            .map_err(|error| db_error("begin TRNM identity status update", error))?;
+        let row = sqlx::query(
+            "update trnm_player_identities set status = $2, updated_at = now()
+             where player_id = $1
+             returning account_id, recovery_key_hash, recovery_generation, status",
+        )
+        .bind(player_id)
+        .bind(status)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|error| db_error("update TRNM identity status", error))?
+        .ok_or(LedgerActionError::AccountNotFound)?;
+        if status != "active" {
+            sqlx::query(
+                "update trnm_player_sessions set revoked_at = now(), revoke_reason = $2
+                 where player_id = $1 and revoked_at is null",
+            )
+            .bind(player_id)
+            .bind(format!("identity_{status}"))
+            .execute(&mut *tx)
+            .await
+            .map_err(|error| db_error("revoke sessions after identity status change", error))?;
+        }
+        let generation: i64 = row.try_get("recovery_generation").map_err(row_error)?;
+        let recovery_hash: String = row.try_get("recovery_key_hash").map_err(row_error)?;
+        let event_kind = if status == "active" {
+            "reactivated"
+        } else {
+            status
+        };
+        append_identity_audit(&mut tx, player_id, generation, event_kind, &recovery_hash).await?;
+        tx.commit()
+            .await
+            .map_err(|error| db_error("commit TRNM identity status update", error))?;
+        Ok(TrnmPlayerIdentityRecord {
+            player_id: player_id.to_string(),
+            account_id: row.try_get("account_id").map_err(row_error)?,
+            recovery_generation: generation,
+            status: row.try_get("status").map_err(row_error)?,
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) async fn create_trnm_native_player_session(
+        &self,
+        player_id: &str,
+        recovery_key: &str,
+        device_id: &str,
+        session_id: Uuid,
+        token_hash: &str,
+        issued_at_epoch: i64,
+        expires_at_epoch: i64,
+    ) -> Result<TrnmPlayerSessionRecord, LedgerActionError> {
+        validate_identity_inputs(player_id, recovery_key)?;
+        if device_id.trim().len() < 3 || device_id.len() > 128 {
+            return Err(LedgerActionError::Other(
+                "device_id must contain 3..128 characters".to_string(),
+            ));
+        }
+        let issued_at = Utc
+            .timestamp_opt(issued_at_epoch, 0)
+            .single()
+            .ok_or_else(|| LedgerActionError::Other("invalid session issued_at".to_string()))?;
+        let expires_at = Utc
+            .timestamp_opt(expires_at_epoch, 0)
+            .single()
+            .ok_or_else(|| LedgerActionError::Other("invalid session expires_at".to_string()))?;
+        let pool = self.pool.as_ref().ok_or_else(|| {
+            LedgerActionError::RepositoryUnavailable("postgres pool not initialized".to_string())
+        })?;
+        let mut tx = pool
+            .begin()
+            .await
+            .map_err(|error| db_error("begin TRNM player session", error))?;
+        let row = sqlx::query(
+            "select account_id, recovery_key_hash, recovery_generation, status
+             from trnm_player_identities where player_id = $1 for update",
+        )
+        .bind(player_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|error| db_error("load TRNM identity for session", error))?
+        .ok_or(LedgerActionError::AccountNotFound)?;
+        let status: String = row.try_get("status").map_err(row_error)?;
+        if status != "active" {
+            return Err(LedgerActionError::IdentityRejected(
+                "TRNM player identity is not active".to_string(),
+            ));
+        }
+        let stored_hash: String = row.try_get("recovery_key_hash").map_err(row_error)?;
+        if stored_hash != recovery_key_hash(recovery_key) {
+            return Err(LedgerActionError::IdentityRejected(
+                "TRNM recovery credential is invalid".to_string(),
+            ));
+        }
+        let account_id: Uuid = row.try_get("account_id").map_err(row_error)?;
+        let recovery_generation: i64 = row.try_get("recovery_generation").map_err(row_error)?;
+        sqlx::query(
+            "insert into trnm_player_sessions (
+                 session_id, player_id, account_id, device_id, recovery_generation,
+                 token_hash, issued_at, expires_at
+             ) values ($1, $2, $3, $4, $5, $6, $7, $8)",
+        )
+        .bind(session_id)
+        .bind(player_id)
+        .bind(account_id)
+        .bind(device_id)
+        .bind(recovery_generation)
+        .bind(token_hash)
+        .bind(issued_at)
+        .bind(expires_at)
+        .execute(&mut *tx)
+        .await
+        .map_err(|error| db_error("persist TRNM player session", error))?;
+        tx.commit()
+            .await
+            .map_err(|error| db_error("commit TRNM player session", error))?;
+        Ok(TrnmPlayerSessionRecord {
+            session_id,
+            player_id: player_id.to_string(),
+            account_id,
+            device_id: device_id.to_string(),
+            recovery_generation,
+            issued_at_epoch,
+            expires_at_epoch,
+        })
+    }
+
+    pub(super) async fn authenticate_trnm_native_player_identity(
+        &self,
+        player_id: &str,
+        recovery_key: &str,
+    ) -> Result<TrnmPlayerIdentityRecord, LedgerActionError> {
+        validate_identity_inputs(player_id, recovery_key)?;
+        let pool = self.pool.as_ref().ok_or_else(|| {
+            LedgerActionError::RepositoryUnavailable("postgres pool not initialized".to_string())
+        })?;
+        let row = sqlx::query(
+            "select account_id, recovery_key_hash, recovery_generation, status
+             from trnm_player_identities where player_id = $1",
+        )
+        .bind(player_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|error| db_error("authenticate TRNM identity", error))?
+        .ok_or(LedgerActionError::AccountNotFound)?;
+        let status: String = row.try_get("status").map_err(row_error)?;
+        if status != "active" {
+            return Err(LedgerActionError::IdentityRejected(
+                "TRNM player identity is not active".to_string(),
+            ));
+        }
+        let stored_hash: String = row.try_get("recovery_key_hash").map_err(row_error)?;
+        if stored_hash != recovery_key_hash(recovery_key) {
+            return Err(LedgerActionError::IdentityRejected(
+                "TRNM recovery credential is invalid".to_string(),
+            ));
+        }
+        Ok(TrnmPlayerIdentityRecord {
+            player_id: player_id.to_string(),
+            account_id: row.try_get("account_id").map_err(row_error)?,
+            recovery_generation: row.try_get("recovery_generation").map_err(row_error)?,
+            status,
+        })
+    }
+
+    pub(super) async fn verify_trnm_native_player_session(
+        &self,
+        session_id: Uuid,
+        token_hash: &str,
+        actor_id: &str,
+        account_id: Uuid,
+        recovery_generation: i64,
+    ) -> Result<TrnmPlayerSessionRecord, LedgerActionError> {
+        let pool = self.pool.as_ref().ok_or_else(|| {
+            LedgerActionError::RepositoryUnavailable("postgres pool not initialized".to_string())
+        })?;
+        let row = sqlx::query(
+            "update trnm_player_sessions s set last_used_at = now()
+             from trnm_player_identities i
+             where s.session_id = $1 and s.player_id = $2 and s.account_id = $3
+               and s.recovery_generation = $4 and s.token_hash = $5
+               and s.revoked_at is null and s.expires_at > now()
+               and i.player_id = s.player_id and i.account_id = s.account_id
+               and i.status = 'active' and i.recovery_generation = s.recovery_generation
+             returning s.player_id, s.account_id, s.device_id, s.recovery_generation,
+                       extract(epoch from s.issued_at)::bigint as issued_at_epoch,
+                       extract(epoch from s.expires_at)::bigint as expires_at_epoch",
+        )
+        .bind(session_id)
+        .bind(actor_id)
+        .bind(account_id)
+        .bind(recovery_generation)
+        .bind(token_hash)
+        .fetch_optional(pool)
+        .await
+        .map_err(|error| db_error("verify TRNM player session", error))?
+        .ok_or_else(|| {
+            LedgerActionError::IdentityRejected(
+                "player session is expired, revoked, or does not own this account".to_string(),
+            )
+        })?;
+        Ok(TrnmPlayerSessionRecord {
+            session_id,
+            player_id: row.try_get("player_id").map_err(row_error)?,
+            account_id: row.try_get("account_id").map_err(row_error)?,
+            device_id: row.try_get("device_id").map_err(row_error)?,
+            recovery_generation: row.try_get("recovery_generation").map_err(row_error)?,
+            issued_at_epoch: row.try_get("issued_at_epoch").map_err(row_error)?,
+            expires_at_epoch: row.try_get("expires_at_epoch").map_err(row_error)?,
+        })
+    }
+
+    pub(super) async fn revoke_trnm_native_player_session(
+        &self,
+        session_id: Uuid,
+        reason: &str,
+    ) -> Result<(), LedgerActionError> {
+        let pool = self.pool.as_ref().ok_or_else(|| {
+            LedgerActionError::RepositoryUnavailable("postgres pool not initialized".to_string())
+        })?;
+        let result = sqlx::query(
+            "update trnm_player_sessions set revoked_at = now(), revoke_reason = $2
+             where session_id = $1 and revoked_at is null",
+        )
+        .bind(session_id)
+        .bind(reason)
+        .execute(pool)
+        .await
+        .map_err(|error| db_error("revoke TRNM player session", error))?;
+        if result.rows_affected() == 0 {
+            return Err(LedgerActionError::IdentityRejected(
+                "player session is already revoked or unknown".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub(super) async fn list_trnm_native_receipts(
+        &self,
+    ) -> Result<Vec<EconomicReceipt>, LedgerActionError> {
+        let pool = self.pool.as_ref().ok_or_else(|| {
+            LedgerActionError::RepositoryUnavailable("postgres pool not initialized".to_string())
+        })?;
+        let values = sqlx::query_scalar::<_, Value>(
+            "select receipt_json from trnm_economic_receipts order by finalized_at, receipt_id",
+        )
+        .fetch_all(pool)
+        .await
+        .map_err(|error| db_error("list TRNM economic receipts", error))?;
+        values
+            .into_iter()
+            .map(|value| {
+                serde_json::from_value(value).map_err(|error| {
+                    LedgerActionError::Other(format!("decode TRNM receipt failed: {error}"))
+                })
+            })
+            .collect()
+    }
+
+    pub(super) async fn run_trnm_native_maintenance(&self) -> Result<Value, LedgerActionError> {
+        let pool = self.pool.as_ref().ok_or_else(|| {
+            LedgerActionError::RepositoryUnavailable("postgres pool not initialized".to_string())
+        })?;
+        let mut tx = pool
+            .begin()
+            .await
+            .map_err(|error| db_error("begin TRNM economy maintenance", error))?;
+        let sellers = sqlx::query_scalar::<_, Uuid>(
+            "select distinct seller_account_id from trnm_escrow_trades
+             where status = 'committed' and seller_hold_released = false
+               and reversible_until <= now()",
+        )
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(|error| db_error("find matured seller holds", error))?;
+        for seller in &sellers {
+            release_matured_seller_holds(&mut tx, *seller).await?;
+        }
+        let receipt_count =
+            sqlx::query_scalar::<_, i64>("select count(*)::bigint from trnm_economic_receipts")
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(|error| db_error("count TRNM receipts", error))?;
+        let overdue_holds = sqlx::query_scalar::<_, i64>(
+            "select count(*)::bigint from trnm_escrow_trades
+             where status = 'committed' and seller_hold_released = false
+               and reversible_until <= now()",
+        )
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|error| db_error("count overdue seller holds", error))?;
+        tx.commit()
+            .await
+            .map_err(|error| db_error("commit TRNM economy maintenance", error))?;
+        Ok(json!({
+            "released_seller_accounts": sellers.len(),
+            "overdue_seller_holds": overdue_holds,
+            "authoritative_receipts": receipt_count,
+            "alert": overdue_holds > 0,
+        }))
     }
 }
 
@@ -378,10 +718,12 @@ async fn append_identity_audit(
     event_kind: &str,
     recovery_key_hash: &str,
 ) -> Result<(), LedgerActionError> {
+    let audit_id = Uuid::new_v4();
     let event_hash = format!(
         "{:x}",
         Sha256::digest(
-            format!("{player_id}:{generation}:{event_kind}:{recovery_key_hash}").as_bytes()
+            format!("{player_id}:{generation}:{event_kind}:{recovery_key_hash}:{audit_id}")
+                .as_bytes()
         )
     );
     sqlx::query(
@@ -389,7 +731,7 @@ async fn append_identity_audit(
              audit_id, player_id, recovery_generation, event_kind, event_hash
          ) values ($1, $2, $3, $4, $5)",
     )
-    .bind(Uuid::new_v4())
+    .bind(audit_id)
     .bind(player_id)
     .bind(generation)
     .bind(event_kind)
@@ -412,6 +754,105 @@ fn intent_account_id(intent: &EconomicIntent) -> Result<Uuid, LedgerActionError>
 
 fn metadata_string<'a>(intent: &'a EconomicIntent, key: &str) -> Option<&'a str> {
     intent.metadata.get(key).and_then(Value::as_str)
+}
+
+async fn consume_value_entitlement(
+    tx: &mut Transaction<'_, Postgres>,
+    intent: &EconomicIntent,
+    account_id: Uuid,
+    amount: i64,
+) -> Result<(), LedgerActionError> {
+    let entitlement: ServerSignedValueEntitlementV1 = intent
+        .metadata
+        .get(SERVER_SIGNED_VALUE_ENTITLEMENT_METADATA_KEY)
+        .cloned()
+        .ok_or_else(|| {
+            LedgerActionError::IdentityRejected(
+                "server-signed value entitlement is required".to_string(),
+            )
+        })
+        .and_then(|value| {
+            serde_json::from_value(value).map_err(|error| {
+                LedgerActionError::IdentityRejected(format!(
+                    "decode value entitlement failed: {error}"
+                ))
+            })
+        })?;
+    let entitlement_account = Uuid::parse_str(&entitlement.account_id).map_err(|_| {
+        LedgerActionError::IdentityRejected("entitlement account_id is invalid".to_string())
+    })?;
+    if entitlement.intent_id != intent.intent_id
+        || entitlement_account != account_id
+        || entitlement.amount_credits != amount
+        || !matches!(entitlement.source, ValueEntitlementSource::Battle)
+    {
+        return Err(LedgerActionError::IdentityRejected(
+            "value entitlement does not bind this reward intent".to_string(),
+        ));
+    }
+    let issued_at = Utc
+        .timestamp_opt(entitlement.issued_at_epoch, 0)
+        .single()
+        .ok_or_else(|| {
+            LedgerActionError::IdentityRejected("invalid entitlement issue time".to_string())
+        })?;
+    let expires_at = Utc
+        .timestamp_opt(entitlement.expires_at_epoch, 0)
+        .single()
+        .ok_or_else(|| {
+            LedgerActionError::IdentityRejected("invalid entitlement expiry".to_string())
+        })?;
+    let entitlement_json = serde_json::to_value(&entitlement)
+        .map_err(|error| LedgerActionError::Other(error.to_string()))?;
+    sqlx::query(
+        "insert into trnm_value_entitlements (
+             entitlement_id, intent_id, issuer, key_id, actor_id, account_id,
+             source_kind, source_id, amount_credits, currency, budget_day,
+             issued_at, expires_at, entitlement_json
+         ) values ($1, $2, $3, $4, $5, $6, 'battle', $7, $8, $9, $10, $11, $12, $13)",
+    )
+    .bind(&entitlement.entitlement_id)
+    .bind(&entitlement.intent_id)
+    .bind(&entitlement.issuer)
+    .bind(&entitlement.key_id)
+    .bind(&entitlement.actor_id)
+    .bind(account_id)
+    .bind(&entitlement.source_id)
+    .bind(entitlement.amount_credits)
+    .bind(&entitlement.currency)
+    .bind(i32::try_from(entitlement.budget_day).unwrap_or(i32::MAX))
+    .bind(issued_at)
+    .bind(expires_at)
+    .bind(entitlement_json)
+    .execute(&mut **tx)
+    .await
+    .map_err(|error| {
+        LedgerActionError::IdentityRejected(format!(
+            "value entitlement is duplicated or invalid: {error}"
+        ))
+    })?;
+    let updated = sqlx::query_scalar::<_, i64>(
+        "insert into trnm_wallet_reward_daily_budget (account_id, budget_day, issued_credits)
+         values ($1, $2, $3)
+         on conflict (account_id, budget_day) do update set
+             issued_credits = trnm_wallet_reward_daily_budget.issued_credits + excluded.issued_credits,
+             updated_at = now()
+         where trnm_wallet_reward_daily_budget.issued_credits + excluded.issued_credits <= $4
+         returning issued_credits",
+    )
+    .bind(account_id)
+    .bind(i32::try_from(entitlement.budget_day).unwrap_or(i32::MAX))
+    .bind(amount)
+    .bind(BATTLE_WALLET_REWARD_DAILY_CAP)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(|error| db_error("enforce TRNM wallet reward daily budget", error))?;
+    if updated.is_none() {
+        return Err(LedgerActionError::IdentityRejected(format!(
+            "daily wallet reward budget exceeds {BATTLE_WALLET_REWARD_DAILY_CAP} credits"
+        )));
+    }
+    Ok(())
 }
 
 fn seller_reversible_window_seconds(intent: &EconomicIntent) -> i64 {

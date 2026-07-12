@@ -9,11 +9,11 @@ cex_load_env
 LEDGER_URL="${LEDGER_BASE_URL:-http://127.0.0.1:7002}"
 CONSUMER_URL="${CONSUMER_ENTRY_BASE_URL:-http://127.0.0.1:8090}"
 ADMIN_TOKEN="${LEDGER_ADMIN_TOKEN:-${IDENTITY_ADMIN_TOKEN:?IDENTITY_ADMIN_TOKEN is required}}"
-ENTRY_TOKEN="${CONSUMER_ENTRY_INGRESS_TOKEN:-$ADMIN_TOKEN}"
 ORG_ID="00000000-0000-0000-0000-00000000ce01"
 RUN_ID="cross-process-$(date +%s)-${RANDOM}"
 WORK_DIR="$(mktemp -d /tmp/cex-trnm-cross-process.XXXXXX)"
 CURRENT_PHASE="bootstrap"
+PLAYER_SESSION=""
 trap 'echo "cross-process E2E failed in phase ${CURRENT_PHASE} at line ${LINENO}" >&2' ERR
 
 post_ledger() {
@@ -29,7 +29,7 @@ post_consumer() {
   local path="$1"
   local payload="$2"
   curl -fsS "$CONSUMER_URL$path" \
-    -H "x-entry-token: $ENTRY_TOKEN" \
+    -H "x-trnm-player-session: $PLAYER_SESSION" \
     -H 'content-type: application/json' \
     --data-binary "$payload"
 }
@@ -67,7 +67,7 @@ intent_json() {
       protocol_version:"term_exchange_protocol_v2",
       intent_id:$intent,
       term_id:("trnm-cross-process:"+$intent),
-      term_version:"2.2.0",
+      term_version:"2.3.0",
       domain:"trnm_game",
       kind:$kind,
       idempotency_key:{scope:"trnm-cross-process",key:$intent},
@@ -110,10 +110,24 @@ CURRENT_PHASE="create-accounts"
 buyer_id="$(create_account trnm-e2e-buyer 200)"
 seller_id="$(create_account trnm-e2e-seller 0)"
 actor_id="trnm-e2e-actor-$RUN_ID"
+recovery_key="trnm-recovery-$RUN_ID-012345678901234567890123"
+post_ledger /v1/trnm/identity/register "$(jq -cn \
+  --arg player "$actor_id" --arg account "$buyer_id" --arg recovery "$recovery_key" \
+  '{player_id:$player,account_id:$account,recovery_key:$recovery}')" >/dev/null
+PLAYER_SESSION="$(curl -fsS "$LEDGER_URL/v1/trnm/identity/session" \
+  -H 'content-type: application/json' --data-binary "$(jq -cn \
+    --arg player "$actor_id" --arg recovery "$recovery_key" \
+    '{player_id:$player,recovery_key:$recovery,device_id:"cross-process-e2e"}')" | jq -er '.session_token')"
 
 CURRENT_PHASE="reward-idempotency-before-restart"
 reward_id="$RUN_ID-reward"
 reward_payload="$(intent_json release_reward "$reward_id" "$actor_id" "$buyer_id" 25)"
+reward_entitlement="$(post_ledger /v1/trnm/economy/entitlements "$(jq -cn \
+  --arg actor "$actor_id" --arg account "$buyer_id" --arg intent "$reward_id" \
+  --arg source "$RUN_ID-battle" \
+  '{actor_id:$actor,account_id:$account,source:"battle",source_id:$source,intent_id:$intent,amount_credits:25}')")"
+reward_payload="$(jq -c --argjson entitlement "$reward_entitlement" \
+  '.intent.metadata.server_signed_value_entitlement = $entitlement' <<<"$reward_payload")"
 post_consumer /v1/trillionnium/economy/intents "$reward_payload" >"$WORK_DIR/reward.json"
 post_consumer /v1/trillionnium/economy/intents "$reward_payload" >"$WORK_DIR/reward-replay-before.json"
 assert_status approved_release "$WORK_DIR/reward.json"

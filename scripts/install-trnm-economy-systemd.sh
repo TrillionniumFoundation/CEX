@@ -24,8 +24,15 @@ install -m 600 \
 install -m 600 \
   "$CEX_PROJECT_ROOT/deploy/systemd/cex-trnm-consumer.service" \
   "$HOME/.config/systemd/user/cex-trnm-consumer.service"
+install -m 600 \
+  "$CEX_PROJECT_ROOT/deploy/systemd/cex-trnm-economy-maintenance.service" \
+  "$HOME/.config/systemd/user/cex-trnm-economy-maintenance.service"
+install -m 600 \
+  "$CEX_PROJECT_ROOT/deploy/systemd/cex-trnm-economy-maintenance.timer" \
+  "$HOME/.config/systemd/user/cex-trnm-economy-maintenance.timer"
 
 systemctl --user daemon-reload
 systemctl --user enable cex-trnm-ledger.service cex-trnm-consumer.service
+systemctl --user enable --now cex-trnm-economy-maintenance.timer
 systemctl --user restart cex-trnm-ledger.service cex-trnm-consumer.service
-echo "installed persistent TRNM economy services (ledger 7002, consumer 8090)"
+echo "installed persistent TRNM economy services (ledger 7002, consumer 8090, maintenance timer)"

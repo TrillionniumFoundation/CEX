@@ -32,6 +32,30 @@ pub fn build_router(state: AppState) -> Router {
             "/v1/trnm/identity/recover",
             post(api::post_trnm_identity_recover),
         )
+        .route(
+            "/v1/trnm/identity/status",
+            post(api::post_trnm_identity_status),
+        )
+        .route(
+            "/v1/trnm/identity/session",
+            post(api::post_trnm_player_session_issue),
+        )
+        .route(
+            "/v1/trnm/identity/session/revoke",
+            post(api::post_trnm_player_session_revoke),
+        )
+        .route(
+            "/v1/trnm/economy/entitlements",
+            post(api::post_trnm_value_entitlement_issue),
+        )
+        .route(
+            "/v1/trnm/economy/receipts",
+            get(api::get_trnm_economic_receipts),
+        )
+        .route(
+            "/v1/trnm/economy/maintenance",
+            post(api::post_trnm_economy_maintenance),
+        )
         .route("/v1/accounts", post(api::create_account))
         .route("/v1/accounts/:id", get(api::get_account))
         .route("/v1/ledger/reserve", post(api::reserve_credits))

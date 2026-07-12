@@ -16,6 +16,8 @@ shared-tracing = { path = "../../crates/shared-tracing" }
 shared-config = { path = "../../crates/shared-config" }
 term-exchange-protocol.workspace = true
 sha2 = "0.10"
+hmac = "0.12"
+base64 = "0.22"
 chrono.workspace = true
 
 [dev-dependencies]
