@@ -4,7 +4,9 @@ use std::{sync::Arc, time::Duration};
 use uuid::Uuid;
 
 use crate::{
-    repository::{LedgerActionError, LedgerRepository, LedgerRepositoryHandle},
+    repository::{
+        LedgerActionError, LedgerRepository, LedgerRepositoryHandle, TrnmPlayerIdentityRecord,
+    },
     state::{AccountRecord, LedgerEntryRecord},
 };
 use term_exchange_protocol::{EconomicIntent, EconomicReceipt, WalletSnapshot};
@@ -436,6 +438,26 @@ impl LedgerRepository for PostgresLedgerRepository {
         requested_cursor: u64,
     ) -> Result<WalletSnapshot, LedgerActionError> {
         self.reconcile_trnm_native_wallet(actor_id, account_id, requested_cursor)
+            .await
+    }
+
+    async fn register_trnm_player_identity(
+        &self,
+        player_id: &str,
+        account_id: Uuid,
+        recovery_key: &str,
+    ) -> Result<TrnmPlayerIdentityRecord, LedgerActionError> {
+        self.register_trnm_native_player_identity(player_id, account_id, recovery_key)
+            .await
+    }
+
+    async fn recover_trnm_player_identity(
+        &self,
+        player_id: &str,
+        recovery_key: &str,
+        new_recovery_key: &str,
+    ) -> Result<TrnmPlayerIdentityRecord, LedgerActionError> {
+        self.recover_trnm_native_player_identity(player_id, recovery_key, new_recovery_key)
             .await
     }
 }

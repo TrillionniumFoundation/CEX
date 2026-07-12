@@ -57,6 +57,20 @@ pub struct TrnmWalletRequest {
     pub reconciliation_cursor: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrnmIdentityRegisterRequest {
+    pub player_id: String,
+    pub account_id: String,
+    pub recovery_key: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrnmIdentityRecoverRequest {
+    pub player_id: String,
+    pub recovery_key: String,
+    pub new_recovery_key: String,
+}
+
 pub async fn health() -> &'static str {
     "ledger-service ok"
 }
@@ -69,7 +83,62 @@ pub async fn trnm_economy_readiness(State(state): State<AppState>) -> impl IntoR
         "postgres_persistent": state.repository.persistence_ready(),
         "atomic_intent_receipts": true,
         "escrow": true,
+        "seller_payout_hold": true,
+        "player_identity_recovery": true,
     }))
+}
+
+pub async fn post_trnm_identity_register(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<TrnmIdentityRegisterRequest>,
+) -> Response {
+    if let Err(response) = authorize_ledger_admin(&state, &headers, &["ledger:manage"]) {
+        return response;
+    }
+    let account_id = match Uuid::parse_str(&request.account_id) {
+        Ok(value) => value,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: "account_id must be a UUID".to_string(),
+                    message: None,
+                }),
+            )
+                .into_response()
+        }
+    };
+    match state
+        .repository
+        .register_trnm_player_identity(&request.player_id, account_id, &request.recovery_key)
+        .await
+    {
+        Ok(identity) => (StatusCode::CREATED, Json(identity)).into_response(),
+        Err(error) => repository_error_response(error).into_response(),
+    }
+}
+
+pub async fn post_trnm_identity_recover(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<TrnmIdentityRecoverRequest>,
+) -> Response {
+    if let Err(response) = authorize_ledger_admin(&state, &headers, &["ledger:manage"]) {
+        return response;
+    }
+    match state
+        .repository
+        .recover_trnm_player_identity(
+            &request.player_id,
+            &request.recovery_key,
+            &request.new_recovery_key,
+        )
+        .await
+    {
+        Ok(identity) => (StatusCode::OK, Json(identity)).into_response(),
+        Err(error) => repository_error_response(error).into_response(),
+    }
 }
 
 pub async fn post_trnm_economic_intent(
@@ -565,6 +634,13 @@ fn repository_error_response(err: LedgerActionError) -> (StatusCode, Json<ErrorR
             StatusCode::CONFLICT,
             Json(ErrorResponse {
                 error: "duplicate idempotency key".to_string(),
+                message: None,
+            }),
+        ),
+        LedgerActionError::IdentityRejected(message) => (
+            StatusCode::UNAUTHORIZED,
+            Json(ErrorResponse {
+                error: message,
                 message: None,
             }),
         ),

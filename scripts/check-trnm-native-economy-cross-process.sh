@@ -67,7 +67,7 @@ intent_json() {
       protocol_version:"term_exchange_protocol_v2",
       intent_id:$intent,
       term_id:("trnm-cross-process:"+$intent),
-      term_version:"2.1.0",
+      term_version:"2.2.0",
       domain:"trnm_game",
       kind:$kind,
       idempotency_key:{scope:"trnm-cross-process",key:$intent},

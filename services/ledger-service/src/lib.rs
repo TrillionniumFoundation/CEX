@@ -24,6 +24,14 @@ pub fn build_router(state: AppState) -> Router {
             "/v1/trnm/economy/wallet",
             post(api::post_trnm_wallet_snapshot),
         )
+        .route(
+            "/v1/trnm/identity/register",
+            post(api::post_trnm_identity_register),
+        )
+        .route(
+            "/v1/trnm/identity/recover",
+            post(api::post_trnm_identity_recover),
+        )
         .route("/v1/accounts", post(api::create_account))
         .route("/v1/accounts/:id", get(api::get_account))
         .route("/v1/ledger/reserve", post(api::reserve_credits))

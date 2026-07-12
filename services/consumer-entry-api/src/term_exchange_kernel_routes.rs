@@ -286,9 +286,9 @@ pub(super) fn term_exchange_kernel_manifest_json(state: &AppState) -> Value {
         "migration_status": {
             "status": "postgres_atomic_intent_receipt_escrow_and_reconciliation_persistence_active",
             "split_strategy": "protocol_first_then_backend_adapter_then_storage_boundary",
-            "current_source_of_evidence": "TRNM revision 11 priority compensation outbox plus CEX PostgreSQL cross-process restart tests",
+            "current_source_of_evidence": "TRNM revision 12 capped value events plus native Bevy input, PostgreSQL restart, seller payout hold and cross-instance idempotency tests",
             "public_player_market": "release_gated_trusted_system_market_only",
-            "next_step": "human usability, anti-abuse, dispute operations and legal release approval before public listings"
+            "next_step": "real-user identity recovery drills, custody/listing review, anti-abuse, dispute operations and legal release approval before public listings"
         }
     })
 }

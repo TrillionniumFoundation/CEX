@@ -27,8 +27,8 @@ async fn main() {
     let state = AppState::new(repository);
     let app = build_router(state);
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:7002")
-        .await
-        .unwrap();
+    let bind_addr =
+        std::env::var("LEDGER_BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:7002".to_string());
+    let listener = tokio::net::TcpListener::bind(&bind_addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
 }

@@ -65,7 +65,9 @@ pub(super) fn cex_trillionnium_world_adapter_readiness_json_for_league(
         },
         "identity": {
             "adapter_contract": CEX_TRNM_ECONOMY_ADAPTER_CONTRACT,
-            "source_of_truth": "cex_identity_registry_or_ingress_authenticated_account_binding"
+            "source_of_truth": "cex_postgres_trnm_player_identities_plus_ingress_authenticated_account_binding",
+            "recovery_api": "admin_protected_register_and_rotating_recovery_credential_ready",
+            "real_user_recovery_drill": "release_gated"
         },
         "session": {
             "source_of_truth": "cex_ingress_token_and_optional_signed_session"
@@ -73,13 +75,14 @@ pub(super) fn cex_trillionnium_world_adapter_readiness_json_for_league(
         "repository": {
             "source_of_truth": "cex_postgres_trnm_economic_intents_and_receipts",
             "status": "atomic_intent_receipt_and_reconciliation_cursor_persistence_ready",
-            "migration_floor": "0027_add_trnm_native_economy_persistence.sql"
+            "migration_floor": "0028_add_trnm_seller_hold_and_identity_recovery.sql"
         },
         "ledger": {
             "source_of_truth": "cex_postgres_ledger_and_escrow_backend",
             "fail_fast": true,
             "in_memory_fallback": false,
             "escrow_commit_before_seller_payment": true,
+            "seller_payout_reserved_during_reversible_window": true,
             "receipt_count": receipt_count
         },
         "public_player_market": {
@@ -87,7 +90,7 @@ pub(super) fn cex_trillionnium_world_adapter_readiness_json_for_league(
             "status": "release_gated",
             "trusted_system_market_only": true,
             "blocked_until": [
-                "production_identity_and_account_recovery",
+                "real_user_identity_recovery_and_account_abuse_drill",
                 "public_listing_custody_and_matching_review",
                 "anti_cheat_abuse_controls",
                 "dispute_and_customer_support_operations",

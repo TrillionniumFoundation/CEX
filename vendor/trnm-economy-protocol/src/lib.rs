@@ -10,6 +10,33 @@ pub const CEX_SETTLEMENT_BACKEND_ID: &str = "cex-settlement-backend";
 pub const CEX_SETTLEMENT_BACKEND_NAME: &str = "CEX Settlement Backend";
 pub const OFFLINE_LOCAL_BACKEND_ID: &str = "trnm-offline-local-backend";
 pub const LEGACY_CEX_RUNTIME_PLUGIN_CONTRACT_VERSION: &str = "trillionnium_cex_runtime_plugin_v1";
+pub const TRNM_ECONOMY_POLICY_VERSION: &str = "trnm_economy_policy_v1";
+pub const BATTLE_WALLET_REWARD_PER_EVENT_CAP: i64 = 100;
+pub const BATTLE_WALLET_REWARD_DAILY_CAP: i64 = 300;
+pub const SELLER_REVERSIBLE_WINDOW_SECONDS: i64 = 86_400;
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct TrnmEconomyPolicy {
+    pub policy_version: String,
+    pub local_soft_credit_convertible_to_wallet: bool,
+    pub battle_wallet_reward_per_event_cap: i64,
+    pub battle_wallet_reward_daily_cap: i64,
+    pub seller_reversible_window_seconds: i64,
+    pub public_player_market_enabled: bool,
+}
+
+impl Default for TrnmEconomyPolicy {
+    fn default() -> Self {
+        Self {
+            policy_version: TRNM_ECONOMY_POLICY_VERSION.to_string(),
+            local_soft_credit_convertible_to_wallet: false,
+            battle_wallet_reward_per_event_cap: BATTLE_WALLET_REWARD_PER_EVENT_CAP,
+            battle_wallet_reward_daily_cap: BATTLE_WALLET_REWARD_DAILY_CAP,
+            seller_reversible_window_seconds: SELLER_REVERSIBLE_WINDOW_SECONDS,
+            public_player_market_enabled: false,
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -385,6 +412,7 @@ pub fn protocol_manifest_json() -> Value {
         "core_types": ["EconomicIntent", "EconomicReceipt", "ReceiptStatus", "ReceiptProgressionClass", "SettlementBackendManifest", "IdempotencyKey", "ActorRef", "AssetRef"],
         "asset_classes": ["bound_gameplay_item", "tradeable_item", "wallet_credit", "temporary_battle_resource"],
         "currency_classes": ["soft_credits", "wallet_credits", "temporary_battle_resource"],
+        "economy_policy": TrnmEconomyPolicy::default(),
         "world_progression_rule": "TRNM applies tradeable value only after a verified receipt allows progression; recoverable holds remain in the durable outbox."
     })
 }
@@ -414,5 +442,15 @@ mod tests {
         assert!(ReceiptStatus::Settled.allows_progression());
         assert!(!ReceiptStatus::FailedNetwork.allows_progression());
         assert!(!ReceiptStatus::FailedBadResponse.allows_progression());
+    }
+
+    #[test]
+    fn monetary_policy_forbids_soft_to_wallet_conversion_and_bounds_rewards() {
+        let policy = TrnmEconomyPolicy::default();
+        assert!(!policy.local_soft_credit_convertible_to_wallet);
+        assert_eq!(policy.battle_wallet_reward_per_event_cap, 100);
+        assert_eq!(policy.battle_wallet_reward_daily_cap, 300);
+        assert_eq!(policy.seller_reversible_window_seconds, 86_400);
+        assert!(!policy.public_player_market_enabled);
     }
 }

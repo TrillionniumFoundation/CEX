@@ -6,6 +6,14 @@ use std::sync::Arc;
 use term_exchange_protocol::{EconomicIntent, EconomicReceipt, WalletSnapshot};
 use uuid::Uuid;
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TrnmPlayerIdentityRecord {
+    pub player_id: String,
+    pub account_id: Uuid,
+    pub recovery_generation: i64,
+    pub status: String,
+}
+
 use crate::state::{AccountRecord, LedgerEntryRecord};
 
 pub type LedgerRepositoryHandle = Arc<dyn LedgerRepository + Send + Sync>;
@@ -17,6 +25,7 @@ pub enum LedgerActionError {
     DuplicateIdempotencyKey,
     InsufficientAvailable { available: f64, requested: f64 },
     InsufficientReserved { reserved: f64, requested: f64 },
+    IdentityRejected(String),
     Other(String),
 }
 
@@ -67,6 +76,28 @@ pub trait LedgerRepository {
     ) -> Result<WalletSnapshot, LedgerActionError> {
         Err(LedgerActionError::RepositoryUnavailable(
             "TRNM wallet reconciliation repository is unavailable".to_string(),
+        ))
+    }
+
+    async fn register_trnm_player_identity(
+        &self,
+        _player_id: &str,
+        _account_id: Uuid,
+        _recovery_key: &str,
+    ) -> Result<TrnmPlayerIdentityRecord, LedgerActionError> {
+        Err(LedgerActionError::RepositoryUnavailable(
+            "TRNM player identity repository is unavailable".to_string(),
+        ))
+    }
+
+    async fn recover_trnm_player_identity(
+        &self,
+        _player_id: &str,
+        _recovery_key: &str,
+        _new_recovery_key: &str,
+    ) -> Result<TrnmPlayerIdentityRecord, LedgerActionError> {
+        Err(LedgerActionError::RepositoryUnavailable(
+            "TRNM player identity repository is unavailable".to_string(),
         ))
     }
 }

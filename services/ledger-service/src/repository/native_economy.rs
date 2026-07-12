@@ -8,8 +8,11 @@ use term_exchange_protocol::{
 };
 use uuid::Uuid;
 
-use super::{postgres::PostgresLedgerRepository, LedgerActionError};
+use super::{postgres::PostgresLedgerRepository, LedgerActionError, TrnmPlayerIdentityRecord};
 use crate::state::AccountRecord;
+
+const DEFAULT_SELLER_REVERSIBLE_WINDOW_SECONDS: i64 = 86_400;
+const MAX_SELLER_REVERSIBLE_WINDOW_SECONDS: i64 = 30 * 86_400;
 
 impl PostgresLedgerRepository {
     pub(super) async fn execute_trnm_native_intent(
@@ -31,6 +34,15 @@ impl PostgresLedgerRepository {
             .begin()
             .await
             .map_err(|error| db_error("begin TRNM native-economy transaction", error))?;
+        let advisory_key = format!(
+            "{}:{}",
+            intent.idempotency_key.scope, intent.idempotency_key.key
+        );
+        sqlx::query("select pg_advisory_xact_lock(hashtextextended($1, 0))")
+            .bind(&advisory_key)
+            .execute(&mut *tx)
+            .await
+            .map_err(|error| db_error("lock TRNM idempotency key", error))?;
 
         if let Some((stored_intent_id, stored_hash, stored_receipt)) =
             sqlx::query_as::<_, (String, String, Option<Value>)>(
@@ -201,6 +213,7 @@ impl PostgresLedgerRepository {
             .begin()
             .await
             .map_err(|error| db_error("begin TRNM wallet reconciliation", error))?;
+        release_matured_seller_holds(&mut tx, account_id).await?;
         let account = load_account_for_update(&mut tx, account_id).await?;
         let cursor = sqlx::query_scalar::<_, i64>(
             "insert into trnm_economy_reconciliation_cursors (actor_id, account_id, cursor)
@@ -226,6 +239,165 @@ impl PostgresLedgerRepository {
             observed_at_cursor: u64::try_from(cursor).unwrap_or_default(),
         })
     }
+
+    pub(super) async fn register_trnm_native_player_identity(
+        &self,
+        player_id: &str,
+        account_id: Uuid,
+        recovery_key: &str,
+    ) -> Result<TrnmPlayerIdentityRecord, LedgerActionError> {
+        validate_identity_inputs(player_id, recovery_key)?;
+        let pool = self.pool.as_ref().ok_or_else(|| {
+            LedgerActionError::RepositoryUnavailable("postgres pool not initialized".to_string())
+        })?;
+        let mut tx = pool
+            .begin()
+            .await
+            .map_err(|error| db_error("begin TRNM identity registration", error))?;
+        let _ = load_account_for_update(&mut tx, account_id).await?;
+        let recovery_key_hash = recovery_key_hash(recovery_key);
+        sqlx::query(
+            "insert into trnm_player_identities (
+                 player_id, account_id, recovery_key_hash, recovery_generation, status
+             ) values ($1, $2, $3, 1, 'active')",
+        )
+        .bind(player_id)
+        .bind(account_id)
+        .bind(&recovery_key_hash)
+        .execute(&mut *tx)
+        .await
+        .map_err(|error| db_error("register TRNM player identity", error))?;
+        append_identity_audit(&mut tx, player_id, 1, "registered", &recovery_key_hash).await?;
+        tx.commit()
+            .await
+            .map_err(|error| db_error("commit TRNM identity registration", error))?;
+        Ok(TrnmPlayerIdentityRecord {
+            player_id: player_id.to_string(),
+            account_id,
+            recovery_generation: 1,
+            status: "active".to_string(),
+        })
+    }
+
+    pub(super) async fn recover_trnm_native_player_identity(
+        &self,
+        player_id: &str,
+        recovery_key: &str,
+        new_recovery_key: &str,
+    ) -> Result<TrnmPlayerIdentityRecord, LedgerActionError> {
+        validate_identity_inputs(player_id, recovery_key)?;
+        validate_identity_inputs(player_id, new_recovery_key)?;
+        if recovery_key == new_recovery_key {
+            return Err(LedgerActionError::Other(
+                "new recovery key must differ from the current key".to_string(),
+            ));
+        }
+        let pool = self.pool.as_ref().ok_or_else(|| {
+            LedgerActionError::RepositoryUnavailable("postgres pool not initialized".to_string())
+        })?;
+        let mut tx = pool
+            .begin()
+            .await
+            .map_err(|error| db_error("begin TRNM identity recovery", error))?;
+        let row = sqlx::query(
+            "select account_id, recovery_key_hash, recovery_generation, status
+             from trnm_player_identities where player_id = $1 for update",
+        )
+        .bind(player_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|error| db_error("load TRNM player identity", error))?
+        .ok_or(LedgerActionError::AccountNotFound)?;
+        let status: String = row.try_get("status").map_err(row_error)?;
+        if status != "active" {
+            return Err(LedgerActionError::IdentityRejected(
+                "TRNM player identity is not active".to_string(),
+            ));
+        }
+        let stored_hash: String = row.try_get("recovery_key_hash").map_err(row_error)?;
+        if stored_hash != recovery_key_hash(recovery_key) {
+            return Err(LedgerActionError::IdentityRejected(
+                "TRNM recovery credential is invalid".to_string(),
+            ));
+        }
+        let account_id: Uuid = row.try_get("account_id").map_err(row_error)?;
+        let generation = row
+            .try_get::<i64, _>("recovery_generation")
+            .map_err(row_error)?
+            .saturating_add(1);
+        let new_hash = recovery_key_hash(new_recovery_key);
+        sqlx::query(
+            "update trnm_player_identities set recovery_key_hash = $2,
+                 recovery_generation = $3, recovered_at = now(), updated_at = now()
+             where player_id = $1",
+        )
+        .bind(player_id)
+        .bind(&new_hash)
+        .bind(generation)
+        .execute(&mut *tx)
+        .await
+        .map_err(|error| db_error("rotate TRNM recovery credential", error))?;
+        append_identity_audit(&mut tx, player_id, generation, "recovered", &new_hash).await?;
+        tx.commit()
+            .await
+            .map_err(|error| db_error("commit TRNM identity recovery", error))?;
+        Ok(TrnmPlayerIdentityRecord {
+            player_id: player_id.to_string(),
+            account_id,
+            recovery_generation: generation,
+            status,
+        })
+    }
+}
+
+fn validate_identity_inputs(player_id: &str, recovery_key: &str) -> Result<(), LedgerActionError> {
+    if player_id.trim().len() < 3 || player_id.len() > 128 {
+        return Err(LedgerActionError::Other(
+            "player_id must contain 3..128 characters".to_string(),
+        ));
+    }
+    if recovery_key.len() < 24 || recovery_key.len() > 512 {
+        return Err(LedgerActionError::Other(
+            "recovery key must contain 24..512 characters".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn recovery_key_hash(recovery_key: &str) -> String {
+    format!(
+        "{:x}",
+        Sha256::digest(format!("trnm-player-recovery-v1:{recovery_key}").as_bytes())
+    )
+}
+
+async fn append_identity_audit(
+    tx: &mut Transaction<'_, Postgres>,
+    player_id: &str,
+    generation: i64,
+    event_kind: &str,
+    recovery_key_hash: &str,
+) -> Result<(), LedgerActionError> {
+    let event_hash = format!(
+        "{:x}",
+        Sha256::digest(
+            format!("{player_id}:{generation}:{event_kind}:{recovery_key_hash}").as_bytes()
+        )
+    );
+    sqlx::query(
+        "insert into trnm_identity_recovery_audit (
+             audit_id, player_id, recovery_generation, event_kind, event_hash
+         ) values ($1, $2, $3, $4, $5)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(player_id)
+    .bind(generation)
+    .bind(event_kind)
+    .bind(event_hash)
+    .execute(&mut **tx)
+    .await
+    .map_err(|error| db_error("append TRNM identity recovery audit", error))?;
+    Ok(())
 }
 
 fn intent_account_id(intent: &EconomicIntent) -> Result<Uuid, LedgerActionError> {
@@ -240,6 +412,15 @@ fn intent_account_id(intent: &EconomicIntent) -> Result<Uuid, LedgerActionError>
 
 fn metadata_string<'a>(intent: &'a EconomicIntent, key: &str) -> Option<&'a str> {
     intent.metadata.get(key).and_then(Value::as_str)
+}
+
+fn seller_reversible_window_seconds(intent: &EconomicIntent) -> i64 {
+    intent
+        .metadata
+        .get("seller_reversible_window_seconds")
+        .and_then(Value::as_i64)
+        .unwrap_or(DEFAULT_SELLER_REVERSIBLE_WINDOW_SECONDS)
+        .clamp(60, MAX_SELLER_REVERSIBLE_WINDOW_SECONDS)
 }
 
 fn escrow_metadata(
@@ -407,7 +588,9 @@ async fn commit_escrow(
         return Ok(());
     }
     let row = sqlx::query(
-        "select amount::float8 as amount, status from trnm_escrow_trades
+        "select amount::float8 as amount, status, seller_hold_amount::float8 as seller_hold_amount,
+                seller_hold_released
+         from trnm_escrow_trades
          where purchase_id = $1 and buyer_account_id = $2 and seller_account_id = $3
          for update",
     )
@@ -429,6 +612,9 @@ async fn commit_escrow(
         receipt.status = ReceiptStatus::Consumed;
         receipt.progression_class = receipt.status.progression_class();
         receipt.evidence["escrow_status"] = json!("committed");
+        receipt.evidence["seller_payout_reserved"] = json!(!row
+            .try_get::<bool, _>("seller_hold_released")
+            .map_err(row_error)?);
         return Ok(());
     }
     if status != "held" {
@@ -439,6 +625,7 @@ async fn commit_escrow(
     }
     let mut seller_account = load_account_for_update(tx, seller).await?;
     seller_account.balance += amount as f64;
+    seller_account.reserved += amount as f64;
     update_account(tx, &seller_account).await?;
     let entry_id = append_native_entry(
         tx,
@@ -451,10 +638,14 @@ async fn commit_escrow(
     .await?;
     sqlx::query(
         "update trnm_escrow_trades set status = 'committed', consume_intent_id = $2,
+             seller_hold_amount = $3, seller_hold_released = false,
+             reversible_until = now() + make_interval(secs => $4),
              updated_at = now() where purchase_id = $1",
     )
     .bind(&purchase_id)
     .bind(&intent.intent_id)
+    .bind(amount as f64)
+    .bind(seller_reversible_window_seconds(intent) as f64)
     .execute(&mut **tx)
     .await
     .map_err(|error| db_error("commit TRNM escrow", error))?;
@@ -462,6 +653,9 @@ async fn commit_escrow(
     receipt.progression_class = receipt.status.progression_class();
     receipt.ledger_entry_id = Some(entry_id.to_string());
     receipt.evidence["escrow_status"] = json!("committed");
+    receipt.evidence["seller_payout_reserved"] = json!(true);
+    receipt.evidence["seller_reversible_window_seconds"] =
+        json!(seller_reversible_window_seconds(intent));
     receipt.evidence["purchase_id"] = json!(purchase_id);
     Ok(())
 }
@@ -564,7 +758,8 @@ async fn reverse_escrow(
         LedgerActionError::Other("chargeback purchase_id is required".to_string())
     })?;
     let row = sqlx::query(
-        "select buyer_account_id, seller_account_id, amount::float8 as amount, status
+        "select buyer_account_id, seller_account_id, amount::float8 as amount, status,
+                seller_hold_amount::float8 as seller_hold_amount, seller_hold_released
          from trnm_escrow_trades where purchase_id = $1 for update",
     )
     .bind(purchase_id)
@@ -580,6 +775,11 @@ async fn reverse_escrow(
     let buyer: Uuid = row.try_get("buyer_account_id").map_err(row_error)?;
     let seller: Uuid = row.try_get("seller_account_id").map_err(row_error)?;
     let amount = row.try_get::<f64, _>("amount").map_err(row_error)?.round() as i64;
+    let seller_hold_amount = row
+        .try_get::<f64, _>("seller_hold_amount")
+        .map_err(row_error)?
+        .round() as i64;
+    let seller_hold_released: bool = row.try_get("seller_hold_released").map_err(row_error)?;
     let status: String = row.try_get("status").map_err(row_error)?;
     if status == "reversed" {
         receipt.status = ReceiptStatus::SellerChargebackConsumed;
@@ -607,7 +807,15 @@ async fn reverse_escrow(
         .expect("seller was locked");
     let buyer_index = 1 - seller_index;
     let seller_available = locked[seller_index].balance - locked[seller_index].reserved;
-    if seller_available + 1e-9 < amount as f64 {
+    let reserved_reversal = !seller_hold_released && seller_hold_amount >= amount;
+    if reserved_reversal && locked[seller_index].reserved + 1e-9 < amount as f64 {
+        receipt.status = ReceiptStatus::SellerChargebackReserveFailed;
+        receipt.progression_class = receipt.status.progression_class();
+        receipt.reason = Some("seller payout hold is missing from reserved balance".to_string());
+        receipt.evidence["compensation_lane"] = json!("operator_reconciliation_required");
+        return Ok(());
+    }
+    if !reserved_reversal && seller_available + 1e-9 < amount as f64 {
         receipt.status = ReceiptStatus::SellerChargebackReserveFailed;
         receipt.progression_class = receipt.status.progression_class();
         receipt.reason = Some(format!(
@@ -615,6 +823,9 @@ async fn reverse_escrow(
         ));
         receipt.evidence["compensation_lane"] = json!("retry_required");
         return Ok(());
+    }
+    if reserved_reversal {
+        locked[seller_index].reserved -= amount as f64;
     }
     locked[seller_index].balance -= amount as f64;
     locked[buyer_index].balance += amount as f64;
@@ -640,6 +851,7 @@ async fn reverse_escrow(
     .await?;
     sqlx::query(
         "update trnm_escrow_trades set status = 'reversed', reversal_intent_id = $2,
+             seller_hold_amount = 0, seller_hold_released = true,
              updated_at = now() where purchase_id = $1",
     )
     .bind(purchase_id)
@@ -652,6 +864,52 @@ async fn reverse_escrow(
     receipt.ledger_entry_id = Some(seller_entry.to_string());
     receipt.evidence["escrow_status"] = json!("reversed");
     receipt.evidence["compensation_lane"] = json!("completed");
+    receipt.evidence["seller_payout_hold_consumed"] = json!(reserved_reversal);
+    Ok(())
+}
+
+async fn release_matured_seller_holds(
+    tx: &mut Transaction<'_, Postgres>,
+    seller_account_id: Uuid,
+) -> Result<(), LedgerActionError> {
+    let rows = sqlx::query(
+        "select purchase_id, seller_hold_amount::float8 as seller_hold_amount
+         from trnm_escrow_trades
+         where seller_account_id = $1 and status = 'committed'
+           and seller_hold_released = false and reversible_until <= now()
+         order by purchase_id for update",
+    )
+    .bind(seller_account_id)
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(|error| db_error("load matured TRNM seller payout holds", error))?;
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let total = rows
+        .iter()
+        .map(|row| row.try_get::<f64, _>("seller_hold_amount"))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(row_error)?
+        .into_iter()
+        .sum::<f64>();
+    let mut seller = load_account_for_update(tx, seller_account_id).await?;
+    if seller.reserved + 1e-9 < total {
+        return Err(LedgerActionError::Other(
+            "seller reserved balance is below matured payout holds".to_string(),
+        ));
+    }
+    seller.reserved -= total;
+    update_account(tx, &seller).await?;
+    sqlx::query(
+        "update trnm_escrow_trades set seller_hold_released = true, updated_at = now()
+         where seller_account_id = $1 and status = 'committed'
+           and seller_hold_released = false and reversible_until <= now()",
+    )
+    .bind(seller_account_id)
+    .execute(&mut **tx)
+    .await
+    .map_err(|error| db_error("release matured TRNM seller payout holds", error))?;
     Ok(())
 }
 
