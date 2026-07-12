@@ -4,9 +4,10 @@ use sha2::{Digest, Sha256};
 use sqlx::{Postgres, Row, Transaction};
 use term_exchange_protocol::{
     EconomicIntent, EconomicIntentKind, EconomicReceipt, ReceiptProgressionClass, ReceiptStatus,
-    ServerSignedValueEntitlementV1, SettlementBackendKind, ValueEntitlementSource, WalletSnapshot,
-    BATTLE_WALLET_REWARD_DAILY_CAP, CEX_SETTLEMENT_BACKEND_ID,
-    SERVER_SIGNED_VALUE_ENTITLEMENT_METADATA_KEY,
+    ServerSignedValueEntitlementV1, ServerSignedValueEntitlementV2, SettlementBackendKind,
+    ValueEntitlementSource, WalletSnapshot, BATTLE_WALLET_REWARD_DAILY_CAP,
+    CEX_SETTLEMENT_BACKEND_ID, SERVER_SIGNED_VALUE_ENTITLEMENT_METADATA_KEY,
+    SERVER_SIGNED_VALUE_ENTITLEMENT_V2_CONTRACT,
 };
 use uuid::Uuid;
 
@@ -762,7 +763,7 @@ async fn consume_value_entitlement(
     account_id: Uuid,
     amount: i64,
 ) -> Result<(), LedgerActionError> {
-    let entitlement: ServerSignedValueEntitlementV1 = intent
+    let entitlement_json = intent
         .metadata
         .get(SERVER_SIGNED_VALUE_ENTITLEMENT_METADATA_KEY)
         .cloned()
@@ -770,14 +771,40 @@ async fn consume_value_entitlement(
             LedgerActionError::IdentityRejected(
                 "server-signed value entitlement is required".to_string(),
             )
-        })
-        .and_then(|value| {
-            serde_json::from_value(value).map_err(|error| {
-                LedgerActionError::IdentityRejected(format!(
-                    "decode value entitlement failed: {error}"
-                ))
-            })
         })?;
+    let entitlement: ServerSignedValueEntitlementV1 = if entitlement_json
+        .get("contract_version")
+        .and_then(Value::as_str)
+        == Some(SERVER_SIGNED_VALUE_ENTITLEMENT_V2_CONTRACT)
+    {
+        let value: ServerSignedValueEntitlementV2 =
+            serde_json::from_value(entitlement_json.clone()).map_err(|error| {
+                LedgerActionError::IdentityRejected(format!(
+                    "decode v2 value entitlement failed: {error}"
+                ))
+            })?;
+        ServerSignedValueEntitlementV1 {
+            contract_version: value.contract_version,
+            entitlement_id: value.entitlement_id,
+            issuer: value.issuer,
+            key_id: value.key_id,
+            actor_id: value.actor_id,
+            account_id: value.account_id,
+            source: value.source,
+            source_id: value.source_id,
+            intent_id: value.intent_id,
+            amount_credits: value.amount_credits,
+            currency: value.currency,
+            budget_day: value.budget_day,
+            issued_at_epoch: value.issued_at_epoch,
+            expires_at_epoch: value.expires_at_epoch,
+            signature: value.signature,
+        }
+    } else {
+        serde_json::from_value(entitlement_json.clone()).map_err(|error| {
+            LedgerActionError::IdentityRejected(format!("decode value entitlement failed: {error}"))
+        })?
+    };
     let entitlement_account = Uuid::parse_str(&entitlement.account_id).map_err(|_| {
         LedgerActionError::IdentityRejected("entitlement account_id is invalid".to_string())
     })?;
@@ -802,8 +829,6 @@ async fn consume_value_entitlement(
         .ok_or_else(|| {
             LedgerActionError::IdentityRejected("invalid entitlement expiry".to_string())
         })?;
-    let entitlement_json = serde_json::to_value(&entitlement)
-        .map_err(|error| LedgerActionError::Other(error.to_string()))?;
     sqlx::query(
         "insert into trnm_value_entitlements (
              entitlement_id, intent_id, issuer, key_id, actor_id, account_id,

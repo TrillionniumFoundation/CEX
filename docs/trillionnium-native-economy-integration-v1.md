@@ -1,6 +1,6 @@
 # Trillionnium Native Economy Integration v1
 
-Status: current CEX integration truth as of 2026-07-12.
+Status: current CEX integration truth as of 2026-07-13.
 
 CEX is the first settlement backend for the current native TRNM game. It does
 not own RPG/RTS gameplay, and its historical World Web/Matrix shell is not the
@@ -9,7 +9,7 @@ native client.
 ## Protocol ownership
 
 The stable protocol is owned by the Trillionnium repository in
-`trnm-economy-protocol` (`term_exchange_protocol_v2`, package `2.3.0`). This
+`trnm-economy-protocol` (`term_exchange_protocol_v2`, package `2.4.0`). This
 CEX workspace vendors and pins that exact pure crate version under `vendor/`,
 so an independent checkout does not require a sibling repository path. The old
 CEX-local v1 crate is removed and represented only by `QUARANTINED.md` plus Git
@@ -57,6 +57,17 @@ requires `x-trnm-game-authority`, backed by the dedicated
 resulting signed intent and reconcile its campaign wallet, but is not shipped
 to a native client. General admin tokens cannot mint value through this route.
 
+Online Authority v2 uses the stricter `ServerSignedValueEntitlementV2` path.
+The dedicated game server signs match/rules/build/result/participant/nonce-bound
+payloads with Ed25519 and submits the signed intent directly; it no longer asks
+CEX to issue the online entitlement. CEX loads only a public issuer registry,
+requires an active exact key/issuer pair and rejects tampered signatures,
+unknown keys, revoked keys or changed authoritative metadata before ledger
+mutation. The private seed is a mode-600 game-server runtime file and is not
+present in CEX, a native client or either repository. The v1 HMAC contract and
+issuance endpoint remain for the existing trusted native/offline integration.
+Production KMS/HSM custody and automatic rotation are still pending.
+
 The wallet endpoint reads the configured ledger, persists the actor/account
 reconciliation cursor and returns the protocol `WalletSnapshot`. Player routes
 require `trnm_player_session_v1`, signed by CEX and persisted as a token hash
@@ -65,11 +76,11 @@ revocation. Recovery, suspension and closure revoke live sessions. The
 consumer shared entry token is retained only for internal service maintenance
 and is not a distributable native-client credential.
 
-TRNM Online Authority v1 calls the session verification endpoint before it
+TRNM Online Authority v2 calls the session verification endpoint before it
 creates, joins, starts, snapshots or commands a network campaign. Verification
 checks the signed token, persisted token hash, active identity, recovery
 generation, revocation, expiry and exact player/account ownership. The game
-server then owns the match result and calls the scoped entitlement/intent path;
+server then owns the match result and calls the signed v2 intent path;
 the player client cannot supply a terminal result or mint amount.
 
 Migrations `0027_add_trnm_native_economy_persistence.sql` and

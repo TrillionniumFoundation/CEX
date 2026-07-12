@@ -4,8 +4,12 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use base64::{
+    engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
+    Engine,
+};
 use chrono::{Datelike, Utc};
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -16,9 +20,10 @@ use shared_config::{
 };
 use term_exchange_protocol::{
     EconomicIntent, EconomicIntentKind, EconomicReceipt, ReceiptStatus,
-    ServerSignedValueEntitlementV1, SettlementBackendKind, ValueEntitlementSource, WalletSnapshot,
-    BATTLE_WALLET_REWARD_PER_EVENT_CAP, CEX_SETTLEMENT_BACKEND_ID,
-    SERVER_SIGNED_VALUE_ENTITLEMENT_CONTRACT, SERVER_SIGNED_VALUE_ENTITLEMENT_METADATA_KEY,
+    ServerSignedValueEntitlementV1, ServerSignedValueEntitlementV2, SettlementBackendKind,
+    ValueEntitlementSource, WalletSnapshot, BATTLE_WALLET_REWARD_PER_EVENT_CAP,
+    CEX_SETTLEMENT_BACKEND_ID, SERVER_SIGNED_VALUE_ENTITLEMENT_CONTRACT,
+    SERVER_SIGNED_VALUE_ENTITLEMENT_METADATA_KEY, SERVER_SIGNED_VALUE_ENTITLEMENT_V2_CONTRACT,
 };
 use uuid::Uuid;
 
@@ -195,6 +200,9 @@ pub async fn trnm_economy_readiness(State(state): State<AppState>) -> Response {
             "seller_payout_hold": true,
             "player_identity_recovery": true,
             "server_signed_value_entitlement": true,
+            "online_entitlement_signature_algorithm": "ed25519",
+            "online_entitlement_active_issuer_keys": state.entitlement_issuer_keys.values().filter(|key| key.status == "active").count(),
+            "online_entitlement_revoked_issuer_keys": state.entitlement_issuer_keys.values().filter(|key| key.status == "revoked").count(),
             "player_session_account_ownership": true,
             "wallet_reward_per_event_cap": BATTLE_WALLET_REWARD_PER_EVENT_CAP,
             "complete_contract_zero_value_only": true,
@@ -805,6 +813,13 @@ fn validate_value_authorization(state: &AppState, intent: &EconomicIntent) -> Re
         .metadata
         .get(SERVER_SIGNED_VALUE_ENTITLEMENT_METADATA_KEY)
         .ok_or_else(|| unauthorized_response("server-signed value entitlement is required"))?;
+    if value
+        .get("contract_version")
+        .and_then(|value| value.as_str())
+        == Some(SERVER_SIGNED_VALUE_ENTITLEMENT_V2_CONTRACT)
+    {
+        return validate_v2_value_authorization(state, intent, value);
+    }
     let entitlement: ServerSignedValueEntitlementV1 = serde_json::from_value(value.clone())
         .map_err(|_| unauthorized_response("value entitlement cannot be decoded"))?;
     entitlement
@@ -844,6 +859,95 @@ fn validate_value_authorization(state: &AppState, intent: &EconomicIntent) -> Re
         &entitlement.signature,
     )
     .map_err(|error| unauthorized_response(&error))
+}
+
+#[allow(clippy::result_large_err)]
+fn validate_v2_value_authorization(
+    state: &AppState,
+    intent: &EconomicIntent,
+    value: &serde_json::Value,
+) -> Result<(), Response> {
+    let entitlement: ServerSignedValueEntitlementV2 = serde_json::from_value(value.clone())
+        .map_err(|_| unauthorized_response("v2 value entitlement cannot be decoded"))?;
+    entitlement
+        .validate_shape()
+        .map_err(|error| unauthorized_response(&error))?;
+    let actor = intent
+        .actors
+        .first()
+        .ok_or_else(|| bad_request_response("TRNM economic intent requires a primary actor"))?;
+    if entitlement.actor_id != actor.actor_id
+        || entitlement.account_id != actor.account_id.clone().unwrap_or_default()
+        || entitlement.intent_id != intent.intent_id
+        || entitlement.amount_credits != intent.amount_credits.unwrap_or_default()
+        || entitlement.source_id
+            != intent
+                .metadata
+                .get("value_event_id")
+                .and_then(|value| value.as_str())
+                .unwrap_or(&intent.intent_id)
+        || !matches!(entitlement.source, ValueEntitlementSource::Battle)
+    {
+        return Err(unauthorized_response(
+            "v2 value entitlement does not bind this authoritative match reward",
+        ));
+    }
+    for (entitlement_value, metadata_key) in [
+        (&entitlement.match_id, "online_match_id"),
+        (&entitlement.rules_version, "online_rules_version"),
+        (&entitlement.build_id, "online_build_id"),
+        (&entitlement.result_hash, "online_result_hash"),
+        (&entitlement.participants_hash, "online_participants_hash"),
+    ] {
+        if intent
+            .metadata
+            .get(metadata_key)
+            .and_then(|value| value.as_str())
+            != Some(entitlement_value.as_str())
+        {
+            return Err(unauthorized_response(
+                "v2 value entitlement does not bind authoritative match metadata",
+            ));
+        }
+    }
+    let now = Utc::now();
+    let today = (now.year() as u32) * 10_000 + now.month() * 100 + now.day();
+    if entitlement.budget_day != today
+        || entitlement.issued_at_epoch > now.timestamp().saturating_add(30)
+        || entitlement.expires_at_epoch < now.timestamp()
+    {
+        return Err(unauthorized_response(
+            "v2 value entitlement is expired or outside today's wallet budget",
+        ));
+    }
+    let issuer_key = state
+        .entitlement_issuer_keys
+        .get(&entitlement.key_id)
+        .ok_or_else(|| unauthorized_response("v2 entitlement issuer key is not registered"))?;
+    if issuer_key.status != "active" || issuer_key.issuer != entitlement.issuer {
+        return Err(unauthorized_response(
+            "v2 entitlement issuer key is revoked or does not own this issuer",
+        ));
+    }
+    let public_key = STANDARD
+        .decode(&issuer_key.public_key_base64)
+        .map_err(|_| unauthorized_response("v2 entitlement issuer public key is malformed"))?;
+    let public_key: [u8; 32] = public_key
+        .try_into()
+        .map_err(|_| unauthorized_response("v2 entitlement issuer public key is malformed"))?;
+    let verifying_key = VerifyingKey::from_bytes(&public_key)
+        .map_err(|_| unauthorized_response("v2 entitlement issuer public key is invalid"))?;
+    let signature = STANDARD
+        .decode(&entitlement.signature)
+        .map_err(|_| unauthorized_response("v2 entitlement signature is malformed"))?;
+    let signature = Signature::from_slice(&signature)
+        .map_err(|_| unauthorized_response("v2 entitlement signature is malformed"))?;
+    let payload = entitlement
+        .signing_payload()
+        .map_err(|error| unauthorized_response(&error))?;
+    verifying_key
+        .verify(&payload, &signature)
+        .map_err(|_| unauthorized_response("v2 entitlement signature is invalid"))
 }
 
 fn sign_entitlement(
@@ -1433,4 +1537,108 @@ fn success_response(
             "fail_fast": fail_fast
         })),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::repository::postgres::PostgresLedgerRepository;
+    use ed25519_dalek::{Signer, SigningKey};
+    use std::sync::Arc;
+    use term_exchange_protocol::{ActorRef, IdempotencyKey, TERM_EXCHANGE_PROTOCOL_VERSION};
+
+    fn signed_v2_intent() -> (AppState, EconomicIntent) {
+        let state = AppState::new_for_tests(
+            PostgresLedgerRepository::new_placeholder(),
+            false,
+            None,
+            Vec::new(),
+            Vec::new(),
+        );
+        let now = Utc::now();
+        let account_id = "00000000-0000-0000-0000-000000000001";
+        let mut entitlement = ServerSignedValueEntitlementV2 {
+            contract_version: SERVER_SIGNED_VALUE_ENTITLEMENT_V2_CONTRACT.to_string(),
+            entitlement_id: "entitlement-test-v2".to_string(),
+            issuer: "trnm-online-game-server".to_string(),
+            key_id: "test-online-ed25519-v1".to_string(),
+            signature_algorithm: "ed25519".to_string(),
+            actor_id: "player-a".to_string(),
+            account_id: account_id.to_string(),
+            source: ValueEntitlementSource::Battle,
+            source_id: "intent-v2".to_string(),
+            intent_id: "intent-v2".to_string(),
+            amount_credits: 25,
+            currency: "wallet_credits".to_string(),
+            budget_day: (now.year() as u32) * 10_000 + now.month() * 100 + now.day(),
+            issued_at_epoch: now.timestamp(),
+            expires_at_epoch: now.timestamp() + 600,
+            match_id: "00000000-0000-0000-0000-000000000002".to_string(),
+            rules_version: "rules-v2".to_string(),
+            build_id: "build-v2".to_string(),
+            result_hash: "1".repeat(64),
+            participants_hash: "2".repeat(64),
+            nonce: "nonce-v2".to_string(),
+            signature: String::new(),
+        };
+        entitlement.signature = STANDARD.encode(
+            SigningKey::from_bytes(&[7_u8; 32])
+                .sign(&entitlement.signing_payload().expect("signing payload"))
+                .to_bytes(),
+        );
+        let intent = EconomicIntent {
+            protocol_version: TERM_EXCHANGE_PROTOCOL_VERSION.to_string(),
+            intent_id: "intent-v2".to_string(),
+            term_id: "battle-reward".to_string(),
+            term_version: "1".to_string(),
+            domain: "trnm".to_string(),
+            kind: EconomicIntentKind::ReleaseReward,
+            idempotency_key: IdempotencyKey {
+                scope: "test".to_string(),
+                key: "intent-v2".to_string(),
+            },
+            actors: vec![ActorRef {
+                actor_id: "player-a".to_string(),
+                actor_kind: "player".to_string(),
+                account_id: Some(account_id.to_string()),
+            }],
+            assets: Vec::new(),
+            amount_credits: Some(25),
+            currency: Some("wallet_credits".to_string()),
+            metadata: json!({
+                SERVER_SIGNED_VALUE_ENTITLEMENT_METADATA_KEY: entitlement,
+                "online_match_id": "00000000-0000-0000-0000-000000000002",
+                "online_rules_version": "rules-v2",
+                "online_build_id": "build-v2",
+                "online_result_hash": "1".repeat(64),
+                "online_participants_hash": "2".repeat(64),
+            }),
+            created_at_epoch: now.timestamp(),
+        };
+        (state, intent)
+    }
+
+    #[test]
+    fn v2_ed25519_entitlement_accepts_only_active_bound_issuer_signatures() {
+        let (state, intent) = signed_v2_intent();
+        assert!(validate_value_authorization(&state, &intent).is_ok());
+
+        let mut tampered = intent.clone();
+        tampered.metadata[SERVER_SIGNED_VALUE_ENTITLEMENT_METADATA_KEY]["signature"] =
+            json!(STANDARD.encode([0_u8; 64]));
+        assert!(validate_value_authorization(&state, &tampered).is_err());
+
+        let mut unknown = intent.clone();
+        unknown.metadata[SERVER_SIGNED_VALUE_ENTITLEMENT_METADATA_KEY]["key_id"] =
+            json!("unknown-key");
+        assert!(validate_value_authorization(&state, &unknown).is_err());
+
+        let mut revoked_state = state.clone();
+        let mut keys = revoked_state.entitlement_issuer_keys.as_ref().clone();
+        keys.get_mut("test-online-ed25519-v1")
+            .expect("test issuer")
+            .status = "revoked".to_string();
+        revoked_state.entitlement_issuer_keys = Arc::new(keys);
+        assert!(validate_value_authorization(&revoked_state, &intent).is_err());
+    }
 }

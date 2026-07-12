@@ -16,6 +16,8 @@ pub const BATTLE_WALLET_REWARD_DAILY_CAP: i64 = 300;
 pub const SELLER_REVERSIBLE_WINDOW_SECONDS: i64 = 86_400;
 pub const SERVER_SIGNED_VALUE_ENTITLEMENT_CONTRACT: &str =
     "trnm_server_signed_value_entitlement_v1";
+pub const SERVER_SIGNED_VALUE_ENTITLEMENT_V2_CONTRACT: &str =
+    "trnm_server_signed_value_entitlement_v2";
 pub const SERVER_SIGNED_VALUE_ENTITLEMENT_METADATA_KEY: &str = "server_signed_value_entitlement";
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -90,6 +92,69 @@ impl ServerSignedValueEntitlementV1 {
             || self.signature.trim().is_empty()
         {
             return Err("value entitlement violates the TRNM signed-value boundary".to_string());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ServerSignedValueEntitlementV2 {
+    pub contract_version: String,
+    pub entitlement_id: String,
+    pub issuer: String,
+    pub key_id: String,
+    pub signature_algorithm: String,
+    pub actor_id: String,
+    pub account_id: String,
+    pub source: ValueEntitlementSource,
+    pub source_id: String,
+    pub intent_id: String,
+    pub amount_credits: i64,
+    pub currency: String,
+    pub budget_day: u32,
+    pub issued_at_epoch: i64,
+    pub expires_at_epoch: i64,
+    pub match_id: String,
+    pub rules_version: String,
+    pub build_id: String,
+    pub result_hash: String,
+    pub participants_hash: String,
+    pub nonce: String,
+    pub signature: String,
+}
+
+impl ServerSignedValueEntitlementV2 {
+    pub fn signing_payload(&self) -> Result<Vec<u8>, String> {
+        let mut unsigned = self.clone();
+        unsigned.signature.clear();
+        serde_json::to_vec(&unsigned)
+            .map_err(|error| format!("encode v2 value entitlement failed: {error}"))
+    }
+
+    pub fn validate_shape(&self) -> Result<(), String> {
+        if self.contract_version != SERVER_SIGNED_VALUE_ENTITLEMENT_V2_CONTRACT
+            || self.entitlement_id.trim().is_empty()
+            || self.issuer.trim().is_empty()
+            || self.key_id.trim().is_empty()
+            || self.signature_algorithm != "ed25519"
+            || self.actor_id.trim().is_empty()
+            || self.account_id.trim().is_empty()
+            || self.source_id.trim().is_empty()
+            || self.intent_id.trim().is_empty()
+            || self.amount_credits <= 0
+            || self.currency != "wallet_credits"
+            || self.expires_at_epoch < self.issued_at_epoch
+            || self.match_id.trim().is_empty()
+            || self.rules_version.trim().is_empty()
+            || self.build_id.trim().is_empty()
+            || self.result_hash.len() != 64
+            || self.participants_hash.len() != 64
+            || self.nonce.trim().is_empty()
+            || self.signature.trim().is_empty()
+        {
+            return Err(
+                "v2 value entitlement violates the TRNM match authority boundary".to_string(),
+            );
         }
         Ok(())
     }
