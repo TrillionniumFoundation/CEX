@@ -462,6 +462,46 @@ impl LedgerRepository for PostgresLedgerRepository {
             .await
     }
 
+    async fn register_trnm_product_player(
+        &self,
+        player_id: &str,
+        recovery_key: &str,
+        org_id: Uuid,
+        invite_code: &str,
+    ) -> Result<TrnmPlayerIdentityRecord, LedgerActionError> {
+        self.register_trnm_native_product_player(player_id, recovery_key, org_id, invite_code)
+            .await
+    }
+
+    async fn issue_trnm_product_registration_invite(
+        &self,
+        lifetime_seconds: i64,
+        max_uses: i32,
+    ) -> Result<serde_json::Value, LedgerActionError> {
+        self.issue_trnm_native_product_registration_invite(lifetime_seconds, max_uses)
+            .await
+    }
+
+    async fn submit_trnm_identity_appeal(
+        &self,
+        player_id: &str,
+        recovery_key: &str,
+        message: &str,
+    ) -> Result<serde_json::Value, LedgerActionError> {
+        self.submit_trnm_native_identity_appeal(player_id, recovery_key, message)
+            .await
+    }
+
+    async fn resolve_trnm_identity_appeal(
+        &self,
+        appeal_id: Uuid,
+        decision: &str,
+        resolution: &str,
+    ) -> Result<serde_json::Value, LedgerActionError> {
+        self.resolve_trnm_native_identity_appeal(appeal_id, decision, resolution)
+            .await
+    }
+
     async fn recover_trnm_player_identity(
         &self,
         player_id: &str,

@@ -89,6 +89,51 @@ pub struct TrnmIdentityStatusRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrnmProductRegisterRequest {
+    pub player_id: String,
+    pub credential: String,
+    pub invite_code: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrnmProductInviteIssueRequest {
+    #[serde(default = "default_product_invite_lifetime_seconds")]
+    pub lifetime_seconds: i64,
+    #[serde(default = "default_product_invite_max_uses")]
+    pub max_uses: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrnmProductLoginRequest {
+    pub player_id: String,
+    pub credential: String,
+    pub device_id: String,
+    #[serde(default = "default_session_lifetime_seconds")]
+    pub lifetime_seconds: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrnmProductCredentialRotateRequest {
+    pub player_id: String,
+    pub credential: String,
+    pub new_credential: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrnmIdentityAppealRequest {
+    pub player_id: String,
+    pub credential: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrnmIdentityAppealResolveRequest {
+    pub appeal_id: String,
+    pub decision: String,
+    pub resolution: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TrnmPlayerSessionIssueRequest {
     pub player_id: String,
     pub recovery_key: String,
@@ -171,6 +216,14 @@ fn default_entitlement_lifetime_seconds() -> i64 {
     600
 }
 
+fn default_product_invite_lifetime_seconds() -> i64 {
+    86_400
+}
+
+fn default_product_invite_max_uses() -> i32 {
+    1
+}
+
 fn default_session_revoke_reason() -> String {
     "player_requested".to_string()
 }
@@ -204,6 +257,11 @@ pub async fn trnm_economy_readiness(State(state): State<AppState>) -> Response {
             "online_entitlement_active_issuer_keys": state.entitlement_issuer_keys.values().filter(|key| key.status == "active").count(),
             "online_entitlement_revoked_issuer_keys": state.entitlement_issuer_keys.values().filter(|key| key.status == "revoked").count(),
             "player_session_account_ownership": true,
+            "closed_alpha_single_use_registration_invites": true,
+            "product_credentials": "argon2id",
+            "credential_rotation_revokes_sessions": true,
+            "durable_login_rate_limit": true,
+            "suspension_appeal_workflow": true,
             "wallet_reward_per_event_cap": BATTLE_WALLET_REWARD_PER_EVENT_CAP,
             "complete_contract_zero_value_only": true,
             "seller_hold_sweeper": true,
@@ -280,6 +338,120 @@ pub async fn post_trnm_identity_status(
         .await
     {
         Ok(identity) => (StatusCode::OK, Json(identity)).into_response(),
+        Err(error) => repository_error_response(error).into_response(),
+    }
+}
+
+pub async fn post_trnm_product_register(
+    State(state): State<AppState>,
+    Json(request): Json<TrnmProductRegisterRequest>,
+) -> Response {
+    match state
+        .repository
+        .register_trnm_product_player(
+            &request.player_id,
+            &request.credential,
+            state.product_org_id,
+            &request.invite_code,
+        )
+        .await
+    {
+        Ok(identity) => (StatusCode::CREATED, Json(identity)).into_response(),
+        Err(error) => repository_error_response(error).into_response(),
+    }
+}
+
+pub async fn post_trnm_product_invite_issue(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<TrnmProductInviteIssueRequest>,
+) -> Response {
+    if let Err(response) = authorize_ledger_admin(&state, &headers, &["ledger:manage"]) {
+        return response;
+    }
+    match state
+        .repository
+        .issue_trnm_product_registration_invite(request.lifetime_seconds, request.max_uses)
+        .await
+    {
+        Ok(invite) => (StatusCode::CREATED, Json(invite)).into_response(),
+        Err(error) => repository_error_response(error).into_response(),
+    }
+}
+
+pub async fn post_trnm_product_login(
+    State(state): State<AppState>,
+    Json(request): Json<TrnmProductLoginRequest>,
+) -> Response {
+    post_trnm_player_session_issue(
+        State(state),
+        Json(TrnmPlayerSessionIssueRequest {
+            player_id: request.player_id,
+            recovery_key: request.credential,
+            device_id: request.device_id,
+            lifetime_seconds: request.lifetime_seconds,
+        }),
+    )
+    .await
+}
+
+pub async fn post_trnm_product_credential_rotate(
+    State(state): State<AppState>,
+    Json(request): Json<TrnmProductCredentialRotateRequest>,
+) -> Response {
+    if let Err(error) = state
+        .repository
+        .authenticate_trnm_player_identity(&request.player_id, &request.credential)
+        .await
+    {
+        return repository_error_response(error).into_response();
+    }
+    match state
+        .repository
+        .recover_trnm_player_identity(
+            &request.player_id,
+            &request.credential,
+            &request.new_credential,
+        )
+        .await
+    {
+        Ok(identity) => (StatusCode::OK, Json(identity)).into_response(),
+        Err(error) => repository_error_response(error).into_response(),
+    }
+}
+
+pub async fn post_trnm_identity_appeal(
+    State(state): State<AppState>,
+    Json(request): Json<TrnmIdentityAppealRequest>,
+) -> Response {
+    match state
+        .repository
+        .submit_trnm_identity_appeal(&request.player_id, &request.credential, &request.message)
+        .await
+    {
+        Ok(appeal) => (StatusCode::CREATED, Json(appeal)).into_response(),
+        Err(error) => repository_error_response(error).into_response(),
+    }
+}
+
+pub async fn post_trnm_identity_appeal_resolve(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<TrnmIdentityAppealResolveRequest>,
+) -> Response {
+    if let Err(response) = authorize_ledger_admin(&state, &headers, &["ledger:manage"]) {
+        return response;
+    }
+    let appeal_id = match Uuid::parse_str(&request.appeal_id) {
+        Ok(value) => value,
+        Err(_) => return bad_request_response("appeal_id must be a UUID"),
+    };
+    match state
+        .repository
+        .resolve_trnm_identity_appeal(appeal_id, &request.decision, &request.resolution)
+        .await
+    {
+        Ok(appeal) => (StatusCode::OK, Json(appeal)).into_response(),
         Err(error) => repository_error_response(error).into_response(),
     }
 }

@@ -57,6 +57,7 @@ pub struct AppState {
     pub player_session_signing_secret: Arc<String>,
     pub require_player_session: bool,
     pub allow_system_economy_operations: bool,
+    pub product_org_id: Uuid,
 }
 
 impl AppState {
@@ -96,6 +97,10 @@ impl AppState {
             allow_system_economy_operations: env_flag(
                 "TRNM_ALLOW_SYSTEM_ECONOMY_OPERATIONS",
                 false,
+            ),
+            product_org_id: required_uuid(
+                "TRNM_PRODUCT_ORG_ID",
+                "00000000-0000-0000-0000-00000000ce01",
             ),
         }
     }
@@ -145,6 +150,8 @@ impl AppState {
             player_session_signing_secret: Arc::new("test-player-session-secret".to_string()),
             require_player_session: false,
             allow_system_economy_operations: true,
+            product_org_id: Uuid::parse_str("00000000-0000-0000-0000-00000000ce01")
+                .expect("test product org UUID"),
         }
     }
 }
@@ -192,6 +199,11 @@ fn env_flag(name: &str, default: bool) -> bool {
         .ok()
         .map(|value| matches!(value.trim(), "1" | "true" | "TRUE" | "yes" | "YES"))
         .unwrap_or(default)
+}
+
+fn required_uuid(name: &str, default: &str) -> Uuid {
+    let value = std::env::var(name).unwrap_or_else(|_| default.to_string());
+    Uuid::parse_str(&value).unwrap_or_else(|_| panic!("{name} must be a UUID"))
 }
 
 fn required_secret(name: &str, fail_fast: bool, development_fallback: &str) -> String {

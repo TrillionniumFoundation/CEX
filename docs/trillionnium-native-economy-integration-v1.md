@@ -76,6 +76,22 @@ revocation. Recovery, suspension and closure revoke live sessions. The
 consumer shared entry token is retained only for internal service maintenance
 and is not a distributable native-client credential.
 
+Online Product v1 adds a closed-alpha self-service account surface. A scoped
+administrator creates a database-backed, time-bounded registration invite with
+a bounded use count; registration consumes one use in the same transaction that
+creates the ledger account and TRNM identity. New credentials use randomly
+salted Argon2id. Legacy high-entropy recovery hashes remain accepted for
+migration, and rotation rewrites the credential while incrementing generation
+and revoking every old session. Five failed logins in a 15-minute window create
+a durable five-minute lock, including unknown player IDs without exposing an
+account-existence distinction.
+
+Suspension revokes all sessions. A suspended credential owner can create one
+pending appeal; only `ledger:manage` may approve or reject it. Approval
+reactivates the identity and appends the existing immutable identity audit.
+This is local software evidence, not verified email/phone recovery, MFA or a
+staffed support SLA.
+
 TRNM Online Authority v2 calls the session verification endpoint before it
 creates, joins, starts, snapshots or commands a network campaign. Verification
 checks the signed token, persisted token hash, active identity, recovery
@@ -85,7 +101,8 @@ the player client cannot supply a terminal result or mint amount.
 
 Migrations `0027_add_trnm_native_economy_persistence.sql` and
 `0028_add_trnm_seller_hold_and_identity_recovery.sql` and
-`0029_add_trnm_value_entitlements_and_player_sessions.sql` supply unique intent,
+`0029_add_trnm_value_entitlements_and_player_sessions.sql` and
+`0030_add_trnm_online_product_identity.sql` supply unique intent,
 idempotency, receipt, cursor and escrow constraints. Formal release services
 are installed as `cex-trnm-ledger.service` and
 `cex-trnm-consumer.service`; `LEDGER_FAIL_FAST=true` makes PostgreSQL absence a

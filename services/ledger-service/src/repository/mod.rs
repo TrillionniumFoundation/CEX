@@ -108,6 +108,50 @@ pub trait LedgerRepository {
         ))
     }
 
+    async fn register_trnm_product_player(
+        &self,
+        _player_id: &str,
+        _recovery_key: &str,
+        _org_id: Uuid,
+        _invite_code: &str,
+    ) -> Result<TrnmPlayerIdentityRecord, LedgerActionError> {
+        Err(LedgerActionError::RepositoryUnavailable(
+            "TRNM product registration repository is unavailable".to_string(),
+        ))
+    }
+
+    async fn issue_trnm_product_registration_invite(
+        &self,
+        _lifetime_seconds: i64,
+        _max_uses: i32,
+    ) -> Result<Value, LedgerActionError> {
+        Err(LedgerActionError::RepositoryUnavailable(
+            "TRNM product invite repository is unavailable".to_string(),
+        ))
+    }
+
+    async fn submit_trnm_identity_appeal(
+        &self,
+        _player_id: &str,
+        _recovery_key: &str,
+        _message: &str,
+    ) -> Result<Value, LedgerActionError> {
+        Err(LedgerActionError::RepositoryUnavailable(
+            "TRNM identity appeal repository is unavailable".to_string(),
+        ))
+    }
+
+    async fn resolve_trnm_identity_appeal(
+        &self,
+        _appeal_id: Uuid,
+        _decision: &str,
+        _resolution: &str,
+    ) -> Result<Value, LedgerActionError> {
+        Err(LedgerActionError::RepositoryUnavailable(
+            "TRNM identity appeal resolution repository is unavailable".to_string(),
+        ))
+    }
+
     async fn recover_trnm_player_identity(
         &self,
         _player_id: &str,

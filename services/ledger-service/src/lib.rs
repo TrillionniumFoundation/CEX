@@ -49,6 +49,27 @@ pub fn build_router(state: AppState) -> Router {
             post(api::post_trnm_player_session_verify),
         )
         .route(
+            "/v1/trnm/product/register",
+            post(api::post_trnm_product_register),
+        )
+        .route(
+            "/v1/trnm/product/registration-invites",
+            post(api::post_trnm_product_invite_issue),
+        )
+        .route("/v1/trnm/product/login", post(api::post_trnm_product_login))
+        .route(
+            "/v1/trnm/product/credentials/rotate",
+            post(api::post_trnm_product_credential_rotate),
+        )
+        .route(
+            "/v1/trnm/product/appeals",
+            post(api::post_trnm_identity_appeal),
+        )
+        .route(
+            "/v1/trnm/product/appeals/resolve",
+            post(api::post_trnm_identity_appeal_resolve),
+        )
+        .route(
             "/v1/trnm/economy/entitlements",
             post(api::post_trnm_value_entitlement_issue),
         )

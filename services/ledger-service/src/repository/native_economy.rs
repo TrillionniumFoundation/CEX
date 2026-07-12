@@ -1,3 +1,7 @@
+use argon2::{
+    password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
+    Argon2,
+};
 use chrono::{TimeZone, Utc};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -268,7 +272,7 @@ impl PostgresLedgerRepository {
             .await
             .map_err(|error| db_error("begin TRNM identity registration", error))?;
         let _ = load_account_for_update(&mut tx, account_id).await?;
-        let recovery_key_hash = recovery_key_hash(recovery_key);
+        let recovery_key_hash = recovery_key_hash(recovery_key)?;
         sqlx::query(
             "insert into trnm_player_identities (
                  player_id, account_id, recovery_key_hash, recovery_generation, status
@@ -290,6 +294,263 @@ impl PostgresLedgerRepository {
             recovery_generation: 1,
             status: "active".to_string(),
         })
+    }
+
+    pub(super) async fn issue_trnm_native_product_registration_invite(
+        &self,
+        lifetime_seconds: i64,
+        max_uses: i32,
+    ) -> Result<Value, LedgerActionError> {
+        let pool = self.pool.as_ref().ok_or_else(|| {
+            LedgerActionError::RepositoryUnavailable("postgres pool not initialized".to_string())
+        })?;
+        let lifetime_seconds = lifetime_seconds.clamp(60, 604_800);
+        let max_uses = max_uses.clamp(1, 100);
+        let invite_id = Uuid::new_v4();
+        let invite_code = format!("trnm-register-{}-{}", Uuid::new_v4(), Uuid::new_v4());
+        let invite_code_hash = format!("{:x}", Sha256::digest(invite_code.as_bytes()));
+        let expires_at_epoch = Utc::now().timestamp().saturating_add(lifetime_seconds);
+        sqlx::query(
+            "insert into trnm_product_registration_invites (
+                invite_id, invite_code_hash, max_uses, expires_at
+             ) values ($1, $2, $3, to_timestamp($4))",
+        )
+        .bind(invite_id)
+        .bind(invite_code_hash)
+        .bind(max_uses)
+        .bind(expires_at_epoch)
+        .execute(pool)
+        .await
+        .map_err(|error| db_error("issue TRNM product registration invite", error))?;
+        Ok(json!({
+            "invite_id": invite_id,
+            "invite_code": invite_code,
+            "max_uses": max_uses,
+            "expires_at_epoch": expires_at_epoch,
+        }))
+    }
+
+    pub(super) async fn register_trnm_native_product_player(
+        &self,
+        player_id: &str,
+        recovery_key: &str,
+        org_id: Uuid,
+        invite_code: &str,
+    ) -> Result<TrnmPlayerIdentityRecord, LedgerActionError> {
+        validate_identity_inputs(player_id, recovery_key)?;
+        if !player_id
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_'))
+        {
+            return Err(LedgerActionError::Other(
+                "player_id must use portable ASCII letters, digits, '-' or '_'".to_string(),
+            ));
+        }
+        let pool = self.pool.as_ref().ok_or_else(|| {
+            LedgerActionError::RepositoryUnavailable("postgres pool not initialized".to_string())
+        })?;
+        let mut tx = pool
+            .begin()
+            .await
+            .map_err(|error| db_error("begin TRNM product registration", error))?;
+        let org_exists: bool = sqlx::query_scalar(
+            "select exists(select 1 from organizations where org_id = $1 and status = 'active')",
+        )
+        .bind(org_id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|error| db_error("validate TRNM product organization", error))?;
+        if !org_exists {
+            return Err(LedgerActionError::IdentityRejected(
+                "TRNM product registration organization is unavailable".to_string(),
+            ));
+        }
+        let invite_code_hash = format!("{:x}", Sha256::digest(invite_code.as_bytes()));
+        let consumed = sqlx::query(
+            "update trnm_product_registration_invites set used_count = used_count + 1
+             where invite_code_hash = $1 and revoked_at is null and expires_at > now()
+               and used_count < max_uses
+             returning invite_id",
+        )
+        .bind(invite_code_hash)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|error| db_error("consume TRNM product registration invite", error))?;
+        if consumed.is_none() {
+            return Err(LedgerActionError::IdentityRejected(
+                "closed-alpha registration invite is invalid, expired, or consumed".to_string(),
+            ));
+        }
+        let account_id = Uuid::new_v4();
+        sqlx::query(
+            "insert into accounts (account_id, org_id, account_type, currency_unit, status)
+             values ($1, $2, 'trnm-online-player', 'credit', 'active')",
+        )
+        .bind(account_id)
+        .bind(org_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|error| db_error("create TRNM product account", error))?;
+        let recovery_key_hash = recovery_key_hash(recovery_key)?;
+        sqlx::query(
+            "insert into trnm_player_identities (
+                 player_id, account_id, recovery_key_hash, recovery_generation, status
+             ) values ($1, $2, $3, 1, 'active')",
+        )
+        .bind(player_id)
+        .bind(account_id)
+        .bind(&recovery_key_hash)
+        .execute(&mut *tx)
+        .await
+        .map_err(|error| db_error("register TRNM product identity", error))?;
+        append_identity_audit(&mut tx, player_id, 1, "registered", &recovery_key_hash).await?;
+        tx.commit()
+            .await
+            .map_err(|error| db_error("commit TRNM product registration", error))?;
+        Ok(TrnmPlayerIdentityRecord {
+            player_id: player_id.to_string(),
+            account_id,
+            recovery_generation: 1,
+            status: "active".to_string(),
+        })
+    }
+
+    pub(super) async fn submit_trnm_native_identity_appeal(
+        &self,
+        player_id: &str,
+        recovery_key: &str,
+        message: &str,
+    ) -> Result<Value, LedgerActionError> {
+        validate_identity_inputs(player_id, recovery_key)?;
+        if !(10..=2000).contains(&message.trim().len()) {
+            return Err(LedgerActionError::Other(
+                "appeal message must contain 10..2000 characters".to_string(),
+            ));
+        }
+        let pool = self.pool.as_ref().ok_or_else(|| {
+            LedgerActionError::RepositoryUnavailable("postgres pool not initialized".to_string())
+        })?;
+        let mut tx = pool
+            .begin()
+            .await
+            .map_err(|error| db_error("begin TRNM identity appeal", error))?;
+        let row = sqlx::query(
+            "select recovery_key_hash, status from trnm_player_identities
+             where player_id = $1 for update",
+        )
+        .bind(player_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|error| db_error("load appealed TRNM identity", error))?
+        .ok_or(LedgerActionError::AccountNotFound)?;
+        let stored_hash: String = row.try_get("recovery_key_hash").map_err(row_error)?;
+        let status: String = row.try_get("status").map_err(row_error)?;
+        if !recovery_key_matches(&stored_hash, recovery_key) {
+            return Err(LedgerActionError::IdentityRejected(
+                "TRNM recovery credential is invalid".to_string(),
+            ));
+        }
+        if status != "suspended" {
+            return Err(LedgerActionError::IdentityRejected(
+                "only a suspended identity may submit an appeal".to_string(),
+            ));
+        }
+        let appeal_id = Uuid::new_v4();
+        sqlx::query(
+            "insert into trnm_identity_appeals (appeal_id, player_id, message)
+             values ($1, $2, $3)",
+        )
+        .bind(appeal_id)
+        .bind(player_id)
+        .bind(message.trim())
+        .execute(&mut *tx)
+        .await
+        .map_err(|error| db_error("submit TRNM identity appeal", error))?;
+        tx.commit()
+            .await
+            .map_err(|error| db_error("commit TRNM identity appeal", error))?;
+        Ok(json!({
+            "appeal_id": appeal_id,
+            "player_id": player_id,
+            "status": "pending",
+        }))
+    }
+
+    pub(super) async fn resolve_trnm_native_identity_appeal(
+        &self,
+        appeal_id: Uuid,
+        decision: &str,
+        resolution: &str,
+    ) -> Result<Value, LedgerActionError> {
+        if !matches!(decision, "approved" | "rejected") {
+            return Err(LedgerActionError::Other(
+                "appeal decision must be approved or rejected".to_string(),
+            ));
+        }
+        if !(10..=2000).contains(&resolution.trim().len()) {
+            return Err(LedgerActionError::Other(
+                "appeal resolution must contain 10..2000 characters".to_string(),
+            ));
+        }
+        let pool = self.pool.as_ref().ok_or_else(|| {
+            LedgerActionError::RepositoryUnavailable("postgres pool not initialized".to_string())
+        })?;
+        let mut tx = pool
+            .begin()
+            .await
+            .map_err(|error| db_error("begin TRNM identity appeal resolution", error))?;
+        let row = sqlx::query(
+            "update trnm_identity_appeals set status = $2, resolution = $3,
+                 resolved_at = now()
+             where appeal_id = $1 and status = 'pending'
+             returning player_id",
+        )
+        .bind(appeal_id)
+        .bind(decision)
+        .bind(resolution.trim())
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|error| db_error("resolve TRNM identity appeal", error))?
+        .ok_or_else(|| {
+            LedgerActionError::IdentityRejected(
+                "identity appeal is already resolved or unknown".to_string(),
+            )
+        })?;
+        let player_id: String = row.try_get("player_id").map_err(row_error)?;
+        if decision == "approved" {
+            let identity = sqlx::query(
+                "update trnm_player_identities set status = 'active', updated_at = now()
+                 where player_id = $1 and status = 'suspended'
+                 returning recovery_generation, recovery_key_hash",
+            )
+            .bind(&player_id)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|error| db_error("reactivate appealed TRNM identity", error))?
+            .ok_or_else(|| {
+                LedgerActionError::IdentityRejected(
+                    "appealed identity is no longer suspended".to_string(),
+                )
+            })?;
+            append_identity_audit(
+                &mut tx,
+                &player_id,
+                identity.try_get("recovery_generation").map_err(row_error)?,
+                "reactivated",
+                &identity
+                    .try_get::<String, _>("recovery_key_hash")
+                    .map_err(row_error)?,
+            )
+            .await?;
+        }
+        tx.commit()
+            .await
+            .map_err(|error| db_error("commit TRNM identity appeal resolution", error))?;
+        Ok(json!({
+            "appeal_id": appeal_id,
+            "player_id": player_id,
+            "status": decision,
+        }))
     }
 
     pub(super) async fn recover_trnm_native_player_identity(
@@ -328,7 +589,7 @@ impl PostgresLedgerRepository {
             ));
         }
         let stored_hash: String = row.try_get("recovery_key_hash").map_err(row_error)?;
-        if stored_hash != recovery_key_hash(recovery_key) {
+        if !recovery_key_matches(&stored_hash, recovery_key) {
             return Err(LedgerActionError::IdentityRejected(
                 "TRNM recovery credential is invalid".to_string(),
             ));
@@ -338,7 +599,7 @@ impl PostgresLedgerRepository {
             .try_get::<i64, _>("recovery_generation")
             .map_err(row_error)?
             .saturating_add(1);
-        let new_hash = recovery_key_hash(new_recovery_key);
+        let new_hash = recovery_key_hash(new_recovery_key)?;
         sqlx::query(
             "update trnm_player_identities set recovery_key_hash = $2,
                  recovery_generation = $3, recovered_at = now(), updated_at = now()
@@ -477,7 +738,7 @@ impl PostgresLedgerRepository {
             ));
         }
         let stored_hash: String = row.try_get("recovery_key_hash").map_err(row_error)?;
-        if stored_hash != recovery_key_hash(recovery_key) {
+        if !recovery_key_matches(&stored_hash, recovery_key) {
             return Err(LedgerActionError::IdentityRejected(
                 "TRNM recovery credential is invalid".to_string(),
             ));
@@ -524,6 +785,20 @@ impl PostgresLedgerRepository {
         let pool = self.pool.as_ref().ok_or_else(|| {
             LedgerActionError::RepositoryUnavailable("postgres pool not initialized".to_string())
         })?;
+        let locked: bool = sqlx::query_scalar(
+            "select coalesce(locked_until > now(), false)
+             from trnm_product_login_attempts where player_id = $1",
+        )
+        .bind(player_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|error| db_error("check TRNM product login rate limit", error))?
+        .unwrap_or(false);
+        if locked {
+            return Err(LedgerActionError::IdentityRejected(
+                "TRNM product login is temporarily locked after repeated failures".to_string(),
+            ));
+        }
         let row = sqlx::query(
             "select account_id, recovery_key_hash, recovery_generation, status
              from trnm_player_identities where player_id = $1",
@@ -531,20 +806,50 @@ impl PostgresLedgerRepository {
         .bind(player_id)
         .fetch_optional(pool)
         .await
-        .map_err(|error| db_error("authenticate TRNM identity", error))?
-        .ok_or(LedgerActionError::AccountNotFound)?;
+        .map_err(|error| db_error("authenticate TRNM identity", error))?;
+        let valid_credential = row
+            .as_ref()
+            .and_then(|row| row.try_get::<String, _>("recovery_key_hash").ok())
+            .is_some_and(|stored_hash| recovery_key_matches(&stored_hash, recovery_key));
+        if !valid_credential {
+            sqlx::query(
+                "insert into trnm_product_login_attempts (
+                    player_id, attempt_count, window_started_at, locked_until, updated_at
+                 ) values ($1, 1, now(), null, now())
+                 on conflict (player_id) do update set
+                    attempt_count = case
+                        when trnm_product_login_attempts.window_started_at < now() - interval '15 minutes'
+                        then 1 else trnm_product_login_attempts.attempt_count + 1 end,
+                    window_started_at = case
+                        when trnm_product_login_attempts.window_started_at < now() - interval '15 minutes'
+                        then now() else trnm_product_login_attempts.window_started_at end,
+                    locked_until = case
+                        when (case
+                            when trnm_product_login_attempts.window_started_at < now() - interval '15 minutes'
+                            then 1 else trnm_product_login_attempts.attempt_count + 1 end) >= 5
+                        then now() + interval '5 minutes' else null end,
+                    updated_at = now()",
+            )
+            .bind(player_id)
+            .execute(pool)
+            .await
+            .map_err(|error| db_error("record TRNM product login failure", error))?;
+            return Err(LedgerActionError::IdentityRejected(
+                "TRNM product login credential is invalid".to_string(),
+            ));
+        }
+        let row = row.expect("valid credential requires an identity row");
         let status: String = row.try_get("status").map_err(row_error)?;
         if status != "active" {
             return Err(LedgerActionError::IdentityRejected(
                 "TRNM player identity is not active".to_string(),
             ));
         }
-        let stored_hash: String = row.try_get("recovery_key_hash").map_err(row_error)?;
-        if stored_hash != recovery_key_hash(recovery_key) {
-            return Err(LedgerActionError::IdentityRejected(
-                "TRNM recovery credential is invalid".to_string(),
-            ));
-        }
+        sqlx::query("delete from trnm_product_login_attempts where player_id = $1")
+            .bind(player_id)
+            .execute(pool)
+            .await
+            .map_err(|error| db_error("clear TRNM product login failures", error))?;
         Ok(TrnmPlayerIdentityRecord {
             player_id: player_id.to_string(),
             account_id: row.try_get("account_id").map_err(row_error)?,
@@ -705,11 +1010,26 @@ fn validate_identity_inputs(player_id: &str, recovery_key: &str) -> Result<(), L
     Ok(())
 }
 
-fn recovery_key_hash(recovery_key: &str) -> String {
-    format!(
-        "{:x}",
-        Sha256::digest(format!("trnm-player-recovery-v1:{recovery_key}").as_bytes())
-    )
+fn recovery_key_hash(recovery_key: &str) -> Result<String, LedgerActionError> {
+    Argon2::default()
+        .hash_password(recovery_key.as_bytes(), &SaltString::generate(&mut OsRng))
+        .map(|hash| hash.to_string())
+        .map_err(|error| LedgerActionError::Other(format!("hash TRNM credential: {error}")))
+}
+
+fn recovery_key_matches(stored_hash: &str, recovery_key: &str) -> bool {
+    if stored_hash.starts_with("$argon2") {
+        return PasswordHash::new(stored_hash).is_ok_and(|parsed| {
+            Argon2::default()
+                .verify_password(recovery_key.as_bytes(), &parsed)
+                .is_ok()
+        });
+    }
+    stored_hash
+        == format!(
+            "{:x}",
+            Sha256::digest(format!("trnm-player-recovery-v1:{recovery_key}").as_bytes())
+        )
 }
 
 async fn append_identity_audit(
@@ -1436,4 +1756,24 @@ fn db_error(context: &str, error: sqlx::Error) -> LedgerActionError {
 
 fn row_error(error: sqlx::Error) -> LedgerActionError {
     LedgerActionError::Other(error.to_string())
+}
+
+#[cfg(test)]
+mod credential_tests {
+    use super::*;
+
+    #[test]
+    fn product_credentials_use_argon2id_and_accept_legacy_high_entropy_hashes() {
+        let credential = "test-product-credential-012345678901234567890123";
+        let encoded = recovery_key_hash(credential).expect("argon2 credential hash");
+        assert!(encoded.starts_with("$argon2id$"));
+        assert!(recovery_key_matches(&encoded, credential));
+        assert!(!recovery_key_matches(&encoded, "wrong-credential"));
+
+        let legacy = format!(
+            "{:x}",
+            Sha256::digest(format!("trnm-player-recovery-v1:{credential}").as_bytes())
+        );
+        assert!(recovery_key_matches(&legacy, credential));
+    }
 }
