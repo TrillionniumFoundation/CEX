@@ -38,6 +38,7 @@ pub struct AppState {
     pub admin_tokens: Arc<HashMap<String, AdminPrincipal>>,
     pub entitlement_signing_secret: Arc<String>,
     pub entitlement_key_id: Arc<String>,
+    pub game_authority_token: Arc<String>,
     pub player_session_signing_secret: Arc<String>,
     pub require_player_session: bool,
     pub allow_system_economy_operations: bool,
@@ -65,6 +66,11 @@ impl AppState {
                 std::env::var("TRNM_VALUE_ENTITLEMENT_KEY_ID")
                     .unwrap_or_else(|_| "trnm-local-entitlement-v1".to_string()),
             ),
+            game_authority_token: Arc::new(required_secret(
+                "TRNM_GAME_AUTHORITY_TOKEN",
+                fail_fast,
+                "local-development-game-authority-token",
+            )),
             player_session_signing_secret: Arc::new(required_secret(
                 "TRNM_PLAYER_SESSION_SIGNING_SECRET",
                 fail_fast,
@@ -109,6 +115,7 @@ impl AppState {
             admin_tokens: Arc::new(admin_tokens),
             entitlement_signing_secret: Arc::new("test-entitlement-secret".to_string()),
             entitlement_key_id: Arc::new("test-entitlement-key".to_string()),
+            game_authority_token: Arc::new("test-game-authority-token".to_string()),
             player_session_signing_secret: Arc::new("test-player-session-secret".to_string()),
             require_player_session: false,
             allow_system_economy_operations: true,

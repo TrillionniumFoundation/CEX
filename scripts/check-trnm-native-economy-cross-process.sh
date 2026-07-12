@@ -122,7 +122,9 @@ PLAYER_SESSION="$(curl -fsS "$LEDGER_URL/v1/trnm/identity/session" \
 CURRENT_PHASE="reward-idempotency-before-restart"
 reward_id="$RUN_ID-reward"
 reward_payload="$(intent_json release_reward "$reward_id" "$actor_id" "$buyer_id" 25)"
-reward_entitlement="$(post_ledger /v1/trnm/economy/entitlements "$(jq -cn \
+reward_entitlement="$(curl -fsS "$LEDGER_URL/v1/trnm/economy/entitlements" \
+  -H "x-trnm-game-authority: ${TRNM_GAME_AUTHORITY_TOKEN:-trnm-game-authority-v1:$IDENTITY_ADMIN_TOKEN}" \
+  -H 'content-type: application/json' --data-binary "$(jq -cn \
   --arg actor "$actor_id" --arg account "$buyer_id" --arg intent "$reward_id" \
   --arg source "$RUN_ID-battle" \
   '{actor_id:$actor,account_id:$account,source:"battle",source_id:$source,intent_id:$intent,amount_credits:25}')")"

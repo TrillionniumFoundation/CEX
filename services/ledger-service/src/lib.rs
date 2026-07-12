@@ -45,6 +45,10 @@ pub fn build_router(state: AppState) -> Router {
             post(api::post_trnm_player_session_revoke),
         )
         .route(
+            "/v1/trnm/identity/session/verify",
+            post(api::post_trnm_player_session_verify),
+        )
+        .route(
             "/v1/trnm/economy/entitlements",
             post(api::post_trnm_value_entitlement_issue),
         )

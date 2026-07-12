@@ -8,12 +8,18 @@ cex_load_env
 
 URL="${LEDGER_BASE_URL:-http://127.0.0.1:7002}"
 ADMIN="${LEDGER_ADMIN_TOKEN:-${IDENTITY_ADMIN_TOKEN:?ledger admin token required}}"
+GAME_AUTHORITY="${TRNM_GAME_AUTHORITY_TOKEN:-trnm-game-authority-v1:$IDENTITY_ADMIN_TOKEN}"
 ORG="00000000-0000-0000-0000-00000000ce01"
 RUN="value-auth-$(date +%s)-${RANDOM}"
 WORK="$(mktemp -d /tmp/cex-trnm-value-auth.XXXXXX)"
 
 admin_post() {
   curl -fsS "$URL$1" -H "x-admin-token: $ADMIN" \
+    -H 'content-type: application/json' --data-binary "$2"
+}
+
+authority_post() {
+  curl -fsS "$URL$1" -H "x-trnm-game-authority: $GAME_AUTHORITY" \
     -H 'content-type: application/json' --data-binary "$2"
 }
 
@@ -61,7 +67,7 @@ http_code="$(curl -sS -o "$WORK/ownership.json" -w '%{http_code}' "$URL/v1/trnm/
 
 for ordinal in 1 2 3; do
   id="$RUN-budget-$ordinal"
-  entitlement="$(admin_post /v1/trnm/economy/entitlements "$(jq -cn \
+  entitlement="$(authority_post /v1/trnm/economy/entitlements "$(jq -cn \
     --arg p "$player" --arg a "$account" --arg id "$id" --arg source "$RUN-battle-$ordinal" \
     '{actor_id:$p,account_id:$a,source:"battle",source_id:$source,intent_id:$id,amount_credits:100}')")"
   curl -fsS "$URL/v1/trnm/economy/intents" -H "x-trnm-player-session: $session" \
@@ -70,7 +76,7 @@ for ordinal in 1 2 3; do
 done
 
 id="$RUN-over-budget"
-entitlement="$(admin_post /v1/trnm/economy/entitlements "$(jq -cn \
+entitlement="$(authority_post /v1/trnm/economy/entitlements "$(jq -cn \
   --arg p "$player" --arg a "$account" --arg id "$id" --arg source "$RUN-battle-over" \
   '{actor_id:$p,account_id:$a,source:"battle",source_id:$source,intent_id:$id,amount_credits:1}')")"
 http_code="$(curl -sS -o "$WORK/budget.json" -w '%{http_code}' "$URL/v1/trnm/economy/intents" \

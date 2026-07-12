@@ -15388,7 +15388,7 @@ async fn create_real_ledger_account(
 async fn issue_real_trnm_value_entitlement(
     http: &Client,
     ledger_base_url: &str,
-    admin_token: &str,
+    _admin_token: &str,
     actor_id: &str,
     account_id: &str,
     intent_id: &str,
@@ -15397,7 +15397,7 @@ async fn issue_real_trnm_value_entitlement(
 ) -> Value {
     let response = http
         .post(format!("{}/v1/trnm/economy/entitlements", ledger_base_url))
-        .header("x-admin-token", admin_token)
+        .header("x-trnm-game-authority", "test-game-authority-token")
         .json(&json!({
             "actor_id": actor_id,
             "account_id": account_id,

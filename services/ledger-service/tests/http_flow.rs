@@ -233,6 +233,57 @@ async fn create_account_requires_admin_token() {
 }
 
 #[tokio::test]
+async fn trnm_session_verify_requires_a_signed_player_session() {
+    let app = build_router(test_state());
+    let (status, body) = send_json_with_headers(
+        app,
+        "POST",
+        "/v1/trnm/identity/session/verify",
+        &[],
+        json!({
+            "player_id": "player-a",
+            "account_id": "00000000-0000-0000-0000-000000000001"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert!(!body["error"].as_str().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn only_the_scoped_game_authority_may_issue_value_entitlements() {
+    let body = json!({
+        "actor_id": "player-a",
+        "account_id": "00000000-0000-0000-0000-000000000001",
+        "source": "battle",
+        "source_id": "battle-a",
+        "intent_id": "intent-a",
+        "amount_credits": 25
+    });
+    let (admin_status, _) = send_json_with_headers(
+        build_router(test_state()),
+        "POST",
+        "/v1/trnm/economy/entitlements",
+        &[("x-admin-token", "local-dev-admin-token")],
+        body.clone(),
+    )
+    .await;
+    assert_eq!(admin_status, StatusCode::UNAUTHORIZED);
+
+    let (authority_status, entitlement) = send_json_with_headers(
+        build_router(test_state()),
+        "POST",
+        "/v1/trnm/economy/entitlements",
+        &[("x-trnm-game-authority", "test-game-authority-token")],
+        body,
+    )
+    .await;
+    assert_eq!(authority_status, StatusCode::CREATED);
+    assert_eq!(entitlement["actor_id"], "player-a");
+    assert_eq!(entitlement["amount_credits"], 25);
+}
+
+#[tokio::test]
 async fn create_account_and_get_round_trip() {
     let app = build_router(test_state());
     let (account_id, created) = create_account(app.clone(), 100.0).await;

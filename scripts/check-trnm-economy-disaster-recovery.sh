@@ -50,6 +50,7 @@ CURRENT_PHASE="secondary-ledger-start"
 DATABASE_URL="$(cex_effective_database_url)" LEDGER_FAIL_FAST=true \
   LEDGER_BIND_ADDR=127.0.0.1:7012 LEDGER_ADMIN_TOKEN="$ADMIN_TOKEN" \
   TRNM_VALUE_ENTITLEMENT_SIGNING_SECRET="trnm-entitlement-signing-v1:$IDENTITY_ADMIN_TOKEN" \
+  TRNM_GAME_AUTHORITY_TOKEN="${TRNM_GAME_AUTHORITY_TOKEN:-trnm-game-authority-v1:$IDENTITY_ADMIN_TOKEN}" \
   TRNM_PLAYER_SESSION_SIGNING_SECRET="trnm-player-session-signing-v1:$IDENTITY_ADMIN_TOKEN" \
   TRNM_REQUIRE_PLAYER_SESSION=true TRNM_ALLOW_SYSTEM_ECONOMY_OPERATIONS=true \
   "$ledger_binary" >"$WORK_DIR/secondary-ledger.log" 2>&1 &
@@ -64,7 +65,8 @@ account_id="$(curl -fsS "$PRIMARY_URL/v1/accounts" -H "x-admin-token: $ADMIN_TOK
   -H 'content-type: application/json' --data-binary "$(jq -cn \
     '{org_id:"00000000-0000-0000-0000-00000000ce01",account_type:"trnm-dr",currency_unit:"credit",initial_balance:0}')" | jq -er '.account_id')"
 entitlement="$(curl -fsS "$PRIMARY_URL/v1/trnm/economy/entitlements" \
-  -H "x-admin-token: $ADMIN_TOKEN" -H 'content-type: application/json' \
+  -H "x-trnm-game-authority: ${TRNM_GAME_AUTHORITY_TOKEN:-trnm-game-authority-v1:$IDENTITY_ADMIN_TOKEN}" \
+  -H 'content-type: application/json' \
   --data-binary "$(jq -cn --arg run "$RUN_ID" --arg account "$account_id" \
   '{actor_id:$run,account_id:$account,source:"battle",source_id:($run+":battle"),intent_id:($run+":reward"),amount_credits:25}')")"
 intent="$(jq -cn --arg run "$RUN_ID" --arg account "$account_id" --argjson entitlement "$entitlement" '{intent:{

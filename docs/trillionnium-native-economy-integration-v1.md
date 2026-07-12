@@ -23,6 +23,9 @@ Current endpoints:
 - `POST /v1/trillionnium/economy/intents`
 - `POST /v1/trillionnium/economy/wallet`
 - `POST /v1/trillionnium/economy/projection/rebuild` (internal maintenance)
+- `POST :7002/v1/trnm/identity/session/verify` (player-session ownership proof
+  for the dedicated TRNM game server)
+- `POST :7002/v1/trnm/economy/entitlements` (scoped game-authority issuance)
 
 The old World adapter readiness route remains a compatibility alias. It is not
 the current contract.
@@ -48,6 +51,11 @@ battle, source ID, intent, amount, UTC budget day and expiry. PostgreSQL
 consumes each entitlement once and enforces 100 credits per event and 300 per
 account/day in the ledger transaction. `CompleteContract` must carry zero
 value. A client-authored amount without the trusted entitlement is rejected.
+Entitlement issuance no longer accepts a general ledger admin header. It
+requires `x-trnm-game-authority`, backed by the dedicated
+`TRNM_GAME_AUTHORITY_TOKEN`. The same scoped server credential may submit the
+resulting signed intent and reconcile its campaign wallet, but is not shipped
+to a native client. General admin tokens cannot mint value through this route.
 
 The wallet endpoint reads the configured ledger, persists the actor/account
 reconciliation cursor and returns the protocol `WalletSnapshot`. Player routes
@@ -56,6 +64,13 @@ with player/account ownership, device, recovery generation, expiry and
 revocation. Recovery, suspension and closure revoke live sessions. The
 consumer shared entry token is retained only for internal service maintenance
 and is not a distributable native-client credential.
+
+TRNM Online Authority v1 calls the session verification endpoint before it
+creates, joins, starts, snapshots or commands a network campaign. Verification
+checks the signed token, persisted token hash, active identity, recovery
+generation, revocation, expiry and exact player/account ownership. The game
+server then owns the match result and calls the scoped entitlement/intent path;
+the player client cannot supply a terminal result or mint amount.
 
 Migrations `0027_add_trnm_native_economy_persistence.sql` and
 `0028_add_trnm_seller_hold_and_identity_recovery.sql` and

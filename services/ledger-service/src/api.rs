@@ -100,6 +100,23 @@ pub struct TrnmPlayerSessionRevokeRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrnmPlayerSessionVerifyRequest {
+    pub player_id: String,
+    pub account_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrnmPlayerSessionVerifyResponse {
+    pub verified: bool,
+    pub session_id: String,
+    pub player_id: String,
+    pub account_id: String,
+    pub device_id: String,
+    pub recovery_generation: i64,
+    pub expires_at_epoch: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TrnmPlayerSessionResponse {
     pub contract_version: String,
     pub session_token: String,
@@ -139,6 +156,7 @@ pub struct TrnmValueEntitlementIssueRequest {
 const PLAYER_SESSION_CONTRACT_VERSION: &str = "trnm_player_session_v1";
 const PLAYER_SESSION_HEADER: &str = "x-trnm-player-session";
 const SYSTEM_OPERATION_HEADER: &str = "x-trnm-system-operation";
+const GAME_AUTHORITY_HEADER: &str = "x-trnm-game-authority";
 
 fn default_session_lifetime_seconds() -> i64 {
     3_600
@@ -347,13 +365,68 @@ pub async fn post_trnm_player_session_revoke(
     }
 }
 
+pub async fn post_trnm_player_session_verify(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<TrnmPlayerSessionVerifyRequest>,
+) -> Response {
+    let claims = match player_session_claims_from_headers(&state, &headers) {
+        Ok(value) => value,
+        Err(response) => return response,
+    };
+    if claims.player_id != request.player_id || claims.account_id != request.account_id {
+        return unauthorized_response("player session does not own the requested actor/account");
+    }
+    let session_id = match Uuid::parse_str(&claims.session_id) {
+        Ok(value) => value,
+        Err(_) => return unauthorized_response("invalid player session id"),
+    };
+    let account_id = match Uuid::parse_str(&claims.account_id) {
+        Ok(value) => value,
+        Err(_) => return unauthorized_response("invalid player session account id"),
+    };
+    let token_hash = sha256_hex(
+        headers
+            .get(PLAYER_SESSION_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .as_bytes(),
+    );
+    match state
+        .repository
+        .verify_trnm_player_session(
+            session_id,
+            &token_hash,
+            &claims.player_id,
+            account_id,
+            claims.recovery_generation,
+        )
+        .await
+    {
+        Ok(record) => (
+            StatusCode::OK,
+            Json(TrnmPlayerSessionVerifyResponse {
+                verified: true,
+                session_id: record.session_id.to_string(),
+                player_id: record.player_id,
+                account_id: record.account_id.to_string(),
+                device_id: record.device_id,
+                recovery_generation: record.recovery_generation,
+                expires_at_epoch: record.expires_at_epoch,
+            }),
+        )
+            .into_response(),
+        Err(error) => repository_error_response(error).into_response(),
+    }
+}
+
 pub async fn post_trnm_value_entitlement_issue(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<TrnmValueEntitlementIssueRequest>,
 ) -> Response {
-    if let Err(response) = authorize_ledger_admin(&state, &headers, &["ledger:manage"]) {
-        return response;
+    if let Err(error) = authorize_game_authority(&state, &headers) {
+        return unauthorized_response(error.0);
     }
     if request.amount_credits <= 0
         || request.amount_credits > BATTLE_WALLET_REWARD_PER_EVENT_CAP
@@ -395,6 +468,26 @@ pub async fn post_trnm_value_entitlement_issue(
         Err(error) => return internal_error_response(error),
     };
     (StatusCode::CREATED, Json(entitlement)).into_response()
+}
+
+struct GameAuthorityError(&'static str);
+
+fn authorize_game_authority(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<(), GameAuthorityError> {
+    let supplied = headers
+        .get(GAME_AUTHORITY_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    if supplied.is_empty()
+        || sha256_hex(supplied.as_bytes()) != sha256_hex(state.game_authority_token.as_bytes())
+    {
+        return Err(GameAuthorityError(
+            "x-trnm-game-authority is required for value issuance",
+        ));
+    }
+    Ok(())
 }
 
 pub async fn get_trnm_economic_receipts(
@@ -633,6 +726,10 @@ async fn authorize_trnm_account(
     actor_id: &str,
     account_id: Uuid,
 ) -> Result<(), Response> {
+    if headers.contains_key(GAME_AUTHORITY_HEADER) {
+        authorize_game_authority(state, headers).map_err(|error| unauthorized_response(error.0))?;
+        return Ok(());
+    }
     if headers
         .get(SYSTEM_OPERATION_HEADER)
         .and_then(|value| value.to_str().ok())
