@@ -59,7 +59,7 @@ fn cex_trillionnium_world_adapter_readiness_green(readiness: &Value) -> bool {
         && readiness
             .pointer("/repository/source_of_truth")
             .and_then(Value::as_str)
-            == Some("cex_normalized_term_exchange_receipt_tables")
+            == Some("cex_postgres_trnm_economic_intents_and_receipts")
         && readiness
             .pointer("/identity/adapter_contract")
             .and_then(Value::as_str)

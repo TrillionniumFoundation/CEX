@@ -804,7 +804,7 @@ fn cex_trillionnium_world_adapter_readiness_connects_protocol_layer() {
         readiness
             .pointer("/repository/source_of_truth")
             .and_then(Value::as_str),
-        Some("cex_normalized_term_exchange_receipt_tables")
+        Some("cex_postgres_trnm_economic_intents_and_receipts")
     );
     assert_eq!(
         readiness
@@ -859,8 +859,12 @@ async fn trillionnium_world_adapter_readiness_endpoint_exposes_protocol_layer() 
     assert_eq!(body["status"], "cex_trnm_game_economy_adapter_ready");
     assert_eq!(
         body["repository"]["source_of_truth"],
-        "cex_normalized_term_exchange_receipt_tables"
+        "cex_postgres_trnm_economic_intents_and_receipts"
     );
+    assert_eq!(body["ledger"]["fail_fast"], true);
+    assert_eq!(body["ledger"]["in_memory_fallback"], false);
+    assert_eq!(body["public_player_market"]["enabled"], false);
+    assert_eq!(body["public_player_market"]["status"], "release_gated");
     assert!(body["route_records"]["total"].as_u64().is_some());
     assert!(
         body["standalone_world_counts"]["nodes"]
@@ -2640,7 +2644,7 @@ async fn term_exchange_kernel_manifest_declares_cex_as_first_backend() {
     );
     assert_eq!(
         body["migration_status"]["status"],
-        "typed_receipt_progression_runtime_recovery_read_model_and_projection_gates_active"
+        "postgres_atomic_intent_receipt_escrow_and_reconciliation_persistence_active"
     );
 }
 
@@ -2802,9 +2806,10 @@ async fn trnm_native_economy_fails_closed_when_ledger_is_down_or_intent_is_inval
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(receipt["status"], "failed_network");
-    assert_eq!(receipt["progression_class"], "recoverable_hold");
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert!(receipt["error"]
+        .as_str()
+        .is_some_and(|error| error.contains("persistent ledger unavailable")));
 
     let mut invalid = trnm_economic_intent_json(
         "trnm-invalid-reward",

@@ -1,0 +1,18 @@
+[Unit]
+Description=CEX persistent TRNM economy ledger
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/.openclaw/workspace/CEX
+ExecStart=%h/.openclaw/workspace/CEX/scripts/run-trnm-economy-service.sh ledger
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=20
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

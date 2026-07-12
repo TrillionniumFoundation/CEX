@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "revision": "trnm-economy-production-approval-v1",
+  "approved_revisions": [
+    "binding:trnm-economy-production-bindings-v1|registry:trnm-economy-production-registry-v1"
+  ]
+}

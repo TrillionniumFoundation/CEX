@@ -1,0 +1,18 @@
+[Unit]
+Description=CEX persistent TRNM economy consumer API
+After=network-online.target cex-trnm-ledger.service
+Wants=network-online.target cex-trnm-ledger.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/.openclaw/workspace/CEX
+ExecStart=%h/.openclaw/workspace/CEX/scripts/run-trnm-economy-service.sh consumer
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=20
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

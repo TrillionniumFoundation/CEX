@@ -10,6 +10,10 @@ use shared_config::{
     admin_principal_allows_org, admin_principal_has_scope, authorize_scoped_admin_from_map,
     AdminAuthorizationFailure, AdminPrincipal,
 };
+use term_exchange_protocol::{
+    EconomicIntent, EconomicIntentKind, EconomicReceipt, ReceiptStatus, SettlementBackendKind,
+    WalletSnapshot, CEX_SETTLEMENT_BACKEND_ID,
+};
 use uuid::Uuid;
 
 use crate::{
@@ -40,8 +44,214 @@ pub struct ErrorResponse {
     pub message: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrnmEconomicIntentRequest {
+    pub intent: EconomicIntent,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrnmWalletRequest {
+    pub actor_id: String,
+    pub account_id: String,
+    #[serde(default)]
+    pub reconciliation_cursor: u64,
+}
+
 pub async fn health() -> &'static str {
     "ledger-service ok"
+}
+
+pub async fn trnm_economy_readiness(State(state): State<AppState>) -> impl IntoResponse {
+    Json(json!({
+        "status": if state.fail_fast && state.repository.persistence_ready() { "ok" } else { "blocked" },
+        "profile": "trnm-economy-production",
+        "fail_fast": state.fail_fast,
+        "postgres_persistent": state.repository.persistence_ready(),
+        "atomic_intent_receipts": true,
+        "escrow": true,
+    }))
+}
+
+pub async fn post_trnm_economic_intent(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<TrnmEconomicIntentRequest>,
+) -> Response {
+    if let Err(response) = authorize_ledger_admin(&state, &headers, &["ledger:manage"]) {
+        return response;
+    }
+    if let Err(error) = request.intent.validate() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error,
+                message: None,
+            }),
+        )
+            .into_response();
+    }
+    match state
+        .repository
+        .execute_trnm_economic_intent(&request.intent)
+        .await
+    {
+        Ok(receipt) => (StatusCode::OK, Json(receipt)).into_response(),
+        Err(LedgerActionError::RepositoryUnavailable(_)) if !state.fail_fast => {
+            match execute_trnm_intent_in_memory(&state, &request.intent).await {
+                Ok(receipt) => (StatusCode::OK, Json(receipt)).into_response(),
+                Err(response) => response,
+            }
+        }
+        Err(error) => repository_error_response(error).into_response(),
+    }
+}
+
+async fn execute_trnm_intent_in_memory(
+    state: &AppState,
+    intent: &EconomicIntent,
+) -> Result<EconomicReceipt, Response> {
+    let account_id = intent
+        .actors
+        .first()
+        .and_then(|actor| actor.account_id.as_deref())
+        .and_then(|value| Uuid::parse_str(value).ok())
+        .ok_or_else(|| {
+            repository_error_response(LedgerActionError::AccountNotFound).into_response()
+        })?;
+    if state
+        .idempotency_keys
+        .read()
+        .await
+        .contains(&intent.idempotency_key.key)
+    {
+        let mut receipt = EconomicReceipt::from_intent(
+            format!("cex-local-receipt:{}", intent.intent_id),
+            intent,
+            CEX_SETTLEMENT_BACKEND_ID,
+            SettlementBackendKind::LocalTest,
+            ReceiptStatus::Duplicate,
+            0,
+        );
+        receipt.evidence = json!({"persistent": false, "local_dev_fallback": true});
+        return Ok(receipt);
+    }
+    let amount = intent.amount_credits.unwrap_or_default().max(0) as f64;
+    let mut accounts = state.accounts.write().await;
+    let account = accounts.get_mut(&account_id).ok_or_else(|| {
+        repository_error_response(LedgerActionError::AccountNotFound).into_response()
+    })?;
+    let status = match intent.kind {
+        EconomicIntentKind::ReleaseReward | EconomicIntentKind::CompleteContract
+            if amount > 0.0 =>
+        {
+            account.balance += amount;
+            ReceiptStatus::ApprovedRelease
+        }
+        EconomicIntentKind::Reserve if account.balance - account.reserved >= amount => {
+            account.reserved += amount;
+            ReceiptStatus::Reserved
+        }
+        EconomicIntentKind::Refund if account.reserved >= amount => {
+            account.reserved -= amount;
+            ReceiptStatus::Refunded
+        }
+        EconomicIntentKind::Settle => {
+            account.balance += amount;
+            ReceiptStatus::Settled
+        }
+        EconomicIntentKind::Consume | EconomicIntentKind::Chargeback
+            if account.reserved >= amount =>
+        {
+            account.reserved -= amount;
+            account.balance -= amount;
+            if matches!(intent.kind, EconomicIntentKind::Chargeback) {
+                ReceiptStatus::SellerChargebackConsumed
+            } else {
+                ReceiptStatus::Consumed
+            }
+        }
+        EconomicIntentKind::ReleaseReward | EconomicIntentKind::CompleteContract => {
+            ReceiptStatus::SkippedZeroReward
+        }
+        _ => ReceiptStatus::FailedLedger,
+    };
+    drop(accounts);
+    state
+        .idempotency_keys
+        .write()
+        .await
+        .insert(intent.idempotency_key.key.clone());
+    let mut receipt = EconomicReceipt::from_intent(
+        format!("cex-local-receipt:{}", intent.intent_id),
+        intent,
+        CEX_SETTLEMENT_BACKEND_ID,
+        SettlementBackendKind::LocalTest,
+        status,
+        0,
+    );
+    receipt.evidence = json!({"persistent": false, "local_dev_fallback": true});
+    Ok(receipt)
+}
+
+pub async fn post_trnm_wallet_snapshot(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<TrnmWalletRequest>,
+) -> Response {
+    if let Err(response) =
+        authorize_ledger_admin(&state, &headers, &["ledger:read", "ledger:manage"])
+    {
+        return response;
+    }
+    if request.actor_id.trim().is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "actor_id is required".to_string(),
+                message: None,
+            }),
+        )
+            .into_response();
+    }
+    let account_id = match Uuid::parse_str(&request.account_id) {
+        Ok(account_id) => account_id,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: "account_id must be a UUID".to_string(),
+                    message: None,
+                }),
+            )
+                .into_response()
+        }
+    };
+    match state
+        .repository
+        .reconcile_trnm_wallet(&request.actor_id, account_id, request.reconciliation_cursor)
+        .await
+    {
+        Ok(snapshot) => (StatusCode::OK, Json::<WalletSnapshot>(snapshot)).into_response(),
+        Err(LedgerActionError::RepositoryUnavailable(_)) if !state.fail_fast => {
+            let accounts = state.accounts.read().await;
+            match accounts.get(&account_id) {
+                Some(account) => (
+                    StatusCode::OK,
+                    Json(WalletSnapshot {
+                        account_id: account_id.to_string(),
+                        available_credits: (account.balance - account.reserved).round() as i64,
+                        reserved_credits: account.reserved.round() as i64,
+                        observed_at_cursor: request.reconciliation_cursor,
+                    }),
+                )
+                    .into_response(),
+                None => {
+                    repository_error_response(LedgerActionError::AccountNotFound).into_response()
+                }
+            }
+        }
+        Err(error) => repository_error_response(error).into_response(),
+    }
 }
 
 pub async fn metrics(State(state): State<AppState>) -> impl IntoResponse {

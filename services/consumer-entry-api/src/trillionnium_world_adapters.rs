@@ -71,12 +71,28 @@ pub(super) fn cex_trillionnium_world_adapter_readiness_json_for_league(
             "source_of_truth": "cex_ingress_token_and_optional_signed_session"
         },
         "repository": {
-            "source_of_truth": "cex_normalized_term_exchange_receipt_tables",
-            "status": "typed_receipt_direct_write_and_read_model_ready"
+            "source_of_truth": "cex_postgres_trnm_economic_intents_and_receipts",
+            "status": "atomic_intent_receipt_and_reconciliation_cursor_persistence_ready",
+            "migration_floor": "0027_add_trnm_native_economy_persistence.sql"
         },
         "ledger": {
-            "source_of_truth": "cex_term_exchange_backend",
+            "source_of_truth": "cex_postgres_ledger_and_escrow_backend",
+            "fail_fast": true,
+            "in_memory_fallback": false,
+            "escrow_commit_before_seller_payment": true,
             "receipt_count": receipt_count
+        },
+        "public_player_market": {
+            "enabled": false,
+            "status": "release_gated",
+            "trusted_system_market_only": true,
+            "blocked_until": [
+                "production_identity_and_account_recovery",
+                "public_listing_custody_and_matching_review",
+                "anti_cheat_abuse_controls",
+                "dispute_and_customer_support_operations",
+                "human_usability_and_legal_release_approval"
+            ]
         },
         "current_game_counts": {
             "world_receipts": world.world_term_exchange_receipts.len(),

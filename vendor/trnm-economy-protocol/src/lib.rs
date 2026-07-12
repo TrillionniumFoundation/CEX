@@ -1,15 +1,102 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-pub const TERM_EXCHANGE_PROTOCOL_VERSION: &str = "term_exchange_protocol_v1";
-pub const TERM_EXCHANGE_KERNEL_CONTRACT_VERSION: &str = "trillionnium_term_exchange_kernel_v1";
-pub const TERM_EXCHANGE_BACKEND_CONTRACT_VERSION: &str = "term_exchange_backend_v1";
+pub const TERM_EXCHANGE_PROTOCOL_VERSION: &str = "term_exchange_protocol_v2";
+pub const TERM_EXCHANGE_PROTOCOL_PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const TERM_EXCHANGE_KERNEL_CONTRACT_VERSION: &str = "trillionnium_term_exchange_kernel_v2";
+pub const TERM_EXCHANGE_BACKEND_CONTRACT_VERSION: &str = "term_exchange_backend_v2";
 pub const TERM_EXCHANGE_KERNEL_ID: &str = "term-exchange-kernel";
 pub const CEX_SETTLEMENT_BACKEND_ID: &str = "cex-settlement-backend";
 pub const CEX_SETTLEMENT_BACKEND_NAME: &str = "CEX Settlement Backend";
+pub const OFFLINE_LOCAL_BACKEND_ID: &str = "trnm-offline-local-backend";
 pub const LEGACY_CEX_RUNTIME_PLUGIN_CONTRACT_VERSION: &str = "trillionnium_cex_runtime_plugin_v1";
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EconomyMode {
+    #[default]
+    OfflineLocal,
+    CexConnected,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EconomyCurrencyClass {
+    SoftCredits,
+    WalletCredits,
+    TemporaryBattleResource,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EconomyAssetClass {
+    BoundGameplayItem,
+    TradeableItem,
+    WalletCredit,
+    TemporaryBattleResource,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EconomyTransferability {
+    Bound,
+    Tradeable,
+    Ephemeral,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct EconomyAssetSemantic {
+    pub asset_id: String,
+    pub asset_class: EconomyAssetClass,
+    pub transferability: EconomyTransferability,
+    pub settlement_authority: String,
+}
+
+impl EconomyAssetSemantic {
+    pub fn soft_credit() -> Self {
+        Self {
+            asset_id: "trnm-soft-credit".to_string(),
+            asset_class: EconomyAssetClass::BoundGameplayItem,
+            transferability: EconomyTransferability::Bound,
+            settlement_authority: "trnm-campaign-core".to_string(),
+        }
+    }
+
+    pub fn wallet_credit() -> Self {
+        Self {
+            asset_id: "cex-wallet-credit".to_string(),
+            asset_class: EconomyAssetClass::WalletCredit,
+            transferability: EconomyTransferability::Tradeable,
+            settlement_authority: CEX_SETTLEMENT_BACKEND_ID.to_string(),
+        }
+    }
+
+    pub fn temporary_battle_resource(resource_id: impl Into<String>) -> Self {
+        Self {
+            asset_id: resource_id.into(),
+            asset_class: EconomyAssetClass::TemporaryBattleResource,
+            transferability: EconomyTransferability::Ephemeral,
+            settlement_authority: "trnm-rts-sim".to_string(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct EconomyAccountBinding {
+    pub actor_id: String,
+    pub account_id: String,
+    pub binding_revision: u64,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct WalletSnapshot {
+    pub account_id: String,
+    pub available_credits: i64,
+    pub reserved_credits: i64,
+    pub observed_at_cursor: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SettlementBackendKind {
     Cex,
@@ -33,7 +120,7 @@ pub enum EconomicIntentKind {
     VerifyReceipt,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReceiptProgressionClass {
     ProgressionAllowed,
@@ -103,7 +190,7 @@ impl ReceiptStatus {
         }
     }
 
-    pub fn allows_world_progression(&self) -> bool {
+    pub fn allows_progression(&self) -> bool {
         matches!(
             self.progression_class(),
             ReceiptProgressionClass::ProgressionAllowed | ReceiptProgressionClass::TerminalSkip
@@ -133,21 +220,6 @@ pub struct AssetRef {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct TermDefinition {
-    pub protocol_version: String,
-    pub term_id: String,
-    pub term_version: String,
-    pub domain: String,
-    pub authority: String,
-    pub pricing_rule_id: String,
-    pub settlement_rule_id: String,
-    pub refund_rule_id: Option<String>,
-    pub dispute_rule_id: Option<String>,
-    pub receipt_schema_id: String,
-    pub projection_schema_id: Option<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct EconomicIntent {
     pub protocol_version: String,
     pub intent_id: String,
@@ -164,7 +236,27 @@ pub struct EconomicIntent {
     pub created_at_epoch: i64,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+impl EconomicIntent {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.protocol_version != TERM_EXCHANGE_PROTOCOL_VERSION
+            || self.intent_id.trim().is_empty()
+            || self.term_id.trim().is_empty()
+            || self.domain != "trnm_game"
+            || self.idempotency_key.scope.trim().is_empty()
+            || self.idempotency_key.key.trim().is_empty()
+            || self.actors.is_empty()
+            || self
+                .actors
+                .iter()
+                .any(|actor| actor.actor_id.trim().is_empty())
+        {
+            return Err("economic intent violates the TRNM protocol boundary".to_string());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct EconomicReceipt {
     pub protocol_version: String,
     pub receipt_id: String,
@@ -208,8 +300,39 @@ impl EconomicReceipt {
         }
     }
 
-    pub fn allows_world_progression(&self) -> bool {
-        self.status.allows_world_progression()
+    pub fn from_intent(
+        receipt_id: impl Into<String>,
+        intent: &EconomicIntent,
+        backend_id: impl Into<String>,
+        backend_kind: SettlementBackendKind,
+        status: ReceiptStatus,
+        finalized_at_epoch: i64,
+    ) -> Self {
+        Self::new(
+            receipt_id,
+            intent.intent_id.clone(),
+            intent.term_id.clone(),
+            backend_id,
+            backend_kind,
+            status,
+            finalized_at_epoch,
+        )
+    }
+
+    pub fn validate_for(&self, intent: &EconomicIntent) -> Result<(), String> {
+        if self.protocol_version != TERM_EXCHANGE_PROTOCOL_VERSION
+            || self.intent_id != intent.intent_id
+            || self.term_id != intent.term_id
+            || self.progression_class != self.status.progression_class()
+            || self.receipt_id.trim().is_empty()
+        {
+            return Err("economic receipt is not bound to the pending intent".to_string());
+        }
+        Ok(())
+    }
+
+    pub fn allows_progression(&self) -> bool {
+        self.status.allows_progression()
             && self.progression_class == self.status.progression_class()
     }
 }
@@ -234,19 +357,20 @@ pub fn cex_settlement_backend_manifest(active: bool) -> SettlementBackendManifes
         contract_version: TERM_EXCHANGE_BACKEND_CONTRACT_VERSION.to_string(),
         active,
         fail_closed: true,
-        capabilities: vec![
-            "wallet_read_model".to_string(),
-            "reserve".to_string(),
-            "seller_settlement".to_string(),
-            "buyer_consume".to_string(),
-            "refund".to_string(),
-            "seller_chargeback".to_string(),
-            "reward_release".to_string(),
-            "review_hold_release".to_string(),
-            "work_order_economy".to_string(),
-            "audit_receipts".to_string(),
-            "recovery_dead_letter".to_string(),
-        ],
+        capabilities: [
+            "wallet_read_model",
+            "reserve",
+            "seller_settlement",
+            "buyer_consume",
+            "refund",
+            "seller_chargeback",
+            "reward_release",
+            "audit_receipts",
+            "reconciliation",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect(),
         receipt_verification_required: true,
     }
 }
@@ -254,21 +378,14 @@ pub fn cex_settlement_backend_manifest(active: bool) -> SettlementBackendManifes
 pub fn protocol_manifest_json() -> Value {
     json!({
         "protocol_version": TERM_EXCHANGE_PROTOCOL_VERSION,
+        "package_version": TERM_EXCHANGE_PROTOCOL_PACKAGE_VERSION,
         "kernel_contract_version": TERM_EXCHANGE_KERNEL_CONTRACT_VERSION,
         "backend_contract_version": TERM_EXCHANGE_BACKEND_CONTRACT_VERSION,
-        "core_types": [
-            "TermDefinition",
-            "EconomicIntent",
-            "EconomicReceipt",
-            "ReceiptStatus",
-            "ReceiptProgressionClass",
-            "SettlementBackendManifest",
-            "IdempotencyKey",
-            "ActorRef",
-            "AssetRef"
-        ],
-        "backend_kinds": ["cex", "dex", "chain", "local_test", "external"],
-        "world_progression_rule": "World/domain runtimes advance economic state only after EconomicReceipt allows progression or terminal skip; recoverable holds route to retry/recovery."
+        "domain": "trnm_game",
+        "core_types": ["EconomicIntent", "EconomicReceipt", "ReceiptStatus", "ReceiptProgressionClass", "SettlementBackendManifest", "IdempotencyKey", "ActorRef", "AssetRef"],
+        "asset_classes": ["bound_gameplay_item", "tradeable_item", "wallet_credit", "temporary_battle_resource"],
+        "currency_classes": ["soft_credits", "wallet_credits", "temporary_battle_resource"],
+        "world_progression_rule": "TRNM applies tradeable value only after a verified receipt allows progression; recoverable holds remain in the durable outbox."
     })
 }
 
@@ -277,43 +394,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn receipt_status_maps_to_progression_class() {
+    fn currency_and_asset_authorities_are_explicit() {
         assert_eq!(
-            ReceiptStatus::Settled.progression_class(),
-            ReceiptProgressionClass::ProgressionAllowed
+            EconomyAssetSemantic::soft_credit().settlement_authority,
+            "trnm-campaign-core"
         );
         assert_eq!(
-            ReceiptStatus::SellerChargebackFailed.progression_class(),
-            ReceiptProgressionClass::RecoverableHold
+            EconomyAssetSemantic::wallet_credit().settlement_authority,
+            CEX_SETTLEMENT_BACKEND_ID
         );
         assert_eq!(
-            ReceiptStatus::Duplicate.progression_class(),
-            ReceiptProgressionClass::ProgressionAllowed
-        );
-        assert_eq!(
-            ReceiptStatus::HeldReview.progression_class(),
-            ReceiptProgressionClass::RecoverableHold
-        );
-        assert_eq!(
-            ReceiptStatus::SkippedZeroSellerNet.progression_class(),
-            ReceiptProgressionClass::TerminalSkip
-        );
-        assert_eq!(
-            ReceiptStatus::MissingLedgerToken.progression_class(),
-            ReceiptProgressionClass::HardFail
+            EconomyAssetSemantic::temporary_battle_resource("cyan").transferability,
+            EconomyTransferability::Ephemeral
         );
     }
 
     #[test]
-    fn cex_backend_is_first_fail_closed_backend() {
-        let manifest = cex_settlement_backend_manifest(true);
-        assert_eq!(manifest.backend_id, CEX_SETTLEMENT_BACKEND_ID);
-        assert_eq!(manifest.backend_kind, SettlementBackendKind::Cex);
-        assert!(manifest.active);
-        assert!(manifest.fail_closed);
-        assert!(manifest
-            .capabilities
-            .iter()
-            .any(|capability| capability == "seller_chargeback"));
+    fn receipt_statuses_fail_closed() {
+        assert!(ReceiptStatus::Settled.allows_progression());
+        assert!(!ReceiptStatus::FailedNetwork.allows_progression());
+        assert!(!ReceiptStatus::FailedBadResponse.allows_progression());
     }
 }

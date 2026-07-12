@@ -1,9 +1,10 @@
 use super::*;
 use term_exchange_protocol::{
-    cex_settlement_backend_manifest, protocol_manifest_json, EconomicIntent, EconomicIntentKind,
+    cex_settlement_backend_manifest, protocol_manifest_json, EconomicIntent, EconomicReceipt,
     WalletSnapshot, CEX_SETTLEMENT_BACKEND_ID, LEGACY_CEX_RUNTIME_PLUGIN_CONTRACT_VERSION,
     TERM_EXCHANGE_BACKEND_CONTRACT_VERSION, TERM_EXCHANGE_KERNEL_CONTRACT_VERSION,
-    TERM_EXCHANGE_KERNEL_ID, TERM_EXCHANGE_PROTOCOL_VERSION,
+    TERM_EXCHANGE_KERNEL_ID, TERM_EXCHANGE_PROTOCOL_PACKAGE_VERSION,
+    TERM_EXCHANGE_PROTOCOL_VERSION,
 };
 
 const TRILLIONNIUM_TERM_EXCHANGE_HOST_CONTRACT_VERSION: &str = "trillionnium_term_exchange_host_v1";
@@ -11,12 +12,12 @@ const LEGACY_CEX_RUNTIME_PLUGIN_ENDPOINT: &str = "/v1/trillionnium/runtime/cex/m
 const TERM_EXCHANGE_KERNEL_MANIFEST_ENDPOINT: &str =
     "/v1/trillionnium/term-exchange/kernel/manifest";
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct TrnmEconomicIntentRequest {
     pub(super) intent: EconomicIntent,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct TrnmWalletRequest {
     pub(super) actor_id: String,
     pub(super) account_id: String,
@@ -198,6 +199,8 @@ pub(super) fn term_exchange_kernel_manifest_json(state: &AppState) -> Value {
         "runtime_requirements": {
             "protocol_crate": "trnm-economy-protocol",
             "protocol_version": TERM_EXCHANGE_PROTOCOL_VERSION,
+            "protocol_package_version": TERM_EXCHANGE_PROTOCOL_PACKAGE_VERSION,
+            "dependency_source": "CEX/vendor/trnm-economy-protocol pinned to exact TRNM-owned package version",
             "fail_closed": true,
             "idempotency_required": true,
             "receipt_required": true,
@@ -281,10 +284,11 @@ pub(super) fn term_exchange_kernel_manifest_json(state: &AppState) -> Value {
             "primary_endpoint": TERM_EXCHANGE_KERNEL_MANIFEST_ENDPOINT
         },
         "migration_status": {
-            "status": "typed_receipt_progression_runtime_recovery_read_model_and_projection_gates_active",
+            "status": "postgres_atomic_intent_receipt_escrow_and_reconciliation_persistence_active",
             "split_strategy": "protocol_first_then_backend_adapter_then_storage_boundary",
-            "current_source_of_evidence": "TRNM revision 10 outbox plus CEX real-ledger integration tests",
-            "next_step": "keep legacy world routes read-compatible while the native TRNM client uses only the game-owned protocol"
+            "current_source_of_evidence": "TRNM revision 11 priority compensation outbox plus CEX PostgreSQL cross-process restart tests",
+            "public_player_market": "release_gated_trusted_system_market_only",
+            "next_step": "human usability, anti-abuse, dispute operations and legal release approval before public listings"
         }
     })
 }
@@ -316,79 +320,60 @@ pub(super) async fn post_trnm_economic_intent(
     if let Err(error) = payload.intent.validate() {
         return (StatusCode::BAD_REQUEST, Json(json!({"error": error}))).into_response();
     }
-    let Some(actor) = payload.intent.actors.first() else {
+    let Some(token) = state.config().ledger_admin_token.as_deref() else {
         return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error": "economic intent requires an actor"})),
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"error": "ledger admin token is not configured"})),
         )
             .into_response();
     };
-    let Some(account_id) = actor.account_id.clone() else {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error": "economic intent actor requires account_id"})),
-        )
-            .into_response();
-    };
-    let (ledger_action, success_status) = match payload.intent.kind {
-        EconomicIntentKind::Reserve => ("reserve", "reserved"),
-        EconomicIntentKind::Settle => ("grant", "settled"),
-        EconomicIntentKind::Consume => ("consume", "consumed"),
-        EconomicIntentKind::Refund => ("refund", "refunded"),
-        EconomicIntentKind::Chargeback => ("consume", "seller_chargeback_consumed"),
-        EconomicIntentKind::ReleaseReward => ("grant", "approved_release"),
-        EconomicIntentKind::CompleteContract => ("grant", "settled"),
-        EconomicIntentKind::Quote | EconomicIntentKind::VerifyReceipt => {
+    let url = format!(
+        "{}/v1/trnm/economy/intents",
+        state.config().ledger_base_url.trim_end_matches('/')
+    );
+    let response = match state
+        .inner
+        .http
+        .post(url)
+        .header("x-admin-token", token)
+        .json(&payload)
+        .send()
+        .await
+    {
+        Ok(response) => response,
+        Err(error) => {
             return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({"error": "quote/verify are read-model operations"})),
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({"error": format!("persistent ledger unavailable: {error}")})),
             )
-                .into_response();
+                .into_response()
         }
     };
-    let amount_credits = payload.intent.amount_credits.unwrap_or_default();
-    let receipt = CexTermExchangeBackend
-        .execute_ledger_action(
-            &state,
-            TermExchangeLedgerActionRequest {
-                term_id: payload.intent.term_id.clone(),
-                term_version: payload.intent.term_version.clone(),
-                domain: payload.intent.domain.clone(),
-                intent_id: payload.intent.intent_id.clone(),
-                intent_kind: payload.intent.kind.clone(),
-                room_id: Some("trnm-native-client".to_string()),
-                matrix_user_id: actor.actor_id.clone(),
-                account_id_override: Some(account_id),
-                message: "TRNM native economy intent".to_string(),
-                failure_context: "TRNM account binding could not be settled".to_string(),
-                ledger_action: ledger_action.to_string(),
-                success_status: success_status.to_string(),
-                idempotency_key: payload.intent.idempotency_key.key.clone(),
-                idempotency_scope: payload.intent.idempotency_key.scope.clone(),
-                reference_id: payload
-                    .intent
-                    .assets
-                    .first()
-                    .map(|asset| asset.asset_id.clone()),
-                amount: amount_credits as f64,
-                amount_credits,
-                currency: payload
-                    .intent
-                    .currency
-                    .clone()
-                    .unwrap_or_else(|| "wallet_credits".to_string()),
-                metadata: payload.intent.metadata.clone(),
-                extra_ledger_body: Map::new(),
-            },
-        )
-        .await
-        .receipt;
-    {
+    let status = response.status();
+    if !status.is_success() {
+        let value = response.json::<Value>().await.unwrap_or(Value::Null);
+        return (StatusCode::BAD_GATEWAY, Json(value)).into_response();
+    }
+    let receipt = match response.json::<EconomicReceipt>().await {
+        Ok(receipt) => receipt,
+        Err(error) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({"error": format!("invalid persistent ledger receipt: {error}")})),
+            )
+                .into_response()
+        }
+    };
+    let league_snapshot = {
         let mut league = state.inner.league_state.lock().await;
         record_league_term_exchange_receipt(
             &mut league,
             Some(TermExchangeReceiptState::from(&receipt)),
         );
+        league.clone()
+    };
+    if let Err(response) = persist_league_state(&state, &league_snapshot).await {
+        return response;
     }
     (StatusCode::OK, Json(receipt)).into_response()
 }
@@ -417,15 +402,15 @@ pub(super) async fn post_trnm_wallet_snapshot(
             .into_response();
     };
     let url = format!(
-        "{}/v1/accounts/{}",
-        state.config().ledger_base_url.trim_end_matches('/'),
-        payload.account_id
+        "{}/v1/trnm/economy/wallet",
+        state.config().ledger_base_url.trim_end_matches('/')
     );
     let response = match state
         .inner
         .http
-        .get(url)
+        .post(url)
         .header("x-admin-token", token)
+        .json(&payload)
         .send()
         .await
     {
@@ -443,28 +428,12 @@ pub(super) async fn post_trnm_wallet_snapshot(
     if !status.is_success() {
         return (StatusCode::BAD_GATEWAY, Json(value)).into_response();
     }
-    let available = value
-        .pointer("/account/balance")
-        .or_else(|| value.get("balance"))
-        .and_then(Value::as_f64)
-        .unwrap_or_default()
-        .round() as i64;
-    let reserved = value
-        .pointer("/account/reserved_balance")
-        .or_else(|| value.pointer("/account/reserved"))
-        .or_else(|| value.get("reserved_balance"))
-        .or_else(|| value.get("reserved"))
-        .and_then(Value::as_f64)
-        .unwrap_or_default()
-        .round() as i64;
-    (
-        StatusCode::OK,
-        Json(WalletSnapshot {
-            account_id: payload.account_id,
-            available_credits: available,
-            reserved_credits: reserved,
-            observed_at_cursor: payload.reconciliation_cursor,
-        }),
-    )
-        .into_response()
+    match serde_json::from_value::<WalletSnapshot>(value) {
+        Ok(snapshot) => (StatusCode::OK, Json(snapshot)).into_response(),
+        Err(error) => (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({"error": format!("invalid wallet snapshot: {error}")})),
+        )
+            .into_response(),
+    }
 }

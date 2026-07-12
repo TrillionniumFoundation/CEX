@@ -7,6 +7,7 @@ use crate::{
     repository::{LedgerActionError, LedgerRepository, LedgerRepositoryHandle},
     state::{AccountRecord, LedgerEntryRecord},
 };
+use term_exchange_protocol::{EconomicIntent, EconomicReceipt, WalletSnapshot};
 
 pub struct PostgresLedgerRepository {
     pub database_url: Option<String>,
@@ -275,6 +276,10 @@ impl PostgresLedgerRepository {
 
 #[async_trait]
 impl LedgerRepository for PostgresLedgerRepository {
+    fn persistence_ready(&self) -> bool {
+        self.pool.is_some()
+    }
+
     async fn create_account(&self, account: &AccountRecord) -> Result<(), String> {
         let pool = self
             .pool
@@ -415,5 +420,22 @@ impl LedgerRepository for PostgresLedgerRepository {
         entry: &LedgerEntryRecord,
     ) -> Result<AccountRecord, LedgerActionError> {
         self.grant_transaction_skeleton(entry).await
+    }
+
+    async fn execute_trnm_economic_intent(
+        &self,
+        intent: &EconomicIntent,
+    ) -> Result<EconomicReceipt, LedgerActionError> {
+        self.execute_trnm_native_intent(intent).await
+    }
+
+    async fn reconcile_trnm_wallet(
+        &self,
+        actor_id: &str,
+        account_id: Uuid,
+        requested_cursor: u64,
+    ) -> Result<WalletSnapshot, LedgerActionError> {
+        self.reconcile_trnm_native_wallet(actor_id, account_id, requested_cursor)
+            .await
     }
 }
