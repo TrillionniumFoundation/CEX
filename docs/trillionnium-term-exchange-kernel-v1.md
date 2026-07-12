@@ -1,5 +1,9 @@
 # Trillionnium Term Exchange Kernel v1
 
+> Historical v1 baseline. The current native-game boundary is
+> `term_exchange_protocol_v2`, owned by Trillionnium's
+> `trnm-economy-protocol`; see `trillionnium-native-economy-integration-v1.md`.
+
 **Decision**: the stable economic layer is the **Term Exchange Kernel**, not CEX itself. CEX is the first settlement backend; DEX/chain settlement must plug into the same protocol later.
 
 Primary runtime manifest:

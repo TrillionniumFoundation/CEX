@@ -2170,6 +2170,7 @@ pub(super) async fn settle_league_reward_with_ledger(
                 intent_kind: term_exchange_protocol::EconomicIntentKind::ReleaseReward,
                 room_id: payload.room_id.clone(),
                 matrix_user_id: matrix_user_id.to_string(),
+                account_id_override: None,
                 message: "league reward settlement".to_string(),
                 failure_context: "matrix identity could not be resolved for reward settlement"
                     .to_string(),

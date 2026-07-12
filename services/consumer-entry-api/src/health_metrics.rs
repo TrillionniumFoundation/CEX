@@ -50,25 +50,24 @@ fn maturity_axis_json(
 
 fn cex_trillionnium_world_adapter_readiness_green(readiness: &Value) -> bool {
     readiness.get("contract_version").and_then(Value::as_str)
-        == Some("cex_trillionnium_world_production_adapter_v1")
+        == Some("cex_trnm_game_economy_adapter_v1")
         && readiness.get("protocol_contract").and_then(Value::as_str)
-            == Some("trillionnium_world_runtime_adapter_v1")
-        && readiness.get("domain_contract").and_then(Value::as_str)
-            == Some("trillionnium_world_domain_v1")
+            == Some("term_exchange_protocol_v2")
+        && readiness.get("domain_contract").and_then(Value::as_str) == Some("trnm_game_economy_v1")
         && readiness.get("status").and_then(Value::as_str)
-            == Some("cex_production_adapter_bridge_ready")
+            == Some("cex_trnm_game_economy_adapter_ready")
         && readiness
             .pointer("/repository/source_of_truth")
             .and_then(Value::as_str)
-            == Some("cex_league_repository_normalized_world_tables")
+            == Some("cex_normalized_term_exchange_receipt_tables")
         && readiness
             .pointer("/identity/adapter_contract")
             .and_then(Value::as_str)
-            == Some("cex_trillionnium_world_production_adapter_v1")
+            == Some("cex_trnm_game_economy_adapter_v1")
         && readiness
             .pointer("/session/source_of_truth")
             .and_then(Value::as_str)
-            == Some("cex_existing_web_and_api_session_guards")
+            == Some("cex_ingress_token_and_optional_signed_session")
         && readiness
             .pointer("/standalone_runtime_adapter_readiness/statuses")
             .and_then(Value::as_array)
@@ -76,7 +75,7 @@ fn cex_trillionnium_world_adapter_readiness_green(readiness: &Value) -> bool {
                 !statuses.is_empty()
                     && statuses.iter().all(|status| {
                         status.get("status").and_then(Value::as_str)
-                            == Some("cex_production_impl_connected")
+                            == Some("cex_trnm_game_economy_impl_connected")
                             && status
                                 .get("production_adapter_trait_ready")
                                 .and_then(Value::as_bool)

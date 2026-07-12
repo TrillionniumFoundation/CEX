@@ -18,6 +18,7 @@ pub(super) struct TermExchangeLedgerActionRequest {
     pub(super) intent_kind: EconomicIntentKind,
     pub(super) room_id: Option<String>,
     pub(super) matrix_user_id: String,
+    pub(super) account_id_override: Option<String>,
     pub(super) message: String,
     pub(super) failure_context: String,
     pub(super) ledger_action: String,
@@ -85,7 +86,7 @@ pub(super) struct TermExchangeBackendReceipt {
 
 impl TermExchangeBackendReceipt {
     pub(super) fn into_legacy_settlement(self) -> LeagueLedgerSettlement {
-        let _receipt_progression_allowed = self.receipt.allows_world_progression();
+        let _receipt_progression_allowed = self.receipt.allows_progression();
         LeagueLedgerSettlement {
             status: self.raw_status,
             account_id: self.account_id,
@@ -151,45 +152,50 @@ async fn execute_cex_ledger_action(
         );
     };
 
-    let matrix_payload = MatrixMessageRequest {
-        matrix_user_id: request.matrix_user_id.clone(),
-        room_id,
-        session_id: None,
-        org_id: None,
-        message: request.message.clone(),
-        capability_id: None,
-        account_id: None,
-        event_id: None,
-        idempotency_key: None,
-        metadata: None,
-    };
-    let resolved_identity = match resolve_matrix_identity(state, &matrix_payload).await {
-        Ok(identity) => identity,
-        Err(_) => {
-            let error = request.failure_context.clone();
+    let account_id = if let Some(account_id) = request.account_id_override.clone() {
+        account_id
+    } else {
+        let matrix_payload = MatrixMessageRequest {
+            matrix_user_id: request.matrix_user_id.clone(),
+            room_id,
+            session_id: None,
+            org_id: None,
+            message: request.message.clone(),
+            capability_id: None,
+            account_id: None,
+            event_id: None,
+            idempotency_key: None,
+            metadata: None,
+        };
+        let resolved_identity = match resolve_matrix_identity(state, &matrix_payload).await {
+            Ok(identity) => identity,
+            Err(_) => {
+                let error = request.failure_context.clone();
+                return backend_receipt(
+                    request,
+                    "failed_identity",
+                    None,
+                    None,
+                    None,
+                    Some(error),
+                    None,
+                    json!({}),
+                );
+            }
+        };
+        let Some(account_id) = resolved_identity.scope.account_id.clone() else {
             return backend_receipt(
                 request,
-                "failed_identity",
+                "skipped_missing_account",
                 None,
                 None,
                 None,
-                Some(error),
+                Some("matrix identity did not resolve a ledger account_id".to_string()),
                 None,
                 json!({}),
             );
-        }
-    };
-    let Some(account_id) = resolved_identity.scope.account_id.clone() else {
-        return backend_receipt(
-            request,
-            "skipped_missing_account",
-            None,
-            None,
-            None,
-            Some("matrix identity did not resolve a ledger account_id".to_string()),
-            None,
-            json!({}),
-        );
+        };
+        account_id
     };
     let Some(ledger_admin_token) = state.config().ledger_admin_token.clone() else {
         return backend_receipt(
@@ -340,17 +346,16 @@ fn backend_receipt(
             json!(TERM_EXCHANGE_BACKEND_ADAPTER_CONTRACT_VERSION),
         );
         map.insert("raw_status".to_string(), json!(raw_status.clone()));
-        map.insert("intent".to_string(), json!(intent));
+        map.insert("intent".to_string(), json!(intent.clone()));
         map.insert(
             "ledger_response".to_string(),
             ledger_response.unwrap_or(Value::Null),
         );
         map.insert("progression_class".to_string(), json!(progression_class));
     }
-    let mut receipt = EconomicReceipt::new(
+    let mut receipt = EconomicReceipt::from_intent(
         format!("receipt:{}", request.intent_id),
-        request.intent_id.clone(),
-        request.term_id.clone(),
+        &intent,
         CEX_SETTLEMENT_BACKEND_ID,
         SettlementBackendKind::Cex,
         typed_status,
@@ -436,6 +441,7 @@ mod tests {
             intent_kind: EconomicIntentKind::ReleaseReward,
             room_id: Some("!room:local.dev".to_string()),
             matrix_user_id: "@alice:local.dev".to_string(),
+            account_id_override: None,
             message: "test".to_string(),
             failure_context: "test failure".to_string(),
             ledger_action: "grant".to_string(),

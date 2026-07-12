@@ -84,6 +84,7 @@ export EXECUTION_PROVIDER_DISPATCH_TIMEOUT_SECONDS="${EXECUTION_PROVIDER_DISPATC
 export CEX_ENABLE_QUEUED_WORKER="${CEX_ENABLE_QUEUED_WORKER:-1}"
 export CEX_ENABLE_ENTRY_SERVICES="${CEX_ENABLE_ENTRY_SERVICES:-1}"
 export CEX_RUNTIME_SKIP_BUILD="${CEX_RUNTIME_SKIP_BUILD:-0}"
+export CEX_RUNTIME_PROFILE="${CEX_RUNTIME_PROFILE:-full}"
 export EXECUTION_WORKER_ID="${EXECUTION_WORKER_ID:-cex-linux-worker}"
 export EXECUTION_WORKER_IDLE_SECS="${EXECUTION_WORKER_IDLE_SECS:-2}"
 export IDENTITY_ADMIN_TOKEN="${IDENTITY_ADMIN_TOKEN:-local-dev-admin-token}"
@@ -93,36 +94,57 @@ export DATABASE_URL="$(cex_effective_database_url)"
 export REDIS_URL="${REDIS_URL:-redis://127.0.0.1:6379}"
 export NATS_URL="${NATS_URL:-nats://127.0.0.1:4222}"
 
+if [[ "$CEX_RUNTIME_PROFILE" == "trnm-economy" ]]; then
+  export CEX_ENABLE_QUEUED_WORKER=0
+  export CEX_ENABLE_ENTRY_SERVICES=1
+  export LEDGER_FAIL_FAST=false
+  export CONSUMER_ENTRY_LEAGUE_NORMALIZED_DUAL_WRITE_ENABLED=false
+  export CONSUMER_ENTRY_LEAGUE_NORMALIZED_READ_SWITCH_ENABLED=false
+  export CONSUMER_ENTRY_LEAGUE_NORMALIZED_FINAL_CUTOVER_ENABLED=false
+fi
+
 RUNTIME_DIR="${CEX_LINUX_RUNTIME_DIR:-$PROJECT_ROOT/run/linux-runtime}"
 LOG_DIR="$RUNTIME_DIR/logs"
 PID_DIR="$RUNTIME_DIR/pids"
 ENTRY_CONFIG_DIR="$RUNTIME_DIR/entry-config"
 mkdir -p "$LOG_DIR" "$PID_DIR"
 
-SERVICES=(ledger-service execution-service identity-service audit-service capability-service gateway-service)
-if [[ "$CEX_ENABLE_ENTRY_SERVICES" == "1" ]]; then
-  SERVICES+=(consumer-entry-api matrix-entry-adapter)
+if [[ "$CEX_RUNTIME_PROFILE" == "trnm-economy" ]]; then
+  SERVICES=(ledger-service consumer-entry-api)
+else
+  SERVICES=(ledger-service execution-service identity-service audit-service capability-service gateway-service)
+  if [[ "$CEX_ENABLE_ENTRY_SERVICES" == "1" ]]; then
+    SERVICES+=(consumer-entry-api matrix-entry-adapter)
+  fi
 fi
 WORKER_NAME="execution-queued-worker"
 WORKER_SCRIPT="$SCRIPT_DIR/execution-queued-worker.sh"
-HEALTH_URLS=(
-  "http://127.0.0.1:7002/health"
-  "http://127.0.0.1:7003/health"
-  "http://127.0.0.1:7001/health"
-  "http://127.0.0.1:7004/health"
-  "http://127.0.0.1:7005/health"
-  "http://127.0.0.1:8080/health"
-)
-if [[ "$CEX_ENABLE_ENTRY_SERVICES" == "1" ]]; then
-  HEALTH_URLS+=(
+if [[ "$CEX_RUNTIME_PROFILE" == "trnm-economy" ]]; then
+  HEALTH_URLS=(
+    "http://127.0.0.1:7002/health"
     "http://127.0.0.1:8090/health"
-    "http://127.0.0.1:8091/health"
   )
+else
+  HEALTH_URLS=(
+    "http://127.0.0.1:7002/health"
+    "http://127.0.0.1:7003/health"
+    "http://127.0.0.1:7001/health"
+    "http://127.0.0.1:7004/health"
+    "http://127.0.0.1:7005/health"
+    "http://127.0.0.1:8080/health"
+  )
+  if [[ "$CEX_ENABLE_ENTRY_SERVICES" == "1" ]]; then
+    HEALTH_URLS+=(
+      "http://127.0.0.1:8090/health"
+      "http://127.0.0.1:8091/health"
+    )
+  fi
 fi
 
 usage() {
   cat <<'EOF'
 Usage: scripts/runtime-manager-linux.sh <start|stop|restart|status|logs>
+Set CEX_RUNTIME_PROFILE=trnm-economy for the ledger + native-game settlement runtime.
 EOF
 }
 

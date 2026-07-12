@@ -794,29 +794,29 @@ fn cex_trillionnium_world_adapter_readiness_connects_protocol_layer() {
 
     assert_eq!(
         readiness.get("protocol_contract").and_then(Value::as_str),
-        Some("trillionnium_world_runtime_adapter_v1")
+        Some("term_exchange_protocol_v2")
     );
     assert_eq!(
         readiness.get("status").and_then(Value::as_str),
-        Some("cex_production_adapter_bridge_ready")
+        Some("cex_trnm_game_economy_adapter_ready")
     );
     assert_eq!(
         readiness
             .pointer("/repository/source_of_truth")
             .and_then(Value::as_str),
-        Some("cex_league_repository_normalized_world_tables")
+        Some("cex_normalized_term_exchange_receipt_tables")
     );
     assert_eq!(
         readiness
             .pointer("/identity/adapter_contract")
             .and_then(Value::as_str),
-        Some("cex_trillionnium_world_production_adapter_v1")
+        Some("cex_trnm_game_economy_adapter_v1")
     );
     assert_eq!(
         readiness
             .pointer("/session/source_of_truth")
             .and_then(Value::as_str),
-        Some("cex_existing_web_and_api_session_guards")
+        Some("cex_ingress_token_and_optional_signed_session")
     );
     assert!(
         readiness
@@ -838,7 +838,7 @@ fn cex_trillionnium_world_adapter_readiness_connects_protocol_layer() {
         .expect("runtime adapter statuses")
         .iter()
         .all(|status| status.get("status").and_then(Value::as_str)
-            == Some("cex_production_impl_connected")));
+            == Some("cex_trnm_game_economy_impl_connected")));
 }
 
 #[tokio::test]
@@ -847,25 +847,19 @@ async fn trillionnium_world_adapter_readiness_endpoint_exposes_protocol_layer() 
     let (status, body) = send_identity_request(
         &app,
         "GET",
-        "/v1/trillionnium/world/adapters/readiness",
+        "/v1/trillionnium/economy/adapters/readiness",
         &[],
     )
     .await;
 
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(
-        body["contract_version"],
-        "cex_trillionnium_world_production_adapter_v1"
-    );
-    assert_eq!(
-        body["protocol_contract"],
-        "trillionnium_world_runtime_adapter_v1"
-    );
-    assert_eq!(body["domain_contract"], "trillionnium_world_domain_v1");
-    assert_eq!(body["status"], "cex_production_adapter_bridge_ready");
+    assert_eq!(body["contract_version"], "cex_trnm_game_economy_adapter_v1");
+    assert_eq!(body["protocol_contract"], "term_exchange_protocol_v2");
+    assert_eq!(body["domain_contract"], "trnm_game_economy_v1");
+    assert_eq!(body["status"], "cex_trnm_game_economy_adapter_ready");
     assert_eq!(
         body["repository"]["source_of_truth"],
-        "cex_league_repository_normalized_world_tables"
+        "cex_normalized_term_exchange_receipt_tables"
     );
     assert!(body["route_records"]["total"].as_u64().is_some());
     assert!(
@@ -879,7 +873,7 @@ async fn trillionnium_world_adapter_readiness_endpoint_exposes_protocol_layer() 
         .expect("runtime adapter statuses")
         .iter()
         .all(|status| status["production_adapter_trait_ready"] == true
-            && status["status"] == "cex_production_impl_connected"));
+            && status["status"] == "cex_trnm_game_economy_impl_connected"));
 }
 
 #[test]
@@ -2548,14 +2542,14 @@ async fn term_exchange_kernel_manifest_declares_cex_as_first_backend() {
     assert_eq!(body["kind"], "trillionnium_term_exchange_kernel_manifest");
     assert_eq!(
         body["contract_version"],
-        "trillionnium_term_exchange_kernel_v1"
+        "trillionnium_term_exchange_kernel_v2"
     );
     assert_eq!(body["kernel_id"], "term-exchange-kernel");
     assert_eq!(body["active_backend_id"], "cex-settlement-backend");
     assert_eq!(body["active_backend_kind"], "cex");
     assert_eq!(
         body["protocol"]["protocol_version"],
-        "term_exchange_protocol_v1"
+        "term_exchange_protocol_v2"
     );
     assert!(body["ownership"]["term_exchange_kernel_owns"]
         .as_array()
@@ -2567,14 +2561,14 @@ async fn term_exchange_kernel_manifest_declares_cex_as_first_backend() {
         .unwrap()
         .iter()
         .any(|value| value.as_str() == Some("seller_chargeback")));
-    assert!(body["ownership"]["trillionnium_world_term_owns"]
+    assert!(body["ownership"]["trnm_game_owns"]
         .as_array()
         .unwrap()
         .iter()
-        .any(|value| value.as_str() == Some("world_event_to_economic_intent_mapping")));
+        .any(|value| value.as_str() == Some("game_event_to_economic_intent_mapping")));
     assert_eq!(
-        body["integration_model"]["world_progression_gate"],
-        "domain_state_advances_only_after_economic_receipt_allows_progression_or_terminal_skip"
+        body["integration_model"]["trnm_progression_gate"],
+        "campaign_state_advances_only_after_a_verified_economic_receipt_allows_progression_or_terminal_skip"
     );
     assert_eq!(body["runtime_requirements"]["fail_closed"], true);
     assert_eq!(
@@ -2650,6 +2644,190 @@ async fn term_exchange_kernel_manifest_declares_cex_as_first_backend() {
     );
 }
 
+fn trnm_economic_intent_json(
+    intent_id: &str,
+    kind: &str,
+    account_id: &str,
+    amount_credits: i64,
+    idempotency_key: &str,
+) -> Value {
+    json!({
+        "intent": {
+            "protocol_version": "term_exchange_protocol_v2",
+            "intent_id": intent_id,
+            "term_id": "trnm_native_game_economy",
+            "term_version": "1",
+            "domain": "trnm_game",
+            "kind": kind,
+            "idempotency_key": {
+                "scope": "trnm-save:e2e",
+                "key": idempotency_key
+            },
+            "actors": [{
+                "actor_id": "trnm-e2e-player",
+                "actor_kind": "player",
+                "account_id": account_id
+            }],
+            "assets": [{
+                "asset_id": "cex-wallet-credit",
+                "asset_kind": "wallet_credit",
+                "quantity": amount_credits,
+                "unit": "credit"
+            }],
+            "amount_credits": amount_credits,
+            "currency": "wallet_credits",
+            "metadata": {"source": "trnm-native-client-e2e"},
+            "created_at_epoch": 1_783_819_200_i64
+        }
+    })
+}
+
+#[tokio::test]
+async fn trnm_native_economy_real_ledger_is_exactly_once_and_supports_recovery_flows() {
+    let (ledger_base_url, ledger_admin_token) = start_real_ledger_service_for_world_e2e().await;
+    let http = Client::new();
+    let account_id =
+        create_real_ledger_account(&http, &ledger_base_url, &ledger_admin_token, 100.0).await;
+    let mut config = test_config();
+    config.ledger_base_url = ledger_base_url.clone();
+    config.ledger_admin_token = Some(ledger_admin_token.clone());
+    let state = AppState::new(config);
+    let app = build_router(state.clone());
+
+    let reward = trnm_economic_intent_json(
+        "trnm-reward-1",
+        "release_reward",
+        &account_id,
+        25,
+        "trnm-reward-key-1",
+    );
+    let (status, first) = send_json_request(
+        &app,
+        "POST",
+        "/v1/trillionnium/economy/intents",
+        &[],
+        reward.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(first["status"], "approved_release");
+    assert_eq!(first["progression_class"], "progression_allowed");
+
+    let (status, duplicate) = send_json_request(
+        &app,
+        "POST",
+        "/v1/trillionnium/economy/intents",
+        &[],
+        reward,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(duplicate["status"], "duplicate");
+    assert_eq!(duplicate["progression_class"], "progression_allowed");
+
+    for (intent_id, kind, key) in [
+        ("trnm-reserve-refund", "reserve", "trnm-reserve-refund-key"),
+        ("trnm-refund", "refund", "trnm-refund-key"),
+        (
+            "trnm-reserve-chargeback",
+            "reserve",
+            "trnm-reserve-chargeback-key",
+        ),
+        ("trnm-chargeback", "chargeback", "trnm-chargeback-key"),
+    ] {
+        let (status, receipt) = send_json_request(
+            &app,
+            "POST",
+            "/v1/trillionnium/economy/intents",
+            &[],
+            trnm_economic_intent_json(intent_id, kind, &account_id, 10, key),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "receipt: {receipt}");
+        assert_eq!(receipt["progression_class"], "progression_allowed");
+    }
+
+    let (status, wallet) = send_json_request(
+        &app,
+        "POST",
+        "/v1/trillionnium/economy/wallet",
+        &[],
+        json!({
+            "actor_id": "trnm-e2e-player",
+            "account_id": account_id,
+            "reconciliation_cursor": 5
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "wallet: {wallet}");
+    assert_eq!(wallet["available_credits"], 115);
+    assert_eq!(wallet["reserved_credits"], 0);
+    assert_eq!(wallet["observed_at_cursor"], 5);
+
+    let ledger_account = get_real_ledger_account(
+        &http,
+        &ledger_base_url,
+        &ledger_admin_token,
+        wallet["account_id"].as_str().expect("wallet account id"),
+    )
+    .await;
+    assert_eq!(ledger_account["balance"], 115.0);
+    assert_eq!(ledger_account["reserved"], 0.0);
+    let league = state.inner.league_state.lock().await;
+    assert!(league.term_exchange_receipts.values().any(|receipt| {
+        receipt.term_id == "trnm_native_game_economy"
+            && receipt.protocol_version == "term_exchange_protocol_v2"
+    }));
+}
+
+#[tokio::test]
+async fn trnm_native_economy_fails_closed_when_ledger_is_down_or_intent_is_invalid() {
+    let mut config = test_config();
+    config.ledger_base_url = "http://127.0.0.1:9".to_string();
+    config.ledger_admin_token = Some("unreachable-ledger-token".to_string());
+    let app = build_router(AppState::new(config));
+    let account_id = "00000000-0000-0000-0000-000000000001";
+
+    let (status, receipt) = send_json_request(
+        &app,
+        "POST",
+        "/v1/trillionnium/economy/intents",
+        &[],
+        trnm_economic_intent_json(
+            "trnm-offline-reward",
+            "release_reward",
+            account_id,
+            25,
+            "trnm-offline-reward-key",
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(receipt["status"], "failed_network");
+    assert_eq!(receipt["progression_class"], "recoverable_hold");
+
+    let mut invalid = trnm_economic_intent_json(
+        "trnm-invalid-reward",
+        "release_reward",
+        account_id,
+        25,
+        "trnm-invalid-reward-key",
+    );
+    invalid["intent"]["protocol_version"] = json!("term_exchange_protocol_v1");
+    let (status, body) = send_json_request(
+        &app,
+        "POST",
+        "/v1/trillionnium/economy/intents",
+        &[],
+        invalid,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(body["error"]
+        .as_str()
+        .is_some_and(|error| error.contains("protocol boundary")));
+}
+
 #[tokio::test]
 async fn legacy_cex_runtime_manifest_endpoint_serves_term_exchange_kernel_manifest() {
     let app = build_router(AppState::new(test_config()));
@@ -2658,7 +2836,7 @@ async fn legacy_cex_runtime_manifest_endpoint_serves_term_exchange_kernel_manife
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
         body["contract_version"],
-        "trillionnium_term_exchange_kernel_v1"
+        "trillionnium_term_exchange_kernel_v2"
     );
     assert_eq!(
         body["legacy_compatibility"]["status"],
@@ -16852,7 +17030,7 @@ async fn health_endpoint_exposes_identity_governance_overview() {
     assert_eq!(
         body["trillionnium_world_maturity"]["cex_trillionnium_world_runtime_adapter_readiness"]
             ["protocol_contract"],
-        "trillionnium_world_runtime_adapter_v1"
+        "term_exchange_protocol_v2"
     );
     assert!(
         body["trillionnium_world_maturity"]["axes"]["technical_alpha"]["checks"]

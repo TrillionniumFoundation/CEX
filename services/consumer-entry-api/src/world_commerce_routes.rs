@@ -1313,6 +1313,7 @@ pub(super) async fn settle_world_purchase_ledger_action(
                 },
                 room_id: room_id.map(ToString::to_string),
                 matrix_user_id: matrix_user_id.to_string(),
+                account_id_override: None,
                 message: message.to_string(),
                 failure_context: failure_context.to_string(),
                 ledger_action: action.to_string(),
@@ -3846,6 +3847,7 @@ pub(super) async fn settle_world_contract_completion_with_ledger(
                 intent_kind: term_exchange_protocol::EconomicIntentKind::CompleteContract,
                 room_id: payload.room_id.clone(),
                 matrix_user_id: matrix_user_id.to_string(),
+                account_id_override: None,
                 message: "world contract reward settlement".to_string(),
                 failure_context:
                     "matrix identity could not be resolved for world contract settlement"

@@ -1293,9 +1293,9 @@ impl From<&term_exchange_protocol::EconomicReceipt> for TermExchangeReceiptState
             intent_id: receipt.intent_id.clone(),
             term_id: receipt.term_id.clone(),
             backend_id: receipt.backend_id.clone(),
-            backend_kind: receipt.backend_kind.clone(),
+            backend_kind: receipt.backend_kind,
             status: receipt.status.clone(),
-            progression_class: receipt.progression_class.clone(),
+            progression_class: receipt.progression_class,
             settlement_reference: receipt.settlement_reference.clone(),
             ledger_entry_id: receipt.ledger_entry_id.clone(),
             reason: receipt.reason.clone(),
@@ -4317,11 +4317,23 @@ pub fn build_router(state: AppState) -> Router {
             "/v1/trillionnium/runtime/cex/manifest",
             get(get_term_exchange_kernel_manifest),
         )
+        .route(
+            "/v1/trillionnium/economy/intents",
+            post(post_trnm_economic_intent),
+        )
+        .route(
+            "/v1/trillionnium/economy/wallet",
+            post(post_trnm_wallet_snapshot),
+        )
         .route("/v1/league/home", get(get_league_home))
         .route("/v1/league/world", get(get_league_world))
         .route("/v1/world/home", get(get_world_home))
         .route(
             "/v1/trillionnium/world/adapters/readiness",
+            get(get_trillionnium_world_adapter_readiness),
+        )
+        .route(
+            "/v1/trillionnium/economy/adapters/readiness",
             get(get_trillionnium_world_adapter_readiness),
         )
         .route("/v1/client/app/:matrix_user_id", get(get_client_app_home))

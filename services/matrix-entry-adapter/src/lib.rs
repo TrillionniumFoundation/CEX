@@ -3203,11 +3203,7 @@ fn prune_recent_event_cache(
     ttl_secs: u64,
     max_size: usize,
 ) {
-    loop {
-        let Some(front) = cache.order.front().cloned() else {
-            break;
-        };
-
+    while let Some(front) = cache.order.front().cloned() {
         let should_drop = cache
             .seen
             .get(&front)
