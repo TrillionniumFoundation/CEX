@@ -7,6 +7,14 @@ services:
       - postgres_wal_archive:/archive
     restart: "no"
 
+  postgres-backup-init:
+    image: postgres:16
+    user: root
+    command: ["bash", "-ceu", "chown postgres:postgres /backups && chmod 700 /backups"]
+    volumes:
+      - postgres_base_backups:/backups
+    restart: "no"
+
   postgres:
     image: postgres:16
     restart: unless-stopped
@@ -49,6 +57,8 @@ services:
     depends_on:
       postgres-archive-init:
         condition: service_completed_successfully
+      postgres-backup-init:
+        condition: service_completed_successfully
 
   redis:
     image: redis:7
@@ -65,3 +75,4 @@ services:
 volumes:
   postgres_data:
   postgres_wal_archive:
+  postgres_base_backups:
