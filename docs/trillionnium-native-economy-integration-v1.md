@@ -58,15 +58,25 @@ resulting signed intent and reconcile its campaign wallet, but is not shipped
 to a native client. General admin tokens cannot mint value through this route.
 
 Online Authority v2 uses the stricter `ServerSignedValueEntitlementV2` path.
-The dedicated game server signs match/rules/build/result/participant/nonce-bound
-payloads with Ed25519 and submits the signed intent directly; it no longer asks
-CEX to issue the online entitlement. CEX loads only a public issuer registry,
-requires an active exact key/issuer pair and rejects tampered signatures,
-unknown keys, revoked keys or changed authoritative metadata before ledger
-mutation. The private seed is a mode-600 game-server runtime file and is not
-present in CEX, a native client or either repository. The v1 HMAC contract and
-issuance endpoint remain for the existing trusted native/offline integration.
-Production KMS/HSM custody and automatic rotation are still pending.
+The dedicated game server owns match/rules/build/result/participant/nonce
+metadata and submits the signed intent directly; it no longer asks CEX to issue
+the online entitlement. Online Production v1 moved signing into a separate
+loopback-only process that alone reads the mode-600 seed, independently checks
+the authoritative envelope and persists exactly-once signing receipts. CEX
+loads only a public issuer registry, requires an active exact key/issuer pair
+and rejects tampered signatures, unknown keys, revoked keys or changed
+authoritative metadata before ledger mutation.
+
+Online Production v2 adds the game-authority-protected
+`POST /v1/trnm/economy/issuer-keys/status` read surface. It returns only the
+registered issuer, state, algorithm and SHA-256 of the 32-byte public key for
+one exact `key_id`; no private material is exposed. The game server first
+verifies a short-lived Ed25519 possession challenge from the isolated signer,
+then requires that key/issuer/fingerprint to converge with this CEX response at
+startup and readiness. Anonymous callers and unknown keys fail closed. The v1
+HMAC contract and issuance endpoint remain for the existing trusted
+native/offline integration. The current signer provider is still a local file
+seed; production KMS/HSM custody remains pending.
 
 The wallet endpoint reads the configured ledger, persists the actor/account
 reconciliation cursor and returns the protocol `WalletSnapshot`. Player routes

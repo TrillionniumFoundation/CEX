@@ -284,6 +284,34 @@ async fn only_the_scoped_game_authority_may_issue_value_entitlements() {
 }
 
 #[tokio::test]
+async fn game_authority_can_verify_the_active_online_issuer_fingerprint() {
+    let body = json!({"key_id": "test-online-ed25519-v1"});
+    let (anonymous_status, _) = send_json_with_headers(
+        build_router(test_state()),
+        "POST",
+        "/v1/trnm/economy/issuer-keys/status",
+        &[],
+        body.clone(),
+    )
+    .await;
+    assert_eq!(anonymous_status, StatusCode::UNAUTHORIZED);
+    let (status, key) = send_json_with_headers(
+        build_router(test_state()),
+        "POST",
+        "/v1/trnm/economy/issuer-keys/status",
+        &[("x-trnm-game-authority", "test-game-authority-token")],
+        body,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(key["key_id"], "test-online-ed25519-v1");
+    assert_eq!(key["issuer"], "trnm-online-game-server");
+    assert_eq!(key["status"], "active");
+    assert_eq!(key["signature_algorithm"], "ed25519");
+    assert_eq!(key["public_key_sha256"].as_str().unwrap().len(), 64);
+}
+
+#[tokio::test]
 async fn create_account_and_get_round_trip() {
     let app = build_router(test_state());
     let (account_id, created) = create_account(app.clone(), 100.0).await;

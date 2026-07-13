@@ -203,6 +203,20 @@ pub struct TrnmValueEntitlementIssueRequest {
     pub lifetime_seconds: i64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrnmEntitlementIssuerKeyStatusRequest {
+    pub key_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrnmEntitlementIssuerKeyStatusResponse {
+    pub key_id: String,
+    pub issuer: String,
+    pub status: String,
+    pub signature_algorithm: String,
+    pub public_key_sha256: String,
+}
+
 const PLAYER_SESSION_CONTRACT_VERSION: &str = "trnm_player_session_v1";
 const PLAYER_SESSION_HEADER: &str = "x-trnm-player-session";
 const SYSTEM_OPERATION_HEADER: &str = "x-trnm-system-operation";
@@ -648,6 +662,38 @@ pub async fn post_trnm_value_entitlement_issue(
         Err(error) => return internal_error_response(error),
     };
     (StatusCode::CREATED, Json(entitlement)).into_response()
+}
+
+pub async fn post_trnm_entitlement_issuer_key_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<TrnmEntitlementIssuerKeyStatusRequest>,
+) -> Response {
+    if let Err(error) = authorize_game_authority(&state, &headers) {
+        return unauthorized_response(error.0);
+    }
+    let Some(key) = state.entitlement_issuer_keys.get(&request.key_id) else {
+        return unauthorized_response("entitlement issuer key is not registered");
+    };
+    let public_key = match STANDARD.decode(&key.public_key_base64) {
+        Ok(value) if value.len() == 32 => value,
+        _ => {
+            return internal_error_response(
+                "registered entitlement public key is malformed".to_string(),
+            )
+        }
+    };
+    (
+        StatusCode::OK,
+        Json(TrnmEntitlementIssuerKeyStatusResponse {
+            key_id: request.key_id,
+            issuer: key.issuer.clone(),
+            status: key.status.clone(),
+            signature_algorithm: "ed25519".to_string(),
+            public_key_sha256: sha256_hex(&public_key),
+        }),
+    )
+        .into_response()
 }
 
 struct GameAuthorityError(&'static str);
