@@ -5,8 +5,8 @@ use uuid::Uuid;
 
 use crate::{
     repository::{
-        LedgerActionError, LedgerRepository, LedgerRepositoryHandle, TrnmPlayerIdentityRecord,
-        TrnmPlayerSessionRecord,
+        LedgerActionError, LedgerRepository, LedgerRepositoryHandle, PostgresOperationalReadiness,
+        TrnmPlayerIdentityRecord, TrnmPlayerSessionRecord,
     },
     state::{AccountRecord, LedgerEntryRecord},
 };
@@ -290,6 +290,51 @@ impl LedgerRepository for PostgresLedgerRepository {
                 .await
                 .is_ok(),
             None => false,
+        }
+    }
+
+    async fn postgres_operational_readiness(&self) -> PostgresOperationalReadiness {
+        let Some(pool) = &self.pool else {
+            return PostgresOperationalReadiness::default();
+        };
+        let row =
+            sqlx::query_as::<_, (bool, bool, bool, i64, i64, Option<String>, Option<String>)>(
+                "select
+                current_setting('archive_mode', true) = 'on' as archive_mode_on,
+                coalesce(btrim(current_setting('archive_command', true)), '') <> ''
+                    as archive_command_configured,
+                last_failed_time is null
+                    or coalesce(last_archived_time >= last_failed_time, false)
+                    as archiver_recovered,
+                archived_count,
+                failed_count,
+                last_archived_wal,
+                last_failed_wal
+             from pg_stat_archiver",
+            )
+            .fetch_one(pool)
+            .await;
+        let Ok((
+            archive_mode_on,
+            archive_command_configured,
+            archiver_recovered,
+            archived_count,
+            failed_count,
+            last_archived_wal,
+            last_failed_wal,
+        )) = row
+        else {
+            return PostgresOperationalReadiness::default();
+        };
+        PostgresOperationalReadiness {
+            query_healthy: true,
+            archive_mode_on,
+            archive_command_configured,
+            archiver_recovered,
+            archived_count,
+            failed_count,
+            last_archived_wal,
+            last_failed_wal,
         }
     }
 

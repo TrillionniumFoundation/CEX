@@ -248,7 +248,12 @@ pub async fn health() -> &'static str {
 
 pub async fn trnm_economy_readiness(State(state): State<AppState>) -> Response {
     let persistence_healthy = state.repository.persistence_healthy().await;
-    let ready = state.fail_fast && state.repository.persistence_ready() && persistence_healthy;
+    let postgres_operations = state.repository.postgres_operational_readiness().await;
+    let postgres_operations_healthy = postgres_operations.ready();
+    let ready = state.fail_fast
+        && state.repository.persistence_ready()
+        && persistence_healthy
+        && postgres_operations_healthy;
     let status = if ready {
         StatusCode::OK
     } else {
@@ -262,6 +267,8 @@ pub async fn trnm_economy_readiness(State(state): State<AppState>) -> Response {
             "fail_fast": state.fail_fast,
             "postgres_persistent": state.repository.persistence_ready(),
             "postgres_healthy": persistence_healthy,
+            "postgres_operations_healthy": postgres_operations_healthy,
+            "postgres_operations": postgres_operations,
             "atomic_intent_receipts": true,
             "escrow": true,
             "seller_payout_hold": true,

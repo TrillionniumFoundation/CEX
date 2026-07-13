@@ -30,6 +30,27 @@ use crate::state::{AccountRecord, LedgerEntryRecord};
 
 pub type LedgerRepositoryHandle = Arc<dyn LedgerRepository + Send + Sync>;
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct PostgresOperationalReadiness {
+    pub query_healthy: bool,
+    pub archive_mode_on: bool,
+    pub archive_command_configured: bool,
+    pub archiver_recovered: bool,
+    pub archived_count: i64,
+    pub failed_count: i64,
+    pub last_archived_wal: Option<String>,
+    pub last_failed_wal: Option<String>,
+}
+
+impl PostgresOperationalReadiness {
+    pub fn ready(&self) -> bool {
+        self.query_healthy
+            && self.archive_mode_on
+            && self.archive_command_configured
+            && self.archiver_recovered
+    }
+}
+
 #[derive(Debug)]
 pub enum LedgerActionError {
     RepositoryUnavailable(String),
@@ -51,6 +72,10 @@ pub trait LedgerRepository {
 
     async fn persistence_healthy(&self) -> bool {
         false
+    }
+
+    async fn postgres_operational_readiness(&self) -> PostgresOperationalReadiness {
+        PostgresOperationalReadiness::default()
     }
 
     async fn create_account(&self, account: &AccountRecord) -> Result<(), String>;
@@ -231,5 +256,44 @@ pub trait LedgerRepository {
         Err(LedgerActionError::RepositoryUnavailable(
             "TRNM economy maintenance is unavailable".to_string(),
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PostgresOperationalReadiness;
+
+    fn green_readiness() -> PostgresOperationalReadiness {
+        PostgresOperationalReadiness {
+            query_healthy: true,
+            archive_mode_on: true,
+            archive_command_configured: true,
+            archiver_recovered: true,
+            archived_count: 10,
+            failed_count: 1,
+            last_archived_wal: Some("00000001000000000000000A".to_string()),
+            last_failed_wal: Some("000000010000000000000009".to_string()),
+        }
+    }
+
+    #[test]
+    fn postgres_operational_readiness_fails_closed_on_each_required_signal() {
+        assert!(green_readiness().ready());
+
+        let mut status = green_readiness();
+        status.query_healthy = false;
+        assert!(!status.ready());
+
+        let mut status = green_readiness();
+        status.archive_mode_on = false;
+        assert!(!status.ready());
+
+        let mut status = green_readiness();
+        status.archive_command_configured = false;
+        assert!(!status.ready());
+
+        let mut status = green_readiness();
+        status.archiver_recovered = false;
+        assert!(!status.ready());
     }
 }
