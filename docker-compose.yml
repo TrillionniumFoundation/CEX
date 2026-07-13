@@ -23,7 +23,7 @@ services:
       - -c
       - archive_mode=on
       - -c
-      - archive_command=test ! -f /var/lib/postgresql/wal-archive/%f && cp %p /var/lib/postgresql/wal-archive/%f
+      - archive_command=/usr/local/bin/cex-postgres-archive-wal %p %f
       - -c
       - archive_timeout=60s
       - -c
@@ -33,6 +33,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - postgres_wal_archive:/var/lib/postgresql/wal-archive
+      - ./scripts/postgres-archive-wal.sh:/usr/local/bin/cex-postgres-archive-wal:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d cex_ai"]
       interval: 5s

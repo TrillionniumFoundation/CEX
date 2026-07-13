@@ -7,6 +7,7 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'deny.toml'
+      - 'docker-compose.yml'
       - 'services/ledger-service/**'
       - 'services/consumer-entry-api/**'
       - 'vendor/trnm-economy-protocol/**'
@@ -16,6 +17,7 @@ on:
       - 'migrations/0030*'
       - 'deploy/systemd/cex-trnm-*'
       - 'scripts/check-trnm-*'
+      - 'scripts/postgres-archive-wal.sh'
       - '.github/workflows/trnm-economy-ci.yml'
   push:
     branches: [main]
@@ -23,6 +25,7 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'deny.toml'
+      - 'docker-compose.yml'
       - 'services/ledger-service/**'
       - 'services/consumer-entry-api/**'
       - 'vendor/trnm-economy-protocol/**'
@@ -32,6 +35,7 @@ on:
       - 'migrations/0030*'
       - 'deploy/systemd/cex-trnm-*'
       - 'scripts/check-trnm-*'
+      - 'scripts/postgres-archive-wal.sh'
       - '.github/workflows/trnm-economy-ci.yml'
 
 permissions:
@@ -52,6 +56,10 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+      - name: PostgreSQL WAL archive contract
+        run: |
+          docker compose config >/dev/null
+          scripts/check-trnm-postgres-archive-command.sh
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy

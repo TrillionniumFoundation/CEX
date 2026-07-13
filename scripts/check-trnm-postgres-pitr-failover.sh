@@ -51,15 +51,20 @@ cex_psql_stdin -c "insert into trnm_dr_markers(marker_id, marker_name)
 cex_psql_stdin -Atc "select pg_create_restore_point('$RESTORE_POINT')" >/dev/null
 cex_psql_stdin -c "insert into trnm_dr_markers(marker_id, marker_name)
   values (gen_random_uuid(), '$RUN_ID-after')" >/dev/null
+target_wal="$(cex_psql_stdin -Atc \
+  'select pg_walfile_name(pg_current_wal_insert_lsn())')"
 cex_psql_stdin -Atc 'select pg_switch_wal()' >/dev/null
 
 for _ in $(seq 1 60); do
-  archive_count="$(cex_docker run --rm -v "$archive_volume:/archive:ro" postgres:16 \
-    bash -ceu 'find /archive -maxdepth 1 -type f | wc -l')"
-  [[ "$archive_count" -gt 0 ]] && break
+  target_archived="$(cex_docker run --rm -v "$archive_volume:/archive:ro" postgres:16 \
+    bash -ceu 'test -s "/archive/$1" && stat -c %s "/archive/$1" || true' \
+      bash "$target_wal")"
+  [[ "$target_archived" -eq 16777216 ]] && break
   sleep 1
 done
-[[ "${archive_count:-0}" -gt 0 ]]
+[[ "${target_archived:-0}" -eq 16777216 ]]
+archive_count="$(cex_docker run --rm -v "$archive_volume:/archive:ro" postgres:16 \
+  bash -ceu 'find /archive -maxdepth 1 -type f | wc -l')"
 
 cex_docker run --rm -v "$BASE_VOLUME:/data" postgres:16 bash -ceu \
   "printf '%s\n' \"restore_command = 'cp /archive/%f %p'\" \
@@ -107,9 +112,11 @@ fi
 
 jq -n --arg run_id "$RUN_ID" --arg archive_mode "$archive_mode" \
   --arg wal_level "$wal_level" --argjson archived_segments "$archive_count" \
+  --arg target_wal "$target_wal" \
   --argjson chaos_verified "$chaos_verified" \
   '{status:"passed",run_id:$run_id,physical_base_backup:true,
     archive_mode:$archive_mode,wal_level:$wal_level,archived_segments:$archived_segments,
+    target_wal:$target_wal,target_wal_archived_complete:true,
     pitr_before_marker_present:true,pitr_after_marker_absent:true,
     restored_instance_promoted_writable:true,primary_stop_fail_closed:$chaos_verified,
     boundary:"same-host PITR and promotion drill; multi-host quorum/fencing remains external infrastructure"}'
