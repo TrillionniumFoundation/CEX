@@ -3,6 +3,14 @@ use sqlx::{postgres::PgPoolOptions, PgPool, Row};
 use std::{sync::Arc, time::Duration};
 use uuid::Uuid;
 
+fn database_pool_is_operational(
+    pool_size: u32,
+    idle_connections: usize,
+    max_connections: u32,
+) -> bool {
+    idle_connections > 0 || pool_size < max_connections
+}
+
 use crate::{
     repository::{
         LedgerActionError, LedgerRepository, LedgerRepositoryHandle, PostgresOperationalReadiness,
@@ -341,12 +349,19 @@ impl LedgerRepository for PostgresLedgerRepository {
         else {
             return PostgresOperationalReadiness::default();
         };
+        let pool_max_connections = pool.options().get_max_connections();
+        let pool_size = pool.size();
+        let pool_idle_connections = pool.num_idle();
         PostgresOperationalReadiness {
             query_healthy: true,
-            pool_saturation_healthy: pool.num_idle() > 0,
-            pool_max_connections: pool.options().get_max_connections(),
-            pool_size: pool.size(),
-            pool_idle_connections: pool.num_idle(),
+            pool_saturation_healthy: database_pool_is_operational(
+                pool_size,
+                pool_idle_connections,
+                pool_max_connections,
+            ),
+            pool_max_connections,
+            pool_size,
+            pool_idle_connections,
             archive_mode_on,
             archive_command_configured,
             archiver_recovered,
@@ -649,5 +664,17 @@ impl LedgerRepository for PostgresLedgerRepository {
 
     async fn maintain_trnm_native_economy(&self) -> Result<serde_json::Value, LedgerActionError> {
         self.run_trnm_native_maintenance().await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::database_pool_is_operational;
+
+    #[test]
+    fn readiness_only_reports_saturation_at_the_pool_limit() {
+        assert!(database_pool_is_operational(1, 0, 8));
+        assert!(database_pool_is_operational(8, 1, 8));
+        assert!(!database_pool_is_operational(8, 0, 8));
     }
 }
