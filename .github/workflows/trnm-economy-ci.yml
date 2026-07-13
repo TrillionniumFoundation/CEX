@@ -1,0 +1,79 @@
+name: trnm-economy-ci
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'deny.toml'
+      - 'services/ledger-service/**'
+      - 'services/consumer-entry-api/**'
+      - 'vendor/trnm-economy-protocol/**'
+      - 'migrations/0027*'
+      - 'migrations/0028*'
+      - 'migrations/0029*'
+      - 'migrations/0030*'
+      - 'deploy/systemd/cex-trnm-*'
+      - 'scripts/check-trnm-*'
+      - '.github/workflows/trnm-economy-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'deny.toml'
+      - 'services/ledger-service/**'
+      - 'services/consumer-entry-api/**'
+      - 'vendor/trnm-economy-protocol/**'
+      - 'migrations/0027*'
+      - 'migrations/0028*'
+      - 'migrations/0029*'
+      - 'migrations/0030*'
+      - 'deploy/systemd/cex-trnm-*'
+      - 'scripts/check-trnm-*'
+      - '.github/workflows/trnm-economy-ci.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: trnm-economy-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: never
+  CARGO_INCREMENTAL: '0'
+  RUST_TEST_THREADS: '1'
+
+jobs:
+  economy-workspace:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Test
+        run: cargo test --workspace --all-targets --locked
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Release TRNM economy services
+        run: cargo build --release --locked -p ledger-service -p consumer-entry-api
+      - name: Supply-chain gates
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit,cargo-deny
+      - run: cargo audit --deny warnings
+      - run: cargo deny check advisories bans licenses sources
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cex-trnm-economy-${{ github.sha }}
+          path: |
+            target/release/ledger-service
+            target/release/consumer-entry-api
+            Cargo.lock
+          if-no-files-found: error
