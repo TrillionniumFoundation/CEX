@@ -10,6 +10,11 @@ services:
   postgres:
     image: postgres:16
     restart: unless-stopped
+    cpus: 2.0
+    mem_reservation: 512m
+    mem_limit: 1536m
+    memswap_limit: 2048m
+    pids_limit: 256
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
@@ -30,6 +35,8 @@ services:
       - max_wal_senders=10
       - -c
       - hot_standby=on
+      - -c
+      - max_connections=50
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - postgres_wal_archive:/var/lib/postgresql/wal-archive

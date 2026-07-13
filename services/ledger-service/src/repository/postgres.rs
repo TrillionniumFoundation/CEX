@@ -33,8 +33,23 @@ impl PostgresLedgerRepository {
             .and_then(|raw| raw.parse::<u64>().ok())
             .filter(|seconds| *seconds > 0)
             .unwrap_or(5);
+        let max_connections = match std::env::var("LEDGER_DATABASE_MAX_CONNECTIONS") {
+            Ok(raw) => raw.parse::<u32>().map_err(|_| {
+                "LEDGER_DATABASE_MAX_CONNECTIONS must be an integer between 1 and 32".to_string()
+            })?,
+            Err(std::env::VarError::NotPresent) => 8,
+            Err(error) => {
+                return Err(format!(
+                    "read LEDGER_DATABASE_MAX_CONNECTIONS from environment: {error}"
+                ))
+            }
+        };
+        if !(1..=32).contains(&max_connections) {
+            return Err("LEDGER_DATABASE_MAX_CONNECTIONS must be between 1 and 32".to_string());
+        }
 
         let pool = PgPoolOptions::new()
+            .max_connections(max_connections)
             .acquire_timeout(Duration::from_secs(connect_timeout_seconds))
             .connect(&database_url)
             .await
@@ -328,6 +343,10 @@ impl LedgerRepository for PostgresLedgerRepository {
         };
         PostgresOperationalReadiness {
             query_healthy: true,
+            pool_saturation_healthy: pool.num_idle() > 0,
+            pool_max_connections: pool.options().get_max_connections(),
+            pool_size: pool.size(),
+            pool_idle_connections: pool.num_idle(),
             archive_mode_on,
             archive_command_configured,
             archiver_recovered,

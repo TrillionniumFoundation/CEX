@@ -33,6 +33,10 @@ pub type LedgerRepositoryHandle = Arc<dyn LedgerRepository + Send + Sync>;
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
 pub struct PostgresOperationalReadiness {
     pub query_healthy: bool,
+    pub pool_saturation_healthy: bool,
+    pub pool_max_connections: u32,
+    pub pool_size: u32,
+    pub pool_idle_connections: usize,
     pub archive_mode_on: bool,
     pub archive_command_configured: bool,
     pub archiver_recovered: bool,
@@ -45,6 +49,7 @@ pub struct PostgresOperationalReadiness {
 impl PostgresOperationalReadiness {
     pub fn ready(&self) -> bool {
         self.query_healthy
+            && self.pool_saturation_healthy
             && self.archive_mode_on
             && self.archive_command_configured
             && self.archiver_recovered
@@ -266,6 +271,10 @@ mod tests {
     fn green_readiness() -> PostgresOperationalReadiness {
         PostgresOperationalReadiness {
             query_healthy: true,
+            pool_saturation_healthy: true,
+            pool_max_connections: 8,
+            pool_size: 4,
+            pool_idle_connections: 1,
             archive_mode_on: true,
             archive_command_configured: true,
             archiver_recovered: true,
@@ -282,6 +291,10 @@ mod tests {
 
         let mut status = green_readiness();
         status.query_healthy = false;
+        assert!(!status.ready());
+
+        let mut status = green_readiness();
+        status.pool_saturation_healthy = false;
         assert!(!status.ready());
 
         let mut status = green_readiness();

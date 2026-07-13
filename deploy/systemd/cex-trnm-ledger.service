@@ -11,6 +11,17 @@ Restart=on-failure
 RestartSec=2
 TimeoutStopSec=20
 UMask=0077
+CPUAccounting=true
+CPUWeight=200
+CPUQuota=100%
+MemoryAccounting=true
+MemoryHigh=256M
+MemoryMax=384M
+MemorySwapMax=128M
+IOAccounting=true
+IOWeight=200
+TasksAccounting=true
+TasksMax=256
 NoNewPrivileges=true
 PrivateTmp=true
 

@@ -60,6 +60,7 @@ jobs:
         run: |
           docker compose config >/dev/null
           scripts/check-trnm-postgres-archive-command.sh
+          scripts/check-trnm-economy-resource-budgets.sh
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy

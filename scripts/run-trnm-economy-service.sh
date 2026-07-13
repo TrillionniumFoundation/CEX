@@ -8,6 +8,7 @@ cex_load_env
 
 export DATABASE_URL="$(cex_effective_database_url)"
 export LEDGER_FAIL_FAST=true
+export LEDGER_DATABASE_MAX_CONNECTIONS="${LEDGER_DATABASE_MAX_CONNECTIONS:-8}"
 export CEX_RUNTIME_PROFILE=trnm-economy
 export CONSUMER_ENTRY_RUNTIME_PROFILE=production
 export LEDGER_BASE_URL="${LEDGER_BASE_URL:-http://127.0.0.1:7002}"
