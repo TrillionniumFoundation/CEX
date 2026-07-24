@@ -14,12 +14,14 @@ require_line() {
 ledger_unit="$ROOT_DIR/deploy/systemd/cex-trnm-ledger.service"
 consumer_unit="$ROOT_DIR/deploy/systemd/cex-trnm-consumer.service"
 for setting in CPUAccounting=true CPUWeight=200 CPUQuota=100% \
-  MemoryAccounting=true MemoryHigh=256M MemoryMax=384M MemorySwapMax=128M \
+  MemoryAccounting=true ManagedOOMPreference=avoid \
+  MemoryHigh=256M MemoryMax=384M MemorySwapMax=128M \
   IOAccounting=true IOWeight=200 TasksAccounting=true TasksMax=256; do
   require_line "$ledger_unit" "$setting"
 done
 for setting in CPUAccounting=true CPUWeight=100 CPUQuota=100% \
-  MemoryAccounting=true MemoryHigh=384M MemoryMax=512M MemorySwapMax=128M \
+  MemoryAccounting=true ManagedOOMPreference=avoid \
+  MemoryHigh=384M MemoryMax=512M MemorySwapMax=128M \
   IOAccounting=true IOWeight=100 TasksAccounting=true TasksMax=256; do
   require_line "$consumer_unit" "$setting"
 done
@@ -44,9 +46,11 @@ if [[ "${TRNM_REQUIRE_INSTALLED_RESOURCE_BUDGETS:-0}" == 1 ]]; then
   [[ "$(systemctl --user show cex-trnm-ledger.service -p CPUQuotaPerSecUSec --value)" == 1s ]]
   [[ "$(systemctl --user show cex-trnm-ledger.service -p MemoryHigh --value)" == 268435456 ]]
   [[ "$(systemctl --user show cex-trnm-ledger.service -p MemoryMax --value)" == 402653184 ]]
+  [[ "$(systemctl --user show cex-trnm-ledger.service -p ManagedOOMPreference --value)" == avoid ]]
   [[ "$(systemctl --user show cex-trnm-consumer.service -p CPUQuotaPerSecUSec --value)" == 1s ]]
   [[ "$(systemctl --user show cex-trnm-consumer.service -p MemoryHigh --value)" == 402653184 ]]
   [[ "$(systemctl --user show cex-trnm-consumer.service -p MemoryMax --value)" == 536870912 ]]
+  [[ "$(systemctl --user show cex-trnm-consumer.service -p ManagedOOMPreference --value)" == avoid ]]
   postgres_container_id="$(
     sudo docker compose --project-directory "$ROOT_DIR" \
       -f "$ROOT_DIR/docker-compose.yml" ps -q postgres
@@ -63,4 +67,5 @@ fi
 jq -n --argjson installed "$installed" \
   '{status:"passed",ledger_pool_max:8,postgres_max_connections:50,
     postgres_memory_max_mib:1536,postgres_cpu_cores:2,
-    systemd_unit_budgets:true,installed_runtime_verified:$installed}'
+    systemd_unit_budgets:true,managed_oom_preference:"avoid",
+    installed_runtime_verified:$installed}'
