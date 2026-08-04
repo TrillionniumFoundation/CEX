@@ -1,0 +1,25 @@
+{
+  "schema": 1,
+  "project_id": "hepta-control-plane",
+  "canonical_dir": "hepta-control-plane",
+  "lane": "hepta-control-plane",
+  "lifecycle": "active",
+  "development": true,
+  "remote": {
+    "policy": "required",
+    "canonical_slug": "TrillionniumFoundation/CEX",
+    "upstream_required": true
+  },
+  "branch": {
+    "protected": [
+      "main",
+      "master"
+    ],
+    "development_regex": "^(feature|fix|chore|docs|test)/(hepta|settlement)-[a-z0-9][a-z0-9._-]*$"
+  },
+  "cargo": {
+    "workspace_manifest": "Cargo.toml",
+    "external_path_dependencies": "forbid"
+  },
+  "deny_changed_paths_regex": "^(services/consumer-entry-api/src/world_|docs/trillionnium-world|scripts/playwright/trillionnium)"
+}
