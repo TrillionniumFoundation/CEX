@@ -100,13 +100,23 @@ async fn operator_challenge_bootstrap_supports_exact_idempotent_lookup() {
         "status": "open"
     });
 
-    let (status, unauthorized) =
-        request_json_without_service_tokens(app.clone(), "GET", "/v1/hepta/challenges", json!({}))
-            .await;
+    let (status, unauthorized) = request_json_without_service_tokens(
+        app.clone(),
+        "GET",
+        "/v1/hepta/operator/challenges",
+        json!({}),
+    )
+    .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
     assert_eq!(unauthorized["code"], "operator_auth_failed");
 
-    let (status, empty) = request_json(app.clone(), "GET", "/v1/hepta/challenges", json!({})).await;
+    let (status, empty) = request_json(
+        app.clone(),
+        "GET",
+        "/v1/hepta/operator/challenges",
+        json!({}),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(empty, json!([]));
 
@@ -115,21 +125,33 @@ async fn operator_challenge_bootstrap_supports_exact_idempotent_lookup() {
     assert_eq!(status, StatusCode::CREATED);
     let challenge_id = created["challenge_id"].as_str().expect("challenge id");
 
-    let (status, listed) =
-        request_json(app.clone(), "GET", "/v1/hepta/challenges", json!({})).await;
+    let (status, listed) = request_json(
+        app.clone(),
+        "GET",
+        "/v1/hepta/operator/challenges",
+        json!({}),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(listed.as_array().expect("challenge list").len(), 1);
     assert_eq!(listed[0], created);
 
-    let exact_path = format!("/v1/hepta/challenges/{challenge_id}");
-    let (status, exact) = request_json(app.clone(), "GET", &exact_path, json!({})).await;
+    let operator_exact_path = format!("/v1/hepta/operator/challenges/{challenge_id}");
+    let (status, exact) = request_json(app.clone(), "GET", &operator_exact_path, json!({})).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(exact, created);
 
     let (status, unauthorized) =
-        request_json_without_service_tokens(app, "GET", &exact_path, json!({})).await;
+        request_json_without_service_tokens(app.clone(), "GET", &operator_exact_path, json!({}))
+            .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
     assert_eq!(unauthorized["code"], "operator_auth_failed");
+
+    let legacy_exact_path = format!("/v1/hepta/challenges/{challenge_id}");
+    let (status, legacy_exact) =
+        request_json_without_service_tokens(app, "GET", &legacy_exact_path, json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(legacy_exact, created);
 }
 
 #[tokio::test]

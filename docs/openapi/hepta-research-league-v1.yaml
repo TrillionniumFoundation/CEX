@@ -55,17 +55,6 @@ paths:
       responses:
         "200": { description: Agent-authorized key rotation accepted }
   /v1/hepta/challenges:
-    get:
-      tags: [Operator]
-      security: [{ OperatorToken: [] }]
-      operationId: listChallengeSnapshots
-      description: >
-        Lists the exact durable challenge snapshots used by deployment
-        initializers. This operator surface is intentionally separate from the
-        sanitized public Paper Raid lobby projection.
-      responses:
-        "200":
-          description: Stable creation-order list of exact challenge snapshots
     post:
       tags: [Operator]
       security: [{ OperatorToken: [] }]
@@ -74,13 +63,31 @@ paths:
         "201": { description: Immutable challenge snapshot created }
   /v1/hepta/challenges/{challenge_id}:
     get:
-      tags: [Operator]
-      security: [{ OperatorToken: [] }]
       operationId: getChallenge
       parameters:
         - $ref: "#/components/parameters/ChallengeId"
       responses:
         "200": { description: Challenge snapshot }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/hepta/operator/challenges:
+    get:
+      tags: [Operator]
+      security: [{ OperatorToken: [] }]
+      operationId: listOperatorChallengeSnapshots
+      description: >
+        Lists exact durable challenge snapshots for deployment initializers.
+        The legacy v1 public exact lookup remains unchanged.
+      responses:
+        "200": { description: Stable creation-order list of exact challenge snapshots }
+  /v1/hepta/operator/challenges/{challenge_id}:
+    get:
+      tags: [Operator]
+      security: [{ OperatorToken: [] }]
+      operationId: getOperatorChallengeSnapshot
+      parameters:
+        - $ref: "#/components/parameters/ChallengeId"
+      responses:
+        "200": { description: Exact durable challenge snapshot }
         "404": { $ref: "#/components/responses/NotFound" }
   /v1/hepta/challenges/{challenge_id}/enrollments:
     post:
