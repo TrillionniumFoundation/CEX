@@ -65,7 +65,7 @@ sbom_sha256="$(sha256sum deploy/hepta-research-league/hepta-research-league.cdx.
 
 mkdir -p "$(dirname "$buildx_plugin")"
 curl --fail --location --proto '=https' --retry 5 --retry-all-errors \
-  --retry-delay 2 --connect-timeout 15 --max-time 300 \
+  --retry-delay 2 --connect-timeout 15 --max-time 1200 \
   --show-error --silent --tlsv1.2 \
   "$buildx_url" --output "$buildx_plugin"
 actual_buildx_sha256="$(sha256sum "$buildx_plugin" | cut -d' ' -f1)"
