@@ -32,6 +32,7 @@ fi
 
 browser="$service_root/src/browser.js"
 html="$service_root/src/html.rs"
+hepta="$service_root/src/hepta.rs"
 if rg -n 'localStorage|sessionStorage|indexedDB|\.style' "$browser" || \
   rg -n '<input[^>]+name=\\?"agent_(private_key|seed|mnemonic)' "$html"
 then
@@ -46,9 +47,13 @@ for required in \
   'Registration may already be committed' \
   'window.location.assign("/league/start")' \
   'agent_proof_nonce_must_equal_idempotency_key' \
-  'sendCommand("create_agent_binding", null, null, payload)'
+  'sendCommand("create_agent_binding", null, null, payload)' \
+  'agent_rotation_old_binding_mismatch' \
+  '"rotate_agent_binding_key"' \
+  '"submit_appeal"' \
+  'PaperAppealSigningV1'
 do
-  if ! rg -q --fixed-strings "$required" "$browser" "$html"; then
+  if ! rg -q --fixed-strings "$required" "$browser" "$html" "$hepta"; then
     echo "required browser onboarding boundary is missing: $required" >&2
     exit 1
   fi

@@ -445,16 +445,18 @@ async fn forward_hepta_command(
 
 async fn lobby(State(state): State<AppState>, headers: HeaderMap) -> Result<Response, AppError> {
     let session = state.session(&headers).await?;
-    let (challenges, tickets, proposals) = tokio::join!(
+    let (challenges, tickets, proposals, bindings) = tokio::join!(
         state.hepta.list_public_challenges(&session.identity),
         state.hepta.list_matchmaking_tickets(&session.identity),
         state.hepta.list_team_proposals(&session.identity),
+        state.hepta.list_current_agent_bindings(&session.identity),
     );
     Ok(html::lobby(
         &session.identity,
         read_state(&challenges),
         read_state(&tickets),
         read_state(&proposals),
+        read_state(&bindings),
     ))
 }
 

@@ -44,8 +44,12 @@ if [[ -n "$supplied_credentials" ]]; then
   fi
   cp "$supplied_credentials" "$credentials"
 else
-  if [[ ! -r "$runtime_env" ]]; then
+  if [[ ! -f "$runtime_env" || ! -r "$runtime_env" ]]; then
     echo "root-only Paper Raid runtime env is unavailable; provide PAPER_RAID_BFF_BROWSER_CREDENTIALS_FILE" >&2
+    exit 2
+  fi
+  if [[ -n "$(find "$runtime_env" -maxdepth 0 -perm /077 -print -quit)" ]]; then
+    echo "Paper Raid runtime env must be mode 0600 or stricter" >&2
     exit 2
   fi
   if [[ -z "$agent_bindings_file" ]]; then
@@ -62,6 +66,10 @@ else
   fi
   if [[ -n "$(find "$agent_bindings_file" -maxdepth 0 -perm /077 -print -quit)" ]]; then
     echo "Agent bindings file must be mode 0600 or stricter" >&2
+    exit 2
+  fi
+  if [[ "$(stat -c %s "$agent_bindings_file")" -gt 262144 ]]; then
+    echo "Agent bindings file exceeds the 256 KiB cap" >&2
     exit 2
   fi
   (
@@ -89,6 +97,10 @@ else
   )
 fi
 chmod 0600 "$credentials"
+if [[ "$(stat -c %s "$credentials")" -gt 262144 ]]; then
+  echo "browser credentials file exceeds the 256 KiB cap" >&2
+  exit 2
+fi
 
 jq -e \
   --argjson require_lobby "$require_lobby" \
@@ -136,6 +148,8 @@ fi
 "${docker_cli[@]}" buildx build \
   --progress plain \
   --load \
+  --provenance=false \
+  --sbom=false \
   --platform linux/amd64 \
   --file "$runner_root/Dockerfile" \
   --tag "$image_name" \

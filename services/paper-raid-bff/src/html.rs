@@ -42,6 +42,7 @@ pub fn lobby(
     challenges: ReadState<'_>,
     tickets: ReadState<'_>,
     proposals: ReadState<'_>,
+    bindings: ReadState<'_>,
 ) -> Response {
     let challenge_cards = challenges
         .value()
@@ -75,10 +76,12 @@ pub fn lobby(
         "/league/formation/",
         true,
     );
+    let binding_controls = active_agent_binding_controls(identity, bindings);
     let body = format!(
         r#"<section class="hero"><span class="eyebrow">PAPER RAID · 论文远征</span><h1>Research Lobby</h1><p>Welcome, {}. Hepta is the only matchmaking and research authority.</p></section>
         <section class="panel"><h2>Challenges / 研究挑战</h2><p class="source-state">Hepta: {}</p><div class="grid">{}</div></section>
-        <section class="grid"><article class="card"><h2>My Queue / 我的队列</h2><p class="source-state">Hepta: {}</p>{}</article><article class="card"><h2>Team Proposals / 组队提案</h2><p class="source-state">Hepta: {}</p>{}</article><article class="card"><h2>Alpha Rules / Alpha 规则</h2><p>Exactly 3 human players, each with an independently bound external Agent. Login keys never leave this page except in the login request.</p></article></section>"#,
+        <section class="grid"><article class="card"><h2>My Queue / 我的队列</h2><p class="source-state">Hepta: {}</p>{}</article><article class="card"><h2>Team Proposals / 组队提案</h2><p class="source-state">Hepta: {}</p>{}</article><article class="card"><h2>Alpha Rules / Alpha 规则</h2><p>Exactly 3 human players, each with an independently bound external Agent. Login keys never leave this page except in the login request.</p></article></section>
+        <section class="panel"><h2>External Agent key continuity / 外部 Agent 密钥连续性</h2><p class="source-state">Hepta: {}</p><p>Rotation requires independent signatures from both the currently bound key and the replacement key. Only public proof fields enter this browser.</p><div class="action-grid">{}</div></section>"#,
         escape(&identity.display_name),
         escape(challenges.label()),
         challenge_cards,
@@ -86,8 +89,74 @@ pub fn lobby(
         ticket_cards,
         escape(proposals.label()),
         proposal_cards,
+        escape(bindings.label()),
+        binding_controls,
     );
     page("Paper Raid Lobby", &identity.display_name, &body, true)
+}
+
+fn active_agent_binding_controls(identity: &AlphaIdentity, bindings: ReadState<'_>) -> String {
+    let Some(items) = bindings.value().and_then(Value::as_array) else {
+        return unavailable("Agent bindings");
+    };
+    let mut output = String::new();
+    let player_id_text = identity.player_id.to_string();
+    for binding in items {
+        if binding.get("status").and_then(Value::as_str) != Some("active")
+            || binding.get("player_id").and_then(Value::as_str) != Some(player_id_text.as_str())
+        {
+            continue;
+        }
+        let Some(binding_id) = binding.get("binding_id").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(agent_id) = binding.get("agent_id").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(old_key_id) = binding.get("agent_key_id").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(old_public_key) = binding.get("agent_public_key").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(version) = binding.get("version").and_then(Value::as_u64) else {
+            continue;
+        };
+        let payload = serde_json::json!({
+            "rotation_id": "00000000-0000-4000-8000-000000000000",
+            "expected_binding_version": version,
+            "agent_id": agent_id,
+            "old_agent_key_id": old_key_id,
+            "old_agent_public_key": old_public_key,
+            "new_agent_key_id": "sha256:...",
+            "new_agent_public_key": "...",
+            "issued_at_unix": 0,
+            "expires_at_unix": 0,
+            "old_key_signature": "...",
+            "new_key_signature": "...",
+            "idempotency_key": "00000000-0000-4000-8000-000000000000",
+        });
+        let payload = serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".into());
+        output.push_str(&format!(
+            r#"<article class="action"><h3>{}</h3><p>Agent <code>{}</code> · binding version {}</p><p>Signing scope: schema <code>hepta.paper_raid.agent_binding_key_rotation.v2</code>, player <code>{}</code>, subject <code>{}</code>, nonce = idempotency_key.</p><form class="agent-rotation-form" data-binding-id="{}" data-binding-version="{}" data-agent-id="{}" data-old-key-id="{}" data-old-public-key="{}"><label>Exact dual-signed rotation JSON / 双密钥签名轮换 JSON<textarea name="payload" rows="16" spellcheck="false" required>{}</textarea></label><button type="submit">Verify and rotate / 验证并轮换</button><output></output></form></article>"#,
+            escape(binding_id),
+            escape(agent_id),
+            version,
+            escape(&player_id_text),
+            escape(&identity.subject_id),
+            escape(binding_id),
+            version,
+            escape(agent_id),
+            escape(old_key_id),
+            escape(old_public_key),
+            escape(&payload),
+        ));
+    }
+    if output.is_empty() {
+        unavailable("active Agent binding")
+    } else {
+        output
+    }
 }
 
 pub fn formation(
@@ -521,7 +590,7 @@ pub fn onboarding(identity: &AlphaIdentity, stage: OnboardingStage) -> Response 
         </form></section>
         <section class="panel narrow"><h2>Step 2 · Register loaded key / 注册当前内存密钥</h2><p>Register the key currently loaded in this tab. After an uncertain network result, open <a href="/league/start">/league/start</a> first; if still unregistered, import the original bundle and retry with the same key.</p><form id="human-key-register-form"><button type="submit">Register current in-memory key / 注册当前内存密钥</button><output></output></form></section>"#.to_string(),
         OnboardingStage::AgentBinding => format!(
-            r#"<section class="grid"><article class="card"><h2>Human identity ready / 人类身份已就绪</h2><p>Player <code>{}</code> is registered. One independently controlled external Agent must now prove its own key.</p></article><article class="card"><h2>External signature only / 仅外部签名</h2><p>Create and sign the exact Agent binding payload in the Agent runtime. Paste public proof fields here; never paste an Agent seed, private key, mnemonic, token, or API credential.</p></article><article class="card"><h2>Fail closed / 失败关闭</h2><p>The BFF forwards the exact signed object with a Consumer assertion. It cannot sign, repair, or silently change the Agent proof.</p></article></section>
+            r#"<section class="grid"><article class="card"><h2>Human identity ready / 人类身份已就绪</h2><p>Player <code>{}</code> and Consumer subject <code>{}</code> are registered. One independently controlled external Agent must now prove its own key.</p></article><article class="card"><h2>External signature only / 仅外部签名</h2><p>The Agent signs <code>hepta.paper_raid.agent_binding_proof.v2</code>, including the displayed subject/player, its public-key hash, and nonce = idempotency_key. Paste only the public request fields here; never paste an Agent seed, private key, mnemonic, token, or API credential.</p></article><article class="card"><h2>Fail closed / 失败关闭</h2><p>The BFF forwards the exact signed object with a Consumer assertion. It cannot sign, repair, or silently change the Agent proof.</p></article></section>
             <section class="panel"><h2>Bind external Agent / 绑定外部 Agent</h2><form class="agent-binding-form" data-player-id="{}"><label>Exact externally signed JSON / 外部 Agent 已签名 JSON<textarea name="payload" rows="16" spellcheck="false" required>{{
   "binding_id": "00000000-0000-4000-8000-000000000000",
   "player_id": "{}",
@@ -535,6 +604,7 @@ pub fn onboarding(identity: &AlphaIdentity, stage: OnboardingStage) -> Response 
   "idempotency_key": "00000000-0000-4000-8000-000000000000"
 }}</textarea></label><button type="submit">Verify and bind / 验证并绑定</button><output></output></form></section>"#,
             escape(&identity.player_id.to_string()),
+            escape(&identity.subject_id),
             escape(&identity.player_id.to_string()),
             escape(&identity.player_id.to_string()),
         ),
@@ -694,7 +764,10 @@ fn command_editor(
     };
     let local_sign = if matches!(
         command,
-        "accept_research_team_membership" | "submit_review" | "create_authorship_consent"
+        "accept_research_team_membership"
+            | "submit_review"
+            | "create_authorship_consent"
+            | "submit_appeal"
     ) {
         "<button class=\"local-sign\" type=\"button\">Sign locally / 本地签名</button>"
     } else {
@@ -864,6 +937,8 @@ mod tests {
         let body = std::str::from_utf8(&body).expect("UTF-8 room");
         assert!(body.contains("pending_finality"));
         assert!(!body.contains(&format!("{}{}", "final", "ized")));
+        assert!(body.contains("data-command=\"submit_appeal\""));
+        assert!(body.contains("Sign locally / 本地签名"));
 
         let missing = paper_room(
             &identity,
@@ -966,5 +1041,46 @@ mod tests {
         let script = include_str!("browser.js");
         assert!(script.contains("agent_proof_nonce_must_equal_idempotency_key"));
         assert!(script.contains("sendCommand(\"create_agent_binding\", null, null, payload)"));
+    }
+
+    #[tokio::test]
+    async fn lobby_rotates_external_agent_keys_only_with_dual_public_proof() {
+        let identity =
+            AlphaIdentity::test_identity("subject-rotation", Uuid::new_v4(), Uuid::new_v4());
+        let binding_id = Uuid::new_v4();
+        let bindings = serde_json::json!([{
+            "binding_id": binding_id,
+            "player_id": identity.player_id,
+            "agent_id": "did:trnm:agent:alpha",
+            "agent_key_id": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "agent_public_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+            "status": "active",
+            "version": 3
+        }]);
+        let response = lobby(
+            &identity,
+            ReadState::Unavailable,
+            ReadState::Unavailable,
+            ReadState::Unavailable,
+            ReadState::Available(&bindings),
+        );
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("collect Lobby")
+            .to_bytes();
+        let body = std::str::from_utf8(&body).expect("UTF-8 Lobby");
+        assert!(body.contains("agent-rotation-form"));
+        assert!(body.contains("hepta.paper_raid.agent_binding_key_rotation.v2"));
+        assert!(body.contains(&binding_id.to_string()));
+        assert!(body.contains(&identity.subject_id));
+        assert!(body.contains("old_key_signature"));
+        assert!(body.contains("new_key_signature"));
+        assert!(!body.contains("agent_private_key"));
+
+        let script = include_str!("browser.js");
+        assert!(script.contains("agent_rotation_must_change_public_key"));
+        assert!(script.contains("\"rotate_agent_binding_key\""));
     }
 }

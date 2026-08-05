@@ -5,12 +5,12 @@ use chrono::Utc;
 use ed25519_dalek::VerifyingKey;
 use hepta_paper_raid_contracts::{
     authorship_consent_signing_bytes, canonical_json_bytes, human_key_registration_signing_bytes,
-    section_review_signing_bytes, sha256_digest, sign_consumer_user_assertion,
-    team_member_acceptance_signing_bytes, verify_human_key_registration_pop,
-    AuthorshipConsentSigningV2, ConsumerUserAssertionClaimV2, HumanKeyRegistrationClaimV2,
-    SectionReviewSigningV1, TeamMemberAcceptanceSigningV2, AUTHORSHIP_CONSENT_V2,
-    CONSUMER_USER_ASSERTION_V2, HUMAN_KEY_REGISTRATION_V2, SECTION_REVIEW_V1,
-    TEAM_MEMBER_ACCEPTANCE_V2,
+    paper_appeal_signing_bytes, section_review_signing_bytes, sha256_digest,
+    sign_consumer_user_assertion, team_member_acceptance_signing_bytes,
+    verify_human_key_registration_pop, AuthorshipConsentSigningV2, ConsumerUserAssertionClaimV2,
+    HumanKeyRegistrationClaimV2, PaperAppealSigningV1, SectionReviewSigningV1,
+    TeamMemberAcceptanceSigningV2, AUTHORSHIP_CONSENT_V2, CONSUMER_USER_ASSERTION_V2,
+    HUMAN_KEY_REGISTRATION_V2, PAPER_APPEAL_V1, SECTION_REVIEW_V1, TEAM_MEMBER_ACCEPTANCE_V2,
 };
 use reqwest::{header, Client, Method, StatusCode};
 use serde::{Deserialize, Serialize};
@@ -36,6 +36,7 @@ pub enum CommandName {
     RotateHumanSigningKey,
     RevokeHumanSigningKey,
     CreateAgentBinding,
+    RotateAgentBindingKey,
     CreateResearchTeam,
     AcceptResearchTeamMembership,
     LockResearchTeam,
@@ -150,6 +151,15 @@ struct ConsentFramePayload {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct AppealFramePayload {
+    appeal_id: Uuid,
+    release_candidate_hash: String,
+    grounds_hash: String,
+    evidence_manifest_hash: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BrowserCommand {
     pub command: CommandName,
     pub resource_id: Option<Uuid>,
@@ -230,6 +240,10 @@ impl BrowserCommand {
             CommandName::CreateAgentBinding => {
                 post("/v2/hepta/agent-bindings".into(), "create_agent_binding_v2")
             }
+            CommandName::RotateAgentBindingKey => post(
+                format!("/v2/hepta/agent-bindings/{}/rotate-key", resource()?),
+                "rotate_agent_binding_key_v2",
+            ),
             CommandName::CreateResearchTeam => {
                 post("/v2/hepta/teams".into(), "create_research_team_v2")
             }
@@ -695,6 +709,67 @@ impl HeptaClient {
                     "signing_public_key": player.signing_public_key.clone(),
                     "signing_public_key_hash": player.signing_public_key_hash.clone(),
                     "release_candidate_hash": input.release_candidate_hash,
+                    "signed_at_unix": signed_at_unix,
+                });
+                (payload, bytes)
+            }
+            CommandName::SubmitAppeal => {
+                let paper_id = request
+                    .resource_id
+                    .ok_or_else(|| AppError::Invalid("resource_id is required".into()))?;
+                let evaluation_id = request
+                    .child_id
+                    .ok_or_else(|| AppError::Invalid("child_id is required".into()))?;
+                let input: AppealFramePayload = serde_json::from_value(request.payload.clone())
+                    .map_err(|_| AppError::Invalid("invalid Appeal frame payload".into()))?;
+                let review = self.get_paper_review_state(identity, paper_id).await?;
+                let evaluation_id_text = evaluation_id.to_string();
+                let evaluation = review
+                    .get("evaluations")
+                    .and_then(Value::as_array)
+                    .and_then(|evaluations| {
+                        evaluations.iter().find(|evaluation| {
+                            evaluation.get("evaluation_id").and_then(Value::as_str)
+                                == Some(evaluation_id_text.as_str())
+                        })
+                    })
+                    .ok_or(AppError::NotFound)?;
+                let current_release = evaluation
+                    .get("release_candidate_hash")
+                    .and_then(Value::as_str)
+                    .ok_or(AppError::Upstream)?;
+                let paper_id_text = paper_id.to_string();
+                if evaluation.get("paper_project_id").and_then(Value::as_str)
+                    != Some(paper_id_text.as_str())
+                    || current_release != input.release_candidate_hash
+                {
+                    return Err(AppError::Conflict(
+                        "Appeal payload does not match the evaluated release candidate".into(),
+                    ));
+                }
+                let signing = PaperAppealSigningV1 {
+                    schema: PAPER_APPEAL_V1.into(),
+                    appeal_id: input.appeal_id,
+                    evaluation_id,
+                    paper_project_id: paper_id,
+                    release_candidate_hash: input.release_candidate_hash.clone(),
+                    appellant_player_id: identity.player_id,
+                    grounds_hash: input.grounds_hash.clone(),
+                    evidence_manifest_hash: input.evidence_manifest_hash.clone(),
+                    signing_key_id: player.signing_key_id.clone(),
+                    signing_public_key_hash: player.signing_public_key_hash.clone(),
+                    signed_at_unix,
+                };
+                let bytes = paper_appeal_signing_bytes(&signing).map_err(AppError::Invalid)?;
+                let payload = serde_json::json!({
+                    "appeal_id": input.appeal_id,
+                    "release_candidate_hash": input.release_candidate_hash,
+                    "appellant_player_id": identity.player_id,
+                    "grounds_hash": input.grounds_hash,
+                    "evidence_manifest_hash": input.evidence_manifest_hash,
+                    "signing_key_id": player.signing_key_id.clone(),
+                    "signing_public_key": player.signing_public_key.clone(),
+                    "signing_public_key_hash": player.signing_public_key_hash.clone(),
                     "signed_at_unix": signed_at_unix,
                 });
                 (payload, bytes)
@@ -1519,11 +1594,22 @@ mod tests {
         let paper = Uuid::new_v4();
         let work_item = Uuid::new_v4();
         let revision = Uuid::new_v4();
+        let binding = Uuid::new_v4();
         let cases = [
             (
                 command(CommandName::CreateAgentBinding, None, None, None),
                 "/v2/hepta/agent-bindings".into(),
                 "create_agent_binding_v2",
+            ),
+            (
+                command(
+                    CommandName::RotateAgentBindingKey,
+                    Some(binding),
+                    None,
+                    None,
+                ),
+                format!("/v2/hepta/agent-bindings/{binding}/rotate-key"),
+                "rotate_agent_binding_key_v2",
             ),
             (
                 command(

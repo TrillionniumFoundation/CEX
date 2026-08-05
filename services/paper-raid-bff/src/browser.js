@@ -404,10 +404,90 @@ function bindAgentBinding() {
         if (typeof payload.agent_key_id !== "string" || !/^sha256:[0-9a-f]{64}$/.test(payload.agent_key_id)) {
           throw new Error("agent_key_id_must_be_sha256_of_public_key_bytes");
         }
+        const agentPublicKey = base64ToBytes(payload.agent_public_key);
+        const agentProofSignature = base64ToBytes(payload.agent_proof_signature);
+        if (agentPublicKey.length !== 32 || agentProofSignature.length !== 64 ||
+            await sha256Label(agentPublicKey) !== payload.agent_key_id) {
+          throw new Error("agent_binding_public_proof_is_not_canonical_ed25519");
+        }
+        if (!Number.isSafeInteger(payload.agent_proof_issued_at_unix) ||
+            !Number.isSafeInteger(payload.agent_proof_expires_at_unix) ||
+            payload.agent_proof_issued_at_unix < 0 ||
+            payload.agent_proof_expires_at_unix <= payload.agent_proof_issued_at_unix ||
+            payload.agent_proof_expires_at_unix - payload.agent_proof_issued_at_unix > 600) {
+          throw new Error("agent_binding_proof_interval_must_be_at_most_ten_minutes");
+        }
         const response = await sendCommand("create_agent_binding", null, null, payload);
         const value = await responseValue(response);
         show(output, value, response.ok);
         if (response.ok) window.setTimeout(() => window.location.assign("/league/start"), 800);
+      } catch (error) {
+        show(output, error.message, false);
+      } finally {
+        button.disabled = false;
+      }
+    });
+  }
+}
+
+function bindAgentRotation() {
+  for (const form of document.querySelectorAll(".agent-rotation-form")) {
+    form.addEventListener("submit", async event => {
+      event.preventDefault();
+      const output = form.querySelector("output");
+      const button = form.querySelector("button");
+      button.disabled = true;
+      try {
+        const payload = JSON.parse(form.elements.payload.value);
+        const expected = [
+          "rotation_id", "expected_binding_version", "agent_id", "old_agent_key_id",
+          "old_agent_public_key", "new_agent_key_id", "new_agent_public_key",
+          "issued_at_unix", "expires_at_unix", "old_key_signature", "new_key_signature",
+          "idempotency_key"
+        ];
+        if (!exactKeys(payload, expected)) throw new Error("agent_rotation_payload_must_have_exact_fields");
+        const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+        if (!uuidPattern.test(payload.rotation_id) || !uuidPattern.test(payload.idempotency_key)) {
+          throw new Error("rotation_and_idempotency_ids_must_be_canonical_uuids");
+        }
+        if (!Number.isSafeInteger(payload.expected_binding_version) ||
+            payload.expected_binding_version < 1 ||
+            payload.expected_binding_version !== Number(form.dataset.bindingVersion)) {
+          throw new Error("agent_rotation_expected_version_mismatch");
+        }
+        if (payload.agent_id !== form.dataset.agentId ||
+            payload.old_agent_key_id !== form.dataset.oldKeyId ||
+            payload.old_agent_public_key !== form.dataset.oldPublicKey) {
+          throw new Error("agent_rotation_old_binding_mismatch");
+        }
+        if (payload.new_agent_public_key === payload.old_agent_public_key) {
+          throw new Error("agent_rotation_must_change_public_key");
+        }
+        const oldPublicKey = base64ToBytes(payload.old_agent_public_key);
+        const newPublicKey = base64ToBytes(payload.new_agent_public_key);
+        const oldSignature = base64ToBytes(payload.old_key_signature);
+        const newSignature = base64ToBytes(payload.new_key_signature);
+        if (oldPublicKey.length !== 32 || newPublicKey.length !== 32 ||
+            oldSignature.length !== 64 || newSignature.length !== 64 ||
+            await sha256Label(oldPublicKey) !== payload.old_agent_key_id ||
+            await sha256Label(newPublicKey) !== payload.new_agent_key_id) {
+          throw new Error("agent_rotation_key_id_hash_mismatch");
+        }
+        if (!Number.isSafeInteger(payload.issued_at_unix) ||
+            !Number.isSafeInteger(payload.expires_at_unix) || payload.issued_at_unix < 0 ||
+            payload.expires_at_unix <= payload.issued_at_unix ||
+            payload.expires_at_unix - payload.issued_at_unix > 600) {
+          throw new Error("agent_rotation_interval_must_be_at_most_ten_minutes");
+        }
+        const response = await sendCommand(
+          "rotate_agent_binding_key",
+          form.dataset.bindingId,
+          null,
+          payload
+        );
+        const value = await responseValue(response);
+        show(output, value, response.ok);
+        if (response.ok) window.setTimeout(() => window.location.reload(), 900);
       } catch (error) {
         show(output, error.message, false);
       } finally {
@@ -461,7 +541,8 @@ function unsignedHumanPayload(command, payload) {
   const clean = { ...payload };
   for (const field of [
     "idempotency_key", "signature", "signing_key_id", "signing_public_key",
-    "signing_public_key_hash", "signed_at_unix", "accepted_at_unix", "player_id"
+    "signing_public_key_hash", "signed_at_unix", "accepted_at_unix", "player_id",
+    "appellant_player_id"
   ]) delete clean[field];
   if (command === "accept_research_team_membership") delete clean.agent_id;
   return clean;
@@ -665,6 +746,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindHumanKeyRegistration();
   bindHumanKeyImport();
   bindAgentBinding();
+  bindAgentRotation();
   bindLocalSigning();
   bindQueueForms();
   bindProposalForms();

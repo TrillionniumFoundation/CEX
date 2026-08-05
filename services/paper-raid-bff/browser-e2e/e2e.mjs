@@ -175,6 +175,12 @@ async function runContext(browser, index) {
     if (requireLobby) {
       assert.equal(path, "/league");
       await page.getByRole("heading", { name: "Research Lobby" }).waitFor();
+      const rotation = page.locator(".agent-rotation-form");
+      await rotation.waitFor();
+      if (credentials.agent_bindings?.[index]) {
+        assert.equal(await rotation.getAttribute("data-agent-id"), credentials.agent_bindings[index].agent_id);
+        assert.equal(await rotation.getAttribute("data-old-key-id"), credentials.agent_bindings[index].agent_key_id);
+      }
     } else {
       assert.ok(path === "/league" || path === "/league/onboarding");
     }
@@ -202,6 +208,7 @@ async function runContext(browser, index) {
       ]) {
         await page.getByRole("heading", { name: heading }).waitFor();
       }
+      await page.locator('form[data-command="submit_appeal"] .local-sign').waitFor();
       await page.getByText("pending_finality", { exact: true }).first().waitFor();
     }
 
@@ -240,6 +247,7 @@ try {
     browser_storage_empty: true,
     response_loss_recovery_exercised: results[0].generatedHumanKey,
     lobby_reached: requireLobby,
+    agent_rotation_continuity_ui_checked: requireLobby,
     paper_room_checked: credentials.paper_id !== null,
   }));
 } finally {

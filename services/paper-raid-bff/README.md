@@ -48,7 +48,11 @@ The browser alpha is a same-origin, external-script flow:
    the self-read; a retry reuses the original imported key and never silently
    generates a replacement.
 4. Agent onboarding accepts only the exact public proof signed by the external
-   Agent. Agent private keys, seeds, mnemonics, runtime tokens and provider
+   Agent under `hepta.paper_raid.agent_binding_proof.v2`. The Lobby also
+   exposes the exact dual-signed `hepta.paper_raid.agent_binding_key_rotation.v2`
+   request: both
+   the currently bound and replacement Agent keys must sign the same scoped
+   rotation. Agent private keys, seeds, mnemonics, runtime tokens and provider
    credentials never enter this browser or BFF.
 5. `/league` reads Hepta Challenges, player-scoped matchmaking tickets and
    player-scoped three-person Team proposals. Queue and proposal decisions use
@@ -61,10 +65,10 @@ The browser alpha is a same-origin, external-script flow:
    It exposes typed proposal, decision, lease, revision, review, merge,
    evidence, experiment, claim, consent, finalization, evaluation,
    reproduction and Appeal actions. Acceptance, independent section review
-   and authorship consent signing frames are constructed from current Hepta
-   facts and signed by the imported human key locally. External Agent and
-   independent panel signatures remain external. The BFF signs only the
-   Consumer user assertion.
+   authorship consent and author Appeal signing frames are constructed from
+   current Hepta facts and signed by the imported human key locally. External
+   Agent and independent panel signatures remain external. The BFF signs only
+   the Consumer user assertion.
 8. `/api/papers/<paper-id>/timeline` combines query-bound Hepta room events
    with Nakama archives selected only from Hepta's player-scoped
    `member_research_sessions`. The Nakama HTTP key never reaches the browser.
@@ -92,7 +96,10 @@ at `/usr/share/doc/paper-raid-bff/sbom.cdx.json`. `scripts/check-image.sh`
 requires a clean commit, regenerates and compares the SBOM, independently
 rebuilds the image with `--no-cache`, compares image IDs, scans the exported
 root filesystem, and proves the credential scanner rejects an injected
-sentinel fixture.
+sentinel fixture. Both builds explicitly disable Buildx-generated provenance
+and SBOM attestations (`--provenance=false --sbom=false`) because provenance is
+carried by immutable OCI labels and the independently generated, checked-in
+SBOM; this keeps the loaded single-platform image identity deterministic.
 
 The image gate never installs a host plugin. It downloads Docker Buildx
 `v0.36.1` from

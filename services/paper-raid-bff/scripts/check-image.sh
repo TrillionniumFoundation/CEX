@@ -145,6 +145,8 @@ build_args=(
 
 "${docker_cli[@]}" buildx build \
   --load \
+  --provenance=false \
+  --sbom=false \
   --platform linux/amd64 \
   --file "$repo_root/services/paper-raid-bff/Dockerfile" \
   "${build_args[@]}" \
@@ -154,6 +156,8 @@ build_args=(
 "${docker_cli[@]}" buildx build \
   --load \
   --no-cache \
+  --provenance=false \
+  --sbom=false \
   --platform linux/amd64 \
   --file "$repo_root/services/paper-raid-bff/Dockerfile" \
   "${build_args[@]}" \
