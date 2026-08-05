@@ -128,6 +128,8 @@ curl \
   --location \
   --proto '=https' \
   --retry 3 \
+  --retry-all-errors \
+  --retry-delay 2 \
   --show-error \
   --silent \
   --tlsv1.2 \

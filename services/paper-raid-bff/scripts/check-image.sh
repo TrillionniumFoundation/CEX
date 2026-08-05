@@ -27,6 +27,7 @@ cleanup() {
   sudo -n docker rm -f "$container_name" >/dev/null 2>&1 || true
   sudo -n docker rm -f "$sentinel_container" >/dev/null 2>&1 || true
   sudo -n docker rm -f "$sentinel_scan_container" >/dev/null 2>&1 || true
+  sudo -n docker image rm -f "$image_name" >/dev/null 2>&1 || true
   sudo -n docker image rm -f "$sentinel_image" >/dev/null 2>&1 || true
   sudo -n docker image rm -f "$repro_image" >/dev/null 2>&1 || true
   case "$scratch_dir" in
@@ -110,6 +111,8 @@ curl \
   --location \
   --proto '=https' \
   --retry 3 \
+  --retry-all-errors \
+  --retry-delay 2 \
   --show-error \
   --silent \
   --tlsv1.2 \
