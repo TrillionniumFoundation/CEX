@@ -14,10 +14,10 @@ source_tree="$(git rev-parse 'HEAD^{tree}')"
 source_date_epoch="$(git show -s --format=%ct HEAD)"
 image_ref="${HEPTA_IMAGE_REF:-trnm/hepta-research-league:${revision}}"
 docker_command=(docker)
-docker_build_command=(env DOCKER_BUILDKIT=1 docker)
+docker_build_command=(docker)
 if ! docker info >/dev/null 2>&1; then
   docker_command=(sudo -n docker)
-  docker_build_command=(sudo -n env DOCKER_BUILDKIT=1 docker)
+  docker_build_command=(sudo -n docker)
 fi
 
 release_dir="$(mktemp -d)"
