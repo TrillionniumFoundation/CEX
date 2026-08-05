@@ -8,6 +8,9 @@ import pathlib
 import urllib.parse
 
 
+RUNTIME_BINARY_PATH = "/usr/local/bin/hepta-research-league"
+
+
 def normalized_identity(package, workspace_root):
     source = package.get("source")
     if source:
@@ -40,11 +43,25 @@ def component(package, workspace_root, component_type):
     return result
 
 
+def runtime_file_component(runtime_binary):
+    digest = hashlib.sha256(runtime_binary.read_bytes()).hexdigest()
+    return {
+        "type": "file",
+        "bom-ref": f"urn:cdx:file:sha256:{digest}",
+        "name": RUNTIME_BINARY_PATH,
+        "hashes": [{"alg": "SHA-256", "content": digest}],
+    }
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--metadata", required=True)
+    parser.add_argument("--runtime-binary", required=True, type=pathlib.Path)
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
+
+    if not args.runtime_binary.is_file():
+        parser.error(f"runtime binary is not a regular file: {args.runtime_binary}")
 
     metadata = json.loads(pathlib.Path(args.metadata).read_text(encoding="utf-8"))
     workspace_root = pathlib.Path(metadata["workspace_root"])
@@ -72,6 +89,7 @@ def main():
             key=lambda item: normalized_identity(packages_by_id[item], workspace_root),
         )
     ]
+    components.append(runtime_file_component(args.runtime_binary))
     dependencies = []
     for package_id in sorted(
         closure,

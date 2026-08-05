@@ -74,6 +74,21 @@ sbom_sha256="$(sha256sum deploy/hepta-research-league/hepta-research-league.cdx.
   echo "Hepta image SBOM digest is not canonical" >&2
   exit 1
 }
+runtime_binary_sha256="$(jq -er '
+  [.components[]? | select(.type == "file")] as $files
+  | if (($files | length) == 1
+      and $files[0].name == "/usr/local/bin/hepta-research-league"
+      and ($files[0].hashes | length) == 1
+      and $files[0].hashes[0].alg == "SHA-256"
+      and $files[0]["bom-ref"] == ("urn:cdx:file:sha256:" + $files[0].hashes[0].content))
+    then $files[0].hashes[0].content
+    else error("Hepta SBOM must bind exactly one canonical runtime file")
+    end
+' deploy/hepta-research-league/hepta-research-league.cdx.json)"
+[[ "$runtime_binary_sha256" =~ ^[0-9a-f]{64}$ ]] || {
+  echo "Hepta SBOM runtime binary digest is not canonical" >&2
+  exit 1
+}
 
 mkdir -p "$(dirname "$buildx_plugin")"
 curl --fail --location --proto '=https' --retry 5 --retry-all-errors \
@@ -110,6 +125,7 @@ build_image() {
     --build-arg "SOURCE_TREE=${source_tree}" \
     --build-arg "SOURCE_DATE_EPOCH=${source_date_epoch}" \
     --build-arg "SBOM_SHA256=${sbom_sha256}" \
+    --build-arg "RUNTIME_BINARY_SHA256=${runtime_binary_sha256}" \
     --iidfile "$target_iid_file" \
     --tag "$target_ref" \
     "$context_dir"
@@ -131,7 +147,8 @@ jq -e \
   --arg revision "$revision" \
   --arg source_tree "$source_tree" \
   --arg source_date_epoch "$source_date_epoch" \
-  --arg sbom_sha256 "$sbom_sha256" '
+  --arg sbom_sha256 "$sbom_sha256" \
+  --arg runtime_binary_sha256 "$runtime_binary_sha256" '
   length == 1
   and .[0].Config.User == "65532:65532"
   and .[0].Config.Entrypoint == ["/usr/local/bin/hepta-research-league"]
@@ -143,6 +160,7 @@ jq -e \
   and .[0].Config.Labels["io.trillionnium.hepta.source-tree"] == $source_tree
   and .[0].Config.Labels["io.trillionnium.hepta.source-date-epoch"] == $source_date_epoch
   and .[0].Config.Labels["io.trillionnium.hepta.application-sbom.sha256"] == $sbom_sha256
+  and .[0].Config.Labels["io.trillionnium.hepta.runtime-binary.sha256"] == $runtime_binary_sha256
   and .[0].Config.Labels["io.trillionnium.hepta.runtime-base"] == "gcr.io/distroless/cc-debian12@sha256:471dbca9cad607b9a32c10e9c31fb09ffaeb2d460e0afbff86c27abbc80b1b98"
 ' <<<"$inspect_json" >/dev/null
 
@@ -150,9 +168,13 @@ sbom_container="$("${docker_command[@]}" create "$image_id")"
 "${docker_command[@]}" cp \
   "$sbom_container:/usr/share/doc/hepta-research-league/sbom.cdx.json" \
   "$release_dir/image-sbom.cdx.json"
+"${docker_command[@]}" cp \
+  "$sbom_container:/usr/local/bin/hepta-research-league" \
+  "$release_dir/image-runtime-binary"
 "${docker_command[@]}" rm "$sbom_container" >/dev/null
 sbom_container=""
 test "$(sha256sum "$release_dir/image-sbom.cdx.json" | cut -d' ' -f1)" = "$sbom_sha256"
+test "$(sha256sum "$release_dir/image-runtime-binary" | cut -d' ' -f1)" = "$runtime_binary_sha256"
 
 jq -n \
   --arg schema "hepta.release_image_provenance.v2" \
@@ -169,6 +191,7 @@ jq -n \
   --arg runtime_base "gcr.io/distroless/cc-debian12@sha256:471dbca9cad607b9a32c10e9c31fb09ffaeb2d460e0afbff86c27abbc80b1b98" \
   --arg vendor_manifest_sha256 "$(sha256sum vendor/trnm-chain-vendor-manifest.json | cut -d' ' -f1)" \
   --arg sbom_sha256 "$sbom_sha256" \
+  --arg runtime_binary_sha256 "$runtime_binary_sha256" \
   '{
     schema: $schema,
     image_ref: $image_ref,
@@ -189,6 +212,10 @@ jq -n \
       format: "CycloneDX-1.5",
       path: "/usr/share/doc/hepta-research-league/sbom.cdx.json",
       sha256: $sbom_sha256
+    },
+    runtime_binary: {
+      path: "/usr/local/bin/hepta-research-league",
+      sha256: $runtime_binary_sha256
     },
     reproducibility: {
       independent_no_cache_builds: 2,

@@ -8,24 +8,43 @@ cd "$repo_dir"
 cargo_gate="${HEPTA_CARGO_LOCK_FILE:-/tmp/trnm-paper-raid-cargo-gate.lock}"
 
 cargo_locked() {
-  flock -n "$cargo_gate" cargo "$@"
+  flock -n "$cargo_gate" env -u SOURCE_DATE_EPOCH cargo "$@"
 }
 
 sbom_check_dir="$(mktemp -d)"
 trap 'rm -rf "$sbom_check_dir"' EXIT
+cargo_locked build --locked --release -p hepta-research-league --bin hepta-research-league
+runtime_binary="target/release/hepta-research-league"
+runtime_binary_sha256="$(sha256sum "$runtime_binary" | cut -d' ' -f1)"
+[[ "$runtime_binary_sha256" =~ ^[0-9a-f]{64}$ ]] || {
+  echo "Hepta runtime binary SHA-256 is not canonical" >&2
+  exit 1
+}
 cargo_locked metadata --locked --format-version 1 >"$sbom_check_dir/cargo-metadata.json"
 python3 scripts/generate-hepta-research-league-sbom.py \
   --metadata "$sbom_check_dir/cargo-metadata.json" \
+  --runtime-binary "$runtime_binary" \
   --output "$sbom_check_dir/hepta-research-league.cdx.json"
+python3 scripts/generate-hepta-research-league-sbom.py \
+  --metadata "$sbom_check_dir/cargo-metadata.json" \
+  --runtime-binary "$runtime_binary" \
+  --output "$sbom_check_dir/hepta-research-league-second.cdx.json"
+cmp "$sbom_check_dir/hepta-research-league.cdx.json" \
+  "$sbom_check_dir/hepta-research-league-second.cdx.json"
 cmp deploy/hepta-research-league/hepta-research-league.cdx.json \
   "$sbom_check_dir/hepta-research-league.cdx.json"
-jq -e '
+jq -e --arg runtime_binary_sha256 "$runtime_binary_sha256" '
   .bomFormat == "CycloneDX"
   and .specVersion == "1.5"
   and .version == 1
   and (.serialNumber | not)
   and (.metadata.timestamp | not)
   and .metadata.component.name == "hepta-research-league"
+  and ([.components[] | select(.type == "file")] | length) == 1
+  and ([.components[] | select(.type == "file")][0]
+    | .name == "/usr/local/bin/hepta-research-league"
+    and .["bom-ref"] == ("urn:cdx:file:sha256:" + $runtime_binary_sha256)
+    and .hashes == [{"alg":"SHA-256","content":$runtime_binary_sha256}])
 ' deploy/hepta-research-league/hepta-research-league.cdx.json >/dev/null
 
 python3 - <<'PY'
@@ -173,6 +192,12 @@ for required_env in (
     assert required_env in hepta["environment"]
 
 dockerfile = pathlib.Path("services/hepta-research-league/Dockerfile").read_text(encoding="utf-8")
+builder_stage = dockerfile.split(
+    "FROM gcr.io/distroless/cc-debian12@sha256:471dbca9cad607b9a32c10e9c31fb09ffaeb2d460e0afbff86c27abbc80b1b98",
+    maxsplit=1,
+)[0]
+assert "VCS_REF" not in builder_stage
+assert "SOURCE_TREE" not in builder_stage
 assert dockerfile.startswith("# syntax=docker/dockerfile:1@sha256:87999aa3d42bdc6bea60565083ee17e86d1f3339802f543c0d03998580f9cb89\n")
 assert "FROM rust@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd578ed948b71b37c1d7fb AS builder" in dockerfile
 assert "FROM gcr.io/distroless/cc-debian12@sha256:471dbca9cad607b9a32c10e9c31fb09ffaeb2d460e0afbff86c27abbc80b1b98" in dockerfile
@@ -180,6 +205,8 @@ assert 'CMD ["/usr/local/bin/hepta-research-league", "--probe-ready"]' in docker
 assert "ARG SOURCE_DATE_EPOCH" in dockerfile
 assert "ARG SOURCE_TREE" in dockerfile
 assert "ARG SBOM_SHA256" in dockerfile
+assert "ARG RUNTIME_BINARY_SHA256" in dockerfile
+assert "env -u SOURCE_DATE_EPOCH cargo build" in dockerfile
 assert "/release/usr/local/bin/hepta-research-league" in dockerfile
 assert "/release/usr/share/doc/hepta-research-league/sbom.cdx.json" in dockerfile
 assert "find /release -exec touch --no-dereference" in dockerfile
@@ -189,6 +216,7 @@ assert "io.trillionnium.hepta.source-tree" in dockerfile
 assert "io.trillionnium.hepta.application-sbom.sha256" in dockerfile
 assert "org.trillionnium.source.tree" in dockerfile
 assert "org.trillionnium.sbom.sha256" in dockerfile
+assert "io.trillionnium.hepta.runtime-binary.sha256" in dockerfile
 assert "/usr/share/doc/hepta-research-league/sbom.cdx.json" in dockerfile
 assert ":latest" not in dockerfile
 
@@ -199,6 +227,9 @@ assert "buildx_sha256=48af8a397ebd60178778bf63611dbcebe5f5e7a9be90eb9147b24b9587
 assert "buildx build" in image_script
 assert "--provenance=false" in image_script
 assert "--sbom=false" in image_script
+assert '--build-arg "RUNTIME_BINARY_SHA256=${runtime_binary_sha256}"' in image_script
+assert '"$sbom_container:/usr/local/bin/hepta-research-league"' in image_script
+assert 'test "$(sha256sum "$release_dir/image-runtime-binary"' in image_script
 assert 'dockerfile_frontend "docker/dockerfile:1@sha256:87999aa3d42bdc6bea60565083ee17e86d1f3339802f543c0d03998580f9cb89"' in image_script
 assert image_script.count("build_image \"$image_ref\"") == 1
 assert image_script.count("build_image \"$repro_ref\"") == 1
