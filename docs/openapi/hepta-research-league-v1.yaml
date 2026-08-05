@@ -55,6 +55,17 @@ paths:
       responses:
         "200": { description: Agent-authorized key rotation accepted }
   /v1/hepta/challenges:
+    get:
+      tags: [Operator]
+      security: [{ OperatorToken: [] }]
+      operationId: listChallengeSnapshots
+      description: >
+        Lists the exact durable challenge snapshots used by deployment
+        initializers. This operator surface is intentionally separate from the
+        sanitized public Paper Raid lobby projection.
+      responses:
+        "200":
+          description: Stable creation-order list of exact challenge snapshots
     post:
       tags: [Operator]
       security: [{ OperatorToken: [] }]
@@ -63,6 +74,8 @@ paths:
         "201": { description: Immutable challenge snapshot created }
   /v1/hepta/challenges/{challenge_id}:
     get:
+      tags: [Operator]
+      security: [{ OperatorToken: [] }]
       operationId: getChallenge
       parameters:
         - $ref: "#/components/parameters/ChallengeId"

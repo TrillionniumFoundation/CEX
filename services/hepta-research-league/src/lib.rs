@@ -1006,7 +1006,10 @@ pub fn app(state: AppState) -> Router {
         .route("/v1/hepta/manifest", get(manifest))
         .route("/v1/hepta/agents", post(register_agent))
         .route("/v1/hepta/agents/rotate-key", post(rotate_agent_key))
-        .route("/v1/hepta/challenges", post(create_challenge))
+        .route(
+            "/v1/hepta/challenges",
+            get(list_challenges).post(create_challenge),
+        )
         .route("/v1/hepta/challenges/:challenge_id", get(get_challenge))
         .route(
             "/v1/hepta/challenges/:challenge_id/enrollments",
@@ -1229,10 +1232,36 @@ async fn create_challenge(
         .await
 }
 
+async fn list_challenges(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<ResearchChallenge>>, ApiError> {
+    require_service_token(
+        &headers,
+        OPERATOR_TOKEN_HEADER,
+        &state.security.operator_token,
+        "operator_auth_failed",
+    )?;
+    state
+        .inspect(|league| {
+            let mut challenges = league.challenges.values().cloned().collect::<Vec<_>>();
+            challenges.sort_by_key(|challenge| (challenge.created_at, challenge.challenge_id));
+            Ok(Json(challenges))
+        })
+        .await
+}
+
 async fn get_challenge(
     State(state): State<AppState>,
     Path(challenge_id): Path<Uuid>,
+    headers: HeaderMap,
 ) -> Result<Json<ResearchChallenge>, ApiError> {
+    require_service_token(
+        &headers,
+        OPERATOR_TOKEN_HEADER,
+        &state.security.operator_token,
+        "operator_auth_failed",
+    )?;
     state
         .inspect(|league| {
             league
