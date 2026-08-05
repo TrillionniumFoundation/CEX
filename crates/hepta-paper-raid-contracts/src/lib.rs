@@ -42,6 +42,19 @@ pub const RESEARCH_SESSION_AUTHORIZATION_V1: &str = "trnm.research-session.autho
 pub const RESEARCH_SESSION_ACTION_V1: &str = "trnm.research-session.action.v1";
 pub const RESEARCH_SESSION_EVENT_V1: &str = "trnm.research-session.event.v1";
 pub const RESEARCH_SESSION_COMPLETION_V1: &str = "trnm.research-session.completed.v1";
+pub const RESEARCH_CONTROL_CLAIM_V2: &str = "trnm.nakama.research-control.claim.v2";
+pub const RESEARCH_CONTROL_AUDIENCE_V2: &str = "trnm:nakama:research-control:v2";
+pub const RESEARCH_CONTROL_CREATE_REQUEST_V2: &str = "trnm.nakama.research-session.create.v2";
+pub const RESEARCH_CONTROL_RESUME_REQUEST_V2: &str = "trnm.nakama.research-session.resume.v2";
+pub const RESEARCH_CONTROL_REPLACE_REQUEST_V2: &str =
+    "trnm.nakama.research-session.replace-roster.v2";
+pub const RESEARCH_CONTROL_COMPLETE_REQUEST_V2: &str = "trnm.nakama.research-session.complete.v2";
+pub const RESEARCH_CONTROL_RESULT_V2: &str = "trnm.nakama.research-control.result.v2";
+pub const RESEARCH_CONTROL_RPC_CREATE_V2: &str = "trnm_research_session_create_v2";
+pub const RESEARCH_CONTROL_RPC_RESUME_V2: &str = "trnm_research_session_resume_v2";
+pub const RESEARCH_CONTROL_RPC_REPLACE_V2: &str = "trnm_research_session_replace_roster_v2";
+pub const RESEARCH_CONTROL_RPC_COMPLETE_V2: &str = "trnm_research_session_complete_v2";
+pub const RESEARCH_CONTROL_MAXIMUM_LIFETIME_SECONDS: i64 = 120;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CanonicalFrame {
@@ -117,6 +130,20 @@ fn validate_logical_id(field: &str, value: &str) -> Result<(), String> {
     {
         return Err(format!(
             "{field} must match [A-Za-z0-9][A-Za-z0-9._:-]{{0,127}}"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_key_id(field: &str, value: &str) -> Result<(), String> {
+    if value.is_empty()
+        || value.len() > 128
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-'))
+    {
+        return Err(format!(
+            "{field} must contain 1-128 ASCII alphanumeric, dot, underscore, colon, or dash bytes"
         ));
     }
     Ok(())
@@ -837,6 +864,318 @@ pub fn verify_research_session_authorization(
     verifying_key
         .verify(&bytes, &Signature::from_bytes(&signature))
         .map_err(|_| "research session authorization signature verification failed".to_string())
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ResearchControlOperationV2 {
+    Create,
+    Resume,
+    ReplaceRoster,
+    Complete,
+}
+
+impl ResearchControlOperationV2 {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Create => "create",
+            Self::Resume => "resume",
+            Self::ReplaceRoster => "replace_roster",
+            Self::Complete => "complete",
+        }
+    }
+
+    pub fn target_rpc(self) -> &'static str {
+        match self {
+            Self::Create => RESEARCH_CONTROL_RPC_CREATE_V2,
+            Self::Resume => RESEARCH_CONTROL_RPC_RESUME_V2,
+            Self::ReplaceRoster => RESEARCH_CONTROL_RPC_REPLACE_V2,
+            Self::Complete => RESEARCH_CONTROL_RPC_COMPLETE_V2,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ResearchControlClaimV2 {
+    pub schema: String,
+    pub command_id: Uuid,
+    pub operation: ResearchControlOperationV2,
+    pub target_rpc: String,
+    pub session_id: String,
+    pub session_roster_version: u64,
+    pub authorization_set_id: Uuid,
+    pub payload_hash: String,
+    pub audience: String,
+    pub issued_at_unix: i64,
+    pub expires_at_unix: i64,
+    pub issuer_key_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SignedResearchControlV2 {
+    pub claim: ResearchControlClaimV2,
+    pub signature: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ResearchControlCreateRequestV2 {
+    pub schema: String,
+    pub authorization_set_id: Uuid,
+    pub authorizations: Vec<SignedResearchSessionAuthorizationV1>,
+    pub control: SignedResearchControlV2,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ResearchControlResumeRequestV2 {
+    pub schema: String,
+    pub logical_session_id: String,
+    pub authorization_set_id: Uuid,
+    pub control: SignedResearchControlV2,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ResearchControlReplaceRequestV2 {
+    pub schema: String,
+    pub logical_session_id: String,
+    pub authorization_set_id: Uuid,
+    pub authorizations: Vec<SignedResearchSessionAuthorizationV1>,
+    pub control: SignedResearchControlV2,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ResearchControlCompleteRequestV2 {
+    pub schema: String,
+    pub logical_session_id: String,
+    pub authorization_set_id: Uuid,
+    pub facts: ResearchSessionTerminalFactsV1,
+    pub control: SignedResearchControlV2,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ResearchControlRuntimeResultV1 {
+    pub schema: String,
+    pub logical_session_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub external_match_id: String,
+    pub runtime_generation: u64,
+    pub status: String,
+    pub session_version: u64,
+    pub roster_version: u64,
+    pub roster_root: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ResearchControlEvidenceResultV1 {
+    pub schema: String,
+    pub logical_session_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub external_match_id: String,
+    pub runtime_generation: u64,
+    pub completion: ResearchSessionCompletionV1,
+    pub authority_public_key_base64: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ResearchControlResultV2<T> {
+    pub schema: String,
+    pub command_id: Uuid,
+    pub operation: ResearchControlOperationV2,
+    pub target_rpc: String,
+    pub result: T,
+}
+
+fn research_control_authorization_envelope_v2(
+    authorization: &SignedResearchSessionAuthorizationV1,
+) -> Result<Vec<u8>, String> {
+    let signing = research_session_authorization_signing_bytes(
+        &authorization.claim,
+        &authorization.issuer_key_id,
+    )?;
+    let signature = decode_base64_exact::<64>("authorization_signature", &authorization.signature)?;
+    Ok(
+        CanonicalFrame::new("trnm_research_control_authorization_envelope_v2")
+            .bytes(&signing)?
+            .bytes(&signature)?
+            .finish(),
+    )
+}
+
+fn research_control_authorization_set_business_v2(
+    domain: &str,
+    schema: &str,
+    session_id: &str,
+    authorization_set_id: Uuid,
+    authorizations: &[SignedResearchSessionAuthorizationV1],
+) -> Result<Vec<u8>, String> {
+    validate_logical_id("session_id", session_id)?;
+    if !(3..=5).contains(&authorizations.len()) {
+        return Err("research control authorization set must contain 3-5 entries".to_string());
+    }
+    let roster_version = authorizations[0].claim.roster_version;
+    if roster_version == 0 || roster_version > JSON_SAFE_U64_MAX {
+        return Err("research control authorization roster version is invalid".to_string());
+    }
+    let mut frame = CanonicalFrame::new(domain)
+        .string(schema)?
+        .string(session_id)?
+        .string(&authorization_set_id.to_string())?
+        .u32(u32::try_from(authorizations.len()).map_err(|_| "authorization set too large")?);
+    for (index, authorization) in authorizations.iter().enumerate() {
+        if authorization.claim.participant_slot
+            != u32::try_from(index + 1).map_err(|_| "participant slot overflow")?
+            || authorization.claim.session_id != session_id
+            || authorization.claim.roster_version != roster_version
+        {
+            return Err(
+                "research control authorizations must be ordered and bind one session and roster version"
+                    .to_string(),
+            );
+        }
+        frame = frame.bytes(&research_control_authorization_envelope_v2(authorization)?)?;
+    }
+    Ok(frame.finish())
+}
+
+pub fn research_control_create_business_v2(
+    request: &ResearchControlCreateRequestV2,
+) -> Result<Vec<u8>, String> {
+    if request.schema != RESEARCH_CONTROL_CREATE_REQUEST_V2 || request.authorizations.is_empty() {
+        return Err("invalid research control create request".to_string());
+    }
+    research_control_authorization_set_business_v2(
+        "trnm_research_control_create_business_v2",
+        &request.schema,
+        &request.authorizations[0].claim.session_id,
+        request.authorization_set_id,
+        &request.authorizations,
+    )
+}
+
+pub fn research_control_resume_business_v2(
+    request: &ResearchControlResumeRequestV2,
+) -> Result<Vec<u8>, String> {
+    if request.schema != RESEARCH_CONTROL_RESUME_REQUEST_V2 {
+        return Err("invalid research control resume request".to_string());
+    }
+    validate_logical_id("logical_session_id", &request.logical_session_id)?;
+    Ok(
+        CanonicalFrame::new("trnm_research_control_resume_business_v2")
+            .string(&request.schema)?
+            .string(&request.logical_session_id)?
+            .string(&request.authorization_set_id.to_string())?
+            .finish(),
+    )
+}
+
+pub fn research_control_replace_business_v2(
+    request: &ResearchControlReplaceRequestV2,
+) -> Result<Vec<u8>, String> {
+    if request.schema != RESEARCH_CONTROL_REPLACE_REQUEST_V2 {
+        return Err("invalid research control replacement request".to_string());
+    }
+    research_control_authorization_set_business_v2(
+        "trnm_research_control_replace_business_v2",
+        &request.schema,
+        &request.logical_session_id,
+        request.authorization_set_id,
+        &request.authorizations,
+    )
+}
+
+pub fn research_control_complete_business_v2(
+    request: &ResearchControlCompleteRequestV2,
+) -> Result<Vec<u8>, String> {
+    if request.schema != RESEARCH_CONTROL_COMPLETE_REQUEST_V2 {
+        return Err("invalid research control completion request".to_string());
+    }
+    validate_logical_id("logical_session_id", &request.logical_session_id)?;
+    let facts = research_session_terminal_facts_frame(&request.facts)?;
+    Ok(
+        CanonicalFrame::new("trnm_research_control_complete_business_v2")
+            .string(&request.schema)?
+            .string(&request.logical_session_id)?
+            .string(&request.authorization_set_id.to_string())?
+            .bytes(&facts)?
+            .finish(),
+    )
+}
+
+pub fn research_control_claim_frame_v2(claim: &ResearchControlClaimV2) -> Result<Vec<u8>, String> {
+    if claim.schema != RESEARCH_CONTROL_CLAIM_V2
+        || claim.target_rpc != claim.operation.target_rpc()
+        || claim.audience != RESEARCH_CONTROL_AUDIENCE_V2
+        || claim.session_roster_version == 0
+        || claim.session_roster_version > JSON_SAFE_U64_MAX
+    {
+        return Err(
+            "research control claim schema, operation, audience, or version is invalid".to_string(),
+        );
+    }
+    validate_logical_id("session_id", &claim.session_id)?;
+    validate_key_id("issuer_key_id", &claim.issuer_key_id)?;
+    decode_digest(&claim.payload_hash)?;
+    if claim.issued_at_unix < 0
+        || u64::try_from(claim.issued_at_unix).map_or(true, |value| value > JSON_SAFE_U64_MAX)
+        || claim.expires_at_unix <= claim.issued_at_unix
+        || u64::try_from(claim.expires_at_unix).map_or(true, |value| value > JSON_SAFE_U64_MAX)
+        || claim.expires_at_unix - claim.issued_at_unix > RESEARCH_CONTROL_MAXIMUM_LIFETIME_SECONDS
+    {
+        return Err("research control validity interval is invalid".to_string());
+    }
+    Ok(CanonicalFrame::new("trnm_research_control_claim_v2")
+        .string(&claim.schema)?
+        .string(&claim.command_id.to_string())?
+        .string(claim.operation.as_str())?
+        .string(&claim.target_rpc)?
+        .string(&claim.session_id)?
+        .u64(claim.session_roster_version)
+        .string(&claim.authorization_set_id.to_string())?
+        .digest(&claim.payload_hash)?
+        .string(&claim.audience)?
+        .i64(claim.issued_at_unix)
+        .i64(claim.expires_at_unix)
+        .string(&claim.issuer_key_id)?
+        .finish())
+}
+
+pub fn research_control_signing_bytes_v2(
+    claim: &ResearchControlClaimV2,
+) -> Result<Vec<u8>, String> {
+    let claim_frame = research_control_claim_frame_v2(claim)?;
+    Ok(CanonicalFrame::new("trnm_research_control_signature_v2")
+        .bytes(&claim_frame)?
+        .finish())
+}
+
+pub fn sign_research_control_v2(
+    claim: ResearchControlClaimV2,
+    signing_key: &SigningKey,
+) -> Result<SignedResearchControlV2, String> {
+    let message = research_control_signing_bytes_v2(&claim)?;
+    Ok(SignedResearchControlV2 {
+        claim,
+        signature: BASE64.encode(signing_key.sign(&message).to_bytes()),
+    })
+}
+
+pub fn verify_research_control_v2(
+    control: &SignedResearchControlV2,
+    verifying_key: &VerifyingKey,
+) -> Result<(), String> {
+    let message = research_control_signing_bytes_v2(&control.claim)?;
+    let signature = decode_base64_exact::<64>("control_signature", &control.signature)?;
+    verifying_key
+        .verify(&message, &Signature::from_bytes(&signature))
+        .map_err(|_| "research control signature verification failed".to_string())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

@@ -157,6 +157,35 @@ authorization. Nakama consumption receives a signed
 `AuthorizationSetConsumptionReceiptV1`; an unsigned authorization-set echo is
 not an acknowledgement.
 
+Hepta is also the only authority permitted to drive the four frozen Nakama
+research-control v2 operations: create, resume, replace-roster and complete.
+The control signing key is distinct from both the normal authorization issuer
+and every pinned Nakama completion authority. Each short-lived Ed25519 claim
+binds one globally unique command UUID, the fixed operation-to-RPC mapping,
+audience, logical session, exact authorization epoch/set ID and the SHA-256 of
+the operation-specific canonical business frame.
+
+Before contacting Nakama, Hepta atomically stores the command, the complete
+canonical signed request bytes and checksum, operation-scoped idempotency
+record and outbox event. The database transaction and locks are released before
+the HTTP call so Nakama's synchronous authorization-consumption/completion
+callback cannot deadlock with command preparation. A timeout, 5xx or process
+death leaves the command pending; a retry sends the original stored bytes and
+never creates a new command or extends/re-signs the expired claim. A pending
+replace/complete after runtime loss requires a separately signed current-epoch
+resume, Agent reconnection, then exact replay of the old accepted command.
+
+The RPC transport uses Nakama's double-JSON envelope and the runtime HTTP key,
+not `TRNM_NAKAMA_OPERATOR_TOKEN`. Hepta accepts only HTTP 200 with exactly one
+`Content-Type: application/json`, strict outer/inner JSON and matching command,
+operation and RPC wrapper fields. Runtime responses are checked against an
+independently recomputed local roster root. Completion responses are verified
+against the locally pinned authority key, the finalized PaperBundle terminal
+facts and the already persisted callback receipt whose full archive/roots were
+independently recomputed. A public key included in Nakama's response is only a
+diagnostic value and must byte-match the pinned key; it never establishes
+trust.
+
 Nakama completion ingestion requires the inline signed
 `trnm.research-session.completed.v1` object and the full ordered authoritative
 event archive. Hepta looks up `authority_key_id` only in its locally pinned

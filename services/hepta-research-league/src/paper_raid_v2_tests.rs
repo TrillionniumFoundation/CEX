@@ -654,7 +654,7 @@ fn actors(member_count: usize) -> Vec<Actor> {
         .collect()
 }
 
-fn security() -> SecurityConfig {
+pub(super) fn security() -> SecurityConfig {
     SecurityConfig::new("operator", "nakama")
         .with_trnm_token("trnm")
         .with_trusted_nakama_research_authority(
@@ -801,7 +801,7 @@ fn error_code(actual: (StatusCode, Value), expected: StatusCode) -> String {
         .to_string()
 }
 
-async fn reset_postgres(database_url: &str) {
+pub(super) async fn reset_postgres(database_url: &str) {
     let pool = sqlx::PgPool::connect(database_url)
         .await
         .expect("maintenance pool");
@@ -835,6 +835,7 @@ async fn reset_postgres(database_url: &str) {
            hepta_team_proposal_decisions,
            hepta_team_proposals,
            hepta_matchmaking_tickets,
+           hepta_nakama_research_control_commands,
            hepta_nakama_research_session_completions,
            hepta_research_session_consumption_receipts,
            hepta_research_session_authorizations,
@@ -3610,6 +3611,10 @@ async fn run_full_flow(state: AppState, member_count: usize, options: FlowOption
         authorization_status,
         outbox_event_types: paper_raid_event_types(&state).await,
     }
+}
+
+pub(super) async fn seed_three_member_postgres_flow_for_control_test(state: AppState) {
+    let _ = run_full_flow(state, 3, FlowOptions::default()).await;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

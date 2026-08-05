@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Hepta Paper Raid API
-  version: 4.0.0-alpha.1
+  version: 4.1.0-alpha.1
   description: >-
     Versioned Team + Paper collaboration control-plane API for 3-5 human players using
     independently operated external Agents to create one signed, reproducible
@@ -17,8 +17,9 @@ paths:
       operationId: getHeptaReadiness
       description: >-
         Returns 200 only when PostgreSQL answers SELECT 1 and all Consumer
-        Edge, Nakama authority and configured finality trust anchors are
-        internally valid. Returns 503 with ready=false otherwise.
+        Edge, distinct authorization/control/completion keys, the signed
+        Nakama control origin/runtime key, and configured finality trust
+        anchors are internally valid. Returns 503 with ready=false otherwise.
       responses:
         "200": {description: Durable dependencies and trust configuration ready}
         "503": {description: Database unavailable or trust configuration invalid}
@@ -703,6 +704,70 @@ paths:
       responses:
         "201": {description: Fresh complete roster epoch issued}
         "409": {description: Stale epoch or replacement changed a frozen field}
+  /v2/hepta/nakama/research-session-controls/create:
+    post:
+      operationId: createNakamaResearchSessionControl
+      description: >-
+        Freezes one globally unique, short-lived Ed25519 control command for
+        the latest initial authorization epoch, persists its exact canonical
+        request bytes transactionally, then calls Nakama only after commit.
+        Timeout/5xx retries reuse the original command ID, signature and bytes.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CreateNakamaResearchSessionControlRequestV2"}
+      responses:
+        "200": {$ref: "#/components/responses/NakamaControlCommand"}
+        "409": {description: Idempotency conflict, stale epoch, or invalid authorization state}
+        "502": {description: Command remains durable and pending after strict Nakama transport/response failure}
+  /v2/hepta/nakama/research-session-controls/resume:
+    post:
+      operationId: resumeNakamaResearchSessionControl
+      description: >-
+        Signs a current-epoch resume that may recreate only Nakama's ephemeral
+        runtime. It never mutates the durable research snapshot.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ResumeNakamaResearchSessionControlRequestV2"}
+      responses:
+        "200": {$ref: "#/components/responses/NakamaControlCommand"}
+        "409": {description: Idempotency conflict or non-current epoch}
+        "502": {description: Durable pending command; exact retry is safe}
+  /v2/hepta/nakama/research-session-controls/replace-roster:
+    post:
+      operationId: replaceNakamaResearchSessionRosterControl
+      description: >-
+        Controls only a previously issued full replacement epoch. The signed
+        payload includes all 3-5 new authorizations in participant-slot order.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ReplaceNakamaResearchSessionRosterControlRequestV2"}
+      responses:
+        "200": {$ref: "#/components/responses/NakamaControlCommand"}
+        "409": {description: Idempotency conflict, stale epoch, or invalid replacement chain}
+        "502": {description: Durable pending command; resume runtime then retry exact bytes}
+  /v2/hepta/nakama/research-session-controls/complete:
+    post:
+      operationId: completeNakamaResearchSessionControl
+      description: >-
+        Derives terminal facts exclusively from the finalized canonical
+        PaperBundle. A response is applied only after local authority
+        verification and the synchronous archive callback has been independently
+        verified and persisted by Hepta.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CompleteNakamaResearchSessionControlRequestV2"}
+      responses:
+        "200": {$ref: "#/components/responses/NakamaControlCommand"}
+        "409": {description: Bundle is not finalized or epoch is not fully consumed}
+        "502": {description: Durable pending command; resume/reconnect then retry exact bytes}
   /v2/hepta/nakama/research-session-authorizations/consumed:
     post:
       security:
@@ -807,6 +872,11 @@ components:
   responses:
     VersionConflict:
       description: expected_version did not match the aggregate version
+    NakamaControlCommand:
+      description: Durable signed control command and strictly validated Nakama result
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/NakamaResearchControlCommandV2"}
   schemas:
     Sha256Digest:
       type: string
@@ -815,6 +885,70 @@ components:
       type: string
       minLength: 1
       maxLength: 200
+    CreateNakamaResearchSessionControlRequestV2:
+      type: object
+      additionalProperties: false
+      required: [authorization_set_id, idempotency_key]
+      properties:
+        authorization_set_id: {type: string, format: uuid}
+        idempotency_key: {$ref: "#/components/schemas/IdempotencyKey"}
+    ResumeNakamaResearchSessionControlRequestV2:
+      type: object
+      additionalProperties: false
+      required: [session_id, roster_version, idempotency_key]
+      properties:
+        session_id: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        roster_version: {type: integer, minimum: 1, maximum: 9007199254740991}
+        idempotency_key: {$ref: "#/components/schemas/IdempotencyKey"}
+    ReplaceNakamaResearchSessionRosterControlRequestV2:
+      type: object
+      additionalProperties: false
+      required: [authorization_set_id, idempotency_key]
+      properties:
+        authorization_set_id: {type: string, format: uuid}
+        idempotency_key: {$ref: "#/components/schemas/IdempotencyKey"}
+    CompleteNakamaResearchSessionControlRequestV2:
+      type: object
+      additionalProperties: false
+      required: [session_id, roster_version, idempotency_key]
+      properties:
+        session_id: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        roster_version: {type: integer, minimum: 1, maximum: 9007199254740991}
+        idempotency_key: {$ref: "#/components/schemas/IdempotencyKey"}
+    NakamaResearchControlCommandV2:
+      type: object
+      additionalProperties: false
+      required: [schema, command_id, operation, target_rpc, session_id, session_roster_version, authorization_set_id, payload_hash, idempotency_key, request_hash, request_sha256, status, response, response_sha256, response_seal_signature, attempt_count, last_error_code, created_at, updated_at]
+      properties:
+        schema: {type: string, const: hepta.paper_raid.nakama_research_control_command.v2}
+        command_id: {type: string, format: uuid}
+        operation: {type: string, enum: [create, resume, replace_roster, complete]}
+        target_rpc:
+          type: string
+          enum: [trnm_research_session_create_v2, trnm_research_session_resume_v2, trnm_research_session_replace_roster_v2, trnm_research_session_complete_v2]
+        session_id: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        session_roster_version: {type: integer, minimum: 1, maximum: 9007199254740991}
+        authorization_set_id: {type: string, format: uuid}
+        payload_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        idempotency_key: {$ref: "#/components/schemas/IdempotencyKey"}
+        request_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        request_sha256: {$ref: "#/components/schemas/Sha256Digest"}
+        status: {type: string, enum: [pending, applied]}
+        response:
+          anyOf: [{type: object}, {type: "null"}]
+        response_sha256:
+          anyOf: [{$ref: "#/components/schemas/Sha256Digest"}, {type: "null"}]
+        response_seal_signature:
+          description: >-
+            Hepta control-key Ed25519 signature over command_id,
+            request_sha256, and response_sha256. Present only after an applied
+            response and re-verified before every replay.
+          anyOf: [{type: string, minLength: 88, maxLength: 88}, {type: "null"}]
+        attempt_count: {type: integer, minimum: 0, maximum: 9007199254740991}
+        last_error_code:
+          anyOf: [{type: string, minLength: 1}, {type: "null"}]
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
     CreateMatchmakingTicketRequest:
       type: object
       additionalProperties: false

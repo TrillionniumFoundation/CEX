@@ -47,6 +47,10 @@ pub use collaboration_v3::*;
 mod review_v4;
 pub use review_v4::*;
 
+#[path = "paper_raid_v2/nakama_control_v2.rs"]
+mod nakama_control_v2;
+pub use nakama_control_v2::*;
+
 const PAPER_RAID_EVENT_SCHEMA_V2: &str = "hepta.paper_raid.event.v2";
 
 #[derive(Clone, Default)]
@@ -71,6 +75,8 @@ pub(crate) struct PaperRaidMemory {
     research_session_consumption_receipts:
         HashMap<(String, u64), SignedAuthorizationSetConsumptionReceiptV1>,
     research_session_completions: HashMap<(String, u64), SignedNakamaCompletionReceiptV1>,
+    nakama_control_commands: HashMap<Uuid, nakama_control_v2::StoredControlCommand>,
+    nakama_control_idempotency: HashMap<(String, String), Uuid>,
     collaboration: collaboration_v3::CollaborationMemory,
     review: review_v4::ReviewMemory,
     idempotency: HashMap<String, MemoryIdempotencyRecord>,
@@ -837,6 +843,7 @@ pub(crate) fn router() -> Router<AppState> {
             "/v2/hepta/nakama/research-session-completions",
             post(ingest_nakama_research_session_completion),
         )
+        .merge(nakama_control_v2::router())
         .merge(collaboration_v3::router())
         .merge(review_v4::router())
 }

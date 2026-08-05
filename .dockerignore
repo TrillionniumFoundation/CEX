@@ -1,0 +1,14 @@
+.git
+.gitignore
+target
+**/target
+.env
+.env.*
+**/*.pem
+**/*.key
+**/*credentials*
+**/auth-profiles.json
+memory
+node_modules
+coverage
+tmp

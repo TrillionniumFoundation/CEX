@@ -259,6 +259,7 @@ struct ReadyResponse {
     storage: &'static str,
     database: &'static str,
     security: &'static str,
+    nakama_control: &'static str,
     failures: Vec<&'static str>,
     agent_execution_mode: &'static str,
     top_level_modules: [&'static str; 3],
@@ -351,6 +352,12 @@ async fn openapi() -> &'static str {
 
 async fn ready(State(state): State<AppState>) -> (StatusCode, Json<ReadyResponse>) {
     let mut failures = state.security.readiness_errors();
+    let nakama_control = if state.nakama_control_http_configured() {
+        "configured"
+    } else {
+        failures.push("nakama_control_http_missing");
+        "missing"
+    };
     let database = if let Some(pool) = &state.pool {
         match pool.acquire().await {
             Ok(mut connection) => match sqlx::query_scalar::<_, i32>("select 1")
@@ -390,6 +397,7 @@ async fn ready(State(state): State<AppState>) -> (StatusCode, Json<ReadyResponse
         } else {
             "invalid"
         },
+        nakama_control,
         failures,
         agent_execution_mode: "external_only",
         top_level_modules: ["hepta", "nakama", "trnm"],

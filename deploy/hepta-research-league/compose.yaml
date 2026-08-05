@@ -14,14 +14,25 @@ services:
       HEPTA_NAKAMA_TOKEN: ${HEPTA_NAKAMA_TOKEN:?required}
       HEPTA_NAKAMA_AUTHORIZATION_ISSUER_KEY_ID: ${HEPTA_NAKAMA_AUTHORIZATION_ISSUER_KEY_ID:?trusted issuer key id required}
       HEPTA_NAKAMA_AUTHORIZATION_ED25519_SEED_BASE64: ${HEPTA_NAKAMA_AUTHORIZATION_ED25519_SEED_BASE64:?secret-manager 32-byte seed required}
+      HEPTA_NAKAMA_CONTROL_ISSUER_KEY_ID: ${HEPTA_NAKAMA_CONTROL_ISSUER_KEY_ID:?dedicated control issuer key id required}
+      HEPTA_NAKAMA_CONTROL_ED25519_SEED_BASE64: ${HEPTA_NAKAMA_CONTROL_ED25519_SEED_BASE64:?dedicated secret-manager 32-byte control seed required}
+      HEPTA_NAKAMA_BASE_URL: ${HEPTA_NAKAMA_BASE_URL:?Nakama internal base URL required}
+      HEPTA_NAKAMA_RUNTIME_HTTP_KEY: ${HEPTA_NAKAMA_RUNTIME_HTTP_KEY:?Nakama runtime HTTP key required}
+      HEPTA_CONSUMER_EDGE_ISSUER: ${HEPTA_CONSUMER_EDGE_ISSUER:?Consumer Edge issuer required}
+      HEPTA_CONSUMER_EDGE_AUDIENCE: ${HEPTA_CONSUMER_EDGE_AUDIENCE:?Consumer Edge audience required}
+      HEPTA_CONSUMER_EDGE_ISSUER_KEY_ID: ${HEPTA_CONSUMER_EDGE_ISSUER_KEY_ID:?Consumer Edge key id required}
+      HEPTA_CONSUMER_EDGE_ED25519_PUBLIC_KEY_BASE64: ${HEPTA_CONSUMER_EDGE_ED25519_PUBLIC_KEY_BASE64:?Consumer Edge public key required}
+      TRNM_NAKAMA_AUTHORITY_KEY_ID: ${TRNM_NAKAMA_AUTHORITY_KEY_ID:?Nakama completion authority key id required}
+      TRNM_NAKAMA_AUTHORITY_PUBLIC_KEY_BASE64: ${TRNM_NAKAMA_AUTHORITY_PUBLIC_KEY_BASE64:?Nakama completion authority public key required}
       HEPTA_TRNM_TOKEN: ${HEPTA_TRNM_TOKEN:?required}
+      HEPTA_FINALITY_MODE: ${HEPTA_FINALITY_MODE:-pending_only}
       HEPTA_TRNM_VALIDATOR_SETS_JSON: ${HEPTA_TRNM_VALIDATOR_SETS_JSON:?offline finality trust anchors required}
       RUST_LOG: hepta_research_league=info
     security_opt:
       - no-new-privileges:true
     cap_drop: [ALL]
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:7011/ready"]
+      test: ["CMD", "/usr/local/bin/hepta-research-league", "--probe-ready"]
       interval: 10s
       timeout: 3s
       retries: 6

@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
+    time::Duration,
 };
 
 use axum::{
@@ -59,6 +60,54 @@ pub struct AppState {
     pool: Option<PgPool>,
     security: Arc<SecurityConfig>,
     rate_limits: Arc<Mutex<HashMap<(String, String), RateWindow>>>,
+    nakama_control_http: Option<Arc<NakamaControlHttpClient>>,
+}
+
+#[derive(Clone)]
+struct NakamaControlHttpClient {
+    base_url: reqwest::Url,
+    runtime_http_key: Arc<str>,
+    client: reqwest::Client,
+}
+
+impl NakamaControlHttpClient {
+    fn new(base_url: &str, runtime_http_key: &str) -> Result<Self, String> {
+        let base_url = reqwest::Url::parse(base_url)
+            .map_err(|error| format!("HEPTA_NAKAMA_BASE_URL is invalid: {error}"))?;
+        if !matches!(base_url.scheme(), "http" | "https")
+            || base_url.host_str().is_none()
+            || !base_url.username().is_empty()
+            || base_url.password().is_some()
+            || base_url.query().is_some()
+            || base_url.fragment().is_some()
+            || base_url.path() != "/"
+        {
+            return Err(
+                "HEPTA_NAKAMA_BASE_URL must be an absolute credential-free HTTP(S) origin"
+                    .to_string(),
+            );
+        }
+        if runtime_http_key.is_empty()
+            || runtime_http_key.len() > 512
+            || runtime_http_key.chars().any(char::is_control)
+        {
+            return Err(
+                "HEPTA_NAKAMA_RUNTIME_HTTP_KEY must contain 1-512 non-control characters"
+                    .to_string(),
+            );
+        }
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .connect_timeout(Duration::from_secs(5))
+            .timeout(Duration::from_secs(15))
+            .build()
+            .map_err(|error| format!("build Nakama control HTTP client: {error}"))?;
+        Ok(Self {
+            base_url,
+            runtime_http_key: Arc::from(runtime_http_key),
+            client,
+        })
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -74,6 +123,8 @@ pub struct SecurityConfig {
     trnm_token: String,
     nakama_authorization_issuer_key_id: String,
     nakama_authorization_signing_key: SigningKey,
+    nakama_control_issuer_key_id: String,
+    nakama_control_signing_key: SigningKey,
     consumer_edge_issuer: String,
     consumer_edge_audience: String,
     consumer_edge_issuer_key_id: String,
@@ -91,6 +142,8 @@ impl SecurityConfig {
             trnm_token: "hepta-test-trnm-token".to_string(),
             nakama_authorization_issuer_key_id: "hepta-test-issuer-key-v1".to_string(),
             nakama_authorization_signing_key: SigningKey::from_bytes(&[0x5a; 32]),
+            nakama_control_issuer_key_id: "hepta-test-control-key-v2".to_string(),
+            nakama_control_signing_key: SigningKey::from_bytes(&[0x5b; 32]),
             consumer_edge_issuer: "hepta-test-consumer-edge".to_string(),
             consumer_edge_audience: "hepta-paper-raid-v2".to_string(),
             consumer_edge_issuer_key_id: "hepta-test-consumer-edge-key-v2".to_string(),
@@ -108,8 +161,77 @@ impl SecurityConfig {
     ) -> Result<Self, String> {
         let issuer_key_id = issuer_key_id.into();
         validate_contract_text("issuer_key_id", &issuer_key_id)?;
+        let signing_key = SigningKey::from_bytes(&seed);
+        if signing_key.verifying_key() == self.nakama_control_signing_key.verifying_key()
+            || self
+                .trusted_nakama_research_authorities
+                .values()
+                .any(|key| key == &signing_key.verifying_key())
+        {
+            return Err(
+                "Nakama authorization signer must differ from control and completion authorities"
+                    .to_string(),
+            );
+        }
         self.nakama_authorization_issuer_key_id = issuer_key_id;
-        self.nakama_authorization_signing_key = SigningKey::from_bytes(&seed);
+        self.nakama_authorization_signing_key = signing_key;
+        Ok(self)
+    }
+
+    pub fn with_nakama_control_signer(
+        mut self,
+        issuer_key_id: impl Into<String>,
+        seed: [u8; 32],
+    ) -> Result<Self, String> {
+        let issuer_key_id = issuer_key_id.into();
+        validate_contract_text("control_issuer_key_id", &issuer_key_id)?;
+        let signing_key = SigningKey::from_bytes(&seed);
+        if signing_key.verifying_key() == self.nakama_authorization_signing_key.verifying_key()
+            || self
+                .trusted_nakama_research_authorities
+                .values()
+                .any(|key| key == &signing_key.verifying_key())
+        {
+            return Err(
+                "Nakama control signer must differ from authorization and completion authorities"
+                    .to_string(),
+            );
+        }
+        self.nakama_control_issuer_key_id = issuer_key_id;
+        self.nakama_control_signing_key = signing_key;
+        Ok(self)
+    }
+
+    pub fn with_nakama_signers(
+        mut self,
+        authorization_issuer_key_id: impl Into<String>,
+        authorization_seed: [u8; 32],
+        control_issuer_key_id: impl Into<String>,
+        control_seed: [u8; 32],
+    ) -> Result<Self, String> {
+        let authorization_issuer_key_id = authorization_issuer_key_id.into();
+        let control_issuer_key_id = control_issuer_key_id.into();
+        validate_contract_text("issuer_key_id", &authorization_issuer_key_id)?;
+        validate_contract_text("control_issuer_key_id", &control_issuer_key_id)?;
+        let authorization_key = SigningKey::from_bytes(&authorization_seed);
+        let control_key = SigningKey::from_bytes(&control_seed);
+        if authorization_key.verifying_key() == control_key.verifying_key()
+            || self
+                .trusted_nakama_research_authorities
+                .values()
+                .any(|key| {
+                    key == &authorization_key.verifying_key() || key == &control_key.verifying_key()
+                })
+        {
+            return Err(
+                "Nakama authorization, control, and completion authorities must use distinct keys"
+                    .to_string(),
+            );
+        }
+        self.nakama_authorization_issuer_key_id = authorization_issuer_key_id;
+        self.nakama_authorization_signing_key = authorization_key;
+        self.nakama_control_issuer_key_id = control_issuer_key_id;
+        self.nakama_control_signing_key = control_key;
         Ok(self)
     }
 
@@ -159,6 +281,14 @@ impl SecurityConfig {
         }
         let verifying_key = VerifyingKey::from_bytes(&public_key)
             .map_err(|_| "Nakama research authority public key is not valid Ed25519".to_string())?;
+        if verifying_key == self.nakama_authorization_signing_key.verifying_key()
+            || verifying_key == self.nakama_control_signing_key.verifying_key()
+        {
+            return Err(
+                "Nakama completion authority must differ from authorization and control signers"
+                    .to_string(),
+            );
+        }
         self.trusted_nakama_research_authorities
             .insert(authority_key_id, verifying_key);
         Ok(self)
@@ -183,6 +313,30 @@ impl SecurityConfig {
             archive,
             verifying_key,
         )
+    }
+
+    fn verify_nakama_research_completion_signature(
+        &self,
+        completion: &paper_raid_contracts::ResearchSessionCompletionV1,
+        authority_public_key_base64: &str,
+    ) -> Result<(), String> {
+        let verifying_key = self
+            .trusted_nakama_research_authorities
+            .get(&completion.authority_key_id)
+            .ok_or_else(|| {
+                format!(
+                    "untrusted Nakama research authority key {}",
+                    completion.authority_key_id
+                )
+            })?;
+        let expected_public_key = BASE64.encode(verifying_key.to_bytes());
+        if authority_public_key_base64 != expected_public_key {
+            return Err(
+                "Nakama evidence response authority key differs from the locally pinned key"
+                    .to_string(),
+            );
+        }
+        paper_raid_contracts::verify_research_session_completion(completion, verifying_key)
     }
 
     pub fn with_trusted_trnm_validator_set(
@@ -237,6 +391,26 @@ impl SecurityConfig {
                 "HEPTA_NAKAMA_AUTHORIZATION_ED25519_SEED_BASE64 must decode to exactly 32 bytes"
                     .to_string()
             })?;
+        let nakama_control_issuer_key_id = std::env::var("HEPTA_NAKAMA_CONTROL_ISSUER_KEY_ID")
+            .map_err(|_| "HEPTA_NAKAMA_CONTROL_ISSUER_KEY_ID must be set".to_string())?;
+        validate_contract_text(
+            "HEPTA_NAKAMA_CONTROL_ISSUER_KEY_ID",
+            &nakama_control_issuer_key_id,
+        )?;
+        let nakama_control_seed_base64 = std::env::var("HEPTA_NAKAMA_CONTROL_ED25519_SEED_BASE64")
+            .map_err(|_| "HEPTA_NAKAMA_CONTROL_ED25519_SEED_BASE64 must be set".to_string())?;
+        let nakama_control_seed = BASE64.decode(&nakama_control_seed_base64).map_err(|_| {
+            "HEPTA_NAKAMA_CONTROL_ED25519_SEED_BASE64 must be canonical base64".to_string()
+        })?;
+        if BASE64.encode(&nakama_control_seed) != nakama_control_seed_base64 {
+            return Err(
+                "HEPTA_NAKAMA_CONTROL_ED25519_SEED_BASE64 must be canonical padded base64"
+                    .to_string(),
+            );
+        }
+        let nakama_control_seed: [u8; 32] = nakama_control_seed.try_into().map_err(|_| {
+            "HEPTA_NAKAMA_CONTROL_ED25519_SEED_BASE64 must decode to exactly 32 bytes".to_string()
+        })?;
         if operator_token.trim().is_empty()
             || nakama_token.trim().is_empty()
             || trnm_token.trim().is_empty()
@@ -324,9 +498,11 @@ impl SecurityConfig {
                 consumer_edge_issuer_key_id,
                 consumer_edge_public_key,
             )?
-            .with_nakama_authorization_signer(
+            .with_nakama_signers(
                 nakama_authorization_issuer_key_id,
                 nakama_authorization_seed,
+                nakama_control_issuer_key_id,
+                nakama_control_seed,
             )?
             .with_trusted_nakama_research_authority(
                 nakama_authority_key_id,
@@ -358,11 +534,24 @@ impl SecurityConfig {
             errors.push("service_token_configuration_invalid");
         }
         if self.nakama_authorization_issuer_key_id.trim().is_empty()
+            || self.nakama_control_issuer_key_id.trim().is_empty()
             || self.consumer_edge_issuer.trim().is_empty()
             || self.consumer_edge_audience.trim().is_empty()
             || self.consumer_edge_issuer_key_id.trim().is_empty()
         {
             errors.push("issuer_configuration_invalid");
+        }
+        if self.nakama_authorization_signing_key.verifying_key()
+            == self.nakama_control_signing_key.verifying_key()
+            || self
+                .trusted_nakama_research_authorities
+                .values()
+                .any(|key| {
+                    key == &self.nakama_authorization_signing_key.verifying_key()
+                        || key == &self.nakama_control_signing_key.verifying_key()
+                })
+        {
+            errors.push("nakama_authority_key_separation_invalid");
         }
         if self.trusted_nakama_research_authorities.is_empty() {
             errors.push("nakama_research_authority_missing");
@@ -390,6 +579,7 @@ impl AppState {
             pool: None,
             security: Arc::new(security),
             rate_limits: Arc::new(Mutex::new(HashMap::new())),
+            nakama_control_http: None,
         }
     }
 
@@ -427,6 +617,12 @@ impl AppState {
         .execute(&pool)
         .await
         .map_err(|error| format!("apply Hepta secure onboarding migration: {error}"))?;
+        sqlx::raw_sql(include_str!(
+            "../../../migrations/0036_add_hepta_nakama_research_control.sql"
+        ))
+        .execute(&pool)
+        .await
+        .map_err(|error| format!("apply Hepta Nakama control migration: {error}"))?;
         sqlx::query(
             "insert into hepta_league_state (state_key, revision, state_json)
              values ('primary', 0, $1::jsonb)
@@ -445,7 +641,32 @@ impl AppState {
             pool: Some(pool),
             security: Arc::new(security),
             rate_limits: Arc::new(Mutex::new(HashMap::new())),
+            nakama_control_http: None,
         })
+    }
+
+    pub fn with_nakama_control_http(
+        mut self,
+        base_url: &str,
+        runtime_http_key: &str,
+    ) -> Result<Self, String> {
+        self.nakama_control_http = Some(Arc::new(NakamaControlHttpClient::new(
+            base_url,
+            runtime_http_key,
+        )?));
+        Ok(self)
+    }
+
+    pub fn with_nakama_control_http_from_env(self) -> Result<Self, String> {
+        let base_url = std::env::var("HEPTA_NAKAMA_BASE_URL")
+            .map_err(|_| "HEPTA_NAKAMA_BASE_URL must be set".to_string())?;
+        let runtime_http_key = std::env::var("HEPTA_NAKAMA_RUNTIME_HTTP_KEY")
+            .map_err(|_| "HEPTA_NAKAMA_RUNTIME_HTTP_KEY must be set".to_string())?;
+        self.with_nakama_control_http(&base_url, &runtime_http_key)
+    }
+
+    pub(crate) fn nakama_control_http_configured(&self) -> bool {
+        self.nakama_control_http.is_some()
     }
 
     async fn inspect<R>(
@@ -976,6 +1197,14 @@ impl ApiError {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
             code: "internal_error",
+            message: message.into(),
+        }
+    }
+
+    fn bad_gateway(code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::BAD_GATEWAY,
+            code,
             message: message.into(),
         }
     }

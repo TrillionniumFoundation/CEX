@@ -22,6 +22,7 @@ trnm-finality-types.workspace = true
 trnm-finality-verifier.workspace = true
 uuid.workspace = true
 hepta-paper-raid-contracts.workspace = true
+reqwest.workspace = true
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

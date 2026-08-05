@@ -1,0 +1,67 @@
+{
+  "schema": "hepta.vendor.trnm_chain_crates.v1",
+  "source_repository": "https://github.com/TrillionniumFoundation/Trillionnium-Chain.git",
+  "source_commit": "e73d1a930991f0e308bf72854b334b6191c7fcc3",
+  "license": "MIT",
+  "update_policy": "Copy byte-for-byte from Cargo's immutable checkout for an explicitly reviewed Chain commit; update this manifest, Cargo.lock, and cross-language golden vectors in the same change.",
+  "packaging_context": {
+    "workspace_inherited_crates": [
+      "trnm-finality-types",
+      "trnm-finality-verifier"
+    ],
+    "workspace_inherited_fields": [
+      "edition",
+      "license",
+      "authors"
+    ],
+    "source_workspace_values": {
+      "edition": "2021",
+      "license": "MIT",
+      "authors": ["Trillionnium Contributors"]
+    },
+    "vendor_workspace_values": {
+      "edition": "2021",
+      "license": "MIT",
+      "authors": ["Qi Team"]
+    },
+    "accepted_metadata_difference": "Only Cargo package author metadata inherits from the embedding Hepta workspace; source bytes, runtime behavior, edition, license, versions, and package names remain identical to the pinned Chain subtrees."
+  },
+  "crates": {
+    "trnm-finality-types": {
+      "version": "0.1.0",
+      "source_git_tree": "31d7e3a141332055232e2d82260bdaa7bbf62d14",
+      "content_manifest_sha256": "683624119efa50f2583a7011bf7b533b47ddefcd8c53802c913a6194363bfb1f",
+      "files": {
+        "Cargo.toml": "5dda2f4c71003b85a26fb823f4216f5d9ea5d3e3403a9165da62549e2c523e23",
+        "src/crypto.rs": "af5d3c8f0df51dbe38b38de670e4debfa16d0082ceb9edecde6b973aef1baa1f",
+        "src/lib.rs": "9bd9ac780f82df9c9b89326233c36df891258646a880c827dfdf7c89a4abd854",
+        "src/protocol.rs": "73ac4512d7653ff915d0cb9f77f2083b9eaaa7541f5cac68fea487736c7ff270"
+      }
+    },
+    "trnm-finality-verifier": {
+      "version": "0.1.0",
+      "source_git_tree": "ad3d2e1aacd5e6e6b3f0c520eb7f1dbfbebbf536",
+      "content_manifest_sha256": "bee4c998f32a0446510060a2fa584297069d2fc23a38871ab6048e4725663bf3",
+      "files": {
+        "Cargo.toml": "99998f99ba17818bcb96eb15915dc684a3698d24cf28107221d2fb2cb7bfef41",
+        "src/lib.rs": "bf477da9caf0ac1f0639c106243e4abe738aee657af6a2e01c302a24de78cf7c"
+      }
+    },
+    "trnm-research-protocol": {
+      "version": "0.1.0",
+      "source_git_tree": "223cd8adcce3e6a3ab7bed24ffb919e0ae1fda56",
+      "content_manifest_sha256": "3386e3b7fe832a61ada9b6917439f18e9f03fb5e9fcb719c1dcff1d91f98811b",
+      "files": {
+        "Cargo.toml": "c93aec7515bd0ecb8ef3fb7aca5e9a95a2d5517c9cb47ea22da21df9a7bb9b27",
+        "README.md": "b441862118d14264b6e7b6423eac81075a1c9cc8490d2c7080aa04299185b419",
+        "fixtures/protocol-v1-golden.json": "ec0974c5e6404461a130f6ee25caf31c86b1a097c8f23936fb9e8942c7bb6e98",
+        "src/canonical.rs": "68b55565680eacc54e7a0f8bfd19e960aafb0e7a19acf42a2a6bbfc33c35460a",
+        "src/command.rs": "6ce11e6a8ed0dbd3d8fd786089840e78d69f4c48db1d08d4562cf0826aa3ccf0",
+        "src/lib.rs": "2b4ac3c16c650f9d0307cf7e42aea1bd0ccf1da65abdd130c99906bbdb0b66bc",
+        "src/state.rs": "dd9eeed804b60725efd867245ea93ea0946a932d45f67f8dee9802a72450466d",
+        "src/types.rs": "e34e0e6be523ad02c08e399fe9485e1c1df6aa802b168af84fcaccdc0c328697",
+        "tests/protocol_v1.rs": "58f32f24b81f1404181f95eb4ed71e97d830f20e977d652b6be497954a8f6fed"
+      }
+    }
+  }
+}

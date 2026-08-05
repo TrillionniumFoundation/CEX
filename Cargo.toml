@@ -40,7 +40,7 @@ chrono = { version = "0.4", features = ["serde"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono"] }
 term-exchange-protocol = { package = "trnm-economy-protocol", version = "=2.4.0", path = "vendor/trnm-economy-protocol" }
-trnm-research-protocol = { version = "=0.1.0", git = "https://github.com/TrillionniumFoundation/Trillionnium-Chain.git", rev = "e73d1a930991f0e308bf72854b334b6191c7fcc3" }
-trnm-finality-types = { version = "=0.1.0", git = "https://github.com/TrillionniumFoundation/Trillionnium-Chain.git", rev = "e73d1a930991f0e308bf72854b334b6191c7fcc3" }
-trnm-finality-verifier = { version = "=0.1.0", git = "https://github.com/TrillionniumFoundation/Trillionnium-Chain.git", rev = "e73d1a930991f0e308bf72854b334b6191c7fcc3" }
+trnm-research-protocol = { version = "=0.1.0", path = "vendor/trnm-research-protocol" }
+trnm-finality-types = { version = "=0.1.0", path = "vendor/trnm-finality-types" }
+trnm-finality-verifier = { version = "=0.1.0", path = "vendor/trnm-finality-verifier" }
 hepta-paper-raid-contracts = { path = "crates/hepta-paper-raid-contracts" }

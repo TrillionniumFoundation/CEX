@@ -55,7 +55,9 @@ async fn postgres_survives_restart_and_multi_instance_outbox_claims_do_not_overl
         .expect("Nakama readiness trust");
     let first = AppState::connect(&database_url, security.clone())
         .await
-        .expect("first durable state");
+        .expect("first durable state")
+        .with_nakama_control_http("http://127.0.0.1:9", "readiness-runtime-http-key")
+        .expect("first Nakama control configuration");
     sqlx::raw_sql(
         "truncate table hepta_inbox, hepta_outbox, hepta_league_state cascade;
          insert into hepta_league_state (state_key, revision, state_json)
@@ -78,7 +80,9 @@ async fn postgres_survives_restart_and_multi_instance_outbox_claims_do_not_overl
     .expect("clean dedicated test database");
     let second = AppState::connect(&database_url, security.clone())
         .await
-        .expect("second durable state");
+        .expect("second durable state")
+        .with_nakama_control_http("http://127.0.0.1:9", "readiness-runtime-http-key")
+        .expect("second Nakama control configuration");
 
     let (status, ready) = request(app(first.clone()), "GET", "/ready", json!({})).await;
     assert_eq!(status, StatusCode::OK);
@@ -112,7 +116,9 @@ async fn postgres_survives_restart_and_multi_instance_outbox_claims_do_not_overl
 
     let recovered = AppState::connect(&database_url, security)
         .await
-        .expect("restart durable state");
+        .expect("restart durable state")
+        .with_nakama_control_http("http://127.0.0.1:9", "readiness-runtime-http-key")
+        .expect("restarted Nakama control configuration");
     for agent in ["did:trnm:pg-a", "did:trnm:pg-b"] {
         let (status, profile) = request(
             app(recovered.clone()),
