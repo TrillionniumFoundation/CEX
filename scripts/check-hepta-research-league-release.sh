@@ -173,14 +173,18 @@ for required_env in (
     assert required_env in hepta["environment"]
 
 dockerfile = pathlib.Path("services/hepta-research-league/Dockerfile").read_text(encoding="utf-8")
+assert dockerfile.startswith("# syntax=docker/dockerfile:1@sha256:87999aa3d42bdc6bea60565083ee17e86d1f3339802f543c0d03998580f9cb89\n")
 assert "FROM rust@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd578ed948b71b37c1d7fb AS builder" in dockerfile
 assert "FROM gcr.io/distroless/cc-debian12@sha256:471dbca9cad607b9a32c10e9c31fb09ffaeb2d460e0afbff86c27abbc80b1b98" in dockerfile
 assert 'CMD ["/usr/local/bin/hepta-research-league", "--probe-ready"]' in dockerfile
-assert not dockerfile.startswith("# syntax=")
 assert "ARG SOURCE_DATE_EPOCH" in dockerfile
 assert "ARG SOURCE_TREE" in dockerfile
 assert "ARG SBOM_SHA256" in dockerfile
-assert "/release/hepta-research-league" in dockerfile
+assert "/release/usr/local/bin/hepta-research-league" in dockerfile
+assert "/release/usr/share/doc/hepta-research-league/sbom.cdx.json" in dockerfile
+assert "find /release -exec touch --no-dereference" in dockerfile
+assert dockerfile.count("COPY --from=builder /release/ /") == 1
+assert dockerfile.count("COPY --from=builder") == 1
 assert "io.trillionnium.hepta.source-tree" in dockerfile
 assert "io.trillionnium.hepta.application-sbom.sha256" in dockerfile
 assert "org.trillionnium.source.tree" in dockerfile
@@ -190,6 +194,12 @@ assert ":latest" not in dockerfile
 
 image_script = pathlib.Path("scripts/build-hepta-research-league-image.sh").read_text(encoding="utf-8")
 assert "--no-cache" in image_script
+assert "buildx_version=v0.36.1" in image_script
+assert "buildx_sha256=48af8a397ebd60178778bf63611dbcebe5f5e7a9be90eb9147b24b9587455778" in image_script
+assert "buildx build" in image_script
+assert "--provenance=false" in image_script
+assert "--sbom=false" in image_script
+assert 'dockerfile_frontend "docker/dockerfile:1@sha256:87999aa3d42bdc6bea60565083ee17e86d1f3339802f543c0d03998580f9cb89"' in image_script
 assert image_script.count("build_image \"$image_ref\"") == 1
 assert image_script.count("build_image \"$repro_ref\"") == 1
 assert '[[ "$image_id" != "$repro_image_id" ]]' in image_script

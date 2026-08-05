@@ -170,8 +170,10 @@ leases with `FOR UPDATE SKIP LOCKED`. TRNM success remains
 `pending_finality` until a cryptographically verified final receipt is
 projected. An API token by itself cannot advance the state.
 
-The release Dockerfile pins both builder and distroless runtime images by
-digest. The three Chain protocol crates required during compilation are
+The release Dockerfile pins its Dockerfile frontend, builder, and distroless
+runtime images by digest. A disposable, checksum-pinned Buildx binary performs
+the build; the normalized release root is copied into the final image as one
+layer. The three Chain protocol crates required during compilation are
 byte-for-byte vendored from immutable Chain commit
 `e73d1a930991f0e308bf72854b334b6191c7fcc3`; their per-file provenance is in
 `vendor/trnm-chain-vendor-manifest.json` and is revalidated by the release gate.

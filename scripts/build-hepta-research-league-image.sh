@@ -14,13 +14,16 @@ source_tree="$(git rev-parse 'HEAD^{tree}')"
 source_date_epoch="$(git show -s --format=%ct HEAD)"
 image_ref="${HEPTA_IMAGE_REF:-trnm/hepta-research-league:${revision}}"
 docker_command=(docker)
-docker_build_command=(docker)
 if ! docker info >/dev/null 2>&1; then
   docker_command=(sudo -n docker)
-  docker_build_command=(sudo -n docker)
 fi
 
 release_dir="$(mktemp -d)"
+buildx_version=v0.36.1
+buildx_url=https://github.com/docker/buildx/releases/download/v0.36.1/buildx-v0.36.1.linux-amd64
+buildx_sha256=48af8a397ebd60178778bf63611dbcebe5f5e7a9be90eb9147b24b9587455778
+docker_config="$release_dir/docker"
+buildx_plugin="$docker_config/cli-plugins/docker-buildx"
 iid_file="$release_dir/image-first.iid"
 repro_iid_file="$release_dir/image-second.iid"
 context_dir="$release_dir/context"
@@ -36,23 +39,67 @@ cleanup() {
 }
 trap cleanup EXIT
 
+for command_name in curl docker jq rg sha256sum; do
+  command -v "$command_name" >/dev/null 2>&1 || {
+    printf 'Hepta image gate requires %s\n' "$command_name" >&2
+    exit 1
+  }
+done
+if [[ "$(uname -m)" != "x86_64" ]]; then
+  echo "Hepta image gate requires an x86_64 host for the pinned Buildx binary" >&2
+  exit 1
+fi
+[[ "$revision" =~ ^[0-9a-f]{40}$ \
+  && "$source_tree" =~ ^[0-9a-f]{40}$ \
+  && "$source_date_epoch" =~ ^[0-9]+$ ]] || {
+  echo "Hepta image source metadata is not canonical" >&2
+  exit 1
+}
+
 git archive --format=tar HEAD | tar -xf - -C "$context_dir"
 sbom_sha256="$(sha256sum deploy/hepta-research-league/hepta-research-league.cdx.json | cut -d' ' -f1)"
+[[ "$sbom_sha256" =~ ^[0-9a-f]{64}$ ]] || {
+  echo "Hepta image SBOM digest is not canonical" >&2
+  exit 1
+}
+
+mkdir -p "$(dirname "$buildx_plugin")"
+curl --fail --location --proto '=https' --retry 5 --retry-all-errors \
+  --retry-delay 2 --connect-timeout 15 --max-time 300 \
+  --show-error --silent --tlsv1.2 \
+  "$buildx_url" --output "$buildx_plugin"
+actual_buildx_sha256="$(sha256sum "$buildx_plugin" | cut -d' ' -f1)"
+if [[ "$actual_buildx_sha256" != "$buildx_sha256" ]]; then
+  echo "disposable Hepta Buildx checksum differs" >&2
+  exit 1
+fi
+chmod 0500 "$buildx_plugin"
+if [[ "${docker_command[0]}" == "sudo" ]]; then
+  docker_build_command=(sudo -n env "DOCKER_CONFIG=$docker_config" docker)
+else
+  docker_build_command=(env "DOCKER_CONFIG=$docker_config" docker)
+fi
+"${docker_build_command[@]}" buildx version | rg -q --fixed-strings "$buildx_version"
 
 build_image() {
   local target_ref="$1"
   local target_iid_file="$2"
-  "${docker_build_command[@]}" build \
-  --pull=false \
-  --no-cache \
-  --file services/hepta-research-league/Dockerfile \
-  --build-arg "VCS_REF=${revision}" \
-  --build-arg "SOURCE_TREE=${source_tree}" \
-  --build-arg "SOURCE_DATE_EPOCH=${source_date_epoch}" \
-  --build-arg "SBOM_SHA256=${sbom_sha256}" \
-  --iidfile "$target_iid_file" \
-  --tag "$target_ref" \
-  "$context_dir"
+  "${docker_build_command[@]}" buildx build \
+    --load \
+    --pull=false \
+    --no-cache \
+    --provenance=false \
+    --sbom=false \
+    --platform linux/amd64 \
+    --build-arg BUILDKIT_MULTI_PLATFORM=1 \
+    --file services/hepta-research-league/Dockerfile \
+    --build-arg "VCS_REF=${revision}" \
+    --build-arg "SOURCE_TREE=${source_tree}" \
+    --build-arg "SOURCE_DATE_EPOCH=${source_date_epoch}" \
+    --build-arg "SBOM_SHA256=${sbom_sha256}" \
+    --iidfile "$target_iid_file" \
+    --tag "$target_ref" \
+    "$context_dir"
 }
 
 build_image "$image_ref" "$iid_file"
@@ -102,6 +149,9 @@ jq -n \
   --arg source_revision "$revision" \
   --arg source_tree "$source_tree" \
   --arg source_date_epoch "$source_date_epoch" \
+  --arg dockerfile_frontend "docker/dockerfile:1@sha256:87999aa3d42bdc6bea60565083ee17e86d1f3339802f543c0d03998580f9cb89" \
+  --arg buildx_version "$buildx_version" \
+  --arg buildx_sha256 "$buildx_sha256" \
   --arg builder_base "rust@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd578ed948b71b37c1d7fb" \
   --arg runtime_base "gcr.io/distroless/cc-debian12@sha256:471dbca9cad607b9a32c10e9c31fb09ffaeb2d460e0afbff86c27abbc80b1b98" \
   --arg vendor_manifest_sha256 "$(sha256sum vendor/trnm-chain-vendor-manifest.json | cut -d' ' -f1)" \
@@ -114,6 +164,11 @@ jq -n \
     source_revision: $source_revision,
     source_tree: $source_tree,
     source_date_epoch: ($source_date_epoch | tonumber),
+    dockerfile_frontend: $dockerfile_frontend,
+    buildx: {
+      version: $buildx_version,
+      binary_sha256: $buildx_sha256
+    },
     builder_base: $builder_base,
     runtime_base: $runtime_base,
     vendor_manifest_sha256: $vendor_manifest_sha256,
