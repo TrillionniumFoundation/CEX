@@ -35,6 +35,8 @@ test "$(sha256sum docs/sdk-fixtures/integration-paper-raid-artifact-bundle-v1.js
   "9c2234c2c677307b262faa6be52a9855958003212fa0733e3c991af86df1555d"
 test "$(sha256sum docs/sdk-fixtures/hepta-paper-collaboration-v3.json | cut -d' ' -f1)" = \
   "6a8c20dabaf2ff723a1db7e9742bcbd24f4d18bb17938f3695cac099c29d84ce"
+test "$(sha256sum docs/sdk-fixtures/hepta-paper-review-v4.json | cut -d' ' -f1)" = \
+  "b25dcbfcf3f9d5830ab8d2b32bdd36b2c073bca8a0bff1da6ba05fb85f6f17b4"
 jq -e \
   '.fixture_version == "hepta_sdk_fixtures_v1"
    and .agent_execution_mode == "external_only"
@@ -58,6 +60,8 @@ node scripts/verify-hepta-paper-raid-v2-fixture.mjs \
   docs/sdk-fixtures/hepta-paper-raid-v2.json
 node scripts/verify-hepta-paper-collaboration-v3-fixture.mjs \
   docs/sdk-fixtures/hepta-paper-collaboration-v3.json
+node scripts/verify-hepta-paper-review-v4-fixture.mjs \
+  docs/sdk-fixtures/hepta-paper-review-v4.json
 
 cargo_locked fmt --all -- --check
 cargo_locked test --locked -p hepta-research-league

@@ -8,6 +8,7 @@ use chrono::Utc;
 use ed25519_dalek::{Signer, SigningKey};
 use serde_json::{json, Value};
 use sqlx::{Connection, PgConnection, Row};
+use std::collections::BTreeMap;
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -18,16 +19,22 @@ use crate::{
         agent_proposal_signing_bytes, canonical_json_bytes, canonical_json_sha256,
         human_decision_signing_bytes, human_evidence_verification_signing_bytes,
         human_key_registration_signing_bytes, human_key_revocation_signing_bytes,
-        human_key_rotation_signing_bytes, section_merge_signing_bytes,
-        section_review_signing_bytes, sha256_digest, sign_authorship_consent,
-        sign_consumer_user_assertion, team_member_acceptance_signing_bytes, AgentProposalSigningV1,
-        AuthorshipConsentSigningV2, ConsumerUserAssertionClaimV2, HumanDecisionSigningV1,
-        HumanEvidenceVerificationSigningV1, HumanKeyRegistrationClaimV2, HumanKeyRevocationClaimV2,
-        HumanKeyRotationClaimV2, SectionMergeSigningV1, SectionReviewSigningV1,
-        TeamMemberAcceptanceSigningV2, AGENT_PROPOSAL_V1, AUTHORSHIP_CONSENT_V2,
-        CONSUMER_USER_ASSERTION_V2, HUMAN_DECISION_V1, HUMAN_EVIDENCE_VERIFICATION_V1,
-        HUMAN_KEY_REGISTRATION_V2, HUMAN_KEY_REVOCATION_V2, HUMAN_KEY_ROTATION_V2,
-        SECTION_MERGE_V1, SECTION_REVIEW_V1, TEAM_MEMBER_ACCEPTANCE_V2,
+        human_key_rotation_signing_bytes, paper_appeal_resolution_signing_bytes,
+        paper_appeal_signing_bytes, paper_evaluation_signing_bytes,
+        paper_reproduction_signing_bytes, paper_review_attestation_signing_bytes,
+        section_merge_signing_bytes, section_review_signing_bytes, sha256_digest,
+        sign_authorship_consent, sign_consumer_user_assertion,
+        team_member_acceptance_signing_bytes, AgentProposalSigningV1, AuthorshipConsentSigningV2,
+        ConsumerUserAssertionClaimV2, HumanDecisionSigningV1, HumanEvidenceVerificationSigningV1,
+        HumanKeyRegistrationClaimV2, HumanKeyRevocationClaimV2, HumanKeyRotationClaimV2,
+        PaperAppealResolutionSigningV1, PaperAppealSigningV1, PaperEvaluationSigningV1,
+        PaperReproductionSigningV1, PaperReviewAttestationSigningV1, SectionMergeSigningV1,
+        SectionReviewSigningV1, TeamMemberAcceptanceSigningV2, AGENT_PROPOSAL_V1,
+        AUTHORSHIP_CONSENT_V2, CONSUMER_USER_ASSERTION_V2, HUMAN_DECISION_V1,
+        HUMAN_EVIDENCE_VERIFICATION_V1, HUMAN_KEY_REGISTRATION_V2, HUMAN_KEY_REVOCATION_V2,
+        HUMAN_KEY_ROTATION_V2, PAPER_APPEAL_RESOLUTION_V1, PAPER_APPEAL_V1, PAPER_EVALUATION_V1,
+        PAPER_REPRODUCTION_V1, PAPER_REVIEW_ATTESTATION_V1, SECTION_MERGE_V1, SECTION_REVIEW_V1,
+        TEAM_MEMBER_ACCEPTANCE_V2,
     },
     AppState, RotateAgentKeyRequest, SecurityConfig, NAKAMA_TOKEN_HEADER, OPERATOR_TOKEN_HEADER,
     TRNM_TOKEN_HEADER, USER_ASSERTION_HEADER,
@@ -774,6 +781,14 @@ async fn reset_postgres(database_url: &str) {
         .expect("maintenance pool");
     sqlx::raw_sql(
         "truncate table
+           hepta_paper_appeal_resolutions,
+           hepta_paper_appeals,
+           hepta_paper_reproductions,
+           hepta_paper_raid_scores,
+           hepta_paper_scores,
+           hepta_paper_evaluation_panel_attestations,
+           hepta_paper_evaluations,
+           hepta_paper_contribution_ledgers,
            hepta_paper_room_events,
            hepta_section_merges,
            hepta_section_reviews,
@@ -2357,6 +2372,27 @@ async fn run_full_flow(state: AppState, member_count: usize, options: FlowOption
             })
         })
         .collect::<Vec<_>>();
+    let contribution_ledger_id = Uuid::from_u128(0x9000_0000_0000_4000_8000_0000_0000_0000 + base);
+    let mut contribution_entries = actors
+        .iter()
+        .map(|actor| {
+            json!({
+                "player_id": actor.player_id,
+                "credit_roles": ["methodology", "writing_review_editing"],
+                "accepted_artifact_manifest_ids": [],
+                "accepted_section_review_ids": [],
+                "contribution_points": 0,
+            })
+        })
+        .collect::<Vec<_>>();
+    contribution_entries.sort_by_key(|entry| entry["player_id"].as_str().unwrap().to_string());
+    let contribution_ledger_hash = canonical_json_sha256(&json!({
+        "schema": CONTRIBUTION_LEDGER_SCHEMA_V1,
+        "contribution_ledger_id": contribution_ledger_id,
+        "paper_project_id": paper_id,
+        "entries": contribution_entries,
+    }))
+    .expect("contribution ledger preimage");
     let promoted = assert_status(
         user_post(
             &router,
@@ -2373,7 +2409,7 @@ async fn run_full_flow(state: AppState, member_count: usize, options: FlowOption
                 "research_protocol_snapshot_hash":digest("research-protocol"),
                 "ethics_disclosure_hash":digest("ethics-disclosure"),
                 "coi_disclosure_hash":digest("coi-disclosure"),
-                "contribution_ledger_hash":digest("contribution-ledger"),
+                "contribution_ledger_hash":contribution_ledger_hash,
                 "ai_disclosure_hash":digest("ai-disclosure"),
                 "license":"CC-BY-4.0",
                 "authors":authors,
@@ -2388,6 +2424,33 @@ async fn run_full_flow(state: AppState, member_count: usize, options: FlowOption
         .as_str()
         .expect("release candidate hash")
         .to_string();
+
+    let ledger_path = format!("/v2/hepta/papers/{paper_id}/contribution-ledgers");
+    let ledger_key = format!("contribution-ledger-{member_count}");
+    let ledger = assert_status(
+        user_post(
+            &router,
+            &actors[0],
+            "create_contribution_ledger_v1",
+            &ledger_path,
+            &ledger_key,
+            json!({
+                "contribution_ledger_id":contribution_ledger_id,
+                "expected_paper_version":paper_version,
+                "release_candidate_hash":release_candidate_hash,
+                "entries":actors.iter().map(|actor| json!({
+                    "player_id":actor.player_id,
+                    "credit_roles":["methodology","writing_review_editing"],
+                    "accepted_artifact_manifest_ids":[],
+                    "accepted_section_review_ids":[],
+                })).collect::<Vec<_>>(),
+                "idempotency_key":ledger_key,
+            }),
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+    assert_eq!(ledger["ledger_hash"], contribution_ledger_hash);
 
     let consent_path = format!("/v2/hepta/papers/{paper_id}/author-consents");
     for (index, actor) in actors.iter().enumerate() {
@@ -2548,6 +2611,658 @@ async fn run_full_flow(state: AppState, member_count: usize, options: FlowOption
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ReviewFlowOutcome {
+    evaluation_status: String,
+    settlement_before_appeal: String,
+    reproduction_passed: String,
+    reproduction_failed: String,
+    challenged_state: String,
+    resolved_state: String,
+    panel_overlap_code: String,
+    appellant_spoof_code: String,
+    resolver_overlap_code: String,
+    evaluation_count: usize,
+    reproduction_count: usize,
+    appeal_count: usize,
+    resolution_count: usize,
+}
+
+fn evaluation_body(
+    paper_id: Uuid,
+    submission: &Value,
+    evaluator: &Actor,
+    reviewers: [&Actor; 2],
+    evaluation_id: Uuid,
+    supersedes_evaluation_id: Option<Uuid>,
+    idempotency_key: &str,
+) -> Value {
+    let tolerance_policy = TolerancePolicy {
+        schema: TOLERANCE_POLICY_SCHEMA_V1.to_string(),
+        version: "1".to_string(),
+        rules: vec![
+            ToleranceRule::Absolute {
+                metric: "accuracy_micros".to_string(),
+                max_delta_micros: 20,
+            },
+            ToleranceRule::Relative {
+                metric: "loss_micros".to_string(),
+                max_delta_bps: 500,
+            },
+            ToleranceRule::Statistical {
+                metric: "effect_micros".to_string(),
+                minimum_interval_overlap_bps: 7_500,
+                maximum_effect_delta_micros: 30,
+                minimum_p_value_micros: 50_000,
+            },
+            ToleranceRule::Seed {
+                expected_seed_set_hash: digest("review-seed-set"),
+            },
+        ],
+    };
+    let reference_metrics_micros = BTreeMap::from([
+        ("accuracy_micros".to_string(), 900_000_i64),
+        ("effect_micros".to_string(), 120_i64),
+        ("loss_micros".to_string(), 100_000_i64),
+    ]);
+    let score_components = PaperScoreComponents {
+        method_rigor_bps: 2_200,
+        experiment_statistics_bps: 1_300,
+        reproducibility_bps: 1_300,
+        evidence_citations_bps: 1_300,
+        value_originality_bps: 1_200,
+        argument_expression_bps: 800,
+        ethics_transparency_bps: 400,
+    };
+    let hard_gates = PaperHardGates {
+        citations_and_data_authentic: true,
+        failed_runs_disclosed: true,
+        all_authors_consented: true,
+        core_claims_have_evidence: true,
+        artifact_lineage_complete: true,
+        license_ethics_coi_complete: true,
+    };
+    let score_bps = 8_500_u16;
+    let paper_score_hash = canonical_json_sha256(&json!({
+        "schema":PAPER_SCORE_SCHEMA_V1,
+        "evaluation_id":evaluation_id,
+        "paper_project_id":paper_id,
+        "components":score_components,
+        "hard_gates":hard_gates,
+        "score_bps":score_bps,
+        "eligible":true,
+    }))
+    .expect("paper score hash");
+    let tolerance_policy_hash =
+        canonical_json_sha256(&tolerance_policy).expect("tolerance policy hash");
+    let reference_metrics_hash =
+        canonical_json_sha256(&reference_metrics_micros).expect("reference metrics hash");
+    let hard_gates_hash = canonical_json_sha256(&hard_gates).expect("hard gates hash");
+    let signed_at_unix = Utc::now().timestamp();
+    let release_candidate_hash = submission["release_candidate_hash"]
+        .as_str()
+        .expect("release hash")
+        .to_string();
+    let paper_bundle_hash = submission["paper_bundle_hash"]
+        .as_str()
+        .expect("bundle hash")
+        .to_string();
+    let signing = PaperEvaluationSigningV1 {
+        schema: PAPER_EVALUATION_V1.to_string(),
+        evaluation_id,
+        paper_project_id: paper_id,
+        submission_id: Uuid::parse_str(
+            submission["submission_id"].as_str().expect("submission id"),
+        )
+        .expect("submission UUID"),
+        release_candidate_hash: release_candidate_hash.clone(),
+        paper_bundle_hash: paper_bundle_hash.clone(),
+        supersedes_evaluation_id,
+        tolerance_policy_hash,
+        paper_score_hash,
+        reference_metrics_hash,
+        hard_gates_hash,
+        evaluator_player_id: evaluator.player_id,
+        signing_key_id: evaluator.human_key_id.clone(),
+        signing_public_key_hash: evaluator.human_public_key_hash.clone(),
+        coi_attestation_hash: digest(&format!("coi-evaluator-{}", evaluator.player_id)),
+        signed_at_unix,
+    };
+    let frame = paper_evaluation_signing_bytes(&signing).expect("evaluation frame");
+    let evaluation_signing_hash = sha256_digest(&frame);
+    let reviewer_attestations = reviewers
+        .iter()
+        .map(|reviewer| {
+            let attestation_id = Uuid::new_v4();
+            let reviewer_signed_at = Utc::now().timestamp();
+            let coi = digest(&format!("coi-reviewer-{}", reviewer.player_id));
+            let signing = PaperReviewAttestationSigningV1 {
+                schema: PAPER_REVIEW_ATTESTATION_V1.to_string(),
+                attestation_id,
+                evaluation_id,
+                evaluation_signing_hash: evaluation_signing_hash.clone(),
+                reviewer_player_id: reviewer.player_id,
+                verdict: "approve".to_string(),
+                signing_key_id: reviewer.human_key_id.clone(),
+                signing_public_key_hash: reviewer.human_public_key_hash.clone(),
+                coi_attestation_hash: coi.clone(),
+                signed_at_unix: reviewer_signed_at,
+            };
+            let frame =
+                paper_review_attestation_signing_bytes(&signing).expect("review attestation frame");
+            json!({
+                "attestation_id":attestation_id,
+                "reviewer_player_id":reviewer.player_id,
+                "verdict":"approve",
+                "signing_key_id":reviewer.human_key_id,
+                "signing_public_key":reviewer.human_public_key,
+                "signing_public_key_hash":reviewer.human_public_key_hash,
+                "coi_attestation_hash":coi,
+                "signed_at_unix":reviewer_signed_at,
+                "signature":BASE64.encode(reviewer.human_key.sign(&frame).to_bytes()),
+            })
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "evaluation_id":evaluation_id,
+        "submission_id":signing.submission_id,
+        "supersedes_evaluation_id":supersedes_evaluation_id,
+        "release_candidate_hash":release_candidate_hash,
+        "paper_bundle_hash":paper_bundle_hash,
+        "tolerance_policy":tolerance_policy,
+        "reference_metrics_micros":reference_metrics_micros,
+        "score_components":score_components,
+        "hard_gates":hard_gates,
+        "evaluator_player_id":evaluator.player_id,
+        "evaluator_signing_key_id":evaluator.human_key_id,
+        "evaluator_signing_public_key":evaluator.human_public_key,
+        "evaluator_signing_public_key_hash":evaluator.human_public_key_hash,
+        "evaluator_coi_attestation_hash":signing.coi_attestation_hash,
+        "evaluator_signed_at_unix":signed_at_unix,
+        "evaluator_signature":BASE64.encode(evaluator.human_key.sign(&frame).to_bytes()),
+        "reviewer_attestations":reviewer_attestations,
+        "idempotency_key":idempotency_key,
+    })
+}
+
+fn reproduction_body(
+    paper_id: Uuid,
+    evaluation: &Value,
+    reproducer: &Actor,
+    reproduction_id: Uuid,
+    supersedes: Option<Uuid>,
+    passing: bool,
+    idempotency_key: &str,
+) -> Value {
+    let observed_metrics_micros = BTreeMap::from([
+        (
+            "accuracy_micros".to_string(),
+            if passing { 900_010_i64 } else { 899_000_i64 },
+        ),
+        ("effect_micros".to_string(), 125_i64),
+        ("loss_micros".to_string(), 102_000_i64),
+    ]);
+    let statistical_evidence = BTreeMap::from([(
+        "effect_micros".to_string(),
+        StatisticalEvidence {
+            interval_overlap_bps: if passing { 8_500 } else { 1_000 },
+            effect_delta_micros: if passing { 10 } else { 500 },
+            p_value_micros: if passing { 80_000 } else { 10_000 },
+        },
+    )]);
+    let seed_set_hash = if passing {
+        digest("review-seed-set")
+    } else {
+        digest("wrong-seed-set")
+    };
+    let signed_at_unix = Utc::now().timestamp();
+    let evaluation_id =
+        Uuid::parse_str(evaluation["evaluation_id"].as_str().expect("evaluation id"))
+            .expect("evaluation UUID");
+    let signing = PaperReproductionSigningV1 {
+        schema: PAPER_REPRODUCTION_V1.to_string(),
+        reproduction_id,
+        evaluation_id,
+        paper_project_id: paper_id,
+        release_candidate_hash: evaluation["release_candidate_hash"]
+            .as_str()
+            .expect("release hash")
+            .to_string(),
+        paper_bundle_hash: evaluation["paper_bundle_hash"]
+            .as_str()
+            .expect("bundle hash")
+            .to_string(),
+        tolerance_policy_hash: evaluation["tolerance_policy_hash"]
+            .as_str()
+            .expect("tolerance hash")
+            .to_string(),
+        observed_metrics_hash: canonical_json_sha256(&observed_metrics_micros)
+            .expect("observed metrics hash"),
+        statistical_evidence_hash: canonical_json_sha256(&statistical_evidence)
+            .expect("statistical evidence hash"),
+        seed_set_hash: seed_set_hash.clone(),
+        environment_hash: digest("reproduction-environment"),
+        run_manifest_hash: digest(&format!("reproduction-run-{reproduction_id}")),
+        supersedes_reproduction_id: supersedes,
+        reproducer_player_id: reproducer.player_id,
+        signing_key_id: reproducer.human_key_id.clone(),
+        signing_public_key_hash: reproducer.human_public_key_hash.clone(),
+        coi_attestation_hash: digest(&format!("coi-reproducer-{}", reproducer.player_id)),
+        signed_at_unix,
+    };
+    let frame = paper_reproduction_signing_bytes(&signing).expect("reproduction frame");
+    json!({
+        "reproduction_id":reproduction_id,
+        "supersedes_reproduction_id":supersedes,
+        "release_candidate_hash":signing.release_candidate_hash,
+        "paper_bundle_hash":signing.paper_bundle_hash,
+        "observed_metrics_micros":observed_metrics_micros,
+        "statistical_evidence":statistical_evidence,
+        "seed_set_hash":seed_set_hash,
+        "environment_hash":signing.environment_hash,
+        "run_manifest_hash":signing.run_manifest_hash,
+        "reproducer_player_id":reproducer.player_id,
+        "signing_key_id":reproducer.human_key_id,
+        "signing_public_key":reproducer.human_public_key,
+        "signing_public_key_hash":reproducer.human_public_key_hash,
+        "coi_attestation_hash":signing.coi_attestation_hash,
+        "signed_at_unix":signed_at_unix,
+        "signature":BASE64.encode(reproducer.human_key.sign(&frame).to_bytes()),
+        "idempotency_key":idempotency_key,
+    })
+}
+
+fn appeal_body(
+    paper_id: Uuid,
+    evaluation: &Value,
+    appellant: &Actor,
+    appeal_id: Uuid,
+    idempotency_key: &str,
+) -> Value {
+    let signed_at_unix = Utc::now().timestamp();
+    let evaluation_id =
+        Uuid::parse_str(evaluation["evaluation_id"].as_str().expect("evaluation id"))
+            .expect("evaluation UUID");
+    let signing = PaperAppealSigningV1 {
+        schema: PAPER_APPEAL_V1.to_string(),
+        appeal_id,
+        evaluation_id,
+        paper_project_id: paper_id,
+        release_candidate_hash: evaluation["release_candidate_hash"]
+            .as_str()
+            .expect("release hash")
+            .to_string(),
+        appellant_player_id: appellant.player_id,
+        grounds_hash: digest("appeal-grounds"),
+        evidence_manifest_hash: digest("appeal-evidence"),
+        signing_key_id: appellant.human_key_id.clone(),
+        signing_public_key_hash: appellant.human_public_key_hash.clone(),
+        signed_at_unix,
+    };
+    let frame = paper_appeal_signing_bytes(&signing).expect("Appeal frame");
+    json!({
+        "appeal_id":appeal_id,
+        "release_candidate_hash":signing.release_candidate_hash,
+        "appellant_player_id":appellant.player_id,
+        "grounds_hash":signing.grounds_hash,
+        "evidence_manifest_hash":signing.evidence_manifest_hash,
+        "signing_key_id":appellant.human_key_id,
+        "signing_public_key":appellant.human_public_key,
+        "signing_public_key_hash":appellant.human_public_key_hash,
+        "signed_at_unix":signed_at_unix,
+        "signature":BASE64.encode(appellant.human_key.sign(&frame).to_bytes()),
+        "idempotency_key":idempotency_key,
+    })
+}
+
+struct ResolutionBody<'a> {
+    resolution_id: Uuid,
+    outcome: &'a str,
+    superseding_evaluation_id: Option<Uuid>,
+    idempotency_key: &'a str,
+}
+
+fn resolution_body(
+    paper_id: Uuid,
+    evaluation: &Value,
+    appeal_id: Uuid,
+    resolver: &Actor,
+    request: ResolutionBody<'_>,
+) -> Value {
+    let signed_at_unix = Utc::now().timestamp();
+    let evaluation_id =
+        Uuid::parse_str(evaluation["evaluation_id"].as_str().expect("evaluation id"))
+            .expect("evaluation UUID");
+    let signing = PaperAppealResolutionSigningV1 {
+        schema: PAPER_APPEAL_RESOLUTION_V1.to_string(),
+        resolution_id: request.resolution_id,
+        appeal_id,
+        evaluation_id,
+        paper_project_id: paper_id,
+        release_candidate_hash: evaluation["release_candidate_hash"]
+            .as_str()
+            .expect("release hash")
+            .to_string(),
+        outcome: request.outcome.to_string(),
+        superseding_evaluation_id: request.superseding_evaluation_id,
+        decision_hash: digest(&format!("appeal-resolution-{}", request.outcome)),
+        resolver_player_id: resolver.player_id,
+        signing_key_id: resolver.human_key_id.clone(),
+        signing_public_key_hash: resolver.human_public_key_hash.clone(),
+        signed_at_unix,
+    };
+    let frame = paper_appeal_resolution_signing_bytes(&signing).expect("Appeal resolution frame");
+    json!({
+        "resolution_id":request.resolution_id,
+        "outcome":request.outcome,
+        "superseding_evaluation_id":request.superseding_evaluation_id,
+        "decision_hash":signing.decision_hash,
+        "resolver_player_id":resolver.player_id,
+        "signing_key_id":resolver.human_key_id,
+        "signing_public_key":resolver.human_public_key,
+        "signing_public_key_hash":resolver.human_public_key_hash,
+        "signed_at_unix":signed_at_unix,
+        "signature":BASE64.encode(resolver.human_key.sign(&frame).to_bytes()),
+        "idempotency_key":request.idempotency_key,
+    })
+}
+
+async fn run_review_flow(state: AppState) -> ReviewFlowOutcome {
+    let _ = run_full_flow(state.clone(), 3, FlowOptions::default()).await;
+    let router = app(state.clone());
+    let authors = actors(3);
+    let external = actors(11);
+    register_prerequisites(&router, &external).await;
+    create_players_and_bindings(&router, &external).await;
+    let paper_id = Uuid::from_u128(0x5000_0000_0000_4000_8000_0000_0000_0000 + 3 * 0x100);
+    let submission_path = format!("/v2/hepta/papers/{paper_id}/submission");
+    let submission = assert_status(
+        user_get(
+            &router,
+            &authors[0],
+            "get_joint_paper_submission_v2",
+            &submission_path,
+            "p5-read-submission",
+        )
+        .await,
+        StatusCode::OK,
+    );
+    let evaluation_path = format!("/v2/hepta/papers/{paper_id}/evaluations");
+    let bad_evaluation_id = Uuid::new_v4();
+    let bad_key = "p5-panel-overlap";
+    let panel_overlap_code = error_code(
+        user_post(
+            &router,
+            &authors[0],
+            "create_paper_evaluation_v1",
+            &evaluation_path,
+            bad_key,
+            evaluation_body(
+                paper_id,
+                &submission,
+                &authors[0],
+                [&external[0], &external[1]],
+                bad_evaluation_id,
+                None,
+                bad_key,
+            ),
+        )
+        .await,
+        StatusCode::FORBIDDEN,
+    );
+    let evaluation_id = Uuid::new_v4();
+    let evaluation_key = "p5-evaluation";
+    let evaluation = assert_status(
+        user_post(
+            &router,
+            &external[0],
+            "create_paper_evaluation_v1",
+            &evaluation_path,
+            evaluation_key,
+            evaluation_body(
+                paper_id,
+                &submission,
+                &external[0],
+                [&external[1], &external[2]],
+                evaluation_id,
+                None,
+                evaluation_key,
+            ),
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+    assert_eq!(evaluation["paper_score"]["score_bps"], 8_500);
+    assert_eq!(evaluation["settlement_state"], "pending_finality");
+    let reproduction_path =
+        format!("/v2/hepta/papers/{paper_id}/evaluations/{evaluation_id}/reproductions");
+    let passing_id = Uuid::new_v4();
+    let passing_key = "p5-reproduction-pass";
+    let passing = assert_status(
+        user_post(
+            &router,
+            &external[3],
+            "create_paper_reproduction_v1",
+            &reproduction_path,
+            passing_key,
+            reproduction_body(
+                paper_id,
+                &evaluation,
+                &external[3],
+                passing_id,
+                None,
+                true,
+                passing_key,
+            ),
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+    let failing_id = Uuid::new_v4();
+    let failing_key = "p5-reproduction-fail";
+    let failing = assert_status(
+        user_post(
+            &router,
+            &external[4],
+            "create_paper_reproduction_v1",
+            &reproduction_path,
+            failing_key,
+            reproduction_body(
+                paper_id,
+                &evaluation,
+                &external[4],
+                failing_id,
+                None,
+                false,
+                failing_key,
+            ),
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+    let superseding_reproduction_id = Uuid::new_v4();
+    let superseding_reproduction_key = "p5-reproduction-superseding";
+    assert_status(
+        user_post(
+            &router,
+            &external[3],
+            "create_paper_reproduction_v1",
+            &reproduction_path,
+            superseding_reproduction_key,
+            reproduction_body(
+                paper_id,
+                &evaluation,
+                &external[3],
+                superseding_reproduction_id,
+                Some(passing_id),
+                true,
+                superseding_reproduction_key,
+            ),
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+    let appeal_path = format!("/v2/hepta/papers/{paper_id}/evaluations/{evaluation_id}/appeals");
+    let spoof_key = "p5-appeal-spoof";
+    let appellant_spoof_code = error_code(
+        user_post(
+            &router,
+            &authors[1],
+            "create_paper_appeal_v1",
+            &appeal_path,
+            spoof_key,
+            appeal_body(
+                paper_id,
+                &evaluation,
+                &authors[0],
+                Uuid::new_v4(),
+                spoof_key,
+            ),
+        )
+        .await,
+        StatusCode::FORBIDDEN,
+    );
+    let appeal_id = Uuid::new_v4();
+    let appeal_key = "p5-appeal";
+    assert_status(
+        user_post(
+            &router,
+            &authors[0],
+            "create_paper_appeal_v1",
+            &appeal_path,
+            appeal_key,
+            appeal_body(paper_id, &evaluation, &authors[0], appeal_id, appeal_key),
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+    let read_path = format!("/v2/hepta/papers/{paper_id}/review-state");
+    let challenged = assert_status(
+        user_get(
+            &router,
+            &authors[0],
+            "get_paper_review_state_v1",
+            &read_path,
+            "p5-read-challenged",
+        )
+        .await,
+        StatusCode::OK,
+    );
+    let superseding_evaluation_id = Uuid::new_v4();
+    let superseding_evaluation_key = "p5-evaluation-superseding";
+    assert_status(
+        user_post(
+            &router,
+            &external[6],
+            "create_paper_evaluation_v1",
+            &evaluation_path,
+            superseding_evaluation_key,
+            evaluation_body(
+                paper_id,
+                &submission,
+                &external[6],
+                [&external[7], &external[8]],
+                superseding_evaluation_id,
+                Some(evaluation_id),
+                superseding_evaluation_key,
+            ),
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+    let resolve_path = format!("/v2/hepta/papers/{paper_id}/appeals/{appeal_id}/resolve");
+    let overlap_key = "p5-resolution-overlap";
+    let resolver_overlap_code = error_code(
+        user_post(
+            &router,
+            &authors[1],
+            "resolve_paper_appeal_v1",
+            &resolve_path,
+            overlap_key,
+            resolution_body(
+                paper_id,
+                &evaluation,
+                appeal_id,
+                &authors[1],
+                ResolutionBody {
+                    resolution_id: Uuid::new_v4(),
+                    outcome: "upheld",
+                    superseding_evaluation_id: Some(superseding_evaluation_id),
+                    idempotency_key: overlap_key,
+                },
+            ),
+        )
+        .await,
+        StatusCode::FORBIDDEN,
+    );
+    let resolution_key = "p5-resolution";
+    assert_status(
+        user_post(
+            &router,
+            &external[9],
+            "resolve_paper_appeal_v1",
+            &resolve_path,
+            resolution_key,
+            resolution_body(
+                paper_id,
+                &evaluation,
+                appeal_id,
+                &external[9],
+                ResolutionBody {
+                    resolution_id: Uuid::new_v4(),
+                    outcome: "upheld",
+                    superseding_evaluation_id: Some(superseding_evaluation_id),
+                    idempotency_key: resolution_key,
+                },
+            ),
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+    let resolved = assert_status(
+        user_get(
+            &router,
+            &authors[0],
+            "get_paper_review_state_v1",
+            &read_path,
+            "p5-read-resolved",
+        )
+        .await,
+        StatusCode::OK,
+    );
+    ReviewFlowOutcome {
+        evaluation_status: evaluation["status"].as_str().unwrap().to_string(),
+        settlement_before_appeal: evaluation["settlement_state"].as_str().unwrap().to_string(),
+        reproduction_passed: passing["status"].as_str().unwrap().to_string(),
+        reproduction_failed: failing["status"].as_str().unwrap().to_string(),
+        challenged_state: challenged["evaluations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|record| record["evaluation_id"] == evaluation_id.to_string())
+            .unwrap()["settlement_state"]
+            .as_str()
+            .unwrap()
+            .to_string(),
+        resolved_state: resolved["evaluations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|record| record["evaluation_id"] == evaluation_id.to_string())
+            .unwrap()["settlement_state"]
+            .as_str()
+            .unwrap()
+            .to_string(),
+        panel_overlap_code,
+        appellant_spoof_code,
+        resolver_overlap_code,
+        evaluation_count: resolved["evaluations"].as_array().unwrap().len(),
+        reproduction_count: resolved["reproductions"].as_array().unwrap().len(),
+        appeal_count: resolved["appeals"].as_array().unwrap().len(),
+        resolution_count: resolved["resolutions"].as_array().unwrap().len(),
+    }
+}
+
 #[tokio::test]
 async fn memory_three_author_golden_flow_is_complete_and_fail_closed() {
     let outcome = run_full_flow(AppState::new(security()), 3, FlowOptions::default()).await;
@@ -2563,6 +3278,27 @@ async fn memory_three_author_golden_flow_is_complete_and_fail_closed() {
     assert_eq!(outcome.tampered_acceptance_code, "stale_team_proposal");
     assert_eq!(outcome.stale_version_code, "aggregate_version_conflict");
     assert_eq!(outcome.stale_parent_code, "stale_parent_revision");
+}
+
+#[tokio::test]
+async fn memory_review_reproduction_and_appeal_are_signed_independent_and_immutable() {
+    let outcome = run_review_flow(AppState::new(security())).await;
+    assert_eq!(outcome.evaluation_status, "accepted");
+    assert_eq!(outcome.settlement_before_appeal, "pending_finality");
+    assert_eq!(outcome.reproduction_passed, "reproduced");
+    assert_eq!(outcome.reproduction_failed, "failed_tolerance");
+    assert_eq!(outcome.challenged_state, "challenged");
+    assert_eq!(outcome.resolved_state, "resolved");
+    assert_eq!(outcome.panel_overlap_code, "review_panel_not_independent");
+    assert_eq!(outcome.appellant_spoof_code, "appellant_assertion_mismatch");
+    assert_eq!(
+        outcome.resolver_overlap_code,
+        "appeal_resolver_not_independent"
+    );
+    assert_eq!(outcome.evaluation_count, 2);
+    assert_eq!(outcome.reproduction_count, 3);
+    assert_eq!(outcome.appeal_count, 1);
+    assert_eq!(outcome.resolution_count, 1);
 }
 
 #[tokio::test]
@@ -2636,6 +3372,45 @@ async fn postgres_collaboration_kernel_matches_memory_and_migration_is_repeatabl
     reset_postgres(&database_url).await;
     let postgres = run_collaboration_kernel_flow(state).await;
     let memory = run_collaboration_kernel_flow(AppState::new(security())).await;
+    assert_eq!(postgres, memory);
+    sqlx::query("select pg_advisory_unlock(hashtext('hepta-research-league-pg-tests'))")
+        .execute(&mut lock)
+        .await
+        .expect("release Hepta PostgreSQL test lock");
+}
+
+#[tokio::test]
+async fn postgres_review_flow_matches_memory_and_migration_is_repeatable() {
+    let Ok(database_url) = std::env::var("HEPTA_TEST_DATABASE_URL") else {
+        eprintln!("HEPTA_TEST_DATABASE_URL unset; P5 PostgreSQL conformance skipped");
+        return;
+    };
+    let mut lock = PgConnection::connect(&database_url)
+        .await
+        .expect("PostgreSQL P5 test lock");
+    sqlx::query("select pg_advisory_lock(hashtext('hepta-research-league-pg-tests'))")
+        .execute(&mut lock)
+        .await
+        .expect("serialize Hepta PostgreSQL tests");
+    let state = AppState::connect(&database_url, security())
+        .await
+        .expect("P5 PostgreSQL state");
+    let pool = state.pool.as_ref().expect("PostgreSQL pool");
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/0034_add_hepta_paper_review_appeal.sql"
+    ))
+    .execute(pool)
+    .await
+    .expect("0034 second application");
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/0034_add_hepta_paper_review_appeal.sql"
+    ))
+    .execute(pool)
+    .await
+    .expect("0034 third application");
+    reset_postgres(&database_url).await;
+    let postgres = run_review_flow(state).await;
+    let memory = run_review_flow(AppState::new(security())).await;
     assert_eq!(postgres, memory);
     sqlx::query("select pg_advisory_unlock(hashtext('hepta-research-league-pg-tests'))")
         .execute(&mut lock)

@@ -40,6 +40,10 @@ use crate::{
 mod collaboration_v3;
 pub use collaboration_v3::*;
 
+#[path = "paper_review_v4.rs"]
+mod review_v4;
+pub use review_v4::*;
+
 const PAPER_RAID_EVENT_SCHEMA_V2: &str = "hepta.paper_raid.event.v2";
 
 #[derive(Clone, Default)]
@@ -62,6 +66,7 @@ pub(crate) struct PaperRaidMemory {
         HashMap<(String, u64), SignedAuthorizationSetConsumptionReceiptV1>,
     research_session_completions: HashMap<(String, u64), SignedNakamaCompletionReceiptV1>,
     collaboration: collaboration_v3::CollaborationMemory,
+    review: review_v4::ReviewMemory,
     idempotency: HashMap<String, MemoryIdempotencyRecord>,
     events: Vec<EventEnvelope>,
 }
@@ -719,6 +724,9 @@ struct PaperRaidManifestResponse {
     source_artifact_bundle_schema: &'static str,
     source_artifact_bundle_contract_hash: &'static str,
     artifact_adapter_source_revision: &'static str,
+    review_protocol: &'static str,
+    tolerance_policy_schema: &'static str,
+    settlement_authority: &'static str,
 }
 
 pub(crate) fn router() -> Router<AppState> {
@@ -790,6 +798,7 @@ pub(crate) fn router() -> Router<AppState> {
             post(ingest_nakama_research_session_completion),
         )
         .merge(collaboration_v3::router())
+        .merge(review_v4::router())
 }
 
 async fn manifest(State(state): State<AppState>) -> Json<PaperRaidManifestResponse> {
@@ -811,6 +820,9 @@ async fn manifest(State(state): State<AppState>) -> Json<PaperRaidManifestRespon
         source_artifact_bundle_schema: SOURCE_ARTIFACT_BUNDLE_SCHEMA_V1,
         source_artifact_bundle_contract_hash: ARTIFACT_BUNDLE_ADAPTER_CONTRACT_HASH_V1,
         artifact_adapter_source_revision: ARTIFACT_BUNDLE_ADAPTER_SOURCE_REVISION,
+        review_protocol: PAPER_REVIEW_PROTOCOL_V4,
+        tolerance_policy_schema: TOLERANCE_POLICY_SCHEMA_V1,
+        settlement_authority: "pending_finality_until_verified_chain_receipt",
     })
 }
 

@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Hepta Paper Raid API
-  version: 3.0.0-alpha.1
+  version: 4.0.0-alpha.1
   description: >-
     Versioned Team + Paper collaboration control-plane API for 3-5 human players using
     independently operated external Agents to create one signed, reproducible
@@ -512,6 +512,115 @@ paths:
       description: Requires a signed assertion from a current team member.
       responses:
         "200": {description: Signed PaperBundle and joint submission}
+  /v2/hepta/papers/{paper_id}/contribution-ledgers:
+    parameters:
+      - {$ref: "#/components/parameters/PaperId"}
+    post:
+      operationId: createContributionLedger
+      description: >-
+        During author_approval, freezes one canonical CRediT ledger whose
+        author roles exactly equal the release candidate. Artifact and review
+        points are derived only from accepted same-paper signed records and
+        never enter PaperScore or determine author order.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CreateContributionLedgerRequest"}
+      responses:
+        "201": {description: Immutable contribution ledger frozen}
+        "409": {description: Roster, release hash, phase, or contribution evidence mismatch}
+  /v2/hepta/papers/{paper_id}/evaluations:
+    parameters:
+      - {$ref: "#/components/parameters/PaperId"}
+    post:
+      operationId: createPaperEvaluation
+      description: >-
+        Records an immutable evaluation of one submission-ready PaperBundle.
+        The asserted evaluator and exactly two signed reviewers must be
+        distinct non-authors with independent COI attestations. Supersession is
+        append-only, restricted to an open Appeal, and requires a disjoint panel.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CreatePaperEvaluationRequest"}
+      responses:
+        "201": {description: Signed evaluation, separate PaperScore and RaidScore recorded in pending_finality}
+        "403": {description: Panel, identity, key, signature, or COI independence failed}
+        "409": {description: Release, ledger, initial evaluation, or supersession precondition failed}
+  /v2/hepta/papers/{paper_id}/evaluations/{evaluation_id}/reproductions:
+    parameters:
+      - {$ref: "#/components/parameters/PaperId"}
+      - name: evaluation_id
+        in: path
+        required: true
+        schema: {type: string, format: uuid}
+    post:
+      operationId: createPaperReproduction
+      description: >-
+        Applies the evaluation's frozen versioned absolute, relative,
+        statistical and seed tolerances. Reports and corrections are immutable;
+        a correction explicitly supersedes only the same reproducer's latest report.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CreatePaperReproductionRequest"}
+      responses:
+        "201": {description: Signed reproduction report recorded}
+        "403": {description: Reproducer is an author/panel member or signature failed}
+  /v2/hepta/papers/{paper_id}/evaluations/{evaluation_id}/appeals:
+    parameters:
+      - {$ref: "#/components/parameters/PaperId"}
+      - name: evaluation_id
+        in: path
+        required: true
+        schema: {type: string, format: uuid}
+    post:
+      operationId: createPaperAppeal
+      description: Opens one signed immutable Appeal by an asserted human author.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CreatePaperAppealRequest"}
+      responses:
+        "201": {description: Appeal opened; settlement projection becomes challenged/held}
+        "403": {description: Appellant assertion, authorship, key, or signature failed}
+  /v2/hepta/papers/{paper_id}/appeals/{appeal_id}/resolve:
+    parameters:
+      - {$ref: "#/components/parameters/PaperId"}
+      - name: appeal_id
+        in: path
+        required: true
+        schema: {type: string, format: uuid}
+    post:
+      operationId: resolvePaperAppeal
+      description: >-
+        Records a signed immutable resolution by a resolver distinct from the
+        authors, appellant and both original/replacement panels. Upheld outcomes
+        require the exact same-release superseding evaluation; denied outcomes cannot reference one.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ResolvePaperAppealRequest"}
+      responses:
+        "201": {description: Appeal resolution recorded; prior evaluation remains immutable}
+        "403": {description: Resolver independence, assertion, key, or signature failed}
+  /v2/hepta/papers/{paper_id}/review-state:
+    parameters:
+      - {$ref: "#/components/parameters/PaperId"}
+    get:
+      operationId: getPaperReviewState
+      description: >-
+        Consistent review projection for signed authors and review participants.
+        Evaluation settlement is derived as pending_finality, challenged, or resolved;
+        signed immutable records are never rewritten.
+      responses:
+        "200": {description: Contribution, evaluation, reproduction, Appeal, resolution and RaidScore records}
+        "403": {description: Asserted player is not a signed participant}
   /v2/hepta/research-session-authorizations:
     post:
       operationId: issueResearchSessionAuthorizationSet
@@ -1343,3 +1452,221 @@ components:
           maxItems: 5
           items: {$ref: "#/components/schemas/PublicationReleaseAuthorConsentV1"}
         publication_release_hash: {$ref: "#/components/schemas/Sha256Digest"}
+    CreditContributionInput:
+      type: object
+      additionalProperties: false
+      required: [player_id, credit_roles, accepted_artifact_manifest_ids, accepted_section_review_ids]
+      properties:
+        player_id: {type: string, format: uuid}
+        credit_roles:
+          type: array
+          minItems: 1
+          maxItems: 32
+          uniqueItems: true
+          items: {type: string, minLength: 1, maxLength: 512}
+        accepted_artifact_manifest_ids:
+          type: array
+          maxItems: 256
+          uniqueItems: true
+          items: {type: string, format: uuid}
+        accepted_section_review_ids:
+          type: array
+          maxItems: 256
+          uniqueItems: true
+          items: {type: string, format: uuid}
+    CreateContributionLedgerRequest:
+      type: object
+      additionalProperties: false
+      required: [contribution_ledger_id, expected_paper_version, release_candidate_hash, entries, idempotency_key]
+      properties:
+        contribution_ledger_id: {type: string, format: uuid}
+        expected_paper_version: {type: integer, minimum: 1}
+        release_candidate_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        entries:
+          type: array
+          minItems: 3
+          maxItems: 5
+          items: {$ref: "#/components/schemas/CreditContributionInput"}
+        idempotency_key: {$ref: "#/components/schemas/IdempotencyKey"}
+    PaperScoreComponents:
+      type: object
+      additionalProperties: false
+      required: [method_rigor_bps, experiment_statistics_bps, reproducibility_bps, evidence_citations_bps, value_originality_bps, argument_expression_bps, ethics_transparency_bps]
+      properties:
+        method_rigor_bps: {type: integer, minimum: 0, maximum: 2500}
+        experiment_statistics_bps: {type: integer, minimum: 0, maximum: 1500}
+        reproducibility_bps: {type: integer, minimum: 0, maximum: 1500}
+        evidence_citations_bps: {type: integer, minimum: 0, maximum: 1500}
+        value_originality_bps: {type: integer, minimum: 0, maximum: 1500}
+        argument_expression_bps: {type: integer, minimum: 0, maximum: 1000}
+        ethics_transparency_bps: {type: integer, minimum: 0, maximum: 500}
+    PaperHardGates:
+      type: object
+      additionalProperties: false
+      required: [citations_and_data_authentic, failed_runs_disclosed, all_authors_consented, core_claims_have_evidence, artifact_lineage_complete, license_ethics_coi_complete]
+      properties:
+        citations_and_data_authentic: {type: boolean}
+        failed_runs_disclosed: {type: boolean}
+        all_authors_consented: {type: boolean}
+        core_claims_have_evidence: {type: boolean}
+        artifact_lineage_complete: {type: boolean}
+        license_ethics_coi_complete: {type: boolean}
+    ToleranceRule:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [kind, metric, max_delta_micros]
+          properties:
+            kind: {type: string, const: absolute}
+            metric: {type: string, minLength: 1, maxLength: 512}
+            max_delta_micros: {type: integer, minimum: 0}
+        - type: object
+          additionalProperties: false
+          required: [kind, metric, max_delta_bps]
+          properties:
+            kind: {type: string, const: relative}
+            metric: {type: string, minLength: 1, maxLength: 512}
+            max_delta_bps: {type: integer, minimum: 0, maximum: 10000}
+        - type: object
+          additionalProperties: false
+          required: [kind, metric, minimum_interval_overlap_bps, maximum_effect_delta_micros, minimum_p_value_micros]
+          properties:
+            kind: {type: string, const: statistical}
+            metric: {type: string, minLength: 1, maxLength: 512}
+            minimum_interval_overlap_bps: {type: integer, minimum: 0, maximum: 10000}
+            maximum_effect_delta_micros: {type: integer, minimum: 0}
+            minimum_p_value_micros: {type: integer, minimum: 0, maximum: 1000000}
+        - type: object
+          additionalProperties: false
+          required: [kind, expected_seed_set_hash]
+          properties:
+            kind: {type: string, const: seed}
+            expected_seed_set_hash: {$ref: "#/components/schemas/Sha256Digest"}
+    TolerancePolicy:
+      type: object
+      additionalProperties: false
+      required: [schema, version, rules]
+      properties:
+        schema: {type: string, const: hepta.paper_raid.tolerance_policy.v1}
+        version: {type: string, const: "1"}
+        rules:
+          type: array
+          minItems: 1
+          maxItems: 128
+          items: {$ref: "#/components/schemas/ToleranceRule"}
+    ReviewAttestationRequest:
+      type: object
+      additionalProperties: false
+      required: [attestation_id, reviewer_player_id, verdict, signing_key_id, signing_public_key, signing_public_key_hash, coi_attestation_hash, signed_at_unix, signature]
+      properties:
+        attestation_id: {type: string, format: uuid}
+        reviewer_player_id: {type: string, format: uuid}
+        verdict: {type: string, enum: [approve, reject]}
+        signing_key_id: {type: string, minLength: 1, maxLength: 512}
+        signing_public_key: {type: string, contentEncoding: base64}
+        signing_public_key_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        coi_attestation_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        signed_at_unix: {type: integer, format: int64, minimum: 0}
+        signature: {type: string, contentEncoding: base64}
+    CreatePaperEvaluationRequest:
+      type: object
+      additionalProperties: false
+      required: [evaluation_id, submission_id, supersedes_evaluation_id, release_candidate_hash, paper_bundle_hash, tolerance_policy, reference_metrics_micros, score_components, hard_gates, evaluator_player_id, evaluator_signing_key_id, evaluator_signing_public_key, evaluator_signing_public_key_hash, evaluator_coi_attestation_hash, evaluator_signed_at_unix, evaluator_signature, reviewer_attestations, idempotency_key]
+      properties:
+        evaluation_id: {type: string, format: uuid}
+        submission_id: {type: string, format: uuid}
+        supersedes_evaluation_id:
+          anyOf: [{type: string, format: uuid}, {type: "null"}]
+        release_candidate_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        paper_bundle_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        tolerance_policy: {$ref: "#/components/schemas/TolerancePolicy"}
+        reference_metrics_micros:
+          type: object
+          minProperties: 1
+          maxProperties: 256
+          additionalProperties: {type: integer, format: int64}
+        score_components: {$ref: "#/components/schemas/PaperScoreComponents"}
+        hard_gates: {$ref: "#/components/schemas/PaperHardGates"}
+        evaluator_player_id: {type: string, format: uuid}
+        evaluator_signing_key_id: {type: string, minLength: 1, maxLength: 512}
+        evaluator_signing_public_key: {type: string, contentEncoding: base64}
+        evaluator_signing_public_key_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        evaluator_coi_attestation_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        evaluator_signed_at_unix: {type: integer, format: int64, minimum: 0}
+        evaluator_signature: {type: string, contentEncoding: base64}
+        reviewer_attestations:
+          type: array
+          minItems: 2
+          maxItems: 2
+          items: {$ref: "#/components/schemas/ReviewAttestationRequest"}
+        idempotency_key: {$ref: "#/components/schemas/IdempotencyKey"}
+    StatisticalEvidence:
+      type: object
+      additionalProperties: false
+      required: [interval_overlap_bps, effect_delta_micros, p_value_micros]
+      properties:
+        interval_overlap_bps: {type: integer, minimum: 0, maximum: 10000}
+        effect_delta_micros: {type: integer, format: int64}
+        p_value_micros: {type: integer, minimum: 0, maximum: 1000000}
+    CreatePaperReproductionRequest:
+      type: object
+      additionalProperties: false
+      required: [reproduction_id, supersedes_reproduction_id, release_candidate_hash, paper_bundle_hash, observed_metrics_micros, statistical_evidence, seed_set_hash, environment_hash, run_manifest_hash, reproducer_player_id, signing_key_id, signing_public_key, signing_public_key_hash, coi_attestation_hash, signed_at_unix, signature, idempotency_key]
+      properties:
+        reproduction_id: {type: string, format: uuid}
+        supersedes_reproduction_id:
+          anyOf: [{type: string, format: uuid}, {type: "null"}]
+        release_candidate_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        paper_bundle_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        observed_metrics_micros:
+          type: object
+          maxProperties: 256
+          additionalProperties: {type: integer, format: int64}
+        statistical_evidence:
+          type: object
+          maxProperties: 256
+          additionalProperties: {$ref: "#/components/schemas/StatisticalEvidence"}
+        seed_set_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        environment_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        run_manifest_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        reproducer_player_id: {type: string, format: uuid}
+        signing_key_id: {type: string, minLength: 1, maxLength: 512}
+        signing_public_key: {type: string, contentEncoding: base64}
+        signing_public_key_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        coi_attestation_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        signed_at_unix: {type: integer, format: int64, minimum: 0}
+        signature: {type: string, contentEncoding: base64}
+        idempotency_key: {$ref: "#/components/schemas/IdempotencyKey"}
+    CreatePaperAppealRequest:
+      type: object
+      additionalProperties: false
+      required: [appeal_id, release_candidate_hash, appellant_player_id, grounds_hash, evidence_manifest_hash, signing_key_id, signing_public_key, signing_public_key_hash, signed_at_unix, signature, idempotency_key]
+      properties:
+        appeal_id: {type: string, format: uuid}
+        release_candidate_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        appellant_player_id: {type: string, format: uuid}
+        grounds_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        evidence_manifest_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        signing_key_id: {type: string, minLength: 1, maxLength: 512}
+        signing_public_key: {type: string, contentEncoding: base64}
+        signing_public_key_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        signed_at_unix: {type: integer, format: int64, minimum: 0}
+        signature: {type: string, contentEncoding: base64}
+        idempotency_key: {$ref: "#/components/schemas/IdempotencyKey"}
+    ResolvePaperAppealRequest:
+      type: object
+      additionalProperties: false
+      required: [resolution_id, outcome, superseding_evaluation_id, decision_hash, resolver_player_id, signing_key_id, signing_public_key, signing_public_key_hash, signed_at_unix, signature, idempotency_key]
+      properties:
+        resolution_id: {type: string, format: uuid}
+        outcome: {type: string, enum: [upheld, denied]}
+        superseding_evaluation_id:
+          anyOf: [{type: string, format: uuid}, {type: "null"}]
+        decision_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        resolver_player_id: {type: string, format: uuid}
+        signing_key_id: {type: string, minLength: 1, maxLength: 512}
+        signing_public_key: {type: string, contentEncoding: base64}
+        signing_public_key_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        signed_at_unix: {type: integer, format: int64, minimum: 0}
+        signature: {type: string, contentEncoding: base64}
+        idempotency_key: {$ref: "#/components/schemas/IdempotencyKey"}

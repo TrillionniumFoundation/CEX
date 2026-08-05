@@ -29,6 +29,11 @@ pub const HUMAN_DECISION_V1: &str = "hepta.paper_raid.human_decision.v1";
 pub const HUMAN_EVIDENCE_VERIFICATION_V1: &str = "hepta.paper_raid.human_evidence_verification.v1";
 pub const SECTION_REVIEW_V1: &str = "hepta.paper_raid.section_review.v1";
 pub const SECTION_MERGE_V1: &str = "hepta.paper_raid.section_merge.v1";
+pub const PAPER_EVALUATION_V1: &str = "hepta.paper_raid.evaluation.v1";
+pub const PAPER_REVIEW_ATTESTATION_V1: &str = "hepta.paper_raid.review_attestation.v1";
+pub const PAPER_REPRODUCTION_V1: &str = "hepta.paper_raid.reproduction.v1";
+pub const PAPER_APPEAL_V1: &str = "hepta.paper_raid.appeal.v1";
+pub const PAPER_APPEAL_RESOLUTION_V1: &str = "hepta.paper_raid.appeal_resolution.v1";
 
 pub const RESEARCH_SESSION_AUTHORIZATION_V1: &str = "trnm.research-session.authorization.v1";
 pub const RESEARCH_SESSION_ACTION_V1: &str = "trnm.research-session.action.v1";
@@ -2556,4 +2561,316 @@ pub fn verify_section_merge_signature(
             &Signature::from_bytes(&signature),
         )
         .map_err(|_| "section merge signature verification failed".to_string())
+}
+
+fn optional_uuid(frame: CanonicalFrame, value: Option<Uuid>) -> Result<CanonicalFrame, String> {
+    match value {
+        Some(value) => frame.u32(1).string(&value.to_string()),
+        None => Ok(frame.u32(0)),
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PaperEvaluationSigningV1 {
+    pub schema: String,
+    pub evaluation_id: Uuid,
+    pub paper_project_id: Uuid,
+    pub submission_id: Uuid,
+    pub release_candidate_hash: String,
+    pub paper_bundle_hash: String,
+    pub supersedes_evaluation_id: Option<Uuid>,
+    pub tolerance_policy_hash: String,
+    pub paper_score_hash: String,
+    pub reference_metrics_hash: String,
+    pub hard_gates_hash: String,
+    pub evaluator_player_id: Uuid,
+    pub signing_key_id: String,
+    pub signing_public_key_hash: String,
+    pub coi_attestation_hash: String,
+    pub signed_at_unix: i64,
+}
+
+pub fn paper_evaluation_signing_bytes(
+    evaluation: &PaperEvaluationSigningV1,
+) -> Result<Vec<u8>, String> {
+    if evaluation.schema != PAPER_EVALUATION_V1 || evaluation.signed_at_unix < 0 {
+        return Err("paper evaluation schema or signing time is invalid".to_string());
+    }
+    validate_text("signing_key_id", &evaluation.signing_key_id)?;
+    let frame = CanonicalFrame::new("hepta_paper_raid_evaluation_v1")
+        .string(&evaluation.schema)?
+        .string(&evaluation.evaluation_id.to_string())?
+        .string(&evaluation.paper_project_id.to_string())?
+        .string(&evaluation.submission_id.to_string())?
+        .digest(&evaluation.release_candidate_hash)?
+        .digest(&evaluation.paper_bundle_hash)?;
+    Ok(optional_uuid(frame, evaluation.supersedes_evaluation_id)?
+        .digest(&evaluation.tolerance_policy_hash)?
+        .digest(&evaluation.paper_score_hash)?
+        .digest(&evaluation.reference_metrics_hash)?
+        .digest(&evaluation.hard_gates_hash)?
+        .string(&evaluation.evaluator_player_id.to_string())?
+        .string(&evaluation.signing_key_id)?
+        .digest(&evaluation.signing_public_key_hash)?
+        .digest(&evaluation.coi_attestation_hash)?
+        .i64(evaluation.signed_at_unix)
+        .finish())
+}
+
+pub fn sign_paper_evaluation(
+    evaluation: &PaperEvaluationSigningV1,
+    signing_key: &SigningKey,
+) -> Result<String, String> {
+    Ok(BASE64.encode(
+        signing_key
+            .sign(&paper_evaluation_signing_bytes(evaluation)?)
+            .to_bytes(),
+    ))
+}
+
+pub fn verify_paper_evaluation_signature(
+    evaluation: &PaperEvaluationSigningV1,
+    signature: &str,
+    verifying_key: &VerifyingKey,
+) -> Result<(), String> {
+    let signature = decode_base64_exact::<64>("signature", signature)?;
+    verifying_key
+        .verify(
+            &paper_evaluation_signing_bytes(evaluation)?,
+            &Signature::from_bytes(&signature),
+        )
+        .map_err(|_| "paper evaluation signature verification failed".to_string())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PaperReviewAttestationSigningV1 {
+    pub schema: String,
+    pub attestation_id: Uuid,
+    pub evaluation_id: Uuid,
+    pub evaluation_signing_hash: String,
+    pub reviewer_player_id: Uuid,
+    pub verdict: String,
+    pub signing_key_id: String,
+    pub signing_public_key_hash: String,
+    pub coi_attestation_hash: String,
+    pub signed_at_unix: i64,
+}
+
+pub fn paper_review_attestation_signing_bytes(
+    review: &PaperReviewAttestationSigningV1,
+) -> Result<Vec<u8>, String> {
+    if review.schema != PAPER_REVIEW_ATTESTATION_V1
+        || review.signed_at_unix < 0
+        || !matches!(review.verdict.as_str(), "approve" | "reject")
+    {
+        return Err("paper review schema, verdict, or signing time is invalid".to_string());
+    }
+    validate_text("signing_key_id", &review.signing_key_id)?;
+    Ok(
+        CanonicalFrame::new("hepta_paper_raid_review_attestation_v1")
+            .string(&review.schema)?
+            .string(&review.attestation_id.to_string())?
+            .string(&review.evaluation_id.to_string())?
+            .digest(&review.evaluation_signing_hash)?
+            .string(&review.reviewer_player_id.to_string())?
+            .string(&review.verdict)?
+            .string(&review.signing_key_id)?
+            .digest(&review.signing_public_key_hash)?
+            .digest(&review.coi_attestation_hash)?
+            .i64(review.signed_at_unix)
+            .finish(),
+    )
+}
+
+pub fn verify_paper_review_attestation_signature(
+    review: &PaperReviewAttestationSigningV1,
+    signature: &str,
+    verifying_key: &VerifyingKey,
+) -> Result<(), String> {
+    let signature = decode_base64_exact::<64>("signature", signature)?;
+    verifying_key
+        .verify(
+            &paper_review_attestation_signing_bytes(review)?,
+            &Signature::from_bytes(&signature),
+        )
+        .map_err(|_| "paper review attestation signature verification failed".to_string())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PaperReproductionSigningV1 {
+    pub schema: String,
+    pub reproduction_id: Uuid,
+    pub evaluation_id: Uuid,
+    pub paper_project_id: Uuid,
+    pub release_candidate_hash: String,
+    pub paper_bundle_hash: String,
+    pub tolerance_policy_hash: String,
+    pub observed_metrics_hash: String,
+    pub statistical_evidence_hash: String,
+    pub seed_set_hash: String,
+    pub environment_hash: String,
+    pub run_manifest_hash: String,
+    pub supersedes_reproduction_id: Option<Uuid>,
+    pub reproducer_player_id: Uuid,
+    pub signing_key_id: String,
+    pub signing_public_key_hash: String,
+    pub coi_attestation_hash: String,
+    pub signed_at_unix: i64,
+}
+
+pub fn paper_reproduction_signing_bytes(
+    reproduction: &PaperReproductionSigningV1,
+) -> Result<Vec<u8>, String> {
+    if reproduction.schema != PAPER_REPRODUCTION_V1 || reproduction.signed_at_unix < 0 {
+        return Err("paper reproduction schema or signing time is invalid".to_string());
+    }
+    validate_text("signing_key_id", &reproduction.signing_key_id)?;
+    let frame = CanonicalFrame::new("hepta_paper_raid_reproduction_v1")
+        .string(&reproduction.schema)?
+        .string(&reproduction.reproduction_id.to_string())?
+        .string(&reproduction.evaluation_id.to_string())?
+        .string(&reproduction.paper_project_id.to_string())?
+        .digest(&reproduction.release_candidate_hash)?
+        .digest(&reproduction.paper_bundle_hash)?
+        .digest(&reproduction.tolerance_policy_hash)?
+        .digest(&reproduction.observed_metrics_hash)?
+        .digest(&reproduction.statistical_evidence_hash)?
+        .digest(&reproduction.seed_set_hash)?
+        .digest(&reproduction.environment_hash)?
+        .digest(&reproduction.run_manifest_hash)?;
+    Ok(
+        optional_uuid(frame, reproduction.supersedes_reproduction_id)?
+            .string(&reproduction.reproducer_player_id.to_string())?
+            .string(&reproduction.signing_key_id)?
+            .digest(&reproduction.signing_public_key_hash)?
+            .digest(&reproduction.coi_attestation_hash)?
+            .i64(reproduction.signed_at_unix)
+            .finish(),
+    )
+}
+
+pub fn verify_paper_reproduction_signature(
+    reproduction: &PaperReproductionSigningV1,
+    signature: &str,
+    verifying_key: &VerifyingKey,
+) -> Result<(), String> {
+    let signature = decode_base64_exact::<64>("signature", signature)?;
+    verifying_key
+        .verify(
+            &paper_reproduction_signing_bytes(reproduction)?,
+            &Signature::from_bytes(&signature),
+        )
+        .map_err(|_| "paper reproduction signature verification failed".to_string())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PaperAppealSigningV1 {
+    pub schema: String,
+    pub appeal_id: Uuid,
+    pub evaluation_id: Uuid,
+    pub paper_project_id: Uuid,
+    pub release_candidate_hash: String,
+    pub appellant_player_id: Uuid,
+    pub grounds_hash: String,
+    pub evidence_manifest_hash: String,
+    pub signing_key_id: String,
+    pub signing_public_key_hash: String,
+    pub signed_at_unix: i64,
+}
+
+pub fn paper_appeal_signing_bytes(appeal: &PaperAppealSigningV1) -> Result<Vec<u8>, String> {
+    if appeal.schema != PAPER_APPEAL_V1 || appeal.signed_at_unix < 0 {
+        return Err("paper appeal schema or signing time is invalid".to_string());
+    }
+    validate_text("signing_key_id", &appeal.signing_key_id)?;
+    Ok(CanonicalFrame::new("hepta_paper_raid_appeal_v1")
+        .string(&appeal.schema)?
+        .string(&appeal.appeal_id.to_string())?
+        .string(&appeal.evaluation_id.to_string())?
+        .string(&appeal.paper_project_id.to_string())?
+        .digest(&appeal.release_candidate_hash)?
+        .string(&appeal.appellant_player_id.to_string())?
+        .digest(&appeal.grounds_hash)?
+        .digest(&appeal.evidence_manifest_hash)?
+        .string(&appeal.signing_key_id)?
+        .digest(&appeal.signing_public_key_hash)?
+        .i64(appeal.signed_at_unix)
+        .finish())
+}
+
+pub fn verify_paper_appeal_signature(
+    appeal: &PaperAppealSigningV1,
+    signature: &str,
+    verifying_key: &VerifyingKey,
+) -> Result<(), String> {
+    let signature = decode_base64_exact::<64>("signature", signature)?;
+    verifying_key
+        .verify(
+            &paper_appeal_signing_bytes(appeal)?,
+            &Signature::from_bytes(&signature),
+        )
+        .map_err(|_| "paper appeal signature verification failed".to_string())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PaperAppealResolutionSigningV1 {
+    pub schema: String,
+    pub resolution_id: Uuid,
+    pub appeal_id: Uuid,
+    pub evaluation_id: Uuid,
+    pub paper_project_id: Uuid,
+    pub release_candidate_hash: String,
+    pub outcome: String,
+    pub superseding_evaluation_id: Option<Uuid>,
+    pub decision_hash: String,
+    pub resolver_player_id: Uuid,
+    pub signing_key_id: String,
+    pub signing_public_key_hash: String,
+    pub signed_at_unix: i64,
+}
+
+pub fn paper_appeal_resolution_signing_bytes(
+    resolution: &PaperAppealResolutionSigningV1,
+) -> Result<Vec<u8>, String> {
+    if resolution.schema != PAPER_APPEAL_RESOLUTION_V1
+        || resolution.signed_at_unix < 0
+        || !matches!(resolution.outcome.as_str(), "upheld" | "denied")
+    {
+        return Err("paper appeal resolution schema, outcome, or time is invalid".to_string());
+    }
+    validate_text("signing_key_id", &resolution.signing_key_id)?;
+    let frame = CanonicalFrame::new("hepta_paper_raid_appeal_resolution_v1")
+        .string(&resolution.schema)?
+        .string(&resolution.resolution_id.to_string())?
+        .string(&resolution.appeal_id.to_string())?
+        .string(&resolution.evaluation_id.to_string())?
+        .string(&resolution.paper_project_id.to_string())?
+        .digest(&resolution.release_candidate_hash)?
+        .string(&resolution.outcome)?;
+    Ok(optional_uuid(frame, resolution.superseding_evaluation_id)?
+        .digest(&resolution.decision_hash)?
+        .string(&resolution.resolver_player_id.to_string())?
+        .string(&resolution.signing_key_id)?
+        .digest(&resolution.signing_public_key_hash)?
+        .i64(resolution.signed_at_unix)
+        .finish())
+}
+
+pub fn verify_paper_appeal_resolution_signature(
+    resolution: &PaperAppealResolutionSigningV1,
+    signature: &str,
+    verifying_key: &VerifyingKey,
+) -> Result<(), String> {
+    let signature = decode_base64_exact::<64>("signature", signature)?;
+    verifying_key
+        .verify(
+            &paper_appeal_resolution_signing_bytes(resolution)?,
+            &Signature::from_bytes(&signature),
+        )
+        .map_err(|_| "paper appeal resolution signature verification failed".to_string())
 }
