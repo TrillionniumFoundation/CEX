@@ -137,6 +137,14 @@ impl CasClient {
         ))
     }
 
+    pub fn max_object_bytes(&self) -> usize {
+        self.config.max_object_bytes
+    }
+
+    pub fn validate_media_type(&self, media_type: &str) -> Result<(), AppError> {
+        validate_media_type(media_type)
+    }
+
     async fn get_optional(
         &self,
         digest: &str,

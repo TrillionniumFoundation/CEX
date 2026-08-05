@@ -6,7 +6,7 @@ use serde_json::Value;
 use url::Url;
 use uuid::Uuid;
 
-use crate::{config::AlphaIdentity, error::AppError};
+use crate::error::AppError;
 
 const MAX_ARCHIVE_BYTES: usize = 2 * 1024 * 1024;
 
@@ -15,6 +15,16 @@ const MAX_ARCHIVE_BYTES: usize = 2 * 1024 * 1024;
 pub struct MemberSessionAccess {
     pub logical_session_id: String,
     pub authorization_id: Uuid,
+    pub roster_version: u64,
+    pub nakama_completion_received: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct HeptaMemberResearchSession {
+    logical_session_id: String,
+    authorization_id: Uuid,
+    roster_version: u64,
+    nakama_completion_received: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -125,29 +135,42 @@ impl NakamaArchiveClient {
     }
 }
 
-/// Extracts only the logged-in member's per-session authorization from a
-/// Hepta-owned read model. A query parameter or deployment secret can never
-/// select this value.
-pub fn member_session_access(
+/// Extracts only the player-scoped authorization records returned by Hepta's
+/// P3 Paper Room. Hepta already verified the Consumer assertion and removed
+/// every other roster member. An invented `research_session.members` shape is
+/// never accepted as authority.
+pub fn member_session_accesses(
     paper_read_model: &Value,
-    identity: &AlphaIdentity,
-) -> Option<MemberSessionAccess> {
-    let session = paper_read_model.get("research_session")?;
-    let logical_session_id = session.get("logical_session_id")?.as_str()?.to_string();
-    let members = session.get("members")?.as_array()?;
-    let member = members.iter().find(|member| {
-        member.get("subject_id").and_then(Value::as_str) == Some(identity.subject_id.as_str())
-            && member
-                .get("player_id")
-                .and_then(Value::as_str)
-                .and_then(|value| Uuid::parse_str(value).ok())
-                == Some(identity.player_id)
-    })?;
-    let authorization_id = Uuid::parse_str(member.get("authorization_id")?.as_str()?).ok()?;
-    Some(MemberSessionAccess {
-        logical_session_id,
-        authorization_id,
-    })
+) -> Result<Vec<MemberSessionAccess>, AppError> {
+    let records = paper_read_model
+        .get("member_research_sessions")
+        .and_then(Value::as_array)
+        .ok_or(AppError::Upstream)?;
+    let mut accesses = Vec::with_capacity(records.len());
+    for record in records {
+        let record: HeptaMemberResearchSession =
+            serde_json::from_value(record.clone()).map_err(|_| AppError::Upstream)?;
+        validate_session_id(&record.logical_session_id)?;
+        if record.roster_version == 0
+            || accesses.iter().any(|existing: &MemberSessionAccess| {
+                existing.logical_session_id == record.logical_session_id
+                    && existing.roster_version == record.roster_version
+            })
+        {
+            return Err(AppError::Upstream);
+        }
+        accesses.push(MemberSessionAccess {
+            logical_session_id: record.logical_session_id,
+            authorization_id: record.authorization_id,
+            roster_version: record.roster_version,
+            nakama_completion_received: record.nakama_completion_received,
+        });
+    }
+    accesses.sort_by(|left, right| {
+        (&left.logical_session_id, left.roster_version)
+            .cmp(&(&right.logical_session_id, right.roster_version))
+    });
+    Ok(accesses)
 }
 
 fn validate_session_id(value: &str) -> Result<(), AppError> {
@@ -205,22 +228,46 @@ mod tests {
     use tokio::sync::Mutex;
 
     #[test]
-    fn access_is_bound_to_current_member() {
-        let identity =
-            AlphaIdentity::test_identity("opaque-subject-a", Uuid::new_v4(), Uuid::new_v4());
-        let other = Uuid::new_v4();
-        let own_authorization = Uuid::new_v4();
+    fn access_uses_only_player_scoped_p3_member_sessions() {
+        let first_authorization = Uuid::new_v4();
+        let second_authorization = Uuid::new_v4();
         let model = serde_json::json!({
-            "research_session": {
-                "logical_session_id": "paper.raid:one",
-                "members": [
-                    {"subject_id":"other", "player_id":other, "authorization_id":Uuid::new_v4()},
-                    {"subject_id":identity.subject_id, "player_id":identity.player_id, "authorization_id":own_authorization}
-                ]
-            }
+            "research_session": {"members":[{"authorization_id":Uuid::new_v4()}]},
+            "member_research_sessions": [
+                {
+                    "logical_session_id":"paper.raid:one",
+                    "authorization_id":first_authorization,
+                    "roster_version":1,
+                    "nakama_completion_received":false,
+                    "status":"issued",
+                    "issued_at":"2026-08-05T00:00:00Z",
+                    "expires_at":"2026-08-06T00:00:00Z",
+                    "consumed_at":null,
+                    "authorization_set_id":Uuid::new_v4()
+                },
+                {
+                    "logical_session_id":"paper.raid:one",
+                    "authorization_id":second_authorization,
+                    "roster_version":2,
+                    "nakama_completion_received":true,
+                    "status":"consumed",
+                    "issued_at":"2026-08-05T01:00:00Z",
+                    "expires_at":"2026-08-06T01:00:00Z",
+                    "consumed_at":"2026-08-05T02:00:00Z",
+                    "authorization_set_id":Uuid::new_v4()
+                }
+            ]
         });
-        let access = member_session_access(&model, &identity).expect("member access");
-        assert_eq!(access.authorization_id, own_authorization);
+        let accesses = member_session_accesses(&model).expect("member accesses");
+        assert_eq!(accesses.len(), 2);
+        assert_eq!(accesses[0].authorization_id, first_authorization);
+        assert_eq!(accesses[1].authorization_id, second_authorization);
+        assert!(accesses[1].nakama_completion_received);
+
+        assert!(member_session_accesses(&serde_json::json!({
+            "research_session":{"members":[]}
+        }))
+        .is_err());
     }
 
     #[derive(Default)]
@@ -281,6 +328,8 @@ mod tests {
                 &MemberSessionAccess {
                     logical_session_id: "paper.raid:wire".into(),
                     authorization_id,
+                    roster_version: 3,
+                    nakama_completion_received: false,
                 },
                 7,
             )
@@ -322,6 +371,8 @@ mod tests {
         let access = MemberSessionAccess {
             logical_session_id: "paper.raid:negative".into(),
             authorization_id: Uuid::new_v4(),
+            roster_version: 1,
+            nakama_completion_received: false,
         };
         for handler in [
             Router::new().route(

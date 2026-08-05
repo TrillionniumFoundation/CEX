@@ -30,4 +30,30 @@ if rg -n 'std::process::Command|tokio::process::Command' "$service_root/src"; th
   exit 1
 fi
 
+browser="$service_root/src/browser.js"
+html="$service_root/src/html.rs"
+if rg -n 'localStorage|sessionStorage|indexedDB|\.style' "$browser" || \
+  rg -n '<input[^>]+name=\\?"agent_(private_key|seed|mnemonic)' "$html"
+then
+  echo "browser persistence or external Agent secret input detected" >&2
+  exit 1
+fi
+
+for required in \
+  'human-key-create-form' \
+  'human-key-register-form' \
+  'forget_current_in_memory_key_before_generating_another' \
+  'Registration may already be committed' \
+  'window.location.assign("/league/start")' \
+  'agent_proof_nonce_must_equal_idempotency_key' \
+  'sendCommand("create_agent_binding", null, null, payload)'
+do
+  if ! rg -q --fixed-strings "$required" "$browser" "$html"; then
+    echo "required browser onboarding boundary is missing: $required" >&2
+    exit 1
+  fi
+done
+
+node "$service_root/scripts/check-browser-crypto.mjs"
+
 echo "paper-raid-bff boundary scan: ok"
