@@ -35,7 +35,7 @@ cleanup() {
     *) echo "refusing to remove unexpected scratch path: $scratch_dir" >&2 ;;
   esac
 }
-trap cleanup EXIT
+trap cleanup EXIT INT TERM
 
 scan_runtime_image() {
   local candidate_image=$1
@@ -110,9 +110,11 @@ curl \
   --fail \
   --location \
   --proto '=https' \
-  --retry 3 \
+  --retry 5 \
   --retry-all-errors \
   --retry-delay 2 \
+  --connect-timeout 15 \
+  --max-time 300 \
   --show-error \
   --silent \
   --tlsv1.2 \
@@ -148,6 +150,7 @@ build_args=(
 
 "${docker_cli[@]}" buildx build \
   --load \
+  --no-cache \
   --provenance=false \
   --sbom=false \
   --platform linux/amd64 \

@@ -113,7 +113,7 @@ jq -e \
 if [[ "$(jq -r '.dependencies.playwright' "$runner_root/package.json")" != "$playwright_version" ]] || \
    [[ "$(jq -r '.packages["node_modules/playwright"].version' "$runner_root/package-lock.json")" != "$playwright_version" ]] || \
    ! rg -q --fixed-strings \
-     "FROM --platform=linux/amd64 mcr.microsoft.com/playwright@$playwright_base_digest" \
+     "FROM mcr.microsoft.com/playwright@$playwright_base_digest" \
      "$runner_root/Dockerfile"
 then
   echo "Playwright package lock and immutable base image are out of sync" >&2

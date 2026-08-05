@@ -1,4 +1,4 @@
-FROM --platform=linux/amd64 mcr.microsoft.com/playwright@sha256:ad57c625d284e8d287abcd40d18434582b2e354de71c8428cb080112b0c45960
+FROM mcr.microsoft.com/playwright@sha256:ad57c625d284e8d287abcd40d18434582b2e354de71c8428cb080112b0c45960
 ENV NODE_ENV=production \
     PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
     PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
