@@ -429,6 +429,82 @@ for mutate in (
     else:
         fail("minimal workspace negative mutation was accepted")
 
+docker_lock_path = repo / "services/hepta-research-league/docker/Cargo.lock"
+if docker_lock_path.is_symlink() or not docker_lock_path.is_file():
+    fail("dedicated Docker lock is missing or non-regular")
+with docker_lock_path.open("rb") as stream:
+    docker_lock = tomllib.load(stream)
+
+
+def validate_docker_lock(candidate):
+    if not isinstance(candidate, dict) or set(candidate) != {"version", "package"}:
+        fail("dedicated Docker lock top-level shape drifted")
+    if candidate.get("version") != 4:
+        fail("dedicated Docker lock version drifted")
+    packages = candidate.get("package")
+    if not isinstance(packages, list) or not packages:
+        fail("dedicated Docker lock package closure is empty")
+    identities = []
+    local = []
+    for package in packages:
+        if not isinstance(package, dict) or not {"name", "version"}.issubset(package):
+            fail("dedicated Docker lock package shape is invalid")
+        if not set(package).issubset({"name", "version", "source", "checksum", "dependencies"}):
+            fail("dedicated Docker lock package contains an unknown field")
+        name = package["name"]
+        version = package["version"]
+        source = package.get("source")
+        if not isinstance(name, str) or not name or not isinstance(version, str) or not version:
+            fail("dedicated Docker lock package identity is invalid")
+        if source is None:
+            if "checksum" in package:
+                fail("local Docker-lock package unexpectedly has a checksum")
+            local.append((name, version))
+        else:
+            if source != "registry+https://github.com/rust-lang/crates.io-index":
+                fail("dedicated Docker lock contains a non-crates.io dependency")
+            if not re.fullmatch(r"[0-9a-f]{64}", package.get("checksum", "")):
+                fail("dedicated Docker lock registry checksum is not canonical")
+        dependencies = package.get("dependencies", [])
+        if not isinstance(dependencies, list) or not all(
+            isinstance(dependency, str) and dependency for dependency in dependencies
+        ):
+            fail("dedicated Docker lock dependency list is invalid")
+        identities.append((name, version, source))
+    if len(identities) != len(set(identities)):
+        fail("dedicated Docker lock contains duplicate package identities")
+    expected_local = {
+        ("hepta-paper-raid-contracts", "0.1.0"),
+        ("hepta-research-league", "0.1.0"),
+        ("trnm-finality-types", "0.1.0"),
+        ("trnm-finality-verifier", "0.1.0"),
+        ("trnm-research-protocol", "0.1.0"),
+    }
+    if set(local) != expected_local or len(local) != len(expected_local):
+        fail("dedicated Docker lock local package closure drifted")
+
+
+validate_docker_lock(docker_lock)
+for mutate in (
+    lambda value: value.update({"version": 3}),
+    lambda value: value["package"].append(copy.deepcopy(value["package"][0])),
+    lambda value: value["package"][0].update(
+        {"source": "git+https://example.invalid/forbidden"}
+    ),
+    lambda value: value["package"].__setitem__(
+        slice(None),
+        [package for package in value["package"] if package["name"] != "hepta-research-league"],
+    ),
+):
+    mutation = copy.deepcopy(docker_lock)
+    mutate(mutation)
+    try:
+        validate_docker_lock(mutation)
+    except AssertionError:
+        pass
+    else:
+        fail("dedicated Docker lock negative mutation was accepted")
+
 toolchain_lines = (
     repo / "services/hepta-research-league/docker/rust-toolchain.manifest"
 ).read_text(encoding="utf-8").splitlines()
