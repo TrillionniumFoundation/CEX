@@ -27,6 +27,7 @@ shell_scripts=(
   scripts/check-hepta-research-league-release.sh
   scripts/check-hepta-research-league-release-structure.sh
   scripts/download-pinned-buildx.sh
+  scripts/generate-hepta-research-league-docker-lock.sh
   scripts/generate-hepta-research-league-runtime-sbom.sh
 )
 python_scripts=(
@@ -42,6 +43,7 @@ for relative_path in "${python_scripts[@]}"; do
 done
 
 python3 - "$repo_dir" "$scratch" <<'PY'
+import copy
 import hashlib
 import json
 import os
@@ -84,7 +86,6 @@ def stage_blocks(text):
 
 expected_copy_sources = {
     "services/hepta-research-league/docker/workspace.Cargo.toml",
-    "Cargo.lock",
     "services/hepta-research-league/docker/rust-toolchain.manifest",
     "crates/hepta-paper-raid-contracts/Cargo.toml",
     "crates/hepta-paper-raid-contracts/src",
@@ -122,8 +123,11 @@ def validate_dockerfile(text):
     expected_identities = [
         (
             "docker.io/library/rust@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd578ed948b71b37c1d7fb",
-            "builder",
+            "workspace",
         ),
+        ("workspace", "lockfile-generator"),
+        ("scratch", "cargo-lock-export"),
+        ("workspace", "builder"),
         ("scratch", "runtime-binary-export"),
         ("scratch", "sbom-metadata-export"),
         ("builder", "release"),
@@ -134,10 +138,10 @@ def validate_dockerfile(text):
     ]
     if identities != expected_identities:
         fail(f"Dockerfile stage identity/order drifted: {identities!r}")
-    _, _, builder = blocks[0]
+    _, _, workspace_stage = blocks[0]
     instructions = [
         line.strip()
-        for line in builder.splitlines()
+        for line in workspace_stage.splitlines()
         if line.strip() and not line.lstrip().startswith("#")
     ]
     if any(line.startswith(("ARG ", "LABEL ")) for line in instructions):
@@ -168,6 +172,56 @@ def validate_dockerfile(text):
             f"extra={sorted(set(copied) - expected_copy_sources)!r} duplicates="
             f"{sorted(item for item, count in Counter(copied).items() if count != 1)!r}"
         )
+    required_workspace_fragments = (
+        'rustc 1.95.0 (59807616e 2026-04-14)',
+        'cargo 1.95.0 (f2d3ce0bd 2026-03-21)',
+    )
+    for fragment in required_workspace_fragments:
+        if fragment not in workspace_stage:
+            fail(f"workspace-stage authority is missing {fragment!r}")
+    lockfile_generator = blocks[1][2]
+    lockfile_export = blocks[2][2]
+    builder = blocks[3][2]
+    runtime_export = blocks[4][2]
+    metadata_export = blocks[5][2]
+    release = blocks[6][2]
+    final = blocks[7][2]
+    lockfile_generator_instructions = [
+        line.strip()
+        for line in lockfile_generator.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    if lockfile_generator_instructions[0] != "FROM workspace AS lockfile-generator":
+        fail("lockfile generator stage identity drifted")
+    lockfile_heads = re.findall(
+        r"(?mi)^(FROM|RUN|COPY|ADD|ARG|ENV|WORKDIR|LABEL|USER|ENTRYPOINT|CMD|HEALTHCHECK)\b",
+        lockfile_generator,
+    )
+    if lockfile_heads != ["FROM", "RUN"]:
+        fail("lockfile generator must contain exactly one RUN instruction")
+    if "cargo generate-lockfile" not in lockfile_generator:
+        fail("lockfile generator does not use pinned Cargo authority")
+    lockfile_export_instructions = [
+        line.strip()
+        for line in lockfile_export.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    if lockfile_export_instructions != [
+        "FROM scratch AS cargo-lock-export",
+        "COPY --from=lockfile-generator /src/Cargo.lock /Cargo.lock",
+    ]:
+        fail("cargo-lock-export must export exactly the generated Docker lock")
+    builder_instructions = [
+        line.strip()
+        for line in builder.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    if not builder_instructions or builder_instructions[0] != "FROM workspace AS builder":
+        fail("compile builder stage identity drifted")
+    if [line for line in builder_instructions if line.startswith("COPY ")] != [
+        "COPY services/hepta-research-league/docker/Cargo.lock Cargo.lock"
+    ]:
+        fail("compile builder must consume only the dedicated Docker lock")
     required_builder_fragments = (
         "cargo fetch --locked",
         "cargo metadata --locked --offline --format-version 1",
@@ -178,16 +232,10 @@ def validate_dockerfile(text):
         "-u VCS_REF",
         "-u SOURCE_TREE",
         "-u SBOM_SHA256",
-        'rustc 1.95.0 (59807616e 2026-04-14)',
-        'cargo 1.95.0 (f2d3ce0bd 2026-03-21)',
     )
     for fragment in required_builder_fragments:
         if fragment not in builder:
             fail(f"compile-stage authority is missing {fragment!r}")
-    runtime_export = blocks[1][2]
-    metadata_export = blocks[2][2]
-    release = blocks[3][2]
-    final = blocks[4][2]
     runtime_instructions = [
         line.strip()
         for line in runtime_export.splitlines()
@@ -284,6 +332,18 @@ for mutation, expected in (
         ),
         "final image COPY",
     ),
+    (
+        dockerfile.replace("cargo generate-lockfile", "cargo update", 1),
+        "pinned Cargo authority",
+    ),
+    (
+        dockerfile.replace(
+            "COPY services/hepta-research-league/docker/Cargo.lock Cargo.lock",
+            "COPY Cargo.lock Cargo.lock",
+            1,
+        ),
+        "dedicated Docker lock",
+    ),
 ):
     try:
         validate_dockerfile(mutation)
@@ -296,6 +356,8 @@ for mutation, expected in (
 manifest_path = repo / "services/hepta-research-league/docker/workspace.Cargo.toml"
 with manifest_path.open("rb") as stream:
     workspace = tomllib.load(stream)
+with (repo / "Cargo.toml").open("rb") as stream:
+    canonical_workspace_dependencies = tomllib.load(stream)["workspace"]["dependencies"]
 expected_members = [
     "crates/hepta-paper-raid-contracts",
     "services/hepta-research-league",
@@ -303,9 +365,6 @@ expected_members = [
     "vendor/trnm-finality-verifier",
     "vendor/trnm-research-protocol",
 ]
-if workspace.get("workspace", {}).get("members") != expected_members:
-    fail("minimal compile workspace member closure drifted")
-workspace_dependencies = workspace["workspace"]["dependencies"]
 expected_workspace_dependencies = {
     "axum",
     "chrono",
@@ -322,19 +381,53 @@ expected_workspace_dependencies = {
     "trnm-research-protocol",
     "uuid",
 }
-if set(workspace_dependencies) != expected_workspace_dependencies:
-    fail("minimal compile workspace dependency set drifted")
-with (repo / "Cargo.toml").open("rb") as stream:
-    canonical_workspace_dependencies = tomllib.load(stream)["workspace"]["dependencies"]
-for name in expected_workspace_dependencies:
-    if workspace_dependencies[name] != canonical_workspace_dependencies.get(name):
-        fail(f"minimal workspace dependency differs from canonical workspace: {name}")
-for name, dependency in workspace_dependencies.items():
-    if isinstance(dependency, dict) and "path" in dependency:
-        if pathlib.PurePosixPath(dependency["path"]).parts[0] not in {"crates", "services", "vendor"}:
-            fail(f"minimal workspace dependency escapes the archive: {name}")
-        if "git" in dependency or "rev" in dependency:
-            fail(f"minimal workspace dependency mixes path and Git authority: {name}")
+
+
+def validate_minimal_workspace(candidate):
+    candidate_workspace = candidate.get("workspace", {})
+    if candidate_workspace.get("members") != expected_members:
+        fail("minimal compile workspace member closure drifted")
+    if candidate_workspace.get("resolver") != "2":
+        fail("minimal compile workspace resolver drifted")
+    if candidate_workspace.get("package") != {
+        "edition": "2021",
+        "license": "MIT",
+        "version": "0.1.0",
+        "authors": ["Qi Team"],
+    }:
+        fail("minimal workspace package metadata differs from the root authority")
+    workspace_dependencies = candidate_workspace.get("dependencies")
+    if not isinstance(workspace_dependencies, dict) or set(workspace_dependencies) != expected_workspace_dependencies:
+        fail("minimal compile workspace dependency set drifted")
+    for name in expected_workspace_dependencies:
+        if workspace_dependencies[name] != canonical_workspace_dependencies.get(name):
+            fail(f"minimal workspace dependency differs from canonical workspace: {name}")
+    for name, dependency in workspace_dependencies.items():
+        if isinstance(dependency, dict) and "path" in dependency:
+            parts = pathlib.PurePosixPath(dependency["path"]).parts
+            if not parts or parts[0] not in {"crates", "services", "vendor"} or ".." in parts:
+                fail(f"minimal workspace dependency escapes the archive: {name}")
+            if "git" in dependency or "rev" in dependency:
+                fail(f"minimal workspace dependency mixes path and Git authority: {name}")
+
+
+validate_minimal_workspace(workspace)
+for mutate in (
+    lambda value: value["workspace"]["members"].append("services/untrusted"),
+    lambda value: value["workspace"]["dependencies"].pop("reqwest"),
+    lambda value: value["workspace"]["dependencies"].update({"reqwest": {"version": "9"}}),
+    lambda value: value["workspace"]["dependencies"]["hepta-paper-raid-contracts"].update(
+        {"path": "../outside"}
+    ),
+):
+    mutation = copy.deepcopy(workspace)
+    mutate(mutation)
+    try:
+        validate_minimal_workspace(mutation)
+    except AssertionError:
+        pass
+    else:
+        fail("minimal workspace negative mutation was accepted")
 
 toolchain_lines = (
     repo / "services/hepta-research-league/docker/rust-toolchain.manifest"
@@ -368,12 +461,35 @@ runtime_script = require_fragments(
         "build_export sbom-metadata-export",
         "--runtime-binary",
         'cmp "$tracked_sbom" "$scratch/first.cdx.json"',
+        'sudo -n chown -R -- "$(id -u):$(id -g)" "$destination"',
         "hepta-release-authority.lock",
         "write_status=",
+        "services/hepta-research-league/docker/Cargo.lock",
     ),
 )
 if runtime_script.count("verify_source_unchanged") < 5:
     fail("runtime SBOM generation lacks repeated TOCTOU checks")
+
+lock_script = require_fragments(
+    "scripts/generate-hepta-research-league-docker-lock.sh",
+    (
+        'git -C "$repo_dir" archive "$revision"',
+        "verify_source_unchanged",
+        "hepta-release-authority.lock",
+        "--target cargo-lock-export",
+        'build_export "$scratch/first"',
+        'build_export "$scratch/second"',
+        "--no-cache",
+        "--pull=false",
+        'cmp "$first_lock" "$second_lock"',
+        'sudo -n chown -R -- "$(id -u):$(id -g)" "$destination"',
+        "expected_local",
+        "write_status=",
+        'cmp "$tracked_lock" "$first_lock"',
+    ),
+)
+if lock_script.count("verify_source_unchanged") < 5:
+    fail("Docker-lock generation lacks repeated TOCTOU checks")
 
 image_script = require_fragments(
     "scripts/build-hepta-research-league-image.sh",
@@ -391,12 +507,14 @@ image_script = require_fragments(
         'scan_image "$repro_image_id" second',
         "rootfs contains forbidden build or credential paths",
         "--target sbom-metadata-export",
+        'sudo -n chown -R -- "$(id -u):$(id -g)" "$release_dir/sbom-metadata"',
         "regenerated.cdx.json",
         "containerimage.digest",
         "sentinel_scan_status",
         "gate_succeeded=true",
         "original_image_id",
         "check-hepta-research-league-compose-smoke.sh",
+        "services/hepta-research-league/docker/Cargo.lock",
     ),
 )
 if image_script.count("verify_source_unchanged") < 5:

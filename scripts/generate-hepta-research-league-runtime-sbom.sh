@@ -58,7 +58,7 @@ esac
 }
 verify_source_unchanged
 
-for command_name in cmp curl cut docker find flock git install mktemp mv python3 rg \
+for command_name in cmp curl cut docker find flock git id install mktemp mv python3 rg \
   sha256sum sort tar timeout uname; do
   command -v "$command_name" >/dev/null 2>&1 || {
     echo "Hepta runtime SBOM generator requires $command_name" >&2
@@ -120,6 +120,14 @@ build_export() {
     --build-arg BUILDKIT_MULTI_PLATFORM=1 \
     --file "$source_context/services/hepta-research-league/Dockerfile" \
     "$source_context"
+  if [[ ${docker_command[0]} == sudo ]]; then
+    case "$destination" in
+      "$scratch"/*)
+        sudo -n chown -R -- "$(id -u):$(id -g)" "$destination"
+        ;;
+      *) echo "refusing to change ownership outside runtime-SBOM scratch" >&2; exit 1 ;;
+    esac
+  fi
   verify_source_unchanged
 }
 
@@ -180,7 +188,7 @@ generator="$source_context/scripts/generate-hepta-research-league-sbom.py"
 common=(
   --metadata "$metadata"
   --dockerfile "$source_context/services/hepta-research-league/Dockerfile"
-  --cargo-lock "$source_context/Cargo.lock"
+  --cargo-lock "$source_context/services/hepta-research-league/docker/Cargo.lock"
   --rust-toolchain "$source_context/services/hepta-research-league/docker/rust-toolchain.manifest"
 )
 python3 "$generator" "${common[@]}" --runtime-binary "$first_binary" \
@@ -192,7 +200,7 @@ python3 "$source_context/scripts/verify-hepta-research-league-sbom.py" \
   --sbom "$scratch/first.cdx.json" \
   --runtime-sha256 "$first_sha256" \
   --dockerfile "$source_context/services/hepta-research-league/Dockerfile" \
-  --cargo-lock "$source_context/Cargo.lock" \
+  --cargo-lock "$source_context/services/hepta-research-league/docker/Cargo.lock" \
   --rust-toolchain "$source_context/services/hepta-research-league/docker/rust-toolchain.manifest"
 
 verify_source_unchanged
@@ -203,7 +211,14 @@ else
   staged_output=$(mktemp \
     "$repo_dir/deploy/hepta-research-league/.hepta-research-league.cdx.json.XXXXXX")
   install -m 0644 "$scratch/first.cdx.json" "$staged_output"
-  verify_source_unchanged
+  cmp "$staged_output" "$scratch/first.cdx.json"
+  staged_relative=${staged_output#"$repo_dir/"}
+  if [[ "$(git -C "$repo_dir" rev-parse HEAD)" != "$revision" ]] || \
+     [[ "$(git -C "$repo_dir" rev-parse 'HEAD^{tree}')" != "$source_tree" ]] || \
+     [[ "$(git -C "$repo_dir" status --porcelain=v1 --untracked-files=all)" != "?? $staged_relative" ]]; then
+    echo "Hepta source changed while staging the atomic SBOM write" >&2
+    exit 1
+  fi
   mv -f -- "$staged_output" "$tracked_sbom"
   staged_output=
   cmp "$tracked_sbom" "$scratch/first.cdx.json"

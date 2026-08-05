@@ -72,7 +72,7 @@ verify_source_unchanged() {
   fi
 }
 
-for command_name in cmp curl cut docker find flock git jq mktemp python3 rg sed \
+for command_name in cmp curl cut docker find flock git id jq mktemp python3 rg sed \
   sha256sum sort tar timeout tr uname; do
   command -v "$command_name" >/dev/null 2>&1 || {
     echo "Hepta image gate requires $command_name" >&2
@@ -132,7 +132,7 @@ printf '%s\n' "$sentinel" >"$source_context/HEPTA_IMAGE_SENTINEL_DO_NOT_SHIP.txt
 verify_source_unchanged
 
 dockerfile="$source_context/services/hepta-research-league/Dockerfile"
-cargo_lock="$source_context/Cargo.lock"
+cargo_lock="$source_context/services/hepta-research-league/docker/Cargo.lock"
 toolchain="$source_context/services/hepta-research-league/docker/rust-toolchain.manifest"
 sbom="$source_context/deploy/hepta-research-league/hepta-research-league.cdx.json"
 dockerfile_sha256=$(sha256sum "$dockerfile" | cut -d' ' -f1)
@@ -205,6 +205,9 @@ verify_source_unchanged
   --output "type=local,dest=$release_dir/sbom-metadata" \
   --build-arg BUILDKIT_MULTI_PLATFORM=1 \
   --file "$dockerfile" "$source_context"
+if [[ ${docker_command[0]} == sudo ]]; then
+  sudo -n chown -R -- "$(id -u):$(id -g)" "$release_dir/sbom-metadata"
+fi
 verify_source_unchanged
 cargo_metadata="$release_dir/sbom-metadata/linux_amd64/cargo-metadata.json"
 cargo_metadata_entries=$(find "$release_dir/sbom-metadata" -mindepth 1 \

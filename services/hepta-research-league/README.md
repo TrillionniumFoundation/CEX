@@ -172,8 +172,8 @@ projected. An API token by itself cannot advance the state.
 
 The release Dockerfile pins its Dockerfile frontend, builder, and distroless
 runtime images by digest. The builder receives only the minimal Hepta compile
-workspace, locked dependencies, required migrations, and embedded OpenAPI
-documents. Git identity, release timestamps, the tracked SBOM, and release
+workspace, its dedicated pinned-builder `docker/Cargo.lock`, required migrations,
+and embedded OpenAPI documents. Git identity, release timestamps, the tracked SBOM, and release
 labels are not visible to `cargo build`; they enter only after the runtime
 binary has been exported. A disposable, checksum-pinned Buildx binary performs
 the build; the normalized release root is copied into the final image as one
@@ -200,9 +200,18 @@ Run the no-Cargo/no-Docker structure and negative gate first:
 bash scripts/check-hepta-research-league-release-structure.sh
 ```
 
-After the source revision is clean and immutable, generate the runtime-bound
-SBOM with the pinned builder, review and commit the resulting SBOM, then prove
-that the committed bytes regenerate exactly:
+After changing the minimal compile manifests, generate its lock twice from the
+clean immutable revision with the pinned builder, review and commit it, then
+prove that the committed bytes regenerate exactly:
+
+```bash
+bash scripts/generate-hepta-research-league-docker-lock.sh --write
+# review and commit services/hepta-research-league/docker/Cargo.lock
+bash scripts/generate-hepta-research-league-docker-lock.sh --check
+```
+
+Next generate the runtime-bound SBOM with the pinned builder, review and commit
+the resulting SBOM, then prove that the committed bytes regenerate exactly:
 
 ```bash
 bash scripts/generate-hepta-research-league-runtime-sbom.sh --write

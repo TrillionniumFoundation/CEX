@@ -25,7 +25,7 @@ python3 scripts/verify-hepta-research-league-sbom.py \
   --sbom deploy/hepta-research-league/hepta-research-league.cdx.json \
   --runtime-sha256 "$runtime_binary_sha256" \
   --dockerfile services/hepta-research-league/Dockerfile \
-  --cargo-lock Cargo.lock \
+  --cargo-lock services/hepta-research-league/docker/Cargo.lock \
   --rust-toolchain services/hepta-research-league/docker/rust-toolchain.manifest
 bash scripts/check-hepta-research-league-release-structure.sh
 

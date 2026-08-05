@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1@sha256:87999aa3d42bdc6bea60565083ee17e86d1f3339802f543c0d03998580f9cb89
-FROM docker.io/library/rust@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd578ed948b71b37c1d7fb AS builder
+FROM docker.io/library/rust@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd578ed948b71b37c1d7fb AS workspace
 
 WORKDIR /src
 ENV CARGO_NET_GIT_FETCH_WITH_CLI=false
@@ -7,7 +7,6 @@ ENV CARGO_NET_GIT_FETCH_WITH_CLI=false
 # The compile DAG is deliberately closed. In particular, the tracked SBOM and
 # all release labels/hashes are absent until after the Rust binary exists.
 COPY services/hepta-research-league/docker/workspace.Cargo.toml Cargo.toml
-COPY Cargo.lock Cargo.lock
 COPY services/hepta-research-league/docker/rust-toolchain.manifest /toolchain/rust-toolchain.manifest
 COPY crates/hepta-paper-raid-contracts/Cargo.toml crates/hepta-paper-raid-contracts/Cargo.toml
 COPY crates/hepta-paper-raid-contracts/src crates/hepta-paper-raid-contracts/src
@@ -37,6 +36,18 @@ RUN test "$(sed -n '1p' /toolchain/rust-toolchain.manifest)" = \
     && test "$(wc -l < /toolchain/rust-toolchain.manifest)" -eq 3 \
     && test "$(rustc --version)" = "rustc 1.95.0 (59807616e 2026-04-14)" \
     && test "$(cargo --version)" = "cargo 1.95.0 (f2d3ce0bd 2026-03-21)"
+
+FROM workspace AS lockfile-generator
+RUN CARGO_HTTP_TIMEOUT=600 \
+    CARGO_HTTP_LOW_SPEED_LIMIT=1 \
+    CARGO_NET_RETRY=5 \
+    cargo generate-lockfile
+
+FROM scratch AS cargo-lock-export
+COPY --from=lockfile-generator /src/Cargo.lock /Cargo.lock
+
+FROM workspace AS builder
+COPY services/hepta-research-league/docker/Cargo.lock Cargo.lock
 RUN CARGO_HTTP_TIMEOUT=600 \
     CARGO_HTTP_LOW_SPEED_LIMIT=1 \
     CARGO_NET_RETRY=5 \
