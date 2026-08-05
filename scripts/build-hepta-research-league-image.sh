@@ -396,9 +396,14 @@ scan_image() {
     return 20
   }
   tar -tf "$rootfs_tar" >"$scan/rootfs.list" || return 20
+  if ! python3 "$source_context/scripts/verify-hepta-research-league-rootfs-tar.py" \
+    --tar "$rootfs_tar"; then
+    echo "Hepta runtime rootfs source-path metadata is not canonical" >&2
+    return 10
+  fi
   local path_status=0
   scan_no_matches "rootfs-path-$label" \
-    '(^|/)(\.git|Cargo\.toml|Cargo\.lock|rust-toolchain\.(toml|manifest))($|/)|(^|/)(src|target|migrations)(/|$)|(^|/)\.env($|[./])|(^|/)(id_rsa|auth-profiles\.json|[^/]*credentials[^/]*)$|\.(rs|sql|pem|key)$' \
+    '(^|/)(\.git|Cargo\.toml|Cargo\.lock|rust-toolchain\.(toml|manifest))($|/)|(^|/)(target|migrations)(/|$)|(^|/)\.env($|[./])|(^|/)(id_rsa|auth-profiles\.json|[^/]*credentials[^/]*)$|\.(rs|sql|pem|key)$' \
     "$scan/rootfs.list" || path_status=$?
   case "$path_status" in
     0) ;;

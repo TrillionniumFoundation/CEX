@@ -32,6 +32,7 @@ shell_scripts=(
 )
 python_scripts=(
   scripts/generate-hepta-research-league-sbom.py
+  scripts/verify-hepta-research-league-rootfs-tar.py
   scripts/verify-hepta-research-league-sbom.py
 )
 for relative_path in "${shell_scripts[@]}"; do
@@ -52,6 +53,7 @@ import re
 import shlex
 import subprocess
 import sys
+import tarfile
 import tomllib
 from collections import Counter
 
@@ -585,6 +587,7 @@ image_script = require_fragments(
         '[[ -f "$rootfs_tar" && ! -L "$rootfs_tar" ]]',
         'sudo -n chown -- "$(id -u):$(id -g)" "$rootfs_tar"',
         '[[ -O "$rootfs_tar" ]]',
+        'verify-hepta-research-league-rootfs-tar.py',
         "rootfs contains forbidden build or credential paths",
         "--target sbom-metadata-export",
         'sudo -n chown -R -- "$(id -u):$(id -g)" "$release_dir/sbom-metadata"',
@@ -625,6 +628,111 @@ except AssertionError:
     pass
 else:
     fail("recursive image rootfs ownership negative mutation was accepted")
+
+
+rootfs_tar_verifier = require_fragments(
+    "scripts/verify-hepta-research-league-rootfs-tar.py",
+    (
+        'ALLOWED_SOURCE_DIRECTORY = "usr/src"',
+        'member.name != ALLOWED_SOURCE_DIRECTORY',
+        'parts != ("usr", "src")',
+        'len(source_entries) != 1',
+        'not source_entry.isdir()',
+        'source_entry.issym()',
+        'source_entry.islnk()',
+    ),
+)
+
+
+def validate_rootfs_tar_verifier_contract(text):
+    if text.count('ALLOWED_SOURCE_DIRECTORY = "usr/src"') != 1:
+        fail("rootfs tar verifier source-directory allowlist is not exact")
+    if text.count('parts != ("usr", "src")') != 1:
+        fail("rootfs tar verifier does not reject other src path segments")
+    if text.count('len(source_entries) != 1') != 1:
+        fail("rootfs tar verifier does not require one exact usr/src entry")
+
+
+validate_rootfs_tar_verifier_contract(rootfs_tar_verifier)
+unsafe_rootfs_tar_verifier = rootfs_tar_verifier.replace(
+    'parts != ("usr", "src")',
+    "False",
+    1,
+)
+try:
+    validate_rootfs_tar_verifier_contract(unsafe_rootfs_tar_verifier)
+except AssertionError:
+    pass
+else:
+    fail("broadened rootfs src allowlist static mutation was accepted")
+
+
+def write_rootfs_tar_fixture(path, entries):
+    with tarfile.open(path, mode="w", format=tarfile.USTAR_FORMAT) as archive:
+        for name, kind, linkname in entries:
+            member = tarfile.TarInfo(name)
+            member.mtime = 0
+            member.uid = 0
+            member.gid = 0
+            member.uname = ""
+            member.gname = ""
+            member.size = 0
+            if kind == "directory":
+                member.type = tarfile.DIRTYPE
+                member.mode = 0o755
+            elif kind == "file":
+                member.type = tarfile.REGTYPE
+                member.mode = 0o644
+            elif kind == "symlink":
+                member.type = tarfile.SYMTYPE
+                member.linkname = linkname
+                member.mode = 0o777
+            elif kind == "hardlink":
+                member.type = tarfile.LNKTYPE
+                member.linkname = linkname
+                member.mode = 0o755
+            else:
+                fail(f"unknown rootfs tar fixture kind: {kind}")
+            archive.addfile(member)
+
+
+rootfs_tar_verifier_path = repo / "scripts/verify-hepta-research-league-rootfs-tar.py"
+positive_rootfs_entries = [
+    ("usr", "directory", ""),
+    ("usr/src", "directory", ""),
+    ("usr/bin", "directory", ""),
+    ("usr/bin/hepta-research-league", "file", ""),
+]
+positive_rootfs_tar = scratch / "rootfs-src-positive.tar"
+write_rootfs_tar_fixture(positive_rootfs_tar, positive_rootfs_entries)
+positive_result = subprocess.run(
+    [sys.executable, str(rootfs_tar_verifier_path), "--tar", str(positive_rootfs_tar)],
+    capture_output=True,
+    check=False,
+)
+if positive_result.returncode != 0:
+    fail("exact empty usr/src directory fixture was rejected")
+
+negative_rootfs_fixtures = {
+    "missing": [("usr", "directory", "")],
+    "root-src": positive_rootfs_entries + [("src", "directory", "")],
+    "other-src": positive_rootfs_entries + [("opt/app/src", "directory", "")],
+    "usr-src-descendant": positive_rootfs_entries + [("usr/src/main.rs", "file", "")],
+    "usr-src-file": [("usr", "directory", ""), ("usr/src", "file", "")],
+    "usr-src-symlink": [("usr", "directory", ""), ("usr/src", "symlink", "tmp")],
+    "usr-src-hardlink": [("usr", "directory", ""), ("usr/src", "hardlink", "usr")],
+    "usr-src-duplicate": positive_rootfs_entries + [("usr/src", "directory", "")],
+}
+for fixture_name, fixture_entries in negative_rootfs_fixtures.items():
+    fixture_path = scratch / f"rootfs-src-{fixture_name}.tar"
+    write_rootfs_tar_fixture(fixture_path, fixture_entries)
+    result = subprocess.run(
+        [sys.executable, str(rootfs_tar_verifier_path), "--tar", str(fixture_path)],
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode == 0:
+        fail(f"rootfs src negative fixture was accepted: {fixture_name}")
 
 require_fragments(
     "scripts/check-hepta-research-league-compose-smoke.sh",
