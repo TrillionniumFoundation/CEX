@@ -1,0 +1,38 @@
+[package]
+name = "paper-raid-bff"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+axum.workspace = true
+base64 = "0.22"
+chrono.workspace = true
+ed25519-dalek = "2"
+hepta-paper-raid-contracts.workspace = true
+hex = "0.4"
+hmac = "0.12"
+http-body-util = "0.1"
+rand = "0.8"
+reqwest.workspace = true
+ring = "0.17.14"
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.10"
+sqlx.workspace = true
+subtle = "2.6"
+thiserror.workspace = true
+tokio.workspace = true
+tower = { version = "0.5", features = ["util"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+url = "2"
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints.rust]
+unsafe_code = "forbid"
