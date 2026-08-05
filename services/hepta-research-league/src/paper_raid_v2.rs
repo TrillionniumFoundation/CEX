@@ -36,9 +36,13 @@ use crate::{
     EventEnvelope, NAKAMA_TOKEN_HEADER, USER_ASSERTION_HEADER,
 };
 
+#[path = "paper_collaboration_v3.rs"]
+mod collaboration_v3;
+pub use collaboration_v3::*;
+
 const PAPER_RAID_EVENT_SCHEMA_V2: &str = "hepta.paper_raid.event.v2";
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct PaperRaidMemory {
     players: HashMap<Uuid, HumanPlayer>,
     players_by_subject: HashMap<String, Uuid>,
@@ -57,6 +61,7 @@ pub(crate) struct PaperRaidMemory {
     research_session_consumption_receipts:
         HashMap<(String, u64), SignedAuthorizationSetConsumptionReceiptV1>,
     research_session_completions: HashMap<(String, u64), SignedNakamaCompletionReceiptV1>,
+    collaboration: collaboration_v3::CollaborationMemory,
     idempotency: HashMap<String, MemoryIdempotencyRecord>,
     events: Vec<EventEnvelope>,
 }
@@ -709,6 +714,11 @@ struct PaperRaidManifestResponse {
     team_formation_authority: &'static str,
     nakama_completion_trust: &'static str,
     finality_mode: &'static str,
+    collaboration_protocol: &'static str,
+    artifact_binding_schema: &'static str,
+    source_artifact_bundle_schema: &'static str,
+    source_artifact_bundle_contract_hash: &'static str,
+    artifact_adapter_source_revision: &'static str,
 }
 
 pub(crate) fn router() -> Router<AppState> {
@@ -779,6 +789,7 @@ pub(crate) fn router() -> Router<AppState> {
             "/v2/hepta/nakama/research-session-completions",
             post(ingest_nakama_research_session_completion),
         )
+        .merge(collaboration_v3::router())
 }
 
 async fn manifest(State(state): State<AppState>) -> Json<PaperRaidManifestResponse> {
@@ -795,6 +806,11 @@ async fn manifest(State(state): State<AppState>) -> Json<PaperRaidManifestRespon
             "all_human_members_sign_exact_roster_role_agent_binding_and_compact",
         nakama_completion_trust: "locally_pinned_authority_key_and_full_archive_verification",
         finality_mode: state.security.finality_mode.as_str(),
+        collaboration_protocol: PAPER_COLLABORATION_PROTOCOL_V3,
+        artifact_binding_schema: ARTIFACT_MANIFEST_BINDING_SCHEMA_V1,
+        source_artifact_bundle_schema: SOURCE_ARTIFACT_BUNDLE_SCHEMA_V1,
+        source_artifact_bundle_contract_hash: ARTIFACT_BUNDLE_ADAPTER_CONTRACT_HASH_V1,
+        artifact_adapter_source_revision: ARTIFACT_BUNDLE_ADAPTER_SOURCE_REVISION,
     })
 }
 
@@ -4168,7 +4184,8 @@ async fn create_revision(
     let now = Utc::now();
 
     if state.pool.is_none() {
-        let mut memory = state.paper_raid.write().await;
+        let mut memory_guard = state.paper_raid.write().await;
+        let mut memory = memory_guard.clone();
         if let Some(replay) =
             memory_replay(&memory, OPERATION, &request.idempotency_key, &request_hash)?
         {
@@ -4212,6 +4229,9 @@ async fn create_revision(
                 "parent_revision_id must equal the current paper revision",
             ));
         }
+        let artifact_binding = collaboration_v3::resolve_revision_artifact_binding_memory(
+            &memory, paper_id, &request,
+        )?;
         let revision_number = if let Some(parent_id) = current_revision_id {
             let parent = memory
                 .revisions
@@ -4250,6 +4270,7 @@ async fn create_revision(
         memory
             .revisions
             .insert(revision.revision_id, revision.clone());
+        collaboration_v3::store_revision_artifact_binding_memory(&mut memory, artifact_binding)?;
         let new_paper_version = {
             let paper = memory.papers.get_mut(&paper_id).expect("paper exists");
             paper.current_revision_id = Some(revision.revision_id);
@@ -4280,6 +4301,7 @@ async fn create_revision(
             StatusCode::CREATED,
             &revision,
         )?;
+        *memory_guard = memory;
         return Ok((StatusCode::CREATED, Json(revision)));
     }
 
@@ -4323,6 +4345,9 @@ async fn create_revision(
             "parent_revision_id must equal the current paper revision",
         ));
     }
+    let artifact_binding =
+        collaboration_v3::resolve_revision_artifact_binding_postgres(&mut tx, paper_id, &request)
+            .await?;
     let revision_number = if let Some(parent_id) = paper.current_revision_id {
         let parent_row = sqlx::query(
             "select record_json from hepta_paper_revisions
@@ -4407,6 +4432,7 @@ async fn create_revision(
         }
         return Err(ApiError::database(error));
     }
+    collaboration_v3::store_revision_artifact_binding_postgres(&mut tx, &artifact_binding).await?;
     paper.current_revision_id = Some(revision.revision_id);
     paper.release_candidate_revision_id = None;
     paper.version += 1;

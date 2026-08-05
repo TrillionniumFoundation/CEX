@@ -15,20 +15,25 @@ use super::*;
 use crate::{
     app, key_rotation_signing_message,
     paper_raid_contracts::{
-        canonical_json_bytes, canonical_json_sha256, human_key_registration_signing_bytes,
-        human_key_revocation_signing_bytes, human_key_rotation_signing_bytes, sha256_digest,
-        sign_authorship_consent, sign_consumer_user_assertion,
-        team_member_acceptance_signing_bytes, AuthorshipConsentSigningV2,
-        ConsumerUserAssertionClaimV2, HumanKeyRegistrationClaimV2, HumanKeyRevocationClaimV2,
-        HumanKeyRotationClaimV2, TeamMemberAcceptanceSigningV2, AUTHORSHIP_CONSENT_V2,
-        CONSUMER_USER_ASSERTION_V2, HUMAN_KEY_REGISTRATION_V2, HUMAN_KEY_REVOCATION_V2,
-        HUMAN_KEY_ROTATION_V2, TEAM_MEMBER_ACCEPTANCE_V2,
+        agent_proposal_signing_bytes, canonical_json_bytes, canonical_json_sha256,
+        human_decision_signing_bytes, human_evidence_verification_signing_bytes,
+        human_key_registration_signing_bytes, human_key_revocation_signing_bytes,
+        human_key_rotation_signing_bytes, section_merge_signing_bytes,
+        section_review_signing_bytes, sha256_digest, sign_authorship_consent,
+        sign_consumer_user_assertion, team_member_acceptance_signing_bytes, AgentProposalSigningV1,
+        AuthorshipConsentSigningV2, ConsumerUserAssertionClaimV2, HumanDecisionSigningV1,
+        HumanEvidenceVerificationSigningV1, HumanKeyRegistrationClaimV2, HumanKeyRevocationClaimV2,
+        HumanKeyRotationClaimV2, SectionMergeSigningV1, SectionReviewSigningV1,
+        TeamMemberAcceptanceSigningV2, AGENT_PROPOSAL_V1, AUTHORSHIP_CONSENT_V2,
+        CONSUMER_USER_ASSERTION_V2, HUMAN_DECISION_V1, HUMAN_EVIDENCE_VERIFICATION_V1,
+        HUMAN_KEY_REGISTRATION_V2, HUMAN_KEY_REVOCATION_V2, HUMAN_KEY_ROTATION_V2,
+        SECTION_MERGE_V1, SECTION_REVIEW_V1, TEAM_MEMBER_ACCEPTANCE_V2,
     },
     AppState, RotateAgentKeyRequest, SecurityConfig, NAKAMA_TOKEN_HEADER, OPERATOR_TOKEN_HEADER,
     TRNM_TOKEN_HEADER, USER_ASSERTION_HEADER,
 };
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Actor {
     player_id: Uuid,
     nakama_user_id: Uuid,
@@ -70,6 +75,537 @@ struct FlowOptions {
 
 fn digest(label: &str) -> String {
     sha256_digest(label.as_bytes())
+}
+
+#[derive(Debug, Clone)]
+struct VerifiedArtifactHashes {
+    manifest_id: Uuid,
+    artifact_manifest_hash: String,
+    source_manifest_hash: String,
+    bibliography_hash: String,
+    claim_evidence_graph_hash: String,
+}
+
+fn integration_artifact_bundle(
+    challenge_id: Uuid,
+    bundle_suffix: &str,
+) -> (Value, String, Vec<Value>) {
+    let mut bundle: Value = serde_json::from_str(include_str!(
+        "../../../docs/sdk-fixtures/integration-paper-raid-artifact-bundle-v1.json"
+    ))
+    .expect("vendored Integration artifact bundle fixture");
+    bundle["challenge_id"] = json!(challenge_id.to_string());
+    bundle["bundle_id"] = json!(format!("paper-raid-synthetic-ablation-001-{bundle_suffix}"));
+    let mut canonical = canonical_json_bytes(&bundle).expect("canonical neutral artifact bundle");
+    canonical.push(b'\n');
+    let source_manifest_sha256 = sha256_digest(&canonical)
+        .strip_prefix("sha256:")
+        .expect("digest prefix")
+        .to_string();
+    let storage_locations = bundle["objects"]
+        .as_array()
+        .expect("artifact objects")
+        .iter()
+        .map(|object| {
+            let sha256 = object["sha256"].as_str().expect("object digest");
+            json!({
+                "logical_path": object["logical_path"],
+                "sha256": sha256,
+                "uri": format!("cas://sha256/{sha256}"),
+                "acl": "team",
+            })
+        })
+        .collect();
+    (bundle, source_manifest_sha256, storage_locations)
+}
+
+async fn create_verified_artifact_manifest(
+    router: &Router,
+    actor: &Actor,
+    paper_id: Uuid,
+    challenge_id: Uuid,
+    expected_paper_version: u64,
+    suffix: &str,
+) -> VerifiedArtifactHashes {
+    let (source_bundle, expected_source_manifest_sha256, storage_locations) =
+        integration_artifact_bundle(challenge_id, suffix);
+    let manifest_id = Uuid::new_v4();
+    let key = format!("artifact-{paper_id}-{suffix}");
+    let path = format!("/v2/hepta/papers/{paper_id}/artifact-manifests");
+    let manifest = assert_status(
+        user_post(
+            router,
+            actor,
+            "create_artifact_manifest_v3",
+            &path,
+            &key,
+            json!({
+                "manifest_id": manifest_id,
+                "expected_paper_version": expected_paper_version,
+                "expected_source_manifest_sha256": expected_source_manifest_sha256,
+                "source_bundle": source_bundle,
+                "storage_locations": storage_locations,
+                "idempotency_key": key,
+            }),
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+    let role_hash = |role: &str| {
+        let matching = manifest["objects"]
+            .as_array()
+            .expect("manifest objects")
+            .iter()
+            .filter(|object| object["role"] == role)
+            .collect::<Vec<_>>();
+        assert_eq!(matching.len(), 1, "fixture role must be unique: {role}");
+        format!(
+            "sha256:{}",
+            matching[0]["sha256"].as_str().expect("role digest")
+        )
+    };
+    VerifiedArtifactHashes {
+        manifest_id,
+        artifact_manifest_hash: manifest["manifest_hash"]
+            .as_str()
+            .expect("manifest root")
+            .to_string(),
+        source_manifest_hash: role_hash("paper_source"),
+        bibliography_hash: role_hash("bibliography"),
+        claim_evidence_graph_hash: role_hash("claim_evidence_graph"),
+    }
+}
+
+struct DraftingPaperContext {
+    router: Router,
+    state: AppState,
+    actors: Vec<Actor>,
+    paper_id: Uuid,
+    work_item_id: Uuid,
+    revision_id: Uuid,
+    paper_version: u64,
+    artifact: VerifiedArtifactHashes,
+}
+
+async fn create_matchmaking_ticket_for(
+    router: &Router,
+    actor: &Actor,
+    challenge_id: Uuid,
+    requested_team_size: u32,
+) -> (StatusCode, Value) {
+    let ticket_id = Uuid::new_v4();
+    let key = format!("p3-ticket-{ticket_id}");
+    user_post(
+        router,
+        actor,
+        "create_matchmaking_ticket_v3",
+        "/v2/hepta/matchmaking/tickets",
+        &key,
+        json!({
+            "ticket_id":ticket_id,
+            "challenge_id":challenge_id,
+            "requested_team_size":requested_team_size,
+            "roles":[actor.role],
+            "availability_hash":digest(&format!("availability-{}", actor.player_id)),
+            "idempotency_key":key,
+        }),
+    )
+    .await
+}
+
+async fn decide_team_proposal(
+    router: &Router,
+    actor: &Actor,
+    proposal_id: Uuid,
+    expected_version: u64,
+    decision: &str,
+    suffix: &str,
+) -> (StatusCode, Value) {
+    let path = format!("/v2/hepta/team-proposals/{proposal_id}/decisions");
+    let decision_id = Uuid::new_v4();
+    let key = format!("p3-team-decision-{decision_id}-{suffix}");
+    user_post(
+        router,
+        actor,
+        "create_team_proposal_decision_v3",
+        &path,
+        &key,
+        json!({
+            "decision_id":decision_id,
+            "expected_proposal_version":expected_version,
+            "decision":decision,
+            "idempotency_key":key,
+        }),
+    )
+    .await
+}
+
+async fn exercise_matchmaking(
+    router: &Router,
+    actors: &[Actor],
+    challenge_id: Uuid,
+) -> (Uuid, Uuid) {
+    assert_eq!(actors.len(), 7);
+    assert_eq!(
+        error_code(
+            create_matchmaking_ticket_for(router, &actors[0], challenge_id, 4).await,
+            StatusCode::BAD_REQUEST,
+        ),
+        "alpha_team_size_requires_three"
+    );
+    let mut proposals = Vec::new();
+    for actor in actors {
+        let response = assert_status(
+            create_matchmaking_ticket_for(router, actor, challenge_id, 3).await,
+            StatusCode::CREATED,
+        );
+        if let Some(proposal) = response["team_proposal"].as_object() {
+            proposals.push(
+                Uuid::parse_str(proposal["proposal_id"].as_str().expect("team proposal id"))
+                    .expect("proposal UUID"),
+            );
+        }
+    }
+    assert_eq!(
+        proposals.len(),
+        2,
+        "seven tickets form two groups and one queue tail"
+    );
+
+    let first_a = decide_team_proposal(router, &actors[0], proposals[0], 1, "accept", "race-a");
+    let first_b = decide_team_proposal(router, &actors[1], proposals[0], 1, "accept", "race-b");
+    let (first_a, first_b) = tokio::join!(first_a, first_b);
+    let loser = if first_a.0 == StatusCode::CREATED {
+        assert_eq!(first_b.0, StatusCode::CONFLICT);
+        assert_eq!(first_b.1["code"], "aggregate_version_conflict");
+        &actors[1]
+    } else {
+        assert_eq!(first_b.0, StatusCode::CREATED);
+        assert_eq!(first_a.0, StatusCode::CONFLICT);
+        assert_eq!(first_a.1["code"], "aggregate_version_conflict");
+        &actors[0]
+    };
+    assert_status(
+        decide_team_proposal(router, loser, proposals[0], 2, "accept", "retry").await,
+        StatusCode::CREATED,
+    );
+    let accepted = assert_status(
+        decide_team_proposal(router, &actors[2], proposals[0], 3, "accept", "terminal").await,
+        StatusCode::CREATED,
+    );
+    assert_eq!(accepted["proposal"]["status"], "accepted");
+
+    let declined = assert_status(
+        decide_team_proposal(router, &actors[3], proposals[1], 1, "decline", "decline").await,
+        StatusCode::CREATED,
+    );
+    assert_eq!(declined["proposal"]["status"], "declined");
+    assert!(declined["replacement_proposal"].is_object());
+    (proposals[0], proposals[1])
+}
+
+#[allow(clippy::too_many_arguments)]
+fn human_verification_signature(
+    actor: &Actor,
+    paper_id: Uuid,
+    record_kind: &str,
+    record_id: Uuid,
+    source_identifier: &str,
+    source_hash: &str,
+    locator: &str,
+    license: &str,
+    signed_at_unix: i64,
+) -> String {
+    let signing = HumanEvidenceVerificationSigningV1 {
+        schema: HUMAN_EVIDENCE_VERIFICATION_V1.to_string(),
+        verification_id: record_id,
+        paper_project_id: paper_id,
+        record_kind: record_kind.to_string(),
+        record_id,
+        source_identifier: source_identifier.to_string(),
+        source_hash: source_hash.to_string(),
+        locator: locator.to_string(),
+        license: license.to_string(),
+        player_id: actor.player_id,
+        signing_key_id: actor.human_key_id.clone(),
+        signing_public_key_hash: actor.human_public_key_hash.clone(),
+        signed_at_unix,
+    };
+    BASE64.encode(
+        actor
+            .human_key
+            .sign(
+                &human_evidence_verification_signing_bytes(&signing)
+                    .expect("human verification frame"),
+            )
+            .to_bytes(),
+    )
+}
+
+fn signed_agent_proposal_body(
+    context: &DraftingPaperContext,
+    proposal_id: Uuid,
+    section_key: &str,
+    parent_revision_id: Uuid,
+    payload_hash: &str,
+    idempotency_key: &str,
+) -> Value {
+    let actor = &context.actors[0];
+    let signed_at_unix = Utc::now().timestamp();
+    let agent_key_id = sha256_digest(&actor.agent_key.verifying_key().to_bytes());
+    let signing = AgentProposalSigningV1 {
+        schema: AGENT_PROPOSAL_V1.to_string(),
+        proposal_id,
+        paper_project_id: context.paper_id,
+        work_item_id: context.work_item_id,
+        section_key: section_key.to_string(),
+        parent_revision_id,
+        proposal_kind: "delivery".to_string(),
+        payload_hash: payload_hash.to_string(),
+        artifact_manifest_hash: context.artifact.artifact_manifest_hash.clone(),
+        agent_id: actor.agent_id.clone(),
+        binding_id: actor.binding_id,
+        agent_key_id: agent_key_id.clone(),
+        signed_at_unix,
+    };
+    json!({
+        "proposal_id":proposal_id,
+        "work_item_id":context.work_item_id,
+        "section_key":section_key,
+        "parent_revision_id":parent_revision_id,
+        "proposal_kind":"delivery",
+        "payload_hash":payload_hash,
+        "artifact_manifest_id":context.artifact.manifest_id,
+        "agent_id":actor.agent_id,
+        "binding_id":actor.binding_id,
+        "agent_key_id":agent_key_id,
+        "signed_at_unix":signed_at_unix,
+        "signature":BASE64.encode(actor.agent_key.sign(
+            &agent_proposal_signing_bytes(&signing).expect("Agent proposal frame")
+        ).to_bytes()),
+        "idempotency_key":idempotency_key,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn signed_human_decision_body(
+    context: &DraftingPaperContext,
+    actor: &Actor,
+    decision_id: Uuid,
+    proposal_id: Uuid,
+    expected_proposal_version: u64,
+    decision: &str,
+    reason_hash: &str,
+    idempotency_key: &str,
+) -> Value {
+    let signed_at_unix = Utc::now().timestamp();
+    let signing = HumanDecisionSigningV1 {
+        schema: HUMAN_DECISION_V1.to_string(),
+        decision_id,
+        paper_project_id: context.paper_id,
+        proposal_id,
+        player_id: actor.player_id,
+        decision: decision.to_string(),
+        reason_hash: reason_hash.to_string(),
+        expected_proposal_version,
+        signing_key_id: actor.human_key_id.clone(),
+        signing_public_key_hash: actor.human_public_key_hash.clone(),
+        signed_at_unix,
+    };
+    json!({
+        "decision_id":decision_id,
+        "proposal_id":proposal_id,
+        "expected_proposal_version":expected_proposal_version,
+        "decision":decision,
+        "reason_hash":reason_hash,
+        "signing_key_id":actor.human_key_id,
+        "signing_public_key":actor.human_public_key,
+        "signing_public_key_hash":actor.human_public_key_hash,
+        "signed_at_unix":signed_at_unix,
+        "signature":BASE64.encode(actor.human_key.sign(
+            &human_decision_signing_bytes(&signing).expect("human decision frame")
+        ).to_bytes()),
+        "idempotency_key":idempotency_key,
+    })
+}
+
+async fn create_locked_drafting_paper(
+    state: AppState,
+    actors: Vec<Actor>,
+    challenge_id: Uuid,
+) -> DraftingPaperContext {
+    let router = app(state.clone());
+    let team_id = Uuid::new_v4();
+    let paper_id = Uuid::new_v4();
+    let work_item_id = Uuid::new_v4();
+    let revision_id = Uuid::new_v4();
+    let compact_hash = digest("p3-collaboration-compact");
+    let create_team_key = format!("p3-create-team-{team_id}");
+    assert_status(
+        user_post(
+            &router,
+            &actors[0],
+            "create_research_team_v2",
+            "/v2/hepta/teams",
+            &create_team_key,
+            json!({
+                "team_id": team_id,
+                "challenge_id": challenge_id,
+                "collaboration_compact_hash": compact_hash,
+                "members": actors.iter().enumerate().map(|(index, actor)| json!({
+                    "participant_slot": index + 1,
+                    "player_id": actor.player_id,
+                    "binding_id": actor.binding_id,
+                    "role": actor.role,
+                })).collect::<Vec<_>>(),
+                "idempotency_key": create_team_key,
+            }),
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+    let acceptance_path = format!("/v2/hepta/teams/{team_id}/member-acceptances");
+    for (index, actor) in actors.iter().enumerate() {
+        let key = format!("p3-accept-{team_id}-{}", actor.player_id);
+        let body = acceptance_body(
+            actor,
+            Uuid::new_v4(),
+            team_id,
+            challenge_id,
+            u32::try_from(index + 1).expect("slot"),
+            &compact_hash,
+            &key,
+        );
+        assert_status(
+            user_post(
+                &router,
+                actor,
+                "accept_research_team_membership_v2",
+                &acceptance_path,
+                &key,
+                body,
+            )
+            .await,
+            StatusCode::CREATED,
+        );
+    }
+    let lock_path = format!("/v2/hepta/teams/{team_id}/lock");
+    let lock_key = format!("p3-lock-{team_id}");
+    assert_status(
+        user_post(
+            &router,
+            &actors[0],
+            "lock_research_team_v2",
+            &lock_path,
+            &lock_key,
+            json!({"expected_version":1,"idempotency_key":lock_key}),
+        )
+        .await,
+        StatusCode::OK,
+    );
+    let paper_key = format!("p3-paper-{paper_id}");
+    assert_status(
+        user_post(
+            &router,
+            &actors[0],
+            "create_paper_project_v2",
+            "/v2/hepta/papers",
+            &paper_key,
+            json!({
+                "paper_project_id":paper_id,
+                "team_id":team_id,
+                "title":"Paper Collaboration Kernel",
+                "target_format":"workshop-short-paper-v1",
+                "idempotency_key":paper_key,
+            }),
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+    let transition_path = format!("/v2/hepta/papers/{paper_id}/transition");
+    let mut paper_version = 1_u64;
+    for phase in ["preregistering", "researching", "experimenting", "drafting"] {
+        let key = format!("p3-phase-{paper_id}-{phase}");
+        assert_status(
+            user_post(
+                &router,
+                &actors[0],
+                "transition_paper_project_v2",
+                &transition_path,
+                &key,
+                json!({"expected_version":paper_version,"next_phase":phase,"idempotency_key":key}),
+            )
+            .await,
+            StatusCode::OK,
+        );
+        paper_version += 1;
+    }
+    let artifact = create_verified_artifact_manifest(
+        &router,
+        &actors[0],
+        paper_id,
+        challenge_id,
+        paper_version,
+        "collaboration",
+    )
+    .await;
+    let work_path = format!("/v2/hepta/papers/{paper_id}/work-items");
+    let work_key = format!("p3-work-{work_item_id}");
+    assert_status(
+        user_post(
+            &router,
+            &actors[0],
+            "create_paper_work_item_v2",
+            &work_path,
+            &work_key,
+            json!({
+                "work_item_id":work_item_id,
+                "expected_paper_version":paper_version,
+                "kind":"paper_section",
+                "title":"Draft methods section",
+                "assigned_player_id":actors[0].player_id,
+                "assigned_binding_id":actors[0].binding_id,
+                "idempotency_key":work_key,
+            }),
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+    paper_version += 1;
+    let revision_path = format!("/v2/hepta/papers/{paper_id}/revisions");
+    let revision_key = format!("p3-revision-{revision_id}");
+    assert_status(
+        user_post(
+            &router,
+            &actors[0],
+            "create_paper_revision_v2",
+            &revision_path,
+            &revision_key,
+            json!({
+                "revision_id":revision_id,
+                "expected_paper_version":paper_version,
+                "parent_revision_id":null,
+                "source_manifest_hash":artifact.source_manifest_hash,
+                "artifact_manifest_hash":artifact.artifact_manifest_hash,
+                "bibliography_hash":artifact.bibliography_hash,
+                "claim_evidence_graph_hash":artifact.claim_evidence_graph_hash,
+                "idempotency_key":revision_key,
+            }),
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+    paper_version += 1;
+    DraftingPaperContext {
+        router,
+        state,
+        actors,
+        paper_id,
+        work_item_id,
+        revision_id,
+        paper_version,
+        artifact,
+    }
 }
 
 fn actors(member_count: usize) -> Vec<Actor> {
@@ -238,6 +774,26 @@ async fn reset_postgres(database_url: &str) {
         .expect("maintenance pool");
     sqlx::raw_sql(
         "truncate table
+           hepta_paper_room_events,
+           hepta_section_merges,
+           hepta_section_reviews,
+           hepta_section_heads,
+           hepta_section_revisions,
+           hepta_human_decisions,
+           hepta_agent_proposals,
+           hepta_section_leases,
+           hepta_claim_records,
+           hepta_figure_lineage,
+           hepta_run_records,
+           hepta_experiment_plans,
+           hepta_collaboration_revision_refs,
+           hepta_citation_records,
+           hepta_evidence_cards,
+           hepta_paper_revision_artifact_bindings,
+           hepta_artifact_manifests,
+           hepta_team_proposal_decisions,
+           hepta_team_proposals,
+           hepta_matchmaking_tickets,
            hepta_nakama_research_session_completions,
            hepta_research_session_consumption_receipts,
            hepta_research_session_authorizations,
@@ -552,6 +1108,746 @@ async fn paper_raid_event_types(state: &AppState) -> Vec<String> {
         .iter()
         .map(|event| event.event_type.clone())
         .collect()
+}
+
+async fn collaboration_snapshot(context: &DraftingPaperContext, nonce: &str) -> Value {
+    let room_path = format!("/v2/hepta/papers/{}/room", context.paper_id);
+    let room = assert_status(
+        user_get(
+            &context.router,
+            &context.actors[0],
+            "get_paper_room_v3",
+            &room_path,
+            &format!("room-{nonce}"),
+        )
+        .await,
+        StatusCode::OK,
+    );
+    let events_path = format!(
+        "/v2/hepta/papers/{}/events?after_cursor=0",
+        context.paper_id
+    );
+    let events = assert_status(
+        user_get(
+            &context.router,
+            &context.actors[0],
+            "list_paper_room_events_v3",
+            &events_path,
+            &format!("events-{nonce}"),
+        )
+        .await,
+        StatusCode::OK,
+    );
+    let outbox = if let Some(pool) = &context.state.pool {
+        json!(sqlx::query(
+            "select event_id,event_type,aggregate_id,aggregate_version,payload_hash,payload
+             from hepta_outbox order by occurred_at,event_id",
+        )
+        .fetch_all(pool)
+        .await
+        .expect("outbox snapshot")
+        .into_iter()
+        .map(|row| {
+            json!({
+                "event_id":row.get::<Uuid,_>("event_id"),
+                "event_type":row.get::<String,_>("event_type"),
+                "aggregate_id":row.get::<String,_>("aggregate_id"),
+                "aggregate_version":row.get::<i64,_>("aggregate_version"),
+                "payload_hash":row.get::<String,_>("payload_hash"),
+                "payload":row.get::<Value,_>("payload"),
+            })
+        })
+        .collect::<Vec<_>>())
+    } else {
+        let memory = context.state.paper_raid.read().await;
+        serde_json::to_value(&memory.events).expect("memory outbox snapshot")
+    };
+    json!({"room":room,"events":events,"outbox":outbox})
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CollaborationOutcome {
+    revision_unknown_code: String,
+    revision_cross_paper_code: String,
+    revision_descriptor_code: String,
+    uri_tamper_code: String,
+    doi_tamper_code: String,
+    duplicate_proposal_code: String,
+    stale_fencing_code: String,
+    stale_parent_code: String,
+    cyclic_parent_code: String,
+    cross_section_parent_code: String,
+    cross_paper_parent_code: String,
+    frozen_phase_code: String,
+    room_event_count: usize,
+    room_last_cursor: u64,
+    revision_binding_count: usize,
+    section_merge_count: usize,
+}
+
+async fn run_collaboration_kernel_flow(state: AppState) -> CollaborationOutcome {
+    let router = app(state.clone());
+    let all_actors = actors(7);
+    let challenge_id = register_prerequisites(&router, &all_actors).await;
+    create_players_and_bindings(&router, &all_actors).await;
+    exercise_matchmaking(&router, &all_actors, challenge_id).await;
+
+    let mut context =
+        create_locked_drafting_paper(state.clone(), all_actors[0..3].to_vec(), challenge_id).await;
+    let cross_context =
+        create_locked_drafting_paper(state.clone(), all_actors[3..6].to_vec(), challenge_id).await;
+    let cross_artifact = create_verified_artifact_manifest(
+        &cross_context.router,
+        &cross_context.actors[0],
+        cross_context.paper_id,
+        challenge_id,
+        cross_context.paper_version,
+        "cross-paper-only",
+    )
+    .await;
+
+    let revision_path = format!("/v2/hepta/papers/{}/revisions", context.paper_id);
+    let revision_negative = |suffix: &str,
+                             artifact_manifest_hash: String,
+                             source_manifest_hash: String,
+                             bibliography_hash: String,
+                             claim_evidence_graph_hash: String| {
+        let key = format!("p3-revision-negative-{suffix}-{}", context.paper_id);
+        (
+            key.clone(),
+            json!({
+                "revision_id":Uuid::new_v4(),
+                "expected_paper_version":context.paper_version,
+                "parent_revision_id":context.revision_id,
+                "source_manifest_hash":source_manifest_hash,
+                "artifact_manifest_hash":artifact_manifest_hash,
+                "bibliography_hash":bibliography_hash,
+                "claim_evidence_graph_hash":claim_evidence_graph_hash,
+                "idempotency_key":key,
+            }),
+        )
+    };
+    let (unknown_key, unknown_body) = revision_negative(
+        "unknown",
+        digest("unknown-artifact-root"),
+        context.artifact.source_manifest_hash.clone(),
+        context.artifact.bibliography_hash.clone(),
+        context.artifact.claim_evidence_graph_hash.clone(),
+    );
+    let revision_unknown_code = error_code(
+        user_post(
+            &context.router,
+            &context.actors[0],
+            "create_paper_revision_v2",
+            &revision_path,
+            &unknown_key,
+            unknown_body,
+        )
+        .await,
+        StatusCode::CONFLICT,
+    );
+    let (cross_key, cross_body) = revision_negative(
+        "cross",
+        cross_artifact.artifact_manifest_hash.clone(),
+        cross_artifact.source_manifest_hash.clone(),
+        cross_artifact.bibliography_hash.clone(),
+        cross_artifact.claim_evidence_graph_hash.clone(),
+    );
+    let revision_cross_paper_code = error_code(
+        user_post(
+            &context.router,
+            &context.actors[0],
+            "create_paper_revision_v2",
+            &revision_path,
+            &cross_key,
+            cross_body,
+        )
+        .await,
+        StatusCode::CONFLICT,
+    );
+    let (tampered_key, tampered_body) = revision_negative(
+        "descriptor",
+        context.artifact.artifact_manifest_hash.clone(),
+        digest("tampered-paper-source"),
+        context.artifact.bibliography_hash.clone(),
+        context.artifact.claim_evidence_graph_hash.clone(),
+    );
+    let revision_descriptor_code = error_code(
+        user_post(
+            &context.router,
+            &context.actors[0],
+            "create_paper_revision_v2",
+            &revision_path,
+            &tampered_key,
+            tampered_body,
+        )
+        .await,
+        StatusCode::CONFLICT,
+    );
+
+    let actor = &context.actors[0];
+    let evidence_id = Uuid::new_v4();
+    let source_uri = "https://example.org/public/paper-source";
+    let source_hash = digest("public-paper-source");
+    let locator = "page 4, table 2";
+    let license = "CC-BY-4.0";
+    let evidence_time = Utc::now().timestamp();
+    let evidence_signature = human_verification_signature(
+        actor,
+        context.paper_id,
+        "evidence_card",
+        evidence_id,
+        &format!("evidence-uri\n{source_uri}"),
+        &source_hash,
+        locator,
+        license,
+        evidence_time,
+    );
+    let evidence_path = format!("/v2/hepta/papers/{}/evidence-cards", context.paper_id);
+    let evidence_key = format!("p3-evidence-{evidence_id}");
+    let evidence_body = json!({
+        "evidence_card_id":evidence_id,
+        "source_uri":source_uri,
+        "source_hash":source_hash,
+        "locator":locator,
+        "license":license,
+        "verification_key_id":actor.human_key_id,
+        "verification_public_key":actor.human_public_key,
+        "verification_public_key_hash":actor.human_public_key_hash,
+        "signed_at_unix":evidence_time,
+        "verification_signature":evidence_signature,
+        "idempotency_key":evidence_key,
+    });
+    assert_status(
+        user_post(
+            &context.router,
+            actor,
+            "create_evidence_card_v3",
+            &evidence_path,
+            &evidence_key,
+            evidence_body.clone(),
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+    let mut uri_tamper = evidence_body;
+    let uri_tamper_key = format!("p3-evidence-uri-tamper-{evidence_id}");
+    uri_tamper["source_uri"] = json!("https://example.org/public/other-source");
+    uri_tamper["idempotency_key"] = json!(uri_tamper_key.clone());
+    let uri_tamper_code = error_code(
+        user_post(
+            &context.router,
+            actor,
+            "create_evidence_card_v3",
+            &evidence_path,
+            &uri_tamper_key,
+            uri_tamper,
+        )
+        .await,
+        StatusCode::FORBIDDEN,
+    );
+
+    let citation_id = Uuid::new_v4();
+    let doi = "10.1234/hepta.paper-raid";
+    let canonical_url = "https://doi.org/10.1234/hepta.paper-raid";
+    let citation_time = Utc::now().timestamp();
+    let citation_source = format!("citation-doi\n{doi}\ncitation-url\n{canonical_url}");
+    let citation_signature = human_verification_signature(
+        actor,
+        context.paper_id,
+        "citation",
+        citation_id,
+        &citation_source,
+        &source_hash,
+        locator,
+        license,
+        citation_time,
+    );
+    let citation_path = format!("/v2/hepta/papers/{}/citations", context.paper_id);
+    let citation_key = format!("p3-citation-{citation_id}");
+    let citation_body = json!({
+        "citation_id":citation_id,
+        "evidence_card_id":evidence_id,
+        "doi":doi,
+        "canonical_url":canonical_url,
+        "source_hash":source_hash,
+        "locator":locator,
+        "license":license,
+        "verification_key_id":actor.human_key_id,
+        "verification_public_key":actor.human_public_key,
+        "verification_public_key_hash":actor.human_public_key_hash,
+        "signed_at_unix":citation_time,
+        "verification_signature":citation_signature,
+        "idempotency_key":citation_key,
+    });
+    assert_status(
+        user_post(
+            &context.router,
+            actor,
+            "create_citation_record_v3",
+            &citation_path,
+            &citation_key,
+            citation_body.clone(),
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+    let mut doi_tamper = citation_body;
+    let doi_tamper_key = format!("p3-citation-doi-tamper-{citation_id}");
+    doi_tamper["doi"] = json!("10.1234/hepta.other");
+    doi_tamper["idempotency_key"] = json!(doi_tamper_key.clone());
+    let doi_tamper_code = error_code(
+        user_post(
+            &context.router,
+            actor,
+            "create_citation_record_v3",
+            &citation_path,
+            &doi_tamper_key,
+            doi_tamper,
+        )
+        .await,
+        StatusCode::FORBIDDEN,
+    );
+
+    let section_key = "methods";
+    let lease_id = Uuid::new_v4();
+    let lease_path = format!("/v2/hepta/papers/{}/section-leases", context.paper_id);
+    let lease_key = format!("p3-lease-{lease_id}");
+    let lease = assert_status(
+        user_post(
+            &context.router,
+            actor,
+            "acquire_section_lease_v3",
+            &lease_path,
+            &lease_key,
+            json!({
+                "lease_id":lease_id,
+                "section_key":section_key,
+                "holder_binding_id":actor.binding_id,
+                "expected_previous_fencing_token":0,
+                "ttl_seconds":3600,
+                "idempotency_key":lease_key,
+            }),
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+    assert_eq!(lease["fencing_token"], 1);
+
+    let proposal_id = Uuid::new_v4();
+    let payload_hash = digest("methods-section-patch");
+    let proposal_key = format!("p3-proposal-{proposal_id}");
+    let proposal_path = format!("/v2/hepta/papers/{}/agent-proposals", context.paper_id);
+    let proposal_body = signed_agent_proposal_body(
+        &context,
+        proposal_id,
+        section_key,
+        context.revision_id,
+        &payload_hash,
+        &proposal_key,
+    );
+    assert_status(
+        request(&context.router, "POST", &proposal_path, proposal_body, None).await,
+        StatusCode::CREATED,
+    );
+
+    let before_duplicate = collaboration_snapshot(&context, "before-duplicate").await;
+    let duplicate_key = format!("p3-proposal-duplicate-{proposal_id}");
+    let duplicate_body = signed_agent_proposal_body(
+        &context,
+        proposal_id,
+        section_key,
+        context.revision_id,
+        &digest("different-valid-payload"),
+        &duplicate_key,
+    );
+    let duplicate_proposal_code = error_code(
+        request(
+            &context.router,
+            "POST",
+            &proposal_path,
+            duplicate_body,
+            None,
+        )
+        .await,
+        StatusCode::CONFLICT,
+    );
+    let after_duplicate = collaboration_snapshot(&context, "after-duplicate").await;
+    assert_eq!(
+        before_duplicate, after_duplicate,
+        "failed memory/PG mutation must be atomic"
+    );
+
+    let decision_id = Uuid::new_v4();
+    let decision_key = format!("p3-human-decision-{decision_id}");
+    let decision_path = format!("/v2/hepta/papers/{}/human-decisions", context.paper_id);
+    let decision_body = signed_human_decision_body(
+        &context,
+        &context.actors[1],
+        decision_id,
+        proposal_id,
+        1,
+        "accept",
+        &digest("accept-methods-patch"),
+        &decision_key,
+    );
+    assert_status(
+        user_post(
+            &context.router,
+            &context.actors[1],
+            "create_human_decision_v3",
+            &decision_path,
+            &decision_key,
+            decision_body,
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+
+    let section_revision_id = Uuid::new_v4();
+    let section_revision_key = format!("p3-section-revision-{section_revision_id}");
+    let section_revision_path = format!("/v2/hepta/papers/{}/section-revisions", context.paper_id);
+    assert_status(
+        user_post(
+            &context.router,
+            actor,
+            "create_section_revision_v3",
+            &section_revision_path,
+            &section_revision_key,
+            json!({
+                "section_revision_id":section_revision_id,
+                "section_key":section_key,
+                "parent_revision_id":context.revision_id,
+                "proposal_id":proposal_id,
+                "lease_id":lease_id,
+                "fencing_token":1,
+                "patch_manifest_id":context.artifact.manifest_id,
+                "patch_hash":payload_hash,
+                "idempotency_key":section_revision_key,
+            }),
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+
+    let reviewer = &context.actors[1];
+    let review_id = Uuid::new_v4();
+    let review_hash = digest("independent-methods-review");
+    let review_time = Utc::now().timestamp();
+    let review_signing = SectionReviewSigningV1 {
+        schema: SECTION_REVIEW_V1.to_string(),
+        review_id,
+        paper_project_id: context.paper_id,
+        section_revision_id,
+        reviewer_player_id: reviewer.player_id,
+        verdict: "approve".to_string(),
+        review_hash: review_hash.clone(),
+        expected_revision_version: 1,
+        signing_key_id: reviewer.human_key_id.clone(),
+        signing_public_key_hash: reviewer.human_public_key_hash.clone(),
+        signed_at_unix: review_time,
+    };
+    let review_key = format!("p3-review-{review_id}");
+    let review_path = format!(
+        "/v2/hepta/papers/{}/section-revisions/{section_revision_id}/reviews",
+        context.paper_id
+    );
+    assert_status(
+        user_post(
+            &context.router,
+            reviewer,
+            "create_section_review_v3",
+            &review_path,
+            &review_key,
+            json!({
+                "review_id":review_id,
+                "expected_revision_version":1,
+                "verdict":"approve",
+                "review_hash":review_hash,
+                "signing_key_id":reviewer.human_key_id,
+                "signing_public_key":reviewer.human_public_key,
+                "signing_public_key_hash":reviewer.human_public_key_hash,
+                "signed_at_unix":review_time,
+                "signature":BASE64.encode(reviewer.human_key.sign(
+                    &section_review_signing_bytes(&review_signing).expect("section review frame")
+                ).to_bytes()),
+                "idempotency_key":review_key,
+            }),
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+
+    let merge_id = Uuid::new_v4();
+    let merge_time = Utc::now().timestamp();
+    let merge_signing = SectionMergeSigningV1 {
+        schema: SECTION_MERGE_V1.to_string(),
+        merge_id,
+        paper_project_id: context.paper_id,
+        section_key: section_key.to_string(),
+        section_revision_id,
+        parent_revision_id: context.revision_id,
+        merged_section_revision_id: section_revision_id,
+        lease_id,
+        fencing_token: 1,
+        merged_by_player_id: actor.player_id,
+        signing_key_id: actor.human_key_id.clone(),
+        signing_public_key_hash: actor.human_public_key_hash.clone(),
+        merged_at_unix: merge_time,
+    };
+    let merge_key = format!("p3-merge-{merge_id}");
+    let merge_path = format!("/v2/hepta/papers/{}/section-merges", context.paper_id);
+    assert_status(
+        user_post(
+            &context.router,
+            actor,
+            "create_section_merge_v3",
+            &merge_path,
+            &merge_key,
+            json!({
+                "merge_id":merge_id,
+                "section_revision_id":section_revision_id,
+                "expected_revision_version":2,
+                "parent_revision_id":context.revision_id,
+                "merged_section_revision_id":section_revision_id,
+                "lease_id":lease_id,
+                "fencing_token":1,
+                "signing_key_id":actor.human_key_id,
+                "signing_public_key":actor.human_public_key,
+                "signing_public_key_hash":actor.human_public_key_hash,
+                "merged_at_unix":merge_time,
+                "signature":BASE64.encode(actor.human_key.sign(
+                    &section_merge_signing_bytes(&merge_signing).expect("section merge frame")
+                ).to_bytes()),
+                "idempotency_key":merge_key,
+            }),
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+
+    let stale_fence_lease_id = Uuid::new_v4();
+    let stale_fence_key = format!("p3-stale-fence-{stale_fence_lease_id}");
+    let stale_fencing_code = error_code(
+        user_post(
+            &context.router,
+            actor,
+            "acquire_section_lease_v3",
+            &lease_path,
+            &stale_fence_key,
+            json!({
+                "lease_id":stale_fence_lease_id,
+                "section_key":section_key,
+                "holder_binding_id":actor.binding_id,
+                "expected_previous_fencing_token":0,
+                "ttl_seconds":3600,
+                "idempotency_key":stale_fence_key,
+            }),
+        )
+        .await,
+        StatusCode::CONFLICT,
+    );
+
+    let next_lease_id = Uuid::new_v4();
+    let next_lease_key = format!("p3-lease-next-{next_lease_id}");
+    assert_status(
+        user_post(
+            &context.router,
+            actor,
+            "acquire_section_lease_v3",
+            &lease_path,
+            &next_lease_key,
+            json!({
+                "lease_id":next_lease_id,
+                "section_key":section_key,
+                "holder_binding_id":actor.binding_id,
+                "expected_previous_fencing_token":1,
+                "ttl_seconds":3600,
+                "idempotency_key":next_lease_key,
+            }),
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+    let stale_key = format!("p3-stale-parent-{}", Uuid::new_v4());
+    let stale_parent_code = error_code(
+        request(
+            &context.router,
+            "POST",
+            &proposal_path,
+            signed_agent_proposal_body(
+                &context,
+                Uuid::new_v4(),
+                section_key,
+                context.revision_id,
+                &digest("stale-parent"),
+                &stale_key,
+            ),
+            None,
+        )
+        .await,
+        StatusCode::CONFLICT,
+    );
+
+    let results_lease_id = Uuid::new_v4();
+    let results_lease_key = format!("p3-results-lease-{results_lease_id}");
+    assert_status(
+        user_post(
+            &context.router,
+            actor,
+            "acquire_section_lease_v3",
+            &lease_path,
+            &results_lease_key,
+            json!({
+                "lease_id":results_lease_id,
+                "section_key":"results",
+                "holder_binding_id":actor.binding_id,
+                "expected_previous_fencing_token":0,
+                "ttl_seconds":3600,
+                "idempotency_key":results_lease_key,
+            }),
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+    let cyclic_parent_key = format!("p3-cyclic-parent-{}", Uuid::new_v4());
+    let cyclic_parent_code = error_code(
+        request(
+            &context.router,
+            "POST",
+            &proposal_path,
+            signed_agent_proposal_body(
+                &context,
+                context.revision_id,
+                "results",
+                context.revision_id,
+                &digest("cyclic-section-parent"),
+                &cyclic_parent_key,
+            ),
+            None,
+        )
+        .await,
+        StatusCode::CONFLICT,
+    );
+    let cross_section_key = format!("p3-cross-section-{}", Uuid::new_v4());
+    let cross_section_parent_code = error_code(
+        request(
+            &context.router,
+            "POST",
+            &proposal_path,
+            signed_agent_proposal_body(
+                &context,
+                Uuid::new_v4(),
+                "results",
+                section_revision_id,
+                &digest("cross-section-parent"),
+                &cross_section_key,
+            ),
+            None,
+        )
+        .await,
+        StatusCode::CONFLICT,
+    );
+    let cross_paper_key = format!("p3-cross-paper-parent-{}", Uuid::new_v4());
+    let cross_paper_parent_code = error_code(
+        request(
+            &context.router,
+            "POST",
+            &proposal_path,
+            signed_agent_proposal_body(
+                &context,
+                Uuid::new_v4(),
+                "results",
+                cross_context.revision_id,
+                &digest("cross-paper-parent"),
+                &cross_paper_key,
+            ),
+            None,
+        )
+        .await,
+        StatusCode::CONFLICT,
+    );
+
+    let transition_path = format!("/v2/hepta/papers/{}/transition", context.paper_id);
+    for phase in ["integrity_review", "reproducing", "author_approval"] {
+        let key = format!("p3-freeze-phase-{}-{phase}", context.paper_id);
+        assert_status(
+            user_post(
+                &context.router,
+                actor,
+                "transition_paper_project_v2",
+                &transition_path,
+                &key,
+                json!({
+                    "expected_version":context.paper_version,
+                    "next_phase":phase,
+                    "idempotency_key":key,
+                }),
+            )
+            .await,
+            StatusCode::OK,
+        );
+        context.paper_version += 1;
+    }
+    let (frozen_bundle, frozen_sha256, frozen_locations) =
+        integration_artifact_bundle(challenge_id, "frozen");
+    let frozen_manifest_id = Uuid::new_v4();
+    let frozen_key = format!("p3-frozen-artifact-{frozen_manifest_id}");
+    let artifact_path = format!("/v2/hepta/papers/{}/artifact-manifests", context.paper_id);
+    let frozen_phase_code = error_code(
+        user_post(
+            &context.router,
+            actor,
+            "create_artifact_manifest_v3",
+            &artifact_path,
+            &frozen_key,
+            json!({
+                "manifest_id":frozen_manifest_id,
+                "expected_paper_version":context.paper_version,
+                "expected_source_manifest_sha256":frozen_sha256,
+                "source_bundle":frozen_bundle,
+                "storage_locations":frozen_locations,
+                "idempotency_key":frozen_key,
+            }),
+        )
+        .await,
+        StatusCode::CONFLICT,
+    );
+
+    let final_snapshot = collaboration_snapshot(&context, "final").await;
+    let room = &final_snapshot["room"];
+    let events = final_snapshot["events"].as_array().expect("room events");
+    let room_last_cursor = room["last_event_cursor"].as_u64().expect("room cursor");
+    assert_eq!(
+        events.last().and_then(|event| event["cursor"].as_u64()),
+        Some(room_last_cursor),
+        "repeatable read must not expose a model/cursor split"
+    );
+
+    CollaborationOutcome {
+        revision_unknown_code,
+        revision_cross_paper_code,
+        revision_descriptor_code,
+        uri_tamper_code,
+        doi_tamper_code,
+        duplicate_proposal_code,
+        stale_fencing_code,
+        stale_parent_code,
+        cyclic_parent_code,
+        cross_section_parent_code,
+        cross_paper_parent_code,
+        frozen_phase_code,
+        room_event_count: events.len(),
+        room_last_cursor,
+        revision_binding_count: room["revision_artifact_bindings"]
+            .as_array()
+            .expect("revision bindings")
+            .len(),
+        section_merge_count: room["section_merges"]
+            .as_array()
+            .expect("section merges")
+            .len(),
+    }
 }
 
 async fn issue_replace_and_consume_session(
@@ -904,6 +2200,16 @@ async fn run_full_flow(state: AppState, member_count: usize, options: FlowOption
         assert_eq!(paper["version"], paper_version);
     }
 
+    let verified_artifact = create_verified_artifact_manifest(
+        &router,
+        &actors[0],
+        paper_id,
+        challenge_id,
+        paper_version,
+        &format!("authors-{member_count}"),
+    )
+    .await;
+
     let work_path = format!("/v2/hepta/papers/{paper_id}/work-items");
     let work_key = format!("create-work-{member_count}");
     let work_body = json!({
@@ -947,7 +2253,8 @@ async fn run_full_flow(state: AppState, member_count: usize, options: FlowOption
     let mut work_version = 1_u64;
     for status in ["in_progress", "review", "accepted"] {
         let key = format!("work-{member_count}-{status}");
-        let artifact = (status == "accepted").then(|| digest("accepted-work-artifact"));
+        let artifact =
+            (status == "accepted").then(|| verified_artifact.artifact_manifest_hash.clone());
         let item = assert_status(
             user_post(
                 &router,
@@ -982,10 +2289,10 @@ async fn run_full_flow(state: AppState, member_count: usize, options: FlowOption
                 "revision_id":revision_id,
                 "expected_paper_version":paper_version,
                 "parent_revision_id":null,
-                "source_manifest_hash":digest("source-manifest"),
-                "artifact_manifest_hash":digest("artifact-manifest"),
-                "bibliography_hash":digest("bibliography"),
-                "claim_evidence_graph_hash":digest("claim-evidence"),
+                "source_manifest_hash":verified_artifact.source_manifest_hash,
+                "artifact_manifest_hash":verified_artifact.artifact_manifest_hash,
+                "bibliography_hash":verified_artifact.bibliography_hash,
+                "claim_evidence_graph_hash":verified_artifact.claim_evidence_graph_hash,
                 "idempotency_key":revision_key,
             }),
         )
@@ -1256,6 +2563,84 @@ async fn memory_three_author_golden_flow_is_complete_and_fail_closed() {
     assert_eq!(outcome.tampered_acceptance_code, "stale_team_proposal");
     assert_eq!(outcome.stale_version_code, "aggregate_version_conflict");
     assert_eq!(outcome.stale_parent_code, "stale_parent_revision");
+}
+
+#[tokio::test]
+async fn memory_collaboration_kernel_is_atomic_signed_and_phase_frozen() {
+    let outcome = run_collaboration_kernel_flow(AppState::new(security())).await;
+    assert_eq!(
+        outcome.revision_unknown_code,
+        "paper_revision_artifact_manifest_unknown"
+    );
+    assert_eq!(
+        outcome.revision_cross_paper_code,
+        "paper_revision_artifact_cross_paper"
+    );
+    assert_eq!(
+        outcome.revision_descriptor_code,
+        "paper_revision_artifact_descriptor_mismatch"
+    );
+    assert_eq!(
+        outcome.uri_tamper_code,
+        "human_verification_signature_failed"
+    );
+    assert_eq!(
+        outcome.doi_tamper_code,
+        "human_verification_signature_failed"
+    );
+    assert_eq!(outcome.duplicate_proposal_code, "agent_proposal_exists");
+    assert_eq!(outcome.stale_fencing_code, "stale_fencing_token");
+    assert_eq!(outcome.stale_parent_code, "stale_section_parent");
+    assert_eq!(outcome.cyclic_parent_code, "stale_section_parent");
+    assert_eq!(outcome.cross_section_parent_code, "stale_section_parent");
+    assert_eq!(outcome.cross_paper_parent_code, "stale_section_parent");
+    assert_eq!(
+        outcome.frozen_phase_code,
+        "paper_phase_disallows_collaboration_mutation"
+    );
+    assert_eq!(outcome.revision_binding_count, 1);
+    assert_eq!(outcome.section_merge_count, 1);
+    assert!(outcome.room_event_count >= 11);
+    assert!(outcome.room_last_cursor >= outcome.room_event_count as u64);
+}
+
+#[tokio::test]
+async fn postgres_collaboration_kernel_matches_memory_and_migration_is_repeatable() {
+    let Ok(database_url) = std::env::var("HEPTA_TEST_DATABASE_URL") else {
+        eprintln!("HEPTA_TEST_DATABASE_URL unset; collaboration PostgreSQL conformance skipped");
+        return;
+    };
+    let mut lock = PgConnection::connect(&database_url)
+        .await
+        .expect("PostgreSQL collaboration test lock");
+    sqlx::query("select pg_advisory_lock(hashtext('hepta-research-league-pg-tests'))")
+        .execute(&mut lock)
+        .await
+        .expect("serialize Hepta PostgreSQL tests");
+    let state = AppState::connect(&database_url, security())
+        .await
+        .expect("collaboration PostgreSQL state");
+    let pool = state.pool.as_ref().expect("PostgreSQL pool");
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/0033_add_hepta_paper_collaboration_kernel.sql"
+    ))
+    .execute(pool)
+    .await
+    .expect("0033 second application");
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/0033_add_hepta_paper_collaboration_kernel.sql"
+    ))
+    .execute(pool)
+    .await
+    .expect("0033 third application");
+    reset_postgres(&database_url).await;
+    let postgres = run_collaboration_kernel_flow(state).await;
+    let memory = run_collaboration_kernel_flow(AppState::new(security())).await;
+    assert_eq!(postgres, memory);
+    sqlx::query("select pg_advisory_unlock(hashtext('hepta-research-league-pg-tests'))")
+        .execute(&mut lock)
+        .await
+        .expect("release Hepta PostgreSQL test lock");
 }
 
 #[tokio::test]

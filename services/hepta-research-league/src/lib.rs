@@ -409,6 +409,12 @@ impl AppState {
         .execute(&pool)
         .await
         .map_err(|error| format!("apply Hepta Paper Raid migration: {error}"))?;
+        sqlx::raw_sql(include_str!(
+            "../../../migrations/0033_add_hepta_paper_collaboration_kernel.sql"
+        ))
+        .execute(&pool)
+        .await
+        .map_err(|error| format!("apply Hepta collaboration migration: {error}"))?;
         sqlx::query(
             "insert into hepta_league_state (state_key, revision, state_json)
              values ('primary', 0, $1::jsonb)

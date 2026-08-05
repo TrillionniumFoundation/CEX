@@ -24,6 +24,11 @@ pub const HUMAN_KEY_REGISTRATION_V2: &str = "hepta.paper_raid.human_key_registra
 pub const HUMAN_KEY_ROTATION_V2: &str = "hepta.paper_raid.human_key_rotation.v2";
 pub const HUMAN_KEY_REVOCATION_V2: &str = "hepta.paper_raid.human_key_revocation.v2";
 pub const CONSUMER_USER_ASSERTION_V2: &str = "hepta.consumer-edge.user-assertion.v2";
+pub const AGENT_PROPOSAL_V1: &str = "hepta.paper_raid.agent_proposal.v1";
+pub const HUMAN_DECISION_V1: &str = "hepta.paper_raid.human_decision.v1";
+pub const HUMAN_EVIDENCE_VERIFICATION_V1: &str = "hepta.paper_raid.human_evidence_verification.v1";
+pub const SECTION_REVIEW_V1: &str = "hepta.paper_raid.section_review.v1";
+pub const SECTION_MERGE_V1: &str = "hepta.paper_raid.section_merge.v1";
 
 pub const RESEARCH_SESSION_AUTHORIZATION_V1: &str = "trnm.research-session.authorization.v1";
 pub const RESEARCH_SESSION_ACTION_V1: &str = "trnm.research-session.action.v1";
@@ -2207,4 +2212,348 @@ pub fn verify_publication_release_against(
         );
     }
     publication_release_hash(release).map(|_| ())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AgentProposalSigningV1 {
+    pub schema: String,
+    pub proposal_id: Uuid,
+    pub paper_project_id: Uuid,
+    pub work_item_id: Uuid,
+    pub section_key: String,
+    pub parent_revision_id: Uuid,
+    pub proposal_kind: String,
+    pub payload_hash: String,
+    pub artifact_manifest_hash: String,
+    pub agent_id: String,
+    pub binding_id: Uuid,
+    pub agent_key_id: String,
+    pub signed_at_unix: i64,
+}
+
+pub fn agent_proposal_signing_bytes(proposal: &AgentProposalSigningV1) -> Result<Vec<u8>, String> {
+    if proposal.schema != AGENT_PROPOSAL_V1
+        || proposal.signed_at_unix < 0
+        || !matches!(proposal.proposal_kind.as_str(), "proposal" | "delivery")
+    {
+        return Err("Agent proposal schema, kind, or signing time is invalid".to_string());
+    }
+    validate_logical_id("section_key", &proposal.section_key)?;
+    validate_text("agent_id", &proposal.agent_id)?;
+    validate_text("agent_key_id", &proposal.agent_key_id)?;
+    Ok(CanonicalFrame::new("hepta_paper_raid_agent_proposal_v1")
+        .string(&proposal.schema)?
+        .string(&proposal.proposal_id.to_string())?
+        .string(&proposal.paper_project_id.to_string())?
+        .string(&proposal.work_item_id.to_string())?
+        .string(&proposal.section_key)?
+        .string(&proposal.parent_revision_id.to_string())?
+        .string(&proposal.proposal_kind)?
+        .digest(&proposal.payload_hash)?
+        .digest(&proposal.artifact_manifest_hash)?
+        .string(&proposal.agent_id)?
+        .string(&proposal.binding_id.to_string())?
+        .string(&proposal.agent_key_id)?
+        .i64(proposal.signed_at_unix)
+        .finish())
+}
+
+pub fn sign_agent_proposal(
+    proposal: &AgentProposalSigningV1,
+    signing_key: &SigningKey,
+) -> Result<String, String> {
+    Ok(BASE64.encode(
+        signing_key
+            .sign(&agent_proposal_signing_bytes(proposal)?)
+            .to_bytes(),
+    ))
+}
+
+pub fn verify_agent_proposal_signature(
+    proposal: &AgentProposalSigningV1,
+    signature: &str,
+    verifying_key: &VerifyingKey,
+) -> Result<(), String> {
+    let signature = decode_base64_exact::<64>("signature", signature)?;
+    verifying_key
+        .verify(
+            &agent_proposal_signing_bytes(proposal)?,
+            &Signature::from_bytes(&signature),
+        )
+        .map_err(|_| "Agent proposal signature verification failed".to_string())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct HumanDecisionSigningV1 {
+    pub schema: String,
+    pub decision_id: Uuid,
+    pub paper_project_id: Uuid,
+    pub proposal_id: Uuid,
+    pub player_id: Uuid,
+    pub decision: String,
+    pub reason_hash: String,
+    pub expected_proposal_version: u64,
+    pub signing_key_id: String,
+    pub signing_public_key_hash: String,
+    pub signed_at_unix: i64,
+}
+
+pub fn human_decision_signing_bytes(decision: &HumanDecisionSigningV1) -> Result<Vec<u8>, String> {
+    if decision.schema != HUMAN_DECISION_V1
+        || decision.signed_at_unix < 0
+        || decision.expected_proposal_version == 0
+        || !matches!(decision.decision.as_str(), "accept" | "rework" | "reject")
+    {
+        return Err("human decision schema, decision, version, or time is invalid".to_string());
+    }
+    validate_text("signing_key_id", &decision.signing_key_id)?;
+    Ok(CanonicalFrame::new("hepta_paper_raid_human_decision_v1")
+        .string(&decision.schema)?
+        .string(&decision.decision_id.to_string())?
+        .string(&decision.paper_project_id.to_string())?
+        .string(&decision.proposal_id.to_string())?
+        .string(&decision.player_id.to_string())?
+        .string(&decision.decision)?
+        .digest(&decision.reason_hash)?
+        .u64(decision.expected_proposal_version)
+        .string(&decision.signing_key_id)?
+        .digest(&decision.signing_public_key_hash)?
+        .i64(decision.signed_at_unix)
+        .finish())
+}
+
+pub fn sign_human_decision(
+    decision: &HumanDecisionSigningV1,
+    signing_key: &SigningKey,
+) -> Result<String, String> {
+    Ok(BASE64.encode(
+        signing_key
+            .sign(&human_decision_signing_bytes(decision)?)
+            .to_bytes(),
+    ))
+}
+
+pub fn verify_human_decision_signature(
+    decision: &HumanDecisionSigningV1,
+    signature: &str,
+    verifying_key: &VerifyingKey,
+) -> Result<(), String> {
+    let signature = decode_base64_exact::<64>("signature", signature)?;
+    verifying_key
+        .verify(
+            &human_decision_signing_bytes(decision)?,
+            &Signature::from_bytes(&signature),
+        )
+        .map_err(|_| "human decision signature verification failed".to_string())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct HumanEvidenceVerificationSigningV1 {
+    pub schema: String,
+    pub verification_id: Uuid,
+    pub paper_project_id: Uuid,
+    pub record_kind: String,
+    pub record_id: Uuid,
+    pub source_identifier: String,
+    pub source_hash: String,
+    pub locator: String,
+    pub license: String,
+    pub player_id: Uuid,
+    pub signing_key_id: String,
+    pub signing_public_key_hash: String,
+    pub signed_at_unix: i64,
+}
+
+pub fn human_evidence_verification_signing_bytes(
+    verification: &HumanEvidenceVerificationSigningV1,
+) -> Result<Vec<u8>, String> {
+    if verification.schema != HUMAN_EVIDENCE_VERIFICATION_V1
+        || verification.signed_at_unix < 0
+        || !matches!(
+            verification.record_kind.as_str(),
+            "evidence_card" | "citation"
+        )
+    {
+        return Err("human evidence verification schema, kind, or time is invalid".to_string());
+    }
+    validate_text("locator", &verification.locator)?;
+    validate_text("license", &verification.license)?;
+    validate_text("source_identifier", &verification.source_identifier)?;
+    validate_text("signing_key_id", &verification.signing_key_id)?;
+    Ok(
+        CanonicalFrame::new("hepta_paper_raid_human_evidence_verification_v1")
+            .string(&verification.schema)?
+            .string(&verification.verification_id.to_string())?
+            .string(&verification.paper_project_id.to_string())?
+            .string(&verification.record_kind)?
+            .string(&verification.record_id.to_string())?
+            .string(&verification.source_identifier)?
+            .digest(&verification.source_hash)?
+            .string(&verification.locator)?
+            .string(&verification.license)?
+            .string(&verification.player_id.to_string())?
+            .string(&verification.signing_key_id)?
+            .digest(&verification.signing_public_key_hash)?
+            .i64(verification.signed_at_unix)
+            .finish(),
+    )
+}
+
+pub fn sign_human_evidence_verification(
+    verification: &HumanEvidenceVerificationSigningV1,
+    signing_key: &SigningKey,
+) -> Result<String, String> {
+    Ok(BASE64.encode(
+        signing_key
+            .sign(&human_evidence_verification_signing_bytes(verification)?)
+            .to_bytes(),
+    ))
+}
+
+pub fn verify_human_evidence_verification_signature(
+    verification: &HumanEvidenceVerificationSigningV1,
+    signature: &str,
+    verifying_key: &VerifyingKey,
+) -> Result<(), String> {
+    let signature = decode_base64_exact::<64>("signature", signature)?;
+    verifying_key
+        .verify(
+            &human_evidence_verification_signing_bytes(verification)?,
+            &Signature::from_bytes(&signature),
+        )
+        .map_err(|_| "human evidence verification signature verification failed".to_string())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SectionReviewSigningV1 {
+    pub schema: String,
+    pub review_id: Uuid,
+    pub paper_project_id: Uuid,
+    pub section_revision_id: Uuid,
+    pub reviewer_player_id: Uuid,
+    pub verdict: String,
+    pub review_hash: String,
+    pub expected_revision_version: u64,
+    pub signing_key_id: String,
+    pub signing_public_key_hash: String,
+    pub signed_at_unix: i64,
+}
+
+pub fn section_review_signing_bytes(review: &SectionReviewSigningV1) -> Result<Vec<u8>, String> {
+    if review.schema != SECTION_REVIEW_V1
+        || review.signed_at_unix < 0
+        || review.expected_revision_version == 0
+        || !matches!(review.verdict.as_str(), "approve" | "rework" | "reject")
+    {
+        return Err("section review schema, verdict, version, or time is invalid".to_string());
+    }
+    validate_text("signing_key_id", &review.signing_key_id)?;
+    Ok(CanonicalFrame::new("hepta_paper_raid_section_review_v1")
+        .string(&review.schema)?
+        .string(&review.review_id.to_string())?
+        .string(&review.paper_project_id.to_string())?
+        .string(&review.section_revision_id.to_string())?
+        .string(&review.reviewer_player_id.to_string())?
+        .string(&review.verdict)?
+        .digest(&review.review_hash)?
+        .u64(review.expected_revision_version)
+        .string(&review.signing_key_id)?
+        .digest(&review.signing_public_key_hash)?
+        .i64(review.signed_at_unix)
+        .finish())
+}
+
+pub fn sign_section_review(
+    review: &SectionReviewSigningV1,
+    signing_key: &SigningKey,
+) -> Result<String, String> {
+    Ok(BASE64.encode(
+        signing_key
+            .sign(&section_review_signing_bytes(review)?)
+            .to_bytes(),
+    ))
+}
+
+pub fn verify_section_review_signature(
+    review: &SectionReviewSigningV1,
+    signature: &str,
+    verifying_key: &VerifyingKey,
+) -> Result<(), String> {
+    let signature = decode_base64_exact::<64>("signature", signature)?;
+    verifying_key
+        .verify(
+            &section_review_signing_bytes(review)?,
+            &Signature::from_bytes(&signature),
+        )
+        .map_err(|_| "section review signature verification failed".to_string())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SectionMergeSigningV1 {
+    pub schema: String,
+    pub merge_id: Uuid,
+    pub paper_project_id: Uuid,
+    pub section_key: String,
+    pub section_revision_id: Uuid,
+    pub parent_revision_id: Uuid,
+    pub merged_section_revision_id: Uuid,
+    pub lease_id: Uuid,
+    pub fencing_token: u64,
+    pub merged_by_player_id: Uuid,
+    pub signing_key_id: String,
+    pub signing_public_key_hash: String,
+    pub merged_at_unix: i64,
+}
+
+pub fn section_merge_signing_bytes(merge: &SectionMergeSigningV1) -> Result<Vec<u8>, String> {
+    if merge.schema != SECTION_MERGE_V1 || merge.merged_at_unix < 0 || merge.fencing_token == 0 {
+        return Err("section merge schema, fencing token, or time is invalid".to_string());
+    }
+    validate_logical_id("section_key", &merge.section_key)?;
+    validate_text("signing_key_id", &merge.signing_key_id)?;
+    Ok(CanonicalFrame::new("hepta_paper_raid_section_merge_v1")
+        .string(&merge.schema)?
+        .string(&merge.merge_id.to_string())?
+        .string(&merge.paper_project_id.to_string())?
+        .string(&merge.section_key)?
+        .string(&merge.section_revision_id.to_string())?
+        .string(&merge.parent_revision_id.to_string())?
+        .string(&merge.merged_section_revision_id.to_string())?
+        .string(&merge.lease_id.to_string())?
+        .u64(merge.fencing_token)
+        .string(&merge.merged_by_player_id.to_string())?
+        .string(&merge.signing_key_id)?
+        .digest(&merge.signing_public_key_hash)?
+        .i64(merge.merged_at_unix)
+        .finish())
+}
+
+pub fn sign_section_merge(
+    merge: &SectionMergeSigningV1,
+    signing_key: &SigningKey,
+) -> Result<String, String> {
+    Ok(BASE64.encode(
+        signing_key
+            .sign(&section_merge_signing_bytes(merge)?)
+            .to_bytes(),
+    ))
+}
+
+pub fn verify_section_merge_signature(
+    merge: &SectionMergeSigningV1,
+    signature: &str,
+    verifying_key: &VerifyingKey,
+) -> Result<(), String> {
+    let signature = decode_base64_exact::<64>("signature", signature)?;
+    verifying_key
+        .verify(
+            &section_merge_signing_bytes(merge)?,
+            &Signature::from_bytes(&signature),
+        )
+        .map_err(|_| "section merge signature verification failed".to_string())
 }

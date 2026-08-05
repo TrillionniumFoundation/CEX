@@ -1,9 +1,9 @@
 openapi: 3.1.0
 info:
   title: Hepta Paper Raid API
-  version: 2.0.0-alpha.1
+  version: 3.0.0-alpha.1
   description: >-
-    Versioned Team + Paper control-plane API for 3-5 human players using
+    Versioned Team + Paper collaboration control-plane API for 3-5 human players using
     independently operated external Agents to create one signed, reproducible
     PaperBundle. This API does not widen the legacy /v1/hepta contracts.
 servers:
@@ -34,6 +34,77 @@ paths:
       operationId: getPaperRaidOpenApi
       responses:
         "200": {description: This OpenAPI document}
+  /v2/hepta/challenges:
+    get:
+      operationId: listPublicPaperRaidChallenges
+      description: Lists non-draft research challenges for an asserted player.
+      responses:
+        "200": {description: Public challenge cards}
+  /v2/hepta/challenges/{challenge_id}:
+    parameters:
+      - {$ref: "#/components/parameters/ChallengeId"}
+    get:
+      operationId: getPublicPaperRaidChallenge
+      responses:
+        "200": {description: Public challenge detail}
+        "404": {description: Challenge is absent or still draft}
+  /v2/hepta/matchmaking/tickets:
+    get:
+      operationId: listMatchmakingTickets
+      description: Lists only the asserted player's tickets.
+      responses:
+        "200": {description: Player-scoped matchmaking tickets}
+    post:
+      operationId: createMatchmakingTicket
+      description: >-
+        Enqueues the asserted player. The alpha matcher requires exactly three
+        players while Team and protocol aggregates remain 3-5 capable.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CreateMatchmakingTicketRequest"}
+      responses:
+        "201": {description: Ticket created and optional deterministic team proposal returned}
+        "409": {description: Player already has one live ticket for this challenge}
+  /v2/hepta/matchmaking/tickets/{ticket_id}:
+    parameters:
+      - {$ref: "#/components/parameters/TicketId"}
+    get:
+      operationId: getMatchmakingTicket
+      description: Returns a ticket only to its asserted player.
+      responses:
+        "200": {description: Matchmaking ticket}
+        "404": {description: Ticket not found in player scope}
+  /v2/hepta/team-proposals:
+    get:
+      operationId: listTeamProposals
+      description: Lists proposed/accepted teams containing the asserted player.
+      responses:
+        "200": {description: Player-scoped team proposals}
+  /v2/hepta/team-proposals/{proposal_id}:
+    parameters:
+      - {$ref: "#/components/parameters/ProposalId"}
+    get:
+      operationId: getTeamProposal
+      responses:
+        "200": {description: Team proposal and immutable decisions}
+  /v2/hepta/team-proposals/{proposal_id}/decisions:
+    parameters:
+      - {$ref: "#/components/parameters/ProposalId"}
+    post:
+      operationId: createTeamProposalDecision
+      description: >-
+        Records one accept/decline for the asserted member. Unanimous acceptance
+        is required; decline requeues all tickets deterministically.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CreateTeamProposalDecisionRequest"}
+      responses:
+        "201": {description: Decision recorded with updated/replacement proposal}
+        "409": {$ref: "#/components/responses/VersionConflict"}
   /v2/hepta/players:
     post:
       operationId: createHumanPlayer
@@ -191,9 +262,215 @@ paths:
       - {$ref: "#/components/parameters/PaperId"}
     post:
       operationId: createPaperRevision
-      description: Creates a revision only from the current parent; stale parents fail.
+      description: >-
+        Creates a revision only from the current parent. All four submitted
+        hashes must resolve to one verified same-paper artifact root and the
+        unique paper_source, bibliography and claim_evidence_graph objects.
       responses:
         "201": {description: Paper revision created}
+  /v2/hepta/papers/{paper_id}/artifact-manifests:
+    parameters:
+      - {$ref: "#/components/parameters/PaperId"}
+    post:
+      operationId: createArtifactManifest
+      description: >-
+        Adapts an exact paper-raid.artifact-bundle.v1 object from the pinned
+        Integration revision, independently recomputes its canonical JSON plus
+        newline root, and binds every object to an immutable CAS or Git URI.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CreateArtifactManifestRequest"}
+      responses:
+        "201": {description: Verified same-paper artifact manifest}
+        "400": {description: Non-canonical bundle, path, digest, role, or URI}
+        "409": {description: Source/root/paper binding conflict}
+  /v2/hepta/papers/{paper_id}/evidence-cards:
+    parameters:
+      - {$ref: "#/components/parameters/PaperId"}
+    post:
+      operationId: createEvidenceCard
+      description: Stores human-signed source URI/hash/locator/license evidence.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CreateEvidenceCardRequest"}
+      responses:
+        "201": {description: Verified evidence card}
+        "403": {description: Identity, current-key, or signature verification failed}
+  /v2/hepta/papers/{paper_id}/citations:
+    parameters:
+      - {$ref: "#/components/parameters/PaperId"}
+    post:
+      operationId: createCitationRecord
+      description: Stores a human-signed DOI/URL citation bound to an evidence card.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CreateCitationRecordRequest"}
+      responses:
+        "201": {description: Verified citation record}
+  /v2/hepta/papers/{paper_id}/experiment-plans:
+    parameters:
+      - {$ref: "#/components/parameters/PaperId"}
+    post:
+      operationId: createExperimentPlan
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CreateExperimentPlanRequest"}
+      responses:
+        "201": {description: Experiment plan bound to verified artifact manifests}
+  /v2/hepta/papers/{paper_id}/run-records:
+    parameters:
+      - {$ref: "#/components/parameters/PaperId"}
+    post:
+      operationId: createRunRecord
+      description: Persists successful, failed, and cancelled runs; failed runs cannot be hidden.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CreateRunRecordRequest"}
+      responses:
+        "201": {description: Immutable run record}
+  /v2/hepta/papers/{paper_id}/figure-lineage:
+    parameters:
+      - {$ref: "#/components/parameters/PaperId"}
+    post:
+      operationId: createFigureLineage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CreateFigureLineageRequest"}
+      responses:
+        "201": {description: Figure-to-run lineage recorded}
+  /v2/hepta/papers/{paper_id}/claims:
+    parameters:
+      - {$ref: "#/components/parameters/PaperId"}
+    post:
+      operationId: createClaimRecord
+      description: Main/numeric/figure claims require evidence, run, or figure lineage.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CreateClaimRecordRequest"}
+      responses:
+        "201": {description: Claim-evidence edge recorded}
+  /v2/hepta/papers/{paper_id}/section-leases:
+    parameters:
+      - {$ref: "#/components/parameters/PaperId"}
+    post:
+      operationId: acquireSectionLease
+      description: Acquires one bounded lease with a monotonically increasing fencing token.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/AcquireSectionLeaseRequest"}
+      responses:
+        "201": {description: Section lease acquired}
+        "409": {description: Live lease or stale fencing token}
+  /v2/hepta/papers/{paper_id}/agent-proposals:
+    parameters:
+      - {$ref: "#/components/parameters/PaperId"}
+    post:
+      security: []
+      operationId: createAgentProposal
+      description: >-
+        Accepts an external Agent's Ed25519-signed proposal. Authority comes
+        from the frozen Agent binding and signed body, not a Consumer assertion.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CreateAgentProposalRequest"}
+      responses:
+        "201": {description: Signed Agent proposal recorded}
+        "403": {description: Agent identity, scope, key, or signature failed}
+  /v2/hepta/papers/{paper_id}/human-decisions:
+    parameters:
+      - {$ref: "#/components/parameters/PaperId"}
+    post:
+      operationId: createHumanDecision
+      description: Records a current-key human accept/rework/reject decision over an Agent proposal.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CreateHumanDecisionRequest"}
+      responses:
+        "201": {description: Human decision recorded}
+  /v2/hepta/papers/{paper_id}/section-revisions:
+    parameters:
+      - {$ref: "#/components/parameters/PaperId"}
+    post:
+      operationId: createSectionRevision
+      description: Materializes an accepted Agent patch under the exact live lease fence.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CreateSectionRevisionRequest"}
+      responses:
+        "201": {description: Section revision created}
+        "409": {description: Stale/cross-paper/cross-section parent or lease fence}
+  /v2/hepta/papers/{paper_id}/section-revisions/{section_revision_id}/reviews:
+    parameters:
+      - {$ref: "#/components/parameters/PaperId"}
+      - {$ref: "#/components/parameters/SectionRevisionId"}
+    post:
+      operationId: createSectionReview
+      description: Requires a current-key signature from a human other than the patch owner.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CreateSectionReviewRequest"}
+      responses:
+        "201": {description: Independent section review recorded}
+  /v2/hepta/papers/{paper_id}/section-merges:
+    parameters:
+      - {$ref: "#/components/parameters/PaperId"}
+    post:
+      operationId: createSectionMerge
+      description: Signed merge that atomically advances one section head and consumes its lease.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CreateSectionMergeRequest"}
+      responses:
+        "201": {description: Section merged}
+        "409": {description: Review, parent, revision, or fencing precondition failed}
+  /v2/hepta/papers/{paper_id}/room:
+    parameters:
+      - {$ref: "#/components/parameters/PaperId"}
+    get:
+      operationId: getPaperRoom
+      description: >-
+        Returns a player-scoped repeatable-read projection of Team, Paper,
+        artifacts, claims, runs, revisions, leases, proposals, reviews and merges.
+      responses:
+        "200": {description: Consistent Paper Room read model}
+  /v2/hepta/papers/{paper_id}/events:
+    parameters:
+      - {$ref: "#/components/parameters/PaperId"}
+      - name: after_cursor
+        in: query
+        required: false
+        schema: {type: integer, minimum: 0, default: 0}
+    get:
+      operationId: listPaperRoomEvents
+      description: Cursor-based catch-up over persisted typed Paper Room events.
+      responses:
+        "200": {description: Ordered events strictly after after_cursor}
   /v2/hepta/papers/{paper_id}/revisions/{revision_id}/promote:
     parameters:
       - {$ref: "#/components/parameters/PaperId"}
@@ -321,6 +598,26 @@ components:
       in: header
       name: x-hepta-nakama-token
   parameters:
+    ChallengeId:
+      name: challenge_id
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    TicketId:
+      name: ticket_id
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    ProposalId:
+      name: proposal_id
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    SectionRevisionId:
+      name: section_revision_id
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
     PlayerId:
       name: player_id
       in: path
@@ -354,6 +651,308 @@ components:
       type: string
       minLength: 1
       maxLength: 200
+    CreateMatchmakingTicketRequest:
+      type: object
+      additionalProperties: false
+      required: [ticket_id, challenge_id, requested_team_size, roles, availability_hash, idempotency_key]
+      properties:
+        ticket_id: {type: string, format: uuid}
+        challenge_id: {type: string, format: uuid}
+        requested_team_size: {type: integer, const: 3}
+        roles:
+          type: array
+          minItems: 1
+          maxItems: 5
+          uniqueItems: true
+          items: {type: string, minLength: 1, maxLength: 512}
+        availability_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        idempotency_key: {$ref: "#/components/schemas/IdempotencyKey"}
+    CreateTeamProposalDecisionRequest:
+      type: object
+      additionalProperties: false
+      required: [decision_id, expected_proposal_version, decision, idempotency_key]
+      properties:
+        decision_id: {type: string, format: uuid}
+        expected_proposal_version: {type: integer, minimum: 1}
+        decision: {type: string, enum: [accept, decline]}
+        idempotency_key: {$ref: "#/components/schemas/IdempotencyKey"}
+    ArtifactReference:
+      type: object
+      additionalProperties: false
+      required: [logical_path, sha256, uri, acl]
+      properties:
+        logical_path: {type: string, minLength: 1, maxLength: 240}
+        sha256: {$ref: "#/components/schemas/Sha256Digest"}
+        uri:
+          type: string
+          description: Exact cas://sha256/... or immutable git+https://...@<40-hex>/<path> URI.
+        acl: {type: string, enum: [team, reviewers, public_after_release]}
+    NeutralArtifactObjectV1:
+      type: object
+      additionalProperties: false
+      required: [canonical_json, dependencies, logical_path, media_type, role, sha256, size]
+      properties:
+        canonical_json: {type: boolean}
+        dependencies:
+          type: array
+          uniqueItems: true
+          items: {type: string}
+        logical_path: {type: string, minLength: 1}
+        media_type: {type: string, minLength: 1}
+        role: {type: string, minLength: 1}
+        sha256:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+          description: Integration neutral bundle uses raw lowercase SHA-256 hex.
+        size: {type: integer, minimum: 0}
+    NeutralArtifactBundleV1:
+      type: object
+      additionalProperties: false
+      required:
+        - artifact_root
+        - bundle_id
+        - challenge_id
+        - created_at
+        - hepta_binding_status
+        - human_authority_materialized
+        - object_count
+        - objects
+        - required_run_ids
+        - schema
+      properties:
+        artifact_root:
+          type: object
+          additionalProperties: false
+          required: [algorithm, digest_file]
+          properties:
+            algorithm: {type: string, const: sha256-canonical-json-plus-newline}
+            digest_file: {type: string, const: artifact-bundle.sha256}
+        bundle_id: {type: string, minLength: 1}
+        challenge_id: {type: string, minLength: 1}
+        created_at: {type: string, format: date-time}
+        hepta_binding_status: {type: string}
+        human_authority_materialized: {type: boolean}
+        object_count: {type: integer, minimum: 1, maximum: 4096}
+        objects:
+          type: array
+          minItems: 1
+          maxItems: 4096
+          items: {$ref: "#/components/schemas/NeutralArtifactObjectV1"}
+        required_run_ids:
+          type: array
+          uniqueItems: true
+          items: {type: string}
+        schema: {type: string, const: paper-raid.artifact-bundle.v1}
+    CreateArtifactManifestRequest:
+      type: object
+      additionalProperties: false
+      required: [manifest_id, expected_paper_version, expected_source_manifest_sha256, source_bundle, storage_locations, idempotency_key]
+      properties:
+        manifest_id: {type: string, format: uuid}
+        expected_paper_version: {type: integer, minimum: 1}
+        expected_source_manifest_sha256:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+        source_bundle: {$ref: "#/components/schemas/NeutralArtifactBundleV1"}
+        storage_locations:
+          type: array
+          minItems: 1
+          maxItems: 4096
+          items: {$ref: "#/components/schemas/ArtifactReference"}
+        idempotency_key: {$ref: "#/components/schemas/IdempotencyKey"}
+    CreateEvidenceCardRequest:
+      type: object
+      additionalProperties: false
+      required: [evidence_card_id, source_uri, source_hash, locator, license, verification_key_id, verification_public_key, verification_public_key_hash, signed_at_unix, verification_signature, idempotency_key]
+      properties:
+        evidence_card_id: {type: string, format: uuid}
+        source_uri: {type: string, format: uri, pattern: '^https://'}
+        source_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        locator: {type: string, minLength: 1}
+        license: {type: string, minLength: 1}
+        verification_key_id: {type: string}
+        verification_public_key: {type: string, contentEncoding: base64}
+        verification_public_key_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        signed_at_unix: {type: integer, format: int64, minimum: 0}
+        verification_signature: {type: string, contentEncoding: base64}
+        idempotency_key: {$ref: "#/components/schemas/IdempotencyKey"}
+    CreateCitationRecordRequest:
+      type: object
+      additionalProperties: false
+      required: [citation_id, evidence_card_id, source_hash, locator, license, verification_key_id, verification_public_key, verification_public_key_hash, signed_at_unix, verification_signature, idempotency_key]
+      properties:
+        citation_id: {type: string, format: uuid}
+        evidence_card_id: {type: string, format: uuid}
+        doi: {type: [string, "null"]}
+        canonical_url: {type: [string, "null"], format: uri}
+        source_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        locator: {type: string, minLength: 1}
+        license: {type: string, minLength: 1}
+        verification_key_id: {type: string, minLength: 1}
+        verification_public_key: {type: string, contentEncoding: base64}
+        verification_public_key_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        signed_at_unix: {type: integer, format: int64, minimum: 0}
+        verification_signature: {type: string, contentEncoding: base64}
+        idempotency_key: {$ref: "#/components/schemas/IdempotencyKey"}
+    CreateExperimentPlanRequest:
+      type: object
+      additionalProperties: false
+      required: [experiment_plan_id, protocol_snapshot_hash, code_manifest_id, dataset_manifest_id, environment_manifest_id, seed_policy_hash, stopping_rule_hash, idempotency_key]
+      properties:
+        experiment_plan_id: {type: string, format: uuid}
+        protocol_snapshot_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        code_manifest_id: {type: string, format: uuid}
+        dataset_manifest_id: {type: string, format: uuid}
+        environment_manifest_id: {type: string, format: uuid}
+        seed_policy_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        stopping_rule_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        idempotency_key: {$ref: "#/components/schemas/IdempotencyKey"}
+    CreateRunRecordRequest:
+      type: object
+      additionalProperties: false
+      required: [run_record_id, experiment_plan_id, status, seed, parameters_hash, logs_manifest_id, idempotency_key]
+      properties:
+        run_record_id: {type: string, format: uuid}
+        experiment_plan_id: {type: string, format: uuid}
+        status: {type: string, enum: [succeeded, failed, cancelled]}
+        seed: {type: integer, format: int64}
+        parameters_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        logs_manifest_id: {type: string, format: uuid}
+        outputs_manifest_id: {type: [string, "null"], format: uuid}
+        metrics_hash:
+          anyOf: [{$ref: "#/components/schemas/Sha256Digest"}, {type: "null"}]
+        failure_hash:
+          anyOf: [{$ref: "#/components/schemas/Sha256Digest"}, {type: "null"}]
+        idempotency_key: {$ref: "#/components/schemas/IdempotencyKey"}
+    CreateFigureLineageRequest:
+      type: object
+      additionalProperties: false
+      required: [figure_lineage_id, figure_key, figure_manifest_id, run_record_ids, transform_hash, idempotency_key]
+      properties:
+        figure_lineage_id: {type: string, format: uuid}
+        figure_key: {type: string, minLength: 1}
+        figure_manifest_id: {type: string, format: uuid}
+        run_record_ids:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items: {type: string, format: uuid}
+        transform_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        idempotency_key: {$ref: "#/components/schemas/IdempotencyKey"}
+    CreateClaimRecordRequest:
+      type: object
+      additionalProperties: false
+      required: [claim_id, claim_key, claim_kind, statement_hash, evidence_card_ids, run_record_ids, figure_lineage_ids, idempotency_key]
+      properties:
+        claim_id: {type: string, format: uuid}
+        claim_key: {type: string, minLength: 1}
+        claim_kind: {type: string, enum: [main, numeric, figure, supporting, limitation]}
+        statement_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        evidence_card_ids:
+          type: array
+          uniqueItems: true
+          items: {type: string, format: uuid}
+        run_record_ids:
+          type: array
+          uniqueItems: true
+          items: {type: string, format: uuid}
+        figure_lineage_ids:
+          type: array
+          uniqueItems: true
+          items: {type: string, format: uuid}
+        idempotency_key: {$ref: "#/components/schemas/IdempotencyKey"}
+    AcquireSectionLeaseRequest:
+      type: object
+      additionalProperties: false
+      required: [lease_id, section_key, holder_binding_id, expected_previous_fencing_token, ttl_seconds, idempotency_key]
+      properties:
+        lease_id: {type: string, format: uuid}
+        section_key: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        holder_binding_id: {type: string, format: uuid}
+        expected_previous_fencing_token: {type: integer, minimum: 0}
+        ttl_seconds: {type: integer, minimum: 60, maximum: 3600}
+        idempotency_key: {$ref: "#/components/schemas/IdempotencyKey"}
+    CreateAgentProposalRequest:
+      type: object
+      additionalProperties: false
+      required: [proposal_id, work_item_id, section_key, parent_revision_id, proposal_kind, payload_hash, artifact_manifest_id, agent_id, binding_id, agent_key_id, signed_at_unix, signature, idempotency_key]
+      properties:
+        proposal_id: {type: string, format: uuid}
+        work_item_id: {type: string, format: uuid}
+        section_key: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        parent_revision_id: {type: string, format: uuid}
+        proposal_kind: {type: string, enum: [proposal, delivery]}
+        payload_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        artifact_manifest_id: {type: string, format: uuid}
+        agent_id: {type: string, minLength: 1}
+        binding_id: {type: string, format: uuid}
+        agent_key_id: {type: string, minLength: 1}
+        signed_at_unix: {type: integer, format: int64, minimum: 0}
+        signature: {type: string, contentEncoding: base64}
+        idempotency_key: {$ref: "#/components/schemas/IdempotencyKey"}
+    CreateHumanDecisionRequest:
+      type: object
+      additionalProperties: false
+      required: [decision_id, proposal_id, expected_proposal_version, decision, reason_hash, signing_key_id, signing_public_key, signing_public_key_hash, signed_at_unix, signature, idempotency_key]
+      properties:
+        decision_id: {type: string, format: uuid}
+        proposal_id: {type: string, format: uuid}
+        expected_proposal_version: {type: integer, minimum: 1}
+        decision: {type: string, enum: [accept, rework, reject]}
+        reason_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        signing_key_id: {type: string, minLength: 1}
+        signing_public_key: {type: string, contentEncoding: base64}
+        signing_public_key_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        signed_at_unix: {type: integer, format: int64, minimum: 0}
+        signature: {type: string, contentEncoding: base64}
+        idempotency_key: {$ref: "#/components/schemas/IdempotencyKey"}
+    CreateSectionRevisionRequest:
+      type: object
+      additionalProperties: false
+      required: [section_revision_id, section_key, parent_revision_id, proposal_id, lease_id, fencing_token, patch_manifest_id, patch_hash, idempotency_key]
+      properties:
+        section_revision_id: {type: string, format: uuid}
+        section_key: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        parent_revision_id: {type: string, format: uuid}
+        proposal_id: {type: string, format: uuid}
+        lease_id: {type: string, format: uuid}
+        fencing_token: {type: integer, minimum: 1}
+        patch_manifest_id: {type: string, format: uuid}
+        patch_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        idempotency_key: {$ref: "#/components/schemas/IdempotencyKey"}
+    CreateSectionReviewRequest:
+      type: object
+      additionalProperties: false
+      required: [review_id, expected_revision_version, verdict, review_hash, signing_key_id, signing_public_key, signing_public_key_hash, signed_at_unix, signature, idempotency_key]
+      properties:
+        review_id: {type: string, format: uuid}
+        expected_revision_version: {type: integer, minimum: 1}
+        verdict: {type: string, enum: [approve, rework, reject]}
+        review_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        signing_key_id: {type: string, minLength: 1}
+        signing_public_key: {type: string, contentEncoding: base64}
+        signing_public_key_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        signed_at_unix: {type: integer, format: int64, minimum: 0}
+        signature: {type: string, contentEncoding: base64}
+        idempotency_key: {$ref: "#/components/schemas/IdempotencyKey"}
+    CreateSectionMergeRequest:
+      type: object
+      additionalProperties: false
+      required: [merge_id, section_revision_id, expected_revision_version, parent_revision_id, merged_section_revision_id, lease_id, fencing_token, signing_key_id, signing_public_key, signing_public_key_hash, merged_at_unix, signature, idempotency_key]
+      properties:
+        merge_id: {type: string, format: uuid}
+        section_revision_id: {type: string, format: uuid}
+        expected_revision_version: {type: integer, minimum: 1}
+        parent_revision_id: {type: string, format: uuid}
+        merged_section_revision_id: {type: string, format: uuid}
+        lease_id: {type: string, format: uuid}
+        fencing_token: {type: integer, minimum: 1}
+        signing_key_id: {type: string, minLength: 1}
+        signing_public_key: {type: string, contentEncoding: base64}
+        signing_public_key_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        merged_at_unix: {type: integer, format: int64, minimum: 0}
+        signature: {type: string, contentEncoding: base64}
+        idempotency_key: {$ref: "#/components/schemas/IdempotencyKey"}
     CreateHumanPlayerRequest:
       type: object
       additionalProperties: false
