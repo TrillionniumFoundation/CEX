@@ -6,6 +6,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use ed25519_dalek::SigningKey;
 use hepta_research_league::{app, AppState, SecurityConfig};
 use serde_json::{json, Value};
+use sqlx::{Connection, PgConnection};
 use tower::ServiceExt;
 
 async fn request(app: axum::Router, method: &str, uri: &str, body: Value) -> (StatusCode, Value) {
@@ -36,7 +37,22 @@ async fn postgres_survives_restart_and_multi_instance_outbox_claims_do_not_overl
         eprintln!("HEPTA_TEST_DATABASE_URL unset; PostgreSQL integration test skipped");
         return;
     };
-    let security = SecurityConfig::new("operator", "nakama").with_trnm_token("trnm");
+    let mut lock = PgConnection::connect(&database_url)
+        .await
+        .expect("PostgreSQL test lock connection");
+    sqlx::query("select pg_advisory_lock(hashtext('hepta-research-league-pg-tests'))")
+        .execute(&mut lock)
+        .await
+        .expect("serialize Hepta PostgreSQL tests");
+    let security = SecurityConfig::new("operator", "nakama")
+        .with_trnm_token("trnm")
+        .with_trusted_nakama_research_authority(
+            "nakama-readiness-test-v1",
+            SigningKey::from_bytes(&[0x77; 32])
+                .verifying_key()
+                .to_bytes(),
+        )
+        .expect("Nakama readiness trust");
     let first = AppState::connect(&database_url, security.clone())
         .await
         .expect("first durable state");
@@ -63,6 +79,12 @@ async fn postgres_survives_restart_and_multi_instance_outbox_claims_do_not_overl
     let second = AppState::connect(&database_url, security.clone())
         .await
         .expect("second durable state");
+
+    let (status, ready) = request(app(first.clone()), "GET", "/ready", json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(ready["ready"], true);
+    assert_eq!(ready["database"], "reachable");
+    assert_eq!(ready["security"], "valid");
 
     let key_a = BASE64.encode(SigningKey::from_bytes(&[31; 32]).verifying_key().to_bytes());
     let key_b = BASE64.encode(SigningKey::from_bytes(&[32; 32]).verifying_key().to_bytes());
@@ -142,4 +164,8 @@ async fn postgres_survives_restart_and_multi_instance_outbox_claims_do_not_overl
         .acknowledge_outbox("worker-c", replay[0].event_id)
         .await
         .expect("ack replayed event"));
+    sqlx::query("select pg_advisory_unlock(hashtext('hepta-research-league-pg-tests'))")
+        .execute(&mut lock)
+        .await
+        .expect("release Hepta PostgreSQL test lock");
 }

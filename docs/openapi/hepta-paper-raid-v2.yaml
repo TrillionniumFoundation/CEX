@@ -1,0 +1,746 @@
+openapi: 3.1.0
+info:
+  title: Hepta Paper Raid API
+  version: 2.0.0-alpha.1
+  description: >-
+    Versioned Team + Paper control-plane API for 3-5 human players using
+    independently operated external Agents to create one signed, reproducible
+    PaperBundle. This API does not widen the legacy /v1/hepta contracts.
+servers:
+  - url: http://127.0.0.1:7011
+security:
+  - consumerUserAssertion: []
+paths:
+  /ready:
+    get:
+      security: []
+      operationId: getHeptaReadiness
+      description: >-
+        Returns 200 only when PostgreSQL answers SELECT 1 and all Consumer
+        Edge, Nakama authority and configured finality trust anchors are
+        internally valid. Returns 503 with ready=false otherwise.
+      responses:
+        "200": {description: Durable dependencies and trust configuration ready}
+        "503": {description: Database unavailable or trust configuration invalid}
+  /v2/hepta/manifest:
+    get:
+      security: []
+      operationId: getPaperRaidManifest
+      responses:
+        "200": {description: Paper Raid capability and finality mode}
+  /v2/hepta/openapi.yaml:
+    get:
+      security: []
+      operationId: getPaperRaidOpenApi
+      responses:
+        "200": {description: This OpenAPI document}
+  /v2/hepta/players:
+    post:
+      operationId: createHumanPlayer
+      description: >-
+        Registers a human player. subject_id and nakama_user_id come only from
+        the signed Consumer Edge assertion, never from the JSON body.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CreateHumanPlayerRequest"}
+      responses:
+        "201": {description: Human player created}
+  /v2/hepta/players/{player_id}/signing-key/rotate:
+    parameters:
+      - {$ref: "#/components/parameters/PlayerId"}
+    post:
+      operationId: rotateHumanSigningKey
+      description: >-
+        Dual-signed old-to-new key rotation. Current forming-team acceptances
+        are superseded and must be signed again using the new key.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/RotateHumanSigningKeyRequest"}
+      responses:
+        "200": {description: Key rotated and stale acceptances superseded}
+        "409": {$ref: "#/components/responses/VersionConflict"}
+  /v2/hepta/players/{player_id}/signing-key/revoke:
+    parameters:
+      - {$ref: "#/components/parameters/PlayerId"}
+    post:
+      operationId: revokeHumanSigningKey
+      description: >-
+        Signed compromise revocation. Forming-team acceptances are superseded;
+        already signed authorship evidence is retained and later finalization
+        enters integrity_hold.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/RevokeHumanSigningKeyRequest"}
+      responses:
+        "200": {description: Key revoked and immutable history retained}
+  /v2/hepta/agent-bindings:
+    post:
+      operationId: createAgentBinding
+      description: Binds a v1 registered external Agent to its asserted human owner.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CreateAgentBindingRequest"}
+      responses:
+        "201": {description: Binding created}
+  /v2/hepta/teams:
+    post:
+      operationId: createResearchTeam
+      description: Atomically creates an ordered 3-5 member Paper Raid roster.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CreateResearchTeamRequest"}
+      responses:
+        "201": {description: Forming team created}
+  /v2/hepta/teams/{team_id}:
+    parameters:
+      - {$ref: "#/components/parameters/TeamId"}
+    get:
+      operationId: getResearchTeam
+      description: Requires a signed assertion from a current team member.
+      responses:
+        "200": {description: Research team}
+  /v2/hepta/teams/{team_id}/member-acceptances:
+    parameters:
+      - {$ref: "#/components/parameters/TeamId"}
+    get:
+      operationId: listResearchTeamMemberAcceptances
+      description: Requires a signed assertion for a current proposed team member.
+      responses:
+        "200": {description: Immutable signed member acceptance records}
+    post:
+      operationId: acceptResearchTeamMembership
+      description: >-
+        A proposed human member signs the exact challenge, roster version,
+        participant slot, Agent binding, role and collaboration compact hash.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/AcceptResearchTeamMembershipRequest"}
+      responses:
+        "201": {description: Signed team membership acceptance recorded}
+        "409": {description: Stale roster, duplicate acceptance, or changed compact}
+  /v2/hepta/teams/{team_id}/lock:
+    parameters:
+      - {$ref: "#/components/parameters/TeamId"}
+    post:
+      operationId: lockResearchTeam
+      description: Requires one valid signed acceptance from every 3-5 member.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ExpectedVersionCommand"}
+      responses:
+        "200": {description: Team roster locked}
+        "409": {$ref: "#/components/responses/VersionConflict"}
+  /v2/hepta/papers:
+    post:
+      operationId: createPaperProject
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CreatePaperProjectRequest"}
+      responses:
+        "201": {description: Paper project created}
+  /v2/hepta/papers/{paper_id}:
+    parameters:
+      - {$ref: "#/components/parameters/PaperId"}
+    get:
+      operationId: getPaperProject
+      description: Requires a signed assertion from a current team member.
+      responses:
+        "200": {description: Paper project}
+  /v2/hepta/papers/{paper_id}/transition:
+    parameters:
+      - {$ref: "#/components/parameters/PaperId"}
+    post:
+      operationId: transitionPaperProject
+      responses:
+        "200": {description: Paper phase advanced or returned to drafting}
+  /v2/hepta/papers/{paper_id}/work-items:
+    parameters:
+      - {$ref: "#/components/parameters/PaperId"}
+    post:
+      operationId: createPaperWorkItem
+      responses:
+        "201": {description: Work item created}
+  /v2/hepta/work-items/{work_item_id}/transition:
+    parameters:
+      - name: work_item_id
+        in: path
+        required: true
+        schema: {type: string, format: uuid}
+    post:
+      operationId: transitionPaperWorkItem
+      responses:
+        "200": {description: Work item transitioned}
+  /v2/hepta/papers/{paper_id}/revisions:
+    parameters:
+      - {$ref: "#/components/parameters/PaperId"}
+    post:
+      operationId: createPaperRevision
+      description: Creates a revision only from the current parent; stale parents fail.
+      responses:
+        "201": {description: Paper revision created}
+  /v2/hepta/papers/{paper_id}/revisions/{revision_id}/promote:
+    parameters:
+      - {$ref: "#/components/parameters/PaperId"}
+      - name: revision_id
+        in: path
+        required: true
+        schema: {type: string, format: uuid}
+    post:
+      operationId: promotePaperReleaseCandidate
+      description: >-
+        Freezes author_order separately from participant_slot and binds the
+        Compact, protocol/amendments, ethics, COI, AI and artifact manifests.
+      responses:
+        "200": {description: Canonical release candidate promoted}
+  /v2/hepta/papers/{paper_id}/author-consents:
+    parameters:
+      - {$ref: "#/components/parameters/PaperId"}
+    post:
+      operationId: createAuthorshipConsent
+      description: >-
+        Accepts only the asserted player's Ed25519 signature over the common
+        release-candidate hash and an immutable human signing-key snapshot.
+      responses:
+        "201": {description: Authorship consent accepted}
+  /v2/hepta/papers/{paper_id}/finalize:
+    parameters:
+      - {$ref: "#/components/parameters/PaperId"}
+    post:
+      operationId: finalizeJointPaperSubmission
+      description: Requires exactly one valid consent from every locked roster member.
+      responses:
+        "201": {description: Canonical PaperBundle is submission_ready and pending_finality}
+        "202": {description: PaperBundle retained in integrity_hold because an authorship key was compromise-revoked}
+  /v2/hepta/papers/{paper_id}/submission:
+    parameters:
+      - {$ref: "#/components/parameters/PaperId"}
+    get:
+      operationId: getJointPaperSubmission
+      description: Requires a signed assertion from a current team member.
+      responses:
+        "200": {description: Signed PaperBundle and joint submission}
+  /v2/hepta/research-session-authorizations:
+    post:
+      operationId: issueResearchSessionAuthorizationSet
+      description: >-
+        Issues one atomic ordered set of 3-5 signed Nakama research-session
+        authorizations. subject_user_id is the bound Nakama UUID; the Consumer
+        subject remains private to Hepta identity records.
+      responses:
+        "201": {description: Complete signed roster epoch issued}
+  /v2/hepta/research-session-authorizations/{session_id}/replace:
+    parameters:
+      - {$ref: "#/components/parameters/SessionId"}
+    post:
+      operationId: replaceResearchSessionAuthorizationSet
+      description: >-
+        Supersedes the latest complete session epoch. Exactly one declared
+        disconnected slot may change Agent key; the human, binding, Agent ID,
+        role, team roster, paper, challenge, ruleset and challenge snapshot
+        remain fixed. Every authorization ID is fresh.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ReplaceResearchSessionAuthorizationSetRequest"}
+      responses:
+        "201": {description: Fresh complete roster epoch issued}
+        "409": {description: Stale epoch or replacement changed a frozen field}
+  /v2/hepta/nakama/research-session-authorizations/consumed:
+    post:
+      security:
+        - nakamaServiceToken: []
+      operationId: consumeResearchSessionAuthorizationSet
+      description: >-
+        Atomically consumes the complete ordered authorization set. Partial,
+        mixed-version, mixed-root and repeated epochs are rejected. The
+        response is a Hepta-signed immutable acknowledgement, not the mutable
+        authorization set.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ConsumeResearchSessionAuthorizationSetRequest"}
+      responses:
+        "200":
+          description: Complete authorization epoch consumed
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SignedAuthorizationSetConsumptionReceiptV1"}
+  /v2/hepta/nakama/research-session-completions:
+    post:
+      security:
+        - nakamaServiceToken: []
+      operationId: ingestNakamaResearchSessionCompletion
+      description: >-
+        Verifies the signed completion with a locally pinned Nakama authority
+        key, independently recomputes the complete event/archive/commitment
+        roots, binds the terminal event to a consumed authorization epoch and
+        finalized PaperBundle, then stores a normalized receipt and outbox event.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/NakamaCompletionIngestRequest"}
+      responses:
+        "201":
+          description: Verified immutable Hepta-signed Nakama completion receipt
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SignedNakamaCompletionReceiptV1"}
+        "403": {description: Untrusted authority, signature, archive, or root}
+        "409": {description: Unconsumed/wrong epoch, bundle mismatch, or second completion}
+components:
+  securitySchemes:
+    consumerUserAssertion:
+      type: apiKey
+      in: header
+      name: x-hepta-user-assertion
+      description: >-
+        Canonical-base64 SignedConsumerUserAssertionV2 binding issuer,
+        audience, subject, Nakama UUID, player, method, path, body hash,
+        idempotency nonce, iat and exp.
+    nakamaServiceToken:
+      type: apiKey
+      in: header
+      name: x-hepta-nakama-token
+  parameters:
+    PlayerId:
+      name: player_id
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    TeamId:
+      name: team_id
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    PaperId:
+      name: paper_id
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    SessionId:
+      name: session_id
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+  responses:
+    VersionConflict:
+      description: expected_version did not match the aggregate version
+  schemas:
+    Sha256Digest:
+      type: string
+      pattern: '^sha256:[0-9a-f]{64}$'
+    IdempotencyKey:
+      type: string
+      minLength: 1
+      maxLength: 200
+    CreateHumanPlayerRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - player_id
+        - display_name
+        - signing_key_id
+        - signing_public_key
+        - key_issued_at_unix
+        - key_expires_at_unix
+        - key_proof_signature
+        - idempotency_key
+      properties:
+        player_id: {type: string, format: uuid}
+        display_name: {type: string, minLength: 1, maxLength: 512}
+        signing_key_id: {type: string, minLength: 1, maxLength: 512}
+        signing_public_key: {type: string, contentEncoding: base64}
+        key_issued_at_unix: {type: integer, format: int64, minimum: 0}
+        key_expires_at_unix: {type: integer, format: int64, minimum: 0}
+        key_proof_signature: {type: string, contentEncoding: base64}
+        idempotency_key: {$ref: "#/components/schemas/IdempotencyKey"}
+    RotateHumanSigningKeyRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - rotation_id
+        - expected_player_version
+        - new_signing_key_id
+        - new_signing_public_key
+        - issued_at_unix
+        - expires_at_unix
+        - old_key_signature
+        - new_key_signature
+        - idempotency_key
+      properties:
+        rotation_id: {type: string, format: uuid}
+        expected_player_version: {type: integer, minimum: 1}
+        new_signing_key_id: {type: string, minLength: 1, maxLength: 512}
+        new_signing_public_key: {type: string, contentEncoding: base64}
+        issued_at_unix: {type: integer, format: int64, minimum: 0}
+        expires_at_unix: {type: integer, format: int64, minimum: 0}
+        old_key_signature: {type: string, contentEncoding: base64}
+        new_key_signature: {type: string, contentEncoding: base64}
+        idempotency_key: {$ref: "#/components/schemas/IdempotencyKey"}
+    RevokeHumanSigningKeyRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - revocation_id
+        - expected_player_version
+        - reason_hash
+        - issued_at_unix
+        - expires_at_unix
+        - signature
+        - idempotency_key
+      properties:
+        revocation_id: {type: string, format: uuid}
+        expected_player_version: {type: integer, minimum: 1}
+        reason_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        issued_at_unix: {type: integer, format: int64, minimum: 0}
+        expires_at_unix: {type: integer, format: int64, minimum: 0}
+        signature: {type: string, contentEncoding: base64}
+        idempotency_key: {$ref: "#/components/schemas/IdempotencyKey"}
+    CreateAgentBindingRequest:
+      type: object
+      additionalProperties: false
+      required: [binding_id, player_id, agent_id, idempotency_key]
+      properties:
+        binding_id: {type: string, format: uuid}
+        player_id: {type: string, format: uuid}
+        agent_id: {type: string, minLength: 1}
+        idempotency_key: {$ref: "#/components/schemas/IdempotencyKey"}
+    TeamMember:
+      type: object
+      additionalProperties: false
+      required: [participant_slot, player_id, binding_id, role]
+      properties:
+        participant_slot: {type: integer, minimum: 1, maximum: 5}
+        player_id: {type: string, format: uuid}
+        binding_id: {type: string, format: uuid}
+        role: {type: string, minLength: 1, maxLength: 512}
+    CreateResearchTeamRequest:
+      type: object
+      additionalProperties: false
+      required: [team_id, challenge_id, collaboration_compact_hash, members, idempotency_key]
+      properties:
+        team_id: {type: string, format: uuid}
+        challenge_id: {type: string, format: uuid}
+        collaboration_compact_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        members:
+          type: array
+          minItems: 3
+          maxItems: 5
+          items: {$ref: "#/components/schemas/TeamMember"}
+        idempotency_key: {$ref: "#/components/schemas/IdempotencyKey"}
+    AcceptResearchTeamMembershipRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - acceptance_id
+        - expected_team_version
+        - roster_version
+        - participant_slot
+        - binding_id
+        - role
+        - collaboration_compact_hash
+        - accepted_at_unix
+        - signature
+        - idempotency_key
+      properties:
+        acceptance_id: {type: string, format: uuid}
+        expected_team_version: {type: integer, minimum: 1}
+        roster_version: {type: integer, minimum: 1}
+        participant_slot: {type: integer, minimum: 1, maximum: 5}
+        binding_id: {type: string, format: uuid}
+        role: {type: string, minLength: 1, maxLength: 512}
+        collaboration_compact_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        accepted_at_unix: {type: integer, format: int64, minimum: 0}
+        signature: {type: string, contentEncoding: base64}
+        idempotency_key: {$ref: "#/components/schemas/IdempotencyKey"}
+    NakamaCompletionIngestRequest:
+      type: object
+      additionalProperties: false
+      required: [schema, completion, archive, idempotency_key]
+      properties:
+        schema:
+          type: string
+          const: hepta.paper_raid.nakama_completion_ingest.v1
+        completion:
+          type: object
+          description: Exact trnm.research-session.completed.v1 signed object.
+        archive:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            description: Exact trnm.research-session.event.v1 object in sequence order.
+        idempotency_key: {$ref: "#/components/schemas/IdempotencyKey"}
+    ExpectedVersionCommand:
+      type: object
+      additionalProperties: false
+      required: [expected_version, idempotency_key]
+      properties:
+        expected_version: {type: integer, minimum: 1}
+        idempotency_key: {$ref: "#/components/schemas/IdempotencyKey"}
+    CreatePaperProjectRequest:
+      type: object
+      additionalProperties: false
+      required: [paper_project_id, team_id, title, target_format, idempotency_key]
+      properties:
+        paper_project_id: {type: string, format: uuid}
+        team_id: {type: string, format: uuid}
+        title: {type: string, minLength: 1}
+        target_format: {type: string, minLength: 1}
+        idempotency_key: {$ref: "#/components/schemas/IdempotencyKey"}
+    ReplaceResearchSessionAuthorizationSetRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - paper_project_id
+        - expected_paper_version
+        - expected_team_version
+        - previous_roster_version
+        - disconnected_participant_slot
+        - idempotency_key
+      properties:
+        paper_project_id: {type: string, format: uuid}
+        expected_paper_version: {type: integer, minimum: 1}
+        expected_team_version: {type: integer, minimum: 1}
+        previous_roster_version: {type: integer, minimum: 1}
+        disconnected_participant_slot: {type: integer, minimum: 1, maximum: 5}
+        ttl_seconds: {type: integer, minimum: 30, maximum: 3600}
+        idempotency_key: {$ref: "#/components/schemas/IdempotencyKey"}
+    ConsumeResearchSessionAuthorizationSetRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - schema
+        - session_id
+        - roster_version
+        - roster_root
+        - authorization_ids
+        - consumed_at_unix
+        - idempotency_key
+      properties:
+        schema:
+          type: string
+          const: hepta.paper_raid.research_session_consumption.v1
+        session_id: {type: string, minLength: 1, maxLength: 128}
+        roster_version: {type: integer, minimum: 1}
+        roster_root: {$ref: "#/components/schemas/Sha256Digest"}
+        authorization_ids:
+          type: array
+          minItems: 3
+          maxItems: 5
+          uniqueItems: true
+          items: {type: string, format: uuid}
+        consumed_at_unix: {type: integer, format: int64, minimum: 0}
+        idempotency_key: {$ref: "#/components/schemas/IdempotencyKey"}
+    SignedAuthorizationSetConsumptionReceiptV1:
+      type: object
+      additionalProperties: false
+      required:
+        - schema
+        - session_id
+        - team_id
+        - paper_project_id
+        - challenge_id
+        - session_roster_version
+        - roster_root
+        - authorization_ids
+        - consumed_at_unix
+        - issuer_key_id
+        - signature
+      properties:
+        schema:
+          type: string
+          const: hepta.paper_raid.authorization_set_consumption_receipt.v1
+        session_id: {type: string, minLength: 1, maxLength: 128}
+        team_id: {type: string, format: uuid}
+        paper_project_id: {type: string, format: uuid}
+        challenge_id: {type: string, format: uuid}
+        session_roster_version: {type: integer, minimum: 1}
+        roster_root: {$ref: "#/components/schemas/Sha256Digest"}
+        authorization_ids:
+          type: array
+          minItems: 3
+          maxItems: 5
+          uniqueItems: true
+          items: {type: string, format: uuid}
+        consumed_at_unix: {type: integer, format: int64, minimum: 0}
+        issuer_key_id: {type: string, minLength: 1}
+        signature: {type: string, contentEncoding: base64}
+    ResearchSessionTerminalFactsV1:
+      type: object
+      additionalProperties: false
+      required:
+        - result_code
+        - paper_bundle_hash
+        - paper_release_candidate_hash
+        - contribution_ledger_hash
+      properties:
+        result_code: {type: string, minLength: 1, maxLength: 512}
+        paper_bundle_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        paper_release_candidate_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        contribution_ledger_hash: {$ref: "#/components/schemas/Sha256Digest"}
+    SignedNakamaCompletionReceiptV1:
+      type: object
+      additionalProperties: false
+      required:
+        - schema
+        - commitment_id
+        - session_id
+        - team_id
+        - paper_project_id
+        - challenge_id
+        - roster_version
+        - roster_root
+        - event_count
+        - event_root
+        - archive_hash
+        - ruleset_hash
+        - challenge_snapshot_hash
+        - nakama_authority_key_id
+        - terminal_facts
+        - verified_at_unix
+        - issuer_key_id
+        - signature
+      properties:
+        schema:
+          type: string
+          const: hepta.paper_raid.nakama_completion_receipt.v1
+        commitment_id: {$ref: "#/components/schemas/Sha256Digest"}
+        session_id: {type: string, minLength: 1, maxLength: 128}
+        team_id: {type: string, format: uuid}
+        paper_project_id: {type: string, format: uuid}
+        challenge_id: {type: string, format: uuid}
+        roster_version: {type: integer, minimum: 1}
+        roster_root: {$ref: "#/components/schemas/Sha256Digest"}
+        event_count: {type: integer, minimum: 1}
+        event_root: {$ref: "#/components/schemas/Sha256Digest"}
+        archive_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        ruleset_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        challenge_snapshot_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        nakama_authority_key_id: {type: string, minLength: 1}
+        terminal_facts: {$ref: "#/components/schemas/ResearchSessionTerminalFactsV1"}
+        verified_at_unix: {type: integer, format: int64, minimum: 0}
+        issuer_key_id: {type: string, minLength: 1}
+        signature: {type: string, contentEncoding: base64}
+    SignedPaperRaidEvidenceEnvelopeV1:
+      description: >-
+        Signed acyclic outer evidence. Verification must compare every field
+        against the supplied PaperBundle, signed completion receipt, evaluation,
+        reproduction, appeal and finality records; signature-only acceptance is forbidden.
+      type: object
+      additionalProperties: false
+      required:
+        - schema
+        - evidence_envelope_id
+        - paper_bundle_hash
+        - nakama_completion_receipt_hash
+        - session_id
+        - session_roster_version
+        - roster_root
+        - event_root
+        - archive_hash
+        - ruleset_hash
+        - challenge_snapshot_hash
+        - evaluation_report_hash
+        - reproduction_report_hash
+        - created_at_unix
+        - issuer_key_id
+        - signature
+      properties:
+        schema: {type: string, const: hepta.paper_raid.evidence_envelope.v1}
+        evidence_envelope_id: {type: string, format: uuid}
+        paper_bundle_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        nakama_completion_receipt_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        session_id: {type: string, minLength: 1, maxLength: 128}
+        session_roster_version: {type: integer, minimum: 1}
+        roster_root: {$ref: "#/components/schemas/Sha256Digest"}
+        event_root: {$ref: "#/components/schemas/Sha256Digest"}
+        archive_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        ruleset_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        challenge_snapshot_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        evaluation_report_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        reproduction_report_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        appeal_resolution_hash:
+          anyOf:
+            - {$ref: "#/components/schemas/Sha256Digest"}
+            - {type: "null"}
+        finality_receipt_hash:
+          anyOf:
+            - {$ref: "#/components/schemas/Sha256Digest"}
+            - {type: "null"}
+        created_at_unix: {type: integer, format: int64, minimum: 0}
+        issuer_key_id: {type: string, minLength: 1}
+        signature: {type: string, contentEncoding: base64}
+    PublicationReleaseAuthorConsentV1:
+      type: object
+      additionalProperties: false
+      required:
+        - author_order
+        - participant_slot
+        - player_id
+        - signing_key_id
+        - signing_public_key
+        - signing_public_key_hash
+        - signature
+      properties:
+        author_order: {type: integer, minimum: 1, maximum: 5}
+        participant_slot: {type: integer, minimum: 1, maximum: 5}
+        player_id: {type: string, format: uuid}
+        signing_key_id: {type: string, minLength: 1}
+        signing_public_key: {type: string, contentEncoding: base64}
+        signing_public_key_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        signature: {type: string, contentEncoding: base64}
+    PublicationReleaseV1:
+      description: >-
+        Later explicit external-release action. The author order, slot and player
+        set must exactly equal the PaperBundle author roster, and the service
+        additionally requires every signing key to be current and active.
+      type: object
+      additionalProperties: false
+      required:
+        - schema
+        - publication_release_id
+        - paper_bundle_hash
+        - evidence_envelope_hash
+        - destination
+        - release_manifest_hash
+        - license
+        - released_at_unix
+        - author_consents
+        - publication_release_hash
+      properties:
+        schema: {type: string, const: hepta.paper_raid.publication_release.v1}
+        publication_release_id: {type: string, format: uuid}
+        paper_bundle_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        evidence_envelope_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        destination: {type: string, minLength: 1, maxLength: 512}
+        release_manifest_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        license: {type: string, minLength: 1, maxLength: 512}
+        released_at_unix: {type: integer, format: int64, minimum: 0}
+        author_consents:
+          type: array
+          minItems: 3
+          maxItems: 5
+          items: {$ref: "#/components/schemas/PublicationReleaseAuthorConsentV1"}
+        publication_release_hash: {$ref: "#/components/schemas/Sha256Digest"}

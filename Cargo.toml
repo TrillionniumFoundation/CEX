@@ -4,6 +4,7 @@ members = [
   "crates/shared-errors",
   "crates/shared-tracing",
   "crates/shared-config",
+  "crates/hepta-paper-raid-contracts",
   "services/identity-service",
   "services/ledger-service",
   "services/gateway-service",
@@ -42,3 +43,4 @@ term-exchange-protocol = { package = "trnm-economy-protocol", version = "=2.4.0"
 trnm-research-protocol = { version = "=0.1.0", git = "https://github.com/TrillionniumFoundation/Trillionnium-Chain.git", rev = "e73d1a930991f0e308bf72854b334b6191c7fcc3" }
 trnm-finality-types = { version = "=0.1.0", git = "https://github.com/TrillionniumFoundation/Trillionnium-Chain.git", rev = "e73d1a930991f0e308bf72854b334b6191c7fcc3" }
 trnm-finality-verifier = { version = "=0.1.0", git = "https://github.com/TrillionniumFoundation/Trillionnium-Chain.git", rev = "e73d1a930991f0e308bf72854b334b6191c7fcc3" }
+hepta-paper-raid-contracts = { path = "crates/hepta-paper-raid-contracts" }

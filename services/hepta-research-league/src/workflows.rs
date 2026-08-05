@@ -20,8 +20,8 @@ use uuid::Uuid;
 
 use super::{
     push_event, require_service_token, sha256_hex, validate_hash, validate_non_empty, ApiError,
-    AppState, ChallengeStatus, EventEnvelope, NAKAMA_TOKEN_HEADER, OPERATOR_TOKEN_HEADER,
-    TRNM_TOKEN_HEADER,
+    AppState, ChallengeStatus, EventEnvelope, FinalityMode, NAKAMA_TOKEN_HEADER,
+    OPERATOR_TOKEN_HEADER, TRNM_TOKEN_HEADER,
 };
 use crate::trnm_v1::{
     command_kind, format_digest, verify_finality_receipt, AuthorityRole, FinalityReceiptV1,
@@ -257,8 +257,13 @@ struct ReconciliationView {
 struct ReadyResponse {
     ready: bool,
     storage: &'static str,
+    database: &'static str,
+    security: &'static str,
+    failures: Vec<&'static str>,
     agent_execution_mode: &'static str,
     top_level_modules: [&'static str; 3],
+    finality_mode: &'static str,
+    trusted_validator_sets: usize,
 }
 
 pub(crate) fn router() -> Router<AppState> {
@@ -344,17 +349,76 @@ async fn openapi() -> &'static str {
     include_str!("../../../docs/openapi/hepta-research-league-v1.yaml")
 }
 
-async fn ready(State(state): State<AppState>) -> Json<ReadyResponse> {
-    Json(ReadyResponse {
-        ready: true,
+async fn ready(State(state): State<AppState>) -> (StatusCode, Json<ReadyResponse>) {
+    let mut failures = state.security.readiness_errors();
+    let database = if let Some(pool) = &state.pool {
+        match pool.acquire().await {
+            Ok(mut connection) => match sqlx::query_scalar::<_, i32>("select 1")
+                .fetch_one(&mut *connection)
+                .await
+            {
+                Ok(1) => "reachable",
+                Ok(_) => {
+                    failures.push("database_probe_unexpected_result");
+                    "unreachable"
+                }
+                Err(_) => {
+                    failures.push("database_probe_failed");
+                    "unreachable"
+                }
+            },
+            Err(_) => {
+                failures.push("database_pool_acquire_failed");
+                "unreachable"
+            }
+        }
+    } else {
+        failures.push("database_pool_missing");
+        "not_configured"
+    };
+    let ready = failures.is_empty();
+    let response = ReadyResponse {
+        ready,
         storage: if state.is_durable() {
             "postgresql"
         } else {
             "in_memory_test_only"
         },
+        database,
+        security: if state.security.readiness_errors().is_empty() {
+            "valid"
+        } else {
+            "invalid"
+        },
+        failures,
         agent_execution_mode: "external_only",
         top_level_modules: ["hepta", "nakama", "trnm"],
-    })
+        finality_mode: state.security.finality_mode.as_str(),
+        trusted_validator_sets: state.security.trusted_trnm_validator_sets.len(),
+    };
+    (
+        if ready {
+            StatusCode::OK
+        } else {
+            StatusCode::SERVICE_UNAVAILABLE
+        },
+        Json(response),
+    )
+}
+
+fn require_verified_finality_mode(state: &AppState) -> Result<(), ApiError> {
+    if state.security.finality_mode != FinalityMode::Verified {
+        return Err(ApiError::conflict(
+            "finality_pending_only",
+            "Hepta is configured for pending_only finality; receipts remain held and no finality write is accepted",
+        ));
+    }
+    if state.security.trusted_trnm_validator_sets.is_empty() {
+        return Err(ApiError::internal(
+            "verified finality mode has no trusted validator sets",
+        ));
+    }
+    Ok(())
 }
 
 async fn metrics(State(state): State<AppState>) -> Result<String, ApiError> {
@@ -869,6 +933,7 @@ async fn ingest_trnm_finality(
     headers: HeaderMap,
     Json(receipt): Json<FinalityReceiptV1>,
 ) -> Result<(StatusCode, Json<TrnmFinalityProjection>), ApiError> {
+    require_verified_finality_mode(&state)?;
     require_service_token(
         &headers,
         TRNM_TOKEN_HEADER,
@@ -974,6 +1039,7 @@ async fn ingest_live_trnm_finality(
     headers: HeaderMap,
     Json(request): Json<LiveTrnmFinalityRequestV1>,
 ) -> Result<(StatusCode, Json<LiveTrnmFinalityProjection>), ApiError> {
+    require_verified_finality_mode(&state)?;
     require_service_token(
         &headers,
         TRNM_TOKEN_HEADER,
@@ -1177,6 +1243,7 @@ async fn verify_trnm_finality_offline(
     State(state): State<AppState>,
     Json(receipt): Json<FinalityReceiptV1>,
 ) -> Result<Json<VerifiedFinalityV1>, ApiError> {
+    require_verified_finality_mode(&state)?;
     verify_finality_receipt(&receipt, None, &state.security.trusted_trnm_validator_sets)
         .map(Json)
         .map_err(|error| {
@@ -1591,6 +1658,9 @@ fn hex_bytes(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ed25519_dalek::SigningKey;
+    use sqlx::postgres::PgPoolOptions;
+    use std::time::Duration;
 
     #[test]
     fn deterministic_scoring_is_fixed_point_and_order_independent() {
@@ -1634,5 +1704,48 @@ mod tests {
         ])
         .unwrap();
         assert_ne!(original, tampered);
+    }
+
+    #[tokio::test]
+    async fn readiness_fails_closed_without_durable_storage_or_nakama_trust() {
+        let state = AppState::new(crate::SecurityConfig::new("operator", "nakama"));
+        let (status, Json(response)) = ready(State(state)).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert!(!response.ready);
+        assert_eq!(response.database, "not_configured");
+        assert_eq!(response.security, "invalid");
+        assert!(response.failures.contains(&"database_pool_missing"));
+        assert!(response
+            .failures
+            .contains(&"nakama_research_authority_missing"));
+    }
+
+    #[tokio::test]
+    async fn readiness_fails_closed_when_postgres_pool_cannot_connect() {
+        let security = crate::SecurityConfig::new("operator", "nakama")
+            .with_trnm_token("trnm")
+            .with_trusted_nakama_research_authority(
+                "nakama-readiness-unit-v1",
+                SigningKey::from_bytes(&[0x71; 32])
+                    .verifying_key()
+                    .to_bytes(),
+            )
+            .expect("valid Nakama authority");
+        let mut state = AppState::new(security);
+        state.pool = Some(
+            PgPoolOptions::new()
+                .acquire_timeout(Duration::from_millis(100))
+                .connect_lazy("postgres://127.0.0.1:1/hepta_unreachable")
+                .expect("lazy pool"),
+        );
+        let (status, Json(response)) = ready(State(state)).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert!(!response.ready);
+        assert_eq!(response.database, "unreachable");
+        assert_eq!(response.security, "valid");
+        assert!(response
+            .failures
+            .iter()
+            .any(|failure| failure.starts_with("database_")));
     }
 }

@@ -9,8 +9,12 @@ cd "$repo_dir"
 python3 - <<'PY'
 import yaml
 
-with open("docs/openapi/hepta-research-league-v1.yaml", encoding="utf-8") as stream:
-    yaml.safe_load(stream)
+for path in (
+    "docs/openapi/hepta-research-league-v1.yaml",
+    "docs/openapi/hepta-paper-raid-v2.yaml",
+):
+    with open(path, encoding="utf-8") as stream:
+        yaml.safe_load(stream)
 PY
 jq -e \
   '.fixture_version == "hepta_sdk_fixtures_v1"
@@ -30,6 +34,9 @@ fi
 
 test "$(rg -o '\"hepta\"|\"nakama\"|\"trnm\"' \
   docs/sdk-fixtures/hepta-research-league-v1.json | sort -u | wc -l)" -eq 3
+
+node scripts/verify-hepta-paper-raid-v2-fixture.mjs \
+  docs/sdk-fixtures/hepta-paper-raid-v2.json
 
 cargo fmt --all -- --check
 cargo test --locked -p hepta-research-league

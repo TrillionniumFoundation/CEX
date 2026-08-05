@@ -21,7 +21,11 @@ use tokio::sync::{Mutex, RwLock};
 use uuid::Uuid;
 
 pub mod trnm_v1;
+pub use hepta_paper_raid_contracts as paper_raid_contracts;
+mod paper_raid_v2;
 mod workflows;
+
+pub use paper_raid_v2::*;
 
 pub const AGENT_PROTOCOL_V1: &str = "hepta_agent_protocol_v1";
 pub const EVENT_SCHEMA_V1: &str = "hepta_event_envelope_v1";
@@ -30,10 +34,28 @@ pub const NAKAMA_AUTHORIZATION_SCHEMA_V1: &str = "trnm.match.authorization.v1";
 pub const OPERATOR_TOKEN_HEADER: &str = "x-hepta-operator-token";
 pub const NAKAMA_TOKEN_HEADER: &str = "x-hepta-nakama-token";
 pub const TRNM_TOKEN_HEADER: &str = "x-hepta-trnm-token";
+pub const USER_ASSERTION_HEADER: &str = "x-hepta-user-assertion";
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FinalityMode {
+    PendingOnly,
+    Verified,
+}
+
+impl FinalityMode {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::PendingOnly => "pending_only",
+            Self::Verified => "verified",
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct AppState {
     inner: Arc<RwLock<LeagueState>>,
+    paper_raid: Arc<RwLock<paper_raid_v2::PaperRaidMemory>>,
     pool: Option<PgPool>,
     security: Arc<SecurityConfig>,
     rate_limits: Arc<Mutex<HashMap<(String, String), RateWindow>>>,
@@ -52,6 +74,12 @@ pub struct SecurityConfig {
     trnm_token: String,
     nakama_authorization_issuer_key_id: String,
     nakama_authorization_signing_key: SigningKey,
+    consumer_edge_issuer: String,
+    consumer_edge_audience: String,
+    consumer_edge_issuer_key_id: String,
+    consumer_edge_verifying_key: VerifyingKey,
+    trusted_nakama_research_authorities: HashMap<String, VerifyingKey>,
+    finality_mode: FinalityMode,
     trusted_trnm_validator_sets: Vec<trnm_v1::TrustedValidatorSetV1>,
 }
 
@@ -63,6 +91,12 @@ impl SecurityConfig {
             trnm_token: "hepta-test-trnm-token".to_string(),
             nakama_authorization_issuer_key_id: "hepta-test-issuer-key-v1".to_string(),
             nakama_authorization_signing_key: SigningKey::from_bytes(&[0x5a; 32]),
+            consumer_edge_issuer: "hepta-test-consumer-edge".to_string(),
+            consumer_edge_audience: "hepta-paper-raid-v2".to_string(),
+            consumer_edge_issuer_key_id: "hepta-test-consumer-edge-key-v2".to_string(),
+            consumer_edge_verifying_key: SigningKey::from_bytes(&[0x6c; 32]).verifying_key(),
+            trusted_nakama_research_authorities: HashMap::new(),
+            finality_mode: FinalityMode::PendingOnly,
             trusted_trnm_validator_sets: Vec::new(),
         }
     }
@@ -84,6 +118,73 @@ impl SecurityConfig {
         self
     }
 
+    pub fn with_consumer_edge_trust(
+        mut self,
+        issuer: impl Into<String>,
+        audience: impl Into<String>,
+        issuer_key_id: impl Into<String>,
+        public_key: [u8; 32],
+    ) -> Result<Self, String> {
+        let issuer = issuer.into();
+        let audience = audience.into();
+        let issuer_key_id = issuer_key_id.into();
+        validate_contract_text("consumer_edge_issuer", &issuer)?;
+        validate_contract_text("consumer_edge_audience", &audience)?;
+        validate_contract_text("consumer_edge_issuer_key_id", &issuer_key_id)?;
+        self.consumer_edge_issuer = issuer;
+        self.consumer_edge_audience = audience;
+        self.consumer_edge_issuer_key_id = issuer_key_id;
+        self.consumer_edge_verifying_key = VerifyingKey::from_bytes(&public_key)
+            .map_err(|_| "consumer Edge public key is not valid Ed25519".to_string())?;
+        Ok(self)
+    }
+
+    pub fn with_finality_mode(mut self, mode: FinalityMode) -> Self {
+        self.finality_mode = mode;
+        self
+    }
+
+    pub fn with_trusted_nakama_research_authority(
+        mut self,
+        authority_key_id: impl Into<String>,
+        public_key: [u8; 32],
+    ) -> Result<Self, String> {
+        let authority_key_id = authority_key_id.into();
+        validate_contract_text("nakama_research_authority_key_id", &authority_key_id)?;
+        if self
+            .trusted_nakama_research_authorities
+            .contains_key(&authority_key_id)
+        {
+            return Err("duplicate trusted Nakama research authority key ID".to_string());
+        }
+        let verifying_key = VerifyingKey::from_bytes(&public_key)
+            .map_err(|_| "Nakama research authority public key is not valid Ed25519".to_string())?;
+        self.trusted_nakama_research_authorities
+            .insert(authority_key_id, verifying_key);
+        Ok(self)
+    }
+
+    pub fn verify_nakama_research_completion(
+        &self,
+        completion: &paper_raid_contracts::ResearchSessionCompletionV1,
+        archive: &[paper_raid_contracts::ResearchSessionEventV1],
+    ) -> Result<(), String> {
+        let verifying_key = self
+            .trusted_nakama_research_authorities
+            .get(&completion.authority_key_id)
+            .ok_or_else(|| {
+                format!(
+                    "untrusted Nakama research authority key {}",
+                    completion.authority_key_id
+                )
+            })?;
+        paper_raid_contracts::verify_research_session_completion_against_archive(
+            completion,
+            archive,
+            verifying_key,
+        )
+    }
+
     pub fn with_trusted_trnm_validator_set(
         mut self,
         validator_set: trnm_v1::TrustedValidatorSetV1,
@@ -96,6 +197,7 @@ impl SecurityConfig {
             return Err("duplicate trusted TRNM validator set".to_string());
         }
         self.trusted_trnm_validator_sets.push(validator_set);
+        self.finality_mode = FinalityMode::Verified;
         Ok(self)
     }
 
@@ -147,14 +249,68 @@ impl SecurityConfig {
         {
             return Err("operator, Nakama, and TRNM tokens must be different".to_string());
         }
-        let trusted_sets_json = std::env::var("HEPTA_TRNM_VALIDATOR_SETS_JSON").map_err(|_| {
-            "HEPTA_TRNM_VALIDATOR_SETS_JSON must configure offline finality trust anchors"
-                .to_string()
-        })?;
+        let consumer_edge_issuer = std::env::var("HEPTA_CONSUMER_EDGE_ISSUER")
+            .map_err(|_| "HEPTA_CONSUMER_EDGE_ISSUER must be set".to_string())?;
+        let consumer_edge_audience = std::env::var("HEPTA_CONSUMER_EDGE_AUDIENCE")
+            .map_err(|_| "HEPTA_CONSUMER_EDGE_AUDIENCE must be set".to_string())?;
+        let consumer_edge_issuer_key_id = std::env::var("HEPTA_CONSUMER_EDGE_ISSUER_KEY_ID")
+            .map_err(|_| "HEPTA_CONSUMER_EDGE_ISSUER_KEY_ID must be set".to_string())?;
+        let consumer_edge_public_key_base64 =
+            std::env::var("HEPTA_CONSUMER_EDGE_ED25519_PUBLIC_KEY_BASE64").map_err(|_| {
+                "HEPTA_CONSUMER_EDGE_ED25519_PUBLIC_KEY_BASE64 must be set".to_string()
+            })?;
+        let consumer_edge_public_key =
+            BASE64
+                .decode(&consumer_edge_public_key_base64)
+                .map_err(|_| {
+                    "HEPTA_CONSUMER_EDGE_ED25519_PUBLIC_KEY_BASE64 must be canonical base64"
+                        .to_string()
+                })?;
+        if BASE64.encode(&consumer_edge_public_key) != consumer_edge_public_key_base64 {
+            return Err(
+                "HEPTA_CONSUMER_EDGE_ED25519_PUBLIC_KEY_BASE64 must be canonical padded base64"
+                    .to_string(),
+            );
+        }
+        let consumer_edge_public_key: [u8; 32] =
+            consumer_edge_public_key.try_into().map_err(|_| {
+                "HEPTA_CONSUMER_EDGE_ED25519_PUBLIC_KEY_BASE64 must decode to 32 bytes".to_string()
+            })?;
+        let nakama_authority_key_id = std::env::var("TRNM_NAKAMA_AUTHORITY_KEY_ID")
+            .map_err(|_| "TRNM_NAKAMA_AUTHORITY_KEY_ID must be set".to_string())?;
+        validate_contract_text("TRNM_NAKAMA_AUTHORITY_KEY_ID", &nakama_authority_key_id)?;
+        let nakama_authority_public_key_base64 =
+            std::env::var("TRNM_NAKAMA_AUTHORITY_PUBLIC_KEY_BASE64")
+                .map_err(|_| "TRNM_NAKAMA_AUTHORITY_PUBLIC_KEY_BASE64 must be set".to_string())?;
+        let nakama_authority_public_key = BASE64
+            .decode(&nakama_authority_public_key_base64)
+            .map_err(|_| {
+                "TRNM_NAKAMA_AUTHORITY_PUBLIC_KEY_BASE64 must be canonical base64".to_string()
+            })?;
+        if BASE64.encode(&nakama_authority_public_key) != nakama_authority_public_key_base64 {
+            return Err(
+                "TRNM_NAKAMA_AUTHORITY_PUBLIC_KEY_BASE64 must be canonical padded base64"
+                    .to_string(),
+            );
+        }
+        let nakama_authority_public_key: [u8; 32] =
+            nakama_authority_public_key.try_into().map_err(|_| {
+                "TRNM_NAKAMA_AUTHORITY_PUBLIC_KEY_BASE64 must decode to 32 bytes".to_string()
+            })?;
+        let finality_mode = match std::env::var("HEPTA_FINALITY_MODE")
+            .map_err(|_| "HEPTA_FINALITY_MODE must be pending_only or verified".to_string())?
+            .as_str()
+        {
+            "pending_only" => FinalityMode::PendingOnly,
+            "verified" => FinalityMode::Verified,
+            _ => return Err("HEPTA_FINALITY_MODE must be pending_only or verified".to_string()),
+        };
+        let trusted_sets_json =
+            std::env::var("HEPTA_TRNM_VALIDATOR_SETS_JSON").unwrap_or_else(|_| "[]".to_string());
         let trusted_sets: Vec<trnm_v1::TrustedValidatorSetV1> =
             serde_json::from_str(&trusted_sets_json)
                 .map_err(|error| format!("decode HEPTA_TRNM_VALIDATOR_SETS_JSON: {error}"))?;
-        if trusted_sets.is_empty() {
+        if finality_mode == FinalityMode::Verified && trusted_sets.is_empty() {
             return Err(
                 "HEPTA_TRNM_VALIDATOR_SETS_JSON must contain at least one validator set"
                     .to_string(),
@@ -162,14 +318,67 @@ impl SecurityConfig {
         }
         let mut security = Self::new(operator_token, nakama_token)
             .with_trnm_token(trnm_token)
+            .with_consumer_edge_trust(
+                consumer_edge_issuer,
+                consumer_edge_audience,
+                consumer_edge_issuer_key_id,
+                consumer_edge_public_key,
+            )?
             .with_nakama_authorization_signer(
                 nakama_authorization_issuer_key_id,
                 nakama_authorization_seed,
+            )?
+            .with_trusted_nakama_research_authority(
+                nakama_authority_key_id,
+                nakama_authority_public_key,
             )?;
+        security.finality_mode = finality_mode;
         for validator_set in trusted_sets {
-            security = security.with_trusted_trnm_validator_set(validator_set)?;
+            validator_set.validate()?;
+            if security.trusted_trnm_validator_sets.iter().any(|existing| {
+                existing.chain_id == validator_set.chain_id
+                    && existing.validator_set_id == validator_set.validator_set_id
+            }) {
+                return Err("duplicate trusted TRNM validator set".to_string());
+            }
+            security.trusted_trnm_validator_sets.push(validator_set);
         }
         Ok(security)
+    }
+
+    fn readiness_errors(&self) -> Vec<&'static str> {
+        let mut errors = Vec::new();
+        if self.operator_token.trim().is_empty()
+            || self.nakama_token.trim().is_empty()
+            || self.trnm_token.trim().is_empty()
+            || self.operator_token == self.nakama_token
+            || self.operator_token == self.trnm_token
+            || self.nakama_token == self.trnm_token
+        {
+            errors.push("service_token_configuration_invalid");
+        }
+        if self.nakama_authorization_issuer_key_id.trim().is_empty()
+            || self.consumer_edge_issuer.trim().is_empty()
+            || self.consumer_edge_audience.trim().is_empty()
+            || self.consumer_edge_issuer_key_id.trim().is_empty()
+        {
+            errors.push("issuer_configuration_invalid");
+        }
+        if self.trusted_nakama_research_authorities.is_empty() {
+            errors.push("nakama_research_authority_missing");
+        }
+        if self.finality_mode == FinalityMode::Verified {
+            if self.trusted_trnm_validator_sets.is_empty() {
+                errors.push("trnm_validator_set_missing");
+            } else if self
+                .trusted_trnm_validator_sets
+                .iter()
+                .any(|validator_set| validator_set.validate().is_err())
+            {
+                errors.push("trnm_validator_set_invalid");
+            }
+        }
+        errors
     }
 }
 
@@ -177,6 +386,7 @@ impl AppState {
     pub fn new(security: SecurityConfig) -> Self {
         Self {
             inner: Arc::new(RwLock::new(LeagueState::default())),
+            paper_raid: Arc::new(RwLock::new(paper_raid_v2::PaperRaidMemory::default())),
             pool: None,
             security: Arc::new(security),
             rate_limits: Arc::new(Mutex::new(HashMap::new())),
@@ -193,6 +403,12 @@ impl AppState {
         .execute(&pool)
         .await
         .map_err(|error| format!("apply Hepta migration: {error}"))?;
+        sqlx::raw_sql(include_str!(
+            "../../../migrations/0032_add_hepta_paper_raid_v2.sql"
+        ))
+        .execute(&pool)
+        .await
+        .map_err(|error| format!("apply Hepta Paper Raid migration: {error}"))?;
         sqlx::query(
             "insert into hepta_league_state (state_key, revision, state_json)
              values ('primary', 0, $1::jsonb)
@@ -207,6 +423,7 @@ impl AppState {
         .map_err(|error| format!("initialize Hepta state: {error}"))?;
         Ok(Self {
             inner: Arc::new(RwLock::new(LeagueState::default())),
+            paper_raid: Arc::new(RwLock::new(paper_raid_v2::PaperRaidMemory::default())),
             pool: Some(pool),
             security: Arc::new(security),
             rate_limits: Arc::new(Mutex::new(HashMap::new())),
@@ -682,6 +899,7 @@ struct ManifestResponse {
     agent_execution_mode: &'static str,
     top_level_modules: [&'static str; 3],
     capabilities: [&'static str; 10],
+    finality_mode: &'static str,
 }
 
 #[derive(Debug, Serialize)]
@@ -789,6 +1007,7 @@ pub fn app(state: AppState) -> Router {
         )
         .route("/v1/hepta/submissions", post(submit_artifact))
         .route("/v1/hepta/events", get(list_events))
+        .merge(paper_raid_v2::router())
         .merge(workflows::router())
         .with_state(state)
 }
@@ -800,7 +1019,7 @@ async fn health() -> Json<HealthResponse> {
     })
 }
 
-async fn manifest() -> Json<ManifestResponse> {
+async fn manifest(State(state): State<AppState>) -> Json<ManifestResponse> {
     Json(ManifestResponse {
         service: "hepta-research-league",
         contract_version: AGENT_PROTOCOL_V1,
@@ -822,6 +1041,7 @@ async fn manifest() -> Json<ManifestResponse> {
             "nakama_event_root_reconciliation",
             "transactional_outbox_inbox",
         ],
+        finality_mode: state.security.finality_mode.as_str(),
     })
 }
 
