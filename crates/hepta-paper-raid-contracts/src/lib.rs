@@ -11,6 +11,7 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 pub const PAPER_RAID_PROTOCOL_V2: &str = "hepta.paper_raid.v2";
+pub const JSON_SAFE_U64_MAX: u64 = 9_007_199_254_740_991;
 pub const PAPER_RELEASE_CANDIDATE_V2: &str = "hepta.paper_raid.release_candidate.v2";
 pub const PAPER_BUNDLE_V2: &str = "hepta.paper_raid.paper_bundle.v2";
 pub const PAPER_RAID_EVIDENCE_ENVELOPE_V1: &str = "hepta.paper_raid.evidence_envelope.v1";
@@ -21,6 +22,8 @@ pub const NAKAMA_COMPLETION_RECEIPT_V1: &str = "hepta.paper_raid.nakama_completi
 pub const AUTHORIZATION_SET_CONSUMPTION_RECEIPT_V1: &str =
     "hepta.paper_raid.authorization_set_consumption_receipt.v1";
 pub const HUMAN_KEY_REGISTRATION_V2: &str = "hepta.paper_raid.human_key_registration.v2";
+pub const AGENT_BINDING_PROOF_V2: &str = "hepta.paper_raid.agent_binding_proof.v2";
+pub const AGENT_BINDING_KEY_ROTATION_V2: &str = "hepta.paper_raid.agent_binding_key_rotation.v2";
 pub const HUMAN_KEY_ROTATION_V2: &str = "hepta.paper_raid.human_key_rotation.v2";
 pub const HUMAN_KEY_REVOCATION_V2: &str = "hepta.paper_raid.human_key_revocation.v2";
 pub const CONSUMER_USER_ASSERTION_V2: &str = "hepta.consumer-edge.user-assertion.v2";
@@ -367,6 +370,189 @@ pub fn verify_human_key_registration_pop(
     let signature = decode_base64_exact::<64>("proof_signature", signature)?;
     key.verify(&message, &Signature::from_bytes(&signature))
         .map_err(|_| "human signing-key proof-of-possession failed".to_string())
+}
+
+/// Agent-owned proof that binds one external Ed25519 key to the exact human
+/// subject and Paper Raid player selected by Consumer Edge. Legacy v1
+/// `owner_id` registration is intentionally absent from this frame.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AgentBindingProofClaimV2 {
+    pub schema: String,
+    pub binding_id: Uuid,
+    pub agent_id: String,
+    pub agent_key_id: String,
+    pub agent_public_key: String,
+    pub agent_public_key_hash: String,
+    pub subject_id: String,
+    pub player_id: Uuid,
+    pub nonce: String,
+    pub issued_at_unix: i64,
+    pub expires_at_unix: i64,
+}
+
+pub fn agent_binding_proof_signing_bytes(
+    claim: &AgentBindingProofClaimV2,
+) -> Result<Vec<u8>, String> {
+    if claim.schema != AGENT_BINDING_PROOF_V2 {
+        return Err(format!(
+            "unsupported Agent binding proof schema {}",
+            claim.schema
+        ));
+    }
+    for (field, value) in [
+        ("agent_id", claim.agent_id.as_str()),
+        ("agent_key_id", claim.agent_key_id.as_str()),
+        ("subject_id", claim.subject_id.as_str()),
+        ("nonce", claim.nonce.as_str()),
+    ] {
+        validate_text(field, value)?;
+    }
+    if claim.issued_at_unix < 0 || claim.expires_at_unix <= claim.issued_at_unix {
+        return Err("Agent binding proof validity interval is invalid".to_string());
+    }
+    let key = decode_base64_exact::<32>("agent_public_key", &claim.agent_public_key)?;
+    if sha256_digest(&key) != claim.agent_public_key_hash {
+        return Err("agent_public_key_hash does not match key".to_string());
+    }
+    if claim.agent_key_id != claim.agent_public_key_hash {
+        return Err("agent_key_id must equal agent_public_key_hash".to_string());
+    }
+    Ok(
+        CanonicalFrame::new("hepta_paper_raid_agent_binding_proof_v2")
+            .string(&claim.schema)?
+            .string(&claim.binding_id.to_string())?
+            .string(&claim.agent_id)?
+            .string(&claim.agent_key_id)?
+            .bytes(&key)?
+            .digest(&claim.agent_public_key_hash)?
+            .string(&claim.subject_id)?
+            .string(&claim.player_id.to_string())?
+            .string(&claim.nonce)?
+            .i64(claim.issued_at_unix)
+            .i64(claim.expires_at_unix)
+            .finish(),
+    )
+}
+
+pub fn verify_agent_binding_proof(
+    claim: &AgentBindingProofClaimV2,
+    signature: &str,
+) -> Result<(), String> {
+    let message = agent_binding_proof_signing_bytes(claim)?;
+    let key = decode_base64_exact::<32>("agent_public_key", &claim.agent_public_key)?;
+    let key = VerifyingKey::from_bytes(&key)
+        .map_err(|_| "Agent public key is not valid Ed25519".to_string())?;
+    let signature = decode_base64_exact::<64>("agent_proof_signature", signature)?;
+    key.verify(&message, &Signature::from_bytes(&signature))
+        .map_err(|_| "Agent binding proof-of-possession failed".to_string())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AgentBindingKeyRotationClaimV2 {
+    pub schema: String,
+    pub rotation_id: Uuid,
+    pub binding_id: Uuid,
+    pub expected_binding_version: u64,
+    pub player_id: Uuid,
+    pub subject_id: String,
+    pub agent_id: String,
+    pub old_agent_key_id: String,
+    pub old_agent_public_key: String,
+    pub old_agent_public_key_hash: String,
+    pub new_agent_key_id: String,
+    pub new_agent_public_key: String,
+    pub new_agent_public_key_hash: String,
+    pub nonce: String,
+    pub issued_at_unix: i64,
+    pub expires_at_unix: i64,
+}
+
+pub fn agent_binding_key_rotation_signing_bytes(
+    claim: &AgentBindingKeyRotationClaimV2,
+) -> Result<Vec<u8>, String> {
+    if claim.schema != AGENT_BINDING_KEY_ROTATION_V2
+        || claim.expected_binding_version == 0
+        || claim.expected_binding_version > JSON_SAFE_U64_MAX
+    {
+        return Err("Agent binding key rotation schema/version is invalid".to_string());
+    }
+    for (field, value) in [
+        ("subject_id", claim.subject_id.as_str()),
+        ("agent_id", claim.agent_id.as_str()),
+        ("old_agent_key_id", claim.old_agent_key_id.as_str()),
+        ("new_agent_key_id", claim.new_agent_key_id.as_str()),
+        ("nonce", claim.nonce.as_str()),
+    ] {
+        validate_text(field, value)?;
+    }
+    if claim.issued_at_unix < 0 || claim.expires_at_unix <= claim.issued_at_unix {
+        return Err("Agent binding key rotation validity interval is invalid".to_string());
+    }
+    let old_key = decode_base64_exact::<32>("old_agent_public_key", &claim.old_agent_public_key)?;
+    let new_key = decode_base64_exact::<32>("new_agent_public_key", &claim.new_agent_public_key)?;
+    if sha256_digest(&old_key) != claim.old_agent_public_key_hash
+        || claim.old_agent_key_id != claim.old_agent_public_key_hash
+    {
+        return Err("old Agent key ID/hash does not match its public key".to_string());
+    }
+    if sha256_digest(&new_key) != claim.new_agent_public_key_hash
+        || claim.new_agent_key_id != claim.new_agent_public_key_hash
+    {
+        return Err("new Agent key ID/hash does not match its public key".to_string());
+    }
+    if old_key == new_key {
+        return Err("Agent binding key rotation must change the public key".to_string());
+    }
+    Ok(
+        CanonicalFrame::new("hepta_paper_raid_agent_binding_key_rotation_v2")
+            .string(&claim.schema)?
+            .string(&claim.rotation_id.to_string())?
+            .string(&claim.binding_id.to_string())?
+            .u64(claim.expected_binding_version)
+            .string(&claim.player_id.to_string())?
+            .string(&claim.subject_id)?
+            .string(&claim.agent_id)?
+            .string(&claim.old_agent_key_id)?
+            .bytes(&old_key)?
+            .digest(&claim.old_agent_public_key_hash)?
+            .string(&claim.new_agent_key_id)?
+            .bytes(&new_key)?
+            .digest(&claim.new_agent_public_key_hash)?
+            .string(&claim.nonce)?
+            .i64(claim.issued_at_unix)
+            .i64(claim.expires_at_unix)
+            .finish(),
+    )
+}
+
+pub fn verify_agent_binding_key_rotation_signatures(
+    claim: &AgentBindingKeyRotationClaimV2,
+    old_key_signature: &str,
+    new_key_signature: &str,
+) -> Result<(), String> {
+    let message = agent_binding_key_rotation_signing_bytes(claim)?;
+    for (label, public_key, signature) in [
+        (
+            "old",
+            claim.old_agent_public_key.as_str(),
+            old_key_signature,
+        ),
+        (
+            "new",
+            claim.new_agent_public_key.as_str(),
+            new_key_signature,
+        ),
+    ] {
+        let key = decode_base64_exact::<32>("agent_public_key", public_key)?;
+        let key = VerifyingKey::from_bytes(&key)
+            .map_err(|_| format!("{label} Agent public key is not valid Ed25519"))?;
+        let signature = decode_base64_exact::<64>("signature", signature)?;
+        key.verify(&message, &Signature::from_bytes(&signature))
+            .map_err(|_| format!("{label} Agent key rotation signature failed"))?;
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

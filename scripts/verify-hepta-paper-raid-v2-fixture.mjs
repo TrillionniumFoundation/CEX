@@ -76,6 +76,47 @@ function assertionFrame(value) {
     .string(text('issuer_key_id', value.issuer_key_id)).finish();
 }
 
+function agentBindingFrame(claim) {
+  if (claim.schema !== 'hepta.paper_raid.agent_binding_proof.v2'
+      || claim.issued_at_unix < 0 || claim.expires_at_unix <= claim.issued_at_unix) {
+    fail('invalid Agent binding proof contract');
+  }
+  const key = b64('agent_public_key', claim.agent_public_key, 32);
+  if (digest(key) !== claim.agent_public_key_hash || claim.agent_key_id !== claim.agent_public_key_hash) {
+    fail('Agent binding key/hash mismatch');
+  }
+  return new Frame('hepta_paper_raid_agent_binding_proof_v2')
+    .string(claim.schema).string(claim.binding_id).string(text('agent_id', claim.agent_id))
+    .string(text('agent_key_id', claim.agent_key_id)).bytes(key)
+    .digest(claim.agent_public_key_hash).string(text('subject_id', claim.subject_id))
+    .string(claim.player_id).string(text('nonce', claim.nonce))
+    .i64(claim.issued_at_unix).i64(claim.expires_at_unix).finish();
+}
+
+function agentBindingRotationFrame(claim) {
+  if (claim.schema !== 'hepta.paper_raid.agent_binding_key_rotation.v2'
+      || claim.expected_binding_version < 1
+      || claim.expected_binding_version > 9007199254740991
+      || claim.issued_at_unix < 0 || claim.expires_at_unix <= claim.issued_at_unix) {
+    fail('invalid Agent binding rotation contract');
+  }
+  const oldKey = b64('old_agent_public_key', claim.old_agent_public_key, 32);
+  const newKey = b64('new_agent_public_key', claim.new_agent_public_key, 32);
+  if (digest(oldKey) !== claim.old_agent_public_key_hash
+      || claim.old_agent_key_id !== claim.old_agent_public_key_hash
+      || digest(newKey) !== claim.new_agent_public_key_hash
+      || claim.new_agent_key_id !== claim.new_agent_public_key_hash
+      || oldKey.equals(newKey)) fail('Agent binding rotation key/hash mismatch or no-op');
+  return new Frame('hepta_paper_raid_agent_binding_key_rotation_v2')
+    .string(claim.schema).string(claim.rotation_id).string(claim.binding_id)
+    .u64(claim.expected_binding_version).string(claim.player_id)
+    .string(text('subject_id', claim.subject_id)).string(text('agent_id', claim.agent_id))
+    .string(text('old_agent_key_id', claim.old_agent_key_id)).bytes(oldKey)
+    .digest(claim.old_agent_public_key_hash).string(text('new_agent_key_id', claim.new_agent_key_id))
+    .bytes(newKey).digest(claim.new_agent_public_key_hash).string(text('nonce', claim.nonce))
+    .i64(claim.issued_at_unix).i64(claim.expires_at_unix).finish();
+}
+
 function releaseFrame(candidate) {
   if (candidate.schema !== 'hepta.paper_raid.release_candidate.v2') fail('invalid release schema');
   const authors = structuredClone(candidate.authors).sort((a, b) => a.author_order - b.author_order);
@@ -274,6 +315,16 @@ const assertionBytes = assertionFrame(assertion.value);
 if (assertionBytes.toString('hex') !== assertion.signing_frame_hex) fail('assertion frame mismatch');
 if (!verify(assertionBytes, fixture.keys.consumer_edge.public_key_base64, assertion.value.signature)) fail('assertion signature');
 
+const agentBinding = fixture.agent_binding_proof;
+const agentBindingBytes = agentBindingFrame(agentBinding.claim);
+if (agentBindingBytes.toString('hex') !== agentBinding.signing_frame_hex
+    || !verify(agentBindingBytes, agentBinding.claim.agent_public_key, agentBinding.signature)) fail('Agent binding vector mismatch');
+const agentBindingRotation = fixture.agent_binding_key_rotation;
+const agentBindingRotationBytes = agentBindingRotationFrame(agentBindingRotation.claim);
+if (agentBindingRotationBytes.toString('hex') !== agentBindingRotation.signing_frame_hex
+    || !verify(agentBindingRotationBytes, agentBindingRotation.claim.old_agent_public_key, agentBindingRotation.old_key_signature)
+    || !verify(agentBindingRotationBytes, agentBindingRotation.claim.new_agent_public_key, agentBindingRotation.new_key_signature)) fail('Agent binding rotation vector mismatch');
+
 const releaseBytes = releaseFrame(fixture.release_candidate.value);
 if (releaseBytes.toString('hex') !== fixture.release_candidate.frame_hex || digest(releaseBytes) !== fixture.release_candidate.hash) fail('release vector mismatch');
 for (const vector of fixture.authorship_consents) {
@@ -310,6 +361,18 @@ verifyPublicationAgainst(publication.value, fixture.paper_bundle.value, evidence
 
 const assertionTamper = structuredClone(assertion.value); assertionTamper.claim.body_hash = digest(Buffer.from('tampered'));
 if (verify(assertionFrame(assertionTamper), fixture.keys.consumer_edge.public_key_base64, assertionTamper.signature)) fail('assertion tamper accepted');
+const agentBindingTamper = structuredClone(agentBinding.claim); agentBindingTamper.subject_id += '-tampered';
+if (verify(agentBindingFrame(agentBindingTamper), agentBindingTamper.agent_public_key, agentBinding.signature)) fail('Agent binding tamper accepted');
+if (verify(agentBindingRotationBytes, agentBindingRotation.claim.old_agent_public_key, agentBindingRotation.new_key_signature)
+    || verify(agentBindingRotationBytes, agentBindingRotation.claim.new_agent_public_key, agentBindingRotation.old_key_signature)) fail('Agent binding rotation signature substitution accepted');
+const noOpRotation = structuredClone(agentBindingRotation.claim);
+noOpRotation.new_agent_key_id = noOpRotation.old_agent_key_id;
+noOpRotation.new_agent_public_key = noOpRotation.old_agent_public_key;
+noOpRotation.new_agent_public_key_hash = noOpRotation.old_agent_public_key_hash;
+try { agentBindingRotationFrame(noOpRotation); fail('Agent binding rotation no-op accepted'); } catch (error) { if (error.message === 'Agent binding rotation no-op accepted') throw error; }
+const overflowRotation = structuredClone(agentBindingRotation.claim);
+overflowRotation.expected_binding_version = 9007199254740992;
+try { agentBindingRotationFrame(overflowRotation); fail('Agent binding rotation version overflow accepted'); } catch (error) { if (error.message === 'Agent binding rotation version overflow accepted') throw error; }
 const releaseTamper = structuredClone(fixture.release_candidate.value); releaseTamper.title += ' tampered';
 if (digest(releaseFrame(releaseTamper)) === fixture.release_candidate.hash) fail('release tamper accepted');
 const consentTamper = structuredClone(fixture.authorship_consents[0]); consentTamper.signing.release_candidate_hash = digest(Buffer.from('tampered'));
@@ -358,6 +421,6 @@ console.log(JSON.stringify({
   completion_receipt_hash: canonicalJsonDigest(completion.value),
   evidence_envelope_hash: evidence.hash,
   publication_release_hash: publication.value.publication_release_hash,
-  tamper_negatives: 12,
+  tamper_negatives: 16,
   ok: true,
 }));

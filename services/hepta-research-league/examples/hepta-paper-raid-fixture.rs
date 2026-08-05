@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use ed25519_dalek::{Signer, SigningKey};
 use hepta_research_league::paper_raid_contracts::{
+    agent_binding_key_rotation_signing_bytes, agent_binding_proof_signing_bytes,
     authorization_set_consumption_receipt_signing_bytes, authorship_consent_signing_bytes,
     canonical_json_sha256, consumer_user_assertion_signing_bytes,
     nakama_completion_receipt_signing_bytes, paper_bundle_frame, paper_bundle_hash,
@@ -11,14 +12,15 @@ use hepta_research_league::paper_raid_contracts::{
     publication_release_author_signing_bytes, publication_release_frame, publication_release_hash,
     sha256_digest, sign_authorization_set_consumption_receipt, sign_authorship_consent,
     sign_consumer_user_assertion, sign_nakama_completion_receipt,
-    sign_paper_raid_evidence_envelope, AuthorshipConsentSigningV2, ConsumerUserAssertionClaimV2,
-    PaperBundleAuthorConsentV2, PaperBundleV2, PaperReleaseAuthorV2, PaperReleaseCandidateV2,
+    sign_paper_raid_evidence_envelope, AgentBindingKeyRotationClaimV2, AgentBindingProofClaimV2,
+    AuthorshipConsentSigningV2, ConsumerUserAssertionClaimV2, PaperBundleAuthorConsentV2,
+    PaperBundleV2, PaperReleaseAuthorV2, PaperReleaseCandidateV2,
     PublicationReleaseAuthorConsentV1, PublicationReleaseV1, ResearchSessionTerminalFactsV1,
     SignedAuthorizationSetConsumptionReceiptV1, SignedNakamaCompletionReceiptV1,
-    SignedPaperRaidEvidenceEnvelopeV1, AUTHORIZATION_SET_CONSUMPTION_RECEIPT_V1,
-    AUTHORSHIP_CONSENT_V2, CONSUMER_USER_ASSERTION_V2, NAKAMA_COMPLETION_RECEIPT_V1,
-    PAPER_BUNDLE_V2, PAPER_RAID_EVIDENCE_ENVELOPE_V1, PAPER_RELEASE_CANDIDATE_V2,
-    PUBLICATION_RELEASE_V1,
+    SignedPaperRaidEvidenceEnvelopeV1, AGENT_BINDING_KEY_ROTATION_V2, AGENT_BINDING_PROOF_V2,
+    AUTHORIZATION_SET_CONSUMPTION_RECEIPT_V1, AUTHORSHIP_CONSENT_V2, CONSUMER_USER_ASSERTION_V2,
+    NAKAMA_COMPLETION_RECEIPT_V1, PAPER_BUNDLE_V2, PAPER_RAID_EVIDENCE_ENVELOPE_V1,
+    PAPER_RELEASE_CANDIDATE_V2, PUBLICATION_RELEASE_V1,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -54,10 +56,14 @@ fn id(value: &str) -> Uuid {
 
 fn main() {
     let (consumer_key, consumer_vector) = key(0xa1);
+    let (agent_key, agent_vector) = key(0xf1);
+    let (replacement_agent_key, replacement_agent_vector) = key(0xf2);
     let (hepta_issuer_key, hepta_issuer_vector) = key(0xe1);
     let author_material = [key(0xb1), key(0xc1), key(0xd1)];
     let mut keys = BTreeMap::new();
     keys.insert("consumer_edge", consumer_vector);
+    keys.insert("agent_binding", agent_vector);
+    keys.insert("agent_binding_replacement", replacement_agent_vector);
     keys.insert("hepta_receipt_issuer", hepta_issuer_vector);
     for (index, (_, vector)) in author_material.iter().enumerate() {
         keys.insert(
@@ -99,6 +105,55 @@ fn main() {
     let assertion_frame =
         consumer_user_assertion_signing_bytes(&assertion.claim, &assertion.issuer_key_id)
             .expect("assertion frame");
+
+    let agent_public_key = BASE64.encode(agent_key.verifying_key().to_bytes());
+    let agent_key_id = sha256_digest(&agent_key.verifying_key().to_bytes());
+    let agent_binding_proof = AgentBindingProofClaimV2 {
+        schema: AGENT_BINDING_PROOF_V2.to_string(),
+        binding_id: id("31000000-0000-4000-8000-000000000001"),
+        agent_id: "did:trnm:paper-raid-golden-agent-1".to_string(),
+        agent_key_id: agent_key_id.clone(),
+        agent_public_key: agent_public_key.clone(),
+        agent_public_key_hash: agent_key_id,
+        subject_id: assertion.claim.subject_id.clone(),
+        player_id: assertion.claim.player_id,
+        nonce: "paper-raid-golden-agent-binding-001".to_string(),
+        issued_at_unix: 1_800_100_000,
+        expires_at_unix: 1_800_100_300,
+    };
+    let agent_binding_frame =
+        agent_binding_proof_signing_bytes(&agent_binding_proof).expect("Agent binding frame");
+    let agent_binding_signature = BASE64.encode(agent_key.sign(&agent_binding_frame).to_bytes());
+    let replacement_public_key = BASE64.encode(replacement_agent_key.verifying_key().to_bytes());
+    let replacement_key_id = sha256_digest(&replacement_agent_key.verifying_key().to_bytes());
+    let agent_binding_rotation = AgentBindingKeyRotationClaimV2 {
+        schema: AGENT_BINDING_KEY_ROTATION_V2.to_string(),
+        rotation_id: id("32000000-0000-4000-8000-000000000001"),
+        binding_id: agent_binding_proof.binding_id,
+        expected_binding_version: 1,
+        player_id: agent_binding_proof.player_id,
+        subject_id: agent_binding_proof.subject_id.clone(),
+        agent_id: agent_binding_proof.agent_id.clone(),
+        old_agent_key_id: agent_binding_proof.agent_key_id.clone(),
+        old_agent_public_key: agent_binding_proof.agent_public_key.clone(),
+        old_agent_public_key_hash: agent_binding_proof.agent_public_key_hash.clone(),
+        new_agent_key_id: replacement_key_id.clone(),
+        new_agent_public_key: replacement_public_key,
+        new_agent_public_key_hash: replacement_key_id,
+        nonce: "paper-raid-golden-agent-rotation-001".to_string(),
+        issued_at_unix: 1_800_100_400,
+        expires_at_unix: 1_800_100_700,
+    };
+    let agent_binding_rotation_frame =
+        agent_binding_key_rotation_signing_bytes(&agent_binding_rotation)
+            .expect("Agent binding rotation frame");
+    let agent_binding_rotation_old_signature =
+        BASE64.encode(agent_key.sign(&agent_binding_rotation_frame).to_bytes());
+    let agent_binding_rotation_new_signature = BASE64.encode(
+        replacement_agent_key
+            .sign(&agent_binding_rotation_frame)
+            .to_bytes(),
+    );
 
     let player_ids = [
         id("30000000-0000-4000-8000-000000000001"),
@@ -378,6 +433,17 @@ fn main() {
             "value": assertion,
             "signing_frame_hex": hex(&assertion_frame),
         },
+        "agent_binding_proof": {
+            "claim": agent_binding_proof,
+            "signing_frame_hex": hex(&agent_binding_frame),
+            "signature": agent_binding_signature,
+        },
+        "agent_binding_key_rotation": {
+            "claim": agent_binding_rotation,
+            "signing_frame_hex": hex(&agent_binding_rotation_frame),
+            "old_key_signature": agent_binding_rotation_old_signature,
+            "new_key_signature": agent_binding_rotation_new_signature,
+        },
         "release_candidate": {
             "value": release_candidate,
             "frame_hex": hex(&release_frame),
@@ -407,6 +473,10 @@ fn main() {
         },
         "negative_cases": [
             "consumer_assertion_body_hash_tamper",
+            "agent_binding_subject_tamper",
+            "agent_binding_rotation_signature_substitution",
+            "agent_binding_rotation_noop",
+            "agent_binding_rotation_version_overflow",
             "release_candidate_title_tamper",
             "authorship_consent_release_hash_tamper",
             "paper_bundle_signature_tamper",

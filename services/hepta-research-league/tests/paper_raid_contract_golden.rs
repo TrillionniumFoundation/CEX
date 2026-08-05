@@ -1,24 +1,27 @@
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use ed25519_dalek::VerifyingKey;
 use hepta_research_league::paper_raid_contracts::{
+    agent_binding_key_rotation_signing_bytes, agent_binding_proof_signing_bytes,
     authorization_set_consumption_receipt_signing_bytes, authorship_consent_signing_bytes,
     canonical_json_sha256, consumer_user_assertion_signing_bytes,
     nakama_completion_receipt_signing_bytes, paper_bundle_frame, paper_bundle_hash,
     paper_raid_evidence_envelope_hash, paper_raid_evidence_envelope_signing_bytes,
     paper_release_candidate_frame, paper_release_candidate_hash, publication_release_frame,
-    publication_release_hash, sha256_digest, verify_authorization_set_consumption_receipt,
+    publication_release_hash, sha256_digest, verify_agent_binding_key_rotation_signatures,
+    verify_agent_binding_proof, verify_authorization_set_consumption_receipt,
     verify_authorship_consent_signature, verify_consumer_user_assertion_signature,
     verify_nakama_completion_receipt, verify_paper_raid_evidence_envelope,
     verify_paper_raid_evidence_envelope_against, verify_publication_release_against,
-    AuthorshipConsentSigningV2, PaperBundleV2, PaperReleaseCandidateV2, PublicationReleaseV1,
+    AgentBindingKeyRotationClaimV2, AgentBindingProofClaimV2, AuthorshipConsentSigningV2,
+    PaperBundleV2, PaperReleaseCandidateV2, PublicationReleaseV1,
     SignedAuthorizationSetConsumptionReceiptV1, SignedConsumerUserAssertionV2,
-    SignedNakamaCompletionReceiptV1, SignedPaperRaidEvidenceEnvelopeV1,
+    SignedNakamaCompletionReceiptV1, SignedPaperRaidEvidenceEnvelopeV1, JSON_SAFE_U64_MAX,
 };
 use serde::Deserialize;
 
 const FIXTURE: &[u8] = include_bytes!("../../../docs/sdk-fixtures/hepta-paper-raid-v2.json");
 const FIXTURE_SHA256: &str =
-    "sha256:309584cc21a7169473a7bd37b93528edce4a3b248b313238cd81f6a7c3cad19d";
+    "sha256:c9f25b1f68fb4ccdd31f4eb4c113292dc5dbaa9b9ddbb3cd6a168655854d808c";
 
 #[derive(Deserialize)]
 struct KeyVector {
@@ -29,6 +32,21 @@ struct KeyVector {
 struct AssertionVector {
     value: SignedConsumerUserAssertionV2,
     signing_frame_hex: String,
+}
+
+#[derive(Deserialize)]
+struct AgentBindingVector {
+    claim: AgentBindingProofClaimV2,
+    signing_frame_hex: String,
+    signature: String,
+}
+
+#[derive(Deserialize)]
+struct AgentBindingRotationVector {
+    claim: AgentBindingKeyRotationClaimV2,
+    signing_frame_hex: String,
+    old_key_signature: String,
+    new_key_signature: String,
 }
 
 #[derive(Deserialize)]
@@ -81,6 +99,8 @@ struct Fixture {
     schema: String,
     keys: serde_json::Map<String, serde_json::Value>,
     consumer_assertion: AssertionVector,
+    agent_binding_proof: AgentBindingVector,
+    agent_binding_key_rotation: AgentBindingRotationVector,
     release_candidate: ReleaseVector,
     authorship_consents: Vec<ConsentVector>,
     paper_bundle: BundleVector,
@@ -104,7 +124,7 @@ fn rust_verifies_hepta_owned_cross_language_vectors_and_tamper_negatives() {
     let fixture: Fixture = serde_json::from_slice(FIXTURE).expect("Paper Raid fixture");
     assert_eq!(fixture.schema, "hepta.paper_raid.golden_vectors.v2");
     assert_eq!(fixture.authorship_consents.len(), 3);
-    assert_eq!(fixture.negative_cases.len(), 12);
+    assert_eq!(fixture.negative_cases.len(), 16);
 
     let consumer: KeyVector = serde_json::from_value(
         fixture
@@ -131,6 +151,31 @@ fn rust_verifies_hepta_owned_cross_language_vectors_and_tamper_negatives() {
     );
     verify_consumer_user_assertion_signature(&fixture.consumer_assertion.value, &consumer_key)
         .unwrap();
+
+    let agent_frame = agent_binding_proof_signing_bytes(&fixture.agent_binding_proof.claim)
+        .expect("Agent binding frame");
+    assert_eq!(
+        agent_frame,
+        decode_hex(&fixture.agent_binding_proof.signing_frame_hex)
+    );
+    verify_agent_binding_proof(
+        &fixture.agent_binding_proof.claim,
+        &fixture.agent_binding_proof.signature,
+    )
+    .expect("Agent binding proof");
+    let rotation_frame =
+        agent_binding_key_rotation_signing_bytes(&fixture.agent_binding_key_rotation.claim)
+            .expect("Agent binding rotation frame");
+    assert_eq!(
+        rotation_frame,
+        decode_hex(&fixture.agent_binding_key_rotation.signing_frame_hex)
+    );
+    verify_agent_binding_key_rotation_signatures(
+        &fixture.agent_binding_key_rotation.claim,
+        &fixture.agent_binding_key_rotation.old_key_signature,
+        &fixture.agent_binding_key_rotation.new_key_signature,
+    )
+    .expect("Agent binding rotation signatures");
 
     let release_frame = paper_release_candidate_frame(&fixture.release_candidate.value).unwrap();
     assert_eq!(
@@ -252,6 +297,27 @@ fn rust_verifies_hepta_owned_cross_language_vectors_and_tamper_negatives() {
     let mut assertion_tamper = fixture.consumer_assertion.value.clone();
     assertion_tamper.claim.body_hash = sha256_digest(b"tampered");
     assert!(verify_consumer_user_assertion_signature(&assertion_tamper, &consumer_key).is_err());
+    let mut agent_binding_tamper = fixture.agent_binding_proof.claim.clone();
+    agent_binding_tamper.subject_id.push_str("-tampered");
+    assert!(verify_agent_binding_proof(
+        &agent_binding_tamper,
+        &fixture.agent_binding_proof.signature,
+    )
+    .is_err());
+    assert!(verify_agent_binding_key_rotation_signatures(
+        &fixture.agent_binding_key_rotation.claim,
+        &fixture.agent_binding_key_rotation.new_key_signature,
+        &fixture.agent_binding_key_rotation.old_key_signature,
+    )
+    .is_err());
+    let mut no_op_rotation = fixture.agent_binding_key_rotation.claim.clone();
+    no_op_rotation.new_agent_key_id = no_op_rotation.old_agent_key_id.clone();
+    no_op_rotation.new_agent_public_key = no_op_rotation.old_agent_public_key.clone();
+    no_op_rotation.new_agent_public_key_hash = no_op_rotation.old_agent_public_key_hash.clone();
+    assert!(agent_binding_key_rotation_signing_bytes(&no_op_rotation).is_err());
+    let mut overflow_rotation = fixture.agent_binding_key_rotation.claim.clone();
+    overflow_rotation.expected_binding_version = JSON_SAFE_U64_MAX + 1;
+    assert!(agent_binding_key_rotation_signing_bytes(&overflow_rotation).is_err());
     let mut release_tamper = fixture.release_candidate.value.clone();
     release_tamper.title.push_str(" tampered");
     assert_ne!(

@@ -14,8 +14,9 @@ use uuid::Uuid;
 
 use super::*;
 use crate::{
-    app, key_rotation_signing_message,
+    app,
     paper_raid_contracts::{
+        agent_binding_key_rotation_signing_bytes, agent_binding_proof_signing_bytes,
         agent_proposal_signing_bytes, canonical_json_bytes, canonical_json_sha256,
         human_decision_signing_bytes, human_evidence_verification_signing_bytes,
         human_key_registration_signing_bytes, human_key_revocation_signing_bytes,
@@ -24,20 +25,22 @@ use crate::{
         paper_reproduction_signing_bytes, paper_review_attestation_signing_bytes,
         section_merge_signing_bytes, section_review_signing_bytes, sha256_digest,
         sign_authorship_consent, sign_consumer_user_assertion,
-        team_member_acceptance_signing_bytes, AgentProposalSigningV1, AuthorshipConsentSigningV2,
+        team_member_acceptance_signing_bytes, AgentBindingKeyRotationClaimV2,
+        AgentBindingProofClaimV2, AgentProposalSigningV1, AuthorshipConsentSigningV2,
         ConsumerUserAssertionClaimV2, HumanDecisionSigningV1, HumanEvidenceVerificationSigningV1,
         HumanKeyRegistrationClaimV2, HumanKeyRevocationClaimV2, HumanKeyRotationClaimV2,
         PaperAppealResolutionSigningV1, PaperAppealSigningV1, PaperEvaluationSigningV1,
         PaperReproductionSigningV1, PaperReviewAttestationSigningV1, SectionMergeSigningV1,
-        SectionReviewSigningV1, TeamMemberAcceptanceSigningV2, AGENT_PROPOSAL_V1,
-        AUTHORSHIP_CONSENT_V2, CONSUMER_USER_ASSERTION_V2, HUMAN_DECISION_V1,
-        HUMAN_EVIDENCE_VERIFICATION_V1, HUMAN_KEY_REGISTRATION_V2, HUMAN_KEY_REVOCATION_V2,
-        HUMAN_KEY_ROTATION_V2, PAPER_APPEAL_RESOLUTION_V1, PAPER_APPEAL_V1, PAPER_EVALUATION_V1,
+        SectionReviewSigningV1, TeamMemberAcceptanceSigningV2, AGENT_BINDING_KEY_ROTATION_V2,
+        AGENT_BINDING_PROOF_V2, AGENT_PROPOSAL_V1, AUTHORSHIP_CONSENT_V2,
+        CONSUMER_USER_ASSERTION_V2, HUMAN_DECISION_V1, HUMAN_EVIDENCE_VERIFICATION_V1,
+        HUMAN_KEY_REGISTRATION_V2, HUMAN_KEY_REVOCATION_V2, HUMAN_KEY_ROTATION_V2,
+        JSON_SAFE_U64_MAX, PAPER_APPEAL_RESOLUTION_V1, PAPER_APPEAL_V1, PAPER_EVALUATION_V1,
         PAPER_REPRODUCTION_V1, PAPER_REVIEW_ATTESTATION_V1, SECTION_MERGE_V1, SECTION_REVIEW_V1,
         TEAM_MEMBER_ACCEPTANCE_V2,
     },
-    AppState, RotateAgentKeyRequest, SecurityConfig, NAKAMA_TOKEN_HEADER, OPERATOR_TOKEN_HEADER,
-    TRNM_TOKEN_HEADER, USER_ASSERTION_HEADER,
+    AppState, SecurityConfig, NAKAMA_TOKEN_HEADER, OPERATOR_TOKEN_HEADER, TRNM_TOKEN_HEADER,
+    USER_ASSERTION_HEADER,
 };
 
 #[derive(Debug, Clone)]
@@ -672,6 +675,29 @@ fn signed_user_assertion(
     body_hash: String,
 ) -> String {
     let now = Utc::now().timestamp();
+    signed_user_assertion_at(
+        actor,
+        operation,
+        method,
+        path,
+        idempotency_key,
+        body_hash,
+        now - 1,
+        now + 120,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn signed_user_assertion_at(
+    actor: &Actor,
+    operation: &str,
+    method: &str,
+    path: &str,
+    idempotency_key: &str,
+    body_hash: String,
+    issued_at_unix: i64,
+    expires_at_unix: i64,
+) -> String {
     let assertion = sign_consumer_user_assertion(
         ConsumerUserAssertionClaimV2 {
             schema: CONSUMER_USER_ASSERTION_V2.to_string(),
@@ -686,8 +712,8 @@ fn signed_user_assertion(
             canonical_path: path.to_string(),
             idempotency_key: idempotency_key.to_string(),
             body_hash,
-            issued_at_unix: now - 1,
-            expires_at_unix: now + 120,
+            issued_at_unix,
+            expires_at_unix,
             nonce: idempotency_key.to_string(),
         },
         "hepta-test-consumer-edge-key-v2",
@@ -821,6 +847,8 @@ async fn reset_postgres(database_url: &str) {
            hepta_research_team_member_acceptances,
            hepta_research_team_members,
            hepta_research_teams,
+           hepta_agent_binding_key_rotations,
+           hepta_agent_binding_nonces,
            hepta_agent_bindings,
            hepta_human_signing_keys,
            hepta_human_players,
@@ -885,59 +913,10 @@ async fn register_prerequisites(router: &Router, actors: &[Actor]) -> Uuid {
 
 async fn create_players_and_bindings(router: &Router, actors: &[Actor]) {
     for actor in actors {
-        let idempotency_key = format!("create-player-{}", actor.player_id);
-        let now = Utc::now().timestamp();
-        let registration = HumanKeyRegistrationClaimV2 {
-            schema: HUMAN_KEY_REGISTRATION_V2.to_string(),
-            player_id: actor.player_id,
-            subject_id: actor.subject_id.clone(),
-            nakama_user_id: actor.nakama_user_id,
-            signing_key_id: actor.human_key_id.clone(),
-            signing_public_key: actor.human_public_key.clone(),
-            signing_public_key_hash: actor.human_public_key_hash.clone(),
-            nonce: idempotency_key.clone(),
-            issued_at_unix: now - 1,
-            expires_at_unix: now + 300,
-        };
-        let proof = BASE64.encode(
-            actor
-                .human_key
-                .sign(
-                    &human_key_registration_signing_bytes(&registration)
-                        .expect("registration frame"),
-                )
-                .to_bytes(),
-        );
-        let body = json!({
-            "player_id": actor.player_id,
-            "display_name": format!("Paper Raid author {}", actor.player_id),
-            "signing_key_id": actor.human_key_id,
-            "signing_public_key": actor.human_public_key,
-            "key_issued_at_unix": registration.issued_at_unix,
-            "key_expires_at_unix": registration.expires_at_unix,
-            "key_proof_signature": proof,
-            "idempotency_key": idempotency_key,
-        });
-        assert_status(
-            user_post(
-                router,
-                actor,
-                "create_human_player_v2",
-                "/v2/hepta/players",
-                &idempotency_key,
-                body,
-            )
-            .await,
-            StatusCode::CREATED,
-        );
+        create_player_only(router, actor).await;
 
         let idempotency_key = format!("create-binding-{}", actor.binding_id);
-        let body = json!({
-            "binding_id": actor.binding_id,
-            "player_id": actor.player_id,
-            "agent_id": actor.agent_id,
-            "idempotency_key": idempotency_key,
-        });
+        let body = agent_binding_body(actor, &idempotency_key, &idempotency_key);
         assert_status(
             user_post(
                 router,
@@ -951,6 +930,1002 @@ async fn create_players_and_bindings(router: &Router, actors: &[Actor]) {
             StatusCode::CREATED,
         );
     }
+}
+
+async fn create_player_only(router: &Router, actor: &Actor) {
+    let idempotency_key = format!("create-player-{}", actor.player_id);
+    let now = Utc::now().timestamp();
+    let body = human_player_body_at(actor, &idempotency_key, now - 1, now + 300);
+    assert_status(
+        user_post(
+            router,
+            actor,
+            "create_human_player_v2",
+            "/v2/hepta/players",
+            &idempotency_key,
+            body,
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+}
+
+fn human_player_body_at(
+    actor: &Actor,
+    idempotency_key: &str,
+    issued_at_unix: i64,
+    expires_at_unix: i64,
+) -> Value {
+    let registration = HumanKeyRegistrationClaimV2 {
+        schema: HUMAN_KEY_REGISTRATION_V2.to_string(),
+        player_id: actor.player_id,
+        subject_id: actor.subject_id.clone(),
+        nakama_user_id: actor.nakama_user_id,
+        signing_key_id: actor.human_key_id.clone(),
+        signing_public_key: actor.human_public_key.clone(),
+        signing_public_key_hash: actor.human_public_key_hash.clone(),
+        nonce: idempotency_key.to_string(),
+        issued_at_unix,
+        expires_at_unix,
+    };
+    let proof = BASE64.encode(
+        actor
+            .human_key
+            .sign(&human_key_registration_signing_bytes(&registration).expect("registration frame"))
+            .to_bytes(),
+    );
+    json!({
+        "player_id": actor.player_id,
+        "display_name": format!("Paper Raid author {}", actor.player_id),
+        "signing_key_id": actor.human_key_id,
+        "signing_public_key": actor.human_public_key,
+        "key_issued_at_unix": registration.issued_at_unix,
+        "key_expires_at_unix": registration.expires_at_unix,
+        "key_proof_signature": proof,
+        "idempotency_key": idempotency_key,
+    })
+}
+
+fn agent_binding_body(actor: &Actor, idempotency_key: &str, proof_nonce: &str) -> Value {
+    let now = Utc::now().timestamp();
+    agent_binding_body_at(actor, idempotency_key, proof_nonce, now - 1, now + 300)
+}
+
+fn agent_binding_body_at(
+    actor: &Actor,
+    idempotency_key: &str,
+    proof_nonce: &str,
+    issued_at_unix: i64,
+    expires_at_unix: i64,
+) -> Value {
+    let agent_public_key = BASE64.encode(actor.agent_key.verifying_key().to_bytes());
+    let agent_key_id = sha256_digest(&actor.agent_key.verifying_key().to_bytes());
+    let proof = AgentBindingProofClaimV2 {
+        schema: AGENT_BINDING_PROOF_V2.to_string(),
+        binding_id: actor.binding_id,
+        agent_id: actor.agent_id.clone(),
+        agent_key_id: agent_key_id.clone(),
+        agent_public_key: agent_public_key.clone(),
+        agent_public_key_hash: agent_key_id.clone(),
+        subject_id: actor.subject_id.clone(),
+        player_id: actor.player_id,
+        nonce: proof_nonce.to_string(),
+        issued_at_unix,
+        expires_at_unix,
+    };
+    let proof_signature = BASE64.encode(
+        actor
+            .agent_key
+            .sign(&agent_binding_proof_signing_bytes(&proof).expect("Agent binding frame"))
+            .to_bytes(),
+    );
+    json!({
+        "binding_id": actor.binding_id,
+        "player_id": actor.player_id,
+        "agent_id": actor.agent_id,
+        "agent_key_id": agent_key_id,
+        "agent_public_key": agent_public_key,
+        "agent_proof_nonce": proof_nonce,
+        "agent_proof_issued_at_unix": proof.issued_at_unix,
+        "agent_proof_expires_at_unix": proof.expires_at_unix,
+        "agent_proof_signature": proof_signature,
+        "idempotency_key": idempotency_key,
+    })
+}
+
+fn agent_binding_rotation_body(
+    actor: &Actor,
+    binding_id: Uuid,
+    expected_binding_version: u64,
+    old_key: &SigningKey,
+    new_key: &SigningKey,
+    idempotency_key: &str,
+) -> Value {
+    agent_binding_rotation_body_with_id(
+        actor,
+        binding_id,
+        Uuid::new_v4(),
+        expected_binding_version,
+        old_key,
+        new_key,
+        idempotency_key,
+    )
+}
+
+fn agent_binding_rotation_body_with_id(
+    actor: &Actor,
+    binding_id: Uuid,
+    rotation_id: Uuid,
+    expected_binding_version: u64,
+    old_key: &SigningKey,
+    new_key: &SigningKey,
+    idempotency_key: &str,
+) -> Value {
+    let old_agent_public_key = BASE64.encode(old_key.verifying_key().to_bytes());
+    let old_agent_key_id = sha256_digest(&old_key.verifying_key().to_bytes());
+    let new_agent_public_key = BASE64.encode(new_key.verifying_key().to_bytes());
+    let new_agent_key_id = sha256_digest(&new_key.verifying_key().to_bytes());
+    let issued_at_unix = Utc::now().timestamp();
+    let claim = AgentBindingKeyRotationClaimV2 {
+        schema: AGENT_BINDING_KEY_ROTATION_V2.to_string(),
+        rotation_id,
+        binding_id,
+        expected_binding_version,
+        player_id: actor.player_id,
+        subject_id: actor.subject_id.clone(),
+        agent_id: actor.agent_id.clone(),
+        old_agent_key_id: old_agent_key_id.clone(),
+        old_agent_public_key: old_agent_public_key.clone(),
+        old_agent_public_key_hash: old_agent_key_id.clone(),
+        new_agent_key_id: new_agent_key_id.clone(),
+        new_agent_public_key: new_agent_public_key.clone(),
+        new_agent_public_key_hash: new_agent_key_id.clone(),
+        nonce: idempotency_key.to_string(),
+        issued_at_unix,
+        expires_at_unix: issued_at_unix + 300,
+    };
+    let frame = agent_binding_key_rotation_signing_bytes(&claim)
+        .expect("valid Agent binding key rotation frame");
+    json!({
+        "rotation_id":claim.rotation_id,
+        "expected_binding_version":expected_binding_version,
+        "agent_id":actor.agent_id,
+        "old_agent_key_id":old_agent_key_id,
+        "old_agent_public_key":old_agent_public_key,
+        "new_agent_key_id":new_agent_key_id,
+        "new_agent_public_key":new_agent_public_key,
+        "issued_at_unix":issued_at_unix,
+        "expires_at_unix":issued_at_unix + 300,
+        "old_key_signature":BASE64.encode(old_key.sign(&frame).to_bytes()),
+        "new_key_signature":BASE64.encode(new_key.sign(&frame).to_bytes()),
+        "idempotency_key":idempotency_key,
+    })
+}
+
+async fn seed_applied_idempotent_response(
+    state: &AppState,
+    operation: &str,
+    idempotency_key: &str,
+    request_hash: &str,
+    aggregate_id: Uuid,
+    response: Value,
+) {
+    if let Some(pool) = &state.pool {
+        sqlx::query(
+            "insert into hepta_paper_raid_idempotency (
+                operation, idempotency_key, request_hash, aggregate_id,
+                response_status, response_json
+             ) values ($1,$2,$3,$4,$5,$6::jsonb)",
+        )
+        .bind(operation)
+        .bind(idempotency_key)
+        .bind(request_hash)
+        .bind(aggregate_id)
+        .bind(i32::from(StatusCode::CREATED.as_u16()))
+        .bind(response)
+        .execute(pool)
+        .await
+        .expect("seed committed idempotent response");
+    } else {
+        state.paper_raid.write().await.idempotency.insert(
+            memory_idempotency_key(operation, idempotency_key),
+            MemoryIdempotencyRecord {
+                request_hash: request_hash.to_string(),
+                status: StatusCode::CREATED,
+                response,
+            },
+        );
+    }
+}
+
+async fn exercise_expired_onboarding_replay(state: AppState) {
+    let router = app(state.clone());
+    let actor = actors(1).remove(0);
+    let now = Utc::now();
+    let issued_at_unix = now.timestamp() - 180;
+    let expires_at_unix = now.timestamp() - 60;
+
+    let player_key = format!("lost-player-response-{}", actor.player_id);
+    let player_body = human_player_body_at(&actor, &player_key, issued_at_unix, expires_at_unix);
+    let player_response = serde_json::to_value(HumanPlayer {
+        player_id: actor.player_id,
+        subject_id: actor.subject_id.clone(),
+        nakama_user_id: actor.nakama_user_id,
+        display_name: format!("Paper Raid author {}", actor.player_id),
+        signing_key_id: actor.human_key_id.clone(),
+        signing_public_key: actor.human_public_key.clone(),
+        signing_public_key_hash: actor.human_public_key_hash.clone(),
+        status: HumanPlayerStatus::Active,
+        version: 1,
+        created_at: now,
+        updated_at: now,
+    })
+    .expect("encode seeded human player");
+    let player_request_hash = canonical_json_sha256(&player_body).expect("player request hash");
+    seed_applied_idempotent_response(
+        &state,
+        "create_human_player_v2",
+        &player_key,
+        &player_request_hash,
+        actor.player_id,
+        player_response.clone(),
+    )
+    .await;
+    let player_assertion = signed_user_assertion_at(
+        &actor,
+        "create_human_player_v2",
+        "POST",
+        "/v2/hepta/players",
+        &player_key,
+        player_request_hash,
+        issued_at_unix,
+        expires_at_unix,
+    );
+    let replayed_player = assert_status(
+        request(
+            &router,
+            "POST",
+            "/v2/hepta/players",
+            player_body,
+            Some(player_assertion),
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+    assert_eq!(replayed_player, player_response);
+
+    let new_player_key = format!("expired-new-player-{}", actor.player_id);
+    let new_player_body =
+        human_player_body_at(&actor, &new_player_key, issued_at_unix, expires_at_unix);
+    let new_player_hash = canonical_json_sha256(&new_player_body).expect("new player request hash");
+    let new_player_assertion = signed_user_assertion_at(
+        &actor,
+        "create_human_player_v2",
+        "POST",
+        "/v2/hepta/players",
+        &new_player_key,
+        new_player_hash,
+        issued_at_unix,
+        expires_at_unix,
+    );
+    assert_eq!(
+        error_code(
+            request(
+                &router,
+                "POST",
+                "/v2/hepta/players",
+                new_player_body,
+                Some(new_player_assertion),
+            )
+            .await,
+            StatusCode::FORBIDDEN,
+        ),
+        "user_assertion_expired"
+    );
+
+    let binding_key = format!("lost-binding-response-{}", actor.binding_id);
+    let binding_body = agent_binding_body_at(
+        &actor,
+        &binding_key,
+        &binding_key,
+        issued_at_unix,
+        expires_at_unix,
+    );
+    let agent_public_key = BASE64.encode(actor.agent_key.verifying_key().to_bytes());
+    let agent_key_id = sha256_digest(&actor.agent_key.verifying_key().to_bytes());
+    let binding_response = serde_json::to_value(AgentBinding {
+        binding_id: actor.binding_id,
+        player_id: actor.player_id,
+        agent_id: actor.agent_id.clone(),
+        agent_key_id: agent_key_id.clone(),
+        agent_public_key,
+        agent_public_key_hash: agent_key_id,
+        status: AgentBindingStatus::Active,
+        version: 1,
+        created_at: now,
+        updated_at: now,
+    })
+    .expect("encode seeded Agent binding");
+    let binding_request_hash =
+        canonical_json_sha256(&binding_body).expect("Agent binding request hash");
+    seed_applied_idempotent_response(
+        &state,
+        "create_agent_binding_v2",
+        &binding_key,
+        &binding_request_hash,
+        actor.binding_id,
+        binding_response.clone(),
+    )
+    .await;
+    let binding_assertion = signed_user_assertion_at(
+        &actor,
+        "create_agent_binding_v2",
+        "POST",
+        "/v2/hepta/agent-bindings",
+        &binding_key,
+        binding_request_hash,
+        issued_at_unix,
+        expires_at_unix,
+    );
+    let replayed_binding = assert_status(
+        request(
+            &router,
+            "POST",
+            "/v2/hepta/agent-bindings",
+            binding_body,
+            Some(binding_assertion),
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+    assert_eq!(replayed_binding, binding_response);
+}
+
+async fn exercise_real_onboarding_expiry_replay(state: AppState) {
+    let router = app(state.clone());
+    let actor = actors(1).remove(0);
+
+    let player_key = format!("real-player-response-loss-{}", actor.player_id);
+    let player_now = Utc::now().timestamp();
+    let player_body = human_player_body_at(&actor, &player_key, player_now, player_now + 1);
+    let player_hash = canonical_json_sha256(&player_body).expect("real player request hash");
+    let player_assertion = signed_user_assertion_at(
+        &actor,
+        "create_human_player_v2",
+        "POST",
+        "/v2/hepta/players",
+        &player_key,
+        player_hash,
+        player_now,
+        player_now + 1,
+    );
+    let created_player = assert_status(
+        request(
+            &router,
+            "POST",
+            "/v2/hepta/players",
+            player_body.clone(),
+            Some(player_assertion.clone()),
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    let replayed_player = assert_status(
+        request(
+            &router,
+            "POST",
+            "/v2/hepta/players",
+            player_body,
+            Some(player_assertion),
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+    assert_eq!(replayed_player, created_player);
+
+    // A different, unapplied command with a currently valid Consumer
+    // assertion still rejects the now-expired human proof.
+    let expired_new_player_key = format!("real-expired-new-player-{}", actor.player_id);
+    let expired_new_player_body =
+        human_player_body_at(&actor, &expired_new_player_key, player_now, player_now + 1);
+    let current_assertion = signed_user_assertion(
+        &actor,
+        "create_human_player_v2",
+        "POST",
+        "/v2/hepta/players",
+        &expired_new_player_key,
+        canonical_json_sha256(&expired_new_player_body).expect("expired new player request hash"),
+    );
+    assert_eq!(
+        error_code(
+            request(
+                &router,
+                "POST",
+                "/v2/hepta/players",
+                expired_new_player_body,
+                Some(current_assertion),
+            )
+            .await,
+            StatusCode::FORBIDDEN,
+        ),
+        "invalid_human_key_registration"
+    );
+
+    let binding_key = format!("real-binding-response-loss-{}", actor.binding_id);
+    let binding_now = Utc::now().timestamp();
+    let binding_body = agent_binding_body_at(
+        &actor,
+        &binding_key,
+        &binding_key,
+        binding_now,
+        binding_now + 1,
+    );
+    let binding_hash = canonical_json_sha256(&binding_body).expect("real binding request hash");
+    let binding_assertion = signed_user_assertion_at(
+        &actor,
+        "create_agent_binding_v2",
+        "POST",
+        "/v2/hepta/agent-bindings",
+        &binding_key,
+        binding_hash,
+        binding_now,
+        binding_now + 1,
+    );
+    let created_binding = assert_status(
+        request(
+            &router,
+            "POST",
+            "/v2/hepta/agent-bindings",
+            binding_body.clone(),
+            Some(binding_assertion.clone()),
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    let replayed_binding = assert_status(
+        request(
+            &router,
+            "POST",
+            "/v2/hepta/agent-bindings",
+            binding_body,
+            Some(binding_assertion),
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+    assert_eq!(replayed_binding, created_binding);
+
+    let mut new_binding_actor = actor.clone();
+    new_binding_actor.binding_id = Uuid::new_v4();
+    new_binding_actor.agent_id = format!("{}-expired-new", actor.agent_id);
+    let expired_new_binding_key = format!("real-expired-new-binding-{}", actor.binding_id);
+    let expired_new_binding_body = agent_binding_body_at(
+        &new_binding_actor,
+        &expired_new_binding_key,
+        &expired_new_binding_key,
+        binding_now,
+        binding_now + 1,
+    );
+    let current_binding_assertion = signed_user_assertion(
+        &actor,
+        "create_agent_binding_v2",
+        "POST",
+        "/v2/hepta/agent-bindings",
+        &expired_new_binding_key,
+        canonical_json_sha256(&expired_new_binding_body).expect("expired new binding request hash"),
+    );
+    assert_eq!(
+        error_code(
+            request(
+                &router,
+                "POST",
+                "/v2/hepta/agent-bindings",
+                expired_new_binding_body,
+                Some(current_binding_assertion),
+            )
+            .await,
+            StatusCode::FORBIDDEN,
+        ),
+        "invalid_agent_binding_proof"
+    );
+
+    let me = assert_status(
+        user_get(
+            &router,
+            &actor,
+            "get_self_human_player_v2",
+            "/v2/hepta/players/me",
+            "real-response-loss-player-self-read",
+        )
+        .await,
+        StatusCode::OK,
+    );
+    assert_eq!(me, created_player);
+    let bindings = assert_status(
+        user_get(
+            &router,
+            &actor,
+            "list_self_agent_bindings_v2",
+            "/v2/hepta/agent-bindings",
+            "real-response-loss-binding-self-read",
+        )
+        .await,
+        StatusCode::OK,
+    );
+    assert_eq!(bindings, json!([created_binding]));
+
+    if let Some(pool) = &state.pool {
+        let players: i64 =
+            sqlx::query_scalar("select count(*) from hepta_human_players where player_id=$1")
+                .bind(actor.player_id)
+                .fetch_one(pool)
+                .await
+                .expect("count committed players");
+        let bindings: i64 =
+            sqlx::query_scalar("select count(*) from hepta_agent_bindings where binding_id=$1")
+                .bind(actor.binding_id)
+                .fetch_one(pool)
+                .await
+                .expect("count committed Agent bindings");
+        let nonces: i64 = sqlx::query_scalar(
+            "select count(*) from hepta_agent_binding_nonces where binding_id=$1",
+        )
+        .bind(actor.binding_id)
+        .fetch_one(pool)
+        .await
+        .expect("count committed Agent proof nonces");
+        assert_eq!((players, bindings, nonces), (1, 1, 1));
+    } else {
+        let memory = state.paper_raid.read().await;
+        assert_eq!(memory.players.len(), 1);
+        assert_eq!(memory.bindings.len(), 1);
+        assert_eq!(memory.used_agent_binding_nonces.len(), 1);
+    }
+}
+
+#[tokio::test]
+async fn applied_onboarding_replays_after_credentials_expire_but_new_requests_do_not() {
+    exercise_expired_onboarding_replay(AppState::new(security())).await;
+}
+
+#[tokio::test]
+async fn real_onboarding_transactions_replay_after_proof_expiry_without_duplicates() {
+    exercise_real_onboarding_expiry_replay(AppState::new(security())).await;
+}
+
+#[tokio::test]
+async fn secure_onboarding_requires_consumer_and_agent_pop_and_scopes_reads() {
+    let router = app(AppState::new(security()));
+    let actors = actors(2);
+    let owner = &actors[0];
+    let other = &actors[1];
+    create_player_only(&router, owner).await;
+    create_player_only(&router, other).await;
+
+    // A legacy v1 Agent may self-claim this subject, but that record is not an
+    // authority for Paper Raid onboarding.
+    assert_status(
+        request(
+            &router,
+            "POST",
+            "/v1/hepta/agents",
+            json!({
+                "agent_id": owner.agent_id,
+                "owner_id": owner.subject_id,
+                "organization_id": "untrusted-legacy-registry",
+                "protocol_version": "hepta_agent_protocol_v1",
+                "public_key": BASE64.encode(other.agent_key.verifying_key().to_bytes()),
+                "capabilities": []
+            }),
+            None,
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+
+    let idempotency_key = format!("secure-binding-{}", owner.binding_id);
+    let valid_body = agent_binding_body(owner, &idempotency_key, &idempotency_key);
+    assert_eq!(
+        error_code(
+            request(
+                &router,
+                "POST",
+                "/v2/hepta/agent-bindings",
+                valid_body.clone(),
+                None,
+            )
+            .await,
+            StatusCode::FORBIDDEN,
+        ),
+        "user_assertion_required"
+    );
+
+    let mut invalid_pop_body = valid_body.clone();
+    invalid_pop_body["agent_proof_signature"] =
+        json!(BASE64.encode(other.agent_key.sign(b"not-the-binding-frame").to_bytes()));
+    assert_eq!(
+        error_code(
+            user_post(
+                &router,
+                owner,
+                "create_agent_binding_v2",
+                "/v2/hepta/agent-bindings",
+                &idempotency_key,
+                invalid_pop_body,
+            )
+            .await,
+            StatusCode::FORBIDDEN,
+        ),
+        "invalid_agent_binding_proof"
+    );
+
+    let impersonation_key = format!("impersonate-binding-{}", owner.binding_id);
+    let impersonation_body = agent_binding_body(owner, &impersonation_key, &impersonation_key);
+    assert_eq!(
+        error_code(
+            user_post(
+                &router,
+                other,
+                "create_agent_binding_v2",
+                "/v2/hepta/agent-bindings",
+                &impersonation_key,
+                impersonation_body,
+            )
+            .await,
+            StatusCode::FORBIDDEN,
+        ),
+        "user_assertion_player_mismatch"
+    );
+
+    let created = assert_status(
+        user_post(
+            &router,
+            owner,
+            "create_agent_binding_v2",
+            "/v2/hepta/agent-bindings",
+            &idempotency_key,
+            valid_body.clone(),
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+    assert_eq!(created["agent_id"], owner.agent_id);
+    assert_eq!(
+        created["agent_public_key"],
+        BASE64.encode(owner.agent_key.verifying_key().to_bytes())
+    );
+
+    // The exact same Consumer assertion cannot authorize changed request
+    // bytes, even when all fields remain syntactically valid.
+    let assertion = signed_user_assertion(
+        owner,
+        "create_agent_binding_v2",
+        "POST",
+        "/v2/hepta/agent-bindings",
+        &idempotency_key,
+        canonical_json_sha256(&valid_body).expect("binding request hash"),
+    );
+    let mut changed_body = valid_body;
+    changed_body["agent_id"] = json!(format!("{}-replayed", owner.agent_id));
+    assert_eq!(
+        error_code(
+            request(
+                &router,
+                "POST",
+                "/v2/hepta/agent-bindings",
+                changed_body,
+                Some(assertion),
+            )
+            .await,
+            StatusCode::FORBIDDEN,
+        ),
+        "user_assertion_scope_mismatch"
+    );
+
+    let me = assert_status(
+        user_get(
+            &router,
+            owner,
+            "get_self_human_player_v2",
+            "/v2/hepta/players/me",
+            "owner-self-read",
+        )
+        .await,
+        StatusCode::OK,
+    );
+    assert_eq!(me["player_id"], owner.player_id.to_string());
+    let owner_bindings = assert_status(
+        user_get(
+            &router,
+            owner,
+            "list_self_agent_bindings_v2",
+            "/v2/hepta/agent-bindings",
+            "owner-bindings-read",
+        )
+        .await,
+        StatusCode::OK,
+    );
+    assert_eq!(owner_bindings.as_array().expect("owner bindings").len(), 1);
+    let other_bindings = assert_status(
+        user_get(
+            &router,
+            other,
+            "list_self_agent_bindings_v2",
+            "/v2/hepta/agent-bindings",
+            "other-bindings-read",
+        )
+        .await,
+        StatusCode::OK,
+    );
+    assert!(other_bindings
+        .as_array()
+        .expect("other bindings")
+        .is_empty());
+}
+
+async fn exercise_agent_binding_rotation_security(state: AppState) {
+    let router = app(state.clone());
+    let actors = actors(2);
+    create_players_and_bindings(&router, &actors).await;
+    let actor = &actors[0];
+    let other = &actors[1];
+    let new_key = SigningKey::from_bytes(&[0x71; 32]);
+    let third_key = SigningKey::from_bytes(&[0x72; 32]);
+    let path = format!("/v2/hepta/agent-bindings/{}/rotate-key", actor.binding_id);
+
+    let valid_key = format!("secure-agent-rotation-{}", actor.binding_id);
+    let valid_body = agent_binding_rotation_body(
+        actor,
+        actor.binding_id,
+        1,
+        &actor.agent_key,
+        &new_key,
+        &valid_key,
+    );
+    let valid_rotation_id = Uuid::parse_str(
+        valid_body["rotation_id"]
+            .as_str()
+            .expect("rotation ID string"),
+    )
+    .expect("rotation ID UUID");
+    let mut substitution = valid_body.clone();
+    let old_signature = substitution["old_key_signature"].clone();
+    substitution["old_key_signature"] = substitution["new_key_signature"].clone();
+    substitution["new_key_signature"] = old_signature;
+    assert_eq!(
+        error_code(
+            user_post(
+                &router,
+                actor,
+                "rotate_agent_binding_key_v2",
+                &path,
+                &valid_key,
+                substitution,
+            )
+            .await,
+            StatusCode::FORBIDDEN,
+        ),
+        "invalid_agent_binding_key_rotation"
+    );
+
+    let overflow_key = format!("overflow-agent-rotation-{}", actor.binding_id);
+    let mut overflow_body = valid_body.clone();
+    overflow_body["expected_binding_version"] = json!(JSON_SAFE_U64_MAX + 1);
+    overflow_body["idempotency_key"] = json!(overflow_key.clone());
+    assert_eq!(
+        error_code(
+            user_post(
+                &router,
+                actor,
+                "rotate_agent_binding_key_v2",
+                &path,
+                &overflow_key,
+                overflow_body,
+            )
+            .await,
+            StatusCode::BAD_REQUEST,
+        ),
+        "invalid_expected_version"
+    );
+
+    let cross_key = format!("cross-agent-rotation-{}", other.binding_id);
+    let cross_path = format!("/v2/hepta/agent-bindings/{}/rotate-key", other.binding_id);
+    let cross_body = agent_binding_rotation_body(
+        actor,
+        other.binding_id,
+        1,
+        &actor.agent_key,
+        &new_key,
+        &cross_key,
+    );
+    assert_eq!(
+        error_code(
+            user_post(
+                &router,
+                actor,
+                "rotate_agent_binding_key_v2",
+                &cross_path,
+                &cross_key,
+                cross_body,
+            )
+            .await,
+            StatusCode::CONFLICT,
+        ),
+        "agent_binding_rotation_scope_mismatch"
+    );
+
+    let rotated = assert_status(
+        user_post(
+            &router,
+            actor,
+            "rotate_agent_binding_key_v2",
+            &path,
+            &valid_key,
+            valid_body.clone(),
+        )
+        .await,
+        StatusCode::OK,
+    );
+    assert_eq!(rotated["version"], 2);
+    assert_eq!(
+        rotated["agent_key_id"],
+        sha256_digest(&new_key.verifying_key().to_bytes())
+    );
+    let replay = assert_status(
+        user_post(
+            &router,
+            actor,
+            "rotate_agent_binding_key_v2",
+            &path,
+            &valid_key,
+            valid_body.clone(),
+        )
+        .await,
+        StatusCode::OK,
+    );
+    assert_eq!(replay, rotated);
+
+    let reused_rotation_key = format!("reused-global-rotation-{}", other.binding_id);
+    let other_new_key = SigningKey::from_bytes(&[0x73; 32]);
+    let reused_rotation_body = agent_binding_rotation_body_with_id(
+        other,
+        other.binding_id,
+        valid_rotation_id,
+        1,
+        &other.agent_key,
+        &other_new_key,
+        &reused_rotation_key,
+    );
+    assert_eq!(
+        error_code(
+            user_post(
+                &router,
+                other,
+                "rotate_agent_binding_key_v2",
+                &cross_path,
+                &reused_rotation_key,
+                reused_rotation_body,
+            )
+            .await,
+            StatusCode::CONFLICT,
+        ),
+        "agent_binding_rotation_reused"
+    );
+
+    let stale_key = format!("stale-agent-rotation-{}", actor.binding_id);
+    let stale_body =
+        agent_binding_rotation_body(actor, actor.binding_id, 1, &new_key, &third_key, &stale_key);
+    assert_eq!(
+        error_code(
+            user_post(
+                &router,
+                actor,
+                "rotate_agent_binding_key_v2",
+                &path,
+                &stale_key,
+                stale_body,
+            )
+            .await,
+            StatusCode::CONFLICT,
+        ),
+        "aggregate_version_conflict"
+    );
+
+    let nonce_reuse_body =
+        agent_binding_rotation_body(actor, actor.binding_id, 2, &new_key, &third_key, &valid_key);
+    assert_eq!(
+        error_code(
+            user_post(
+                &router,
+                actor,
+                "rotate_agent_binding_key_v2",
+                &path,
+                &valid_key,
+                nonce_reuse_body,
+            )
+            .await,
+            StatusCode::CONFLICT,
+        ),
+        "idempotency_key_conflict"
+    );
+
+    let no_op_key = format!("no-op-agent-rotation-{}", actor.binding_id);
+    let current_public_key = BASE64.encode(new_key.verifying_key().to_bytes());
+    let current_key_id = sha256_digest(&new_key.verifying_key().to_bytes());
+    let no_op_time = Utc::now().timestamp();
+    let no_op_body = json!({
+        "rotation_id":Uuid::new_v4(),
+        "expected_binding_version":2,
+        "agent_id":actor.agent_id,
+        "old_agent_key_id":current_key_id,
+        "old_agent_public_key":current_public_key,
+        "new_agent_key_id":current_key_id,
+        "new_agent_public_key":current_public_key,
+        "issued_at_unix":no_op_time,
+        "expires_at_unix":no_op_time + 300,
+        "old_key_signature":BASE64.encode([0_u8;64]),
+        "new_key_signature":BASE64.encode([0_u8;64]),
+        "idempotency_key":no_op_key,
+    });
+    assert_eq!(
+        error_code(
+            user_post(
+                &router,
+                actor,
+                "rotate_agent_binding_key_v2",
+                &path,
+                &no_op_key,
+                no_op_body,
+            )
+            .await,
+            StatusCode::FORBIDDEN,
+        ),
+        "invalid_agent_binding_key_rotation"
+    );
+
+    if let Some(pool) = &state.pool {
+        let version: i64 =
+            sqlx::query_scalar("select version from hepta_agent_bindings where binding_id=$1")
+                .bind(actor.binding_id)
+                .fetch_one(pool)
+                .await
+                .expect("Agent binding version");
+        let rotations: i64 = sqlx::query_scalar(
+            "select count(*) from hepta_agent_binding_key_rotations where binding_id=$1",
+        )
+        .bind(actor.binding_id)
+        .fetch_one(pool)
+        .await
+        .expect("Agent rotation history count");
+        let events: i64 = sqlx::query_scalar(
+            "select count(*) from hepta_outbox where event_type='hepta.paper_raid.agent_binding.key_rotated.v2' and aggregate_id=$1",
+        )
+        .bind(actor.binding_id.to_string())
+        .fetch_one(pool)
+        .await
+        .expect("Agent rotation outbox count");
+        assert_eq!((version, rotations, events), (2, 1, 1));
+    } else {
+        let memory = state.paper_raid.read().await;
+        assert_eq!(memory.bindings[&actor.binding_id].version, 2);
+        assert_eq!(memory.used_agent_binding_rotation_nonces.len(), 1);
+        assert_eq!(memory.used_agent_binding_rotation_ids.len(), 1);
+        assert_eq!(
+            memory
+                .events
+                .iter()
+                .filter(|event| event.event_type == "hepta.paper_raid.agent_binding.key_rotated.v2")
+                .count(),
+            1
+        );
+    }
+}
+
+#[tokio::test]
+async fn agent_binding_rotation_is_dual_pop_scoped_versioned_and_idempotent() {
+    exercise_agent_binding_rotation_security(AppState::new(security())).await;
 }
 
 fn acceptance_body(
@@ -1925,31 +2900,57 @@ async fn issue_replace_and_consume_session(
             "replacement_epoch_agent_key_scope"
         );
         let new_agent_key = SigningKey::from_bytes(&[0x7a; 32]);
-        let nonce = format!("agent-rotation-{member_count}");
-        let mut rotation = RotateAgentKeyRequest {
+        let rotation_key = format!("agent-binding-rotation-{member_count}");
+        let old_public_key = BASE64.encode(actors[0].agent_key.verifying_key().to_bytes());
+        let old_key_id = sha256_digest(&actors[0].agent_key.verifying_key().to_bytes());
+        let new_public_key = BASE64.encode(new_agent_key.verifying_key().to_bytes());
+        let new_key_id = sha256_digest(&new_agent_key.verifying_key().to_bytes());
+        let issued_at_unix = Utc::now().timestamp();
+        let rotation = AgentBindingKeyRotationClaimV2 {
+            schema: AGENT_BINDING_KEY_ROTATION_V2.to_string(),
+            rotation_id: Uuid::new_v4(),
+            binding_id: actors[0].binding_id,
+            expected_binding_version: 1,
+            player_id: actors[0].player_id,
+            subject_id: actors[0].subject_id.clone(),
             agent_id: actors[0].agent_id.clone(),
-            new_public_key: BASE64.encode(new_agent_key.verifying_key().to_bytes()),
-            nonce,
-            signature: String::new(),
+            old_agent_key_id: old_key_id.clone(),
+            old_agent_public_key: old_public_key.clone(),
+            old_agent_public_key_hash: old_key_id.clone(),
+            new_agent_key_id: new_key_id.clone(),
+            new_agent_public_key: new_public_key.clone(),
+            new_agent_public_key_hash: new_key_id.clone(),
+            nonce: rotation_key.clone(),
+            issued_at_unix,
+            expires_at_unix: issued_at_unix + 300,
         };
-        rotation.signature = BASE64.encode(
-            actors[0]
-                .agent_key
-                .sign(key_rotation_signing_message(&rotation).as_bytes())
-                .to_bytes(),
+        let rotation_frame = agent_binding_key_rotation_signing_bytes(&rotation)
+            .expect("Agent binding rotation frame");
+        let rotation_path = format!(
+            "/v2/hepta/agent-bindings/{}/rotate-key",
+            actors[0].binding_id
         );
         assert_status(
-            request(
+            user_post(
                 router,
-                "POST",
-                "/v1/hepta/agents/rotate-key",
+                &actors[0],
+                "rotate_agent_binding_key_v2",
+                &rotation_path,
+                &rotation_key,
                 json!({
+                    "rotation_id":rotation.rotation_id,
+                    "expected_binding_version":rotation.expected_binding_version,
                     "agent_id":rotation.agent_id,
-                    "new_public_key":rotation.new_public_key,
-                    "nonce":rotation.nonce,
-                    "signature":rotation.signature,
+                    "old_agent_key_id":old_key_id,
+                    "old_agent_public_key":old_public_key,
+                    "new_agent_key_id":new_key_id,
+                    "new_agent_public_key":new_public_key,
+                    "issued_at_unix":rotation.issued_at_unix,
+                    "expires_at_unix":rotation.expires_at_unix,
+                    "old_key_signature":BASE64.encode(actors[0].agent_key.sign(&rotation_frame).to_bytes()),
+                    "new_key_signature":BASE64.encode(new_agent_key.sign(&rotation_frame).to_bytes()),
+                    "idempotency_key":rotation_key,
                 }),
-                None,
             )
             .await,
             StatusCode::OK,
@@ -3380,6 +4381,38 @@ async fn postgres_collaboration_kernel_matches_memory_and_migration_is_repeatabl
 }
 
 #[tokio::test]
+async fn postgres_applied_onboarding_replays_after_credentials_expire() {
+    let Ok(database_url) = std::env::var("HEPTA_TEST_DATABASE_URL") else {
+        eprintln!("HEPTA_TEST_DATABASE_URL unset; secure onboarding PostgreSQL replay skipped");
+        return;
+    };
+    let mut lock = PgConnection::connect(&database_url)
+        .await
+        .expect("PostgreSQL onboarding replay test lock");
+    sqlx::query("select pg_advisory_lock(hashtext('hepta-research-league-pg-tests'))")
+        .execute(&mut lock)
+        .await
+        .expect("serialize Hepta PostgreSQL tests");
+    let state = AppState::connect(&database_url, security())
+        .await
+        .expect("secure onboarding PostgreSQL state");
+    reset_postgres(&database_url).await;
+    exercise_expired_onboarding_replay(state.clone()).await;
+    reset_postgres(&database_url).await;
+    exercise_real_onboarding_expiry_replay(state).await;
+    reset_postgres(&database_url).await;
+    let rotation_state = AppState::connect(&database_url, security())
+        .await
+        .expect("secure Agent rotation PostgreSQL state");
+    exercise_agent_binding_rotation_security(rotation_state).await;
+    reset_postgres(&database_url).await;
+    sqlx::query("select pg_advisory_unlock(hashtext('hepta-research-league-pg-tests'))")
+        .execute(&mut lock)
+        .await
+        .expect("release Hepta PostgreSQL onboarding replay lock");
+}
+
+#[tokio::test]
 async fn postgres_review_flow_matches_memory_and_migration_is_repeatable() {
     let Ok(database_url) = std::env::var("HEPTA_TEST_DATABASE_URL") else {
         eprintln!("HEPTA_TEST_DATABASE_URL unset; P5 PostgreSQL conformance skipped");
@@ -3408,6 +4441,18 @@ async fn postgres_review_flow_matches_memory_and_migration_is_repeatable() {
     .execute(pool)
     .await
     .expect("0034 third application");
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/0035_add_hepta_secure_onboarding.sql"
+    ))
+    .execute(pool)
+    .await
+    .expect("0035 second application");
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/0035_add_hepta_secure_onboarding.sql"
+    ))
+    .execute(pool)
+    .await
+    .expect("0035 third application");
     reset_postgres(&database_url).await;
     let postgres = run_review_flow(state).await;
     let memory = run_review_flow(AppState::new(security())).await;
@@ -3445,7 +4490,7 @@ async fn postgres_matches_memory_and_covers_four_five_restart_concurrency_and_ho
         .await
         .expect("four-author state");
     let four = run_full_flow(
-        four_state,
+        four_state.clone(),
         4,
         FlowOptions {
             rotate_human_after_acceptance: true,
@@ -3458,6 +4503,34 @@ async fn postgres_matches_memory_and_covers_four_five_restart_concurrency_and_ho
     assert_eq!(four.member_count, 4);
     assert_eq!(four.paper_phase, "submission_ready");
     assert_eq!(four.authorization_epoch, 2);
+    let epoch_rows = sqlx::query(
+        "select roster_version, record_json
+         from hepta_research_session_authorization_sets order by roster_version",
+    )
+    .fetch_all(four_state.pool.as_ref().expect("four-author pool"))
+    .await
+    .expect("read immutable authorization epochs");
+    assert_eq!(epoch_rows.len(), 2);
+    let old_epoch: Value = epoch_rows[0].get("record_json");
+    let new_epoch: Value = epoch_rows[1].get("record_json");
+    assert_eq!(epoch_rows[0].get::<i64, _>("roster_version"), 1);
+    assert_eq!(epoch_rows[1].get::<i64, _>("roster_version"), 2);
+    assert_eq!(
+        old_epoch["members"][0]["authorization"]["claim"]["agent_key_id"],
+        sha256_digest(&actors(4)[0].agent_key.verifying_key().to_bytes())
+    );
+    assert_ne!(
+        old_epoch["members"][0]["authorization"]["claim"]["agent_key_id"],
+        new_epoch["members"][0]["authorization"]["claim"]["agent_key_id"]
+    );
+    let rotation_history: i64 = sqlx::query_scalar(
+        "select count(*) from hepta_agent_binding_key_rotations where binding_id=$1",
+    )
+    .bind(actors(4)[0].binding_id)
+    .fetch_one(four_state.pool.as_ref().expect("four-author pool"))
+    .await
+    .expect("read Agent binding rotation history");
+    assert_eq!(rotation_history, 1);
 
     reset_postgres(&database_url).await;
     let five_state = AppState::connect(&database_url, security())

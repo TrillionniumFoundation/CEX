@@ -43,6 +43,42 @@ Hepta player ID, operation, HTTP method, canonical path, canonical body hash,
 idempotency nonce, issue time, and expiry. Caller-provided identity fields do
 not override it.
 
+Paper Raid Agent onboarding is independent of the legacy v1 Agent registry.
+`CreateAgentBindingRequest` carries the Agent Ed25519 public key and a proof
+over `hepta.paper_raid.agent_binding_proof.v2`: binding UUID, Agent ID,
+key ID, raw public key and hash, Consumer-asserted subject, Hepta player UUID,
+nonce, issue time and expiry. The key ID equals the SHA-256 public-key digest,
+the proof nonce equals the operation idempotency key, and an accepted
+`(agent_id, nonce)` is durably single-use. A legacy self-claimed `owner_id` or
+legacy public key is never an authority for a v2 binding or Nakama admission.
+The Paper Raid authorization path reads the immutable key snapshot from the
+v2 binding only.
+
+Agent key rotation is a separate v2 command. Its canonical frame binds the
+rotation and binding IDs, expected binding version, player, asserted subject,
+Agent ID, both key IDs/raw public keys/hashes, nonce, issue time and expiry.
+The current and replacement Agent keys both sign those identical bytes. A
+no-op, signature substitution, stale version, cross-binding scope, or reused
+nonce fails closed. PostgreSQL atomically updates the live binding while
+retaining the signed rotation record, outbox event and idempotent response;
+authorization epochs already issued with the old key remain immutable and
+auditable. A later Nakama replacement epoch reads only the rotated binding.
+
+The only onboarding discovery reads are assertion-scoped:
+`GET /v2/hepta/players/me` returns the exact stored player whose player,
+subject and Nakama UUID all match the assertion, and
+`GET /v2/hepta/agent-bindings` returns only that player's bindings. There is
+no caller-selected player filter.
+
+Onboarding idempotency is deliberately response-loss safe. Hepta always
+revalidates canonical assertion/proof bytes, signatures, operation, path,
+nonce and request hash. If the same operation/idempotency key/request hash was
+already committed, Hepta returns the original status and response even after
+the assertion or proof validity window has elapsed. Time-window checks are
+skipped only after finding that exact applied ledger record; an unapplied
+expired request still fails. The player or binding mutation, Agent proof
+nonce, outbox event and idempotent response are committed atomically.
+
 A team creator only proposes a roster. Every proposed member must separately
 sign `hepta.paper_raid.team_member_acceptance.v2`, binding the exact team,
 challenge, roster version, participant slot, human player, Agent binding,
@@ -143,7 +179,7 @@ and vendored byte-for-byte at
 `docs/sdk-fixtures/trnm-nakama-research-session-golden-vectors-v1.json`.
 Hepta independently recomputes it and, when the sibling canonical checkout is
 present, also requires byte identity. Hepta owns a separate single canonical
-fixture for Consumer assertion, release candidate, authorship consent,
+fixture for Consumer assertion, Agent binding proof, release candidate, authorship consent,
 PaperBundle, signed authorization consumption, signed completion, outer
 evidence envelope and publication release contracts at
 `docs/sdk-fixtures/hepta-paper-raid-v2.json`, verified by Rust and an

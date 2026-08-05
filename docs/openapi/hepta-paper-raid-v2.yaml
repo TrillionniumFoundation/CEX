@@ -117,7 +117,21 @@ paths:
           application/json:
             schema: {$ref: "#/components/schemas/CreateHumanPlayerRequest"}
       responses:
-        "201": {description: Human player created}
+        "201":
+          description: Human player created, or the original response for an exact applied replay
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/HumanPlayer"}
+  /v2/hepta/players/me:
+    get:
+      operationId: getSelfHumanPlayer
+      description: Returns only the player bound to the signed Consumer assertion.
+      responses:
+        "200":
+          description: Assertion-scoped human player
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/HumanPlayer"}
   /v2/hepta/players/{player_id}/signing-key/rotate:
     parameters:
       - {$ref: "#/components/parameters/PlayerId"}
@@ -151,16 +165,57 @@ paths:
       responses:
         "200": {description: Key revoked and immutable history retained}
   /v2/hepta/agent-bindings:
+    get:
+      operationId: listSelfAgentBindings
+      description: Returns only Agent bindings owned by the asserted player.
+      responses:
+        "200":
+          description: Assertion-scoped Agent bindings ordered by created_at then binding_id
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: "#/components/schemas/AgentBinding"}
     post:
       operationId: createAgentBinding
-      description: Binds a v1 registered external Agent to its asserted human owner.
+      description: >-
+        Binds an external Agent only after its Ed25519 key signs the exact
+        agent_id, key, asserted subject, player, nonce and validity interval.
+        Legacy v1 self-claimed owner_id is never trusted by Paper Raid.
       requestBody:
         required: true
         content:
           application/json:
             schema: {$ref: "#/components/schemas/CreateAgentBindingRequest"}
       responses:
-        "201": {description: Binding created}
+        "201":
+          description: Agent binding created, or the original response for an exact applied replay
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AgentBinding"}
+  /v2/hepta/agent-bindings/{binding_id}/rotate-key:
+    parameters:
+      - name: binding_id
+        in: path
+        required: true
+        schema: {type: string, format: uuid}
+    post:
+      operationId: rotateAgentBindingKey
+      description: >-
+        Atomically rotates the authoritative v2 Agent key after the old and new
+        keys sign the same binding/player/subject/version-scoped frame.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/RotateAgentBindingKeyRequest"}
+      responses:
+        "200":
+          description: Agent binding key rotated, or original exact-replay response
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AgentBinding"}
+        "409": {$ref: "#/components/responses/VersionConflict"}
   /v2/hepta/teams:
     post:
       operationId: createResearchTeam
@@ -1062,6 +1117,37 @@ components:
         merged_at_unix: {type: integer, format: int64, minimum: 0}
         signature: {type: string, contentEncoding: base64}
         idempotency_key: {$ref: "#/components/schemas/IdempotencyKey"}
+    HumanPlayer:
+      type: object
+      additionalProperties: false
+      required: [player_id, subject_id, nakama_user_id, display_name, signing_key_id, signing_public_key, signing_public_key_hash, status, version, created_at, updated_at]
+      properties:
+        player_id: {type: string, format: uuid}
+        subject_id: {type: string, minLength: 1, maxLength: 512}
+        nakama_user_id: {type: string, format: uuid}
+        display_name: {type: string, minLength: 1, maxLength: 512}
+        signing_key_id: {type: string, minLength: 1, maxLength: 512}
+        signing_public_key: {type: string, contentEncoding: base64}
+        signing_public_key_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        status: {type: string, enum: [active, suspended]}
+        version: {type: integer, format: int64, minimum: 1}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+    AgentBinding:
+      type: object
+      additionalProperties: false
+      required: [binding_id, player_id, agent_id, agent_key_id, agent_public_key, agent_public_key_hash, status, version, created_at, updated_at]
+      properties:
+        binding_id: {type: string, format: uuid}
+        player_id: {type: string, format: uuid}
+        agent_id: {type: string, minLength: 1, maxLength: 512}
+        agent_key_id: {$ref: "#/components/schemas/Sha256Digest"}
+        agent_public_key: {type: string, contentEncoding: base64}
+        agent_public_key_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        status: {type: string, enum: [active, revoked]}
+        version: {type: integer, format: int64, minimum: 1}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
     CreateHumanPlayerRequest:
       type: object
       additionalProperties: false
@@ -1128,11 +1214,44 @@ components:
     CreateAgentBindingRequest:
       type: object
       additionalProperties: false
-      required: [binding_id, player_id, agent_id, idempotency_key]
+      required:
+        - binding_id
+        - player_id
+        - agent_id
+        - agent_key_id
+        - agent_public_key
+        - agent_proof_nonce
+        - agent_proof_issued_at_unix
+        - agent_proof_expires_at_unix
+        - agent_proof_signature
+        - idempotency_key
       properties:
         binding_id: {type: string, format: uuid}
         player_id: {type: string, format: uuid}
         agent_id: {type: string, minLength: 1}
+        agent_key_id: {$ref: "#/components/schemas/Sha256Digest"}
+        agent_public_key: {type: string, contentEncoding: base64}
+        agent_proof_nonce: {$ref: "#/components/schemas/IdempotencyKey"}
+        agent_proof_issued_at_unix: {type: integer, format: int64, minimum: 0}
+        agent_proof_expires_at_unix: {type: integer, format: int64, minimum: 0}
+        agent_proof_signature: {type: string, contentEncoding: base64}
+        idempotency_key: {$ref: "#/components/schemas/IdempotencyKey"}
+    RotateAgentBindingKeyRequest:
+      type: object
+      additionalProperties: false
+      required: [rotation_id, expected_binding_version, agent_id, old_agent_key_id, old_agent_public_key, new_agent_key_id, new_agent_public_key, issued_at_unix, expires_at_unix, old_key_signature, new_key_signature, idempotency_key]
+      properties:
+        rotation_id: {type: string, format: uuid}
+        expected_binding_version: {type: integer, format: int64, minimum: 1, maximum: 9007199254740991}
+        agent_id: {type: string, minLength: 1, maxLength: 512}
+        old_agent_key_id: {$ref: "#/components/schemas/Sha256Digest"}
+        old_agent_public_key: {type: string, contentEncoding: base64}
+        new_agent_key_id: {$ref: "#/components/schemas/Sha256Digest"}
+        new_agent_public_key: {type: string, contentEncoding: base64}
+        issued_at_unix: {type: integer, format: int64, minimum: 0}
+        expires_at_unix: {type: integer, format: int64, minimum: 0}
+        old_key_signature: {type: string, contentEncoding: base64}
+        new_key_signature: {type: string, contentEncoding: base64}
         idempotency_key: {$ref: "#/components/schemas/IdempotencyKey"}
     TeamMember:
       type: object

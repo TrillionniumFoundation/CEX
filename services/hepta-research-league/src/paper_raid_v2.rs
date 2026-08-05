@@ -20,17 +20,20 @@ use crate::{
         consumer_user_assertion_signing_bytes, paper_bundle_hash, paper_release_candidate_hash,
         research_session_roster_root, sha256_digest, sign_authorization_set_consumption_receipt,
         sign_nakama_completion_receipt, sign_research_session_authorization,
+        verify_agent_binding_key_rotation_signatures, verify_agent_binding_proof,
         verify_human_key_registration_pop, verify_human_key_revocation_signature,
         verify_human_key_rotation_signatures, verify_team_member_acceptance_signature,
-        AuthorshipConsentSigningV2, ConsumerUserAssertionClaimV2, HumanKeyRegistrationClaimV2,
-        HumanKeyRevocationClaimV2, HumanKeyRotationClaimV2, PaperBundleAuthorConsentV2,
-        PaperBundleV2, PaperReleaseAuthorV2, PaperReleaseCandidateV2,
-        ResearchSessionAuthorizationClaimV1, ResearchSessionCompletionV1, ResearchSessionEventV1,
-        ResearchSessionRosterMemberV1, SignedAuthorizationSetConsumptionReceiptV1,
-        SignedConsumerUserAssertionV2, SignedNakamaCompletionReceiptV1,
-        SignedResearchSessionAuthorizationV1, TeamMemberAcceptanceSigningV2, AUTHORSHIP_CONSENT_V2,
-        HUMAN_KEY_REGISTRATION_V2, HUMAN_KEY_REVOCATION_V2, HUMAN_KEY_ROTATION_V2, PAPER_BUNDLE_V2,
-        PAPER_RAID_PROTOCOL_V2, PAPER_RELEASE_CANDIDATE_V2, TEAM_MEMBER_ACCEPTANCE_V2,
+        AgentBindingKeyRotationClaimV2, AgentBindingProofClaimV2, AuthorshipConsentSigningV2,
+        ConsumerUserAssertionClaimV2, HumanKeyRegistrationClaimV2, HumanKeyRevocationClaimV2,
+        HumanKeyRotationClaimV2, PaperBundleAuthorConsentV2, PaperBundleV2, PaperReleaseAuthorV2,
+        PaperReleaseCandidateV2, ResearchSessionAuthorizationClaimV1, ResearchSessionCompletionV1,
+        ResearchSessionEventV1, ResearchSessionRosterMemberV1,
+        SignedAuthorizationSetConsumptionReceiptV1, SignedConsumerUserAssertionV2,
+        SignedNakamaCompletionReceiptV1, SignedResearchSessionAuthorizationV1,
+        TeamMemberAcceptanceSigningV2, AGENT_BINDING_KEY_ROTATION_V2, AGENT_BINDING_PROOF_V2,
+        AUTHORSHIP_CONSENT_V2, HUMAN_KEY_REGISTRATION_V2, HUMAN_KEY_REVOCATION_V2,
+        HUMAN_KEY_ROTATION_V2, JSON_SAFE_U64_MAX, PAPER_BUNDLE_V2, PAPER_RAID_PROTOCOL_V2,
+        PAPER_RELEASE_CANDIDATE_V2, TEAM_MEMBER_ACCEPTANCE_V2,
     },
     require_service_token, validate_contract_text_api, validate_non_empty, ApiError, AppState,
     EventEnvelope, NAKAMA_TOKEN_HEADER, USER_ASSERTION_HEADER,
@@ -54,6 +57,9 @@ pub(crate) struct PaperRaidMemory {
     human_signing_keys: HashMap<(Uuid, String), HumanSigningKey>,
     bindings: HashMap<Uuid, AgentBinding>,
     active_bindings_by_agent: HashMap<String, Uuid>,
+    used_agent_binding_nonces: HashSet<(String, String)>,
+    used_agent_binding_rotation_nonces: HashSet<(Uuid, String)>,
+    used_agent_binding_rotation_ids: HashSet<Uuid>,
     teams: HashMap<Uuid, ResearchTeam>,
     team_acceptances: HashMap<Uuid, TeamMemberAcceptance>,
     papers: HashMap<Uuid, PaperProject>,
@@ -201,6 +207,9 @@ pub struct AgentBinding {
     pub binding_id: Uuid,
     pub player_id: Uuid,
     pub agent_id: String,
+    pub agent_key_id: String,
+    pub agent_public_key: String,
+    pub agent_public_key_hash: String,
     pub status: AgentBindingStatus,
     pub version: u64,
     pub created_at: DateTime<Utc>,
@@ -213,6 +222,29 @@ pub struct CreateAgentBindingRequest {
     pub binding_id: Uuid,
     pub player_id: Uuid,
     pub agent_id: String,
+    pub agent_key_id: String,
+    pub agent_public_key: String,
+    pub agent_proof_nonce: String,
+    pub agent_proof_issued_at_unix: i64,
+    pub agent_proof_expires_at_unix: i64,
+    pub agent_proof_signature: String,
+    pub idempotency_key: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RotateAgentBindingKeyRequest {
+    pub rotation_id: Uuid,
+    pub expected_binding_version: u64,
+    pub agent_id: String,
+    pub old_agent_key_id: String,
+    pub old_agent_public_key: String,
+    pub new_agent_key_id: String,
+    pub new_agent_public_key: String,
+    pub issued_at_unix: i64,
+    pub expires_at_unix: i64,
+    pub old_key_signature: String,
+    pub new_key_signature: String,
     pub idempotency_key: String,
 }
 
@@ -734,6 +766,7 @@ pub(crate) fn router() -> Router<AppState> {
         .route("/v2/hepta/manifest", get(manifest))
         .route("/v2/hepta/openapi.yaml", get(openapi))
         .route("/v2/hepta/players", post(create_player))
+        .route("/v2/hepta/players/me", get(get_self_player))
         .route(
             "/v2/hepta/players/:player_id/signing-key/rotate",
             post(rotate_human_signing_key),
@@ -742,7 +775,14 @@ pub(crate) fn router() -> Router<AppState> {
             "/v2/hepta/players/:player_id/signing-key/revoke",
             post(revoke_human_signing_key),
         )
-        .route("/v2/hepta/agent-bindings", post(create_agent_binding))
+        .route(
+            "/v2/hepta/agent-bindings",
+            get(list_self_agent_bindings).post(create_agent_binding),
+        )
+        .route(
+            "/v2/hepta/agent-bindings/:binding_id/rotate-key",
+            post(rotate_agent_binding_key),
+        )
         .route("/v2/hepta/teams", post(create_team))
         .route("/v2/hepta/teams/:team_id", get(get_team))
         .route(
@@ -873,6 +913,50 @@ fn require_user_assertion(
     idempotency_key: &str,
     body_hash: &str,
 ) -> Result<ConsumerUserAssertionClaimV2, ApiError> {
+    require_user_assertion_internal(
+        headers,
+        state,
+        operation,
+        http_method,
+        canonical_path,
+        idempotency_key,
+        body_hash,
+        true,
+    )
+}
+
+fn require_user_assertion_for_applied_replay(
+    headers: &HeaderMap,
+    state: &AppState,
+    operation: &str,
+    http_method: &str,
+    canonical_path: &str,
+    idempotency_key: &str,
+    body_hash: &str,
+) -> Result<ConsumerUserAssertionClaimV2, ApiError> {
+    require_user_assertion_internal(
+        headers,
+        state,
+        operation,
+        http_method,
+        canonical_path,
+        idempotency_key,
+        body_hash,
+        false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn require_user_assertion_internal(
+    headers: &HeaderMap,
+    state: &AppState,
+    operation: &str,
+    http_method: &str,
+    canonical_path: &str,
+    idempotency_key: &str,
+    body_hash: &str,
+    enforce_current_time: bool,
+) -> Result<ConsumerUserAssertionClaimV2, ApiError> {
     let encoded = headers
         .get(USER_ASSERTION_HEADER)
         .and_then(|value| value.to_str().ok())
@@ -925,15 +1009,8 @@ fn require_user_assertion(
             "user assertion issuer, audience, request, or nonce scope does not match",
         ));
     }
-    let now = Utc::now().timestamp();
-    if claim.issued_at_unix > now + 60
-        || claim.expires_at_unix < now - 30
-        || claim.expires_at_unix - claim.issued_at_unix > 300
-    {
-        return Err(ApiError::forbidden(
-            "user_assertion_expired",
-            "user assertion is outside the allowed clock/TTL window",
-        ));
+    if enforce_current_time {
+        enforce_user_assertion_time(claim)?;
     }
     let signing_bytes = consumer_user_assertion_signing_bytes(claim, &assertion.issuer_key_id)
         .map_err(|message| ApiError::bad_request("invalid_user_assertion", message))?;
@@ -966,6 +1043,33 @@ fn require_user_assertion(
             )
         })?;
     Ok(claim.clone())
+}
+
+fn enforce_user_assertion_time(claim: &ConsumerUserAssertionClaimV2) -> Result<(), ApiError> {
+    let now = Utc::now().timestamp();
+    if claim.issued_at_unix > now + 60
+        || claim.expires_at_unix < now - 30
+        || claim.expires_at_unix - claim.issued_at_unix > 300
+    {
+        return Err(ApiError::forbidden(
+            "user_assertion_expired",
+            "user assertion is outside the allowed clock/TTL window",
+        ));
+    }
+    Ok(())
+}
+
+fn enforce_onboarding_proof_time(
+    issued_at_unix: i64,
+    expires_at_unix: i64,
+    code: &'static str,
+    message: &'static str,
+) -> Result<(), ApiError> {
+    let now = Utc::now().timestamp();
+    if now < issued_at_unix || now >= expires_at_unix || expires_at_unix - issued_at_unix > 600 {
+        return Err(ApiError::forbidden(code, message));
+    }
+    Ok(())
 }
 
 fn require_member_read_assertion(
@@ -1312,6 +1416,92 @@ fn validate_team_members(members: &[CreateTeamMemberRequest]) -> Result<(), ApiE
     Ok(())
 }
 
+async fn get_self_player(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<HumanPlayer>, ApiError> {
+    let assertion = require_member_read_assertion(
+        &headers,
+        &state,
+        "get_self_human_player_v2",
+        "/v2/hepta/players/me",
+    )?;
+    let player = if let Some(pool) = &state.pool {
+        let row = sqlx::query("select record_json from hepta_human_players where player_id=$1")
+            .bind(assertion.player_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(ApiError::database)?
+            .ok_or_else(|| {
+                ApiError::not_found("human_player_not_found", "human player does not exist")
+            })?;
+        decode_record(row.get("record_json"), "human player")?
+    } else {
+        state
+            .paper_raid
+            .read()
+            .await
+            .players
+            .get(&assertion.player_id)
+            .cloned()
+            .ok_or_else(|| {
+                ApiError::not_found("human_player_not_found", "human player does not exist")
+            })?
+    };
+    assert_player_identity(&assertion, &player)?;
+    Ok(Json(player))
+}
+
+async fn list_self_agent_bindings(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<AgentBinding>>, ApiError> {
+    let assertion = require_member_read_assertion(
+        &headers,
+        &state,
+        "list_self_agent_bindings_v2",
+        "/v2/hepta/agent-bindings",
+    )?;
+    let mut bindings = if let Some(pool) = &state.pool {
+        let player_row =
+            sqlx::query("select record_json from hepta_human_players where player_id=$1")
+                .bind(assertion.player_id)
+                .fetch_optional(pool)
+                .await
+                .map_err(ApiError::database)?
+                .ok_or_else(|| {
+                    ApiError::not_found("human_player_not_found", "human player does not exist")
+                })?;
+        let player: HumanPlayer = decode_record(player_row.get("record_json"), "human player")?;
+        assert_player_identity(&assertion, &player)?;
+        sqlx::query(
+            "select record_json from hepta_agent_bindings
+             where player_id=$1 order by created_at,binding_id",
+        )
+        .bind(assertion.player_id)
+        .fetch_all(pool)
+        .await
+        .map_err(ApiError::database)?
+        .into_iter()
+        .map(|row| decode_record(row.get("record_json"), "Agent binding"))
+        .collect::<Result<Vec<_>, _>>()?
+    } else {
+        let memory = state.paper_raid.read().await;
+        let player = memory.players.get(&assertion.player_id).ok_or_else(|| {
+            ApiError::not_found("human_player_not_found", "human player does not exist")
+        })?;
+        assert_player_identity(&assertion, player)?;
+        memory
+            .bindings
+            .values()
+            .filter(|binding| binding.player_id == assertion.player_id)
+            .cloned()
+            .collect()
+    };
+    bindings.sort_by_key(|binding| (binding.created_at, binding.binding_id));
+    Ok(Json(bindings))
+}
+
 async fn create_player(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1328,7 +1518,7 @@ async fn create_player(
             .map_err(|_| ApiError::internal("canonical public key decode failed"))?,
     );
     let request_hash = request_hash(&request)?;
-    let assertion = require_user_assertion(
+    let assertion = require_user_assertion_for_applied_replay(
         &headers,
         &state,
         OPERATION,
@@ -1356,20 +1546,11 @@ async fn create_player(
         issued_at_unix: request.key_issued_at_unix,
         expires_at_unix: request.key_expires_at_unix,
     };
-    if now.timestamp() < registration.issued_at_unix
-        || now.timestamp() >= registration.expires_at_unix
-        || registration.expires_at_unix - registration.issued_at_unix > 600
-    {
-        return Err(ApiError::forbidden(
-            "invalid_human_key_registration",
-            "human key proof must be active and valid for at most ten minutes",
-        ));
-    }
     verify_human_key_registration_pop(&registration, &request.key_proof_signature)
         .map_err(|message| ApiError::forbidden("invalid_human_key_registration", message))?;
     let player = HumanPlayer {
         player_id: request.player_id,
-        subject_id: assertion.subject_id,
+        subject_id: assertion.subject_id.clone(),
         nakama_user_id: assertion.nakama_user_id,
         display_name: request.display_name.clone(),
         signing_key_id: request.signing_key_id.clone(),
@@ -1400,6 +1581,13 @@ async fn create_player(
         {
             return Ok(replay);
         }
+        enforce_user_assertion_time(&assertion)?;
+        enforce_onboarding_proof_time(
+            registration.issued_at_unix,
+            registration.expires_at_unix,
+            "invalid_human_key_registration",
+            "human key proof must be active and valid for at most ten minutes",
+        )?;
         if memory.players.contains_key(&player.player_id)
             || memory.players_by_subject.contains_key(&player.subject_id)
             || memory
@@ -1448,6 +1636,13 @@ async fn create_player(
     if let Some(replay) = replay {
         return decode_stored(replay);
     }
+    enforce_user_assertion_time(&assertion)?;
+    enforce_onboarding_proof_time(
+        registration.issued_at_unix,
+        registration.expires_at_unix,
+        "invalid_human_key_registration",
+        "human key proof must be active and valid for at most ten minutes",
+    )?;
     let record_json = serde_json::to_value(&player)
         .map_err(|error| ApiError::internal(format!("encode human player: {error}")))?;
     let result = sqlx::query(
@@ -2074,8 +2269,27 @@ async fn create_agent_binding(
     const OPERATION: &str = "create_agent_binding_v2";
     validate_idempotency_key(&request.idempotency_key)?;
     validate_non_empty("agent_id", &request.agent_id)?;
+    validate_contract_text_api("agent_key_id", &request.agent_key_id)?;
+    validate_contract_text_api("agent_proof_nonce", &request.agent_proof_nonce)?;
+    if request.agent_proof_nonce != request.idempotency_key {
+        return Err(ApiError::bad_request(
+            "agent_binding_nonce_scope_mismatch",
+            "Agent proof nonce must equal the request idempotency key",
+        ));
+    }
+    let agent_public_key = canonical_public_key(&request.agent_public_key)?;
+    let agent_public_key_bytes = BASE64
+        .decode(&agent_public_key)
+        .map_err(|_| ApiError::internal("canonical Agent public key decode failed"))?;
+    let agent_public_key_hash = sha256_digest(&agent_public_key_bytes);
+    if request.agent_key_id != agent_public_key_hash {
+        return Err(ApiError::bad_request(
+            "agent_key_id_mismatch",
+            "agent_key_id must equal the canonical Agent public-key hash",
+        ));
+    }
     let request_hash = request_hash(&request)?;
-    let assertion = require_user_assertion(
+    let assertion = require_user_assertion_for_applied_replay(
         &headers,
         &state,
         OPERATION,
@@ -2090,25 +2304,29 @@ async fn create_agent_binding(
             "asserted player_id does not match the Agent binding owner",
         ));
     }
-    let agent = state
-        .inspect(|league| {
-            league
-                .agents
-                .get(&request.agent_id)
-                .cloned()
-                .ok_or_else(|| {
-                    ApiError::not_found(
-                        "agent_not_found",
-                        format!("agent {} does not exist", request.agent_id),
-                    )
-                })
-        })
-        .await?;
     let now = Utc::now();
+    let proof = AgentBindingProofClaimV2 {
+        schema: AGENT_BINDING_PROOF_V2.to_string(),
+        binding_id: request.binding_id,
+        agent_id: request.agent_id.clone(),
+        agent_key_id: request.agent_key_id.clone(),
+        agent_public_key: agent_public_key.clone(),
+        agent_public_key_hash: agent_public_key_hash.clone(),
+        subject_id: assertion.subject_id.clone(),
+        player_id: request.player_id,
+        nonce: request.agent_proof_nonce.clone(),
+        issued_at_unix: request.agent_proof_issued_at_unix,
+        expires_at_unix: request.agent_proof_expires_at_unix,
+    };
+    verify_agent_binding_proof(&proof, &request.agent_proof_signature)
+        .map_err(|message| ApiError::forbidden("invalid_agent_binding_proof", message))?;
     let binding = AgentBinding {
         binding_id: request.binding_id,
         player_id: request.player_id,
         agent_id: request.agent_id.clone(),
+        agent_key_id: request.agent_key_id.clone(),
+        agent_public_key,
+        agent_public_key_hash,
         status: AgentBindingStatus::Active,
         version: 1,
         created_at: now,
@@ -2122,14 +2340,30 @@ async fn create_agent_binding(
         {
             return Ok(replay);
         }
+        enforce_user_assertion_time(&assertion)?;
+        enforce_onboarding_proof_time(
+            proof.issued_at_unix,
+            proof.expires_at_unix,
+            "invalid_agent_binding_proof",
+            "Agent binding proof must be active and valid for at most ten minutes",
+        )?;
         let player = memory.players.get(&request.player_id).ok_or_else(|| {
             ApiError::not_found("human_player_not_found", "human player does not exist")
         })?;
         assert_player_identity(&assertion, player)?;
-        if player.status != HumanPlayerStatus::Active || player.subject_id != agent.owner_id {
+        if player.status != HumanPlayerStatus::Active {
             return Err(ApiError::forbidden(
-                "agent_binding_owner_mismatch",
-                "Agent owner_id must match the active human player subject_id",
+                "human_player_inactive",
+                "Agent binding requires an active human player",
+            ));
+        }
+        if memory
+            .used_agent_binding_nonces
+            .contains(&(binding.agent_id.clone(), request.agent_proof_nonce.clone()))
+        {
+            return Err(ApiError::conflict(
+                "agent_binding_nonce_reused",
+                "Agent binding proof nonce has already been accepted",
             ));
         }
         if memory.bindings.contains_key(&binding.binding_id)
@@ -2145,6 +2379,9 @@ async fn create_agent_binding(
         memory
             .active_bindings_by_agent
             .insert(binding.agent_id.clone(), binding.binding_id);
+        memory
+            .used_agent_binding_nonces
+            .insert((binding.agent_id.clone(), request.agent_proof_nonce.clone()));
         memory.bindings.insert(binding.binding_id, binding.clone());
         push_memory_event(
             &mut memory,
@@ -2176,22 +2413,28 @@ async fn create_agent_binding(
     if let Some(replay) = replay {
         return decode_stored(replay);
     }
+    enforce_user_assertion_time(&assertion)?;
+    enforce_onboarding_proof_time(
+        proof.issued_at_unix,
+        proof.expires_at_unix,
+        "invalid_agent_binding_proof",
+        "Agent binding proof must be active and valid for at most ten minutes",
+    )?;
     let player_row = sqlx::query(
-        "select subject_id, status, record_json from hepta_human_players where player_id = $1 for share",
+        "select status, record_json from hepta_human_players where player_id = $1 for share",
     )
     .bind(binding.player_id)
     .fetch_optional(&mut *tx)
     .await
     .map_err(ApiError::database)?
     .ok_or_else(|| ApiError::not_found("human_player_not_found", "human player does not exist"))?;
-    let subject_id: String = player_row.get("subject_id");
     let status: String = player_row.get("status");
     let stored_player: HumanPlayer = decode_record(player_row.get("record_json"), "human player")?;
     assert_player_identity(&assertion, &stored_player)?;
-    if status != "active" || subject_id != agent.owner_id {
+    if status != "active" {
         return Err(ApiError::forbidden(
-            "agent_binding_owner_mismatch",
-            "Agent owner_id must match the active human player subject_id",
+            "human_player_inactive",
+            "Agent binding requires an active human player",
         ));
     }
     let record_json = serde_json::to_value(&binding)
@@ -2224,6 +2467,27 @@ async fn create_agent_binding(
         }
         return Err(ApiError::database(error));
     }
+    let nonce_insert = sqlx::query(
+        "insert into hepta_agent_binding_nonces (agent_id, nonce, binding_id)
+         values ($1,$2,$3)",
+    )
+    .bind(&binding.agent_id)
+    .bind(&request.agent_proof_nonce)
+    .bind(binding.binding_id)
+    .execute(&mut *tx)
+    .await;
+    if let Err(error) = nonce_insert {
+        if error
+            .as_database_error()
+            .is_some_and(|db| db.is_unique_violation())
+        {
+            return Err(ApiError::conflict(
+                "agent_binding_nonce_reused",
+                "Agent binding proof nonce has already been accepted",
+            ));
+        }
+        return Err(ApiError::database(error));
+    }
     insert_postgres_event(
         &mut tx,
         OPERATION,
@@ -2250,6 +2514,308 @@ async fn create_agent_binding(
     .await?;
     tx.commit().await.map_err(ApiError::database)?;
     Ok((StatusCode::CREATED, Json(binding)))
+}
+
+async fn rotate_agent_binding_key(
+    State(state): State<AppState>,
+    Path(binding_id): Path<Uuid>,
+    headers: HeaderMap,
+    Json(request): Json<RotateAgentBindingKeyRequest>,
+) -> Result<(StatusCode, Json<AgentBinding>), ApiError> {
+    const OPERATION: &str = "rotate_agent_binding_key_v2";
+    validate_idempotency_key(&request.idempotency_key)?;
+    if request.expected_binding_version == 0 || request.expected_binding_version > JSON_SAFE_U64_MAX
+    {
+        return Err(ApiError::bad_request(
+            "invalid_expected_version",
+            "expected_binding_version must be a positive JSON-safe integer",
+        ));
+    }
+    validate_non_empty("agent_id", &request.agent_id)?;
+    validate_contract_text_api("old_agent_key_id", &request.old_agent_key_id)?;
+    validate_contract_text_api("new_agent_key_id", &request.new_agent_key_id)?;
+    let old_agent_public_key = canonical_public_key(&request.old_agent_public_key)?;
+    let new_agent_public_key = canonical_public_key(&request.new_agent_public_key)?;
+    let old_agent_public_key_hash = sha256_digest(
+        &BASE64
+            .decode(&old_agent_public_key)
+            .map_err(|_| ApiError::internal("canonical old Agent public key decode failed"))?,
+    );
+    let new_agent_public_key_hash = sha256_digest(
+        &BASE64
+            .decode(&new_agent_public_key)
+            .map_err(|_| ApiError::internal("canonical new Agent public key decode failed"))?,
+    );
+    if request.old_agent_key_id != old_agent_public_key_hash
+        || request.new_agent_key_id != new_agent_public_key_hash
+    {
+        return Err(ApiError::bad_request(
+            "agent_key_id_mismatch",
+            "old and new Agent key IDs must equal their canonical public-key hashes",
+        ));
+    }
+    let request_hash = request_hash(&request)?;
+    let path = format!("/v2/hepta/agent-bindings/{binding_id}/rotate-key");
+    let assertion = require_user_assertion_for_applied_replay(
+        &headers,
+        &state,
+        OPERATION,
+        "POST",
+        &path,
+        &request.idempotency_key,
+        &request_hash,
+    )?;
+    let claim = AgentBindingKeyRotationClaimV2 {
+        schema: AGENT_BINDING_KEY_ROTATION_V2.to_string(),
+        rotation_id: request.rotation_id,
+        binding_id,
+        expected_binding_version: request.expected_binding_version,
+        player_id: assertion.player_id,
+        subject_id: assertion.subject_id.clone(),
+        agent_id: request.agent_id.clone(),
+        old_agent_key_id: request.old_agent_key_id.clone(),
+        old_agent_public_key: old_agent_public_key.clone(),
+        old_agent_public_key_hash: old_agent_public_key_hash.clone(),
+        new_agent_key_id: request.new_agent_key_id.clone(),
+        new_agent_public_key: new_agent_public_key.clone(),
+        new_agent_public_key_hash: new_agent_public_key_hash.clone(),
+        nonce: request.idempotency_key.clone(),
+        issued_at_unix: request.issued_at_unix,
+        expires_at_unix: request.expires_at_unix,
+    };
+    verify_agent_binding_key_rotation_signatures(
+        &claim,
+        &request.old_key_signature,
+        &request.new_key_signature,
+    )
+    .map_err(|message| ApiError::forbidden("invalid_agent_binding_key_rotation", message))?;
+    let now = Utc::now();
+
+    if state.pool.is_none() {
+        let mut memory = state.paper_raid.write().await;
+        if let Some(replay) =
+            memory_replay(&memory, OPERATION, &request.idempotency_key, &request_hash)?
+        {
+            return Ok(replay);
+        }
+        enforce_user_assertion_time(&assertion)?;
+        enforce_onboarding_proof_time(
+            claim.issued_at_unix,
+            claim.expires_at_unix,
+            "invalid_agent_binding_key_rotation",
+            "Agent key rotation must be active and valid for at most ten minutes",
+        )?;
+        let player = memory.players.get(&assertion.player_id).ok_or_else(|| {
+            ApiError::not_found("human_player_not_found", "human player does not exist")
+        })?;
+        assert_player_identity(&assertion, player)?;
+        let snapshot = memory.bindings.get(&binding_id).cloned().ok_or_else(|| {
+            ApiError::not_found("agent_binding_not_found", "Agent binding does not exist")
+        })?;
+        validate_agent_binding_rotation_scope(&snapshot, &claim)?;
+        if memory
+            .used_agent_binding_rotation_ids
+            .contains(&request.rotation_id)
+            || memory
+                .used_agent_binding_rotation_nonces
+                .contains(&(binding_id, request.idempotency_key.clone()))
+        {
+            return Err(ApiError::conflict(
+                "agent_binding_rotation_reused",
+                "Agent binding key rotation ID or nonce has already been accepted",
+            ));
+        }
+        let binding = memory
+            .bindings
+            .get_mut(&binding_id)
+            .expect("binding exists");
+        binding.agent_key_id = new_agent_public_key_hash.clone();
+        binding.agent_public_key = new_agent_public_key;
+        binding.agent_public_key_hash = new_agent_public_key_hash;
+        binding.version += 1;
+        binding.updated_at = now;
+        let response = binding.clone();
+        memory
+            .used_agent_binding_rotation_nonces
+            .insert((binding_id, request.idempotency_key.clone()));
+        memory
+            .used_agent_binding_rotation_ids
+            .insert(request.rotation_id);
+        push_memory_event(
+            &mut memory,
+            OPERATION,
+            &request.idempotency_key,
+            "hepta.paper_raid.agent_binding.key_rotated.v2",
+            binding_id,
+            response.version,
+            json!({
+                "rotation_id": request.rotation_id,
+                "binding_id": binding_id,
+                "agent_id": response.agent_id,
+                "old_agent_key_id": claim.old_agent_key_id,
+                "new_agent_key_id": response.agent_key_id,
+            }),
+        )?;
+        memory_remember(
+            &mut memory,
+            OPERATION,
+            &request.idempotency_key,
+            request_hash,
+            StatusCode::OK,
+            &response,
+        )?;
+        return Ok((StatusCode::OK, Json(response)));
+    }
+
+    let (mut tx, replay) =
+        begin_postgres_idempotent(&state, OPERATION, &request.idempotency_key, &request_hash)
+            .await?;
+    if let Some(replay) = replay {
+        return decode_stored(replay);
+    }
+    enforce_user_assertion_time(&assertion)?;
+    enforce_onboarding_proof_time(
+        claim.issued_at_unix,
+        claim.expires_at_unix,
+        "invalid_agent_binding_key_rotation",
+        "Agent key rotation must be active and valid for at most ten minutes",
+    )?;
+    let player_row =
+        sqlx::query("select record_json from hepta_human_players where player_id=$1 for share")
+            .bind(assertion.player_id)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(ApiError::database)?
+            .ok_or_else(|| {
+                ApiError::not_found("human_player_not_found", "human player does not exist")
+            })?;
+    let player: HumanPlayer = decode_record(player_row.get("record_json"), "human player")?;
+    assert_player_identity(&assertion, &player)?;
+    let binding_row = sqlx::query(
+        "select version, record_json from hepta_agent_bindings where binding_id=$1 for update",
+    )
+    .bind(binding_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(ApiError::database)?
+    .ok_or_else(|| {
+        ApiError::not_found("agent_binding_not_found", "Agent binding does not exist")
+    })?;
+    let mut binding: AgentBinding = decode_record(binding_row.get("record_json"), "Agent binding")?;
+    let actual_version = u64::try_from(binding_row.get::<i64, _>("version"))
+        .map_err(|_| ApiError::internal("Agent binding version is invalid"))?;
+    if binding.version != actual_version {
+        return Err(ApiError::internal(
+            "Agent binding row and canonical record version differ",
+        ));
+    }
+    validate_agent_binding_rotation_scope(&binding, &claim)?;
+    binding.agent_key_id = new_agent_public_key_hash.clone();
+    binding.agent_public_key = new_agent_public_key;
+    binding.agent_public_key_hash = new_agent_public_key_hash;
+    binding.version += 1;
+    binding.updated_at = now;
+    let record_json = serde_json::to_value(&binding)
+        .map_err(|error| ApiError::internal(format!("encode Agent binding: {error}")))?;
+    let updated = sqlx::query(
+        "update hepta_agent_bindings set version=$1, record_json=$2::jsonb, updated_at=$3
+         where binding_id=$4 and version=$5",
+    )
+    .bind(binding.version as i64)
+    .bind(record_json)
+    .bind(binding.updated_at)
+    .bind(binding_id)
+    .bind(request.expected_binding_version as i64)
+    .execute(&mut *tx)
+    .await
+    .map_err(ApiError::database)?;
+    if updated.rows_affected() != 1 {
+        return Err(ApiError::conflict(
+            "aggregate_version_conflict",
+            "Agent binding changed concurrently",
+        ));
+    }
+    let rotation_json = serde_json::to_value(&claim)
+        .map_err(|error| ApiError::internal(format!("encode Agent key rotation: {error}")))?;
+    let rotation_insert = sqlx::query(
+        "insert into hepta_agent_binding_key_rotations (
+            rotation_id, binding_id, nonce, expected_binding_version, record_json
+         ) values ($1,$2,$3,$4,$5::jsonb)",
+    )
+    .bind(request.rotation_id)
+    .bind(binding_id)
+    .bind(&request.idempotency_key)
+    .bind(request.expected_binding_version as i64)
+    .bind(rotation_json)
+    .execute(&mut *tx)
+    .await;
+    if let Err(error) = rotation_insert {
+        if error
+            .as_database_error()
+            .is_some_and(|db| db.is_unique_violation())
+        {
+            return Err(ApiError::conflict(
+                "agent_binding_rotation_reused",
+                "Agent binding key rotation ID or nonce has already been accepted",
+            ));
+        }
+        return Err(ApiError::database(error));
+    }
+    insert_postgres_event(
+        &mut tx,
+        OPERATION,
+        &request.idempotency_key,
+        "hepta.paper_raid.agent_binding.key_rotated.v2",
+        binding_id,
+        binding.version,
+        json!({
+            "rotation_id": request.rotation_id,
+            "binding_id": binding_id,
+            "agent_id": binding.agent_id,
+            "old_agent_key_id": claim.old_agent_key_id,
+            "new_agent_key_id": binding.agent_key_id,
+        }),
+    )
+    .await?;
+    finish_postgres_idempotent(
+        &mut tx,
+        OPERATION,
+        &request.idempotency_key,
+        &request_hash,
+        Some(binding_id),
+        StatusCode::OK,
+        &binding,
+    )
+    .await?;
+    tx.commit().await.map_err(ApiError::database)?;
+    Ok((StatusCode::OK, Json(binding)))
+}
+
+fn validate_agent_binding_rotation_scope(
+    binding: &AgentBinding,
+    claim: &AgentBindingKeyRotationClaimV2,
+) -> Result<(), ApiError> {
+    if binding.binding_id != claim.binding_id
+        || binding.player_id != claim.player_id
+        || binding.agent_id != claim.agent_id
+        || binding.agent_key_id != claim.old_agent_key_id
+        || binding.agent_public_key != claim.old_agent_public_key
+        || binding.agent_public_key_hash != claim.old_agent_public_key_hash
+        || binding.status != AgentBindingStatus::Active
+    {
+        return Err(ApiError::conflict(
+            "agent_binding_rotation_scope_mismatch",
+            "Agent binding identity or current key does not match the signed rotation",
+        ));
+    }
+    if binding.version != claim.expected_binding_version {
+        return Err(version_conflict(
+            "Agent binding",
+            claim.expected_binding_version,
+            binding.version,
+        ));
+    }
+    Ok(())
 }
 
 async fn create_team(
@@ -6030,7 +6596,6 @@ struct ResearchSessionAuthorizationInputs<'a> {
     team: &'a ResearchTeam,
     players: &'a HashMap<Uuid, HumanPlayer>,
     bindings: &'a HashMap<Uuid, AgentBinding>,
-    agents: &'a HashMap<String, crate::AgentRegistration>,
     challenge: &'a crate::ResearchChallenge,
 }
 
@@ -6048,7 +6613,6 @@ fn build_research_session_authorization_set(
         team,
         players,
         bindings,
-        agents,
         challenge,
     } = inputs;
     if paper.team_id != team.team_id
@@ -6095,30 +6659,30 @@ fn build_research_session_authorization_set(
                 "team Agent binding no longer matches its human player",
             ));
         }
-        let agent = agents.get(&member.agent_id).ok_or_else(|| {
-            ApiError::not_found(
-                "agent_not_found",
-                format!("Agent {} no longer exists", member.agent_id),
-            )
-        })?;
-        let public_key = canonical_public_key(&agent.public_key)?;
+        let public_key = canonical_public_key(&binding.agent_public_key)?;
         let public_key_bytes = BASE64
             .decode(&public_key)
             .map_err(|_| ApiError::internal("canonical Agent public key decode failed"))?;
         let key_hash = sha256_digest(&public_key_bytes);
+        if key_hash != binding.agent_public_key_hash || binding.agent_key_id != key_hash {
+            return Err(ApiError::conflict(
+                "research_session_binding_key_mismatch",
+                "stored Agent binding key material is not self-consistent",
+            ));
+        }
         let authorization_id = Uuid::new_v4();
         authorization_ids.push(authorization_id);
         roster_entries.push(ResearchSessionRosterMemberV1 {
             participant_slot: member.participant_slot,
             authorization_id: authorization_id.to_string(),
             subject_user_id: player.nakama_user_id.to_string(),
-            agent_id: agent.agent_id.clone(),
-            agent_did: if agent.agent_id.starts_with("did:") {
-                agent.agent_id.clone()
+            agent_id: binding.agent_id.clone(),
+            agent_did: if binding.agent_id.starts_with("did:") {
+                binding.agent_id.clone()
             } else {
-                format!("did:trnm:{}", agent.agent_id)
+                format!("did:trnm:{}", binding.agent_id)
             },
-            agent_key_id: key_hash.clone(),
+            agent_key_id: binding.agent_key_id.clone(),
             agent_key_hash: key_hash,
             role: member.role.clone(),
         });
@@ -6139,9 +6703,9 @@ fn build_research_session_authorization_set(
         .zip(roster_entries.iter())
         .zip(authorization_ids)
     {
-        let agent = agents
-            .get(&team_member.agent_id)
-            .expect("Agent checked while building roster");
+        let binding = bindings
+            .get(&team_member.binding_id)
+            .expect("Agent binding checked while building roster");
         let claim = ResearchSessionAuthorizationClaimV1 {
             schema: crate::paper_raid_contracts::RESEARCH_SESSION_AUTHORIZATION_V1.to_string(),
             authorization_id: authorization_id.to_string(),
@@ -6149,10 +6713,10 @@ fn build_research_session_authorization_set(
             team_id: team.team_id.to_string(),
             paper_project_id: paper.paper_project_id.to_string(),
             challenge_id: paper.challenge_id.to_string(),
-            agent_id: agent.agent_id.clone(),
+            agent_id: binding.agent_id.clone(),
             agent_did: roster_member.agent_did.clone(),
             agent_key_id: roster_member.agent_key_id.clone(),
-            agent_public_key: canonical_public_key(&agent.public_key)?,
+            agent_public_key: canonical_public_key(&binding.agent_public_key)?,
             subject_user_id: roster_member.subject_user_id.clone(),
             participant_slot: team_member.participant_slot,
             role: team_member.role.clone(),
@@ -6281,8 +6845,8 @@ async fn issue_research_session_authorization_set(
         &request.idempotency_key,
         &request_hash,
     )?;
-    let (agents, challenges) = state
-        .inspect(|league| Ok((league.agents.clone(), league.challenges.clone())))
+    let challenges = state
+        .inspect(|league| Ok(league.challenges.clone()))
         .await?;
 
     if state.pool.is_none() {
@@ -6380,7 +6944,6 @@ async fn issue_research_session_authorization_set(
             team: &team,
             players: &players,
             bindings: &bindings,
-            agents: &agents,
             challenge,
         })?;
         memory
@@ -6498,7 +7061,6 @@ async fn issue_research_session_authorization_set(
         team: &team,
         players: &players,
         bindings: &bindings,
-        agents: &agents,
         challenge,
     })?;
     let set_json = serde_json::to_value(&set).map_err(|error| {
@@ -6629,8 +7191,8 @@ async fn replace_research_session_authorization_set(
         &request.idempotency_key,
         &request_hash,
     )?;
-    let (agents, challenges) = state
-        .inspect(|league| Ok((league.agents.clone(), league.challenges.clone())))
+    let challenges = state
+        .inspect(|league| Ok(league.challenges.clone()))
         .await?;
 
     if state.pool.is_none() {
@@ -6753,7 +7315,6 @@ async fn replace_research_session_authorization_set(
                 team: &team,
                 players: &players,
                 bindings: &bindings,
-                agents: &agents,
                 challenge,
             })?;
         ensure_replacement_matches_previous_epoch(
@@ -6935,7 +7496,6 @@ async fn replace_research_session_authorization_set(
             team: &team,
             players: &players,
             bindings: &bindings,
-            agents: &agents,
             challenge,
         })?;
     ensure_replacement_matches_previous_epoch(
