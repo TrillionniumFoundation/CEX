@@ -123,23 +123,10 @@ fi
 docker_config="$scratch_dir/docker-config"
 buildx_plugin="$docker_config/cli-plugins/docker-buildx"
 mkdir -p "$(dirname "$buildx_plugin")"
-curl \
-  --fail \
-  --location \
-  --proto '=https' \
-  --retry 3 \
-  --retry-all-errors \
-  --retry-delay 2 \
-  --show-error \
-  --silent \
-  --tlsv1.2 \
+bash "$repo_root/services/paper-raid-bff/scripts/download-pinned-buildx.sh" \
   "$buildx_url" \
-  --output "$buildx_plugin"
-actual_buildx_sha256=$(sha256sum "$buildx_plugin" | cut -d' ' -f1)
-if [[ "$actual_buildx_sha256" != "$buildx_sha256" ]]; then
-  echo "disposable buildx checksum mismatch" >&2
-  exit 1
-fi
+  "$buildx_sha256" \
+  "$buildx_plugin"
 chmod 0500 "$buildx_plugin"
 docker_cli=(sudo -n env "DOCKER_CONFIG=$docker_config" docker)
 if ! "${docker_cli[@]}" buildx version | rg -q --fixed-strings "$buildx_version"; then

@@ -11,19 +11,23 @@ use crate::{config::CasConfig, error::AppError};
 type HmacSha256 = Hmac<Sha256>;
 
 const ALLOWED_MEDIA_TYPES: &[&str] = &[
+    "application/x-bibtex",
+    "text/csv; charset=utf-8",
     "application/json",
+    "text/markdown; charset=utf-8",
     "application/pdf",
+    "text/x-python; charset=utf-8",
+    "image/svg+xml",
+    "text/plain; charset=utf-8",
+    "application/octet-stream",
     "application/zip",
     "application/gzip",
-    "text/markdown",
-    "text/plain; charset=utf-8",
-    "text/csv; charset=utf-8",
-    "text/x-bibtex; charset=utf-8",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredObject {
     pub digest: String,
+    pub artifact_sha256: String,
     pub uri: String,
     pub media_type: String,
     pub size: usize,
@@ -78,7 +82,7 @@ impl CasClient {
                     "CAS key already contains different bytes".into(),
                 ));
             }
-            return Ok(self.stored(expected_digest, media_type, bytes.len(), false));
+            return self.stored(expected_digest, media_type, bytes.len(), false);
         }
 
         let url = self.object_url(expected_digest)?;
@@ -108,12 +112,12 @@ impl CasClient {
                     "CAS key already contains different bytes".into(),
                 ));
             }
-            return Ok(self.stored(expected_digest, media_type, bytes.len(), false));
+            return self.stored(expected_digest, media_type, bytes.len(), false);
         }
         if !response.status().is_success() {
             return Err(AppError::Unavailable("cas"));
         }
-        Ok(self.stored(expected_digest, media_type, bytes.len(), true))
+        self.stored(expected_digest, media_type, bytes.len(), true)
     }
 
     pub async fn get(&self, digest: &str, expected_media_type: &str) -> Result<Vec<u8>, AppError> {
@@ -129,12 +133,7 @@ impl CasClient {
     }
 
     pub fn expected_uri(&self, digest: &str) -> Result<String, AppError> {
-        validate_digest(digest)?;
-        Ok(format!(
-            "s3://{}/objects/sha256/{}",
-            self.config.bucket,
-            digest.trim_start_matches("sha256:")
-        ))
+        Ok(format!("cas://sha256/{}", raw_sha256(digest)?))
     }
 
     pub fn max_object_bytes(&self) -> usize {
@@ -193,9 +192,7 @@ impl CasClient {
     }
 
     fn object_url(&self, digest: &str) -> Result<Url, AppError> {
-        let hex = digest
-            .strip_prefix("sha256:")
-            .ok_or_else(|| AppError::Invalid("artifact digest is invalid".into()))?;
+        let hex = raw_sha256(digest)?;
         let mut url = self.config.endpoint.clone();
         url.set_path(&format!("/{}/objects/sha256/{hex}", self.config.bucket));
         url.set_query(None);
@@ -266,18 +263,22 @@ impl CasClient {
         Ok(request)
     }
 
-    fn stored(&self, digest: &str, media_type: &str, size: usize, created: bool) -> StoredObject {
-        StoredObject {
+    fn stored(
+        &self,
+        digest: &str,
+        media_type: &str,
+        size: usize,
+        created: bool,
+    ) -> Result<StoredObject, AppError> {
+        let artifact_sha256 = raw_sha256(digest)?.to_string();
+        Ok(StoredObject {
             digest: digest.to_string(),
-            uri: format!(
-                "s3://{}/objects/sha256/{}",
-                self.config.bucket,
-                digest.trim_start_matches("sha256:")
-            ),
+            uri: format!("cas://sha256/{artifact_sha256}"),
+            artifact_sha256,
             media_type: media_type.to_string(),
             size,
             created,
-        }
+        })
     }
 }
 
@@ -287,7 +288,20 @@ fn validate_digest(value: &str) -> Result<(), AppError> {
         .map_err(AppError::Invalid)
 }
 
-fn validate_media_type(value: &str) -> Result<(), AppError> {
+pub(crate) fn raw_sha256(value: &str) -> Result<&str, AppError> {
+    validate_digest(value)?;
+    value
+        .strip_prefix("sha256:")
+        .ok_or_else(|| AppError::Invalid("artifact digest is invalid".into()))
+}
+
+pub(crate) fn digest_label_from_raw_sha256(value: &str) -> Result<String, AppError> {
+    let digest = format!("sha256:{value}");
+    validate_digest(&digest)?;
+    Ok(digest)
+}
+
+pub(crate) fn validate_media_type(value: &str) -> Result<(), AppError> {
     if !ALLOWED_MEDIA_TYPES.contains(&value) {
         return Err(AppError::Invalid(
             "artifact media type is not allowed".into(),
@@ -361,12 +375,38 @@ mod tests {
         let url = client.object_url(&digest).expect("object URL");
         assert!(url.path().starts_with("/paper-raid-alpha/objects/sha256/"));
         assert!(!url.path().contains(".."));
+        let raw = digest.strip_prefix("sha256:").expect("raw digest");
+        assert_eq!(
+            client.expected_uri(&digest).unwrap(),
+            format!("cas://sha256/{raw}")
+        );
+        assert_eq!(digest_label_from_raw_sha256(raw).unwrap(), digest);
     }
 
     #[test]
     fn rejects_noncanonical_digest_and_media() {
         assert!(validate_digest("sha256:ABC").is_err());
-        assert!(validate_media_type("text/html").is_err());
+        assert!(raw_sha256(&"ab".repeat(32)).is_err());
+        assert!(digest_label_from_raw_sha256(&format!("sha256:{}", "ab".repeat(32))).is_err());
+        assert!(digest_label_from_raw_sha256(&"AB".repeat(32)).is_err());
+        for media_type in ALLOWED_MEDIA_TYPES {
+            validate_media_type(media_type).expect("exact kernel media type");
+        }
+        for rejected in [
+            "text/html",
+            "text/*",
+            "*/*",
+            "text/markdown",
+            "text/markdown;charset=utf-8",
+            "text/x-bibtex; charset=utf-8",
+            "application/json; charset=utf-8",
+            "IMAGE/SVG+XML",
+        ] {
+            assert!(
+                validate_media_type(rejected).is_err(),
+                "unexpectedly accepted {rejected}"
+            );
+        }
     }
 
     #[test]
@@ -493,6 +533,15 @@ mod tests {
             .await
             .expect("first append");
         assert!(created.created);
+        assert_eq!(created.digest, digest);
+        assert_eq!(
+            created.artifact_sha256,
+            digest.trim_start_matches("sha256:")
+        );
+        assert_eq!(
+            created.uri,
+            format!("cas://sha256/{}", created.artifact_sha256)
+        );
         let replay = client
             .put_if_absent(&digest, "application/json", bytes)
             .await

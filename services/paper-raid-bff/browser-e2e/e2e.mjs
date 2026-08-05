@@ -209,6 +209,40 @@ async function runContext(browser, index) {
         await page.getByRole("heading", { name: heading }).waitFor();
       }
       await page.locator('form[data-command="submit_appeal"] .local-sign').waitFor();
+      const artifactLinks = page.locator(
+        `a[href^="/api/papers/${credentials.paper_id}/artifacts/"]`,
+      );
+      for (let linkIndex = 0; linkIndex < await artifactLinks.count(); linkIndex += 1) {
+        const href = await artifactLinks.nth(linkIndex).getAttribute("href");
+        assert.match(href, /\/artifacts\/sha256:[0-9a-f]{64}$/);
+      }
+      for (const command of [
+        "create_nakama_research_session_control",
+        "resume_nakama_research_session_control",
+        "replace_nakama_research_session_roster_control",
+        "complete_nakama_research_session_control",
+      ]) {
+        const control = page.locator(`form.command-form[data-command="${command}"]`);
+        await control.waitFor();
+        assert.equal(await control.getAttribute("data-resource-id"), "");
+        assert.equal(await control.locator('[name="child_id"]').count(), 0);
+      }
+      assert.deepEqual(
+        await page.locator('.artifact-form select[name="media_type"] option').allTextContents(),
+        [
+          "application/x-bibtex",
+          "text/csv; charset=utf-8",
+          "application/json",
+          "text/markdown; charset=utf-8",
+          "application/pdf",
+          "text/x-python; charset=utf-8",
+          "image/svg+xml",
+          "text/plain; charset=utf-8",
+          "application/octet-stream",
+          "application/zip",
+          "application/gzip",
+        ],
+      );
       await page.getByText("pending_finality", { exact: true }).first().waitFor();
     }
 

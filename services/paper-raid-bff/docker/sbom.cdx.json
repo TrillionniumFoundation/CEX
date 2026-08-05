@@ -2,6 +2,17 @@
   "bomFormat": "CycloneDX",
   "components": [
     {
+      "bom-ref": "file:/paper-raid-bff",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "2169b46f82ac491a28171bc0ac08436867316660809a5906f59a8c8e90a27d81"
+        }
+      ],
+      "name": "/paper-raid-bff",
+      "type": "file"
+    },
+    {
       "bom-ref": "pkg:cargo/aho-corasick@1.1.5",
       "licenses": [
         {

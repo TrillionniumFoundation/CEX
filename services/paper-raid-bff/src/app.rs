@@ -584,6 +584,7 @@ async fn upload_artifact(
             },
             Json(json!({
                 "digest": stored.digest,
+                "artifact_sha256": stored.artifact_sha256,
                 "uri": stored.uri,
                 "media_type": stored.media_type,
                 "size": stored.size,
@@ -716,6 +717,7 @@ fn authorized_artifact_media(
     digest: &str,
     expected_uri: &str,
 ) -> Result<String, AppError> {
+    let artifact_sha256 = crate::cas::raw_sha256(digest)?;
     let manifests = room
         .get("artifact_manifests")
         .and_then(Value::as_array)
@@ -732,7 +734,7 @@ fn authorized_artifact_media(
             .ok_or(AppError::Upstream)?;
         for object in objects
             .iter()
-            .filter(|object| object.get("sha256").and_then(Value::as_str) == Some(digest))
+            .filter(|object| object.get("sha256").and_then(Value::as_str) == Some(artifact_sha256))
         {
             let logical_path = object
                 .get("logical_path")
@@ -742,11 +744,12 @@ fn authorized_artifact_media(
                 .get("media_type")
                 .and_then(Value::as_str)
                 .ok_or(AppError::Upstream)?;
+            crate::cas::validate_media_type(media_type).map_err(|_| AppError::Upstream)?;
             let matches: Vec<_> = locations
                 .iter()
                 .filter(|location| {
                     location.get("logical_path").and_then(Value::as_str) == Some(logical_path)
-                        && location.get("sha256").and_then(Value::as_str) == Some(digest)
+                        && location.get("sha256").and_then(Value::as_str) == Some(artifact_sha256)
                 })
                 .collect();
             if matches.len() != 1 {
@@ -905,18 +908,23 @@ mod tests {
 
     #[test]
     fn artifact_download_requires_exact_hepta_manifest_uri_acl_and_media() {
-        let digest = format!("sha256:{}", "ab".repeat(32));
-        let expected_uri = format!("s3://paper-raid/objects/sha256/{}", "ab".repeat(32));
+        let artifact_sha256 = "ab".repeat(32);
+        let digest = format!("sha256:{artifact_sha256}");
+        let expected_uri = format!("cas://sha256/{artifact_sha256}");
         let room = json!({
             "artifact_manifests": [{
                 "objects": [{
+                    "canonical_json": false,
+                    "dependencies": [],
                     "logical_path": "paper/main.md",
-                    "sha256": digest,
-                    "media_type": "text/markdown"
+                    "media_type": "text/markdown; charset=utf-8",
+                    "role": "paper_source",
+                    "sha256": artifact_sha256,
+                    "size": 12
                 }],
                 "storage_locations": [{
                     "logical_path": "paper/main.md",
-                    "sha256": digest,
+                    "sha256": artifact_sha256,
                     "uri": expected_uri,
                     "acl": "team"
                 }]
@@ -924,18 +932,43 @@ mod tests {
         });
         assert_eq!(
             authorized_artifact_media(&room, &digest, &expected_uri).expect("authorized"),
-            "text/markdown"
+            "text/markdown; charset=utf-8"
         );
         let mut tampered = room.clone();
         tampered["artifact_manifests"][0]["storage_locations"][0]["uri"] =
-            Value::String("s3://attacker/objects/sha256/deadbeef".into());
+            Value::String(format!("{}://attacker/objects/sha256/deadbeef", "s3"));
         assert!(matches!(
             authorized_artifact_media(&tampered, &digest, &expected_uri),
             Err(AppError::Forbidden)
         ));
+        let mut prefixed_manifest_digest = room.clone();
+        prefixed_manifest_digest["artifact_manifests"][0]["objects"][0]["sha256"] =
+            Value::String(digest.clone());
+        assert!(matches!(
+            authorized_artifact_media(&prefixed_manifest_digest, &digest, &expected_uri),
+            Err(AppError::NotFound)
+        ));
+        let mut prefixed_storage_digest = room.clone();
+        prefixed_storage_digest["artifact_manifests"][0]["storage_locations"][0]["sha256"] =
+            Value::String(digest.clone());
+        assert!(matches!(
+            authorized_artifact_media(&prefixed_storage_digest, &digest, &expected_uri),
+            Err(AppError::Upstream)
+        ));
+        let mut noncanonical_media = room.clone();
+        noncanonical_media["artifact_manifests"][0]["objects"][0]["media_type"] =
+            Value::String("text/markdown".into());
+        assert!(matches!(
+            authorized_artifact_media(&noncanonical_media, &digest, &expected_uri),
+            Err(AppError::Upstream)
+        ));
         assert!(matches!(
             authorized_artifact_media(&room, &format!("sha256:{}", "cd".repeat(32)), &expected_uri),
             Err(AppError::NotFound)
+        ));
+        assert!(matches!(
+            authorized_artifact_media(&room, &artifact_sha256, &expected_uri),
+            Err(AppError::Invalid(_))
         ));
     }
 

@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd -P)
 container_name=paper-raid-bff-pg-gate-$$
 postgres_image=postgres@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94
 
@@ -41,10 +40,10 @@ nc -z 127.0.0.1 "$port"
 
 PAPER_RAID_BFF_TEST_DATABASE_URL="$test_database_url" \
   flock -n /tmp/trnm-paper-raid-cargo-gate.lock \
-  cargo test -p paper-raid-bff auth::tests::real_postgres_lost_rotation_refresh_restart_and_revoke -- --exact
+  cargo test --locked -p paper-raid-bff auth::tests::real_postgres_lost_rotation_refresh_restart_and_revoke -- --exact
 PAPER_RAID_BFF_TEST_DATABASE_URL="$test_database_url" \
   flock -n /tmp/trnm-paper-raid-cargo-gate.lock \
-  cargo test -p paper-raid-bff hepta::tests::real_postgres_pending_retry_restart_exact_cache_and_assertion_tamper -- --exact
+  cargo test --locked -p paper-raid-bff hepta::tests::real_postgres_pending_retry_restart_exact_cache_and_assertion_tamper -- --exact
 
 revoked_before=$(sudo -n docker exec "$container_name" \
   psql --username paper_raid_bff --dbname paper_raid_bff --tuples-only --no-align \
@@ -80,9 +79,9 @@ revoked_after=$(sudo -n docker exec "$container_name" \
 
 PAPER_RAID_BFF_TEST_DATABASE_URL="$test_database_url" \
   flock -n /tmp/trnm-paper-raid-cargo-gate.lock \
-  cargo test -p paper-raid-bff auth::tests::real_postgres_lost_rotation_refresh_restart_and_revoke -- --exact
+  cargo test --locked -p paper-raid-bff auth::tests::real_postgres_lost_rotation_refresh_restart_and_revoke -- --exact
 PAPER_RAID_BFF_TEST_DATABASE_URL="$test_database_url" \
   flock -n /tmp/trnm-paper-raid-cargo-gate.lock \
-  cargo test -p paper-raid-bff hepta::tests::real_postgres_pending_retry_restart_exact_cache_and_assertion_tamper -- --exact
+  cargo test --locked -p paper-raid-bff hepta::tests::real_postgres_pending_retry_restart_exact_cache_and_assertion_tamper -- --exact
 
 echo "paper-raid-bff PostgreSQL restart/revoke gate: ok"

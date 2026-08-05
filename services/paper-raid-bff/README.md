@@ -32,6 +32,14 @@ resolutions are submitted through their committed typed routes and read back
 from the P5 review model. Missing sections render as `unavailable`; the BFF
 never fabricates research facts or persists a Paper Room read model.
 
+The four Nakama lifecycle controls are also fixed BrowserCommands. Create,
+resume, roster replacement and completion map only to the committed static
+`/v2/hepta/nakama/research-session-controls/{create,resume,replace-roster,complete}`
+POST routes and their exact `*_v2` Consumer assertion operations. Their
+BrowserCommand `resource_id`, `child_id` and `session_id` locators must all be
+null; session/roster/set locators come only from Hepta's deny-unknown typed
+payload. The caller can never supply an upstream path or assertion operation.
+
 The browser alpha is a same-origin, external-script flow:
 
 1. `/login` exchanges one fixed alpha key for an encrypted HttpOnly session;
@@ -74,11 +82,23 @@ The browser alpha is a same-origin, external-script flow:
    `member_research_sessions`. The Nakama HTTP key never reaches the browser.
 
 CAS upload is streamed and capped independently at 32 MiB. The BFF recomputes
-the requested digest and returns its configured content-addressed URI; it
-does not create a research fact. A download is allowed only when the
+the requested `sha256:<64-lowercase-hex>` API digest and returns both that
+prefixed BFF/CAS digest, the raw `artifact_sha256` used by Hepta's neutral
+manifest, and the canonical `cas://sha256/<64-lowercase-hex>` ArtifactReference
+URI; it does not create a research fact. The backing S3-compatible provider
+remains an implementation detail under
+`/<bucket>/objects/sha256/<64-lowercase-hex>` and is never exposed as a
+research URI. A download is allowed only when the
 authenticated player's P3 Paper Room contains an exact ArtifactManifest
 object and storage-location binding for the digest, media type, URI and ACL.
-JSON commands remain capped at 2 MiB.
+The exact Paper Collaboration Kernel media allowlist is
+`application/x-bibtex`, `text/csv; charset=utf-8`, `application/json`,
+`text/markdown; charset=utf-8`, `application/pdf`,
+`text/x-python; charset=utf-8`, `image/svg+xml`,
+`text/plain; charset=utf-8` and `application/octet-stream`; exact
+`application/zip` and `application/gzip` remain available for bundles. No
+wildcard or parameter normalization is accepted. JSON commands remain capped
+at 2 MiB.
 
 If a mutation response is lost after CSRF rotation commits, the encrypted
 session cookie remains valid. `POST /session/refresh` requires the exact
@@ -91,15 +111,29 @@ secret mechanism. Do not commit populated env files.
 
 The runtime image is pinned to immutable builder and distroless base digests,
 runs as UID/GID 65532 without a shell, carries exact OCI revision/creation and
-Cargo-lock provenance labels, and includes a deterministic CycloneDX 1.5 SBOM
+Git source-tree/Cargo-lock provenance labels, and includes a deterministic CycloneDX 1.5 SBOM
 at `/usr/share/doc/paper-raid-bff/sbom.cdx.json`. `scripts/check-image.sh`
 requires a clean commit, regenerates and compares the SBOM, independently
-rebuilds the image with `--no-cache`, compares image IDs, scans the exported
-root filesystem, and proves the credential scanner rejects an injected
-sentinel fixture. Both builds explicitly disable Buildx-generated provenance
+rebuilds the image with `--no-cache`, compares image IDs, OCI index digests,
+IID files and config digests independently, scans the exported
+root filesystem, requires exactly one CycloneDX `type=file` component for
+`/paper-raid-bff`, and proves its SHA-256 equals both independently built image
+binaries. The host release build remains a compile/code gate, while the
+runtime byte authority comes only from the immutable Debian Rust builder; this
+avoids treating the Ubuntu host linker as equivalent to the pinned image
+linker. The Docker build checks the SBOM-bound runtime SHA-256 before creating
+the release tree, and the final OCI config repeats it in
+`org.trillionnium.runtime-binary.sha256`. The gate also proves the credential
+scanner rejects an injected sentinel fixture. Both builds explicitly disable Buildx-generated provenance
 and SBOM attestations (`--provenance=false --sbom=false`) because provenance is
 carried by immutable OCI labels and the independently generated, checked-in
 SBOM; this keeps the loaded single-platform image identity deterministic.
+
+Regenerate the tracked runtime SBOM only from a clean commit with
+`scripts/generate-runtime-sbom.sh services/paper-raid-bff/docker/sbom.cdx.json`.
+That path runs the pinned builder twice with `--no-cache`, requires byte-equal
+runtime binaries, rejects revision/tree/SBOM/self-hash embedding, and generates
+the CycloneDX document twice before replacing the tracked file.
 
 The image gate never installs a host plugin. It downloads Docker Buildx
 `v0.36.1` from
@@ -107,7 +141,13 @@ The image gate never installs a host plugin. It downloads Docker Buildx
 requires SHA-256
 `48af8a397ebd60178778bf63611dbcebe5f5e7a9be90eb9147b24b9587455778`,
 loads it only through a temporary `DOCKER_CONFIG`, and deletes that directory
-on exit.
+on exit. The shared downloader keeps partial bytes, resumes with HTTP ranges,
+and fails after eight bounded attempts; every successful transfer is still
+accepted only after the fixed SHA-256 check.
+For an offline/repeated local gate, `PAPER_RAID_BUILDX_BIN` may name a cached
+regular non-symlink file. The gate copies it into the same disposable
+`DOCKER_CONFIG` and still enforces the pinned SHA-256 and Buildx version before
+use; the cache path is never mounted or copied into the product image.
 
 The release browser gate is also disposable. `scripts/check-browser-e2e.sh`
 builds its runner from Playwright `1.49.1` at the immutable amd64 base digest

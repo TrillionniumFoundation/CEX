@@ -4,6 +4,8 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd -P)
 docker_dir="$repo_root/services/paper-raid-bff/docker"
 output=${1:-}
+runtime_input_kind=${2:-}
+runtime_input=${3:-}
 scratch_dir=$(mktemp -d)
 
 cleanup() {
@@ -14,10 +16,30 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if [[ -z "$output" ]]; then
-  echo "usage: $0 OUTPUT" >&2
+if [[ -z "$output" || "$#" -ne 3 ]]; then
+  echo "usage: $0 OUTPUT (--runtime-binary FILE | --runtime-sha256 SHA256)" >&2
   exit 2
 fi
+case "$runtime_input_kind" in
+  --runtime-binary)
+    if [[ ! -f "$runtime_input" ]] || [[ ! -x "$runtime_input" ]]; then
+      echo "runtime binary is missing or not executable: $runtime_input" >&2
+      exit 2
+    fi
+    runtime_binary_sha256=$(sha256sum "$runtime_input" | cut -d' ' -f1)
+    ;;
+  --runtime-sha256)
+    if [[ ! "$runtime_input" =~ ^[0-9a-f]{64}$ ]]; then
+      echo "runtime binary SHA-256 is not canonical" >&2
+      exit 2
+    fi
+    runtime_binary_sha256=$runtime_input
+    ;;
+  *)
+    echo "usage: $0 OUTPUT (--runtime-binary FILE | --runtime-sha256 SHA256)" >&2
+    exit 2
+    ;;
+esac
 
 exec 9>/tmp/trnm-paper-raid-cargo-gate.lock
 flock -x 9
@@ -48,7 +70,9 @@ cargo metadata \
 
 lock_sha256=$(sha256sum "$docker_dir/Cargo.lock" | cut -d' ' -f1)
 generated="$scratch_dir/sbom.cdx.json"
-jq --sort-keys --arg lock_sha256 "$lock_sha256" '
+jq --sort-keys \
+  --arg lock_sha256 "$lock_sha256" \
+  --arg runtime_binary_sha256 "$runtime_binary_sha256" '
   . as $metadata
   | def package($id): first($metadata.packages[] | select(.id == $id));
     def purl($package):
@@ -71,11 +95,20 @@ jq --sort-keys --arg lock_sha256 "$lock_sha256" '
         component: component(first($metadata.packages[] | select(.name == "paper-raid-bff"))),
         properties: [{name: "trnm:cargo-lock:sha256", value: $lock_sha256}]
       },
-      components: [
-        $metadata.packages[]
-        | select(.name != "paper-raid-bff")
-        | component(.)
-      ] | sort_by(."bom-ref"),
+      components: (
+        [
+          $metadata.packages[]
+          | select(.name != "paper-raid-bff")
+          | component(.)
+        ]
+        + [{
+            type: "file",
+            "bom-ref": "file:/paper-raid-bff",
+            name: "/paper-raid-bff",
+            hashes: [{alg: "SHA-256", content: $runtime_binary_sha256}]
+          }]
+        | sort_by(."bom-ref")
+      ),
       dependencies: [
         $metadata.resolve.nodes[]
         | package(.id) as $package

@@ -50,6 +50,10 @@ pub enum CommandName {
     FinalizeJointPaperSubmission,
     IssueResearchSessionAuthorizationSet,
     ReplaceResearchSessionAuthorizationSet,
+    CreateNakamaResearchSessionControl,
+    ResumeNakamaResearchSessionControl,
+    ReplaceNakamaResearchSessionRosterControl,
+    CompleteNakamaResearchSessionControl,
     QueueMatchmaking,
     DecideTeamProposal,
     CreateEvidenceCard,
@@ -305,6 +309,34 @@ impl BrowserCommand {
                     "replace_research_session_authorization_set_v1",
                 )
             }
+            CommandName::CreateNakamaResearchSessionControl => {
+                self.require_no_route_locators()?;
+                post(
+                    "/v2/hepta/nakama/research-session-controls/create".into(),
+                    "create_nakama_research_session_control_v2",
+                )
+            }
+            CommandName::ResumeNakamaResearchSessionControl => {
+                self.require_no_route_locators()?;
+                post(
+                    "/v2/hepta/nakama/research-session-controls/resume".into(),
+                    "resume_nakama_research_session_control_v2",
+                )
+            }
+            CommandName::ReplaceNakamaResearchSessionRosterControl => {
+                self.require_no_route_locators()?;
+                post(
+                    "/v2/hepta/nakama/research-session-controls/replace-roster".into(),
+                    "replace_nakama_research_session_roster_control_v2",
+                )
+            }
+            CommandName::CompleteNakamaResearchSessionControl => {
+                self.require_no_route_locators()?;
+                post(
+                    "/v2/hepta/nakama/research-session-controls/complete".into(),
+                    "complete_nakama_research_session_control_v2",
+                )
+            }
             CommandName::QueueMatchmaking => post(
                 "/v2/hepta/matchmaking/tickets".into(),
                 "create_matchmaking_ticket_v3",
@@ -422,6 +454,15 @@ impl BrowserCommand {
             }
         }
         Ok(payload)
+    }
+
+    fn require_no_route_locators(&self) -> Result<(), AppError> {
+        if self.resource_id.is_some() || self.child_id.is_some() || self.session_id.is_some() {
+            return Err(AppError::Invalid(
+                "Nakama research control commands require null envelope locators".into(),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -1422,7 +1463,7 @@ mod tests {
     use super::*;
     use axum::{
         body::Bytes,
-        extract::{Path, Query, State},
+        extract::{OriginalUri, Path, Query, State},
         http::{HeaderMap, StatusCode as AxumStatus},
         response::{IntoResponse, Response},
         routing::{get, post},
@@ -1662,6 +1703,46 @@ mod tests {
                 "replace_research_session_authorization_set_v1",
             ),
             (
+                command(
+                    CommandName::CreateNakamaResearchSessionControl,
+                    None,
+                    None,
+                    None,
+                ),
+                "/v2/hepta/nakama/research-session-controls/create".into(),
+                "create_nakama_research_session_control_v2",
+            ),
+            (
+                command(
+                    CommandName::ResumeNakamaResearchSessionControl,
+                    None,
+                    None,
+                    None,
+                ),
+                "/v2/hepta/nakama/research-session-controls/resume".into(),
+                "resume_nakama_research_session_control_v2",
+            ),
+            (
+                command(
+                    CommandName::ReplaceNakamaResearchSessionRosterControl,
+                    None,
+                    None,
+                    None,
+                ),
+                "/v2/hepta/nakama/research-session-controls/replace-roster".into(),
+                "replace_nakama_research_session_roster_control_v2",
+            ),
+            (
+                command(
+                    CommandName::CompleteNakamaResearchSessionControl,
+                    None,
+                    None,
+                    None,
+                ),
+                "/v2/hepta/nakama/research-session-controls/complete".into(),
+                "complete_nakama_research_session_control_v2",
+            ),
+            (
                 command(CommandName::QueueMatchmaking, None, None, None),
                 "/v2/hepta/matchmaking/tickets".into(),
                 "create_matchmaking_ticket_v3",
@@ -1729,8 +1810,60 @@ mod tests {
         ];
         for (command, expected_path, expected_operation) in cases {
             let route = command.route().expect("exact route");
+            assert_eq!(route.method, Method::POST);
             assert_eq!(route.path, expected_path);
             assert_eq!(route.operation, expected_operation);
+        }
+    }
+
+    #[test]
+    fn browser_command_rejects_caller_supplied_path_and_operation() {
+        let idempotency_key = Uuid::new_v4();
+        let base = serde_json::json!({
+            "command": "create_nakama_research_session_control",
+            "resource_id": null,
+            "child_id": null,
+            "session_id": null,
+            "idempotency_key": idempotency_key,
+            "payload": {
+                "authorization_set_id": Uuid::new_v4(),
+                "idempotency_key": idempotency_key
+            }
+        });
+        assert!(serde_json::from_value::<BrowserCommand>(base.clone()).is_ok());
+
+        let mut with_path = base.clone();
+        with_path
+            .as_object_mut()
+            .expect("command object")
+            .insert("path".into(), Value::String("/v2/hepta/admin".into()));
+        assert!(serde_json::from_value::<BrowserCommand>(with_path).is_err());
+
+        let mut with_operation = base;
+        with_operation
+            .as_object_mut()
+            .expect("command object")
+            .insert("operation".into(), Value::String("forged_v2".into()));
+        assert!(serde_json::from_value::<BrowserCommand>(with_operation).is_err());
+    }
+
+    #[test]
+    fn nakama_control_routes_reject_all_unused_envelope_locators() {
+        for name in [
+            CommandName::CreateNakamaResearchSessionControl,
+            CommandName::ResumeNakamaResearchSessionControl,
+            CommandName::ReplaceNakamaResearchSessionRosterControl,
+            CommandName::CompleteNakamaResearchSessionControl,
+        ] {
+            assert!(command(name, Some(Uuid::new_v4()), None, None)
+                .route()
+                .is_err());
+            assert!(command(name, None, Some(Uuid::new_v4()), None)
+                .route()
+                .is_err());
+            assert!(command(name, None, None, Some("paper.raid:alpha"))
+                .route()
+                .is_err());
         }
     }
 
@@ -1835,6 +1968,68 @@ mod tests {
         Json(serde_json::json!([{"cursor":42}])).into_response()
     }
 
+    async fn mock_nakama_control(
+        State((captured, verifying_key)): State<(
+            Arc<Mutex<MockHeptaState>>,
+            ed25519_dalek::VerifyingKey,
+        )>,
+        OriginalUri(uri): OriginalUri,
+        headers: HeaderMap,
+        body: Bytes,
+    ) -> Response {
+        let expected_operation = match uri.path() {
+            "/v2/hepta/nakama/research-session-controls/create" => {
+                "create_nakama_research_session_control_v2"
+            }
+            "/v2/hepta/nakama/research-session-controls/resume" => {
+                "resume_nakama_research_session_control_v2"
+            }
+            "/v2/hepta/nakama/research-session-controls/replace-roster" => {
+                "replace_nakama_research_session_roster_control_v2"
+            }
+            "/v2/hepta/nakama/research-session-controls/complete" => {
+                "complete_nakama_research_session_control_v2"
+            }
+            _ => return AxumStatus::NOT_FOUND.into_response(),
+        };
+        let assertion = headers
+            .get(ASSERTION_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| BASE64.decode(value).ok())
+            .and_then(|bytes| serde_json::from_slice::<SignedConsumerUserAssertionV2>(&bytes).ok());
+        let Some(assertion) = assertion else {
+            return AxumStatus::BAD_REQUEST.into_response();
+        };
+        let body_json: Value = match serde_json::from_slice(&body) {
+            Ok(value) => value,
+            Err(_) => return AxumStatus::BAD_REQUEST.into_response(),
+        };
+        if verify_consumer_user_assertion_signature(&assertion, &verifying_key).is_err()
+            || assertion.claim.http_method != "POST"
+            || assertion.claim.canonical_path != uri.path()
+            || assertion.claim.operation != expected_operation
+            || assertion.claim.body_hash != sha256_digest(&body)
+            || body_json.get("idempotency_key").and_then(Value::as_str)
+                != Some(assertion.claim.idempotency_key.as_str())
+            || body_json.get("path").is_some()
+            || body_json.get("operation").is_some()
+        {
+            return AxumStatus::BAD_REQUEST.into_response();
+        }
+        let mut captured = captured.lock().expect("mock lock");
+        captured.calls += 1;
+        captured.bodies.push(body.to_vec());
+        captured.assertions.push(assertion);
+        (
+            AxumStatus::CREATED,
+            Json(serde_json::json!({
+                "schema":"hepta.paper_raid.nakama_research_control_command.v2",
+                "status":"pending"
+            })),
+        )
+            .into_response()
+    }
+
     async fn spawn_mock_hepta(
         captured: Arc<Mutex<MockHeptaState>>,
         verifying_key: ed25519_dalek::VerifyingKey,
@@ -1846,6 +2041,22 @@ mod tests {
         let router = Router::new()
             .route("/v2/hepta/teams", post(mock_create_team))
             .route("/v2/hepta/papers/:paper_id/events", get(mock_paper_events))
+            .route(
+                "/v2/hepta/nakama/research-session-controls/create",
+                post(mock_nakama_control),
+            )
+            .route(
+                "/v2/hepta/nakama/research-session-controls/resume",
+                post(mock_nakama_control),
+            )
+            .route(
+                "/v2/hepta/nakama/research-session-controls/replace-roster",
+                post(mock_nakama_control),
+            )
+            .route(
+                "/v2/hepta/nakama/research-session-controls/complete",
+                post(mock_nakama_control),
+            )
             .with_state((captured, verifying_key));
         tokio::spawn(async move {
             axum::serve(listener, router)
@@ -1933,6 +2144,39 @@ mod tests {
             Err(AppError::Conflict(_))
         ));
 
+        for (name, payload) in [
+            (
+                CommandName::CreateNakamaResearchSessionControl,
+                serde_json::json!({"authorization_set_id": Uuid::new_v4()}),
+            ),
+            (
+                CommandName::ResumeNakamaResearchSessionControl,
+                serde_json::json!({"session_id":"paper.raid:alpha","roster_version":1}),
+            ),
+            (
+                CommandName::ReplaceNakamaResearchSessionRosterControl,
+                serde_json::json!({"authorization_set_id": Uuid::new_v4()}),
+            ),
+            (
+                CommandName::CompleteNakamaResearchSessionControl,
+                serde_json::json!({"session_id":"paper.raid:alpha","roster_version":1}),
+            ),
+        ] {
+            let control = BrowserCommand {
+                command: name,
+                resource_id: None,
+                child_id: None,
+                session_id: None,
+                idempotency_key: Uuid::new_v4(),
+                payload,
+            };
+            let response = restarted
+                .forward_command(&identity, &control)
+                .await
+                .expect("fixed Nakama control route");
+            assert_eq!(response.status, 201);
+        }
+
         let paper_id = Uuid::new_v4();
         let events = restarted
             .list_paper_room_events(&identity, paper_id, 42)
@@ -1941,8 +2185,36 @@ mod tests {
         assert_eq!(events[0]["cursor"], 42);
 
         let captured = captured.lock().expect("mock lock");
-        assert_eq!(captured.calls, 1);
-        assert_eq!(captured.bodies, vec![body]);
+        assert_eq!(captured.calls, 5);
+        assert_eq!(captured.bodies.len(), 5);
+        assert_eq!(captured.bodies[0], body);
+        assert_eq!(
+            captured.assertions[1..5]
+                .iter()
+                .map(|assertion| (
+                    assertion.claim.canonical_path.as_str(),
+                    assertion.claim.operation.as_str(),
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    "/v2/hepta/nakama/research-session-controls/create",
+                    "create_nakama_research_session_control_v2",
+                ),
+                (
+                    "/v2/hepta/nakama/research-session-controls/resume",
+                    "resume_nakama_research_session_control_v2",
+                ),
+                (
+                    "/v2/hepta/nakama/research-session-controls/replace-roster",
+                    "replace_nakama_research_session_roster_control_v2",
+                ),
+                (
+                    "/v2/hepta/nakama/research-session-controls/complete",
+                    "complete_nakama_research_session_control_v2",
+                ),
+            ]
+        );
         assert_eq!(
             captured.event_queries,
             vec![format!(

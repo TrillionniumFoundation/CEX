@@ -356,7 +356,7 @@ pub fn paper_room(
             "register_artifact",
             Some(paper_id),
             false,
-            r#"{"manifest_id":"...","expected_paper_version":1,"expected_source_manifest_sha256":"sha256:...","source_bundle":{...},"storage_locations":[...]}"#,
+            r#"{"manifest_id":"...","expected_paper_version":1,"expected_source_manifest_sha256":"<raw-64-lowercase-hex-of-canonical-source-bundle>","source_bundle":{"artifact_root":{"algorithm":"sha256-canonical-manifest-v1","digest_file":"artifact-bundle.v1.sha256"},"bundle_id":"paper-raid-bundle-001","challenge_id":"<paper-challenge-uuid>","created_at":"2026-08-05T00:00:00Z","hepta_binding_status":"unbound","human_authority_materialized":false,"object_count":1,"objects":[{"canonical_json":false,"dependencies":[],"logical_path":"paper/main.md","media_type":"text/markdown; charset=utf-8","role":"paper_source","sha256":"<raw-64-lowercase-hex>","size":12}],"required_run_ids":["run-001"],"schema":"paper-raid.artifact-bundle.v1"},"storage_locations":[{"logical_path":"paper/main.md","sha256":"<same-raw-64-lowercase-hex>","uri":"cas://sha256/<same-raw-64-lowercase-hex>","acl":"team"}]}"#,
         ),
         command_editor(
             "Acquire Section Lease / 获取章节租约",
@@ -423,6 +423,42 @@ pub fn paper_room(
             r#"{"submission_id":"...","release_candidate_id":"...","expected_paper_version":1}"#,
         ),
     );
+        for editor in [
+            command_editor(
+                "Start Nakama Research Session / 启动科研会话",
+                "Hepta derives and signs the exact create control from the authorization set; the browser cannot choose a Nakama RPC or assertion operation.",
+                "create_nakama_research_session_control",
+                None,
+                false,
+                r#"{"authorization_set_id":"..."}"#,
+            ),
+            command_editor(
+                "Resume Nakama Research Session / 恢复科研会话",
+                "Resume the exact current session epoch after a runtime restart before retrying a pending replace or complete command.",
+                "resume_nakama_research_session_control",
+                None,
+                false,
+                r#"{"session_id":"paper.raid:...","roster_version":1}"#,
+            ),
+            command_editor(
+                "Replace Nakama Roster / 替换科研阵容",
+                "Hepta derives the next signed roster epoch only from the already-authorized replacement set.",
+                "replace_nakama_research_session_roster_control",
+                None,
+                false,
+                r#"{"authorization_set_id":"..."}"#,
+            ),
+            command_editor(
+                "Complete Nakama Research Session / 完成科研会话",
+                "Hepta signs the completion control for the exact current session and roster version; terminal facts remain server-derived.",
+                "complete_nakama_research_session_control",
+                None,
+                false,
+                r#"{"session_id":"paper.raid:...","roster_version":1}"#,
+            ),
+        ] {
+            actions.push_str(&editor);
+        }
         for editor in [
             command_editor(
                 "Evidence Card / 证据卡",
@@ -787,7 +823,7 @@ fn command_editor(
 
 fn artifact_upload(paper_id: &str) -> String {
     format!(
-        r#"<article class="action"><h3>Upload Artifact / 上传工件</h3><p>The BFF recomputes the digest, writes append-only CAS bytes, and returns the only storage URI allowed in an ArtifactManifest.</p><form class="artifact-form" data-paper-id="{}"><label>Artifact file / 工件文件<input name="artifact" type="file" required></label><label>Canonical media type / 媒体类型<select name="media_type" required><option>application/json</option><option>application/pdf</option><option>application/zip</option><option>application/gzip</option><option>text/markdown</option><option>text/plain; charset=utf-8</option><option>text/csv; charset=utf-8</option><option>text/x-bibtex; charset=utf-8</option></select></label><button type="submit">Hash + upload / 哈希并上传</button><output></output></form></article>"#,
+        r#"<article class="action"><h3>Upload Artifact / 上传工件</h3><p>The BFF recomputes the digest, writes append-only CAS bytes, and returns the only storage URI allowed in an ArtifactManifest.</p><form class="artifact-form" data-paper-id="{}"><label>Artifact file / 工件文件<input name="artifact" type="file" required></label><label>Canonical media type / 媒体类型<select name="media_type" required><option>application/x-bibtex</option><option>text/csv; charset=utf-8</option><option>application/json</option><option>text/markdown; charset=utf-8</option><option>application/pdf</option><option>text/x-python; charset=utf-8</option><option>image/svg+xml</option><option>text/plain; charset=utf-8</option><option>application/octet-stream</option><option>application/zip</option><option>application/gzip</option></select></label><button type="submit">Hash + upload / 哈希并上传</button><output></output></form></article>"#,
         escape(paper_id)
     )
 }
@@ -817,13 +853,16 @@ fn artifact_links(room: ReadState<'_>, paper_id: &str) -> String {
             let Some(digest) = object.get("sha256").and_then(Value::as_str) else {
                 continue;
             };
+            let Ok(route_digest) = crate::cas::digest_label_from_raw_sha256(digest) else {
+                continue;
+            };
             let logical_path = scalar(object.get("logical_path"));
             links.push_str(&format!(
                 r#"<li><a href="/api/papers/{}/artifacts/{}"><span>{}</span><code>{}</code></a></li>"#,
                 escape(paper_id),
-                escape(digest),
+                escape(&route_digest),
                 escape(&logical_path),
-                escape(digest),
+                escape(&route_digest),
             ));
         }
     }
@@ -939,6 +978,29 @@ mod tests {
         assert!(!body.contains(&format!("{}{}", "final", "ized")));
         assert!(body.contains("data-command=\"submit_appeal\""));
         assert!(body.contains("Sign locally / 本地签名"));
+        for command in [
+            "create_nakama_research_session_control",
+            "resume_nakama_research_session_control",
+            "replace_nakama_research_session_roster_control",
+            "complete_nakama_research_session_control",
+        ] {
+            assert!(body.contains(&format!("data-command=\"{command}\"")));
+        }
+        for media_type in [
+            "application/x-bibtex",
+            "text/csv; charset=utf-8",
+            "application/json",
+            "text/markdown; charset=utf-8",
+            "application/pdf",
+            "text/x-python; charset=utf-8",
+            "image/svg+xml",
+            "text/plain; charset=utf-8",
+            "application/octet-stream",
+        ] {
+            assert!(body.contains(&format!("<option>{media_type}</option>")));
+        }
+        assert!(!body.contains("<option>text/markdown</option>"));
+        assert!(!body.contains("<option>text/x-bibtex; charset=utf-8</option>"));
 
         let missing = paper_room(
             &identity,
@@ -956,6 +1018,34 @@ mod tests {
         let missing = std::str::from_utf8(&missing).expect("UTF-8 missing room");
         assert!(missing.contains("not_found"));
         assert!(!missing.contains("pending_finality"));
+    }
+
+    #[test]
+    fn artifact_links_convert_only_final_hepta_raw_sha256_to_bff_digest_routes() {
+        let raw = "ab".repeat(32);
+        let room = serde_json::json!({
+            "artifact_manifests": [{
+                "objects": [{
+                    "canonical_json": false,
+                    "dependencies": [],
+                    "logical_path": "paper/main.md",
+                    "media_type": "text/markdown; charset=utf-8",
+                    "role": "paper_source",
+                    "sha256": raw,
+                    "size": 12
+                }]
+            }]
+        });
+        let links = artifact_links(ReadState::Available(&room), "paper-a");
+        assert!(links.contains(&format!("/artifacts/sha256:{}", "ab".repeat(32))));
+        assert!(links.contains("text") || links.contains("paper/main.md"));
+
+        let mut prefixed = room.clone();
+        prefixed["artifact_manifests"][0]["objects"][0]["sha256"] =
+            Value::String(format!("sha256:{}", "ab".repeat(32)));
+        let links = artifact_links(ReadState::Available(&prefixed), "paper-a");
+        assert!(!links.contains("/artifacts/"));
+        assert!(links.contains("No registered artifacts"));
     }
 
     #[tokio::test]
