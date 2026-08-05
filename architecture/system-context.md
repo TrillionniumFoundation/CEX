@@ -1,5 +1,11 @@
 # System Context
 
+> **Superseded for product direction by** `hepta-nakama-trnm-battle-platform-v1.md`
+> and `../decisions/adr-004-three-module-external-agent-battle-platform.md`.
+> The platform is now an external-Agent research battle platform with exactly
+> three top-level modules: Hepta Research League, Nakama, and TRNM. This file
+> remains only as historical context for reusable CEX implementation pieces.
+
 ## 1. 平台定位
 
 本平台是一个 **Rust AI-native platform**，借鉴中心化交易所的工程能力，但不继承其金融交易业务语义。

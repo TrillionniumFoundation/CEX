@@ -1,7 +1,6 @@
 target/
 .env
 .env.local
-Cargo.lock
 ci-artifacts/
 **/.DS_Store
 .vscode/
