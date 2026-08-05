@@ -35,7 +35,19 @@ cleanup() {
     "${docker_command[@]}" rm -f "$sbom_container" >/dev/null 2>&1 || true
   fi
   "${docker_command[@]}" image rm "$repro_ref" >/dev/null 2>&1 || true
-  rm -rf "$release_dir"
+  case "$release_dir" in
+    /tmp/tmp.*)
+      if [[ "${docker_command[0]}" == "sudo" ]]; then
+        sudo -n rm -rf -- "$release_dir"
+      else
+        rm -rf -- "$release_dir"
+      fi
+      ;;
+    *)
+      echo "refusing to remove unexpected Hepta image-gate scratch path" >&2
+      return 1
+      ;;
+  esac
 }
 trap cleanup EXIT
 
@@ -86,6 +98,7 @@ build_image() {
   local target_iid_file="$2"
   "${docker_build_command[@]}" buildx build \
     --load \
+    --progress=plain \
     --pull=false \
     --no-cache \
     --provenance=false \
