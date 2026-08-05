@@ -581,6 +581,10 @@ image_script = require_fragments(
         "history --no-trunc",
         'scan_image "$image_id" first',
         'scan_image "$repro_image_id" second',
+        "first|second|sentinel-negative)",
+        '[[ -f "$rootfs_tar" && ! -L "$rootfs_tar" ]]',
+        'sudo -n chown -- "$(id -u):$(id -g)" "$rootfs_tar"',
+        '[[ -O "$rootfs_tar" ]]',
         "rootfs contains forbidden build or credential paths",
         "--target sbom-metadata-export",
         'sudo -n chown -R -- "$(id -u):$(id -g)" "$release_dir/sbom-metadata"',
@@ -595,6 +599,32 @@ image_script = require_fragments(
 )
 if image_script.count("verify_source_unchanged") < 5:
     fail("image gate lacks repeated TOCTOU checks")
+
+
+def validate_image_rootfs_export_ownership(text):
+    exact_chown = 'sudo -n chown -- "$(id -u):$(id -g)" "$rootfs_tar"'
+    if text.count(exact_chown) != 1:
+        fail("image rootfs export must have one exact non-recursive ownership repair")
+    if re.search(r"chown[ \t]+-R[^\n]*(rootfs|\$scan)", text):
+        fail("image rootfs export ownership repair must not be recursive or broad")
+    if text.count('[[ -f "$rootfs_tar" && ! -L "$rootfs_tar" ]]') != 1:
+        fail("image rootfs export must be validated before ownership repair")
+    if text.count("first|second|sentinel-negative)") != 1:
+        fail("image rootfs scanner labels are not a closed set")
+
+
+validate_image_rootfs_export_ownership(image_script)
+unsafe_image_script = image_script.replace(
+    'sudo -n chown -- "$(id -u):$(id -g)" "$rootfs_tar"',
+    'sudo -n chown -R -- "$(id -u):$(id -g)" "$scan"',
+    1,
+)
+try:
+    validate_image_rootfs_export_ownership(unsafe_image_script)
+except AssertionError:
+    pass
+else:
+    fail("recursive image rootfs ownership negative mutation was accepted")
 
 require_fragments(
     "scripts/check-hepta-research-league-compose-smoke.sh",

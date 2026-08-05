@@ -370,13 +370,32 @@ esac
 scan_image() {
   local candidate=$1
   local label=$2
+  case "$label" in
+    first|second|sentinel-negative) ;;
+    *)
+      echo "refusing unexpected Hepta rootfs scan label: $label" >&2
+      return 20
+      ;;
+  esac
   local scan="$release_dir/$label"
+  local rootfs_tar="$scan/rootfs.tar"
   mkdir -p "$scan/rootfs" || return 20
   local container
   container=$("${docker_command[@]}" create --read-only --network none "$candidate") || return 20
   containers+=("$container")
-  "${docker_command[@]}" export "$container" --output "$scan/rootfs.tar" || return 20
-  tar -tf "$scan/rootfs.tar" >"$scan/rootfs.list" || return 20
+  "${docker_command[@]}" export "$container" --output "$rootfs_tar" || return 20
+  [[ -f "$rootfs_tar" && ! -L "$rootfs_tar" ]] || {
+    echo "Hepta rootfs export is not a regular non-symlink file" >&2
+    return 20
+  }
+  if [[ ${docker_command[0]} == sudo ]]; then
+    sudo -n chown -- "$(id -u):$(id -g)" "$rootfs_tar" || return 20
+  fi
+  [[ -O "$rootfs_tar" ]] || {
+    echo "Hepta rootfs export ownership was not normalized" >&2
+    return 20
+  }
+  tar -tf "$rootfs_tar" >"$scan/rootfs.list" || return 20
   local path_status=0
   scan_no_matches "rootfs-path-$label" \
     '(^|/)(\.git|Cargo\.toml|Cargo\.lock|rust-toolchain\.(toml|manifest))($|/)|(^|/)(src|target|migrations)(/|$)|(^|/)\.env($|[./])|(^|/)(id_rsa|auth-profiles\.json|[^/]*credentials[^/]*)$|\.(rs|sql|pem|key)$' \
@@ -392,7 +411,7 @@ scan_image() {
       return 20
       ;;
   esac
-  tar -xf "$scan/rootfs.tar" -C "$scan/rootfs" || return 20
+  tar -xf "$rootfs_tar" -C "$scan/rootfs" || return 20
   cmp "$sbom" "$scan/rootfs/usr/share/doc/hepta-research-league/sbom.cdx.json" || return 20
   local binary="$scan/rootfs/usr/local/bin/hepta-research-league"
   [[ -f "$binary" && ! -L "$binary" && -x "$binary" ]] || {
