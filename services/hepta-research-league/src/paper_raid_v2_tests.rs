@@ -3729,6 +3729,15 @@ struct ReviewFlowOutcome {
     reproduction_count: usize,
     appeal_count: usize,
     resolution_count: usize,
+    contribution_room_event_count: usize,
+    evaluation_room_event_count: usize,
+    reproduction_room_event_count: usize,
+    appeal_room_event_count: usize,
+    resolution_room_event_count: usize,
+    appeal_outbox_event_count: usize,
+    resolution_outbox_event_count: usize,
+    appeal_room_settlement_state: String,
+    resolution_room_settlement_state: String,
 }
 
 fn evaluation_body(
@@ -4227,17 +4236,58 @@ async fn run_review_flow(state: AppState) -> ReviewFlowOutcome {
     );
     let appeal_id = Uuid::new_v4();
     let appeal_key = "p5-appeal";
-    assert_status(
+    let appeal_request = appeal_body(paper_id, &evaluation, &authors[0], appeal_id, appeal_key);
+    let appeal = assert_status(
         user_post(
             &router,
             &authors[0],
             "create_paper_appeal_v1",
             &appeal_path,
             appeal_key,
-            appeal_body(paper_id, &evaluation, &authors[0], appeal_id, appeal_key),
+            appeal_request.clone(),
         )
         .await,
         StatusCode::CREATED,
+    );
+    let appeal_replay = assert_status(
+        user_post(
+            &router,
+            &authors[0],
+            "create_paper_appeal_v1",
+            &appeal_path,
+            appeal_key,
+            appeal_request,
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+    assert_eq!(appeal_replay, appeal, "Appeal replay must be exact");
+    let events_path = format!("/v2/hepta/papers/{paper_id}/events?after_cursor=0");
+    let challenged_events = assert_status(
+        user_get(
+            &router,
+            &authors[0],
+            "list_paper_room_events_v3",
+            &events_path,
+            "p5-read-events-challenged",
+        )
+        .await,
+        StatusCode::OK,
+    );
+    let opened_events = challenged_events
+        .as_array()
+        .expect("Paper Room events")
+        .iter()
+        .filter(|event| event["event_type"] == "hepta.paper_raid.appeal.opened.v1")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        opened_events.len(),
+        1,
+        "Appeal replay must not duplicate its Paper Room event"
+    );
+    assert_eq!(
+        opened_events[0]["payload"]["settlement_state"],
+        "challenged"
     );
     let read_path = format!("/v2/hepta/papers/{paper_id}/review-state");
     let challenged = assert_status(
@@ -4299,29 +4349,84 @@ async fn run_review_flow(state: AppState) -> ReviewFlowOutcome {
         StatusCode::FORBIDDEN,
     );
     let resolution_key = "p5-resolution";
-    assert_status(
+    let resolution_request = resolution_body(
+        paper_id,
+        &evaluation,
+        appeal_id,
+        &external[9],
+        ResolutionBody {
+            resolution_id: Uuid::new_v4(),
+            outcome: "upheld",
+            superseding_evaluation_id: Some(superseding_evaluation_id),
+            idempotency_key: resolution_key,
+        },
+    );
+    let resolution = assert_status(
         user_post(
             &router,
             &external[9],
             "resolve_paper_appeal_v1",
             &resolve_path,
             resolution_key,
-            resolution_body(
-                paper_id,
-                &evaluation,
-                appeal_id,
-                &external[9],
-                ResolutionBody {
-                    resolution_id: Uuid::new_v4(),
-                    outcome: "upheld",
-                    superseding_evaluation_id: Some(superseding_evaluation_id),
-                    idempotency_key: resolution_key,
-                },
-            ),
+            resolution_request.clone(),
         )
         .await,
         StatusCode::CREATED,
     );
+    let resolution_replay = assert_status(
+        user_post(
+            &router,
+            &external[9],
+            "resolve_paper_appeal_v1",
+            &resolve_path,
+            resolution_key,
+            resolution_request,
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+    assert_eq!(
+        resolution_replay, resolution,
+        "Appeal resolution replay must be exact"
+    );
+    let room_events = assert_status(
+        user_get(
+            &router,
+            &authors[0],
+            "list_paper_room_events_v3",
+            &events_path,
+            "p5-read-events-resolved",
+        )
+        .await,
+        StatusCode::OK,
+    );
+    let room_events = room_events.as_array().expect("Paper Room events");
+    let room_event_count = |event_type: &str| {
+        room_events
+            .iter()
+            .filter(|event| event["event_type"] == event_type)
+            .count()
+    };
+    let resolved_events = room_events
+        .iter()
+        .filter(|event| event["event_type"] == "hepta.paper_raid.appeal.resolved.v1")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        resolved_events.len(),
+        1,
+        "resolution replay must not duplicate its Paper Room event"
+    );
+    assert_eq!(
+        resolved_events[0]["payload"]["settlement_state"],
+        "resolved"
+    );
+    let outbox_event_types = paper_raid_event_types(&state).await;
+    let outbox_event_count = |event_type: &str| {
+        outbox_event_types
+            .iter()
+            .filter(|candidate| candidate.as_str() == event_type)
+            .count()
+    };
     let resolved = assert_status(
         user_get(
             &router,
@@ -4363,6 +4468,25 @@ async fn run_review_flow(state: AppState) -> ReviewFlowOutcome {
         reproduction_count: resolved["reproductions"].as_array().unwrap().len(),
         appeal_count: resolved["appeals"].as_array().unwrap().len(),
         resolution_count: resolved["resolutions"].as_array().unwrap().len(),
+        contribution_room_event_count: room_event_count(
+            "hepta.paper_raid.contribution_ledger.frozen.v1",
+        ),
+        evaluation_room_event_count: room_event_count("hepta.paper_raid.evaluation.recorded.v1"),
+        reproduction_room_event_count: room_event_count(
+            "hepta.paper_raid.reproduction.recorded.v1",
+        ),
+        appeal_room_event_count: room_event_count("hepta.paper_raid.appeal.opened.v1"),
+        resolution_room_event_count: room_event_count("hepta.paper_raid.appeal.resolved.v1"),
+        appeal_outbox_event_count: outbox_event_count("hepta.paper_raid.appeal.opened.v1"),
+        resolution_outbox_event_count: outbox_event_count("hepta.paper_raid.appeal.resolved.v1"),
+        appeal_room_settlement_state: opened_events[0]["payload"]["settlement_state"]
+            .as_str()
+            .expect("Appeal event settlement state")
+            .to_string(),
+        resolution_room_settlement_state: resolved_events[0]["payload"]["settlement_state"]
+            .as_str()
+            .expect("resolution event settlement state")
+            .to_string(),
     }
 }
 
@@ -4402,6 +4526,15 @@ async fn memory_review_reproduction_and_appeal_are_signed_independent_and_immuta
     assert_eq!(outcome.reproduction_count, 3);
     assert_eq!(outcome.appeal_count, 1);
     assert_eq!(outcome.resolution_count, 1);
+    assert_eq!(outcome.contribution_room_event_count, 1);
+    assert_eq!(outcome.evaluation_room_event_count, 2);
+    assert_eq!(outcome.reproduction_room_event_count, 3);
+    assert_eq!(outcome.appeal_room_event_count, 1);
+    assert_eq!(outcome.resolution_room_event_count, 1);
+    assert_eq!(outcome.appeal_outbox_event_count, 1);
+    assert_eq!(outcome.resolution_outbox_event_count, 1);
+    assert_eq!(outcome.appeal_room_settlement_state, "challenged");
+    assert_eq!(outcome.resolution_room_settlement_state, "resolved");
 }
 
 #[tokio::test]
@@ -4557,6 +4690,15 @@ async fn postgres_review_flow_matches_memory_and_migration_is_repeatable() {
     .expect("0035 third application");
     reset_postgres(&database_url).await;
     let postgres = run_review_flow(state).await;
+    assert_eq!(postgres.contribution_room_event_count, 1);
+    assert_eq!(postgres.evaluation_room_event_count, 2);
+    assert_eq!(postgres.reproduction_room_event_count, 3);
+    assert_eq!(postgres.appeal_room_event_count, 1);
+    assert_eq!(postgres.resolution_room_event_count, 1);
+    assert_eq!(postgres.appeal_outbox_event_count, 1);
+    assert_eq!(postgres.resolution_outbox_event_count, 1);
+    assert_eq!(postgres.appeal_room_settlement_state, "challenged");
+    assert_eq!(postgres.resolution_room_settlement_state, "resolved");
     let memory = run_review_flow(AppState::new(security())).await;
     assert_eq!(postgres, memory);
     sqlx::query("select pg_advisory_unlock(hashtext('hepta-research-league-pg-tests'))")

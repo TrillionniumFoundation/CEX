@@ -1431,7 +1431,7 @@ async fn active_human_key_postgres(
 
 // The explicit event envelope fields mirror the durable outbox boundary.
 #[allow(clippy::too_many_arguments)]
-fn push_room_event_memory(
+pub(super) fn push_room_event_memory(
     memory: &mut PaperRaidMemory,
     operation: &str,
     idempotency_key: &str,
@@ -1467,7 +1467,7 @@ fn push_room_event_memory(
 
 // Keep the PostgreSQL event call shape byte-for-byte parallel with memory.
 #[allow(clippy::too_many_arguments)]
-async fn insert_room_event_postgres(
+pub(super) async fn insert_room_event_postgres(
     tx: &mut Transaction<'_, Postgres>,
     operation: &str,
     idempotency_key: &str,

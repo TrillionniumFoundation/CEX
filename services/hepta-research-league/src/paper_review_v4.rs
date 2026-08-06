@@ -14,6 +14,7 @@ use serde_json::json;
 use sqlx::{Postgres, Row, Transaction};
 use uuid::Uuid;
 
+use super::collaboration_v3::{insert_room_event_postgres, push_room_event_memory};
 use super::*;
 use crate::paper_raid_contracts::{
     canonical_json_sha256, paper_appeal_resolution_signing_bytes, paper_appeal_signing_bytes,
@@ -1148,15 +1149,16 @@ async fn create_contribution_ledger(
                 "contribution_ledger_id already exists",
             ));
         }
-        push_memory_event(
+        push_room_event_memory(
             &mut next,
             OPERATION,
             &request.idempotency_key,
             "hepta.paper_raid.contribution_ledger.frozen.v1",
             paper_id,
+            paper_id,
             1,
             json!({"ledger_hash": ledger.ledger_hash}),
-        )?;
+        );
         memory_remember(
             &mut next,
             OPERATION,
@@ -1209,11 +1211,12 @@ async fn create_contribution_ledger(
         }
         return Err(ApiError::database(error));
     }
-    insert_postgres_event(
+    insert_room_event_postgres(
         &mut tx,
         OPERATION,
         &request.idempotency_key,
         "hepta.paper_raid.contribution_ledger.frozen.v1",
+        paper_id,
         paper_id,
         1,
         json!({"ledger_hash": ledger.ledger_hash}),
@@ -1952,11 +1955,12 @@ async fn create_paper_evaluation(
         next.review
             .raid_scores
             .insert(raid_score.raid_score_id, raid_score);
-        push_memory_event(
+        push_room_event_memory(
             &mut next,
             OPERATION,
             &request.idempotency_key,
             "hepta.paper_raid.evaluation.recorded.v1",
+            paper_id,
             paper_id,
             evaluation.version,
             json!({
@@ -1965,7 +1969,7 @@ async fn create_paper_evaluation(
                 "settlement_state": evaluation.settlement_state,
                 "paper_score_hash": evaluation.paper_score.score_hash,
             }),
-        )?;
+        );
         memory_remember(
             &mut next,
             OPERATION,
@@ -2033,11 +2037,12 @@ async fn create_paper_evaluation(
     let evaluation = make_evaluation(&context, &request, prepared, attestations, now, version);
     let raid_score = make_raid_score(&evaluation, &ledger, now)?;
     insert_evaluation_postgres(&mut tx, &evaluation, &raid_score).await?;
-    insert_postgres_event(
+    insert_room_event_postgres(
         &mut tx,
         OPERATION,
         &request.idempotency_key,
         "hepta.paper_raid.evaluation.recorded.v1",
+        paper_id,
         paper_id,
         evaluation.version,
         json!({
@@ -2593,15 +2598,16 @@ async fn create_paper_reproduction(
                 "reproduction_id already exists",
             ));
         }
-        push_memory_event(
+        push_room_event_memory(
             &mut next,
             OPERATION,
             &request.idempotency_key,
             "hepta.paper_raid.reproduction.recorded.v1",
             paper_id,
+            paper_id,
             report.version,
             json!({"reproduction_id":report.reproduction_id,"evaluation_id":evaluation_id,"status":report.status,"report_hash":report.report_hash}),
-        )?;
+        );
         memory_remember(
             &mut next,
             OPERATION,
@@ -2687,11 +2693,12 @@ async fn create_paper_reproduction(
         }
         return Err(ApiError::database(error));
     }
-    insert_postgres_event(
+    insert_room_event_postgres(
         &mut tx,
         OPERATION,
         &request.idempotency_key,
         "hepta.paper_raid.reproduction.recorded.v1",
+        paper_id,
         paper_id,
         report.version,
         json!({"reproduction_id":report.reproduction_id,"evaluation_id":evaluation_id,"status":report.status,"report_hash":report.report_hash}),
@@ -2870,15 +2877,16 @@ async fn create_paper_appeal(
                 "appeal_id already exists",
             ));
         }
-        push_memory_event(
+        push_room_event_memory(
             &mut next,
             OPERATION,
             &request.idempotency_key,
             "hepta.paper_raid.appeal.opened.v1",
             paper_id,
+            paper_id,
             1,
             json!({"appeal_id":appeal.appeal_id,"evaluation_id":evaluation_id,"settlement_state":"challenged"}),
-        )?;
+        );
         memory_remember(
             &mut next,
             OPERATION,
@@ -2960,11 +2968,12 @@ async fn create_paper_appeal(
         }
         return Err(ApiError::database(error));
     }
-    insert_postgres_event(
+    insert_room_event_postgres(
         &mut tx,
         OPERATION,
         &request.idempotency_key,
         "hepta.paper_raid.appeal.opened.v1",
+        paper_id,
         paper_id,
         1,
         json!({"appeal_id":appeal.appeal_id,"evaluation_id":evaluation_id,"settlement_state":"challenged"}),
@@ -3174,15 +3183,16 @@ async fn resolve_paper_appeal(
                 "resolution_id already exists",
             ));
         }
-        push_memory_event(
+        push_room_event_memory(
             &mut next,
             OPERATION,
             &request.idempotency_key,
             "hepta.paper_raid.appeal.resolved.v1",
             paper_id,
+            paper_id,
             1,
             json!({"resolution_id":resolution.resolution_id,"appeal_id":appeal_id,"outcome":resolution.outcome,"settlement_state":"resolved"}),
-        )?;
+        );
         memory_remember(
             &mut next,
             OPERATION,
@@ -3298,11 +3308,12 @@ async fn resolve_paper_appeal(
         }
         return Err(ApiError::database(error));
     }
-    insert_postgres_event(
+    insert_room_event_postgres(
         &mut tx,
         OPERATION,
         &request.idempotency_key,
         "hepta.paper_raid.appeal.resolved.v1",
+        paper_id,
         paper_id,
         1,
         json!({"resolution_id":resolution.resolution_id,"appeal_id":appeal_id,"outcome":resolution.outcome,"settlement_state":"resolved"}),
