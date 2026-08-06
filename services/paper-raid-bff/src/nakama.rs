@@ -9,6 +9,7 @@ use uuid::Uuid;
 use crate::error::AppError;
 
 const MAX_ARCHIVE_BYTES: usize = 2 * 1024 * 1024;
+const NAKAMA_ARCHIVE_PAGE_LIMIT: u32 = 128;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -101,7 +102,7 @@ impl NakamaArchiveClient {
             schema: "trnm.nakama.research-session.get-archive.v1",
             logical_session_id: &access.logical_session_id,
             after_sequence,
-            limit: 500,
+            limit: NAKAMA_ARCHIVE_PAGE_LIMIT,
             authorization_id: access.authorization_id,
         })
         .map_err(|_| AppError::Internal)?;
@@ -347,6 +348,7 @@ mod tests {
         );
         assert_eq!(payload["authorization_id"], authorization_id.to_string());
         assert_eq!(payload["after_sequence"], 7);
+        assert_eq!(payload["limit"], NAKAMA_ARCHIVE_PAGE_LIMIT);
         assert!(payload.get("operator_credential").is_none());
     }
 
