@@ -790,9 +790,6 @@ async fn collect_limited_body(mut body: Body, limit: usize) -> Result<Vec<u8>, A
         }
         bytes.extend_from_slice(&data);
     }
-    if bytes.is_empty() {
-        return Err(AppError::Invalid("artifact body is empty".into()));
-    }
     Ok(bytes)
 }
 
@@ -973,7 +970,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn streaming_artifact_body_enforces_cap_and_rejects_empty() {
+    async fn streaming_artifact_body_enforces_cap_and_accepts_empty() {
         assert_eq!(
             collect_limited_body(Body::from("paper"), 5)
                 .await
@@ -983,7 +980,12 @@ mod tests {
         assert!(collect_limited_body(Body::from("oversized"), 4)
             .await
             .is_err());
-        assert!(collect_limited_body(Body::empty(), 4).await.is_err());
+        assert_eq!(
+            collect_limited_body(Body::empty(), 4)
+                .await
+                .expect("zero-byte body"),
+            Vec::<u8>::new()
+        );
     }
 
     #[test]
