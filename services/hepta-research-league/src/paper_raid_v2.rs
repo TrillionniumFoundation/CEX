@@ -8519,4 +8519,4 @@ async fn ingest_nakama_research_session_completion(
 
 #[cfg(test)]
 #[path = "paper_raid_v2_tests.rs"]
-mod endpoint_tests;
+pub(crate) mod endpoint_tests;

@@ -859,22 +859,33 @@ async fn ingest_paper_chain_finality_postgres(
     .execute(&mut *tx)
     .await
     .map_err(ApiError::database)?;
-    sqlx::query(
-        "insert into hepta_paper_chain_finality_projections (
-            paper_project_id,local_command_id,receipt_hash,status,version,record_json,updated_at
-         ) values ($1,$2,$3,'verified_finality',1,$4::jsonb,$5)",
-    )
-    .bind(paper_id)
-    .bind(projection.local_command_id)
-    .bind(&projection.receipt_hash)
-    .bind(&projection_json)
-    .bind(projection.verified_at)
-    .execute(&mut *tx)
-    .await
-    .map_err(ApiError::database)?;
+    insert_finality_projection_postgres(&mut tx, &projection, &projection_json).await?;
     insert_outbox_event(&mut tx, &event).await?;
     tx.commit().await.map_err(ApiError::database)?;
     Ok((StatusCode::CREATED, Json(projection)))
+}
+
+async fn insert_finality_projection_postgres(
+    tx: &mut Transaction<'_, Postgres>,
+    projection: &PaperChainFinalityProjectionV1,
+    projection_json: &Value,
+) -> Result<(), ApiError> {
+    sqlx::query(
+        "insert into hepta_paper_chain_finality_projections (
+            paper_project_id,evaluation_id,local_command_id,receipt_hash,
+            status,version,record_json,updated_at
+         ) values ($1,$2,$3,$4,'verified_finality',1,$5::jsonb,$6)",
+    )
+    .bind(projection.paper_project_id)
+    .bind(projection.evaluation_id)
+    .bind(projection.local_command_id)
+    .bind(&projection.receipt_hash)
+    .bind(projection_json)
+    .bind(projection.verified_at)
+    .execute(&mut **tx)
+    .await
+    .map_err(ApiError::database)?;
+    Ok(())
 }
 
 async fn receipt_replay_postgres(
@@ -1678,6 +1689,7 @@ mod tests {
     };
     use ed25519_dalek::SigningKey;
     use serde_json::json;
+    use sqlx::{Connection, PgConnection};
     use tower::ServiceExt;
 
     use super::*;
@@ -1808,6 +1820,113 @@ mod tests {
             first.1, replay.1,
             "anchor replay must return stored admission time"
         );
+    }
+
+    #[tokio::test]
+    async fn postgres_projection_persists_evaluation_binding() {
+        let Ok(database_url) = std::env::var("HEPTA_TEST_DATABASE_URL") else {
+            eprintln!("HEPTA_TEST_DATABASE_URL unset; finality projection PostgreSQL test skipped");
+            return;
+        };
+        let mut lock = PgConnection::connect(&database_url)
+            .await
+            .expect("PostgreSQL finality projection test lock");
+        sqlx::query("select pg_advisory_lock(hashtext('hepta-research-league-pg-tests'))")
+            .execute(&mut lock)
+            .await
+            .expect("serialize Hepta PostgreSQL tests");
+        let state = AppState::connect(&database_url, security())
+            .await
+            .expect("finality projection PostgreSQL state");
+        crate::paper_raid_v2::endpoint_tests::reset_postgres(&database_url).await;
+        let binding =
+            crate::paper_raid_v2::endpoint_tests::seed_paper_chain_finality_test(state.clone())
+                .await;
+        let pool = state.pool.as_ref().expect("PostgreSQL pool");
+        let projection = PaperChainFinalityProjectionV1 {
+            schema: PAPER_CHAIN_FINALITY_PROJECTION_SCHEMA_V1.to_string(),
+            paper_project_id: binding.paper_project_id,
+            submission_id: binding.submission_id,
+            evaluation_id: binding.evaluation_id,
+            local_command_id: Uuid::new_v4(),
+            command_idempotency_key: "finality-projection-postgres-command".to_string(),
+            command_fingerprint: digest(0x81),
+            paper_binding_fingerprint: digest(0x82),
+            receipt_hash: "83".repeat(32),
+            trust_anchor_hash: ANCHOR_HASH.to_string(),
+            chain_id: "trnm-comet-spike".to_string(),
+            comet_tx_hash: "84".repeat(32),
+            transaction_index: 0,
+            execution_height: 7,
+            commitment_height: 8,
+            commitment_header_hash: "85".repeat(32),
+            app_hash: "86".repeat(32),
+            status: PaperChainFinalityStatusV1::VerifiedFinality,
+            ranking_eligible: false,
+            reward_eligible: false,
+            score_eligible: false,
+            economic_eligible: false,
+            version: 1,
+            verified_at: Utc::now(),
+        };
+        let projection_json = serde_json::to_value(&projection).expect("projection JSON");
+        sqlx::query(
+            "insert into hepta_trnm_cometbft_trust_anchors (
+                anchor_hash,chain_id,trusted_height,canonical_anchor,canonical_sha256,admitted_at
+             ) values ($1,$2,1,$3,$1,now()) on conflict (anchor_hash) do nothing",
+        )
+        .bind(ANCHOR_HASH)
+        .bind(&projection.chain_id)
+        .bind(canonical_fixture_payload(ANCHOR_FILE))
+        .execute(pool)
+        .await
+        .expect("trust anchor fixture");
+        sqlx::query(
+            "insert into hepta_paper_chain_receipts (
+                receipt_hash,paper_project_id,local_command_id,command_idempotency_key,
+                command_fingerprint,paper_binding_fingerprint,anchor_hash,chain_id,
+                execution_height,commitment_height,comet_tx_hash,app_hash,
+                canonical_receipt,canonical_sha256,verified_at,record_json
+             ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16::jsonb)",
+        )
+        .bind(&projection.receipt_hash)
+        .bind(projection.paper_project_id)
+        .bind(projection.local_command_id)
+        .bind(&projection.command_idempotency_key)
+        .bind(&projection.command_fingerprint)
+        .bind(&projection.paper_binding_fingerprint)
+        .bind(&projection.trust_anchor_hash)
+        .bind(&projection.chain_id)
+        .bind(i64_from_u64(projection.execution_height, "execution_height").unwrap())
+        .bind(i64_from_u64(projection.commitment_height, "commitment_height").unwrap())
+        .bind(&projection.comet_tx_hash)
+        .bind(&projection.app_hash)
+        .bind(canonical_fixture_payload(RECEIPT_FILE))
+        .bind(sha256_hex(canonical_fixture_payload(RECEIPT_FILE)))
+        .bind(projection.verified_at)
+        .bind(&projection_json)
+        .execute(pool)
+        .await
+        .expect("receipt fixture");
+        let mut tx = pool.begin().await.expect("projection transaction");
+        insert_finality_projection_postgres(&mut tx, &projection, &projection_json)
+            .await
+            .expect("persist verified projection");
+        tx.commit().await.expect("commit verified projection");
+        let stored_evaluation_id: Uuid = sqlx::query_scalar(
+            "select evaluation_id from hepta_paper_chain_finality_projections
+             where local_command_id=$1",
+        )
+        .bind(projection.local_command_id)
+        .fetch_one(pool)
+        .await
+        .expect("stored projection evaluation binding");
+        assert_eq!(stored_evaluation_id, binding.evaluation_id);
+        crate::paper_raid_v2::endpoint_tests::reset_postgres(&database_url).await;
+        sqlx::query("select pg_advisory_unlock(hashtext('hepta-research-league-pg-tests'))")
+            .execute(&mut lock)
+            .await
+            .expect("release Hepta PostgreSQL finality projection lock");
     }
 
     #[tokio::test]

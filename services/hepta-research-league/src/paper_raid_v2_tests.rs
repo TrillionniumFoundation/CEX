@@ -842,7 +842,7 @@ fn error_code(actual: (StatusCode, Value), expected: StatusCode) -> String {
         .to_string()
 }
 
-pub(super) async fn reset_postgres(database_url: &str) {
+pub(crate) async fn reset_postgres(database_url: &str) {
     let pool = sqlx::PgPool::connect(database_url)
         .await
         .expect("maintenance pool");
