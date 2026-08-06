@@ -15,7 +15,11 @@ Paper Raid gauges are intentionally low-cardinality:
 - `hepta_paper_raid_papers_total`
 - `hepta_paper_raid_active_authorization_epochs`
 - `hepta_paper_raid_pending_control_commands`
+- `hepta_paper_raid_oldest_pending_control_seconds`
+- `hepta_paper_raid_max_pending_control_attempts`
 - `hepta_paper_raid_pending_outbox_events`
+- `hepta_paper_raid_oldest_pending_outbox_seconds`
+- `hepta_paper_raid_max_pending_outbox_attempts`
 - `hepta_paper_raid_idempotency_records`
 - `hepta_paper_raid_storage_backend_info{backend="postgres"}`
 
@@ -28,10 +32,12 @@ never tracing fields.
 
 - Critical: `/ready` is non-200 for 2 minutes, or the active storage backend is
   not PostgreSQL in a non-development environment.
-- High: pending Nakama control commands remain non-zero for 10 minutes or grow
-  across three consecutive scrapes.
-- High: pending outbox events remain non-zero for 10 minutes or grow across
-  three consecutive scrapes.
+- High: `hepta_paper_raid_oldest_pending_control_seconds > 600`, pending control
+  depth grows across three consecutive scrapes, or maximum pending attempts
+  exceeds 3.
+- High: `hepta_paper_raid_oldest_pending_outbox_seconds > 600`, pending outbox
+  depth grows across three consecutive scrapes, or maximum pending attempts
+  exceeds 3.
 - High: any `hepta_http` 5xx ratio exceeds 1% over 10 minutes. Page immediately
   if the affected route is a consent, finalize, completion, or appeal write.
 - Warning: p95 exceeds 750 ms or p99 exceeds 1.5 s for 15 minutes, excluding
