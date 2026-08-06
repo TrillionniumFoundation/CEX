@@ -1,7 +1,7 @@
 use std::{collections::HashMap, fs, path::PathBuf};
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-use ed25519_dalek::VerifyingKey;
+use ed25519_dalek::{SigningKey, VerifyingKey};
 use hepta_research_league::{
     paper_raid_contracts::{
         research_session_action_fingerprint, research_session_action_signing_bytes,
@@ -235,6 +235,13 @@ fn rust_independently_verifies_the_canonical_nakama_fixture() {
     )
     .unwrap();
     SecurityConfig::new("operator-test", "nakama-test")
+        .with_trusted_nakama_research_authority(
+            "nakama-retiring-overlap-v0",
+            SigningKey::from_bytes(&[0x44; 32])
+                .verifying_key()
+                .to_bytes(),
+        )
+        .unwrap()
         .with_trusted_nakama_research_authority(
             fixture.completion.value.authority_key_id.clone(),
             authority.to_bytes(),

@@ -35,6 +35,11 @@ paths:
       operationId: getServiceManifest
       responses:
         "200": { description: Versioned protocol manifest }
+  /v1/hepta/openapi.yaml:
+    get:
+      operationId: getOpenApiContract
+      responses:
+        "200": { description: Exact OpenAPI 3.1 contract served by this release }
   /v1/hepta/agents:
     post:
       tags: [External Agents]
@@ -144,6 +149,18 @@ paths:
       operationId: createEvaluatorManifest
       responses:
         "201": { description: Versioned fixed-point evaluator manifest created }
+  /v1/hepta/evaluator-manifests/{manifest_id}:
+    get:
+      tags: [Evaluation]
+      operationId: getEvaluatorManifest
+      parameters:
+        - name: manifest_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200": { description: Immutable evaluator manifest }
+        "404": { $ref: "#/components/responses/NotFound" }
   /v1/hepta/evaluations:
     post:
       tags: [Evaluation, Operator]
@@ -151,6 +168,23 @@ paths:
       operationId: evaluateSubmissionDeterministically
       responses:
         "201": { description: Immutable evaluation report created }
+  /v1/hepta/evaluations/{evaluation_id}:
+    get:
+      tags: [Evaluation]
+      operationId: getEvaluationReport
+      parameters:
+        - name: evaluation_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200": { description: Immutable evaluation report }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /v1/hepta/events:
+    get:
+      operationId: listResearchEvents
+      responses:
+        "200": { description: Current append-only research event stream }
   /v1/hepta/reproductions:
     post:
       tags: [Evaluation]

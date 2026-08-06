@@ -28,6 +28,7 @@ python3 scripts/verify-hepta-research-league-sbom.py \
   --cargo-lock services/hepta-research-league/docker/Cargo.lock \
   --rust-toolchain services/hepta-research-league/docker/rust-toolchain.manifest
 bash scripts/check-hepta-research-league-release-structure.sh
+python3 scripts/check-hepta-route-openapi-parity.py
 
 python3 - <<'PY'
 import yaml
@@ -167,8 +168,10 @@ for required_env in (
     "HEPTA_CONSUMER_EDGE_AUDIENCE",
     "HEPTA_CONSUMER_EDGE_ISSUER_KEY_ID",
     "HEPTA_CONSUMER_EDGE_ED25519_PUBLIC_KEY_BASE64",
+    "HEPTA_CONSUMER_EDGE_ED25519_PUBLIC_KEYS_JSON",
     "TRNM_NAKAMA_AUTHORITY_KEY_ID",
     "TRNM_NAKAMA_AUTHORITY_PUBLIC_KEY_BASE64",
+    "TRNM_NAKAMA_AUTHORITY_PUBLIC_KEYS_JSON",
     "HEPTA_FINALITY_MODE",
 ):
     assert required_env in hepta["environment"]

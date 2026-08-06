@@ -688,6 +688,43 @@ fn signed_user_assertion(
 }
 
 #[allow(clippy::too_many_arguments)]
+fn signed_user_assertion_with_key(
+    actor: &Actor,
+    operation: &str,
+    method: &str,
+    path: &str,
+    idempotency_key: &str,
+    body_hash: String,
+    issuer_key_id: &str,
+    signing_key: &SigningKey,
+) -> String {
+    let now = Utc::now().timestamp();
+    let assertion = sign_consumer_user_assertion(
+        ConsumerUserAssertionClaimV2 {
+            schema: CONSUMER_USER_ASSERTION_V2.to_string(),
+            assertion_id: Uuid::new_v4(),
+            issuer: "hepta-test-consumer-edge".to_string(),
+            audience: "hepta-paper-raid-v2".to_string(),
+            subject_id: actor.subject_id.clone(),
+            nakama_user_id: actor.nakama_user_id,
+            player_id: actor.player_id,
+            operation: operation.to_string(),
+            http_method: method.to_string(),
+            canonical_path: path.to_string(),
+            idempotency_key: idempotency_key.to_string(),
+            body_hash,
+            issued_at_unix: now - 1,
+            expires_at_unix: now + 120,
+            nonce: idempotency_key.to_string(),
+        },
+        issuer_key_id,
+        signing_key,
+    )
+    .expect("sign Consumer assertion with overlap key");
+    BASE64.encode(canonical_json_bytes(&assertion).expect("canonical assertion"))
+}
+
+#[allow(clippy::too_many_arguments)]
 fn signed_user_assertion_at(
     actor: &Actor,
     operation: &str,
@@ -1283,12 +1320,20 @@ async fn exercise_expired_onboarding_replay(state: AppState) {
 }
 
 async fn exercise_real_onboarding_expiry_replay(state: AppState) {
+    const PROOF_LIFETIME_SECONDS: i64 = 5;
+    const EXPIRY_WAIT: std::time::Duration = std::time::Duration::from_secs(6);
+
     let router = app(state.clone());
     let actor = actors(1).remove(0);
 
     let player_key = format!("real-player-response-loss-{}", actor.player_id);
     let player_now = Utc::now().timestamp();
-    let player_body = human_player_body_at(&actor, &player_key, player_now, player_now + 1);
+    let player_body = human_player_body_at(
+        &actor,
+        &player_key,
+        player_now,
+        player_now + PROOF_LIFETIME_SECONDS,
+    );
     let player_hash = canonical_json_sha256(&player_body).expect("real player request hash");
     let player_assertion = signed_user_assertion_at(
         &actor,
@@ -1298,7 +1343,7 @@ async fn exercise_real_onboarding_expiry_replay(state: AppState) {
         &player_key,
         player_hash,
         player_now,
-        player_now + 1,
+        player_now + PROOF_LIFETIME_SECONDS,
     );
     let created_player = assert_status(
         request(
@@ -1311,7 +1356,7 @@ async fn exercise_real_onboarding_expiry_replay(state: AppState) {
         .await,
         StatusCode::CREATED,
     );
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    tokio::time::sleep(EXPIRY_WAIT).await;
     let replayed_player = assert_status(
         request(
             &router,
@@ -1328,8 +1373,12 @@ async fn exercise_real_onboarding_expiry_replay(state: AppState) {
     // A different, unapplied command with a currently valid Consumer
     // assertion still rejects the now-expired human proof.
     let expired_new_player_key = format!("real-expired-new-player-{}", actor.player_id);
-    let expired_new_player_body =
-        human_player_body_at(&actor, &expired_new_player_key, player_now, player_now + 1);
+    let expired_new_player_body = human_player_body_at(
+        &actor,
+        &expired_new_player_key,
+        player_now,
+        player_now + PROOF_LIFETIME_SECONDS,
+    );
     let current_assertion = signed_user_assertion(
         &actor,
         "create_human_player_v2",
@@ -1360,7 +1409,7 @@ async fn exercise_real_onboarding_expiry_replay(state: AppState) {
         &binding_key,
         &binding_key,
         binding_now,
-        binding_now + 1,
+        binding_now + PROOF_LIFETIME_SECONDS,
     );
     let binding_hash = canonical_json_sha256(&binding_body).expect("real binding request hash");
     let binding_assertion = signed_user_assertion_at(
@@ -1371,7 +1420,7 @@ async fn exercise_real_onboarding_expiry_replay(state: AppState) {
         &binding_key,
         binding_hash,
         binding_now,
-        binding_now + 1,
+        binding_now + PROOF_LIFETIME_SECONDS,
     );
     let created_binding = assert_status(
         request(
@@ -1384,7 +1433,7 @@ async fn exercise_real_onboarding_expiry_replay(state: AppState) {
         .await,
         StatusCode::CREATED,
     );
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    tokio::time::sleep(EXPIRY_WAIT).await;
     let replayed_binding = assert_status(
         request(
             &router,
@@ -1407,7 +1456,7 @@ async fn exercise_real_onboarding_expiry_replay(state: AppState) {
         &expired_new_binding_key,
         &expired_new_binding_key,
         binding_now,
-        binding_now + 1,
+        binding_now + PROOF_LIFETIME_SECONDS,
     );
     let current_binding_assertion = signed_user_assertion(
         &actor,
@@ -1664,6 +1713,54 @@ async fn secure_onboarding_requires_consumer_and_agent_pop_and_scopes_reads() {
         .as_array()
         .expect("other bindings")
         .is_empty());
+}
+
+#[tokio::test]
+async fn consumer_edge_overlap_key_accepts_new_signer_and_rejects_unknown_key() {
+    let overlap_key = SigningKey::from_bytes(&[0x6d; 32]);
+    let security = security()
+        .with_consumer_edge_verifying_key(
+            "hepta-test-consumer-edge-key-v3",
+            overlap_key.verifying_key().to_bytes(),
+        )
+        .expect("add Consumer Edge overlap key");
+    let router = app(AppState::new(security));
+    let actor = &actors(1)[0];
+    let path = "/v2/hepta/players/me";
+    let accepted = signed_user_assertion_with_key(
+        actor,
+        "get_self_human_player_v2",
+        "GET",
+        path,
+        "overlap-read",
+        sha256_digest(&[]),
+        "hepta-test-consumer-edge-key-v3",
+        &overlap_key,
+    );
+    assert_eq!(
+        request(&router, "GET", path, Value::Null, Some(accepted))
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+
+    let unknown = signed_user_assertion_with_key(
+        actor,
+        "get_self_human_player_v2",
+        "GET",
+        path,
+        "unknown-read",
+        sha256_digest(&[]),
+        "hepta-test-consumer-edge-key-v4",
+        &SigningKey::from_bytes(&[0x6e; 32]),
+    );
+    assert_eq!(
+        error_code(
+            request(&router, "GET", path, Value::Null, Some(unknown)).await,
+            StatusCode::FORBIDDEN,
+        ),
+        "user_assertion_unknown_issuer_key"
+    );
 }
 
 async fn exercise_agent_binding_rotation_security(state: AppState) {

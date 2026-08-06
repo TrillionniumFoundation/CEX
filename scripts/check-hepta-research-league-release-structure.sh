@@ -31,6 +31,7 @@ shell_scripts=(
   scripts/generate-hepta-research-league-runtime-sbom.sh
 )
 python_scripts=(
+  scripts/check-hepta-route-openapi-parity.py
   scripts/generate-hepta-research-league-sbom.py
   scripts/verify-hepta-research-league-rootfs-tar.py
   scripts/verify-hepta-research-league-sbom.py

@@ -5,8 +5,9 @@ use std::{
 };
 
 use axum::{
-    extract::{Path, State},
-    http::{HeaderMap, StatusCode},
+    extract::{MatchedPath, Path, Request, State},
+    http::{HeaderMap, Method, StatusCode},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
@@ -127,8 +128,7 @@ pub struct SecurityConfig {
     nakama_control_signing_key: SigningKey,
     consumer_edge_issuer: String,
     consumer_edge_audience: String,
-    consumer_edge_issuer_key_id: String,
-    consumer_edge_verifying_key: VerifyingKey,
+    consumer_edge_verifying_keys: HashMap<String, VerifyingKey>,
     trusted_nakama_research_authorities: HashMap<String, VerifyingKey>,
     finality_mode: FinalityMode,
     trusted_trnm_validator_sets: Vec<trnm_v1::TrustedValidatorSetV1>,
@@ -146,8 +146,10 @@ impl SecurityConfig {
             nakama_control_signing_key: SigningKey::from_bytes(&[0x5b; 32]),
             consumer_edge_issuer: "hepta-test-consumer-edge".to_string(),
             consumer_edge_audience: "hepta-paper-raid-v2".to_string(),
-            consumer_edge_issuer_key_id: "hepta-test-consumer-edge-key-v2".to_string(),
-            consumer_edge_verifying_key: SigningKey::from_bytes(&[0x6c; 32]).verifying_key(),
+            consumer_edge_verifying_keys: HashMap::from([(
+                "hepta-test-consumer-edge-key-v2".to_string(),
+                SigningKey::from_bytes(&[0x6c; 32]).verifying_key(),
+            )]),
             trusted_nakama_research_authorities: HashMap::new(),
             finality_mode: FinalityMode::PendingOnly,
             trusted_trnm_validator_sets: Vec::new(),
@@ -255,9 +257,33 @@ impl SecurityConfig {
         validate_contract_text("consumer_edge_issuer_key_id", &issuer_key_id)?;
         self.consumer_edge_issuer = issuer;
         self.consumer_edge_audience = audience;
-        self.consumer_edge_issuer_key_id = issuer_key_id;
-        self.consumer_edge_verifying_key = VerifyingKey::from_bytes(&public_key)
-            .map_err(|_| "consumer Edge public key is not valid Ed25519".to_string())?;
+        self.consumer_edge_verifying_keys.clear();
+        self.consumer_edge_verifying_keys.insert(
+            issuer_key_id,
+            VerifyingKey::from_bytes(&public_key)
+                .map_err(|_| "consumer Edge public key is not valid Ed25519".to_string())?,
+        );
+        Ok(self)
+    }
+
+    pub fn with_consumer_edge_verifying_key(
+        mut self,
+        issuer_key_id: impl Into<String>,
+        public_key: [u8; 32],
+    ) -> Result<Self, String> {
+        let issuer_key_id = issuer_key_id.into();
+        validate_contract_text("consumer_edge_issuer_key_id", &issuer_key_id)?;
+        if self
+            .consumer_edge_verifying_keys
+            .contains_key(&issuer_key_id)
+        {
+            return Err("duplicate Consumer Edge issuer key ID".to_string());
+        }
+        self.consumer_edge_verifying_keys.insert(
+            issuer_key_id,
+            VerifyingKey::from_bytes(&public_key)
+                .map_err(|_| "consumer Edge public key is not valid Ed25519".to_string())?,
+        );
         Ok(self)
     }
 
@@ -471,6 +497,22 @@ impl SecurityConfig {
             nakama_authority_public_key.try_into().map_err(|_| {
                 "TRNM_NAKAMA_AUTHORITY_PUBLIC_KEY_BASE64 must decode to 32 bytes".to_string()
             })?;
+        let mut consumer_edge_keys =
+            decode_public_key_ring_env("HEPTA_CONSUMER_EDGE_ED25519_PUBLIC_KEYS_JSON")?;
+        merge_legacy_public_key(
+            &mut consumer_edge_keys,
+            &consumer_edge_issuer_key_id,
+            consumer_edge_public_key,
+            "HEPTA_CONSUMER_EDGE_ED25519_PUBLIC_KEYS_JSON",
+        )?;
+        let mut nakama_authority_keys =
+            decode_public_key_ring_env("TRNM_NAKAMA_AUTHORITY_PUBLIC_KEYS_JSON")?;
+        merge_legacy_public_key(
+            &mut nakama_authority_keys,
+            &nakama_authority_key_id,
+            nakama_authority_public_key,
+            "TRNM_NAKAMA_AUTHORITY_PUBLIC_KEYS_JSON",
+        )?;
         let finality_mode = match std::env::var("HEPTA_FINALITY_MODE")
             .map_err(|_| "HEPTA_FINALITY_MODE must be pending_only or verified".to_string())?
             .as_str()
@@ -490,24 +532,30 @@ impl SecurityConfig {
                     .to_string(),
             );
         }
+        let mut consumer_keys = consumer_edge_keys.into_iter();
+        let (consumer_key_id, consumer_public_key) = consumer_keys
+            .next()
+            .ok_or_else(|| "Consumer Edge public key ring is empty".to_string())?;
         let mut security = Self::new(operator_token, nakama_token)
             .with_trnm_token(trnm_token)
             .with_consumer_edge_trust(
                 consumer_edge_issuer,
                 consumer_edge_audience,
-                consumer_edge_issuer_key_id,
-                consumer_edge_public_key,
+                consumer_key_id,
+                consumer_public_key,
             )?
             .with_nakama_signers(
                 nakama_authorization_issuer_key_id,
                 nakama_authorization_seed,
                 nakama_control_issuer_key_id,
                 nakama_control_seed,
-            )?
-            .with_trusted_nakama_research_authority(
-                nakama_authority_key_id,
-                nakama_authority_public_key,
             )?;
+        for (key_id, public_key) in consumer_keys {
+            security = security.with_consumer_edge_verifying_key(key_id, public_key)?;
+        }
+        for (key_id, public_key) in nakama_authority_keys {
+            security = security.with_trusted_nakama_research_authority(key_id, public_key)?;
+        }
         security.finality_mode = finality_mode;
         for validator_set in trusted_sets {
             validator_set.validate()?;
@@ -537,7 +585,7 @@ impl SecurityConfig {
             || self.nakama_control_issuer_key_id.trim().is_empty()
             || self.consumer_edge_issuer.trim().is_empty()
             || self.consumer_edge_audience.trim().is_empty()
-            || self.consumer_edge_issuer_key_id.trim().is_empty()
+            || self.consumer_edge_verifying_keys.is_empty()
         {
             errors.push("issuer_configuration_invalid");
         }
@@ -1265,6 +1313,30 @@ pub fn app(state: AppState) -> Router {
         .merge(paper_raid_v2::router())
         .merge(workflows::router())
         .with_state(state)
+        .layer(middleware::from_fn(trace_http_request))
+}
+
+async fn trace_http_request(request: Request, next: Next) -> Response {
+    let request_id = Uuid::new_v4();
+    let method: Method = request.method().clone();
+    let route = request
+        .extensions()
+        .get::<MatchedPath>()
+        .map(MatchedPath::as_str)
+        .unwrap_or("unmatched")
+        .to_string();
+    let started_at = std::time::Instant::now();
+    let response = next.run(request).await;
+    tracing::info!(
+        target: "hepta_http",
+        request_id = %request_id,
+        method = %method,
+        route = %route,
+        status = response.status().as_u16(),
+        latency_ms = started_at.elapsed().as_millis() as u64,
+        "request completed"
+    );
+    response
 }
 
 async fn health() -> Json<HealthResponse> {
@@ -2095,6 +2167,46 @@ fn decode_canonical_base64_exact<const N: usize>(
     decoded
         .try_into()
         .map_err(|_| format!("{field} must decode to exactly {N} bytes"))
+}
+
+fn decode_public_key_ring_env(field: &str) -> Result<HashMap<String, [u8; 32]>, String> {
+    let raw = match std::env::var(field) {
+        Ok(raw) if !raw.trim().is_empty() => raw,
+        _ => return Ok(HashMap::new()),
+    };
+    let encoded: HashMap<String, String> =
+        serde_json::from_str(&raw).map_err(|error| format!("decode {field}: {error}"))?;
+    if encoded.is_empty() {
+        return Err(format!("{field} must not be an empty JSON object"));
+    }
+    encoded
+        .into_iter()
+        .map(|(key_id, value)| {
+            validate_contract_text(field, &key_id)?;
+            let key = decode_canonical_base64_exact::<32>(field, &value)?;
+            VerifyingKey::from_bytes(&key)
+                .map_err(|_| format!("{field} key {key_id} is not valid Ed25519"))?;
+            Ok((key_id, key))
+        })
+        .collect()
+}
+
+fn merge_legacy_public_key(
+    keys: &mut HashMap<String, [u8; 32]>,
+    key_id: &str,
+    public_key: [u8; 32],
+    ring_field: &str,
+) -> Result<(), String> {
+    if let Some(existing) = keys.get(key_id) {
+        if existing != &public_key {
+            return Err(format!(
+                "legacy key {key_id} differs from the same key ID in {ring_field}"
+            ));
+        }
+    } else {
+        keys.insert(key_id.to_string(), public_key);
+    }
+    Ok(())
 }
 
 fn canonical_agent_public_key(value: &str) -> Result<String, ApiError> {

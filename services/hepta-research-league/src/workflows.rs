@@ -430,7 +430,7 @@ fn require_verified_finality_mode(state: &AppState) -> Result<(), ApiError> {
 }
 
 async fn metrics(State(state): State<AppState>) -> Result<String, ApiError> {
-    state
+    let mut metrics = state
         .inspect(|league| {
             let pending = league
                 .trnm_commands
@@ -452,7 +452,9 @@ async fn metrics(State(state): State<AppState>) -> Result<String, ApiError> {
                 league.nakama_matches.len()
             ))
         })
-        .await
+        .await?;
+    metrics.push_str(&crate::paper_raid_v2::operational_metrics(&state).await?);
+    Ok(metrics)
 }
 
 async fn create_evaluator_manifest(

@@ -1,6 +1,9 @@
 # Hepta Research League
 
-Hepta Research League is the research control plane for the three-module external-Agent battle platform.
+Hepta Research League is the research control plane for Paper Raid: small human
+teams coordinate externally operated Agents to produce a jointly approved,
+reproducible paper bundle. The legacy v1 competitive surface remains available
+for compatibility but is not the product authority for Paper Raid.
 
 This service does not host models, execute Agent loops, store model API keys, or provide platform-owned competitors. Every Agent is owned and operated outside the platform and authenticates with an Ed25519 key.
 
@@ -40,14 +43,23 @@ HEPTA_CONSUMER_EDGE_ISSUER='<consumer-edge-issuer>' \
 HEPTA_CONSUMER_EDGE_AUDIENCE='hepta-paper-raid-v2' \
 HEPTA_CONSUMER_EDGE_ISSUER_KEY_ID='<consumer-edge-key-id>' \
 HEPTA_CONSUMER_EDGE_ED25519_PUBLIC_KEY_BASE64='<consumer-edge-public-key>' \
+HEPTA_CONSUMER_EDGE_ED25519_PUBLIC_KEYS_JSON='{"old-key":"<old-public-key>","new-key":"<new-public-key>"}' \
 TRNM_NAKAMA_AUTHORITY_KEY_ID='<nakama-completion-key-id>' \
 TRNM_NAKAMA_AUTHORITY_PUBLIC_KEY_BASE64='<nakama-completion-public-key>' \
+TRNM_NAKAMA_AUTHORITY_PUBLIC_KEYS_JSON='{"old-key":"<old-public-key>","new-key":"<new-public-key>"}' \
 HEPTA_TRNM_TOKEN='<different-trnm-secret>' \
 HEPTA_FINALITY_MODE='pending_only' \
 HEPTA_TRNM_VALIDATOR_SETS_JSON='<trusted validator-set JSON>' \
 HEPTA_DATABASE_URL='postgres://hepta:...@postgres/hepta' \
 cargo run -p hepta-research-league
 ```
+
+`HEPTA_CONSUMER_EDGE_ED25519_PUBLIC_KEYS_JSON` and
+`TRNM_NAKAMA_AUTHORITY_PUBLIC_KEYS_JSON` optionally add overlap trust keys for
+zero-downtime rotation. The legacy key ID/public-key pair remains required and
+must byte-match any ring entry with the same key ID. Add the new public key,
+switch the signer, then retire the old key only after in-flight assertions and
+resumable sessions have drained.
 
 The default listener is `127.0.0.1:7011`. Override it with `HEPTA_BIND_ADDR`.
 Production startup requires PostgreSQL and three non-empty, pairwise-distinct
@@ -169,6 +181,10 @@ are serialized across instances inside PostgreSQL; outbox workers use expiring
 leases with `FOR UPDATE SKIP LOCKED`. TRNM success remains
 `pending_finality` until a cryptographically verified final receipt is
 projected. An API token by itself cannot advance the state.
+
+Paper Raid metrics, structured HTTP tracing, alert thresholds, retention,
+backup/restore acceptance, and 24-hour soak evidence requirements are defined
+in `docs/hepta-paper-raid-operations-v1.md`.
 
 The release Dockerfile pins its Dockerfile frontend, builder, and distroless
 runtime images by digest. The builder receives only the minimal Hepta compile

@@ -90,6 +90,88 @@ struct MemoryIdempotencyRecord {
     response: Value,
 }
 
+pub(crate) async fn operational_metrics(state: &AppState) -> Result<String, ApiError> {
+    let (
+        storage_backend,
+        papers_total,
+        active_authorization_epochs,
+        pending_control_commands,
+        pending_outbox_events,
+        idempotency_records,
+    ) = if let Some(pool) = &state.pool {
+        let row = sqlx::query(
+            "select \
+                (select count(*) from hepta_paper_projects)::bigint as papers_total, \
+                (select count(*) from hepta_research_session_authorization_sets \
+                    where status in ('issued', 'consumed'))::bigint as active_authorization_epochs, \
+                (select count(*) from hepta_nakama_research_control_commands \
+                    where status = 'pending')::bigint as pending_control_commands, \
+                (select count(*) from hepta_outbox \
+                    where delivered_at is null)::bigint as pending_outbox_events, \
+                (select count(*) from hepta_paper_raid_idempotency)::bigint as idempotency_records",
+        )
+        .fetch_one(pool)
+        .await
+        .map_err(ApiError::database)?;
+        (
+            "postgres",
+            row.get::<i64, _>("papers_total"),
+            row.get::<i64, _>("active_authorization_epochs"),
+            row.get::<i64, _>("pending_control_commands"),
+            row.get::<i64, _>("pending_outbox_events"),
+            row.get::<i64, _>("idempotency_records"),
+        )
+    } else {
+        let memory = state.paper_raid.read().await;
+        (
+            "memory",
+            memory.papers.len() as i64,
+            memory
+                .research_session_authorization_sets
+                .values()
+                .filter(|authorization_set| {
+                    matches!(
+                        authorization_set.status,
+                        ResearchSessionAuthorizationSetStatus::Issued
+                            | ResearchSessionAuthorizationSetStatus::Consumed
+                    )
+                })
+                .count() as i64,
+            memory
+                .nakama_control_commands
+                .values()
+                .filter(|command| {
+                    command.record.status
+                        == nakama_control_v2::NakamaResearchControlCommandStatusV2::Pending
+                })
+                .count() as i64,
+            0,
+            memory.idempotency.len() as i64,
+        )
+    };
+
+    Ok(format!(
+        "# HELP hepta_paper_raid_storage_backend_info Active Paper Raid storage backend.\n\
+         # TYPE hepta_paper_raid_storage_backend_info gauge\n\
+         hepta_paper_raid_storage_backend_info{{backend=\"{storage_backend}\"}} 1\n\
+         # HELP hepta_paper_raid_papers_total Number of Paper Raid projects.\n\
+         # TYPE hepta_paper_raid_papers_total gauge\n\
+         hepta_paper_raid_papers_total {papers_total}\n\
+         # HELP hepta_paper_raid_active_authorization_epochs Active issued or consumed research-session authorization epochs.\n\
+         # TYPE hepta_paper_raid_active_authorization_epochs gauge\n\
+         hepta_paper_raid_active_authorization_epochs {active_authorization_epochs}\n\
+         # HELP hepta_paper_raid_pending_control_commands Nakama research-control commands waiting to be applied.\n\
+         # TYPE hepta_paper_raid_pending_control_commands gauge\n\
+         hepta_paper_raid_pending_control_commands {pending_control_commands}\n\
+         # HELP hepta_paper_raid_pending_outbox_events Transactional outbox events waiting for delivery.\n\
+         # TYPE hepta_paper_raid_pending_outbox_events gauge\n\
+         hepta_paper_raid_pending_outbox_events {pending_outbox_events}\n\
+         # HELP hepta_paper_raid_idempotency_records Durable Paper Raid idempotency records.\n\
+         # TYPE hepta_paper_raid_idempotency_records gauge\n\
+         hepta_paper_raid_idempotency_records {idempotency_records}\n"
+    ))
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum HumanPlayerStatus {
@@ -1001,8 +1083,7 @@ fn require_user_assertion_internal(
         ));
     }
     let claim = &assertion.claim;
-    if assertion.issuer_key_id != state.security.consumer_edge_issuer_key_id
-        || claim.issuer != state.security.consumer_edge_issuer
+    if claim.issuer != state.security.consumer_edge_issuer
         || claim.audience != state.security.consumer_edge_audience
         || claim.operation != operation
         || claim.http_method != http_method
@@ -1041,7 +1122,14 @@ fn require_user_assertion_internal(
     })?;
     state
         .security
-        .consumer_edge_verifying_key
+        .consumer_edge_verifying_keys
+        .get(&assertion.issuer_key_id)
+        .ok_or_else(|| {
+            ApiError::forbidden(
+                "user_assertion_unknown_issuer_key",
+                "Consumer Edge user assertion key ID is not trusted",
+            )
+        })?
         .verify(&signing_bytes, &signature)
         .map_err(|_| {
             ApiError::forbidden(
