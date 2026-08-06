@@ -16,6 +16,8 @@ COPY vendor/trnm-finality-types/Cargo.toml vendor/trnm-finality-types/Cargo.toml
 COPY vendor/trnm-finality-types/src vendor/trnm-finality-types/src
 COPY vendor/trnm-finality-verifier/Cargo.toml vendor/trnm-finality-verifier/Cargo.toml
 COPY vendor/trnm-finality-verifier/src vendor/trnm-finality-verifier/src
+COPY vendor/trnm-protocol/Cargo.toml vendor/trnm-protocol/Cargo.toml
+COPY vendor/trnm-protocol/src vendor/trnm-protocol/src
 COPY vendor/trnm-research-protocol/Cargo.toml vendor/trnm-research-protocol/Cargo.toml
 COPY vendor/trnm-research-protocol/src vendor/trnm-research-protocol/src
 COPY migrations/0031_add_hepta_research_league.sql migrations/0031_add_hepta_research_league.sql
@@ -24,6 +26,7 @@ COPY migrations/0033_add_hepta_paper_collaboration_kernel.sql migrations/0033_ad
 COPY migrations/0034_add_hepta_paper_review_appeal.sql migrations/0034_add_hepta_paper_review_appeal.sql
 COPY migrations/0035_add_hepta_secure_onboarding.sql migrations/0035_add_hepta_secure_onboarding.sql
 COPY migrations/0036_add_hepta_nakama_research_control.sql migrations/0036_add_hepta_nakama_research_control.sql
+COPY migrations/0037_add_hepta_paper_chain_finality_v1.sql migrations/0037_add_hepta_paper_chain_finality_v1.sql
 COPY docs/openapi/hepta-research-league-v1.yaml docs/openapi/hepta-research-league-v1.yaml
 COPY docs/openapi/hepta-paper-raid-v2.yaml docs/openapi/hepta-paper-raid-v2.yaml
 

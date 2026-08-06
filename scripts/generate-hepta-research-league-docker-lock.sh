@@ -185,6 +185,7 @@ expected_local = {
     ("hepta-research-league", "0.1.0"),
     ("trnm-finality-types", "0.1.0"),
     ("trnm-finality-verifier", "0.1.0"),
+    ("trnm-protocol", "0.1.0"),
     ("trnm-research-protocol", "0.1.0"),
 }
 if set(local) != expected_local or len(local) != len(expected_local):

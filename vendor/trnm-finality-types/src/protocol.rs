@@ -11,6 +11,14 @@ pub const SIGNED_COMMAND_SCHEMA_V1: &str = "trnm_signed_command_envelope_v1";
 pub const BLOCK_HEADER_SCHEMA_V1: &str = "trnm_block_header_v1";
 pub const VALIDATOR_VOTE_SCHEMA_V1: &str = "trnm_validator_precommit_v1";
 pub const FINALITY_RECEIPT_SCHEMA_V1: &str = "trnm_finality_receipt_v1";
+pub const MAX_SIGNED_COMMAND_PAYLOAD_BYTES: usize = 1024 * 1024;
+/// Maximum accepted JSON wire size for a signed command envelope.
+///
+/// Payloads are lowercase hex on the wire, so the envelope needs twice the
+/// binary payload limit plus bounded metadata/signature headroom. Receipt V2
+/// reuses this exact limit for its DataHash-proven raw transaction.
+pub const MAX_SIGNED_COMMAND_ENVELOPE_WIRE_BYTES: usize =
+    2 * MAX_SIGNED_COMMAND_PAYLOAD_BYTES + 16 * 1024;
 
 fn ensure_token(label: &str, value: &str, max: usize) -> Result<()> {
     ensure!(!value.is_empty(), "{label} must not be empty");
@@ -93,6 +101,52 @@ impl SignedCommandEnvelopeV1 {
         Ok(bytes)
     }
 
+    /// Emit the compact canonical JSON representation accepted by app v5.
+    pub fn to_wire_bytes(&self) -> Result<Vec<u8>> {
+        self.validate_shape()?;
+        let bytes = serde_json::to_vec(self)?;
+        ensure!(
+            bytes.len() <= MAX_SIGNED_COMMAND_ENVELOPE_WIRE_BYTES,
+            "signed command envelope exceeds the {}-byte wire limit",
+            MAX_SIGNED_COMMAND_ENVELOPE_WIRE_BYTES
+        );
+        Ok(bytes)
+    }
+
+    /// Decode a semantically valid envelope while applying a shared,
+    /// pre-allocation wire boundary. Callers outside consensus may use this to
+    /// inspect historical pre-v5 encodings; app v5 and Receipt V2 must use
+    /// [`Self::from_canonical_wire_bytes`]. Security fields remain
+    /// signature-bound by [`Self::validate_at`].
+    pub fn from_wire_bytes(bytes: &[u8]) -> Result<Self> {
+        ensure!(
+            !bytes.is_empty(),
+            "signed command envelope must not be empty"
+        );
+        ensure!(
+            bytes.len() <= MAX_SIGNED_COMMAND_ENVELOPE_WIRE_BYTES,
+            "signed command envelope exceeds the {}-byte wire limit",
+            MAX_SIGNED_COMMAND_ENVELOPE_WIRE_BYTES
+        );
+        let envelope: Self = serde_json::from_slice(bytes)
+            .map_err(|error| anyhow!("decode signed command envelope JSON: {error}"))?;
+        envelope.validate_shape()?;
+        Ok(envelope)
+    }
+
+    /// Decode only the exact compact field order and JSON representation
+    /// emitted by [`Self::to_wire_bytes`]. This is the app-v5 outer-envelope
+    /// consensus boundary for both legacy `CanonicalTxV1` and typed Research
+    /// payloads; it does not change either inner payload schema or semantics.
+    pub fn from_canonical_wire_bytes(bytes: &[u8]) -> Result<Self> {
+        let envelope = Self::from_wire_bytes(bytes)?;
+        ensure!(
+            envelope.to_wire_bytes()? == bytes,
+            "signed command envelope JSON is not canonical"
+        );
+        Ok(envelope)
+    }
+
     pub fn validate_shape(&self) -> Result<()> {
         ensure!(
             self.schema == SIGNED_COMMAND_SCHEMA_V1,
@@ -110,7 +164,7 @@ impl SignedCommandEnvelopeV1 {
         );
         let payload = self.payload_bytes()?;
         ensure!(
-            payload.len() <= 1024 * 1024,
+            payload.len() <= MAX_SIGNED_COMMAND_PAYLOAD_BYTES,
             "payload exceeds the 1 MiB command limit"
         );
         let expected = hash_domain("trnm.command.payload.v1", &[&payload]);
@@ -523,6 +577,72 @@ mod tests {
         .unwrap();
         envelope.payload_hex = hex::encode(b"payload-b");
         assert!(envelope.validate_at("trnm-devnet-1", 1_500).is_err());
+    }
+
+    #[test]
+    fn signed_command_wire_decoder_shares_the_receipt_raw_tx_limit() {
+        let key = SigningKey::from_bytes(&[11u8; 32]);
+        let envelope = SignedCommandEnvelopeV1::sign(
+            "trnm-devnet-1",
+            "cmd-1",
+            "did:key:nakama-1",
+            "nakama",
+            1,
+            1_000,
+            2_000,
+            "match_evidence_commitment_v1",
+            b"payload",
+            &key,
+        )
+        .unwrap();
+        let wire = envelope.to_wire_bytes().unwrap();
+        assert_eq!(
+            SignedCommandEnvelopeV1::from_wire_bytes(&wire).unwrap(),
+            envelope
+        );
+        assert_eq!(
+            SignedCommandEnvelopeV1::from_canonical_wire_bytes(&wire).unwrap(),
+            envelope
+        );
+
+        let mut whitespace = vec![b' '];
+        whitespace.extend_from_slice(&wire);
+        assert!(SignedCommandEnvelopeV1::from_wire_bytes(&whitespace).is_ok());
+        assert!(SignedCommandEnvelopeV1::from_canonical_wire_bytes(&whitespace).is_err());
+
+        let wire_json = String::from_utf8(wire.clone()).unwrap();
+        let schema_field = format!(
+            "\"schema\":{},",
+            serde_json::to_string(&envelope.schema).unwrap()
+        );
+        let chain_field = format!(
+            "\"chain_id\":{},",
+            serde_json::to_string(&envelope.chain_id).unwrap()
+        );
+        let canonical_prefix = format!("{{{schema_field}{chain_field}");
+        assert!(wire_json.starts_with(&canonical_prefix));
+        let reordered = wire_json
+            .replacen(
+                &canonical_prefix,
+                &format!("{{{chain_field}{schema_field}"),
+                1,
+            )
+            .into_bytes();
+        assert!(SignedCommandEnvelopeV1::from_wire_bytes(&reordered).is_ok());
+        assert!(SignedCommandEnvelopeV1::from_canonical_wire_bytes(&reordered).is_err());
+
+        let unknown = wire_json
+            .replacen('{', "{\"unexpected\":true,", 1)
+            .into_bytes();
+        assert!(SignedCommandEnvelopeV1::from_canonical_wire_bytes(&unknown).is_err());
+
+        let duplicate = wire_json
+            .replacen('{', &format!("{{{schema_field}"), 1)
+            .into_bytes();
+        assert!(SignedCommandEnvelopeV1::from_canonical_wire_bytes(&duplicate).is_err());
+
+        let oversized = vec![b' '; MAX_SIGNED_COMMAND_ENVELOPE_WIRE_BYTES + 1];
+        assert!(SignedCommandEnvelopeV1::from_wire_bytes(&oversized).is_err());
     }
 
     #[test]

@@ -1,12 +1,14 @@
-use crate::canonical::{canonical_hash, CanonicalCbor, Encoder};
+use crate::canonical::{canonical_hash, CanonicalCbor, CanonicalDecodeError, Decoder, Encoder};
 use crate::command::{
     AuthorityRole, SignedResearchCommandV1, SignedResearchCommandValidationError,
 };
 use crate::types::{
-    validate_claim_shares, ClaimChallengeStatus, ClaimResolutionDecision, ClaimResolutionV1,
-    ClaimShareV1, ClaimStatus, CreateResearchClaimV1, DeclareLicenseV1, EvaluationCommitmentV1,
-    ExternalKey, IssueWorkloadReceiptV1, MatchEvidenceCommitmentV1, ObjectRefV1, ResearchCommandV1,
-    ResearchObjectKind, PROTOCOL_VERSION,
+    decode_challenge, decode_claim, decode_claim_share, decode_evaluation, decode_external_key,
+    decode_license, decode_match, decode_object_ref, decode_resolution, decode_version,
+    decode_workload, validate_claim_shares, ClaimChallengeStatus, ClaimResolutionDecision,
+    ClaimResolutionV1, ClaimShareV1, ClaimStatus, CreateResearchClaimV1, DeclareLicenseV1,
+    EvaluationCommitmentV1, ExternalKey, IssueWorkloadReceiptV1, MatchEvidenceCommitmentV1,
+    ObjectRefV1, ResearchCommandV1, ResearchObjectKind, PROTOCOL_VERSION,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -34,6 +36,7 @@ impl AuthorityIdentityV1 {
             || !self.signer_did.starts_with("did:")
             || !self.signer_did.bytes().all(|byte| byte.is_ascii_graphic())
             || self.public_key == [0; 32]
+            || ed25519_dalek::VerifyingKey::from_bytes(&self.public_key).is_err()
         {
             return Err(ProtocolStateError::InvalidAuthoritySet);
         }
@@ -268,6 +271,291 @@ impl CanonicalCbor for AppliedCommandRecordV1 {
     }
 }
 
+impl AppliedCommandRecordV1 {
+    pub fn from_canonical_bytes(bytes: &[u8]) -> Result<Self, ProtocolStateError> {
+        let mut decoder = Decoder::new(bytes);
+        decoder.array(4)?;
+        decode_version(&mut decoder)?;
+        let record = Self {
+            command_id: decode_external_key(&mut decoder)?,
+            fingerprint: decoder.bytes_exact()?,
+            primary_object_ref: decode_object_ref(&mut decoder)?,
+        };
+        decoder.finish()?;
+        record.command_id.validate("command_id")?;
+        record.primary_object_ref.validate("primary_object_ref")?;
+        if record.fingerprint == [0; 32] || record.canonical_bytes() != bytes {
+            return Err(ProtocolStateError::InvalidSnapshotGraph);
+        }
+        Ok(record)
+    }
+}
+
+/// One independently authenticated Research domain object. Runtime execution
+/// loads only the command's explicit read-set and feeds that bounded fragment
+/// through the same state-transition implementation used by snapshot tests.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResearchDomainObjectV1 {
+    MatchEvidence(MatchEvidenceObjectV1),
+    EvaluationCommitment(EvaluationCommitmentObjectV1),
+    WorkloadReceipt(WorkloadReceiptObjectV1),
+    ResearchClaim(ResearchClaimObjectV1),
+    LicenseDeclaration(LicenseDeclarationObjectV1),
+    ClaimChallenge(ClaimChallengeObjectV1),
+    ClaimResolution(ClaimResolutionObjectV1),
+}
+
+impl ResearchDomainObjectV1 {
+    pub fn object_ref(&self) -> ObjectRefV1 {
+        match self {
+            Self::MatchEvidence(object) => object.object_ref,
+            Self::EvaluationCommitment(object) => object.object_ref,
+            Self::WorkloadReceipt(object) => object.object_ref,
+            Self::ResearchClaim(object) => object.object_ref,
+            Self::LicenseDeclaration(object) => object.object_ref,
+            Self::ClaimChallenge(object) => object.object_ref,
+            Self::ClaimResolution(object) => object.object_ref,
+        }
+    }
+
+    pub fn from_canonical_bytes(
+        kind: ResearchObjectKind,
+        bytes: &[u8],
+    ) -> Result<Self, ProtocolStateError> {
+        let mut decoder = Decoder::new(bytes);
+        let object = match kind {
+            ResearchObjectKind::MatchEvidence => {
+                decoder.array(3)?;
+                decode_version(&mut decoder)?;
+                Self::MatchEvidence(MatchEvidenceObjectV1 {
+                    object_ref: decode_object_ref(&mut decoder)?,
+                    commitment: decode_match(&mut decoder)?,
+                })
+            }
+            ResearchObjectKind::EvaluationCommitment => {
+                decoder.array(3)?;
+                decode_version(&mut decoder)?;
+                Self::EvaluationCommitment(EvaluationCommitmentObjectV1 {
+                    object_ref: decode_object_ref(&mut decoder)?,
+                    commitment: decode_evaluation(&mut decoder)?,
+                })
+            }
+            ResearchObjectKind::WorkloadReceipt => {
+                decoder.array(3)?;
+                decode_version(&mut decoder)?;
+                Self::WorkloadReceipt(WorkloadReceiptObjectV1 {
+                    object_ref: decode_object_ref(&mut decoder)?,
+                    receipt: decode_workload(&mut decoder)?,
+                })
+            }
+            ResearchObjectKind::ResearchClaim => {
+                decoder.array(6)?;
+                decode_version(&mut decoder)?;
+                let object_ref = decode_object_ref(&mut decoder)?;
+                let claim = decode_claim(&mut decoder)?;
+                let claimant_count = decoder.array_len()?;
+                let mut current_claimants = Vec::with_capacity(claimant_count.min(128));
+                for _ in 0..claimant_count {
+                    current_claimants.push(decode_claim_share(&mut decoder)?);
+                }
+                let status = decode_claim_status(&mut decoder)?;
+                let active_challenge = if decoder.consume_null() {
+                    None
+                } else {
+                    Some(decode_external_key(&mut decoder)?)
+                };
+                Self::ResearchClaim(ResearchClaimObjectV1 {
+                    object_ref,
+                    claim,
+                    current_claimants,
+                    status,
+                    active_challenge,
+                })
+            }
+            ResearchObjectKind::LicenseDeclaration => {
+                decoder.array(3)?;
+                decode_version(&mut decoder)?;
+                Self::LicenseDeclaration(LicenseDeclarationObjectV1 {
+                    object_ref: decode_object_ref(&mut decoder)?,
+                    declaration: decode_license(&mut decoder)?,
+                })
+            }
+            ResearchObjectKind::ClaimChallenge => {
+                decoder.array(5)?;
+                decode_version(&mut decoder)?;
+                let object_ref = decode_object_ref(&mut decoder)?;
+                let challenge = decode_challenge(&mut decoder)?;
+                let status = decode_challenge_status(&mut decoder)?;
+                let resolution_ref = if decoder.consume_null() {
+                    None
+                } else {
+                    Some(decode_object_ref(&mut decoder)?)
+                };
+                Self::ClaimChallenge(ClaimChallengeObjectV1 {
+                    object_ref,
+                    challenge,
+                    status,
+                    resolution_ref,
+                })
+            }
+            ResearchObjectKind::ClaimResolution => {
+                decoder.array(3)?;
+                decode_version(&mut decoder)?;
+                Self::ClaimResolution(ClaimResolutionObjectV1 {
+                    object_ref: decode_object_ref(&mut decoder)?,
+                    resolution: decode_resolution(&mut decoder)?,
+                })
+            }
+        };
+        decoder.finish()?;
+        object.validate_intrinsic()?;
+        if object.canonical_bytes() != bytes {
+            return Err(CanonicalDecodeError::NonCanonicalRoundTrip.into());
+        }
+        Ok(object)
+    }
+
+    fn validate_intrinsic(&self) -> Result<(), ProtocolStateError> {
+        match self {
+            Self::MatchEvidence(object) => {
+                object.commitment.validate()?;
+                validate_snapshot_object_ref(
+                    object.object_ref,
+                    ResearchObjectKind::MatchEvidence,
+                    object.commitment.commitment_id,
+                )?;
+                require_initial_version(object.object_ref)
+            }
+            Self::EvaluationCommitment(object) => {
+                object.commitment.validate()?;
+                validate_snapshot_object_ref(
+                    object.object_ref,
+                    ResearchObjectKind::EvaluationCommitment,
+                    object.commitment.evaluation_id,
+                )?;
+                require_initial_version(object.object_ref)
+            }
+            Self::WorkloadReceipt(object) => {
+                object.receipt.validate()?;
+                validate_snapshot_object_ref(
+                    object.object_ref,
+                    ResearchObjectKind::WorkloadReceipt,
+                    object.receipt.receipt_id,
+                )?;
+                require_initial_version(object.object_ref)
+            }
+            Self::ResearchClaim(object) => {
+                object.claim.validate()?;
+                validate_snapshot_object_ref(
+                    object.object_ref,
+                    ResearchObjectKind::ResearchClaim,
+                    object.claim.claim_id,
+                )?;
+                validate_claim_shares(&object.current_claimants, false)?;
+                let challenge_consistent = match object.status {
+                    ClaimStatus::Challenged => object.active_challenge.is_some(),
+                    _ => object.active_challenge.is_none(),
+                };
+                if challenge_consistent {
+                    Ok(())
+                } else {
+                    Err(ProtocolStateError::InvalidSnapshotGraph)
+                }
+            }
+            Self::LicenseDeclaration(object) => {
+                object.declaration.validate()?;
+                validate_snapshot_object_ref(
+                    object.object_ref,
+                    ResearchObjectKind::LicenseDeclaration,
+                    object.declaration.declaration_id,
+                )?;
+                require_initial_version(object.object_ref)
+            }
+            Self::ClaimChallenge(object) => {
+                object.challenge.validate()?;
+                validate_snapshot_object_ref(
+                    object.object_ref,
+                    ResearchObjectKind::ClaimChallenge,
+                    object.challenge.challenge_id,
+                )?;
+                let consistent = match object.status {
+                    ClaimChallengeStatus::Open => {
+                        object.object_ref.object_version == 1 && object.resolution_ref.is_none()
+                    }
+                    ClaimChallengeStatus::Resolved => {
+                        object.object_ref.object_version == 2 && object.resolution_ref.is_some()
+                    }
+                };
+                if consistent {
+                    Ok(())
+                } else {
+                    Err(ProtocolStateError::InvalidSnapshotGraph)
+                }
+            }
+            Self::ClaimResolution(object) => {
+                object.resolution.validate()?;
+                validate_snapshot_object_ref(
+                    object.object_ref,
+                    ResearchObjectKind::ClaimResolution,
+                    object.resolution.resolution_id,
+                )?;
+                require_initial_version(object.object_ref)
+            }
+        }
+    }
+}
+
+impl CanonicalCbor for ResearchDomainObjectV1 {
+    fn encode_canonical(&self, encoder: &mut Encoder) {
+        match self {
+            Self::MatchEvidence(object) => object.encode_canonical(encoder),
+            Self::EvaluationCommitment(object) => object.encode_canonical(encoder),
+            Self::WorkloadReceipt(object) => object.encode_canonical(encoder),
+            Self::ResearchClaim(object) => object.encode_canonical(encoder),
+            Self::LicenseDeclaration(object) => object.encode_canonical(encoder),
+            Self::ClaimChallenge(object) => object.encode_canonical(encoder),
+            Self::ClaimResolution(object) => object.encode_canonical(encoder),
+        }
+    }
+}
+
+fn decode_claim_status(decoder: &mut Decoder<'_>) -> Result<ClaimStatus, CanonicalDecodeError> {
+    let value = decoder.uint()?;
+    match value {
+        1 => Ok(ClaimStatus::Active),
+        2 => Ok(ClaimStatus::Challenged),
+        3 => Ok(ClaimStatus::Rejected),
+        4 => Ok(ClaimStatus::Amended),
+        5 => Ok(ClaimStatus::LicenseAmendmentRequired),
+        value => Err(CanonicalDecodeError::UnknownDiscriminant {
+            name: "ClaimStatus",
+            value,
+        }),
+    }
+}
+
+fn decode_challenge_status(
+    decoder: &mut Decoder<'_>,
+) -> Result<ClaimChallengeStatus, CanonicalDecodeError> {
+    let value = decoder.uint()?;
+    match value {
+        1 => Ok(ClaimChallengeStatus::Open),
+        2 => Ok(ClaimChallengeStatus::Resolved),
+        value => Err(CanonicalDecodeError::UnknownDiscriminant {
+            name: "ClaimChallengeStatus",
+            value,
+        }),
+    }
+}
+
+fn require_initial_version(object_ref: ObjectRefV1) -> Result<(), ProtocolStateError> {
+    if object_ref.object_version == 1 {
+        Ok(())
+    } else {
+        Err(ProtocolStateError::InvalidSnapshotGraph)
+    }
+}
+
 /// Vector-backed persistence form so JSON and other serde formats do not need
 /// to encode 32-byte map keys as object-property strings.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -345,18 +633,74 @@ impl ResearchProtocolState {
         &self.authorities
     }
 
+    pub fn authorize(
+        authorities: &AuthoritySetV1,
+        signed: &SignedResearchCommandV1,
+    ) -> Result<(), ProtocolStateError> {
+        signed.validate()?;
+        authorities.validate()?;
+        if authorities.authorizes(signed) {
+            Ok(())
+        } else {
+            Err(ProtocolStateError::UnauthorizedAuthority {
+                signer_did: signed.signer_did.clone(),
+                role: signed.signer_role,
+                public_key: signed.public_key,
+            })
+        }
+    }
+
+    /// Construct a bounded execution fragment from independently authenticated
+    /// domain objects. Cross-object invariants remain enforced by [`Self::apply`]
+    /// against the command's explicit read-set; unrelated global objects are not
+    /// loaded or scanned.
+    pub fn from_fragment(
+        authorities: AuthoritySetV1,
+        objects: impl IntoIterator<Item = ResearchDomainObjectV1>,
+    ) -> Result<Self, ProtocolStateError> {
+        let mut state = Self::with_authorities(authorities)?;
+        for object in objects {
+            object.validate_intrinsic()?;
+            let object_ref = object.object_ref();
+            let duplicate = match object {
+                ResearchDomainObjectV1::MatchEvidence(object) => {
+                    state.matches.insert(object_ref.key, object).is_some()
+                }
+                ResearchDomainObjectV1::EvaluationCommitment(object) => {
+                    state.evaluations.insert(object_ref.key, object).is_some()
+                }
+                ResearchDomainObjectV1::WorkloadReceipt(object) => state
+                    .workload_receipts
+                    .insert(object_ref.key, object)
+                    .is_some(),
+                ResearchDomainObjectV1::ResearchClaim(object) => {
+                    state.claims.insert(object_ref.key, object).is_some()
+                }
+                ResearchDomainObjectV1::LicenseDeclaration(object) => {
+                    state.licenses.insert(object_ref.key, object).is_some()
+                }
+                ResearchDomainObjectV1::ClaimChallenge(object) => {
+                    state.challenges.insert(object_ref.key, object).is_some()
+                }
+                ResearchDomainObjectV1::ClaimResolution(object) => {
+                    state.resolutions.insert(object_ref.key, object).is_some()
+                }
+            };
+            if duplicate {
+                return Err(ProtocolStateError::DuplicateObject {
+                    kind: object_ref.kind,
+                    key: object_ref.key,
+                });
+            }
+        }
+        Ok(state)
+    }
+
     pub fn apply(
         &mut self,
         signed: &SignedResearchCommandV1,
     ) -> Result<ApplyOutcome, ProtocolStateError> {
-        signed.validate()?;
-        if !self.authorities.authorizes(signed) {
-            return Err(ProtocolStateError::UnauthorizedAuthority {
-                signer_did: signed.signer_did.clone(),
-                role: signed.signer_role,
-                public_key: signed.public_key,
-            });
-        }
+        Self::authorize(&self.authorities, signed)?;
         let fingerprint = signed.command_fingerprint();
         if let Some(existing) = self.applied_commands.get(&signed.command_id) {
             if existing.fingerprint == fingerprint {
@@ -422,6 +766,10 @@ impl ResearchProtocolState {
 
     pub fn get_resolution(&self, key: ExternalKey) -> Option<&ClaimResolutionObjectV1> {
         self.resolutions.get(&key)
+    }
+
+    pub fn get_applied_command(&self, command_id: ExternalKey) -> Option<&AppliedCommandRecordV1> {
+        self.applied_commands.get(&command_id)
     }
 
     pub fn export_snapshot(&self) -> ResearchProtocolSnapshotV1 {
@@ -1140,6 +1488,8 @@ fn collect_command_records(
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ProtocolStateError {
+    #[error(transparent)]
+    InvalidCanonicalObject(#[from] CanonicalDecodeError),
     #[error(transparent)]
     InvalidCommand(#[from] SignedResearchCommandValidationError),
     #[error(transparent)]

@@ -151,6 +151,10 @@ pub struct TrnmCommand {
     pub aggregate_id: String,
     pub idempotency_key: String,
     pub command_fingerprint: String,
+    #[serde(default)]
+    pub paper_binding: Option<crate::PaperTrnmCommandBindingV1>,
+    #[serde(default)]
+    pub paper_binding_fingerprint: Option<String>,
     pub signed_command: SignedResearchCommandV1,
     pub status: TrnmProjectionStatus,
     pub created_at: DateTime<Utc>,
@@ -160,6 +164,7 @@ pub struct TrnmCommand {
 #[serde(rename_all = "snake_case")]
 pub enum TrnmProjectionStatus {
     PendingFinality,
+    VerifiedFinality,
     Provisional,
     Finalized,
     Challenged,
@@ -167,8 +172,11 @@ pub enum TrnmProjectionStatus {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CreateTrnmCommandRequest {
     signed_command: SignedResearchCommandV1,
+    #[serde(default)]
+    paper_binding: Option<crate::PaperTrnmCommandBindingV1>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -265,6 +273,7 @@ struct ReadyResponse {
     top_level_modules: [&'static str; 3],
     finality_mode: &'static str,
     trusted_validator_sets: usize,
+    pinned_cometbft_trust_anchor_hashes: usize,
 }
 
 pub(crate) fn router() -> Router<AppState> {
@@ -403,6 +412,10 @@ async fn ready(State(state): State<AppState>) -> (StatusCode, Json<ReadyResponse
         top_level_modules: ["hepta", "nakama", "trnm"],
         finality_mode: state.security.finality_mode.as_str(),
         trusted_validator_sets: state.security.trusted_trnm_validator_sets.len(),
+        pinned_cometbft_trust_anchor_hashes: state
+            .security
+            .pinned_trnm_cometbft_trust_anchor_hashes
+            .len(),
     };
     (
         if ready {
@@ -896,6 +909,43 @@ async fn create_trnm_command(
         .to_hex();
     let idempotency_key = request.signed_command.command_id.to_hex();
     let command_fingerprint = format_digest(&request.signed_command.command_fingerprint());
+    let paper_binding_fingerprint = request
+        .paper_binding
+        .as_ref()
+        .map(crate::paper_chain_finality_v1::paper_binding_fingerprint)
+        .transpose()?;
+    if let Some(binding) = &request.paper_binding {
+        crate::paper_chain_finality_v1::validate_signed_paper_binding(
+            &request.signed_command,
+            binding,
+        )?;
+    }
+    if let Some(existing) = state
+        .inspect(|league| {
+            Ok(league
+                .trnm_commands
+                .values()
+                .find(|command| command.idempotency_key == idempotency_key)
+                .cloned())
+        })
+        .await?
+    {
+        if existing.kind == kind
+            && existing.aggregate_id == aggregate_id
+            && existing.command_fingerprint == command_fingerprint
+            && existing.paper_binding == request.paper_binding
+            && existing.paper_binding_fingerprint == paper_binding_fingerprint
+        {
+            return Ok((StatusCode::OK, Json(existing)));
+        }
+        return Err(ApiError::conflict(
+            "trnm_idempotency_conflict",
+            "TRNM idempotency key was reused with different command or Paper binding data",
+        ));
+    }
+    if let Some(binding) = &request.paper_binding {
+        crate::paper_chain_finality_v1::validate_paper_binding_for_queue(&state, binding).await?;
+    }
     state
         .transact(|league| {
             if let Some(existing) = league
@@ -906,12 +956,14 @@ async fn create_trnm_command(
                 if existing.kind == kind
                     && existing.aggregate_id == aggregate_id
                     && existing.command_fingerprint == command_fingerprint
+                    && existing.paper_binding == request.paper_binding
+                    && existing.paper_binding_fingerprint == paper_binding_fingerprint
                 {
                     return Ok((StatusCode::OK, Json(existing.clone())));
                 }
                 return Err(ApiError::conflict(
                     "trnm_idempotency_conflict",
-                    "TRNM idempotency key was reused with different command data",
+                    "TRNM idempotency key was reused with different command or Paper binding data",
                 ));
             }
             let command = TrnmCommand {
@@ -920,6 +972,8 @@ async fn create_trnm_command(
                 aggregate_id,
                 idempotency_key,
                 command_fingerprint,
+                paper_binding: request.paper_binding,
+                paper_binding_fingerprint,
                 signed_command: request.signed_command,
                 status: TrnmProjectionStatus::PendingFinality,
                 created_at: Utc::now(),

@@ -15,6 +15,10 @@ use uuid::Uuid;
 use super::*;
 use crate::{
     app,
+    paper_chain_finality_v1::{
+        paper_trnm_submission_commitment_hash, PaperTrnmCommandBindingV1,
+        PAPER_TRNM_COMMAND_BINDING_SCHEMA_V1,
+    },
     paper_raid_contracts::{
         agent_binding_key_rotation_signing_bytes, agent_binding_proof_signing_bytes,
         agent_proposal_signing_bytes, canonical_json_bytes, canonical_json_sha256,
@@ -3712,6 +3716,102 @@ async fn run_full_flow(state: AppState, member_count: usize, options: FlowOption
 
 pub(super) async fn seed_three_member_postgres_flow_for_control_test(state: AppState) {
     let _ = run_full_flow(state, 3, FlowOptions::default()).await;
+}
+
+#[allow(dead_code)]
+pub(crate) async fn seed_paper_chain_finality_test(state: AppState) -> PaperTrnmCommandBindingV1 {
+    let _ = run_full_flow(state.clone(), 3, FlowOptions::default()).await;
+    let router = app(state);
+    let authors = actors(3);
+    let external = actors(11);
+    register_prerequisites(&router, &external).await;
+    create_players_and_bindings(&router, &external).await;
+    let paper_id = Uuid::from_u128(0x5000_0000_0000_4000_8000_0000_0000_0000 + 3 * 0x100);
+    let submission = assert_status(
+        user_get(
+            &router,
+            &authors[0],
+            "get_joint_paper_submission_v2",
+            &format!("/v2/hepta/papers/{paper_id}/submission"),
+            "chain-finality-read-submission",
+        )
+        .await,
+        StatusCode::OK,
+    );
+    let evaluation_id = Uuid::new_v4();
+    let evaluation_key = "chain-finality-evaluation";
+    let evaluation = assert_status(
+        user_post(
+            &router,
+            &external[0],
+            "create_paper_evaluation_v1",
+            &format!("/v2/hepta/papers/{paper_id}/evaluations"),
+            evaluation_key,
+            evaluation_body(
+                paper_id,
+                &submission,
+                &external[0],
+                [&external[1], &external[2]],
+                evaluation_id,
+                None,
+                evaluation_key,
+            ),
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+    let reproduction_id = Uuid::new_v4();
+    let reproduction_key = "chain-finality-reproduction";
+    let reproduction = assert_status(
+        user_post(
+            &router,
+            &external[3],
+            "create_paper_reproduction_v1",
+            &format!("/v2/hepta/papers/{paper_id}/evaluations/{evaluation_id}/reproductions"),
+            reproduction_key,
+            reproduction_body(
+                paper_id,
+                &evaluation,
+                &external[3],
+                reproduction_id,
+                None,
+                true,
+                reproduction_key,
+            ),
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+    let evaluation: PaperEvaluation =
+        serde_json::from_value(evaluation).expect("decode seeded evaluation");
+    let reproduction: PaperReproduction =
+        serde_json::from_value(reproduction).expect("decode seeded reproduction");
+    let submission: JointPaperSubmission =
+        serde_json::from_value(submission).expect("decode seeded submission");
+    let mut binding = PaperTrnmCommandBindingV1 {
+        schema: PAPER_TRNM_COMMAND_BINDING_SCHEMA_V1.to_string(),
+        paper_project_id: paper_id,
+        submission_id: submission.submission_id,
+        evaluation_id,
+        research_session_id: "paper-raid-3-session".to_string(),
+        research_session_roster_version: 1,
+        match_evidence_commitment_id: digest("paper-chain-finality-match-evidence"),
+        match_evidence_object_version: 1,
+        release_candidate_hash: submission.release_candidate_hash,
+        paper_bundle_hash: submission.paper_bundle_hash,
+        submission_commitment_hash: digest("placeholder-submission-commitment"),
+        tolerance_policy_hash: evaluation.tolerance_policy_hash,
+        evaluation_signing_hash: evaluation.evaluation_signing_hash,
+        reproduction_id,
+        reproduction_report_hash: reproduction.report_hash,
+        evaluation_score_bps: evaluation.paper_score.score_bps,
+        evaluation_accepted: evaluation.status == PaperEvaluationStatus::Accepted,
+        evaluation_completed_at_unix_s: u64::try_from(evaluation.created_at.timestamp())
+            .expect("positive evaluation time"),
+    };
+    binding.submission_commitment_hash =
+        paper_trnm_submission_commitment_hash(&binding).expect("Paper submission commitment");
+    binding
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

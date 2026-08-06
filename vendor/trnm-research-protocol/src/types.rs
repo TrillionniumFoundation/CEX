@@ -1024,7 +1024,7 @@ fn validate_spdx(expression: &str) -> Result<(), ResearchPayloadValidationError>
     Ok(())
 }
 
-fn decode_version(decoder: &mut Decoder<'_>) -> Result<(), CanonicalDecodeError> {
+pub(crate) fn decode_version(decoder: &mut Decoder<'_>) -> Result<(), CanonicalDecodeError> {
     let version = decoder.uint()?;
     if version != PROTOCOL_VERSION as u64 {
         return Err(CanonicalDecodeError::UnsupportedVersion(version));
@@ -1032,7 +1032,9 @@ fn decode_version(decoder: &mut Decoder<'_>) -> Result<(), CanonicalDecodeError>
     Ok(())
 }
 
-fn decode_external_key(decoder: &mut Decoder<'_>) -> Result<ExternalKey, CanonicalDecodeError> {
+pub(crate) fn decode_external_key(
+    decoder: &mut Decoder<'_>,
+) -> Result<ExternalKey, CanonicalDecodeError> {
     Ok(ExternalKey::from_bytes(decoder.bytes_exact()?))
 }
 
@@ -1053,7 +1055,9 @@ fn decode_kind(decoder: &mut Decoder<'_>) -> Result<ResearchObjectKind, Canonica
     }
 }
 
-fn decode_object_ref(decoder: &mut Decoder<'_>) -> Result<ObjectRefV1, CanonicalDecodeError> {
+pub(crate) fn decode_object_ref(
+    decoder: &mut Decoder<'_>,
+) -> Result<ObjectRefV1, CanonicalDecodeError> {
     decoder.array(4)?;
     decode_version(decoder)?;
     Ok(ObjectRefV1 {
@@ -1063,7 +1067,7 @@ fn decode_object_ref(decoder: &mut Decoder<'_>) -> Result<ObjectRefV1, Canonical
     })
 }
 
-fn decode_match(
+pub(crate) fn decode_match(
     decoder: &mut Decoder<'_>,
 ) -> Result<MatchEvidenceCommitmentV1, CanonicalDecodeError> {
     decoder.array(11)?;
@@ -1082,7 +1086,7 @@ fn decode_match(
     })
 }
 
-fn decode_evaluation(
+pub(crate) fn decode_evaluation(
     decoder: &mut Decoder<'_>,
 ) -> Result<EvaluationCommitmentV1, CanonicalDecodeError> {
     decoder.array(10)?;
@@ -1133,7 +1137,7 @@ fn decode_contribution(
     })
 }
 
-fn decode_workload(
+pub(crate) fn decode_workload(
     decoder: &mut Decoder<'_>,
 ) -> Result<IssueWorkloadReceiptV1, CanonicalDecodeError> {
     decoder.array(7)?;
@@ -1155,7 +1159,9 @@ fn decode_workload(
     })
 }
 
-fn decode_claim_share(decoder: &mut Decoder<'_>) -> Result<ClaimShareV1, CanonicalDecodeError> {
+pub(crate) fn decode_claim_share(
+    decoder: &mut Decoder<'_>,
+) -> Result<ClaimShareV1, CanonicalDecodeError> {
     decoder.array(3)?;
     decode_version(decoder)?;
     let contributor = decode_external_key(decoder)?;
@@ -1171,7 +1177,9 @@ fn decode_claim_share(decoder: &mut Decoder<'_>) -> Result<ClaimShareV1, Canonic
     })
 }
 
-fn decode_claim(decoder: &mut Decoder<'_>) -> Result<CreateResearchClaimV1, CanonicalDecodeError> {
+pub(crate) fn decode_claim(
+    decoder: &mut Decoder<'_>,
+) -> Result<CreateResearchClaimV1, CanonicalDecodeError> {
     decoder.array(8)?;
     decode_version(decoder)?;
     let claim_id = decode_external_key(decoder)?;
@@ -1213,7 +1221,9 @@ fn decode_license_scope(decoder: &mut Decoder<'_>) -> Result<LicenseScope, Canon
     }
 }
 
-fn decode_license(decoder: &mut Decoder<'_>) -> Result<DeclareLicenseV1, CanonicalDecodeError> {
+pub(crate) fn decode_license(
+    decoder: &mut Decoder<'_>,
+) -> Result<DeclareLicenseV1, CanonicalDecodeError> {
     decoder.array(8)?;
     decode_version(decoder)?;
     Ok(DeclareLicenseV1 {
@@ -1244,7 +1254,7 @@ fn decode_challenge_reason(
     }
 }
 
-fn decode_challenge(
+pub(crate) fn decode_challenge(
     decoder: &mut Decoder<'_>,
 ) -> Result<ChallengeResearchClaimV1, CanonicalDecodeError> {
     decoder.array(7)?;
@@ -1275,7 +1285,9 @@ fn decode_resolution_decision(
     }
 }
 
-fn decode_resolution(decoder: &mut Decoder<'_>) -> Result<ClaimResolutionV1, CanonicalDecodeError> {
+pub(crate) fn decode_resolution(
+    decoder: &mut Decoder<'_>,
+) -> Result<ClaimResolutionV1, CanonicalDecodeError> {
     decoder.array(7)?;
     decode_version(decoder)?;
     let resolution_id = decode_external_key(decoder)?;

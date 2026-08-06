@@ -2,40 +2,38 @@
 
 ## Status
 
-Hepta consumes three Chain-owned Rust crates from the canonical private Chain
+Hepta consumes four Chain-owned Rust crates from the canonical private Chain
 repository at one immutable Git revision:
 
 - repository: `https://github.com/TrillionniumFoundation/Trillionnium-Chain.git`
-- revision: `e73d1a930991f0e308bf72854b334b6191c7fcc3`
-- packages: `trnm-research-protocol`, `trnm-finality-types`, and
-  `trnm-finality-verifier`, each exactly version `0.1.0`
+- revision: `f2e3da051effabc97c2d0e7c47acd1df3d0dd4aa`
+- packages: `trnm-research-protocol`, `trnm-protocol`,
+  `trnm-finality-types`, and `trnm-finality-verifier`, each exactly version
+  `0.1.0`
 
-The root workspace manifest is the single source of this pin. Individual Hepta
-services use workspace dependencies, and the committed `Cargo.lock` records the
-resolved Git source and commit. Builds and release gates use `--locked`.
+The root workspace manifest is the single source of the local vendored paths,
+and `vendor/trnm-chain-vendor-manifest.json` freezes the source commit, crate
+trees, file set, and byte hashes. Builds and release gates use `--locked`.
 
 ## Boundary
 
 Hepta does not read a sibling Chain worktree. The pinned crates provide the
-Chain-native signed-command rules, canonical CBOR and object references, finality
-receipt wire types, and canonical finality verifier. They must not be replaced by
-copied structs or Hepta's legacy local receipt verifier.
+Chain-native signed-command rules, canonical CBOR and typed transaction/object
+references, AppHash receipt V2 wire types, trust-anchor fixtures, and canonical
+finality verifier. They must not be replaced by copied structs or Hepta's legacy
+local receipt verifier.
 
 The local `/trnm/finality` and `/verify` wire format remains a separate legacy
 adapter. `/trnm/finality/live` uses native Chain types and proof/QC semantics.
 Consolidating those adapters is a separate protocol migration.
 
-## Private-repository access
+## Release isolation
 
-A clean build needs read-only access to the private Chain repository. Developer
-machines may use their normal Git credential helper. CI must use a read-only
-deploy credential that can fetch only the pinned repository; a token scoped only
-to the Hepta repository is insufficient. Credentials must never appear in Cargo
-manifests, lockfiles, logs, images, or repository URLs.
-
-Cached builds may work offline after the exact revision has been fetched. A clean
-offline machine cannot reconstruct a private Git dependency, so offline success
-is not a substitute for the immutable source pin.
+A clean Hepta release build uses only the checked-in vendored crates and does not
+need Chain repository credentials or a sibling Chain checkout. Updating the
+boundary is a separate reviewed operation that copies the four immutable Chain
+subtrees byte-for-byte and refreshes their provenance manifest. Credentials must
+never appear in Cargo manifests, lockfiles, logs, images, or repository URLs.
 
 ## Verification
 

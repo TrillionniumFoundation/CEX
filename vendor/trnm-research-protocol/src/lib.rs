@@ -18,7 +18,8 @@ pub use state::{
     AppliedCommandRecordV1, ApplyOutcome, AuthorityIdentityV1, AuthoritySetV1,
     ClaimChallengeObjectV1, ClaimResolutionObjectV1, EvaluationCommitmentObjectV1,
     LicenseDeclarationObjectV1, MatchEvidenceObjectV1, ProtocolStateError, ResearchClaimObjectV1,
-    ResearchProtocolSnapshotV1, ResearchProtocolState, WorkloadReceiptObjectV1,
+    ResearchDomainObjectV1, ResearchProtocolSnapshotV1, ResearchProtocolState,
+    WorkloadReceiptObjectV1,
 };
 pub use types::{
     ChallengeReason, ChallengeResearchClaimV1, ClaimChallengeStatus, ClaimResolutionDecision,

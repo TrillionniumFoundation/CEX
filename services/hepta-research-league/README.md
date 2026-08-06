@@ -193,9 +193,9 @@ and embedded OpenAPI documents. Git identity, release timestamps, the tracked SB
 labels are not visible to `cargo build`; they enter only after the runtime
 binary has been exported. A disposable, checksum-pinned Buildx binary performs
 the build; the normalized release root is copied into the final image as one
-layer. The three Chain protocol crates required during compilation are
+layer. The four Chain protocol crates required during compilation are
 byte-for-byte vendored from immutable Chain commit
-`e73d1a930991f0e308bf72854b334b6191c7fcc3`; their per-file provenance is in
+`f2e3da051effabc97c2d0e7c47acd1df3d0dd4aa`; their per-file provenance is in
 `vendor/trnm-chain-vendor-manifest.json` and is revalidated by the release gate.
 The tracked CycloneDX 1.5 application SBOM is generated only after two
 independent no-cache exports from the pinned builder produce the same runtime

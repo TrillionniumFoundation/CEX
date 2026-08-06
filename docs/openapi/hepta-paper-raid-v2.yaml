@@ -812,6 +812,84 @@ paths:
               schema: {$ref: "#/components/schemas/SignedNakamaCompletionReceiptV1"}
         "403": {description: Untrusted authority, signature, archive, or root}
         "409": {description: Unconsumed/wrong epoch, bundle mismatch, or second completion}
+  /v2/hepta/operator/trnm/trust-anchors:
+    post:
+      security:
+        - operatorServiceToken: []
+      operationId: ingestCanonicalCometBftTrustAnchor
+      description: >-
+        Accepts only exact canonical CometBFTTrustAnchorV1 JSON bytes after
+        operator authentication. Upload does not create trust: anchor_hash_hex
+        must already exist in the immutable
+        HEPTA_TRNM_COMETBFT_TRUST_ANCHOR_HASHES_JSON allowlist. The raw wire is
+        retained byte-for-byte. The upstream 16 MiB wire limit is enforced
+        before parsing.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Exact canonical trnm_cometbft_trust_anchor_v1 wire document.
+              additionalProperties: true
+      responses:
+        "201": {description: Pinned canonical trust anchor admitted}
+        "200": {description: Exact byte replay of the admitted anchor}
+        "400": {description: Noncanonical or structurally invalid anchor bytes}
+        "403": {description: Operator authentication failed or anchor hash is not pre-pinned}
+        "409": {description: Anchor hash/content conflict}
+        "413": {description: Body exceeds the upstream canonical wire limit}
+  /v2/hepta/papers/{paper_id}/chain-finality:
+    parameters:
+      - {$ref: "#/components/parameters/PaperId"}
+    get:
+      security:
+        - trnmServiceToken: []
+      operationId: getPaperChainFinalityProjection
+      responses:
+        "200":
+          description: Orthogonal verified-finality projection; never an economic eligibility grant
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PaperChainFinalityProjectionV1"}
+        "404": {description: Paper remains pending_finality}
+    post:
+      security:
+        - trnmServiceToken: []
+      operationId: ingestCanonicalPaperReceiptV2
+      description: >-
+        Authenticates before reading any body bytes, then applies the upstream
+        128 MiB stream cap and exact canonical Receipt V2 decoder. The selected
+        stored trust anchor and server clock verify CometBFT finality. The
+        verified domain command_id binds TrnmCommand.idempotency_key (never its
+        local UUID), and the full signed EvaluationCommitmentV1 is rebound to
+        immutable Paper/submission/evaluation/reproduction records. Integrity
+        hold, open Appeal, or superseded evaluation/reproduction fails closed.
+      parameters:
+        - name: x-hepta-trnm-trust-anchor-hash
+          in: header
+          required: true
+          schema: {type: string, pattern: "^[0-9a-f]{64}$"}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Exact canonical trnm_cometbft_apphash_finality_receipt_v2 wire document.
+              additionalProperties: true
+      responses:
+        "201":
+          description: pending_finality transitioned to verified_finality atomically
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PaperChainFinalityProjectionV1"}
+        "200": {description: Exact applied receipt replay; no duplicate event/outbox}
+        "400": {description: Noncanonical, malformed, or structurally invalid receipt}
+        "403": {description: TRNM authentication or trust verification failed}
+        "404": {description: Bound queued command or immutable Paper record missing}
+        "409": {description: Binding, hold, Appeal, supersession, finality, or replay conflict}
+        "413": {description: Body exceeds the upstream canonical wire limit}
 components:
   securitySchemes:
     consumerUserAssertion:
@@ -826,6 +904,14 @@ components:
       type: apiKey
       in: header
       name: x-hepta-nakama-token
+    operatorServiceToken:
+      type: apiKey
+      in: header
+      name: x-hepta-operator-token
+    trnmServiceToken:
+      type: apiKey
+      in: header
+      name: x-hepta-trnm-token
   parameters:
     ChallengeId:
       name: challenge_id
@@ -885,6 +971,35 @@ components:
       type: string
       minLength: 1
       maxLength: 200
+    PaperChainFinalityProjectionV1:
+      type: object
+      additionalProperties: false
+      required: [schema, paper_project_id, submission_id, evaluation_id, local_command_id, command_idempotency_key, command_fingerprint, paper_binding_fingerprint, receipt_hash, trust_anchor_hash, chain_id, comet_tx_hash, transaction_index, execution_height, commitment_height, commitment_header_hash, app_hash, status, ranking_eligible, reward_eligible, score_eligible, economic_eligible, version, verified_at]
+      properties:
+        schema: {type: string, const: hepta.paper_raid.chain_finality_projection.v1}
+        paper_project_id: {type: string, format: uuid}
+        submission_id: {type: string, format: uuid}
+        evaluation_id: {type: string, format: uuid}
+        local_command_id: {type: string, format: uuid}
+        command_idempotency_key: {type: string, pattern: "^[0-9a-f]{64}$"}
+        command_fingerprint: {$ref: "#/components/schemas/Sha256Digest"}
+        paper_binding_fingerprint: {$ref: "#/components/schemas/Sha256Digest"}
+        receipt_hash: {type: string, pattern: "^[0-9a-f]{64}$"}
+        trust_anchor_hash: {type: string, pattern: "^[0-9a-f]{64}$"}
+        chain_id: {type: string, minLength: 1, maxLength: 128}
+        comet_tx_hash: {type: string, pattern: "^[0-9a-f]{64}$"}
+        transaction_index: {type: integer, minimum: 0}
+        execution_height: {type: integer, minimum: 1}
+        commitment_height: {type: integer, minimum: 2}
+        commitment_header_hash: {type: string, pattern: "^[0-9a-f]{64}$"}
+        app_hash: {type: string, pattern: "^[0-9a-f]{64}$"}
+        status: {type: string, const: verified_finality}
+        ranking_eligible: {type: boolean, const: false}
+        reward_eligible: {type: boolean, const: false}
+        score_eligible: {type: boolean, const: false}
+        economic_eligible: {type: boolean, const: false}
+        version: {type: integer, const: 1}
+        verified_at: {type: string, format: date-time}
     CreateNakamaResearchSessionControlRequestV2:
       type: object
       additionalProperties: false

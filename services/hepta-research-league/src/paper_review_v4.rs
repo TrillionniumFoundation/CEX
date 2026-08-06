@@ -32,12 +32,12 @@ pub const RAID_SCORE_SCHEMA_V1: &str = "hepta.paper_raid.raid_score.v1";
 pub const TOLERANCE_POLICY_SCHEMA_V1: &str = "hepta.paper_raid.tolerance_policy.v1";
 
 #[derive(Clone, Default)]
-pub(super) struct ReviewMemory {
+pub(crate) struct ReviewMemory {
     contribution_ledgers: HashMap<Uuid, ContributionLedger>,
-    evaluations: HashMap<Uuid, PaperEvaluation>,
-    reproductions: HashMap<Uuid, PaperReproduction>,
-    appeals: HashMap<Uuid, PaperAppeal>,
-    resolutions: HashMap<Uuid, PaperAppealResolution>,
+    pub(crate) evaluations: HashMap<Uuid, PaperEvaluation>,
+    pub(crate) reproductions: HashMap<Uuid, PaperReproduction>,
+    pub(crate) appeals: HashMap<Uuid, PaperAppeal>,
+    pub(crate) resolutions: HashMap<Uuid, PaperAppealResolution>,
     raid_scores: HashMap<Uuid, RaidScore>,
 }
 

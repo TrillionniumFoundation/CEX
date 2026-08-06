@@ -539,6 +539,34 @@ components:
           type: object
           description: Canonical-CBOR-backed SignedResearchCommandV1 JSON transport document.
           additionalProperties: true
+        paper_binding:
+          $ref: "#/components/schemas/PaperTrnmCommandBindingV1"
+    PaperTrnmCommandBindingV1:
+      type: object
+      additionalProperties: false
+      description: >-
+        Optional immutable Paper binding for a queued EvaluationCommitmentV1.
+        The binding fingerprint participates in idempotent replay. The signed
+        payload must match the derived evaluation external key, canonical
+        submission composite, tolerance policy, evaluation signing hash,
+        selected latest reproduction, score, accepted bit and completion time.
+        Commands without this binding remain pending for Paper Receipt V2.
+      required: [schema, paper_project_id, submission_id, evaluation_id, release_candidate_hash, paper_bundle_hash, submission_commitment_hash, tolerance_policy_hash, evaluation_signing_hash, reproduction_id, reproduction_report_hash, evaluation_score_bps, evaluation_accepted, evaluation_completed_at_unix_s]
+      properties:
+        schema: {type: string, const: hepta.paper_raid.trnm_command_binding.v1}
+        paper_project_id: {type: string, format: uuid}
+        submission_id: {type: string, format: uuid}
+        evaluation_id: {type: string, format: uuid}
+        release_candidate_hash: {$ref: "#/components/schemas/CanonicalSha256Commitment"}
+        paper_bundle_hash: {$ref: "#/components/schemas/CanonicalSha256Commitment"}
+        submission_commitment_hash: {$ref: "#/components/schemas/CanonicalSha256Commitment"}
+        tolerance_policy_hash: {$ref: "#/components/schemas/CanonicalSha256Commitment"}
+        evaluation_signing_hash: {$ref: "#/components/schemas/CanonicalSha256Commitment"}
+        reproduction_id: {type: string, format: uuid}
+        reproduction_report_hash: {$ref: "#/components/schemas/CanonicalSha256Commitment"}
+        evaluation_score_bps: {type: integer, minimum: 0, maximum: 10000}
+        evaluation_accepted: {type: boolean}
+        evaluation_completed_at_unix_s: {type: integer, minimum: 1}
     LiveTrnmFinalityRequestV1:
       type: object
       additionalProperties: false

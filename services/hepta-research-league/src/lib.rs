@@ -24,9 +24,11 @@ use uuid::Uuid;
 
 pub mod trnm_v1;
 pub use hepta_paper_raid_contracts as paper_raid_contracts;
+mod paper_chain_finality_v1;
 mod paper_raid_v2;
 mod workflows;
 
+pub use paper_chain_finality_v1::*;
 pub use paper_raid_v2::*;
 
 pub const AGENT_PROTOCOL_V1: &str = "hepta_agent_protocol_v1";
@@ -58,6 +60,8 @@ impl FinalityMode {
 pub struct AppState {
     inner: Arc<RwLock<LeagueState>>,
     paper_raid: Arc<RwLock<paper_raid_v2::PaperRaidMemory>>,
+    paper_chain_finality: Arc<RwLock<paper_chain_finality_v1::PaperChainFinalityMemory>>,
+    paper_chain_verification_clock: Arc<dyn Fn() -> std::time::SystemTime + Send + Sync + 'static>,
     pool: Option<PgPool>,
     security: Arc<SecurityConfig>,
     rate_limits: Arc<Mutex<HashMap<(String, String), RateWindow>>>,
@@ -132,6 +136,7 @@ pub struct SecurityConfig {
     trusted_nakama_research_authorities: HashMap<String, VerifyingKey>,
     finality_mode: FinalityMode,
     trusted_trnm_validator_sets: Vec<trnm_v1::TrustedValidatorSetV1>,
+    pinned_trnm_cometbft_trust_anchor_hashes: HashSet<String>,
 }
 
 impl SecurityConfig {
@@ -153,6 +158,7 @@ impl SecurityConfig {
             trusted_nakama_research_authorities: HashMap::new(),
             finality_mode: FinalityMode::PendingOnly,
             trusted_trnm_validator_sets: Vec::new(),
+            pinned_trnm_cometbft_trust_anchor_hashes: HashSet::new(),
         }
     }
 
@@ -290,6 +296,21 @@ impl SecurityConfig {
     pub fn with_finality_mode(mut self, mode: FinalityMode) -> Self {
         self.finality_mode = mode;
         self
+    }
+
+    pub fn with_pinned_trnm_cometbft_trust_anchor_hash(
+        mut self,
+        anchor_hash: impl Into<String>,
+    ) -> Result<Self, String> {
+        let anchor_hash = anchor_hash.into();
+        validate_raw_sha256_hex("TRNM CometBFT trust anchor hash", &anchor_hash)?;
+        if !self
+            .pinned_trnm_cometbft_trust_anchor_hashes
+            .insert(anchor_hash)
+        {
+            return Err("duplicate pinned TRNM CometBFT trust anchor hash".to_string());
+        }
+        Ok(self)
     }
 
     pub fn with_trusted_nakama_research_authority(
@@ -526,12 +547,6 @@ impl SecurityConfig {
         let trusted_sets: Vec<trnm_v1::TrustedValidatorSetV1> =
             serde_json::from_str(&trusted_sets_json)
                 .map_err(|error| format!("decode HEPTA_TRNM_VALIDATOR_SETS_JSON: {error}"))?;
-        if finality_mode == FinalityMode::Verified && trusted_sets.is_empty() {
-            return Err(
-                "HEPTA_TRNM_VALIDATOR_SETS_JSON must contain at least one validator set"
-                    .to_string(),
-            );
-        }
         let mut consumer_keys = consumer_edge_keys.into_iter();
         let (consumer_key_id, consumer_public_key) = consumer_keys
             .next()
@@ -566,6 +581,25 @@ impl SecurityConfig {
                 return Err("duplicate trusted TRNM validator set".to_string());
             }
             security.trusted_trnm_validator_sets.push(validator_set);
+        }
+        let pinned_anchor_hashes_json =
+            std::env::var("HEPTA_TRNM_COMETBFT_TRUST_ANCHOR_HASHES_JSON")
+                .unwrap_or_else(|_| "[]".to_string());
+        let pinned_anchor_hashes: Vec<String> = serde_json::from_str(&pinned_anchor_hashes_json)
+            .map_err(|error| {
+                format!("decode HEPTA_TRNM_COMETBFT_TRUST_ANCHOR_HASHES_JSON: {error}")
+            })?;
+        for anchor_hash in pinned_anchor_hashes {
+            security = security.with_pinned_trnm_cometbft_trust_anchor_hash(anchor_hash)?;
+        }
+        if finality_mode == FinalityMode::Verified
+            && security.trusted_trnm_validator_sets.is_empty()
+            && security.pinned_trnm_cometbft_trust_anchor_hashes.is_empty()
+        {
+            return Err(
+                "verified HEPTA_FINALITY_MODE requires either legacy validator sets or pinned CometBFT trust-anchor hashes"
+                    .to_string(),
+            );
         }
         Ok(security)
     }
@@ -605,9 +639,12 @@ impl SecurityConfig {
             errors.push("nakama_research_authority_missing");
         }
         if self.finality_mode == FinalityMode::Verified {
-            if self.trusted_trnm_validator_sets.is_empty() {
-                errors.push("trnm_validator_set_missing");
-            } else if self
+            if self.trusted_trnm_validator_sets.is_empty()
+                && self.pinned_trnm_cometbft_trust_anchor_hashes.is_empty()
+            {
+                errors.push("trnm_finality_trust_missing");
+            }
+            if self
                 .trusted_trnm_validator_sets
                 .iter()
                 .any(|validator_set| validator_set.validate().is_err())
@@ -624,6 +661,10 @@ impl AppState {
         Self {
             inner: Arc::new(RwLock::new(LeagueState::default())),
             paper_raid: Arc::new(RwLock::new(paper_raid_v2::PaperRaidMemory::default())),
+            paper_chain_finality: Arc::new(RwLock::new(
+                paper_chain_finality_v1::PaperChainFinalityMemory::default(),
+            )),
+            paper_chain_verification_clock: Arc::new(std::time::SystemTime::now),
             pool: None,
             security: Arc::new(security),
             rate_limits: Arc::new(Mutex::new(HashMap::new())),
@@ -671,6 +712,12 @@ impl AppState {
         .execute(&pool)
         .await
         .map_err(|error| format!("apply Hepta Nakama control migration: {error}"))?;
+        sqlx::raw_sql(include_str!(
+            "../../../migrations/0037_add_hepta_paper_chain_finality_v1.sql"
+        ))
+        .execute(&pool)
+        .await
+        .map_err(|error| format!("apply Hepta Paper Chain finality migration: {error}"))?;
         sqlx::query(
             "insert into hepta_league_state (state_key, revision, state_json)
              values ('primary', 0, $1::jsonb)
@@ -686,6 +733,10 @@ impl AppState {
         Ok(Self {
             inner: Arc::new(RwLock::new(LeagueState::default())),
             paper_raid: Arc::new(RwLock::new(paper_raid_v2::PaperRaidMemory::default())),
+            paper_chain_finality: Arc::new(RwLock::new(
+                paper_chain_finality_v1::PaperChainFinalityMemory::default(),
+            )),
+            paper_chain_verification_clock: Arc::new(std::time::SystemTime::now),
             pool: Some(pool),
             security: Arc::new(security),
             rate_limits: Arc::new(Mutex::new(HashMap::new())),
@@ -1265,6 +1316,14 @@ impl ApiError {
         }
     }
 
+    fn payload_too_large(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::PAYLOAD_TOO_LARGE,
+            code: "request_body_too_large",
+            message: message.into(),
+        }
+    }
+
     fn database(error: sqlx::Error) -> Self {
         Self::internal(format!("Hepta persistence failure: {error}"))
     }
@@ -1310,6 +1369,7 @@ pub fn app(state: AppState) -> Router {
         )
         .route("/v1/hepta/submissions", post(submit_artifact))
         .route("/v1/hepta/events", get(list_events))
+        .merge(paper_chain_finality_v1::router())
         .merge(paper_raid_v2::router())
         .merge(workflows::router())
         .with_state(state)
@@ -2152,6 +2212,19 @@ fn decode_digest(value: &str) -> Result<[u8; 32], String> {
             .map_err(|_| "digest contains invalid hexadecimal".to_string())?;
     }
     Ok(output)
+}
+
+fn validate_raw_sha256_hex(field: &str, value: &str) -> Result<(), String> {
+    if value.len() != 64
+        || value
+            .bytes()
+            .any(|byte| !byte.is_ascii_digit() && !(b'a'..=b'f').contains(&byte))
+    {
+        return Err(format!(
+            "{field} must contain exactly 64 lowercase hexadecimal characters"
+        ));
+    }
+    Ok(())
 }
 
 fn decode_canonical_base64_exact<const N: usize>(

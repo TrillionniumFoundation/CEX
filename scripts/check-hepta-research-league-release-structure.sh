@@ -98,6 +98,8 @@ expected_copy_sources = {
     "vendor/trnm-finality-types/src",
     "vendor/trnm-finality-verifier/Cargo.toml",
     "vendor/trnm-finality-verifier/src",
+    "vendor/trnm-protocol/Cargo.toml",
+    "vendor/trnm-protocol/src",
     "vendor/trnm-research-protocol/Cargo.toml",
     "vendor/trnm-research-protocol/src",
     "migrations/0031_add_hepta_research_league.sql",
@@ -106,6 +108,7 @@ expected_copy_sources = {
     "migrations/0034_add_hepta_paper_review_appeal.sql",
     "migrations/0035_add_hepta_secure_onboarding.sql",
     "migrations/0036_add_hepta_nakama_research_control.sql",
+    "migrations/0037_add_hepta_paper_chain_finality_v1.sql",
     "docs/openapi/hepta-research-league-v1.yaml",
     "docs/openapi/hepta-paper-raid-v2.yaml",
 }
@@ -366,6 +369,7 @@ expected_members = [
     "services/hepta-research-league",
     "vendor/trnm-finality-types",
     "vendor/trnm-finality-verifier",
+    "vendor/trnm-protocol",
     "vendor/trnm-research-protocol",
 ]
 expected_workspace_dependencies = {
@@ -381,6 +385,7 @@ expected_workspace_dependencies = {
     "tracing-subscriber",
     "trnm-finality-types",
     "trnm-finality-verifier",
+    "trnm-protocol",
     "trnm-research-protocol",
     "uuid",
 }
@@ -481,6 +486,7 @@ def validate_docker_lock(candidate):
         ("hepta-research-league", "0.1.0"),
         ("trnm-finality-types", "0.1.0"),
         ("trnm-finality-verifier", "0.1.0"),
+        ("trnm-protocol", "0.1.0"),
         ("trnm-research-protocol", "0.1.0"),
     }
     if set(local) != expected_local or len(local) != len(expected_local):

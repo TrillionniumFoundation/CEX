@@ -66,19 +66,21 @@ pub(crate) struct PaperRaidMemory {
     used_agent_binding_rotation_ids: HashSet<Uuid>,
     teams: HashMap<Uuid, ResearchTeam>,
     team_acceptances: HashMap<Uuid, TeamMemberAcceptance>,
-    papers: HashMap<Uuid, PaperProject>,
+    pub(crate) papers: HashMap<Uuid, PaperProject>,
     work_items: HashMap<Uuid, WorkItem>,
     revisions: HashMap<Uuid, PaperRevision>,
     consents: HashMap<Uuid, AuthorshipConsent>,
-    submissions: HashMap<Uuid, JointPaperSubmission>,
-    research_session_authorization_sets: HashMap<(String, u64), ResearchSessionAuthorizationSetV1>,
+    pub(crate) submissions: HashMap<Uuid, JointPaperSubmission>,
+    pub(crate) research_session_authorization_sets:
+        HashMap<(String, u64), ResearchSessionAuthorizationSetV1>,
     research_session_consumption_receipts:
         HashMap<(String, u64), SignedAuthorizationSetConsumptionReceiptV1>,
-    research_session_completions: HashMap<(String, u64), SignedNakamaCompletionReceiptV1>,
+    pub(crate) research_session_completions:
+        HashMap<(String, u64), SignedNakamaCompletionReceiptV1>,
     nakama_control_commands: HashMap<Uuid, nakama_control_v2::StoredControlCommand>,
     nakama_control_idempotency: HashMap<(String, String), Uuid>,
     collaboration: collaboration_v3::CollaborationMemory,
-    review: review_v4::ReviewMemory,
+    pub(crate) review: review_v4::ReviewMemory,
     idempotency: HashMap<String, MemoryIdempotencyRecord>,
     events: Vec<EventEnvelope>,
 }
@@ -6723,7 +6725,7 @@ async fn get_joint_submission(
     Ok(Json(submission))
 }
 
-fn validate_logical_session_id(value: &str) -> Result<(), ApiError> {
+pub(crate) fn validate_logical_session_id(value: &str) -> Result<(), ApiError> {
     let mut bytes = value.bytes();
     let first = bytes
         .next()

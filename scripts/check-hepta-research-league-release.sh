@@ -57,11 +57,15 @@ with open(vendor_root / "trnm-chain-vendor-manifest.json", encoding="utf-8") as 
     provenance = json.load(stream)
 assert provenance["schema"] == "hepta.vendor.trnm_chain_crates.v1"
 assert provenance["source_repository"] == "https://github.com/TrillionniumFoundation/Trillionnium-Chain.git"
-assert provenance["source_commit"] == "e73d1a930991f0e308bf72854b334b6191c7fcc3"
+assert provenance["source_commit"] == "f2e3da051effabc97c2d0e7c47acd1df3d0dd4aa"
 assert provenance["license"] == "MIT"
 assert provenance["update_policy"].strip()
 assert provenance["packaging_context"] == {
-    "workspace_inherited_crates": ["trnm-finality-types", "trnm-finality-verifier"],
+    "workspace_inherited_crates": [
+        "trnm-finality-types",
+        "trnm-finality-verifier",
+        "trnm-protocol",
+    ],
     "workspace_inherited_fields": ["edition", "license", "authors"],
     "source_workspace_values": {
         "edition": "2021",
@@ -78,12 +82,14 @@ assert provenance["packaging_context"] == {
 assert set(provenance["crates"]) == {
     "trnm-finality-types",
     "trnm-finality-verifier",
+    "trnm-protocol",
     "trnm-research-protocol",
 }
 expected_source_trees = {
-    "trnm-finality-types": "31d7e3a141332055232e2d82260bdaa7bbf62d14",
-    "trnm-finality-verifier": "ad3d2e1aacd5e6e6b3f0c520eb7f1dbfbebbf536",
-    "trnm-research-protocol": "223cd8adcce3e6a3ab7bed24ffb919e0ae1fda56",
+    "trnm-finality-types": "05e21c11fa9216c8bbcdd2642ed6ac07cde9ba65",
+    "trnm-finality-verifier": "1f6644d22cf8cb302ef450d09c9dfa0346e10e7d",
+    "trnm-protocol": "6d41dc8b77f8221b70c487ead28ddd42cb4b53c5",
+    "trnm-research-protocol": "f299b4012d5d3161d726fc4d4b56be7626b952fb",
 }
 
 def git_object_id(kind, data):
