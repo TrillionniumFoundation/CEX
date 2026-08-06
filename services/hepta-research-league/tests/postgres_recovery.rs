@@ -139,6 +139,10 @@ async fn postgres_survives_restart_and_multi_instance_outbox_claims_do_not_overl
     assert_eq!(metrics_status, StatusCode::OK);
     assert!(metrics.contains("hepta_paper_raid_storage_backend_info{backend=\"postgres\"} 1"));
     assert!(metrics.contains("hepta_paper_raid_pending_outbox_events 2"));
+    assert!(metrics.contains("hepta_paper_raid_oldest_pending_outbox_seconds "));
+    assert!(metrics.contains("hepta_paper_raid_max_pending_outbox_attempts 0"));
+    assert!(metrics.contains("hepta_paper_raid_oldest_pending_control_seconds 0"));
+    assert!(metrics.contains("hepta_paper_raid_max_pending_control_attempts 0"));
 
     let recovered = AppState::connect(&database_url, security)
         .await

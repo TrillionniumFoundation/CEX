@@ -19,4 +19,11 @@ cargo_locked test --locked -p paper-raid-bff
 cargo_locked check --locked -p hepta-research-league -p paper-raid-bff
 cargo_locked clippy --locked -p hepta-research-league -p paper-raid-bff --all-targets -- -D warnings
 
+if [[ ${PAPER_RAID_ALPHA_REQUIRE_POSTGRES:-1} == 1 ]]; then
+  bash scripts/check-paper-raid-alpha-candidate-postgres.sh
+elif [[ ${PAPER_RAID_ALPHA_REQUIRE_POSTGRES:-1} != 0 ]]; then
+  echo "ERROR: PAPER_RAID_ALPHA_REQUIRE_POSTGRES must be 0 or 1" >&2
+  exit 64
+fi
+
 echo "Paper Raid alpha candidate source gate: PASS"

@@ -96,7 +96,11 @@ pub(crate) async fn operational_metrics(state: &AppState) -> Result<String, ApiE
         papers_total,
         active_authorization_epochs,
         pending_control_commands,
+        oldest_pending_control_seconds,
+        max_pending_control_attempts,
         pending_outbox_events,
+        oldest_pending_outbox_seconds,
+        max_pending_outbox_attempts,
         idempotency_records,
     ) = if let Some(pool) = &state.pool {
         let row = sqlx::query(
@@ -106,8 +110,19 @@ pub(crate) async fn operational_metrics(state: &AppState) -> Result<String, ApiE
                     where status in ('issued', 'consumed'))::bigint as active_authorization_epochs, \
                 (select count(*) from hepta_nakama_research_control_commands \
                     where status = 'pending')::bigint as pending_control_commands, \
+                greatest(coalesce((select extract(epoch from now() - min(created_at))::bigint \
+                    from hepta_nakama_research_control_commands \
+                    where status = 'pending'), 0), 0)::bigint as oldest_pending_control_seconds, \
+                coalesce((select max(attempt_count) \
+                    from hepta_nakama_research_control_commands \
+                    where status = 'pending'), 0)::bigint as max_pending_control_attempts, \
                 (select count(*) from hepta_outbox \
                     where delivered_at is null)::bigint as pending_outbox_events, \
+                greatest(coalesce((select extract(epoch from now() - min(occurred_at))::bigint \
+                    from hepta_outbox where delivered_at is null), 0), 0)::bigint \
+                    as oldest_pending_outbox_seconds, \
+                coalesce((select max(attempt_count) from hepta_outbox \
+                    where delivered_at is null), 0)::bigint as max_pending_outbox_attempts, \
                 (select count(*) from hepta_paper_raid_idempotency)::bigint as idempotency_records",
         )
         .fetch_one(pool)
@@ -118,7 +133,11 @@ pub(crate) async fn operational_metrics(state: &AppState) -> Result<String, ApiE
             row.get::<i64, _>("papers_total"),
             row.get::<i64, _>("active_authorization_epochs"),
             row.get::<i64, _>("pending_control_commands"),
+            row.get::<i64, _>("oldest_pending_control_seconds"),
+            row.get::<i64, _>("max_pending_control_attempts"),
             row.get::<i64, _>("pending_outbox_events"),
+            row.get::<i64, _>("oldest_pending_outbox_seconds"),
+            row.get::<i64, _>("max_pending_outbox_attempts"),
             row.get::<i64, _>("idempotency_records"),
         )
     } else {
@@ -137,6 +156,17 @@ pub(crate) async fn operational_metrics(state: &AppState) -> Result<String, ApiE
                     )
                 })
                 .count() as i64,
+            {
+                let pending = memory
+                    .nakama_control_commands
+                    .values()
+                    .filter(|command| {
+                        command.record.status
+                            == nakama_control_v2::NakamaResearchControlCommandStatusV2::Pending
+                    })
+                    .collect::<Vec<_>>();
+                pending.len() as i64
+            },
             memory
                 .nakama_control_commands
                 .values()
@@ -144,7 +174,26 @@ pub(crate) async fn operational_metrics(state: &AppState) -> Result<String, ApiE
                     command.record.status
                         == nakama_control_v2::NakamaResearchControlCommandStatusV2::Pending
                 })
-                .count() as i64,
+                .map(|command| {
+                    Utc::now()
+                        .signed_duration_since(command.record.created_at)
+                        .num_seconds()
+                        .max(0)
+                })
+                .max()
+                .unwrap_or(0),
+            memory
+                .nakama_control_commands
+                .values()
+                .filter(|command| {
+                    command.record.status
+                        == nakama_control_v2::NakamaResearchControlCommandStatusV2::Pending
+                })
+                .filter_map(|command| i64::try_from(command.record.attempt_count).ok())
+                .max()
+                .unwrap_or(0),
+            0,
+            0,
             0,
             memory.idempotency.len() as i64,
         )
@@ -163,9 +212,21 @@ pub(crate) async fn operational_metrics(state: &AppState) -> Result<String, ApiE
          # HELP hepta_paper_raid_pending_control_commands Nakama research-control commands waiting to be applied.\n\
          # TYPE hepta_paper_raid_pending_control_commands gauge\n\
          hepta_paper_raid_pending_control_commands {pending_control_commands}\n\
+         # HELP hepta_paper_raid_oldest_pending_control_seconds Age of the oldest pending Nakama research-control command.\n\
+         # TYPE hepta_paper_raid_oldest_pending_control_seconds gauge\n\
+         hepta_paper_raid_oldest_pending_control_seconds {oldest_pending_control_seconds}\n\
+         # HELP hepta_paper_raid_max_pending_control_attempts Highest attempt count among pending Nakama research-control commands.\n\
+         # TYPE hepta_paper_raid_max_pending_control_attempts gauge\n\
+         hepta_paper_raid_max_pending_control_attempts {max_pending_control_attempts}\n\
          # HELP hepta_paper_raid_pending_outbox_events Transactional outbox events waiting for delivery.\n\
          # TYPE hepta_paper_raid_pending_outbox_events gauge\n\
          hepta_paper_raid_pending_outbox_events {pending_outbox_events}\n\
+         # HELP hepta_paper_raid_oldest_pending_outbox_seconds Age of the oldest undelivered transactional outbox event.\n\
+         # TYPE hepta_paper_raid_oldest_pending_outbox_seconds gauge\n\
+         hepta_paper_raid_oldest_pending_outbox_seconds {oldest_pending_outbox_seconds}\n\
+         # HELP hepta_paper_raid_max_pending_outbox_attempts Highest delivery attempt count among undelivered outbox events.\n\
+         # TYPE hepta_paper_raid_max_pending_outbox_attempts gauge\n\
+         hepta_paper_raid_max_pending_outbox_attempts {max_pending_outbox_attempts}\n\
          # HELP hepta_paper_raid_idempotency_records Durable Paper Raid idempotency records.\n\
          # TYPE hepta_paper_raid_idempotency_records gauge\n\
          hepta_paper_raid_idempotency_records {idempotency_records}\n"
