@@ -15,6 +15,38 @@ use tracing::info;
 const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 const PROBE_MAX_RESPONSE_BYTES: u64 = 65_536;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CommandMode {
+    Serve,
+    ProbeReady,
+    Migrate,
+}
+
+fn command_mode(arguments: &[String]) -> Result<CommandMode, String> {
+    match arguments {
+        [] => Ok(CommandMode::Serve),
+        [argument] if argument == "--probe-ready" => Ok(CommandMode::ProbeReady),
+        [argument] if argument == "--migrate" => Ok(CommandMode::Migrate),
+        _ => Err("usage: hepta-research-league [--probe-ready|--migrate]".to_string()),
+    }
+}
+
+fn migration_database_url_from_file(path: &str) -> Result<String, String> {
+    let secret = std::fs::read_to_string(path)
+        .map_err(|error| format!("read HEPTA_MIGRATION_DATABASE_URL_FILE: {error}"))?;
+    normalize_migration_database_url_secret(&secret)
+}
+
+fn normalize_migration_database_url_secret(secret: &str) -> Result<String, String> {
+    let database_url = secret.trim();
+    if database_url.is_empty() {
+        return Err(
+            "HEPTA_MIGRATION_DATABASE_URL_FILE must contain a nonempty PostgreSQL URL".to_string(),
+        );
+    }
+    Ok(database_url.to_string())
+}
+
 fn probe_target(bind_addr: &str) -> Result<SocketAddr, String> {
     let configured: SocketAddr = bind_addr
         .parse()
@@ -103,11 +135,48 @@ async fn main() -> ExitCode {
         )
         .init();
 
-    if std::env::args().skip(1).eq(["--probe-ready"]) {
+    let arguments = std::env::args().skip(1).collect::<Vec<_>>();
+    let command_mode = match command_mode(&arguments) {
+        Ok(mode) => mode,
+        Err(message) => {
+            eprintln!("{message}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if command_mode == CommandMode::ProbeReady {
         return match probe_ready().await {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
                 eprintln!("Hepta readiness probe failed: {error}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+
+    if command_mode == CommandMode::Migrate {
+        let migration_database_url_file = std::env::var("HEPTA_MIGRATION_DATABASE_URL_FILE")
+            .expect(
+                "HEPTA_MIGRATION_DATABASE_URL_FILE must name the one-shot migrator secret file",
+            );
+        let migration_database_url = migration_database_url_from_file(&migration_database_url_file)
+            .expect("load one-shot migration-owner PostgreSQL URL");
+        let runtime_role = std::env::var("HEPTA_RUNTIME_DATABASE_ROLE")
+            .expect("HEPTA_RUNTIME_DATABASE_ROLE must name the ordinary runtime login role");
+        let finality_role = std::env::var("HEPTA_FINALITY_DATABASE_ROLE")
+            .expect("HEPTA_FINALITY_DATABASE_ROLE must name the isolated finality login role");
+        return match AppState::migrate_and_configure_database_roles(
+            &migration_database_url,
+            &runtime_role,
+            &finality_role,
+        )
+        .await
+        {
+            Ok(()) => {
+                info!("Hepta migrations and database-role grants completed");
+                ExitCode::SUCCESS
+            }
+            Err(error) => {
+                eprintln!("Hepta one-shot migration failed: {error}");
                 ExitCode::FAILURE
             }
         };
@@ -121,13 +190,15 @@ async fn main() -> ExitCode {
     info!(%bind_addr, "Hepta Research League listening");
     let security = SecurityConfig::from_env().expect("load Hepta service authentication");
     let database_url = std::env::var("HEPTA_DATABASE_URL")
-        .or_else(|_| std::env::var("DATABASE_URL"))
-        .expect("HEPTA_DATABASE_URL or DATABASE_URL must be set");
-    let state = AppState::connect(&database_url, security)
-        .await
-        .expect("initialize durable Hepta repository")
-        .with_nakama_control_http_from_env()
-        .expect("configure signed Nakama control client");
+        .expect("HEPTA_DATABASE_URL must use the ordinary runtime database role");
+    let finality_database_url = std::env::var("HEPTA_FINALITY_DATABASE_URL")
+        .expect("HEPTA_FINALITY_DATABASE_URL must use the isolated finality database role");
+    let state =
+        AppState::connect_with_database_roles(&database_url, &finality_database_url, security)
+            .await
+            .expect("initialize durable Hepta repository")
+            .with_nakama_control_http_from_env()
+            .expect("configure signed Nakama control client");
     axum::serve(listener, app(state))
         .await
         .expect("serve Hepta Research League");
@@ -137,6 +208,30 @@ async fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn command_modes_are_exact_and_fail_closed() {
+        assert_eq!(command_mode(&[]).unwrap(), CommandMode::Serve);
+        assert_eq!(
+            command_mode(&["--probe-ready".to_string()]).unwrap(),
+            CommandMode::ProbeReady
+        );
+        assert_eq!(
+            command_mode(&["--migrate".to_string()]).unwrap(),
+            CommandMode::Migrate
+        );
+        assert!(command_mode(&["--migrate=true".to_string()]).is_err());
+        assert!(command_mode(&["--migrate".to_string(), "extra".to_string()]).is_err());
+    }
+
+    #[test]
+    fn migration_database_url_secret_is_trimmed_and_nonempty() {
+        assert_eq!(
+            normalize_migration_database_url_secret("postgresql://owner@db/hepta\n").unwrap(),
+            "postgresql://owner@db/hepta"
+        );
+        assert!(normalize_migration_database_url_secret(" \n\t").is_err());
+    }
 
     #[test]
     fn probe_maps_wildcard_listener_to_loopback() {

@@ -1,9 +1,11 @@
 {
   "schema": "hepta.vendor.trnm_chain_crates.v1",
   "source_repository": "https://github.com/TrillionniumFoundation/Trillionnium-Chain.git",
-  "source_commit": "f2e3da051effabc97c2d0e7c47acd1df3d0dd4aa",
+  "source_branch": "feature/chain-paper-raid-receipt-v2",
+  "source_commit": "4adfbadaa8c35cd3515f20381eb6b80d6885f457",
+  "source_tree": "396ae6037b24037aff6983fd30d6baf906fda687",
   "license": "MIT",
-  "update_policy": "Copy byte-for-byte from Cargo's immutable checkout for an explicitly reviewed Chain commit; update this manifest, Cargo.lock, and cross-language golden vectors in the same change.",
+  "update_policy": "Copy byte-for-byte from a repository-external fresh clone checked out detached at an explicitly reviewed Chain commit; update this manifest, Cargo.lock, and cross-language golden vectors in the same change.",
   "packaging_context": {
     "workspace_inherited_crates": [
       "trnm-finality-types",
@@ -30,11 +32,11 @@
   "crates": {
     "trnm-finality-types": {
       "version": "0.1.0",
-      "source_git_tree": "05e21c11fa9216c8bbcdd2642ed6ac07cde9ba65",
-      "content_manifest_sha256": "4b0d8d3438f5a9cff070576624f18c878d6798bcbac7659f5a7ac366ceac72d5",
+      "source_git_tree": "81914c339c0ace155ea169da0ff01555e09e58d0",
+      "content_manifest_sha256": "323ee39a9194dbd7b4b5600166e64cd082f834763eb30b3590192b46d84f06dd",
       "files": {
         "Cargo.toml": "6638fcae5d361c1aec12f10656363928afc71f55566064ee34501473a50226f4",
-        "src/cometbft.rs": "910a4c4c76fac216d630d703223c822e5c77b1748c9eeac717471dc0f223c6f1",
+        "src/cometbft.rs": "257401da951eb1ccf513b970796188c130847d9c9d7e8b7dafee70ed42598bb7",
         "src/crypto.rs": "af5d3c8f0df51dbe38b38de670e4debfa16d0082ceb9edecde6b973aef1baa1f",
         "src/lib.rs": "c6473a4a8d35d3192611b1233bbc23c2d939a93275169c72c9e2da7374eae275",
         "src/protocol.rs": "6291dff7971c719f95689387d2080fc62dd8b66d5d007aea28284348b02236e9",
@@ -43,40 +45,41 @@
     },
     "trnm-finality-verifier": {
       "version": "0.1.0",
-      "source_git_tree": "1f6644d22cf8cb302ef450d09c9dfa0346e10e7d",
-      "content_manifest_sha256": "9a40b36d5ab2acfc44ba5a3d3c1947b62c12c71936b2cee97accef6899e6daad",
+      "source_git_tree": "93883497881e470e56ede755f5a20780c2989a60",
+      "content_manifest_sha256": "8c41c6e7b292bbe73b6838461e1b60ceb886da7196b6199fbf5fb209d50bf2cf",
       "files": {
-        "Cargo.toml": "c3b792083a550e9a841a8ad212fac58caa2894651c175dd306a84939d2bb2f62",
+        "Cargo.toml": "dbc51406c6222868252facd3b3caf26b2dce45546a4d8bae07139100d21ec6ad",
         "fixtures/README.md": "899ff6516f0cf5eed7179cd27190175d7ee1e744ebf73096b4c1ec3703640279",
         "fixtures/cometbft-apphash-finality-receipt-v2.json": "22486b4b24e5cd6c26aa3f6a8953041e94414488ca9fb3825d306103da07344e",
         "fixtures/cometbft-receipt-v2-tamper-vectors-v1.json": "d1640586367a81ae749eebebf318862f404b91d3c9b68a88a1a6a495829e979b",
         "fixtures/cometbft-receipt-v2-verified-outcome-v1.json": "d16f4358f28f576db28e69c26afa1a16f0ca351335e6c2271773111a6f1026e5",
         "fixtures/cometbft-trust-anchor-v1.json": "3f0cf0929c8da96d6a15b391eebd2214bfdc9608595d8abf657953bfc2ab85f4",
-        "src/bin/trnm-research-receipt-v2.rs": "6ad15d8b1749f28078733408a5005189b1f05da288b870b33b930d347716db47",
-        "src/cometbft.rs": "d808e7205d91aa72c32d6193d41c75a29e638a1ced481bd86c7e052decb17f87",
+        "src/bin/trnm-research-receipt-v2.rs": "49f5b049d460e343ae7c15ddc1a456790a42bbd9198962e084ed7588bebae0d4",
+        "src/cometbft.rs": "392f5f167f01d8f5f1cecafb60c76594669c915677182866320ebd942d179327",
         "src/lib.rs": "d89284107a888a9d2f0bceb49f7e7dd5bc0ec5c1ac5aa1377aa7fd38519ebda7"
       }
     },
     "trnm-protocol": {
       "version": "0.1.0",
-      "source_git_tree": "6d41dc8b77f8221b70c487ead28ddd42cb4b53c5",
-      "content_manifest_sha256": "328ae00acc9e2d4aad52a6e173234b5b0504bd44c572e7e1c2d648d07ae618c8",
+      "source_git_tree": "31aaec567089e341f3708dd8c243b98437593948",
+      "content_manifest_sha256": "2a8ad93918e536a6401475891049f5e3a06cfec39c6144f07ead9f7493a89a81",
       "files": {
         "Cargo.toml": "d345f48ee3fa72d8ff24d946816404923378fd3b745bb27964c25a67be81fd92",
-        "src/lib.rs": "d3c1bde5dfd36bf482ac250cebd9dc2cadbf442bd4ee6bf7d974c0ae6eeba775"
+        "src/lib.rs": "77b9aabe0ce80f9b40c9ca8e8cf3bfeadac2dab4cb66798dca2bd5bde03a9098"
       }
     },
     "trnm-research-protocol": {
       "version": "0.1.0",
-      "source_git_tree": "f299b4012d5d3161d726fc4d4b56be7626b952fb",
-      "content_manifest_sha256": "097a565a320bd26d5c132805323d58febacdfc2c5d3b7a3d604d416163f208b4",
+      "source_git_tree": "16db8325a884e66f2c7cb8305be05f71a900e9b1",
+      "content_manifest_sha256": "f79ec7608bb43d0cb501d95774bc38784ccb2ae13fec42dfb12d35422068b17d",
       "files": {
         "Cargo.toml": "c93aec7515bd0ecb8ef3fb7aca5e9a95a2d5517c9cb47ea22da21df9a7bb9b27",
         "README.md": "b441862118d14264b6e7b6423eac81075a1c9cc8490d2c7080aa04299185b419",
         "fixtures/protocol-v1-golden.json": "ec0974c5e6404461a130f6ee25caf31c86b1a097c8f23936fb9e8942c7bb6e98",
         "src/canonical.rs": "b63dabcfaa0342a5575a234bfcc22f3cd27abd752b47540cd4ebff0984d6ef94",
         "src/command.rs": "6ce11e6a8ed0dbd3d8fd786089840e78d69f4c48db1d08d4562cf0826aa3ccf0",
-        "src/lib.rs": "480e763bf6af9709c3b917e1701d4141f4dbc07b2c6ff1d0ead4088e69310efe",
+        "src/lib.rs": "fa60d0a990b6689340ef21c6a7ecc58affeaa003dbd56853fef8c7ffdd1aaa7e",
+        "src/paper_raid.rs": "358ffc7aff2637f3f9720719a07c6af32e5ecf1a1445c16db05465b2862797e7",
         "src/state.rs": "4c58f2aeb0532b37dd1d1ebbca509f7d76557020df6006cd1794c80f92ac4743",
         "src/types.rs": "f4ec1388fd37b15ed07a56b4c418b4bd192bcd373f96519668e119991276fe75",
         "tests/protocol_v1.rs": "58f32f24b81f1404181f95eb4ed71e97d830f20e977d652b6be497954a8f6fed"

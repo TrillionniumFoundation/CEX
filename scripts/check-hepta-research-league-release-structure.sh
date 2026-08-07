@@ -115,6 +115,7 @@ expected_copy_sources = {
     "migrations/0035_add_hepta_secure_onboarding.sql",
     "migrations/0036_add_hepta_nakama_research_control.sql",
     "migrations/0037_add_hepta_paper_chain_finality_v1.sql",
+    "migrations/0038_add_hepta_paper_chain_finality_v2.sql",
     "docs/openapi/hepta-research-league-v1.yaml",
     "docs/openapi/hepta-paper-raid-v2.yaml",
 }
@@ -787,6 +788,48 @@ require_fragments(
         "configured_receipt_in_flight",
         ".trnm_receipt_v2_max_body_bytes == 32768",
         ".trnm_receipt_v2_max_in_flight == 1",
+        '.paper_chain_finality_v2_command_lane == "awaiting_chain_verifier_upgrade"',
+        '.paper_scientific_finality_policy == "hepta.paper_raid.scientific_finality_policy.v1"',
+        ".paper_no_appeal_window_seconds == 86400",
+        "hepta_trnm_cometbft_time_checkpoints_v1",
+        "hepta_paper_chain_finality_window_arms_v2",
+        "hepta_paper_chain_finality_preparations_v2",
+        "verified_v2_trigger_count",
+        "verified_v2_constraint_catalog",
+        "hepta_paper_finality_v2_constraint_catalog_fingerprint",
+        "t.tgfoid = to_regprocedure(e.function_name)",
+        "t.tgtype = e.trigger_type",
+        "t.tgenabled = 'A'",
+        "hepta_paper_evaluations_finality_v2_source_guard",
+    ),
+)
+
+require_fragments(
+    "migrations/0038_add_hepta_paper_chain_finality_v2.sql",
+    (
+        "hepta_paper_finality_v2_preparation_guard",
+        "hepta_paper_finality_v2_preparation_seal_guard",
+        "hepta_paper_chain_finality_window_arms_v2",
+        "hepta_trnm_cometbft_time_checkpoints_v1",
+        "hepta_reject_paper_finality_v2_source_mutation",
+        "hepta_reject_paper_finality_v2_truncate",
+        "hepta_validate_paper_finality_v2_time_checkpoint",
+        "hepta_paper_finality_v2_constraint_catalog_fingerprint",
+        "hepta_paper_chain_finality_v2_constraint_catalog_mismatch",
+        "enable always trigger",
+        "hepta_paper_chain_finality_v2_source_sealed",
+        "hepta_nakama_completions_finality_v2_source_guard",
+    ),
+)
+
+require_fragments(
+    "services/hepta-research-league/src/paper_chain_finality_v2.rs",
+    (
+        "pg_advisory_xact_lock",
+        "verify_cometbft_light_finality_proof_v1_with_trust_anchor",
+        "PAPER_CHAIN_TIME_MAX_LAG_MS_V1",
+        "paper_trnm_v2_window_arm_stale",
+        "paper_trnm_v2_final_checkpoint_not_causal",
     ),
 )
 
@@ -858,6 +901,36 @@ require_fragments(
         "db-baseline-db-sequences.json",
         "hepta_paper_room_events_cursor_seq",
         "jsonb_agg(to_jsonb(row_value) order by",
+        "HEPTA_MIGRATION_DATABASE_URL_FILE",
+        "HEPTA_FINALITY_DATABASE_URL",
+        "HEPTA_RUNTIME_DATABASE_ROLE",
+        "HEPTA_FINALITY_DATABASE_ROLE",
+        "hepta_resource_migrator",
+        "hepta_resource_runtime",
+        "hepta_resource_finality",
+        "runtime_role_boundary",
+        "finality_role_boundary",
+        "definer_public_execute_count",
+        "verified_definer_count",
+        "has_function_privilege",
+        "aclexplode",
+        "function.prosecdef",
+        "function.proconfig=array['search_path=pg_catalog']::text[]",
+        "hepta_assert_paper_finality_v2_source_unsealed(uuid)",
+        "hepta_paper_finality_v2_lock_window_arm()",
+        "hepta_paper_finality_v2_lock_preparation()",
+        "hepta_paper_finality_v2_apply_seal()",
+        "hepta_reject_paper_finality_v2_source_mutation()",
+        "hepta-migrate",
+        "--migrate",
+        "--profile migration run --rm --no-deps hepta-migrate",
+        "compose.migration.yaml",
+        "migration-owner.url",
+        'chmod 0444 "$migration_secret_file"',
+        'rm -f -- "$migration_secret_file"',
+        '[[ ! -e "$migration_secret_file" ]]',
+        "chain_time_checkpoint_rows",
+        "finality_v2_window_arm_rows",
     ),
 )
 resource_gate_text = (
@@ -1094,18 +1167,32 @@ resource_services = resource_override.get("services", {})
 if set(resource_services) != {"postgres", "hepta"}:
     fail("Receipt V2 resource override service keys drifted")
 if resource_services["postgres"].get("environment") != {
-    "POSTGRES_USER": "hepta_resource",
-    "POSTGRES_PASSWORD": "hepta_resource_password",
+    "POSTGRES_USER": "hepta_resource_migrator",
+    "POSTGRES_PASSWORD": "hepta_resource_migrator_password",
     "POSTGRES_DB": "hepta_resource",
 }:
     fail("Receipt V2 resource override PostgreSQL environment drifted")
 if resource_services["hepta"].get("environment") != {
-    "HEPTA_DATABASE_URL": "postgres://hepta_resource:hepta_resource_password@postgres:5432/hepta_resource"
+    "HEPTA_DATABASE_URL": "postgres://hepta_resource_runtime:hepta_resource_runtime_password@postgres:5432/hepta_resource",
+    "HEPTA_FINALITY_DATABASE_URL": "postgres://hepta_resource_finality:hepta_resource_finality_password@postgres:5432/hepta_resource",
 }:
     fail("Receipt V2 resource override Hepta environment drifted")
 compose_smoke_text = (
     repo / "scripts/check-hepta-research-league-compose-smoke.sh"
 ).read_text(encoding="utf-8")
+constraint_catalog_sha256 = (
+    "910d4454106f5722ad44c6c9095bf48d"
+    "585dfaa9501fc40d9ef377fd57c3f3ba"
+)
+for relative in (
+    "migrations/0038_add_hepta_paper_chain_finality_v2.sql",
+    "services/hepta-research-league/src/lib.rs",
+    "services/hepta-research-league/src/paper_raid_v2_tests.rs",
+    "scripts/check-hepta-research-league-compose-smoke.sh",
+):
+    text = (repo / relative).read_text(encoding="utf-8")
+    if constraint_catalog_sha256 not in text:
+        fail(f"Paper finality V2 constraint fingerprint drifted in {relative}")
 if compose_smoke_text.index("started=true") > compose_smoke_text.index(
     '"${compose[@]}" up -d postgres'
 ):
@@ -1119,24 +1206,89 @@ for fragment in (
     "HEPTA_TRNM_COMETBFT_TRUST_ANCHOR_HASHES_JSON",
     "HEPTA_TRNM_RECEIPT_V2_MAX_BODY_BYTES",
     "HEPTA_TRNM_RECEIPT_V2_MAX_IN_FLIGHT",
+    "HEPTA_FINALITY_DATABASE_URL",
 ):
     if fragment not in compose_text:
         fail(f"Compose release contract is missing {fragment!r}")
+migration_compose_text = (
+    repo / "deploy/hepta-research-league/compose.migration.yaml"
+).read_text(encoding="utf-8")
+for fragment in (
+    'image: ${HEPTA_IMAGE:?immutable HEPTA_IMAGE digest is required}',
+    "HEPTA_MIGRATION_DATABASE_URL_FILE",
+    "HEPTA_RUNTIME_DATABASE_ROLE",
+    "HEPTA_FINALITY_DATABASE_ROLE",
+    "hepta-migrate",
+    'command: ["--migrate"]',
+):
+    if fragment not in migration_compose_text:
+        fail(f"migration-only Compose contract is missing {fragment!r}")
 try:
     compose_document = yaml.load(compose_text, Loader=UniqueKeyLoader)
+    migration_compose_document = yaml.load(
+        migration_compose_text, Loader=UniqueKeyLoader
+    )
 except yaml.YAMLError as error:
     fail(f"Compose release contract is invalid YAML: {error}")
-if not isinstance(compose_document, dict):
+if not isinstance(compose_document, dict) or not isinstance(
+    migration_compose_document, dict
+):
     fail("Compose release contract is not an object")
 hepta_compose = compose_document.get("services", {}).get("hepta")
 if not isinstance(hepta_compose, dict):
     fail("Compose release contract has no Hepta service")
+if "hepta-migrate" in compose_document.get("services", {}) or "secrets" in compose_document:
+    fail("resident Compose contract must have no migrator service or owner secret")
+hepta_migrate_compose = migration_compose_document.get("services", {}).get("hepta-migrate")
+if not isinstance(hepta_migrate_compose, dict):
+    fail("Compose release contract has no one-shot migration service")
 if hepta_compose.get("image") != "${HEPTA_IMAGE:?immutable HEPTA_IMAGE digest is required}":
     fail("Compose Hepta image authority drifted")
 if hepta_compose.get("pull_policy") != "never" or "build" in hepta_compose:
     fail("Compose Hepta service must use only the frozen local image")
 if hepta_compose.get("ports") != ["127.0.0.1:${HEPTA_HOST_PORT:-7011}:7011"]:
     fail("Compose Hepta host binding drifted")
+if {
+    "HEPTA_MIGRATION_DATABASE_URL",
+    "HEPTA_MIGRATION_DATABASE_URL_FILE",
+} & set(hepta_compose.get("environment", {})):
+    fail("resident Compose Hepta service exposes the migration-owner credential")
+if hepta_compose.get("environment", {}).get(
+    "HEPTA_FINALITY_DATABASE_URL"
+) != "${HEPTA_FINALITY_DATABASE_URL:?isolated finality-writer URL required}":
+    fail("resident Compose Hepta service must receive the isolated finality-writer URL")
+if "depends_on" in hepta_compose:
+    fail("resident Compose Hepta must not retain or restart the migration profile")
+if hepta_migrate_compose.get("image") != "${HEPTA_IMAGE:?immutable HEPTA_IMAGE digest is required}":
+    fail("Compose migration job image authority drifted")
+if hepta_migrate_compose.get("pull_policy") != "never" or "build" in hepta_migrate_compose:
+    fail("Compose migration job must use only the frozen local image")
+if hepta_migrate_compose.get("restart") != "no":
+    fail("Compose migration job must be one-shot")
+if hepta_migrate_compose.get("profiles") != ["migration"]:
+    fail("Compose migration job must be isolated behind the migration profile")
+if hepta_migrate_compose.get("command") != ["--migrate"]:
+    fail("Compose migration job must invoke the binary migration mode")
+if hepta_migrate_compose.get("environment") != {
+    "HEPTA_MIGRATION_DATABASE_URL_FILE": "/run/secrets/hepta_migration_database_url",
+    "HEPTA_RUNTIME_DATABASE_ROLE": "${HEPTA_RUNTIME_DATABASE_ROLE:?non-owner runtime database role required}",
+    "HEPTA_FINALITY_DATABASE_ROLE": "${HEPTA_FINALITY_DATABASE_ROLE:?isolated finality-writer database role required}",
+}:
+    fail("Compose migration job environment exceeds its three-variable authority")
+if hepta_migrate_compose.get("secrets") != [
+    {"source": "hepta_migration_database_url", "target": "hepta_migration_database_url"}
+]:
+    fail("Compose migration job must receive the owner URL only as a file secret")
+if migration_compose_document.get("secrets") != {
+    "hepta_migration_database_url": {
+        "file": "${HEPTA_MIGRATION_DATABASE_URL_FILE:?host path to the migration-owner URL secret is required}"
+    }
+}:
+    fail("Compose migration owner secret-file authority drifted")
+if hepta_migrate_compose.get("read_only") is not True:
+    fail("Compose migration job rootfs must be read-only")
+if hepta_migrate_compose.get("cap_drop") != ["ALL"]:
+    fail("Compose migration job capabilities are not closed")
 if hepta_compose.get("environment", {}).get(
     "HEPTA_TRNM_COMETBFT_TRUST_ANCHOR_HASHES_JSON"
 ) != "${HEPTA_TRNM_COMETBFT_TRUST_ANCHOR_HASHES_JSON:?Receipt V2 pinned trust-anchor hashes required}":

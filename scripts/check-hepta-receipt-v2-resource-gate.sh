@@ -17,6 +17,7 @@ postgres_image='docker.io/library/postgres:17.6-alpine3.22@sha256:ef257d85f76e48
 fixture_generator="$repo_dir/scripts/generate-hepta-receipt-v2-resource-fixtures.py"
 gate_source="$repo_dir/scripts/check-hepta-receipt-v2-resource-gate.sh"
 compose_source="$repo_dir/deploy/hepta-research-league/compose.yaml"
+migration_compose_source="$repo_dir/deploy/hepta-research-league/compose.migration.yaml"
 scratch_parent=/var/tmp
 umask 077
 command -v mktemp >/dev/null 2>&1 && command -v stat >/dev/null 2>&1 || {
@@ -35,6 +36,7 @@ fixture_snapshot_identity=
 default_env="$scratch/default.env"
 max_env="$scratch/max.env"
 override="$scratch/compose.resource.yaml"
+migration_secret_file="$scratch/migration-owner.url"
 started=false
 holder_pid=
 evidence_staging=
@@ -273,11 +275,13 @@ done
 gate_source_sha256=$(sha256sum "$gate_source" | cut -d' ' -f1)
 generator_source_sha256=$(sha256sum "$fixture_generator" | cut -d' ' -f1)
 compose_source_sha256=$(sha256sum "$compose_source" | cut -d' ' -f1)
+migration_compose_source_sha256=$(sha256sum "$migration_compose_source" | cut -d' ' -f1)
 
 verify_release_inputs_unchanged() {
   [[ $(sha256sum "$gate_source" | cut -d' ' -f1) == "$gate_source_sha256" \
     && $(sha256sum "$fixture_generator" | cut -d' ' -f1) == "$generator_source_sha256" \
-    && $(sha256sum "$compose_source" | cut -d' ' -f1) == "$compose_source_sha256" ]] || {
+    && $(sha256sum "$compose_source" | cut -d' ' -f1) == "$compose_source_sha256" \
+    && $(sha256sum "$migration_compose_source" | cut -d' ' -f1) == "$migration_compose_source_sha256" ]] || {
     echo "resource-gate source authority changed while the gate was running" >&2
     return 1
   }
@@ -456,10 +460,18 @@ PY
 # The default phase intentionally omits HEPTA_TRNM_RECEIPT_V2_MAX_BODY_BYTES:
 # Compose itself must supply the canonical 32 KiB default. The max phase adds
 # one explicit 1 MiB override while keeping every other byte identical.
+printf '%s\n' \
+  'postgres://hepta_resource_migrator:hepta_resource_migrator_password@postgres:5432/hepta_resource' \
+  >"$migration_secret_file"
+chmod 0444 "$migration_secret_file"
 cat >"$default_env" <<EOF
 HEPTA_IMAGE=$HEPTA_IMAGE
 HEPTA_HOST_PORT=$host_port
-HEPTA_DATABASE_URL=postgres://hepta_resource:hepta_resource_password@postgres:5432/hepta_resource
+HEPTA_DATABASE_URL=postgres://hepta_resource_runtime:hepta_resource_runtime_password@postgres:5432/hepta_resource
+HEPTA_FINALITY_DATABASE_URL=postgres://hepta_resource_finality:hepta_resource_finality_password@postgres:5432/hepta_resource
+HEPTA_MIGRATION_DATABASE_URL_FILE=$migration_secret_file
+HEPTA_RUNTIME_DATABASE_ROLE=hepta_resource_runtime
+HEPTA_FINALITY_DATABASE_ROLE=hepta_resource_finality
 HEPTA_OPERATOR_TOKEN=hepta-resource-operator-token
 HEPTA_NAKAMA_TOKEN=hepta-resource-nakama-token
 HEPTA_NAKAMA_AUTHORIZATION_ISSUER_KEY_ID=hepta-resource-authorization-v1
@@ -491,11 +503,11 @@ services:
     image: $postgres_image
     pull_policy: never
     environment:
-      POSTGRES_USER: hepta_resource
-      POSTGRES_PASSWORD: hepta_resource_password
+      POSTGRES_USER: hepta_resource_migrator
+      POSTGRES_PASSWORD: hepta_resource_migrator_password
       POSTGRES_DB: hepta_resource
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U hepta_resource -d hepta_resource"]
+      test: ["CMD-SHELL", "pg_isready -U hepta_resource_migrator -d hepta_resource"]
       interval: 2s
       timeout: 2s
       retries: 30
@@ -505,11 +517,9 @@ services:
       - no-new-privileges:true
   hepta:
     pull_policy: never
-    depends_on:
-      postgres:
-        condition: service_healthy
     environment:
-      HEPTA_DATABASE_URL: postgres://hepta_resource:hepta_resource_password@postgres:5432/hepta_resource
+      HEPTA_DATABASE_URL: postgres://hepta_resource_runtime:hepta_resource_runtime_password@postgres:5432/hepta_resource
+      HEPTA_FINALITY_DATABASE_URL: postgres://hepta_resource_finality:hepta_resource_finality_password@postgres:5432/hepta_resource
 volumes:
   pgdata: {}
 EOF
@@ -519,23 +529,57 @@ if [[ ${docker_command[0]} == sudo ]]; then
     --file "$repo_dir/deploy/hepta-research-league/compose.yaml" --file "$override")
   compose_max=(sudo -n docker compose --project-name "$project" --env-file "$max_env" \
     --file "$repo_dir/deploy/hepta-research-league/compose.yaml" --file "$override")
+  migration_compose=(sudo -n docker compose --project-name "$project" --env-file "$default_env" \
+    --file "$repo_dir/deploy/hepta-research-league/compose.yaml" \
+    --file "$repo_dir/deploy/hepta-research-league/compose.migration.yaml" \
+    --file "$override")
 else
   compose_default=(docker compose --project-name "$project" --env-file "$default_env" \
     --file "$repo_dir/deploy/hepta-research-league/compose.yaml" --file "$override")
   compose_max=(docker compose --project-name "$project" --env-file "$max_env" \
     --file "$repo_dir/deploy/hepta-research-league/compose.yaml" --file "$override")
+  migration_compose=(docker compose --project-name "$project" --env-file "$default_env" \
+    --file "$repo_dir/deploy/hepta-research-league/compose.yaml" \
+    --file "$repo_dir/deploy/hepta-research-league/compose.migration.yaml" \
+    --file "$override")
 fi
 compose_cleanup=("${compose_max[@]}")
 
 configured_default=$("${compose_default[@]}" config --format json)
 configured_max=$("${compose_max[@]}" config --format json)
+configured_migration=$("${migration_compose[@]}" --profile migration config --format json)
 [[ $(jq -er '.services.hepta.image' <<<"$configured_default") == "$HEPTA_IMAGE" ]]
 [[ $(jq -er '.services.hepta.environment.HEPTA_TRNM_RECEIPT_V2_MAX_BODY_BYTES' <<<"$configured_default") == "$default_cap" ]]
 [[ $(jq -er '.services.hepta.environment.HEPTA_TRNM_RECEIPT_V2_MAX_BODY_BYTES' <<<"$configured_max") == "$deployment_max" ]]
 [[ $(jq -er '.services.hepta.environment.HEPTA_TRNM_RECEIPT_V2_MAX_IN_FLIGHT' <<<"$configured_default") == 1 ]]
 [[ $(jq -er '.services.hepta.environment.HEPTA_TRNM_RECEIPT_V2_MAX_IN_FLIGHT' <<<"$configured_max") == 1 ]]
+[[ $(jq -r '.services.hepta.environment |
+  (has("HEPTA_MIGRATION_DATABASE_URL") or has("HEPTA_MIGRATION_DATABASE_URL_FILE"))' \
+  <<<"$configured_default") == false ]]
+[[ $(jq -r '.services.hepta.environment.HEPTA_FINALITY_DATABASE_URL' <<<"$configured_default") == \
+  'postgres://hepta_resource_finality:hepta_resource_finality_password@postgres:5432/hepta_resource' ]]
+jq -e --arg secret_file "$migration_secret_file" '
+  .services["hepta-migrate"].image == .services.hepta.image
+  and .services["hepta-migrate"].restart == "no"
+  and .services["hepta-migrate"].profiles == ["migration"]
+  and .services["hepta-migrate"].command == ["--migrate"]
+  and (.services["hepta-migrate"].environment | keys) == [
+    "HEPTA_FINALITY_DATABASE_ROLE",
+    "HEPTA_MIGRATION_DATABASE_URL_FILE",
+    "HEPTA_RUNTIME_DATABASE_ROLE"
+  ]
+  and .services["hepta-migrate"].environment.HEPTA_MIGRATION_DATABASE_URL_FILE == "/run/secrets/hepta_migration_database_url"
+  and .secrets.hepta_migration_database_url.file == $secret_file
+' <<<"$configured_migration" >/dev/null
+[[ $(jq -r '.services | has("hepta-migrate")' <<<"$configured_default") == false ]]
+[[ $(jq -r 'has("secrets")' <<<"$configured_default") == false ]]
+if grep -Fq 'postgres://hepta_resource_migrator:' <<<"$configured_migration"; then
+  echo "rendered resource-gate Compose configuration exposed the migration-owner URL" >&2
+  exit 1
+fi
 "${compose_default[@]}" config --quiet
 "${compose_max[@]}" config --quiet
+"${migration_compose[@]}" --profile migration config --quiet
 printf '%s\n' "$configured_default" | jq -S . \
   >"$evidence_dir/compose-default-rendered.json"
 printf '%s\n' "$configured_max" | jq -S . \
@@ -548,7 +592,7 @@ compose=("${compose_default[@]}")
 wait_postgres() {
   local attempt
   for attempt in $(seq 1 60); do
-    if "${compose[@]}" exec -T postgres pg_isready -U hepta_resource -d hepta_resource >/dev/null 2>&1; then
+    if "${compose[@]}" exec -T postgres pg_isready -U hepta_resource_migrator -d hepta_resource >/dev/null 2>&1; then
       return 0
     fi
     sleep 1
@@ -578,7 +622,10 @@ assert_ready_cap() {
     '.ready == true
       and .finality_mode == "verified"
       and .trnm_receipt_v2_max_body_bytes == $expected
-      and .trnm_receipt_v2_max_in_flight == 1' "$output" >/dev/null
+      and .trnm_receipt_v2_max_in_flight == 1
+      and .paper_chain_finality_v2_command_lane == "awaiting_chain_verifier_upgrade"
+      and .paper_scientific_finality_policy == "hepta.paper_raid.scientific_finality_policy.v1"
+      and .paper_no_appeal_window_seconds == 86400' "$output" >/dev/null
 }
 
 capture_db_snapshot() {
@@ -589,7 +636,7 @@ capture_db_snapshot() {
   local sequences_raw="$scratch/$label.db-sequences.raw.json"
   [[ "$label" =~ ^[a-z0-9-]+$ ]]
   "${compose[@]}" exec -T postgres psql -X -A -t \
-    -U hepta_resource -d hepta_resource -v ON_ERROR_STOP=1 -c \
+    -U hepta_resource_migrator -d hepta_resource -v ON_ERROR_STOP=1 -c \
     "select coalesce(
        jsonb_agg(to_jsonb(hepta_league_state) order by state_key),
        '[]'::jsonb
@@ -598,7 +645,7 @@ capture_db_snapshot() {
   jq -S . "$state_raw" >"$evidence_dir/$label-league-state.json"
 
   "${compose[@]}" exec -T postgres psql -X -A -t \
-    -U hepta_resource -d hepta_resource -v ON_ERROR_STOP=1 -c \
+    -U hepta_resource_migrator -d hepta_resource -v ON_ERROR_STOP=1 -c \
     "select jsonb_build_object(
        'league_state_rows', (select count(*) from hepta_league_state),
        'league_revision_sum', (select coalesce(sum(revision), 0) from hepta_league_state),
@@ -610,12 +657,15 @@ capture_db_snapshot() {
        'trust_anchor_rows', (select count(*) from hepta_trnm_cometbft_trust_anchors),
        'finality_inbox_rows', (select count(*) from hepta_paper_chain_finality_inbox),
        'chain_receipt_rows', (select count(*) from hepta_paper_chain_receipts),
-       'finality_projection_rows', (select count(*) from hepta_paper_chain_finality_projections)
+       'finality_projection_rows', (select count(*) from hepta_paper_chain_finality_projections),
+       'chain_time_checkpoint_rows', (select count(*) from hepta_trnm_cometbft_time_checkpoints_v1),
+       'finality_v2_window_arm_rows', (select count(*) from hepta_paper_chain_finality_window_arms_v2),
+       'finality_v2_preparation_rows', (select count(*) from hepta_paper_chain_finality_preparations_v2)
      )::text;" >"$counts_raw"
   jq -S . "$counts_raw" >"$evidence_dir/$label-db-counts.json"
 
   "${compose[@]}" exec -T postgres psql -X -A -t \
-    -U hepta_resource -d hepta_resource -v ON_ERROR_STOP=1 -c \
+    -U hepta_resource_migrator -d hepta_resource -v ON_ERROR_STOP=1 -c \
     "select jsonb_build_object(
        'hepta_league_state', coalesce(
          (select jsonb_agg(to_jsonb(row_value) order by state_key)
@@ -646,7 +696,16 @@ capture_db_snapshot() {
           from hepta_paper_chain_receipts row_value), '[]'::jsonb),
        'hepta_paper_chain_finality_projections', coalesce(
          (select jsonb_agg(to_jsonb(row_value) order by local_command_id)
-          from hepta_paper_chain_finality_projections row_value), '[]'::jsonb)
+          from hepta_paper_chain_finality_projections row_value), '[]'::jsonb),
+       'hepta_trnm_cometbft_time_checkpoints_v1', coalesce(
+         (select jsonb_agg(to_jsonb(row_value) order by checkpoint_hash)
+          from hepta_trnm_cometbft_time_checkpoints_v1 row_value), '[]'::jsonb),
+       'hepta_paper_chain_finality_window_arms_v2', coalesce(
+         (select jsonb_agg(to_jsonb(row_value) order by arm_id)
+          from hepta_paper_chain_finality_window_arms_v2 row_value), '[]'::jsonb),
+       'hepta_paper_chain_finality_preparations_v2', coalesce(
+         (select jsonb_agg(to_jsonb(row_value) order by preparation_id)
+          from hepta_paper_chain_finality_preparations_v2 row_value), '[]'::jsonb)
      )::text;" >"$rows_raw"
   jq -S . "$rows_raw" >"$evidence_dir/$label-db-rows.json"
 
@@ -654,7 +713,7 @@ capture_db_snapshot() {
   # nextval() must therefore fail this invariant even when every table row is
   # byte-identical to the baseline.
   "${compose[@]}" exec -T postgres psql -X -A -t \
-    -U hepta_resource -d hepta_resource -v ON_ERROR_STOP=1 -c \
+    -U hepta_resource_migrator -d hepta_resource -v ON_ERROR_STOP=1 -c \
     "select jsonb_build_object(
        'hepta_paper_room_events_cursor_seq', (
          select jsonb_build_object('last_value', last_value, 'is_called', is_called)
@@ -734,8 +793,184 @@ post_receipt() {
 started=true
 "${compose[@]}" up -d postgres
 wait_postgres
-"${compose[@]}" up -d hepta
+"${compose[@]}" exec -T postgres psql -X -v ON_ERROR_STOP=1 \
+  -U hepta_resource_migrator -d hepta_resource -c \
+  "create role hepta_resource_runtime login password 'hepta_resource_runtime_password'
+     nosuperuser nocreatedb nocreaterole noinherit noreplication nobypassrls;
+   create role hepta_resource_finality login password 'hepta_resource_finality_password'
+     nosuperuser nocreatedb nocreaterole noinherit noreplication nobypassrls;"
+"${migration_compose[@]}" --profile migration run --rm --no-deps hepta-migrate
+[[ -z $("${migration_compose[@]}" --profile migration ps -a -q hepta-migrate) ]]
+[[ -z $("${docker_command[@]}" ps -aq \
+  --filter "label=com.docker.compose.project=$project" \
+  --filter 'label=com.docker.compose.service=hepta-migrate') ]]
+rm -f -- "$migration_secret_file"
+[[ ! -e "$migration_secret_file" ]]
+"${compose[@]}" config --quiet
+"${compose[@]}" up -d --no-deps hepta
 wait_hepta
+resident_container=$("${compose[@]}" ps -q hepta)
+if "${docker_command[@]}" inspect "$resident_container" \
+  --format '{{range .Config.Env}}{{println .}}{{end}}' | grep -Eq '^HEPTA_MIGRATION_DATABASE_URL(_FILE)?='; then
+  echo "resident resource-gate Hepta container retained the migration-owner credential" >&2
+  exit 1
+fi
+if "${docker_command[@]}" inspect "$resident_container" \
+  | grep -Fq 'postgres://hepta_resource_migrator:'; then
+  echo "resident resource-gate Hepta metadata exposed the migration-owner URL" >&2
+  exit 1
+fi
+"${docker_command[@]}" inspect "$resident_container" \
+  --format '{{range .Config.Env}}{{println .}}{{end}}' \
+  | grep -Fx 'HEPTA_FINALITY_DATABASE_URL=postgres://hepta_resource_finality:hepta_resource_finality_password@postgres:5432/hepta_resource' >/dev/null
+runtime_role_boundary=$("${compose[@]}" exec -T postgres psql -X -A -t \
+  -U hepta_resource_migrator -d hepta_resource -v ON_ERROR_STOP=1 -c \
+  "select (
+      not role.rolsuper
+      and not role.rolinherit
+      and not role.rolcreatedb
+      and not role.rolcreaterole
+      and not role.rolreplication
+      and not role.rolbypassrls
+      and not exists (
+        select 1 from pg_auth_members as membership
+        where membership.member=role.oid or membership.roleid=role.oid
+      )
+      and not exists (
+        select 1 from pg_class as relation
+        join pg_namespace as namespace on namespace.oid=relation.relnamespace
+        where namespace.nspname='public' and relation.relowner=role.oid
+      )
+      and has_schema_privilege(role.rolname, 'public', 'USAGE')
+      and not has_schema_privilege(role.rolname, 'public', 'CREATE')
+      and has_database_privilege(role.rolname, current_database(), 'CONNECT')
+      and not has_database_privilege(role.rolname, current_database(), 'CREATE')
+      and not has_database_privilege(role.rolname, current_database(), 'TEMPORARY')
+      and not has_function_privilege(
+        role.rolname,
+        'public.hepta_assert_paper_finality_v2_source_unsealed(uuid)',
+        'EXECUTE'
+      )
+      and not has_function_privilege(role.rolname, 'public.hepta_paper_finality_v2_lock_window_arm()', 'EXECUTE')
+      and not has_function_privilege(role.rolname, 'public.hepta_paper_finality_v2_lock_preparation()', 'EXECUTE')
+      and not has_function_privilege(role.rolname, 'public.hepta_paper_finality_v2_apply_seal()', 'EXECUTE')
+      and not has_function_privilege(role.rolname, 'public.hepta_reject_paper_finality_v2_source_mutation()', 'EXECUTE')
+      and (
+        select bool_and(
+          has_table_privilege(role.rolname, relation.oid, 'SELECT')
+          and not has_table_privilege(role.rolname, relation.oid, 'TRUNCATE')
+          and not has_table_privilege(role.rolname, relation.oid, 'REFERENCES')
+          and not has_table_privilege(role.rolname, relation.oid, 'TRIGGER')
+          and (
+            case when relation.relname = any(array[
+              'hepta_trnm_cometbft_time_checkpoints_v1',
+              'hepta_paper_chain_finality_window_arms_v2',
+              'hepta_paper_chain_finality_preparations_v2'
+            ]) then
+              not has_table_privilege(role.rolname, relation.oid, 'INSERT')
+              and not has_table_privilege(role.rolname, relation.oid, 'UPDATE')
+              and not has_table_privilege(role.rolname, relation.oid, 'DELETE')
+            else
+              has_table_privilege(role.rolname, relation.oid, 'INSERT')
+              and has_table_privilege(role.rolname, relation.oid, 'UPDATE')
+              and has_table_privilege(role.rolname, relation.oid, 'DELETE')
+            end
+          )
+        )
+        from pg_class as relation
+        join pg_namespace as namespace on namespace.oid=relation.relnamespace
+        where namespace.nspname='public' and relation.relkind in ('r','p')
+      )
+    )::text
+   from pg_roles as role where role.rolname='hepta_resource_runtime';")
+[[ "$runtime_role_boundary" == t ]]
+finality_role_boundary=$("${compose[@]}" exec -T postgres psql -X -A -t \
+  -U hepta_resource_migrator -d hepta_resource -v ON_ERROR_STOP=1 -c \
+  "select (
+      not role.rolsuper
+      and not role.rolinherit
+      and not role.rolcreatedb
+      and not role.rolcreaterole
+      and not role.rolreplication
+      and not role.rolbypassrls
+      and not exists (
+        select 1 from pg_auth_members as membership
+        where membership.member=role.oid or membership.roleid=role.oid
+      )
+      and not exists (
+        select 1 from pg_class as relation
+        join pg_namespace as namespace on namespace.oid=relation.relnamespace
+        where namespace.nspname='public' and relation.relowner=role.oid
+      )
+      and has_schema_privilege(role.rolname, 'public', 'USAGE')
+      and not has_schema_privilege(role.rolname, 'public', 'CREATE')
+      and has_database_privilege(role.rolname, current_database(), 'CONNECT')
+      and not has_database_privilege(role.rolname, current_database(), 'CREATE')
+      and not has_database_privilege(role.rolname, current_database(), 'TEMPORARY')
+      and has_function_privilege(
+        role.rolname,
+        'public.hepta_assert_paper_finality_v2_source_unsealed(uuid)',
+        'EXECUTE'
+      )
+      and not has_function_privilege(role.rolname, 'public.hepta_paper_finality_v2_lock_window_arm()', 'EXECUTE')
+      and not has_function_privilege(role.rolname, 'public.hepta_paper_finality_v2_lock_preparation()', 'EXECUTE')
+      and not has_function_privilege(role.rolname, 'public.hepta_paper_finality_v2_apply_seal()', 'EXECUTE')
+      and not has_function_privilege(role.rolname, 'public.hepta_reject_paper_finality_v2_source_mutation()', 'EXECUTE')
+      and (
+        select bool_and(
+          has_table_privilege(role.rolname, relation.oid, 'SELECT')
+          and (
+            has_table_privilege(role.rolname, relation.oid, 'INSERT') =
+            (relation.relname = any(array[
+              'hepta_trnm_cometbft_time_checkpoints_v1',
+              'hepta_paper_chain_finality_window_arms_v2',
+              'hepta_paper_chain_finality_preparations_v2'
+            ]))
+          )
+          and not has_table_privilege(role.rolname, relation.oid, 'UPDATE')
+          and not has_table_privilege(role.rolname, relation.oid, 'DELETE')
+          and not has_table_privilege(role.rolname, relation.oid, 'TRUNCATE')
+          and not has_table_privilege(role.rolname, relation.oid, 'REFERENCES')
+          and not has_table_privilege(role.rolname, relation.oid, 'TRIGGER')
+        )
+        from pg_class as relation
+        join pg_namespace as namespace on namespace.oid=relation.relnamespace
+        where namespace.nspname='public' and relation.relkind in ('r','p')
+      )
+    )::text
+   from pg_roles as role where role.rolname='hepta_resource_finality';")
+[[ "$finality_role_boundary" == t ]]
+definer_public_execute_count=$("${compose[@]}" exec -T postgres psql -X -A -t \
+  -U hepta_resource_migrator -d hepta_resource -v ON_ERROR_STOP=1 -c \
+  "select count(*)
+   from pg_proc as function
+   where function.oid = any(array[
+     to_regprocedure('public.hepta_paper_finality_v2_lock_window_arm()'),
+     to_regprocedure('public.hepta_paper_finality_v2_lock_preparation()'),
+     to_regprocedure('public.hepta_paper_finality_v2_apply_seal()'),
+     to_regprocedure('public.hepta_assert_paper_finality_v2_source_unsealed(uuid)'),
+     to_regprocedure('public.hepta_reject_paper_finality_v2_source_mutation()')
+   ])
+   and exists (
+     select 1
+     from aclexplode(coalesce(function.proacl, acldefault('f', function.proowner))) as privilege
+     where privilege.grantee=0 and privilege.privilege_type='EXECUTE'
+   );")
+[[ "$definer_public_execute_count" == 0 ]]
+verified_definer_count=$("${compose[@]}" exec -T postgres psql -X -A -t \
+  -U hepta_resource_migrator -d hepta_resource -v ON_ERROR_STOP=1 -c \
+  "select count(*)
+   from (values
+     ('public.hepta_paper_finality_v2_lock_window_arm()'),
+     ('public.hepta_paper_finality_v2_lock_preparation()'),
+     ('public.hepta_paper_finality_v2_apply_seal()'),
+     ('public.hepta_assert_paper_finality_v2_source_unsealed(uuid)'),
+     ('public.hepta_reject_paper_finality_v2_source_mutation()')
+   ) as expected(signature)
+   join pg_proc as function on function.oid=to_regprocedure(expected.signature)
+   where function.prosecdef
+     and function.proconfig=array['search_path=pg_catalog']::text[];")
+[[ "$verified_definer_count" == 5 ]]
 assert_ready_cap "$default_cap" "$evidence_dir/default-ready.json"
 default_ready_sha256=$(sha256sum "$evidence_dir/default-ready.json" | cut -d' ' -f1)
 default_container=$("${compose[@]}" ps -q hepta)
@@ -756,7 +991,7 @@ anchor_status=$(curl --silent --show-error --max-time 30 \
   "http://127.0.0.1:$host_port/v2/hepta/operator/trnm/trust-anchors")
 [[ "$anchor_status" == 201 ]]
 [[ $("${compose[@]}" exec -T postgres psql -X -A -t \
-  -U hepta_resource -d hepta_resource -v ON_ERROR_STOP=1 \
+  -U hepta_resource_migrator -d hepta_resource -v ON_ERROR_STOP=1 \
   -c "select count(*) from hepta_trnm_cometbft_trust_anchors;") == 1 ]]
 capture_db_snapshot db-baseline
 jq -e \
@@ -768,7 +1003,10 @@ jq -e \
     and .nakama_control_command_rows == 0
     and .finality_inbox_rows == 0
     and .chain_receipt_rows == 0
-    and .finality_projection_rows == 0' \
+    and .finality_projection_rows == 0
+    and .chain_time_checkpoint_rows == 0
+    and .finality_v2_window_arm_rows == 0
+    and .finality_v2_preparation_rows == 0' \
   "$evidence_dir/db-baseline-db-counts.json" >/dev/null
 cp -- "$evidence_dir/db-baseline-db-counts.json" \
   "$evidence_dir/db-baseline-counts.json"
@@ -812,6 +1050,10 @@ assert_ready_cap "$deployment_max" "$evidence_dir/max-ready.json"
 max_ready_sha256=$(sha256sum "$evidence_dir/max-ready.json" | cut -d' ' -f1)
 max_container=$("${compose[@]}" ps -q hepta)
 [[ "$max_container" != "$default_container" ]]
+[[ -z $("${compose[@]}" ps -a -q hepta-migrate) ]]
+[[ -z $("${docker_command[@]}" ps -aq \
+  --filter "label=com.docker.compose.project=$project" \
+  --filter 'label=com.docker.compose.service=hepta-migrate') ]]
 [[ $("${docker_command[@]}" inspect "$max_container" --format '{{.Image}}') == "$HEPTA_EXPECTED_IMAGE_ID" ]]
 [[ $("${docker_command[@]}" inspect "$max_container" --format '{{.HostConfig.Memory}}') == "$memory_limit_bytes" ]]
 max_pid=$("${docker_command[@]}" inspect "$max_container" --format '{{.State.Pid}}')
@@ -820,7 +1062,7 @@ printf '%s\n' "$max_cgroup_path" >"$evidence_dir/max-cgroup-memory-peak-path.txt
 max_baseline_peak=$(read_memory_peak "$max_cgroup_path")
 [[ "$max_baseline_peak" =~ ^[0-9]+$ ]]
 [[ $("${compose[@]}" exec -T postgres psql -X -A -t \
-  -U hepta_resource -d hepta_resource -v ON_ERROR_STOP=1 \
+  -U hepta_resource_migrator -d hepta_resource -v ON_ERROR_STOP=1 \
   -c "select count(*) from hepta_trnm_cometbft_trust_anchors;") == 1 ]]
 assert_db_unchanged max-after-recreate
 
@@ -1034,6 +1276,7 @@ jq -n \
   --arg gate_source_sha256 "$gate_source_sha256" \
   --arg generator_source_sha256 "$generator_source_sha256" \
   --arg compose_source_sha256 "$compose_source_sha256" \
+  --arg migration_compose_source_sha256 "$migration_compose_source_sha256" \
   --arg compose_default_sha256 "$compose_default_sha256" \
   --arg compose_max_sha256 "$compose_max_sha256" \
   --arg image_inspect_sha256 "$image_inspect_sha256" \
@@ -1095,6 +1338,7 @@ jq -n \
       gate_source_sha256:$gate_source_sha256,
       generator_source_sha256:$generator_source_sha256,
       compose_source_sha256:$compose_source_sha256,
+      migration_compose_source_sha256:$migration_compose_source_sha256,
       compose_default_rendered_sha256:$compose_default_sha256,
       compose_max_rendered_sha256:$compose_max_sha256,
       image_inspect_sha256:$image_inspect_sha256,

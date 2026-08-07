@@ -1894,6 +1894,11 @@ async fn create_paper_evaluation(
         {
             return Ok(replay);
         }
+        let _finality_seal_guard = state.paper_chain_finality.read().await;
+        crate::paper_chain_finality_v2::ensure_paper_finality_v2_source_unsealed_memory(
+            &_finality_seal_guard,
+            paper_id,
+        )?;
         let mut next = memory.clone();
         let context = review_context_memory(&next, paper_id)?;
         let submission = load_submission_memory(&next, paper_id, request.submission_id)?;
@@ -1987,6 +1992,10 @@ async fn create_paper_evaluation(
     if let Some(replay) = replay {
         return decode_stored(replay);
     }
+    crate::paper_chain_finality_v2::lock_paper_finality_v2_source_unsealed_postgres(
+        &mut tx, paper_id,
+    )
+    .await?;
     let context = review_context_postgres(&mut tx, paper_id).await?;
     let submission = load_submission_postgres(&mut tx, paper_id, request.submission_id).await?;
     let ledger =
@@ -2559,6 +2568,11 @@ async fn create_paper_reproduction(
         {
             return Ok(replay);
         }
+        let _finality_seal_guard = state.paper_chain_finality.read().await;
+        crate::paper_chain_finality_v2::ensure_paper_finality_v2_source_unsealed_memory(
+            &_finality_seal_guard,
+            paper_id,
+        )?;
         let mut next = memory.clone();
         let context = review_context_memory(&next, paper_id)?;
         let evaluation = next
@@ -2624,6 +2638,10 @@ async fn create_paper_reproduction(
     if let Some(replay) = replay {
         return decode_stored(replay);
     }
+    crate::paper_chain_finality_v2::lock_paper_finality_v2_source_unsealed_postgres(
+        &mut tx, paper_id,
+    )
+    .await?;
     let context = review_context_postgres(&mut tx, paper_id).await?;
     let row = sqlx::query(
         "select record_json from hepta_paper_evaluations
@@ -2828,6 +2846,11 @@ async fn create_paper_appeal(
         {
             return Ok(replay);
         }
+        let _finality_seal_guard = state.paper_chain_finality.read().await;
+        crate::paper_chain_finality_v2::ensure_paper_finality_v2_source_unsealed_memory(
+            &_finality_seal_guard,
+            paper_id,
+        )?;
         let mut next = memory.clone();
         let context = review_context_memory(&next, paper_id)?;
         let evaluation = next
@@ -2903,6 +2926,10 @@ async fn create_paper_appeal(
     if let Some(replay) = replay {
         return decode_stored(replay);
     }
+    crate::paper_chain_finality_v2::lock_paper_finality_v2_source_unsealed_postgres(
+        &mut tx, paper_id,
+    )
+    .await?;
     let context = review_context_postgres(&mut tx, paper_id).await?;
     let row = sqlx::query(
         "select record_json from hepta_paper_evaluations
@@ -3124,6 +3151,11 @@ async fn resolve_paper_appeal(
         {
             return Ok(replay);
         }
+        let _finality_seal_guard = state.paper_chain_finality.read().await;
+        crate::paper_chain_finality_v2::ensure_paper_finality_v2_source_unsealed_memory(
+            &_finality_seal_guard,
+            paper_id,
+        )?;
         let mut next = memory.clone();
         let context = review_context_memory(&next, paper_id)?;
         let appeal = next
@@ -3209,6 +3241,10 @@ async fn resolve_paper_appeal(
     if let Some(replay) = replay {
         return decode_stored(replay);
     }
+    crate::paper_chain_finality_v2::lock_paper_finality_v2_source_unsealed_postgres(
+        &mut tx, paper_id,
+    )
+    .await?;
     let context = review_context_postgres(&mut tx, paper_id).await?;
     let row = sqlx::query(
         "select record_json from hepta_paper_appeals

@@ -85,6 +85,51 @@ pub(crate) struct PaperRaidMemory {
     events: Vec<EventEnvelope>,
 }
 
+#[cfg(test)]
+impl PaperRaidMemory {
+    pub(crate) fn paper_finality_v1_side_effect_snapshot(&self) -> Value {
+        let mut authorization_sets = self
+            .research_session_authorization_sets
+            .values()
+            .collect::<Vec<_>>();
+        authorization_sets.sort_by(|left, right| {
+            (&left.session_id, left.roster_version).cmp(&(&right.session_id, right.roster_version))
+        });
+        let mut completions = self
+            .research_session_completions
+            .values()
+            .collect::<Vec<_>>();
+        completions.sort_by(|left, right| {
+            (&left.session_id, left.roster_version).cmp(&(&right.session_id, right.roster_version))
+        });
+        let mut idempotency = self
+            .idempotency
+            .iter()
+            .map(|(key, record)| {
+                json!({
+                    "key": key,
+                    "request_hash": record.request_hash,
+                    "status": record.status.as_u16(),
+                    "response": record.response,
+                })
+            })
+            .collect::<Vec<_>>();
+        idempotency.sort_by(|left, right| left["key"].as_str().cmp(&right["key"].as_str()));
+        json!({
+            "papers": self.papers,
+            "submissions": self.submissions,
+            "authorization_sets": authorization_sets,
+            "completions": completions,
+            "evaluations": self.review.evaluations,
+            "reproductions": self.review.reproductions,
+            "appeals": self.review.appeals,
+            "resolutions": self.review.resolutions,
+            "idempotency": idempotency,
+            "events": self.events,
+        })
+    }
+}
+
 #[derive(Debug, Clone)]
 struct MemoryIdempotencyRecord {
     request_hash: String,
@@ -3987,6 +4032,16 @@ fn version_conflict(kind: &str, expected: u64, actual: u64) -> ApiError {
     )
 }
 
+async fn ensure_paper_finality_v2_source_unsealed_memory(
+    state: &AppState,
+    paper_id: Uuid,
+) -> Result<(), ApiError> {
+    let finality = state.paper_chain_finality.read().await;
+    crate::paper_chain_finality_v2::ensure_paper_finality_v2_source_unsealed_memory(
+        &finality, paper_id,
+    )
+}
+
 async fn create_paper(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -4236,6 +4291,7 @@ async fn transition_paper(
         {
             return Ok(replay);
         }
+        ensure_paper_finality_v2_source_unsealed_memory(&state, paper_id).await?;
         let paper_snapshot = memory.papers.get(&paper_id).cloned().ok_or_else(|| {
             ApiError::not_found("paper_project_not_found", "paper project does not exist")
         })?;
@@ -4301,6 +4357,10 @@ async fn transition_paper(
     if let Some(replay) = replay {
         return decode_stored(replay);
     }
+    crate::paper_chain_finality_v2::lock_paper_finality_v2_source_unsealed_postgres(
+        &mut tx, paper_id,
+    )
+    .await?;
     let row = sqlx::query(
         "select version, record_json from hepta_paper_projects
          where paper_project_id = $1 for update",
@@ -4448,6 +4508,7 @@ async fn create_work_item(
         {
             return Ok(replay);
         }
+        ensure_paper_finality_v2_source_unsealed_memory(&state, paper_id).await?;
         if memory.work_items.contains_key(&request.work_item_id) {
             return Err(ApiError::conflict(
                 "work_item_conflict",
@@ -4544,6 +4605,10 @@ async fn create_work_item(
     if let Some(replay) = replay {
         return decode_stored(replay);
     }
+    crate::paper_chain_finality_v2::lock_paper_finality_v2_source_unsealed_postgres(
+        &mut tx, paper_id,
+    )
+    .await?;
     let paper_row = sqlx::query(
         "select team_id, phase, version, record_json from hepta_paper_projects
          where paper_project_id = $1 for update",
@@ -4927,6 +4992,7 @@ async fn create_revision(
         {
             return Ok(replay);
         }
+        ensure_paper_finality_v2_source_unsealed_memory(&state, paper_id).await?;
         if memory.revisions.contains_key(&request.revision_id) {
             return Err(ApiError::conflict(
                 "paper_revision_conflict",
@@ -5047,6 +5113,10 @@ async fn create_revision(
     if let Some(replay) = replay {
         return decode_stored(replay);
     }
+    crate::paper_chain_finality_v2::lock_paper_finality_v2_source_unsealed_postgres(
+        &mut tx, paper_id,
+    )
+    .await?;
     let paper_row = sqlx::query(
         "select version, record_json from hepta_paper_projects
          where paper_project_id = $1 for update",
@@ -5302,6 +5372,7 @@ async fn promote_release_candidate(
         {
             return Ok(replay);
         }
+        ensure_paper_finality_v2_source_unsealed_memory(&state, paper_id).await?;
         let paper = memory.papers.get(&paper_id).cloned().ok_or_else(|| {
             ApiError::not_found("paper_project_not_found", "paper project does not exist")
         })?;
@@ -5447,6 +5518,10 @@ async fn promote_release_candidate(
     if let Some(replay) = replay {
         return decode_stored(replay);
     }
+    crate::paper_chain_finality_v2::lock_paper_finality_v2_source_unsealed_postgres(
+        &mut tx, paper_id,
+    )
+    .await?;
     let paper_row = sqlx::query(
         "select version, record_json from hepta_paper_projects
          where paper_project_id = $1 for update",
@@ -5763,6 +5838,7 @@ async fn create_authorship_consent(
         {
             return Ok(replay);
         }
+        ensure_paper_finality_v2_source_unsealed_memory(&state, paper_id).await?;
         if memory.consents.contains_key(&request.consent_id) {
             return Err(ApiError::conflict(
                 "authorship_consent_conflict",
@@ -5905,6 +5981,10 @@ async fn create_authorship_consent(
     if let Some(replay) = replay {
         return decode_stored(replay);
     }
+    crate::paper_chain_finality_v2::lock_paper_finality_v2_source_unsealed_postgres(
+        &mut tx, paper_id,
+    )
+    .await?;
     let paper_row = sqlx::query(
         "select version, record_json from hepta_paper_projects
          where paper_project_id = $1 for update",
@@ -6278,6 +6358,7 @@ async fn finalize_paper(
         {
             return Ok(replay);
         }
+        ensure_paper_finality_v2_source_unsealed_memory(&state, paper_id).await?;
         if memory.submissions.contains_key(&request.submission_id)
             || memory.submissions.values().any(|submission| {
                 submission.paper_project_id == paper_id
@@ -6440,6 +6521,10 @@ async fn finalize_paper(
     if let Some(replay) = replay {
         return decode_stored(replay);
     }
+    crate::paper_chain_finality_v2::lock_paper_finality_v2_source_unsealed_postgres(
+        &mut tx, paper_id,
+    )
+    .await?;
     let paper_row = sqlx::query(
         "select version, record_json from hepta_paper_projects
          where paper_project_id = $1 for update",
@@ -7014,6 +7099,7 @@ async fn issue_research_session_authorization_set(
         {
             return Ok(replay);
         }
+        ensure_paper_finality_v2_source_unsealed_memory(&state, request.paper_project_id).await?;
         if memory
             .research_session_authorization_sets
             .values()
@@ -7140,6 +7226,11 @@ async fn issue_research_session_authorization_set(
     if let Some(replay) = replay {
         return decode_stored(replay);
     }
+    crate::paper_chain_finality_v2::lock_paper_finality_v2_source_unsealed_postgres(
+        &mut tx,
+        request.paper_project_id,
+    )
+    .await?;
     let paper_row = sqlx::query(
         "select version, record_json from hepta_paper_projects
          where paper_project_id = $1 for share",
@@ -7360,6 +7451,7 @@ async fn replace_research_session_authorization_set(
         {
             return Ok(replay);
         }
+        ensure_paper_finality_v2_source_unsealed_memory(&state, request.paper_project_id).await?;
         let latest_roster_version = memory
             .research_session_authorization_sets
             .values()
@@ -7525,6 +7617,11 @@ async fn replace_research_session_authorization_set(
     if let Some(replay) = replay {
         return decode_stored(replay);
     }
+    crate::paper_chain_finality_v2::lock_paper_finality_v2_source_unsealed_postgres(
+        &mut tx,
+        request.paper_project_id,
+    )
+    .await?;
     let previous_row = sqlx::query(
         "select record_json from hepta_research_session_authorization_sets
          where session_id = $1 and roster_version = $2
@@ -7925,6 +8022,7 @@ async fn consume_research_session_authorization_set(
                     "research session authorization set does not exist",
                 )
             })?;
+        ensure_paper_finality_v2_source_unsealed_memory(&state, snapshot.paper_project_id).await?;
         ensure_consumption_matches_set(&request, &snapshot, consumed_at)?;
         let consumed_set = {
             let set = memory
@@ -7984,6 +8082,26 @@ async fn consume_research_session_authorization_set(
     if let Some(replay) = replay {
         return decode_stored(replay);
     }
+    let paper_project_id = sqlx::query_scalar::<_, Uuid>(
+        "select paper_project_id from hepta_research_session_authorization_sets
+         where session_id = $1 and roster_version = $2",
+    )
+    .bind(&request.session_id)
+    .bind(request.roster_version as i64)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(ApiError::database)?
+    .ok_or_else(|| {
+        ApiError::not_found(
+            "authorization_set_not_found",
+            "research session authorization set does not exist",
+        )
+    })?;
+    crate::paper_chain_finality_v2::lock_paper_finality_v2_source_unsealed_postgres(
+        &mut tx,
+        paper_project_id,
+    )
+    .await?;
     let row = sqlx::query(
         "select record_json from hepta_research_session_authorization_sets
          where session_id = $1 and roster_version = $2 for update",
@@ -8001,6 +8119,12 @@ async fn consume_research_session_authorization_set(
     })?;
     let mut set: ResearchSessionAuthorizationSetV1 =
         decode_record(row.get("record_json"), "research session authorization set")?;
+    if set.paper_project_id != paper_project_id {
+        return Err(ApiError::conflict(
+            "authorization_set_paper_changed",
+            "authorization set changed Paper scope while awaiting its source lock",
+        ));
+    }
     ensure_consumption_matches_set(&request, &set, consumed_at)?;
     set.status = ResearchSessionAuthorizationSetStatus::Consumed;
     set.version += 1;
@@ -8294,6 +8418,8 @@ async fn ingest_nakama_research_session_completion(
                     "completion has no corresponding authorization set",
                 )
             })?;
+        ensure_paper_finality_v2_source_unsealed_memory(&state, set_snapshot.paper_project_id)
+            .await?;
         let latest_roster_version = memory
             .research_session_authorization_sets
             .values()
@@ -8372,6 +8498,31 @@ async fn ingest_nakama_research_session_completion(
     if let Some(replay) = replay {
         return decode_stored(replay);
     }
+    let paper_project_id = sqlx::query_scalar::<_, Uuid>(
+        "select paper_project_id from hepta_research_session_authorization_sets
+         where session_id = $1 and roster_version = $2
+           and roster_version = (
+               select max(latest.roster_version)
+               from hepta_research_session_authorization_sets latest
+               where latest.session_id = $1
+           )",
+    )
+    .bind(&request.completion.session_id)
+    .bind(request.completion.roster_version as i64)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(ApiError::database)?
+    .ok_or_else(|| {
+        ApiError::not_found(
+            "authorization_set_not_found",
+            "completion has no corresponding authorization set",
+        )
+    })?;
+    crate::paper_chain_finality_v2::lock_paper_finality_v2_source_unsealed_postgres(
+        &mut tx,
+        paper_project_id,
+    )
+    .await?;
     let set_row = sqlx::query(
         "select record_json from hepta_research_session_authorization_sets
          where session_id = $1 and roster_version = $2
@@ -8397,8 +8548,15 @@ async fn ingest_nakama_research_session_completion(
         set_row.get("record_json"),
         "research session authorization set",
     )?;
-    let (team_id, paper_project_id, challenge_id) =
+    if set.paper_project_id != paper_project_id {
+        return Err(ApiError::conflict(
+            "authorization_set_paper_changed",
+            "authorization set changed Paper scope while awaiting its source lock",
+        ));
+    }
+    let (team_id, completion_paper_project_id, challenge_id) =
         ensure_completion_matches_set(&request.completion, &set)?;
+    debug_assert_eq!(completion_paper_project_id, paper_project_id);
     let submission_row = sqlx::query(
         "select record_json from hepta_joint_paper_submissions
          where paper_project_id = $1 and status = 'submission_ready' for share",

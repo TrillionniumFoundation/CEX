@@ -9,6 +9,7 @@
 use anyhow::{anyhow, ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::io::{self, Write};
 
 use crate::{
     authenticated_object_proof_key_v4, decode_hash32, hash_domain, AuthenticatedObjectRecordV1,
@@ -68,6 +69,82 @@ fn ensure_trust_anchor_v1_wire_len(len: usize) -> Result<()> {
         MAX_COMETBFT_TRUST_ANCHOR_V1_WIRE_BYTES
     );
     Ok(())
+}
+
+/// Compare Serde's compact JSON output with the supplied wire bytes without
+/// allocating a second document-sized buffer.  Receipt V2 can legitimately be
+/// large, so `serde_json::to_vec(value) == wire` would otherwise double the
+/// canonicality check's transient memory.
+fn ensure_exact_compact_json<T: Serialize>(value: &T, wire: &[u8], label: &str) -> Result<()> {
+    struct ExactWriter<'a> {
+        expected: &'a [u8],
+        offset: usize,
+    }
+
+    impl Write for ExactWriter<'_> {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            let end = self.offset.checked_add(bytes.len()).ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "canonical JSON offset overflow")
+            })?;
+            if self.expected.get(self.offset..end) != Some(bytes) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "canonical JSON mismatch",
+                ));
+            }
+            self.offset = end;
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let mut writer = ExactWriter {
+        expected: wire,
+        offset: 0,
+    };
+    if serde_json::to_writer(&mut writer, value).is_err() || writer.offset != wire.len() {
+        return Err(anyhow!("{label} JSON is not canonical"));
+    }
+    Ok(())
+}
+
+#[derive(Default)]
+struct CountingWriter {
+    len: u64,
+}
+
+impl Write for CountingWriter {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.len = self
+            .len
+            .checked_add(u64::try_from(bytes.len()).map_err(|_| {
+                io::Error::new(io::ErrorKind::InvalidData, "serialized length exceeds u64")
+            })?)
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "serialized length overflow")
+            })?;
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+struct Sha256Writer<'a>(&'a mut Sha256);
+
+impl Write for Sha256Writer<'_> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0.update(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 fn decode_canonical_hex(
@@ -544,11 +621,7 @@ impl CometBftTrustAnchorV1 {
         let anchor: Self =
             serde_json::from_slice(bytes).context("decode CometBFT trust anchor JSON")?;
         anchor.validate_shape()?;
-        let canonical = serde_json::to_vec(&anchor)?;
-        ensure!(
-            canonical == bytes,
-            "CometBFT trust anchor JSON is not canonical"
-        );
+        ensure_exact_compact_json(&anchor, bytes, "CometBFT trust anchor")?;
         Ok(anchor)
     }
 
@@ -689,6 +762,28 @@ pub struct CometBftAppHashFinalityReceiptV2 {
     pub receipt_hash_hex: String,
 }
 
+/// Borrowed wire view used for Receipt V2's self-hash.  Keeping this separate
+/// from the owned receipt prevents a document-sized clone merely to blank the
+/// self-referential hash field.
+#[derive(Serialize)]
+struct UnsignedCometBftAppHashFinalityReceiptV2<'a> {
+    schema: &'a str,
+    chain_id: &'a str,
+    command_id: &'a str,
+    command_fingerprint_hex: &'a str,
+    execution_height: u64,
+    commitment_height: u64,
+    comet_tx_hash_hex: &'a str,
+    raw_tx_hex: &'a str,
+    execution_header: &'a CometBftHeaderV1,
+    commitment_light_proof: &'a CometBftLightFinalityProofV1,
+    transaction_inclusion_proof: &'a CometBftMerkleInclusionProofV1,
+    canonical_result_bytes_hex: &'a str,
+    result_inclusion_proof: &'a CometBftMerkleInclusionProofV1,
+    applied_command_object_proof: &'a AppHashObjectProofV1,
+    receipt_hash_hex: &'static str,
+}
+
 impl CometBftAppHashFinalityReceiptV2 {
     /// Decode only the exact compact JSON representation emitted by
     /// [`Self::canonical_bytes`], with an overall limit applied before Serde
@@ -697,8 +792,7 @@ impl CometBftAppHashFinalityReceiptV2 {
         ensure_receipt_v2_wire_len(bytes.len())?;
         let receipt: Self = serde_json::from_slice(bytes).context("decode Receipt V2 JSON")?;
         receipt.validate_shape()?;
-        let canonical = serde_json::to_vec(&receipt)?;
-        ensure!(canonical == bytes, "Receipt V2 JSON is not canonical");
+        ensure_exact_compact_json(&receipt, bytes, "Receipt V2")?;
         Ok(receipt)
     }
 
@@ -861,7 +955,7 @@ impl CometBftAppHashFinalityReceiptV2 {
         if require_receipt_hash {
             let receipt_hash = decode_hash32("receipt_hash_hex", &self.receipt_hash_hex)?;
             ensure!(
-                receipt_hash == self.compute_receipt_hash()?,
+                receipt_hash == self.compute_receipt_hash_validated()?,
                 "receipt_hash_hex mismatch"
             );
         } else {
@@ -880,16 +974,58 @@ impl CometBftAppHashFinalityReceiptV2 {
 
     pub fn unsigned_bytes(&self) -> Result<Vec<u8>> {
         self.validate_common(false)?;
-        let mut copy = self.clone();
-        copy.receipt_hash_hex.clear();
-        serde_json::to_vec(&copy).map_err(Into::into)
+        serde_json::to_vec(&self.unsigned_view()).map_err(Into::into)
     }
 
     pub fn compute_receipt_hash(&self) -> Result<Hash32> {
-        Ok(hash_domain(
-            "trnm.cometbft.apphash.finality.receipt.v2",
-            &[&self.unsigned_bytes()?],
-        ))
+        self.validate_common(false)?;
+        self.compute_receipt_hash_validated()
+    }
+
+    fn unsigned_view(&self) -> UnsignedCometBftAppHashFinalityReceiptV2<'_> {
+        UnsignedCometBftAppHashFinalityReceiptV2 {
+            schema: &self.schema,
+            chain_id: &self.chain_id,
+            command_id: &self.command_id,
+            command_fingerprint_hex: &self.command_fingerprint_hex,
+            execution_height: self.execution_height,
+            commitment_height: self.commitment_height,
+            comet_tx_hash_hex: &self.comet_tx_hash_hex,
+            raw_tx_hex: &self.raw_tx_hex,
+            execution_header: &self.execution_header,
+            commitment_light_proof: &self.commitment_light_proof,
+            transaction_inclusion_proof: &self.transaction_inclusion_proof,
+            canonical_result_bytes_hex: &self.canonical_result_bytes_hex,
+            result_inclusion_proof: &self.result_inclusion_proof,
+            applied_command_object_proof: &self.applied_command_object_proof,
+            receipt_hash_hex: "",
+        }
+    }
+
+    /// Hash the canonical unsigned view directly into SHA-256.  The framing is
+    /// byte-for-byte identical to `hash_domain(domain, &[unsigned_bytes])`, but
+    /// it avoids allocating the potentially 128 MiB unsigned JSON document.
+    fn compute_receipt_hash_validated(&self) -> Result<Hash32> {
+        const HASH_PREFIX: &[u8] = b"trnm.domain.hash.v1";
+        const DOMAIN: &[u8] = b"trnm.cometbft.apphash.finality.receipt.v2";
+
+        let unsigned = self.unsigned_view();
+        let mut counter = CountingWriter::default();
+        serde_json::to_writer(&mut counter, &unsigned)
+            .context("measure canonical unsigned Receipt V2")?;
+        ensure!(
+            counter.len <= MAX_COMETBFT_RECEIPT_V2_WIRE_BYTES as u64,
+            "unsigned Receipt V2 exceeds the wire limit"
+        );
+
+        let mut hasher = Sha256::new();
+        hasher.update(HASH_PREFIX);
+        hasher.update((DOMAIN.len() as u64).to_be_bytes());
+        hasher.update(DOMAIN);
+        hasher.update(counter.len.to_be_bytes());
+        serde_json::to_writer(Sha256Writer(&mut hasher), &unsigned)
+            .context("hash canonical unsigned Receipt V2")?;
+        Ok(hasher.finalize().into())
     }
 }
 

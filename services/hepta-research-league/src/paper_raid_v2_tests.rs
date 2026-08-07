@@ -8,7 +8,11 @@ use chrono::Utc;
 use ed25519_dalek::{Signer, SigningKey};
 use serde_json::{json, Value};
 use sqlx::{Connection, PgConnection, Row};
-use std::collections::BTreeMap;
+use std::{
+    collections::BTreeMap,
+    sync::Arc,
+    time::{Duration, UNIX_EPOCH},
+};
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -18,6 +22,11 @@ use crate::{
     paper_chain_finality_v1::{
         paper_trnm_submission_commitment_hash, PaperTrnmCommandBindingV1,
         PAPER_TRNM_COMMAND_BINDING_SCHEMA_V1,
+    },
+    paper_chain_finality_v2::{
+        binding_commitment_id_v2, paper_scientific_finality_policy_hash_v1, validate_binding_v2,
+        PaperTrnmAppealStatusV2, PaperTrnmChainTimeCheckpointV1, PaperTrnmFinalityPreparationV2,
+        PaperTrnmFinalityWindowArmV2, PAPER_CHAIN_TIME_MAX_LAG_MS_V1,
     },
     paper_raid_contracts::{
         agent_binding_key_rotation_signing_bytes, agent_binding_proof_signing_bytes,
@@ -851,8 +860,43 @@ pub(crate) async fn reset_postgres(database_url: &str) {
     let pool = sqlx::PgPool::connect(database_url)
         .await
         .expect("maintenance pool");
+    // 0038 intentionally makes TRUNCATE impossible for both immutable
+    // evidence and its source tables.  These PostgreSQL tests run in a
+    // dedicated disposable database, so reset explicitly removes only the
+    // statement-level TRUNCATE guards, clears the fixture data, and then
+    // reapplies 0038 to reconstruct and verify the production guard set.
+    sqlx::raw_sql(
+        "drop trigger if exists hepta_trnm_time_checkpoint_v1_truncate_guard
+             on hepta_trnm_cometbft_time_checkpoints_v1;
+         drop trigger if exists hepta_paper_finality_v2_window_arm_truncate_guard
+             on hepta_paper_chain_finality_window_arms_v2;
+         drop trigger if exists hepta_paper_finality_v2_preparation_truncate_guard
+             on hepta_paper_chain_finality_preparations_v2;
+         drop trigger if exists hepta_paper_projects_finality_v2_truncate_guard
+             on hepta_paper_projects;
+         drop trigger if exists hepta_joint_submissions_finality_v2_truncate_guard
+             on hepta_joint_paper_submissions;
+         drop trigger if exists hepta_paper_evaluations_finality_v2_truncate_guard
+             on hepta_paper_evaluations;
+         drop trigger if exists hepta_paper_reproductions_finality_v2_truncate_guard
+             on hepta_paper_reproductions;
+         drop trigger if exists hepta_paper_appeals_finality_v2_truncate_guard
+             on hepta_paper_appeals;
+         drop trigger if exists hepta_paper_resolutions_finality_v2_truncate_guard
+             on hepta_paper_appeal_resolutions;
+         drop trigger if exists hepta_research_auth_sets_finality_v2_truncate_guard
+             on hepta_research_session_authorization_sets;
+         drop trigger if exists hepta_nakama_completions_finality_v2_truncate_guard
+             on hepta_nakama_research_session_completions;",
+    )
+    .execute(&pool)
+    .await
+    .expect("drop test-only V2 TRUNCATE guards before reset");
     sqlx::raw_sql(
         "truncate table
+           hepta_paper_chain_finality_preparations_v2,
+           hepta_paper_chain_finality_window_arms_v2,
+           hepta_trnm_cometbft_time_checkpoints_v1,
            hepta_paper_chain_finality_projections,
            hepta_paper_chain_receipts,
            hepta_paper_chain_finality_inbox,
@@ -922,6 +966,12 @@ pub(crate) async fn reset_postgres(database_url: &str) {
     .execute(&pool)
     .await
     .expect("reset dedicated test database");
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/0038_add_hepta_paper_chain_finality_v2.sql"
+    ))
+    .execute(&pool)
+    .await
+    .expect("restore V2 constraints and TRUNCATE guards after test reset");
 }
 
 async fn register_prerequisites(router: &Router, actors: &[Actor]) -> Uuid {
@@ -3973,6 +4023,612 @@ pub(crate) async fn seed_paper_chain_finality_test(state: AppState) -> PaperTrnm
     binding
 }
 
+const PAPER_FINALITY_V2_ANCHOR_FILE: &[u8] =
+    include_bytes!("../../../vendor/trnm-finality-verifier/fixtures/cometbft-trust-anchor-v1.json");
+const PAPER_FINALITY_V2_RECEIPT_FILE: &[u8] = include_bytes!(
+    "../../../vendor/trnm-finality-verifier/fixtures/cometbft-apphash-finality-receipt-v2.json"
+);
+const PAPER_FINALITY_V2_ANCHOR_HASH: &str =
+    "88b73fc902dd554c35b9a44ff582ec6d76e59085a2e4fdf14292183f4b3846d5";
+const PAPER_FINALITY_V2_FIXTURE_VERIFICATION_TIME_UNIX_S: u64 = 1_786_034_510;
+
+pub(crate) fn paper_chain_finality_v2_security() -> SecurityConfig {
+    security()
+        .with_pinned_trnm_cometbft_trust_anchor_hash(PAPER_FINALITY_V2_ANCHOR_HASH)
+        .expect("valid pinned Paper finality V2 trust anchor")
+}
+
+fn set_paper_chain_finality_v2_clock(state: &mut AppState, unix_ms: u64) {
+    let instant = UNIX_EPOCH + Duration::from_millis(unix_ms);
+    state.cometbft_local_verification_clock = Arc::new(move || instant);
+}
+
+async fn admit_paper_chain_finality_v2_anchor(router: &Router) {
+    let canonical = PAPER_FINALITY_V2_ANCHOR_FILE
+        .strip_suffix(b"\n")
+        .expect("repository trust-anchor fixture has one transport newline");
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v2/hepta/operator/trnm/trust-anchors")
+                .header("content-type", "application/json")
+                .header(OPERATOR_TOKEN_HEADER, "operator")
+                .body(Body::from(canonical.to_vec()))
+                .expect("trust-anchor request"),
+        )
+        .await
+        .expect("trust-anchor response");
+    assert_eq!(response.status(), StatusCode::CREATED);
+}
+
+async fn admit_paper_chain_finality_v2_start_checkpoint(
+    router: &Router,
+) -> PaperTrnmChainTimeCheckpointV1 {
+    let receipt: Value = serde_json::from_slice(PAPER_FINALITY_V2_RECEIPT_FILE)
+        .expect("decode CometBFT Receipt V2 fixture");
+    let request_body = json!({
+        "trust_anchor_hash":PAPER_FINALITY_V2_ANCHOR_HASH,
+        "proof":receipt["commitment_light_proof"],
+    });
+    let path = "/v2/hepta/operator/trnm/time-checkpoints";
+    let created = assert_status(
+        request(router, "POST", path, request_body.clone(), None).await,
+        StatusCode::CREATED,
+    );
+    assert_eq!(
+        assert_status(
+            request(router, "POST", path, request_body, None).await,
+            StatusCode::OK,
+        ),
+        created,
+        "exact checkpoint admission replay must preserve the authenticated tuple"
+    );
+    serde_json::from_value(created).expect("decode admitted Chain-time checkpoint")
+}
+
+fn synthetic_authenticated_checkpoint(
+    start: &PaperTrnmChainTimeCheckpointV1,
+    height: u64,
+    consensus_time_unix_ms: u64,
+    suffix: &str,
+) -> (PaperTrnmChainTimeCheckpointV1, Value) {
+    // The vendored CometBFT fixture above exercises the real admission and
+    // verifier boundary, but it contains only one finalized height.  Later
+    // heights are inserted as already-authenticated repository records so
+    // this suite can isolate arm/deadline/seal semantics.  Verifier fixtures
+    // separately reject unsigned or structurally invalid light proofs.
+    let canonical_proof = json!({
+        "schema":"hepta.paper_raid.test_authenticated_chain_time_checkpoint.v1",
+        "source_checkpoint_hash":start.checkpoint_hash,
+        "height":height,
+        "consensus_time_unix_ms":consensus_time_unix_ms,
+        "suffix":suffix,
+    });
+    let header_hash = digest(&format!("paper-finality-v2-header-{height}-{suffix}"))
+        .strip_prefix("sha256:")
+        .expect("digest prefix")
+        .to_string();
+    let checkpoint = PaperTrnmChainTimeCheckpointV1 {
+        schema: crate::paper_chain_finality_v2::PAPER_TRNM_CHAIN_TIME_CHECKPOINT_SCHEMA_V1
+            .to_string(),
+        checkpoint_hash: digest(&format!(
+            "paper-finality-v2-checkpoint-{height}-{consensus_time_unix_ms}-{suffix}"
+        )),
+        trust_anchor_hash: start.trust_anchor_hash.clone(),
+        chain_id: start.chain_id.clone(),
+        height,
+        header_hash,
+        consensus_time_unix_ms,
+        canonical_proof_sha256: canonical_json_sha256(&canonical_proof)
+            .expect("canonical synthetic proof hash"),
+        locally_verified_at_unix_ms: consensus_time_unix_ms,
+    };
+    (checkpoint, canonical_proof)
+}
+
+async fn seed_authenticated_chain_time_checkpoint(
+    state: &AppState,
+    checkpoint: &PaperTrnmChainTimeCheckpointV1,
+    canonical_proof: &Value,
+) {
+    if let Some(pool) = state.finality_pool.as_ref().or(state.pool.as_ref()) {
+        sqlx::query(
+            "insert into hepta_trnm_cometbft_time_checkpoints_v1 (
+                checkpoint_hash,trust_anchor_hash,chain_id,height,header_hash,
+                consensus_time_unix_ms,canonical_proof,canonical_proof_sha256,
+                locally_verified_at_unix_ms,record_json
+             ) values ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10::jsonb)",
+        )
+        .bind(&checkpoint.checkpoint_hash)
+        .bind(&checkpoint.trust_anchor_hash)
+        .bind(&checkpoint.chain_id)
+        .bind(i64::try_from(checkpoint.height).expect("test checkpoint height fits i64"))
+        .bind(&checkpoint.header_hash)
+        .bind(
+            i64::try_from(checkpoint.consensus_time_unix_ms)
+                .expect("test checkpoint time fits i64"),
+        )
+        .bind(canonical_proof)
+        .bind(&checkpoint.canonical_proof_sha256)
+        .bind(
+            i64::try_from(checkpoint.locally_verified_at_unix_ms)
+                .expect("test local verification time fits i64"),
+        )
+        .bind(serde_json::to_value(checkpoint).expect("encode test checkpoint"))
+        .execute(pool)
+        .await
+        .expect("seed authenticated synthetic Chain-time checkpoint");
+    } else {
+        let mut finality = state.paper_chain_finality.write().await;
+        let height_key = (checkpoint.chain_id.clone(), checkpoint.height);
+        assert!(
+            finality
+                .preparations_v2
+                .time_checkpoint_hash_by_chain_height
+                .insert(height_key, checkpoint.checkpoint_hash.clone())
+                .is_none(),
+            "synthetic checkpoint height must be new"
+        );
+        assert!(
+            finality
+                .preparations_v2
+                .time_checkpoints_by_hash
+                .insert(checkpoint.checkpoint_hash.clone(), checkpoint.clone())
+                .is_none(),
+            "synthetic checkpoint hash must be new"
+        );
+    }
+}
+
+struct ArmedPaperFinalityV2Test {
+    state: AppState,
+    legacy: PaperTrnmCommandBindingV1,
+    arm: PaperTrnmFinalityWindowArmV2,
+}
+
+async fn arm_paper_chain_finality_v2_window(mut state: AppState) -> ArmedPaperFinalityV2Test {
+    set_paper_chain_finality_v2_clock(
+        &mut state,
+        PAPER_FINALITY_V2_FIXTURE_VERIFICATION_TIME_UNIX_S * 1_000,
+    );
+    let router = app(state.clone());
+    admit_paper_chain_finality_v2_anchor(&router).await;
+    let start_checkpoint = admit_paper_chain_finality_v2_start_checkpoint(&router).await;
+    let legacy = seed_paper_chain_finality_test(state.clone()).await;
+    let arm_path = format!(
+        "/v2/hepta/papers/{}/chain-finality-v2/arm",
+        legacy.paper_project_id
+    );
+    let arm_body = json!({
+        "submission_id":legacy.submission_id,
+        "evaluation_id":legacy.evaluation_id,
+        "latest_reproduction_id":legacy.reproduction_id,
+        "research_session_id":legacy.research_session_id,
+        "research_session_roster_version":legacy.research_session_roster_version,
+        "start_checkpoint_hash":start_checkpoint.checkpoint_hash,
+        "idempotency_key":"paper-finality-v2-window-arm",
+    });
+    let created = assert_status(
+        request(&router, "POST", &arm_path, arm_body.clone(), None).await,
+        StatusCode::CREATED,
+    );
+    assert_eq!(
+        assert_status(
+            request(&router, "POST", &arm_path, arm_body.clone(), None).await,
+            StatusCode::OK,
+        ),
+        created,
+        "window-arm replay must be byte-for-byte stable"
+    );
+    let arm: PaperTrnmFinalityWindowArmV2 =
+        serde_json::from_value(created).expect("decode V2 window arm");
+    assert_eq!(arm.max_chain_time_lag_ms, PAPER_CHAIN_TIME_MAX_LAG_MS_V1);
+    ArmedPaperFinalityV2Test { state, legacy, arm }
+}
+
+pub(crate) async fn exercise_paper_chain_finality_v2_preparation(
+    state: AppState,
+) -> PaperTrnmFinalityPreparationV2 {
+    let armed = arm_paper_chain_finality_v2_window(state).await;
+    let mut state = armed.state;
+    let legacy = armed.legacy;
+    let arm = armed.arm;
+    let path = format!(
+        "/v2/hepta/papers/{}/chain-finality-v2/prepare",
+        legacy.paper_project_id
+    );
+    let early_time = arm
+        .earliest_final_checkpoint_time_unix_ms
+        .checked_sub(1)
+        .expect("positive V2 Chain-time deadline");
+    let (early_checkpoint, early_proof) = synthetic_authenticated_checkpoint(
+        &arm.start_checkpoint,
+        arm.start_checkpoint.height + 1,
+        early_time,
+        "deadline-minus-one",
+    );
+    seed_authenticated_chain_time_checkpoint(&state, &early_checkpoint, &early_proof).await;
+    let mut body = json!({
+        "arm_id":arm.arm_id,
+        "submission_id":legacy.submission_id,
+        "evaluation_id":legacy.evaluation_id,
+        "latest_reproduction_id":legacy.reproduction_id,
+        "research_session_id":legacy.research_session_id,
+        "research_session_roster_version":legacy.research_session_roster_version,
+        "final_checkpoint_hash":early_checkpoint.checkpoint_hash,
+        "idempotency_key":"paper-finality-v2-preparation",
+    });
+    let router = app(state.clone());
+    let unauthenticated = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(&path)
+                .header("content-type", "application/json")
+                .body(Body::from("{"))
+                .expect("malformed unauthenticated request"),
+        )
+        .await
+        .expect("unauthenticated response");
+    assert_eq!(
+        unauthenticated.status(),
+        StatusCode::FORBIDDEN,
+        "operator authentication must run before malformed JSON is read"
+    );
+    let unauthenticated_body = to_bytes(unauthenticated.into_body(), usize::MAX)
+        .await
+        .expect("unauthenticated response body");
+    let unauthenticated_json: Value =
+        serde_json::from_slice(&unauthenticated_body).expect("unauthenticated JSON response");
+    assert_eq!(unauthenticated_json["code"], "operator_auth_failed");
+
+    set_paper_chain_finality_v2_clock(
+        &mut state,
+        (PAPER_FINALITY_V2_FIXTURE_VERIFICATION_TIME_UNIX_S + 30 * 24 * 60 * 60) * 1_000,
+    );
+    let forward_clock_router = app(state.clone());
+    assert_eq!(
+        error_code(
+            request(&forward_clock_router, "POST", &path, body.clone(), None).await,
+            StatusCode::CONFLICT,
+        ),
+        "paper_chain_finality_appeal_window_open",
+        "a host-clock jump must not close a Chain-time Appeal window at deadline - 1ms"
+    );
+
+    let (final_checkpoint, final_proof) = synthetic_authenticated_checkpoint(
+        &arm.start_checkpoint,
+        arm.start_checkpoint.height + 2,
+        arm.earliest_final_checkpoint_time_unix_ms,
+        "deadline",
+    );
+    seed_authenticated_chain_time_checkpoint(&state, &final_checkpoint, &final_proof).await;
+    body["final_checkpoint_hash"] = json!(final_checkpoint.checkpoint_hash);
+    set_paper_chain_finality_v2_clock(&mut state, 1);
+    let router = app(state.clone());
+    let created = assert_status(
+        request(&router, "POST", &path, body.clone(), None).await,
+        StatusCode::CREATED,
+    );
+    assert_eq!(
+        created["binding"]["final_checkpoint_consensus_time_unix_ms"],
+        arm.earliest_final_checkpoint_time_unix_ms,
+        "deadline Chain time must be accepted even after the host clock rolls backward"
+    );
+    assert_eq!(
+        created["binding"]["appeal_window_closes_at_unix_ms"],
+        arm.earliest_final_checkpoint_time_unix_ms
+    );
+    assert_eq!(
+        created["status"], "awaiting_chain_verifier_upgrade",
+        "preparation must not masquerade as a queued or verified Chain command"
+    );
+    assert_eq!(created["binding"]["scientific_finality"], true);
+    for field in [
+        "score_eligible",
+        "ranking_eligible",
+        "reward_eligible",
+        "economic_eligible",
+    ] {
+        assert_eq!(created["binding"][field], false, "{field} must fail closed");
+    }
+    assert_eq!(
+        created["binding"]["settlement_policy_hash"],
+        paper_scientific_finality_policy_hash_v1().expect("frozen policy hash")
+    );
+    assert_eq!(
+        assert_status(
+            request(&router, "POST", &path, body.clone(), None).await,
+            StatusCode::OK,
+        ),
+        created,
+        "preparation replay must be byte-for-byte stable"
+    );
+    let mut duplicate_facts = body.clone();
+    duplicate_facts["idempotency_key"] = json!("paper-finality-v2-preparation-duplicate");
+    let expected_duplicate_code = if state.pool.is_some() {
+        "paper_chain_finality_v2_source_sealed"
+    } else {
+        "paper_trnm_v2_preparation_exists"
+    };
+    assert_eq!(
+        error_code(
+            request(&router, "POST", &path, duplicate_facts, None).await,
+            StatusCode::CONFLICT,
+        ),
+        expected_duplicate_code,
+        "a new idempotency key must not mint another commitment for the same final facts"
+    );
+    let mut conflict = body.clone();
+    conflict["latest_reproduction_id"] = json!(Uuid::new_v4());
+    assert_eq!(
+        error_code(
+            request(&router, "POST", &path, conflict, None).await,
+            StatusCode::CONFLICT,
+        ),
+        "paper_trnm_v2_idempotency_conflict"
+    );
+
+    let preparation: PaperTrnmFinalityPreparationV2 =
+        serde_json::from_value(created.clone()).expect("decode V2 preparation");
+    let mut zero_score = preparation.binding.clone();
+    zero_score.evaluation_accepted = true;
+    zero_score.evaluation_score_bps = 0;
+    assert_eq!(
+        validate_binding_v2(&zero_score)
+            .expect_err("accepted evaluation with zero score must fail closed")
+            .code,
+        "paper_trnm_v2_finality_invariant_failed"
+    );
+    let mut independent_scientific_facts = preparation.binding.clone();
+    independent_scientific_facts.evaluation_accepted = false;
+    independent_scientific_facts.latest_reproduction_accepted = true;
+    independent_scientific_facts.commitment_id =
+        binding_commitment_id_v2(&independent_scientific_facts)
+            .expect("derive independent-facts commitment id");
+    validate_binding_v2(&independent_scientific_facts)
+        .expect("evaluation acceptance and reproduction success are independent scientific facts");
+
+    let authors = actors(3);
+    let external = actors(11);
+    let submission = assert_status(
+        user_get(
+            &router,
+            &authors[0],
+            "get_joint_paper_submission_v2",
+            &format!("/v2/hepta/papers/{}/submission", legacy.paper_project_id),
+            "paper-finality-v2-sealed-submission",
+        )
+        .await,
+        StatusCode::OK,
+    );
+    let review = assert_status(
+        user_get(
+            &router,
+            &authors[0],
+            "get_paper_review_state_v1",
+            &format!("/v2/hepta/papers/{}/review-state", legacy.paper_project_id),
+            "paper-finality-v2-sealed-review",
+        )
+        .await,
+        StatusCode::OK,
+    );
+    let evaluation = review["evaluations"]
+        .as_array()
+        .expect("evaluation array")
+        .iter()
+        .find(|record| record["evaluation_id"] == legacy.evaluation_id.to_string())
+        .cloned()
+        .expect("seeded evaluation in review state");
+    let late_evaluation_key = "paper-finality-v2-late-evaluation";
+    assert_eq!(
+        error_code(
+            user_post(
+                &router,
+                &external[6],
+                "create_paper_evaluation_v1",
+                &format!("/v2/hepta/papers/{}/evaluations", legacy.paper_project_id),
+                late_evaluation_key,
+                evaluation_body(
+                    legacy.paper_project_id,
+                    &submission,
+                    &external[6],
+                    [&external[7], &external[8]],
+                    Uuid::new_v4(),
+                    Some(legacy.evaluation_id),
+                    late_evaluation_key,
+                ),
+            )
+            .await,
+            StatusCode::CONFLICT,
+        ),
+        "paper_chain_finality_v2_source_sealed"
+    );
+    let late_reproduction_key = "paper-finality-v2-late-reproduction";
+    assert_eq!(
+        error_code(
+            user_post(
+                &router,
+                &external[3],
+                "create_paper_reproduction_v1",
+                &format!(
+                    "/v2/hepta/papers/{}/evaluations/{}/reproductions",
+                    legacy.paper_project_id, legacy.evaluation_id
+                ),
+                late_reproduction_key,
+                reproduction_body(
+                    legacy.paper_project_id,
+                    &evaluation,
+                    &external[3],
+                    Uuid::new_v4(),
+                    Some(legacy.reproduction_id),
+                    true,
+                    late_reproduction_key,
+                ),
+            )
+            .await,
+            StatusCode::CONFLICT,
+        ),
+        "paper_chain_finality_v2_source_sealed"
+    );
+    let late_appeal_key = "paper-finality-v2-late-appeal";
+    assert_eq!(
+        error_code(
+            user_post(
+                &router,
+                &authors[0],
+                "create_paper_appeal_v1",
+                &format!(
+                    "/v2/hepta/papers/{}/evaluations/{}/appeals",
+                    legacy.paper_project_id, legacy.evaluation_id
+                ),
+                late_appeal_key,
+                appeal_body(
+                    legacy.paper_project_id,
+                    &evaluation,
+                    &authors[0],
+                    Uuid::new_v4(),
+                    late_appeal_key,
+                ),
+            )
+            .await,
+            StatusCode::CONFLICT,
+        ),
+        "paper_chain_finality_v2_source_sealed"
+    );
+    assert_eq!(
+        assert_status(
+            request(&router, "POST", &path, body, None).await,
+            StatusCode::OK,
+        ),
+        created,
+        "sealed source mutations must not make exact preparation replay stale"
+    );
+    preparation
+}
+
+#[tokio::test]
+async fn memory_paper_chain_finality_v2_preparation_enforces_policy_and_fail_closed_status() {
+    let preparation = exercise_paper_chain_finality_v2_preparation(AppState::new(
+        paper_chain_finality_v2_security(),
+    ))
+    .await;
+    assert_eq!(
+        preparation.binding.appeal_status,
+        PaperTrnmAppealStatusV2::ClosedNoAppeal
+    );
+    assert_eq!(
+        preparation.binding.evaluation_superseded_by_evaluation_id,
+        None
+    );
+    assert_eq!(
+        preparation
+            .binding
+            .reproduction_superseded_by_reproduction_id,
+        None
+    );
+}
+
+#[tokio::test]
+async fn memory_paper_chain_finality_v2_arm_is_invalidated_by_source_drift() {
+    let armed =
+        arm_paper_chain_finality_v2_window(AppState::new(paper_chain_finality_v2_security())).await;
+    let state = armed.state;
+    let legacy = armed.legacy;
+    let arm = armed.arm;
+    let router = app(state.clone());
+    let authors = actors(3);
+    let review = assert_status(
+        user_get(
+            &router,
+            &authors[0],
+            "get_paper_review_state_v1",
+            &format!("/v2/hepta/papers/{}/review-state", legacy.paper_project_id),
+            "paper-finality-v2-arm-drift-review",
+        )
+        .await,
+        StatusCode::OK,
+    );
+    let evaluation = review["evaluations"]
+        .as_array()
+        .expect("evaluation array")
+        .iter()
+        .find(|record| record["evaluation_id"] == legacy.evaluation_id.to_string())
+        .cloned()
+        .expect("armed evaluation in review state");
+    let appeal_key = "paper-finality-v2-arm-drift-appeal";
+    assert_status(
+        user_post(
+            &router,
+            &authors[0],
+            "create_paper_appeal_v1",
+            &format!(
+                "/v2/hepta/papers/{}/evaluations/{}/appeals",
+                legacy.paper_project_id, legacy.evaluation_id
+            ),
+            appeal_key,
+            appeal_body(
+                legacy.paper_project_id,
+                &evaluation,
+                &authors[0],
+                Uuid::new_v4(),
+                appeal_key,
+            ),
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+
+    let (final_checkpoint, final_proof) = synthetic_authenticated_checkpoint(
+        &arm.start_checkpoint,
+        arm.start_checkpoint.height + 1,
+        arm.earliest_final_checkpoint_time_unix_ms,
+        "source-drift",
+    );
+    seed_authenticated_chain_time_checkpoint(&state, &final_checkpoint, &final_proof).await;
+    let path = format!(
+        "/v2/hepta/papers/{}/chain-finality-v2/prepare",
+        legacy.paper_project_id
+    );
+    assert_eq!(
+        error_code(
+            request(
+                &router,
+                "POST",
+                &path,
+                json!({
+                    "arm_id":arm.arm_id,
+                    "submission_id":legacy.submission_id,
+                    "evaluation_id":legacy.evaluation_id,
+                    "latest_reproduction_id":legacy.reproduction_id,
+                    "research_session_id":legacy.research_session_id,
+                    "research_session_roster_version":legacy.research_session_roster_version,
+                    "final_checkpoint_hash":final_checkpoint.checkpoint_hash,
+                    "idempotency_key":"paper-finality-v2-source-drift-prepare",
+                }),
+                None,
+            )
+            .await,
+            StatusCode::CONFLICT,
+        ),
+        "paper_trnm_v2_window_arm_stale",
+        "an Appeal opened after arm must invalidate the observed source tuple"
+    );
+    assert!(
+        !state
+            .paper_chain_finality
+            .read()
+            .await
+            .preparations_v2
+            .by_paper_id
+            .contains_key(&legacy.paper_project_id),
+        "source drift must not leave a partial immutable preparation"
+    );
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ReviewFlowOutcome {
     evaluation_status: String,
@@ -4964,6 +5620,637 @@ async fn postgres_review_flow_matches_memory_and_migration_is_repeatable() {
         .execute(&mut lock)
         .await
         .expect("release Hepta PostgreSQL test lock");
+}
+
+async fn assert_paper_finality_v2_trigger_replay_repairs_tampering(pool: &sqlx::PgPool) {
+    sqlx::raw_sql(
+        "alter table hepta_paper_evaluations
+             disable trigger hepta_paper_evaluations_finality_v2_source_guard;
+         drop trigger hepta_paper_reproductions_finality_v2_source_guard
+             on hepta_paper_reproductions;
+         create trigger hepta_paper_reproductions_finality_v2_source_guard
+             before update on hepta_paper_reproductions
+             for each row execute function
+                 hepta_reject_paper_finality_v2_evidence_mutation();",
+    )
+    .execute(pool)
+    .await
+    .expect("tamper V2 source triggers before migration replay");
+
+    let tampered = sqlx::query(
+        "select relation.relname as relation_name,
+                trigger.tgname as trigger_name,
+                procedure.proname as function_name,
+                trigger.tgtype::integer as trigger_type,
+                trigger.tgenabled::text as enabled
+         from pg_trigger as trigger
+         join pg_class as relation on relation.oid=trigger.tgrelid
+         join pg_proc as procedure on procedure.oid=trigger.tgfoid
+         where not trigger.tgisinternal
+           and trigger.tgname in (
+                'hepta_paper_evaluations_finality_v2_source_guard',
+                'hepta_paper_reproductions_finality_v2_source_guard'
+           )
+         order by trigger.tgname",
+    )
+    .fetch_all(pool)
+    .await
+    .expect("inspect deliberately tampered V2 source triggers");
+    assert_eq!(tampered.len(), 2);
+    assert_eq!(tampered[0].get::<String, _>("enabled"), "D");
+    assert_eq!(tampered[1].get::<i32, _>("trigger_type"), 19);
+    assert_eq!(
+        tampered[1].get::<String, _>("function_name"),
+        "hepta_reject_paper_finality_v2_evidence_mutation"
+    );
+
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/0038_add_hepta_paper_chain_finality_v2.sql"
+    ))
+    .execute(pool)
+    .await
+    .expect("0038 must repair disabled and wrong-function source triggers");
+
+    let repaired = sqlx::query(
+        "select relation.relname as relation_name,
+                trigger.tgname as trigger_name,
+                procedure.proname as function_name,
+                trigger.tgtype::integer as trigger_type,
+                trigger.tgenabled::text as enabled
+         from pg_trigger as trigger
+         join pg_class as relation on relation.oid=trigger.tgrelid
+         join pg_proc as procedure on procedure.oid=trigger.tgfoid
+         where not trigger.tgisinternal
+           and trigger.tgname in (
+                'hepta_paper_evaluations_finality_v2_source_guard',
+                'hepta_paper_reproductions_finality_v2_source_guard'
+           )
+         order by trigger.tgname",
+    )
+    .fetch_all(pool)
+    .await
+    .expect("inspect repaired V2 source triggers");
+    assert_eq!(repaired.len(), 2);
+    for row in repaired {
+        let trigger_name = row.get::<String, _>("trigger_name");
+        let expected_relation =
+            if trigger_name == "hepta_paper_evaluations_finality_v2_source_guard" {
+                "hepta_paper_evaluations"
+            } else {
+                assert_eq!(
+                    trigger_name,
+                    "hepta_paper_reproductions_finality_v2_source_guard"
+                );
+                "hepta_paper_reproductions"
+            };
+        assert_eq!(row.get::<String, _>("relation_name"), expected_relation);
+        assert_eq!(
+            row.get::<String, _>("function_name"),
+            "hepta_reject_paper_finality_v2_source_mutation"
+        );
+        assert_eq!(
+            row.get::<i32, _>("trigger_type"),
+            31,
+            "source guard must be BEFORE ROW INSERT OR UPDATE OR DELETE"
+        );
+        assert_eq!(
+            row.get::<String, _>("enabled"),
+            "A",
+            "source guard must be ENABLE ALWAYS"
+        );
+    }
+}
+
+async fn assert_paper_finality_v2_constraint_replay_rejects_same_name_tampering(
+    pool: &sqlx::PgPool,
+) {
+    let baseline = sqlx::query(
+        "select constraint_count, catalog_sha256
+         from public.hepta_paper_finality_v2_constraint_catalog_fingerprint()",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("read canonical V2 constraint catalog fingerprint");
+    assert_eq!(baseline.get::<i64, _>("constraint_count"), 77);
+    assert_eq!(
+        baseline.get::<String, _>("catalog_sha256"),
+        "910d4454106f5722ad44c6c9095bf48d585dfaa9501fc40d9ef377fd57c3f3ba"
+    );
+
+    sqlx::raw_sql(
+        "alter table hepta_paper_chain_finality_window_arms_v2
+             drop constraint hepta_paper_finality_v2_arm_values_check;
+         alter table hepta_paper_chain_finality_window_arms_v2
+             add constraint hepta_paper_finality_v2_arm_values_check check (true);",
+    )
+    .execute(pool)
+    .await
+    .expect("replace a V2 CHECK with a weaker same-name constraint");
+    let tampered_sha256: String = sqlx::query_scalar(
+        "select catalog_sha256
+         from public.hepta_paper_finality_v2_constraint_catalog_fingerprint()",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("fingerprint deliberately weakened V2 constraint catalog");
+    assert_ne!(
+        tampered_sha256,
+        "910d4454106f5722ad44c6c9095bf48d585dfaa9501fc40d9ef377fd57c3f3ba"
+    );
+
+    let replay_error = sqlx::raw_sql(include_str!(
+        "../../../migrations/0038_add_hepta_paper_chain_finality_v2.sql"
+    ))
+    .execute(pool)
+    .await
+    .expect_err("0038 replay must reject a weaker same-name constraint");
+    let replay_database_error = replay_error
+        .as_database_error()
+        .expect("constraint-catalog rejection must be a PostgreSQL error");
+    assert_eq!(replay_database_error.code().as_deref(), Some("55000"));
+    assert_eq!(
+        replay_database_error.message(),
+        "hepta_paper_chain_finality_v2_constraint_catalog_mismatch"
+    );
+
+    sqlx::query(
+        "alter table hepta_paper_chain_finality_window_arms_v2
+         drop constraint hepta_paper_finality_v2_arm_values_check",
+    )
+    .execute(pool)
+    .await
+    .expect("remove deliberately weakened V2 CHECK");
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/0038_add_hepta_paper_chain_finality_v2.sql"
+    ))
+    .execute(pool)
+    .await
+    .expect("0038 replay must restore a missing canonical V2 CHECK");
+
+    let repaired = sqlx::query(
+        "select constraint_count, catalog_sha256
+         from public.hepta_paper_finality_v2_constraint_catalog_fingerprint()",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("read repaired V2 constraint catalog fingerprint");
+    assert_eq!(repaired.get::<i64, _>("constraint_count"), 77);
+    assert_eq!(
+        repaired.get::<String, _>("catalog_sha256"),
+        "910d4454106f5722ad44c6c9095bf48d585dfaa9501fc40d9ef377fd57c3f3ba"
+    );
+}
+
+async fn prepare_paper_finality_v2_against_stale_repeatable_read_writer(
+    state: AppState,
+) -> PaperTrnmFinalityPreparationV2 {
+    let armed = arm_paper_chain_finality_v2_window(state).await;
+    let state = armed.state;
+    let legacy = armed.legacy;
+    let arm = armed.arm;
+    let pool = state.pool.as_ref().expect("PostgreSQL pool").clone();
+    let (final_checkpoint, final_proof) = synthetic_authenticated_checkpoint(
+        &arm.start_checkpoint,
+        arm.start_checkpoint.height + 1,
+        arm.earliest_final_checkpoint_time_unix_ms,
+        "repeatable-read-deadline",
+    );
+    seed_authenticated_chain_time_checkpoint(&state, &final_checkpoint, &final_proof).await;
+
+    let mut stale_tx = pool.begin().await.expect("begin stale writer transaction");
+    sqlx::query("set transaction isolation level repeatable read")
+        .execute(&mut *stale_tx)
+        .await
+        .expect("set stale writer isolation level");
+    let stale_snapshot = sqlx::query(
+        "select paper.finality_v2_seal_epoch as seal_epoch,
+                evaluation.record_json as evaluation_json
+         from hepta_paper_projects as paper
+         join hepta_paper_evaluations as evaluation
+           on evaluation.paper_project_id=paper.paper_project_id
+         where paper.paper_project_id=$1 and evaluation.evaluation_id=$2",
+    )
+    .bind(legacy.paper_project_id)
+    .bind(legacy.evaluation_id)
+    .fetch_one(&mut *stale_tx)
+    .await
+    .expect("establish stale Paper and source snapshot");
+    assert_eq!(stale_snapshot.get::<i16, _>("seal_epoch"), 0);
+    let evaluation_json_before = stale_snapshot.get::<Value, _>("evaluation_json");
+    let rollback_operation = "paper-finality-v2-repeatable-read-rollback-probe";
+    let rollback_key = "paper-finality-v2-repeatable-read-rollback-probe";
+    sqlx::query(
+        "insert into hepta_paper_raid_idempotency (
+            operation,idempotency_key,request_hash,aggregate_id,response_status,response_json
+         ) values ($1,$2,$3,$4,201,$5::jsonb)",
+    )
+    .bind(rollback_operation)
+    .bind(rollback_key)
+    .bind(sha256_digest(b"repeatable-read-side-effect-must-roll-back"))
+    .bind(legacy.paper_project_id)
+    .bind(json!({"result":"must_roll_back_with_stale_writer"}))
+    .execute(&mut *stale_tx)
+    .await
+    .expect("write stale writer side effect before preparation commits");
+
+    let path = format!(
+        "/v2/hepta/papers/{}/chain-finality-v2/prepare",
+        legacy.paper_project_id
+    );
+    let body = json!({
+        "arm_id":arm.arm_id,
+        "submission_id":legacy.submission_id,
+        "evaluation_id":legacy.evaluation_id,
+        "latest_reproduction_id":legacy.reproduction_id,
+        "research_session_id":legacy.research_session_id,
+        "research_session_roster_version":legacy.research_session_roster_version,
+        "final_checkpoint_hash":final_checkpoint.checkpoint_hash,
+        "idempotency_key":"paper-finality-v2-repeatable-read-preparation",
+    });
+    let router = app(state);
+    let created = assert_status(
+        request(&router, "POST", &path, body, None).await,
+        StatusCode::CREATED,
+    );
+    let preparation: PaperTrnmFinalityPreparationV2 =
+        serde_json::from_value(created).expect("decode RR-race V2 preparation");
+
+    let stale_error = sqlx::query(
+        "update hepta_paper_evaluations
+         set record_json=record_json
+         where evaluation_id=$1",
+    )
+    .bind(legacy.evaluation_id)
+    .execute(&mut *stale_tx)
+    .await
+    .expect_err("stale RR source writer must lose to the committed Paper anchor update");
+    let stale_database_error = stale_error
+        .as_database_error()
+        .expect("stale writer failure must be a PostgreSQL error");
+    assert_eq!(
+        stale_database_error.code().as_deref(),
+        Some("40001"),
+        "the pre-existing Paper anchor must turn an old RR snapshot into a serialization failure"
+    );
+    stale_tx
+        .rollback()
+        .await
+        .expect("rollback aborted stale writer transaction");
+
+    let rollback_rows = sqlx::query_scalar::<_, i64>(
+        "select count(*)::bigint from hepta_paper_raid_idempotency
+         where operation=$1 and idempotency_key=$2",
+    )
+    .bind(rollback_operation)
+    .bind(rollback_key)
+    .fetch_one(&pool)
+    .await
+    .expect("inspect rolled-back stale writer side effect");
+    assert_eq!(
+        rollback_rows, 0,
+        "40001 must abort every side effect written earlier by the stale transaction"
+    );
+    let evaluation_json_after = sqlx::query_scalar::<_, Value>(
+        "select record_json from hepta_paper_evaluations where evaluation_id=$1",
+    )
+    .bind(legacy.evaluation_id)
+    .fetch_one(&pool)
+    .await
+    .expect("read source after stale writer rollback");
+    assert_eq!(evaluation_json_after, evaluation_json_before);
+    preparation
+}
+
+async fn assert_paper_finality_v2_cross_paper_updates_are_deadlock_free(
+    pool: &sqlx::PgPool,
+    sealed_paper_id: Uuid,
+) {
+    let sealed = sqlx::query(
+        "select paper.team_id, paper.challenge_id, auth_set.authorization_set_id
+         from hepta_paper_projects as paper
+         join hepta_research_session_authorization_sets as auth_set
+           on auth_set.paper_project_id=paper.paper_project_id
+         where paper.paper_project_id=$1
+         order by auth_set.roster_version desc
+         limit 1",
+    )
+    .bind(sealed_paper_id)
+    .fetch_one(pool)
+    .await
+    .expect("load sealed Paper authorization set");
+    let sealed_team_id = sealed.get::<Uuid, _>("team_id");
+    let challenge_id = sealed.get::<Uuid, _>("challenge_id");
+    let sealed_authorization_set_id = sealed.get::<Uuid, _>("authorization_set_id");
+    let unsealed_team_id = Uuid::new_v4();
+    let unsealed_paper_id = Uuid::new_v4();
+    let unsealed_authorization_set_id = Uuid::new_v4();
+    sqlx::query(
+        "insert into hepta_research_teams (
+            team_id,challenge_id,collaboration_compact_hash,status,
+            roster_version,version,record_json,created_at,updated_at
+         ) values ($1,$2,$3,'archived',1,1,$4::jsonb,now(),now())",
+    )
+    .bind(unsealed_team_id)
+    .bind(challenge_id)
+    .bind(digest("paper-finality-v2-cross-paper-team"))
+    .bind(json!({"team_id":unsealed_team_id,"status":"archived"}))
+    .execute(pool)
+    .await
+    .expect("seed unsealed cross-Paper team");
+    sqlx::query(
+        "insert into hepta_paper_projects (
+            paper_project_id,team_id,challenge_id,phase,version,
+            record_json,created_at,updated_at
+         ) values ($1,$2,$3,'submission_ready',1,$4::jsonb,now(),now())",
+    )
+    .bind(unsealed_paper_id)
+    .bind(unsealed_team_id)
+    .bind(challenge_id)
+    .bind(json!({
+        "paper_project_id":unsealed_paper_id,
+        "team_id":unsealed_team_id,
+        "phase":"submission_ready",
+    }))
+    .execute(pool)
+    .await
+    .expect("seed unsealed cross-Paper anchor");
+    sqlx::query(
+        "insert into hepta_research_session_authorization_sets (
+            authorization_set_id,session_id,team_id,paper_project_id,challenge_id,
+            team_roster_version,roster_version,roster_root,
+            supersedes_roster_version,replaced_participant_slot,status,version,
+            record_json,issued_at,expires_at,consumed_at
+         ) values (
+            $1,$2,$3,$4,$5,1,1,$6,null,null,'completed',1,
+            $7::jsonb,now(),now()+interval '1 day',now()
+         )",
+    )
+    .bind(unsealed_authorization_set_id)
+    .bind(format!("paper-finality-v2-cross-paper-{unsealed_paper_id}"))
+    .bind(unsealed_team_id)
+    .bind(unsealed_paper_id)
+    .bind(challenge_id)
+    .bind(digest("paper-finality-v2-cross-paper-roster"))
+    .bind(json!({
+        "authorization_set_id":unsealed_authorization_set_id,
+        "paper_project_id":unsealed_paper_id,
+        "status":"completed",
+    }))
+    .execute(pool)
+    .await
+    .expect("seed unsealed cross-Paper source row");
+
+    let opposite_updates = tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::join!(
+            sqlx::query(
+                "update hepta_research_session_authorization_sets
+                 set paper_project_id=$1,team_id=$2
+                 where authorization_set_id=$3",
+            )
+            .bind(unsealed_paper_id)
+            .bind(unsealed_team_id)
+            .bind(sealed_authorization_set_id)
+            .execute(pool),
+            sqlx::query(
+                "update hepta_research_session_authorization_sets
+                 set paper_project_id=$1,team_id=$2
+                 where authorization_set_id=$3",
+            )
+            .bind(sealed_paper_id)
+            .bind(sealed_team_id)
+            .bind(unsealed_authorization_set_id)
+            .execute(pool),
+        )
+    })
+    .await
+    .expect("opposite cross-Paper updates must not deadlock");
+    for result in [opposite_updates.0, opposite_updates.1] {
+        let error = result.expect_err("sealed/unsealed cross-Paper update must fail closed");
+        let database_error = error
+            .as_database_error()
+            .expect("cross-Paper rejection must be a PostgreSQL error");
+        assert_eq!(database_error.code().as_deref(), Some("55000"));
+        assert_eq!(
+            database_error.message(),
+            "hepta_paper_chain_finality_v2_source_sealed"
+        );
+    }
+    let source_scopes = sqlx::query(
+        "select authorization_set_id,paper_project_id
+         from hepta_research_session_authorization_sets
+         where authorization_set_id=any($1)
+         order by authorization_set_id",
+    )
+    .bind(vec![
+        sealed_authorization_set_id,
+        unsealed_authorization_set_id,
+    ])
+    .fetch_all(pool)
+    .await
+    .expect("inspect cross-Paper source scopes after rejection");
+    assert_eq!(source_scopes.len(), 2);
+    for row in source_scopes {
+        let authorization_set_id = row.get::<Uuid, _>("authorization_set_id");
+        let expected_paper_id = if authorization_set_id == sealed_authorization_set_id {
+            sealed_paper_id
+        } else {
+            assert_eq!(authorization_set_id, unsealed_authorization_set_id);
+            unsealed_paper_id
+        };
+        assert_eq!(row.get::<Uuid, _>("paper_project_id"), expected_paper_id);
+    }
+}
+
+#[tokio::test]
+async fn postgres_paper_chain_finality_v2_preparation_matches_memory_and_is_atomic() {
+    let Ok(database_url) = std::env::var("HEPTA_TEST_DATABASE_URL") else {
+        eprintln!(
+            "HEPTA_TEST_DATABASE_URL unset; Paper finality V2 PostgreSQL conformance skipped"
+        );
+        return;
+    };
+    let mut lock = PgConnection::connect(&database_url)
+        .await
+        .expect("PostgreSQL Paper finality V2 test lock");
+    sqlx::query("select pg_advisory_lock(hashtext('hepta-research-league-pg-tests'))")
+        .execute(&mut lock)
+        .await
+        .expect("serialize Hepta PostgreSQL tests");
+    let state = AppState::connect(&database_url, paper_chain_finality_v2_security())
+        .await
+        .expect("Paper finality V2 PostgreSQL state");
+    let pool = state.pool.as_ref().expect("PostgreSQL pool").clone();
+    sqlx::raw_sql(include_str!(
+        "../../../migrations/0038_add_hepta_paper_chain_finality_v2.sql"
+    ))
+    .execute(&pool)
+    .await
+    .expect("0038 second application");
+    reset_postgres(&database_url).await;
+    assert_paper_finality_v2_trigger_replay_repairs_tampering(&pool).await;
+    assert_paper_finality_v2_constraint_replay_rejects_same_name_tampering(&pool).await;
+    let stale_writer_preparation =
+        prepare_paper_finality_v2_against_stale_repeatable_read_writer(state.clone()).await;
+    assert_paper_finality_v2_cross_paper_updates_are_deadlock_free(
+        &pool,
+        stale_writer_preparation.binding.paper_project_id,
+    )
+    .await;
+
+    reset_postgres(&database_url).await;
+    let postgres = exercise_paper_chain_finality_v2_preparation(state).await;
+    let row = sqlx::query(
+        "select count(*)::bigint as rows,
+                min(status) as status,
+                min(commitment_id) as commitment_id
+         from hepta_paper_chain_finality_preparations_v2",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("inspect V2 preparation rows");
+    assert_eq!(row.get::<i64, _>("rows"), 1);
+    assert_eq!(
+        row.get::<String, _>("status"),
+        "awaiting_chain_verifier_upgrade"
+    );
+    assert_eq!(
+        row.get::<String, _>("commitment_id"),
+        postgres.binding.commitment_id
+    );
+    let protocol_counts = sqlx::query(
+        "select
+            (select count(*) from hepta_trnm_cometbft_time_checkpoints_v1)::bigint
+                as checkpoints,
+            (select count(*) from hepta_paper_chain_finality_window_arms_v2)::bigint
+                as arms",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("inspect V2 checkpoint and arm rows");
+    assert_eq!(protocol_counts.get::<i64, _>("checkpoints"), 3);
+    assert_eq!(protocol_counts.get::<i64, _>("arms"), 1);
+
+    let evaluation_json_before = sqlx::query_scalar::<_, Value>(
+        "select record_json from hepta_paper_evaluations where evaluation_id=$1",
+    )
+    .bind(postgres.binding.evaluation_id)
+    .fetch_one(&pool)
+    .await
+    .expect("read sealed evaluation before rollback probe");
+    let rollback_operation = "paper-finality-v2-old-binary-rollback-probe";
+    let rollback_key = "paper-finality-v2-old-binary-rollback-probe";
+    let mut rollback_tx = pool.begin().await.expect("begin rollback probe");
+    sqlx::query(
+        "insert into hepta_paper_raid_idempotency (
+            operation,idempotency_key,request_hash,aggregate_id,response_status,response_json
+         ) values ($1,$2,$3,$4,201,$5::jsonb)",
+    )
+    .bind(rollback_operation)
+    .bind(rollback_key)
+    .bind(sha256_digest(b"must-roll-back"))
+    .bind(postgres.binding.paper_project_id)
+    .bind(json!({"result":"must_roll_back"}))
+    .execute(&mut *rollback_tx)
+    .await
+    .expect("write old-binary side effect before sealed source mutation");
+    let sealed_error = sqlx::query(
+        "update hepta_paper_evaluations
+         set record_json=record_json
+         where evaluation_id=$1",
+    )
+    .bind(postgres.binding.evaluation_id)
+    .execute(&mut *rollback_tx)
+    .await
+    .expect_err("database trigger must reject an old-binary source write");
+    let sealed_database_error = sealed_error
+        .as_database_error()
+        .expect("sealed source write must be a PostgreSQL error");
+    assert_eq!(sealed_database_error.code().as_deref(), Some("55000"));
+    assert_eq!(
+        sealed_database_error.message(),
+        "hepta_paper_chain_finality_v2_source_sealed"
+    );
+    rollback_tx
+        .rollback()
+        .await
+        .expect("rollback aborted old-binary transaction");
+    let rollback_rows = sqlx::query_scalar::<_, i64>(
+        "select count(*)::bigint from hepta_paper_raid_idempotency
+         where operation=$1 and idempotency_key=$2",
+    )
+    .bind(rollback_operation)
+    .bind(rollback_key)
+    .fetch_one(&pool)
+    .await
+    .expect("inspect rolled-back old-binary side effect");
+    assert_eq!(
+        rollback_rows, 0,
+        "a rejected old-binary source write must roll back every earlier transaction side effect"
+    );
+    let evaluation_json_after = sqlx::query_scalar::<_, Value>(
+        "select record_json from hepta_paper_evaluations where evaluation_id=$1",
+    )
+    .bind(postgres.binding.evaluation_id)
+    .fetch_one(&pool)
+    .await
+    .expect("read sealed evaluation after rollback probe");
+    assert_eq!(evaluation_json_after, evaluation_json_before);
+
+    let immutable_error = sqlx::query(
+        "update hepta_paper_chain_finality_preparations_v2
+         set record_json=record_json
+         where preparation_id=$1",
+    )
+    .bind(postgres.preparation_id)
+    .execute(&pool)
+    .await
+    .expect_err("database trigger must make the preparation immutable");
+    let immutable_database_error = immutable_error
+        .as_database_error()
+        .expect("immutable preparation write must be a PostgreSQL error");
+    assert_eq!(immutable_database_error.code().as_deref(), Some("55000"));
+    assert_eq!(
+        immutable_database_error.message(),
+        "hepta_paper_chain_finality_v2_preparation_immutable"
+    );
+
+    let truncate_error = sqlx::query("truncate hepta_paper_chain_finality_window_arms_v2 cascade")
+        .execute(&pool)
+        .await
+        .expect_err("production V2 TRUNCATE guard must remain enabled after test reset");
+    let truncate_database_error = truncate_error
+        .as_database_error()
+        .expect("V2 TRUNCATE rejection must be a PostgreSQL error");
+    assert_eq!(truncate_database_error.code().as_deref(), Some("55000"));
+    assert_eq!(
+        truncate_database_error.message(),
+        "hepta_paper_chain_finality_v2_truncate_forbidden"
+    );
+
+    let memory = exercise_paper_chain_finality_v2_preparation(AppState::new(
+        paper_chain_finality_v2_security(),
+    ))
+    .await;
+    assert_eq!(postgres.binding.appeal_status, memory.binding.appeal_status);
+    assert_eq!(
+        postgres.binding.settlement_policy_hash,
+        memory.binding.settlement_policy_hash
+    );
+    assert_eq!(
+        (
+            postgres.binding.scientific_finality,
+            postgres.binding.score_eligible,
+            postgres.binding.ranking_eligible,
+            postgres.binding.reward_eligible,
+            postgres.binding.economic_eligible,
+        ),
+        (true, false, false, false, false)
+    );
+    reset_postgres(&database_url).await;
+    sqlx::query("select pg_advisory_unlock(hashtext('hepta-research-league-pg-tests'))")
+        .execute(&mut lock)
+        .await
+        .expect("release Hepta PostgreSQL Paper finality V2 test lock");
 }
 
 #[tokio::test]

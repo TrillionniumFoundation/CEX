@@ -27,6 +27,7 @@ COPY migrations/0034_add_hepta_paper_review_appeal.sql migrations/0034_add_hepta
 COPY migrations/0035_add_hepta_secure_onboarding.sql migrations/0035_add_hepta_secure_onboarding.sql
 COPY migrations/0036_add_hepta_nakama_research_control.sql migrations/0036_add_hepta_nakama_research_control.sql
 COPY migrations/0037_add_hepta_paper_chain_finality_v1.sql migrations/0037_add_hepta_paper_chain_finality_v1.sql
+COPY migrations/0038_add_hepta_paper_chain_finality_v2.sql migrations/0038_add_hepta_paper_chain_finality_v2.sql
 COPY docs/openapi/hepta-research-league-v1.yaml docs/openapi/hepta-research-league-v1.yaml
 COPY docs/openapi/hepta-paper-raid-v2.yaml docs/openapi/hepta-paper-raid-v2.yaml
 

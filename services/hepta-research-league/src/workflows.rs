@@ -276,6 +276,9 @@ struct ReadyResponse {
     pinned_cometbft_trust_anchor_hashes: usize,
     trnm_receipt_v2_max_body_bytes: usize,
     trnm_receipt_v2_max_in_flight: usize,
+    paper_chain_finality_v2_command_lane: &'static str,
+    paper_scientific_finality_policy: &'static str,
+    paper_no_appeal_window_seconds: i64,
 }
 
 pub(crate) fn router() -> Router<AppState> {
@@ -369,30 +372,16 @@ async fn ready(State(state): State<AppState>) -> (StatusCode, Json<ReadyResponse
         failures.push("nakama_control_http_missing");
         "missing"
     };
-    let database = if let Some(pool) = &state.pool {
-        match pool.acquire().await {
-            Ok(mut connection) => match sqlx::query_scalar::<_, i32>("select 1")
-                .fetch_one(&mut *connection)
-                .await
-            {
-                Ok(1) => "reachable",
-                Ok(_) => {
-                    failures.push("database_probe_unexpected_result");
-                    "unreachable"
-                }
-                Err(_) => {
-                    failures.push("database_probe_failed");
-                    "unreachable"
-                }
-            },
-            Err(_) => {
-                failures.push("database_pool_acquire_failed");
+    let database = match state.probe_database_pools().await {
+        Ok(()) => "reachable",
+        Err(failure) => {
+            failures.push(failure);
+            if failure.ends_with("_missing") {
+                "not_configured"
+            } else {
                 "unreachable"
             }
         }
-    } else {
-        failures.push("database_pool_missing");
-        "not_configured"
     };
     let ready = failures.is_empty();
     let response = ReadyResponse {
@@ -420,6 +409,12 @@ async fn ready(State(state): State<AppState>) -> (StatusCode, Json<ReadyResponse
             .len(),
         trnm_receipt_v2_max_body_bytes: state.security.trnm_receipt_v2_max_body_bytes,
         trnm_receipt_v2_max_in_flight: state.security.trnm_receipt_v2_max_in_flight,
+        paper_chain_finality_v2_command_lane:
+            crate::paper_chain_finality_v2::PAPER_TRNM_FINALITY_V2_COMMAND_LANE,
+        paper_scientific_finality_policy:
+            crate::paper_chain_finality_v2::PAPER_SCIENTIFIC_FINALITY_POLICY_SCHEMA_V1,
+        paper_no_appeal_window_seconds:
+            crate::paper_chain_finality_v2::PAPER_NO_APPEAL_WINDOW_SECONDS_V1,
     };
     (
         if ready {
@@ -1841,6 +1836,15 @@ mod tests {
         assert_eq!(response.finality_mode, "verified");
         assert_eq!(response.pinned_cometbft_trust_anchor_hashes, 0);
         assert_eq!(
+            response.paper_chain_finality_v2_command_lane,
+            "awaiting_chain_verifier_upgrade"
+        );
+        assert_eq!(
+            response.paper_scientific_finality_policy,
+            "hepta.paper_raid.scientific_finality_policy.v1"
+        );
+        assert_eq!(response.paper_no_appeal_window_seconds, 86_400);
+        assert_eq!(
             response.trnm_receipt_v2_max_body_bytes,
             crate::DEFAULT_TRNM_RECEIPT_V2_MAX_BODY_BYTES
         );
@@ -1869,6 +1873,7 @@ mod tests {
                 .connect_lazy("postgres://127.0.0.1:1/hepta_unreachable")
                 .expect("lazy pool"),
         );
+        state.finality_pool = state.pool.clone();
         let (status, Json(response)) = ready(State(state)).await;
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
         assert!(!response.ready);

@@ -17,7 +17,7 @@ use trnm_finality_types::{
 };
 use trnm_finality_verifier::{
     verify_cometbft_apphash_finality_receipt_v2_with_trust_anchor, ReceiptV2VerificationOutcome,
-    ValidatedCometBftTrustAnchorV1, VerifiedCometBftReceiptV2,
+    ValidatedCometBftTrustAnchorV1, VerifiedCometBftDomainCommandV2, VerifiedCometBftReceiptV2,
 };
 use uuid::Uuid;
 
@@ -140,6 +140,40 @@ pub(crate) struct PaperChainFinalityMemory {
     receipts: HashMap<String, MemoryReceipt>,
     projections: HashMap<Uuid, PaperChainFinalityProjectionV1>,
     inbox: HashMap<String, String>,
+    pub(crate) preparations_v2:
+        crate::paper_chain_finality_v2::PaperChainFinalityPreparationMemoryV2,
+}
+
+pub(crate) fn validated_trust_anchor_memory_v1(
+    memory: &PaperChainFinalityMemory,
+    anchor_hash: &str,
+    pinned_anchor_hashes: &std::collections::HashSet<String>,
+) -> Result<ValidatedCometBftTrustAnchorV1, ApiError> {
+    if !pinned_anchor_hashes.contains(anchor_hash) {
+        return Err(ApiError::forbidden(
+            "trnm_trust_anchor_not_pinned",
+            "stored trust anchor is absent from immutable server configuration",
+        ));
+    }
+    let stored = memory.trust_anchors.get(anchor_hash).ok_or_else(|| {
+        ApiError::not_found(
+            "trnm_trust_anchor_not_admitted",
+            "selected CometBFT trust anchor has not been admitted",
+        )
+    })?;
+    let anchor = ValidatedCometBftTrustAnchorV1::from_canonical_bytes(&stored.canonical).map_err(
+        |error| {
+            ApiError::internal(format!(
+                "stored canonical CometBFT trust anchor is invalid: {error:#}"
+            ))
+        },
+    )?;
+    if anchor.wire().anchor_hash_hex != anchor_hash {
+        return Err(ApiError::internal(
+            "stored CometBFT trust anchor bytes do not match their indexed hash",
+        ));
+    }
+    Ok(anchor)
 }
 
 pub(crate) fn router() -> Router<AppState> {
@@ -357,7 +391,7 @@ async fn ingest_trust_anchor(
             "operator upload cannot expand trust; anchor hash is absent from immutable server configuration",
         ));
     }
-    let admitted_at = DateTime::<Utc>::from((state.paper_chain_verification_clock)());
+    let admitted_at = DateTime::<Utc>::from((state.cometbft_local_verification_clock)());
     let record = StoredPaperChainTrustAnchorV1 {
         schema: PAPER_CHAIN_TRUST_ANCHOR_SCHEMA_V1.to_string(),
         anchor_hash: wire.anchor_hash_hex.clone(),
@@ -494,7 +528,7 @@ async fn ingest_paper_chain_finality(
             )
         })?;
     let canonical_sha256 = format!("sha256:{}", sha256_hex(&canonical));
-    let verification_time = (state.paper_chain_verification_clock)();
+    let verification_time = (state.cometbft_local_verification_clock)();
     if state.pool.is_some() {
         ingest_paper_chain_finality_postgres(
             &state,
@@ -578,19 +612,6 @@ async fn ingest_paper_chain_finality_memory(
     receipt: CometBftAppHashFinalityReceiptV2,
     verification_time: SystemTime,
 ) -> Result<(StatusCode, Json<PaperChainFinalityProjectionV1>), ApiError> {
-    {
-        let memory = state.paper_chain_finality.read().await;
-        if let Some(replay) = receipt_replay_memory(
-            &memory,
-            paper_id,
-            &receipt.receipt_hash_hex,
-            &trust_anchor_hash,
-            &canonical,
-            &canonical_sha256,
-        )? {
-            return Ok((StatusCode::OK, Json(replay)));
-        }
-    }
     let anchor_canonical = {
         let memory = state.paper_chain_finality.read().await;
         memory
@@ -611,18 +632,50 @@ async fn ingest_paper_chain_finality_memory(
         &state.security.pinned_trnm_cometbft_trust_anchor_hashes,
         verification_time,
     )?;
-    let verified_at = DateTime::<Utc>::from(verification_time);
+    ingest_verified_paper_chain_finality_memory(
+        state,
+        paper_id,
+        trust_anchor_hash,
+        canonical,
+        canonical_sha256,
+        verified,
+        DateTime::<Utc>::from(verification_time),
+    )
+    .await
+}
 
+#[allow(clippy::too_many_arguments)]
+async fn ingest_verified_paper_chain_finality_memory(
+    state: &AppState,
+    paper_id: Uuid,
+    trust_anchor_hash: String,
+    canonical: Bytes,
+    canonical_sha256: String,
+    verified: VerifiedCometBftReceiptV2,
+    verified_at: DateTime<Utc>,
+) -> Result<(StatusCode, Json<PaperChainFinalityProjectionV1>), ApiError> {
+    let verified_domain_command = require_legacy_research_domain(&verified)?;
     // Paper writes take this same lock. Holding it across the command and new
     // projection updates prevents an Appeal/integrity transition from racing
     // the finality decision in the in-memory test backend.
     let paper_memory = state.paper_raid.write().await;
     let mut league = state.inner.write().await;
     let mut finality = state.paper_chain_finality.write().await;
+    let command = league
+        .trnm_commands
+        .values_mut()
+        .find(|command| command.idempotency_key == verified.command_id)
+        .ok_or_else(|| {
+            ApiError::not_found(
+                "queued_trnm_command_not_found",
+                "Receipt domain command_id does not match a queued Hepta command",
+            )
+        })?;
+    validate_verified_domain_command(command, verified_domain_command)?;
     if let Some(replay) = receipt_replay_memory(
         &finality,
         paper_id,
-        &receipt.receipt_hash_hex,
+        &verified.receipt_hash_hex,
         &trust_anchor_hash,
         &canonical,
         &canonical_sha256,
@@ -635,16 +688,6 @@ async fn ingest_paper_chain_finality_memory(
             "Paper already has a different immutable Chain finality projection",
         ));
     }
-    let command = league
-        .trnm_commands
-        .values_mut()
-        .find(|command| command.idempotency_key == verified.command_id)
-        .ok_or_else(|| {
-            ApiError::not_found(
-                "queued_trnm_command_not_found",
-                "Receipt domain command_id does not match a queued Hepta command",
-            )
-        })?;
     validate_verified_command_binding(
         command,
         paper_id,
@@ -668,9 +711,9 @@ async fn ingest_paper_chain_finality_memory(
     );
     finality
         .inbox
-        .insert(receipt.receipt_hash_hex.clone(), canonical_sha256.clone());
+        .insert(verified.receipt_hash_hex.clone(), canonical_sha256.clone());
     finality.receipts.insert(
-        receipt.receipt_hash_hex.clone(),
+        verified.receipt_hash_hex.clone(),
         MemoryReceipt {
             canonical_sha256,
             trust_anchor_hash,
@@ -726,34 +769,6 @@ async fn ingest_paper_chain_finality_postgres(
     .execute(&mut *tx)
     .await
     .map_err(ApiError::database)?;
-
-    if let Some(replay) = receipt_replay_postgres(
-        &mut tx,
-        paper_id,
-        &receipt.receipt_hash_hex,
-        &trust_anchor_hash,
-        &canonical,
-        &canonical_sha256,
-    )
-    .await?
-    {
-        tx.commit().await.map_err(ApiError::database)?;
-        return Ok((StatusCode::OK, Json(replay)));
-    }
-    if sqlx::query_scalar::<_, bool>(
-        "select exists(select 1 from hepta_paper_chain_finality_projections
-         where paper_project_id=$1)",
-    )
-    .bind(paper_id)
-    .fetch_one(&mut *tx)
-    .await
-    .map_err(ApiError::database)?
-    {
-        return Err(ApiError::conflict(
-            "paper_chain_finality_conflict",
-            "Paper already has a different immutable Chain finality projection",
-        ));
-    }
     let anchor_row = sqlx::query(
         "select canonical_anchor from hepta_trnm_cometbft_trust_anchors
          where anchor_hash=$1 for share",
@@ -776,12 +791,39 @@ async fn ingest_paper_chain_finality_postgres(
         &state.security.pinned_trnm_cometbft_trust_anchor_hashes,
         verification_time,
     )?;
+    let result = ingest_verified_paper_chain_finality_postgres(
+        state,
+        &mut tx,
+        paper_id,
+        &trust_anchor_hash,
+        canonical.as_ref(),
+        &canonical_sha256,
+        &verified,
+        DateTime::<Utc>::from(verification_time),
+    )
+    .await?;
+    tx.commit().await.map_err(ApiError::database)?;
+    Ok(result)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn ingest_verified_paper_chain_finality_postgres(
+    state: &AppState,
+    tx: &mut Transaction<'_, Postgres>,
+    paper_id: Uuid,
+    trust_anchor_hash: &str,
+    canonical: &[u8],
+    canonical_sha256: &str,
+    verified: &VerifiedCometBftReceiptV2,
+    verified_at: DateTime<Utc>,
+) -> Result<(StatusCode, Json<PaperChainFinalityProjectionV1>), ApiError> {
+    let verified_domain_command = require_legacy_research_domain(verified)?;
 
     let state_row = sqlx::query(
         "select revision,state_json from hepta_league_state
          where state_key='primary' for update",
     )
-    .fetch_one(&mut *tx)
+    .fetch_one(&mut **tx)
     .await
     .map_err(ApiError::database)?;
     let revision: i64 = state_row.get("revision");
@@ -796,15 +838,36 @@ async fn ingest_paper_chain_finality_postgres(
                 "Receipt domain command_id does not match a queued Hepta command",
             )
         })?;
-    let binding = validate_command_identity(command, paper_id, &verified)?.clone();
-    validate_paper_binding_postgres(&mut tx, &binding, true, &state.security).await?;
-    let projection = build_projection(
+    validate_verified_domain_command(command, verified_domain_command)?;
+    if let Some(replay) = receipt_replay_postgres(
+        tx,
         paper_id,
-        command,
-        &verified,
-        &trust_anchor_hash,
-        DateTime::<Utc>::from(verification_time),
-    )?;
+        &verified.receipt_hash_hex,
+        trust_anchor_hash,
+        canonical,
+        canonical_sha256,
+    )
+    .await?
+    {
+        return Ok((StatusCode::OK, Json(replay)));
+    }
+    if sqlx::query_scalar::<_, bool>(
+        "select exists(select 1 from hepta_paper_chain_finality_projections
+         where paper_project_id=$1)",
+    )
+    .bind(paper_id)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(ApiError::database)?
+    {
+        return Err(ApiError::conflict(
+            "paper_chain_finality_conflict",
+            "Paper already has a different immutable Chain finality projection",
+        ));
+    }
+    let binding = validate_command_identity(command, paper_id, verified)?.clone();
+    validate_paper_binding_postgres(tx, &binding, true, &state.security).await?;
+    let projection = build_projection(paper_id, command, verified, trust_anchor_hash, verified_at)?;
     command.status = TrnmProjectionStatus::VerifiedFinality;
     push_event(
         &mut league,
@@ -826,7 +889,7 @@ async fn ingest_paper_chain_finality_postgres(
     .bind(revision + 1)
     .bind(state_json)
     .bind(revision)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await
     .map_err(ApiError::database)?;
 
@@ -839,11 +902,11 @@ async fn ingest_paper_chain_finality_postgres(
          ) values ($1,$2,$3,$4,$5)",
     )
     .bind(&projection.receipt_hash)
-    .bind(&canonical_sha256)
-    .bind(&trust_anchor_hash)
+    .bind(canonical_sha256)
+    .bind(trust_anchor_hash)
     .bind(paper_id)
     .bind(projection.verified_at)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await
     .map_err(ApiError::database)?;
     sqlx::query(
@@ -860,7 +923,7 @@ async fn ingest_paper_chain_finality_postgres(
     .bind(&projection.command_idempotency_key)
     .bind(&projection.command_fingerprint)
     .bind(&projection.paper_binding_fingerprint)
-    .bind(&trust_anchor_hash)
+    .bind(trust_anchor_hash)
     .bind(&projection.chain_id)
     .bind(i64_from_u64(
         projection.execution_height,
@@ -872,16 +935,15 @@ async fn ingest_paper_chain_finality_postgres(
     )?)
     .bind(&projection.comet_tx_hash)
     .bind(&projection.app_hash)
-    .bind(&canonical[..])
-    .bind(&canonical_sha256)
+    .bind(canonical)
+    .bind(canonical_sha256)
     .bind(projection.verified_at)
     .bind(&projection_json)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await
     .map_err(ApiError::database)?;
-    insert_finality_projection_postgres(&mut tx, &projection, &projection_json).await?;
-    insert_outbox_event(&mut tx, &event).await?;
-    tx.commit().await.map_err(ApiError::database)?;
+    insert_finality_projection_postgres(tx, &projection, &projection_json).await?;
+    insert_outbox_event(tx, &event).await?;
     Ok((StatusCode::CREATED, Json(projection)))
 }
 
@@ -999,6 +1061,32 @@ fn verify_receipt(
     }
 }
 
+fn require_legacy_research_domain(
+    verified: &VerifiedCometBftReceiptV2,
+) -> Result<&crate::trnm_v1::SignedResearchCommandV1, ApiError> {
+    match &verified.domain_command {
+        VerifiedCometBftDomainCommandV2::ResearchV1(command) => Ok(command.as_ref()),
+        VerifiedCometBftDomainCommandV2::PaperRaidFinalityV2(_)
+        | VerifiedCometBftDomainCommandV2::PaperRaidFinalityV3(_) => Err(ApiError::conflict(
+            "trnm_receipt_domain_lane_mismatch",
+            "typed Paper Raid finality commands cannot enter the legacy Paper finality V1 lane",
+        )),
+    }
+}
+
+fn validate_verified_domain_command(
+    command: &crate::workflows::TrnmCommand,
+    verified_domain_command: &crate::trnm_v1::SignedResearchCommandV1,
+) -> Result<(), ApiError> {
+    if verified_domain_command != &command.signed_command {
+        return Err(ApiError::conflict(
+            "trnm_receipt_domain_command_mismatch",
+            "verified Receipt V2 Research command differs from the exact locally queued signed command",
+        ));
+    }
+    Ok(())
+}
+
 fn validate_verified_command_binding<'a>(
     command: &'a crate::workflows::TrnmCommand,
     paper_id: Uuid,
@@ -1060,7 +1148,7 @@ fn validate_command_identity<'a>(
     Ok(binding)
 }
 
-fn validate_match_evidence_binding(
+pub(crate) fn validate_match_evidence_binding(
     binding: &PaperTrnmCommandBindingV1,
     submission: &JointPaperSubmission,
     authorization_set: &crate::paper_raid_v2::ResearchSessionAuthorizationSetV1,
@@ -1440,7 +1528,7 @@ async fn validate_paper_binding_postgres(
     Ok(())
 }
 
-fn validate_current_binding_records(
+pub(crate) fn validate_current_binding_records(
     binding: &PaperTrnmCommandBindingV1,
     paper: &PaperProject,
     submission: &JointPaperSubmission,
@@ -1636,7 +1724,10 @@ fn trust_anchor_hash_header(headers: &HeaderMap) -> Result<String, ApiError> {
     Ok(value)
 }
 
-async fn read_limited_body(request: Request, limit: usize) -> Result<axum::body::Bytes, ApiError> {
+pub(crate) async fn read_limited_body(
+    request: Request,
+    limit: usize,
+) -> Result<axum::body::Bytes, ApiError> {
     let content_lengths = request
         .headers()
         .get_all(CONTENT_LENGTH)
@@ -1711,6 +1802,11 @@ mod tests {
     use serde_json::json;
     use sqlx::{Connection, PgConnection};
     use tower::ServiceExt;
+    use trnm_research_protocol::{
+        PaperRaidAppealStatusV2, PaperRaidAppealStatusV3, PaperRaidFinalityCommitmentV2,
+        PaperRaidFinalityCommitmentV3, SignedPaperRaidFinalityCommandV2,
+        SignedPaperRaidFinalityCommandV3,
+    };
 
     use super::*;
     use crate::{
@@ -1735,14 +1831,35 @@ mod tests {
     );
     const ANCHOR_HASH: &str = "88b73fc902dd554c35b9a44ff582ec6d76e59085a2e4fdf14292183f4b3846d5";
     const VERIFICATION_TIME: u64 = 1_786_034_510;
-    const FIXTURE_COMMAND_ID: &str =
-        "54fe42942e0f514960bdd8dc9378d21af6b417f9712fe8511d6ad8d9e56a7529";
-    const FIXTURE_COMMAND_FINGERPRINT: &str =
-        "189f0888da2220b90d9ead78c8c80775206d09b07105d42811912f689453cad4";
 
     fn canonical_fixture_payload(file: &'static [u8]) -> &'static [u8] {
         file.strip_suffix(b"\n")
             .expect("repository JSON fixture must end in one transport newline")
+    }
+
+    fn lower_hex(bytes: &[u8]) -> String {
+        use std::fmt::Write as _;
+
+        let mut encoded = String::with_capacity(bytes.len() * 2);
+        for byte in bytes {
+            write!(&mut encoded, "{byte:02x}").expect("write lowercase hex");
+        }
+        encoded
+    }
+
+    fn verified_receipt_fixture() -> VerifiedCometBftReceiptV2 {
+        let receipt = CometBftAppHashFinalityReceiptV2::from_canonical_bytes(
+            canonical_fixture_payload(RECEIPT_FILE),
+        )
+        .expect("canonical Receipt V2 fixture");
+        verify_receipt(
+            &receipt,
+            canonical_fixture_payload(ANCHOR_FILE),
+            ANCHOR_HASH,
+            &HashSet::from([ANCHOR_HASH.to_string()]),
+            std::time::UNIX_EPOCH + Duration::from_secs(VERIFICATION_TIME),
+        )
+        .expect("Receipt V2 fixture verifies")
     }
 
     fn security() -> SecurityConfig {
@@ -1771,7 +1888,7 @@ mod tests {
 
     fn fixed_state() -> AppState {
         let mut state = AppState::new(security());
-        state.paper_chain_verification_clock =
+        state.cometbft_local_verification_clock =
             Arc::new(|| std::time::UNIX_EPOCH + Duration::from_secs(VERIFICATION_TIME));
         state
     }
@@ -1781,7 +1898,7 @@ mod tests {
             max_body_bytes,
             max_in_flight,
         ));
-        state.paper_chain_verification_clock =
+        state.cometbft_local_verification_clock =
             Arc::new(|| std::time::UNIX_EPOCH + Duration::from_secs(VERIFICATION_TIME));
         state
     }
@@ -1973,21 +2090,417 @@ mod tests {
     }
 
     fn fixture_bound_command(binding: &PaperTrnmCommandBindingV1) -> TrnmCommand {
-        let signed = signed_command(binding, ExternalKey::from_bytes([0x42; 32]));
+        let verified = verified_receipt_fixture();
+        let VerifiedCometBftDomainCommandV2::ResearchV1(signed) = verified.domain_command else {
+            panic!("repository Receipt V2 fixture must carry Research V1");
+        };
         TrnmCommand {
             command_id: Uuid::new_v4(),
             kind: TrnmCommandKind::EvaluationCommitment,
             aggregate_id: signed.command.primary_object_ref().key.to_hex(),
-            idempotency_key: FIXTURE_COMMAND_ID.to_string(),
-            command_fingerprint: format!("sha256:{FIXTURE_COMMAND_FINGERPRINT}"),
+            idempotency_key: verified.command_id,
+            command_fingerprint: format!("sha256:{}", verified.command_fingerprint_hex),
             paper_binding: Some(binding.clone()),
             paper_binding_fingerprint: Some(
                 paper_binding_fingerprint(binding).expect("Paper binding fingerprint"),
             ),
-            signed_command: signed,
+            signed_command: *signed,
             status: TrnmProjectionStatus::PendingFinality,
             created_at: Utc::now(),
         }
+    }
+
+    fn mismatched_fixture_bound_command(binding: &PaperTrnmCommandBindingV1) -> TrnmCommand {
+        let mut command = fixture_bound_command(binding);
+        command.signed_command = signed_command(binding, ExternalKey::from_bytes([0x42; 32]));
+        command
+    }
+
+    async fn postgres_json_rows(pool: &sqlx::PgPool, query: &str) -> Vec<Value> {
+        sqlx::query(query)
+            .fetch_all(pool)
+            .await
+            .expect("Paper finality side-effect snapshot query")
+            .into_iter()
+            .map(|row| row.get("record"))
+            .collect()
+    }
+
+    async fn paper_finality_side_effect_snapshot(state: &AppState) -> Value {
+        if let Some(pool) = &state.pool {
+            let league = sqlx::query_scalar::<_, Value>(
+                "select to_jsonb(snapshot) from (
+                    select state_key,revision,state_json,updated_at
+                    from hepta_league_state where state_key='primary'
+                 ) snapshot",
+            )
+            .fetch_one(pool)
+            .await
+            .expect("League state side-effect snapshot");
+            return json!({
+                "league": league,
+                "paper_projects_with_finality_v2_seal": postgres_json_rows(
+                    pool,
+                    "select to_jsonb(snapshot) as record from (
+                        select * from hepta_paper_projects order by paper_project_id
+                     ) snapshot",
+                ).await,
+                "joint_paper_submissions": postgres_json_rows(
+                    pool,
+                    "select to_jsonb(snapshot) as record from (
+                        select * from hepta_joint_paper_submissions order by submission_id
+                     ) snapshot",
+                ).await,
+                "research_session_authorization_sets": postgres_json_rows(
+                    pool,
+                    "select to_jsonb(snapshot) as record from (
+                        select * from hepta_research_session_authorization_sets
+                        order by session_id,roster_version
+                     ) snapshot",
+                ).await,
+                "nakama_research_session_completions": postgres_json_rows(
+                    pool,
+                    "select to_jsonb(snapshot) as record from (
+                        select * from hepta_nakama_research_session_completions
+                        order by commitment_id
+                     ) snapshot",
+                ).await,
+                "paper_evaluations": postgres_json_rows(
+                    pool,
+                    "select to_jsonb(snapshot) as record from (
+                        select * from hepta_paper_evaluations order by evaluation_id
+                     ) snapshot",
+                ).await,
+                "paper_reproductions": postgres_json_rows(
+                    pool,
+                    "select to_jsonb(snapshot) as record from (
+                        select * from hepta_paper_reproductions order by reproduction_id
+                     ) snapshot",
+                ).await,
+                "paper_appeals": postgres_json_rows(
+                    pool,
+                    "select to_jsonb(snapshot) as record from (
+                        select * from hepta_paper_appeals order by appeal_id
+                     ) snapshot",
+                ).await,
+                "paper_appeal_resolutions": postgres_json_rows(
+                    pool,
+                    "select to_jsonb(snapshot) as record from (
+                        select * from hepta_paper_appeal_resolutions order by resolution_id
+                     ) snapshot",
+                ).await,
+                "trust_anchors": postgres_json_rows(
+                    pool,
+                    "select to_jsonb(snapshot) as record from (
+                        select * from hepta_trnm_cometbft_trust_anchors order by anchor_hash
+                     ) snapshot",
+                ).await,
+                "time_checkpoints_v1": postgres_json_rows(
+                    pool,
+                    "select to_jsonb(snapshot) as record from (
+                        select * from hepta_trnm_cometbft_time_checkpoints_v1
+                        order by chain_id,height,checkpoint_hash
+                     ) snapshot",
+                ).await,
+                "finality_window_arms_v2": postgres_json_rows(
+                    pool,
+                    "select to_jsonb(snapshot) as record from (
+                        select * from hepta_paper_chain_finality_window_arms_v2
+                        order by paper_project_id,arm_id
+                     ) snapshot",
+                ).await,
+                "finality_preparations_v2": postgres_json_rows(
+                    pool,
+                    "select to_jsonb(snapshot) as record from (
+                        select * from hepta_paper_chain_finality_preparations_v2
+                        order by paper_project_id,preparation_id
+                     ) snapshot",
+                ).await,
+                "finality_inbox": postgres_json_rows(
+                    pool,
+                    "select to_jsonb(snapshot) as record from (
+                        select * from hepta_paper_chain_finality_inbox order by receipt_hash
+                     ) snapshot",
+                ).await,
+                "receipts": postgres_json_rows(
+                    pool,
+                    "select to_jsonb(snapshot) as record from (
+                        select * from hepta_paper_chain_receipts order by receipt_hash
+                     ) snapshot",
+                ).await,
+                "projections": postgres_json_rows(
+                    pool,
+                    "select to_jsonb(snapshot) as record from (
+                        select * from hepta_paper_chain_finality_projections order by local_command_id
+                     ) snapshot",
+                ).await,
+                "outbox": postgres_json_rows(
+                    pool,
+                    "select to_jsonb(snapshot) as record from (
+                        select * from hepta_outbox order by event_id
+                     ) snapshot",
+                ).await,
+                "inbox": postgres_json_rows(
+                    pool,
+                    "select to_jsonb(snapshot) as record from (
+                        select * from hepta_inbox order by consumer,event_id
+                     ) snapshot",
+                ).await,
+                "paper_raid_idempotency": postgres_json_rows(
+                    pool,
+                    "select to_jsonb(snapshot) as record from (
+                        select * from hepta_paper_raid_idempotency order by operation,idempotency_key
+                     ) snapshot",
+                ).await,
+            });
+        }
+
+        let league = {
+            let league = state.inner.read().await;
+            serde_json::to_value(&*league).expect("memory League state snapshot")
+        };
+        let paper_raid = state
+            .paper_raid
+            .read()
+            .await
+            .paper_finality_v1_side_effect_snapshot();
+        let finality = state.paper_chain_finality.read().await;
+        let mut trust_anchors = finality
+            .trust_anchors
+            .iter()
+            .map(|(anchor_hash, anchor)| {
+                json!({
+                    "anchor_hash": anchor_hash,
+                    "record": anchor.record,
+                    "canonical_hex": lower_hex(anchor.canonical.as_ref()),
+                })
+            })
+            .collect::<Vec<_>>();
+        trust_anchors.sort_by(|left, right| {
+            left["anchor_hash"]
+                .as_str()
+                .cmp(&right["anchor_hash"].as_str())
+        });
+        let mut receipts = finality
+            .receipts
+            .iter()
+            .map(|(receipt_hash, receipt)| {
+                json!({
+                    "receipt_hash": receipt_hash,
+                    "canonical_sha256": receipt.canonical_sha256,
+                    "trust_anchor_hash": receipt.trust_anchor_hash,
+                    "canonical_hex": lower_hex(receipt.canonical.as_ref()),
+                    "projection": receipt.projection,
+                })
+            })
+            .collect::<Vec<_>>();
+        receipts.sort_by(|left, right| {
+            left["receipt_hash"]
+                .as_str()
+                .cmp(&right["receipt_hash"].as_str())
+        });
+        let preparations_v2 = &finality.preparations_v2;
+        let mut time_checkpoint_hash_by_chain_height = preparations_v2
+            .time_checkpoint_hash_by_chain_height
+            .iter()
+            .map(|((chain_id, height), checkpoint_hash)| {
+                json!({
+                    "chain_id": chain_id,
+                    "height": height,
+                    "checkpoint_hash": checkpoint_hash,
+                })
+            })
+            .collect::<Vec<_>>();
+        time_checkpoint_hash_by_chain_height.sort_by(|left, right| {
+            (left["chain_id"].as_str(), left["height"].as_u64())
+                .cmp(&(right["chain_id"].as_str(), right["height"].as_u64()))
+        });
+        json!({
+            "league": league,
+            "paper_raid": paper_raid,
+            "trust_anchors": trust_anchors,
+            "finality_inbox": finality.inbox,
+            "receipts": receipts,
+            "projections": finality.projections,
+            "preparations_v2": {
+                "time_checkpoints_by_hash": preparations_v2.time_checkpoints_by_hash,
+                "time_checkpoint_hash_by_chain_height": time_checkpoint_hash_by_chain_height,
+                "arms_by_idempotency_key": preparations_v2.arms_by_idempotency_key,
+                "arms_by_id": preparations_v2.arms_by_id,
+                "arms_by_source_fingerprint": preparations_v2.arms_by_source_fingerprint,
+                "by_idempotency_key": preparations_v2.by_idempotency_key,
+                "by_commitment_id": preparations_v2.by_commitment_id,
+                "by_paper_id": preparations_v2.by_paper_id,
+            },
+        })
+    }
+
+    async fn admit_fixture_anchor(router: &Router) {
+        let (status, body) = raw_request(
+            router.clone(),
+            "/v2/hepta/operator/trnm/trust-anchors",
+            Some((OPERATOR_TOKEN_HEADER, "operator")),
+            canonical_fixture_payload(ANCHOR_FILE).to_vec(),
+            None,
+            0,
+        )
+        .await;
+        assert!(
+            matches!(status, StatusCode::CREATED | StatusCode::OK),
+            "{body}"
+        );
+    }
+
+    fn paper_raid_v2_domain_command() -> SignedPaperRaidFinalityCommandV2 {
+        SignedPaperRaidFinalityCommandV2::sign(
+            "trnm-comet-spike".to_string(),
+            ExternalKey::from_bytes([0x91; 32]),
+            "did:trnm:hepta-authority".to_string(),
+            1,
+            PaperRaidFinalityCommitmentV2 {
+                commitment_id: ExternalKey::from_bytes([0x92; 32]),
+                paper_project_id: ExternalKey::from_bytes([0x93; 32]),
+                submission_id: ExternalKey::from_bytes([0x94; 32]),
+                match_evidence_ref: ObjectRefV1::new(
+                    ResearchObjectKind::MatchEvidence,
+                    ExternalKey::from_bytes([0x95; 32]),
+                    1,
+                ),
+                release_candidate_hash: [0x11; 32],
+                paper_bundle_hash: [0x12; 32],
+                submission_commitment_hash: [0x13; 32],
+                author_consent_set_hash: [0x14; 32],
+                tolerance_policy_hash: [0x15; 32],
+                evaluation_id: ExternalKey::from_bytes([0x96; 32]),
+                evaluation_hash: [0x16; 32],
+                evaluation_score_bps: 8_500,
+                evaluation_accepted: true,
+                evaluation_completed_at_unix_s: 100,
+                latest_reproduction_id: ExternalKey::from_bytes([0x97; 32]),
+                latest_reproduction_hash: [0x17; 32],
+                latest_reproduction_accepted: true,
+                latest_reproduction_completed_at_unix_s: 110,
+                evaluation_superseded_by: None,
+                reproduction_superseded_by: None,
+                appeal_status: PaperRaidAppealStatusV2::ClosedNoAppeal,
+                appeal_id: None,
+                appeal_resolution_hash: None,
+                appeal_window_closes_at_unix_s: 120,
+                settlement_policy_hash: [0x18; 32],
+                scientific_finality: true,
+                score_eligible: false,
+                ranking_eligible: false,
+                reward_eligible: false,
+                economic_eligible: false,
+                finalized_at_unix_s: 121,
+            },
+            &SigningKey::from_bytes(&[0x31; 32]),
+        )
+        .expect("valid Paper Raid finality V2 command")
+    }
+
+    fn paper_raid_v3_domain_command() -> SignedPaperRaidFinalityCommandV3 {
+        SignedPaperRaidFinalityCommandV3::sign(
+            "trnm-comet-spike".to_string(),
+            ExternalKey::from_bytes([0xa1; 32]),
+            "did:trnm:hepta-authority".to_string(),
+            1,
+            PaperRaidFinalityCommitmentV3 {
+                commitment_id: ExternalKey::from_bytes([0xa2; 32]),
+                paper_project_id: ExternalKey::from_bytes([0xa3; 32]),
+                submission_id: ExternalKey::from_bytes([0xa4; 32]),
+                match_evidence_ref: ObjectRefV1::new(
+                    ResearchObjectKind::MatchEvidence,
+                    ExternalKey::from_bytes([0xa5; 32]),
+                    1,
+                ),
+                release_candidate_hash: [0x21; 32],
+                paper_bundle_hash: [0x22; 32],
+                submission_commitment_hash: [0x23; 32],
+                author_consent_set_hash: [0x24; 32],
+                tolerance_policy_hash: [0x25; 32],
+                evaluation_id: ExternalKey::from_bytes([0xa6; 32]),
+                evaluation_hash: [0x26; 32],
+                evaluation_score_bps: 8_500,
+                evaluation_accepted: true,
+                evaluation_completed_at_unix_s: 100,
+                latest_reproduction_id: ExternalKey::from_bytes([0xa7; 32]),
+                latest_reproduction_hash: [0x27; 32],
+                latest_reproduction_accepted: true,
+                latest_reproduction_completed_at_unix_s: 110,
+                evaluation_supersedes: None,
+                evaluation_superseded_by: None,
+                reproduction_superseded_by: None,
+                appeal_status: PaperRaidAppealStatusV3::ClosedNoAppeal,
+                appeal_id: None,
+                appealed_evaluation_id: None,
+                appeal_resolution_hash: None,
+                appeal_window_closes_at_unix_s: 120,
+                settlement_policy_hash: [0x28; 32],
+                scientific_finality: true,
+                score_eligible: false,
+                ranking_eligible: false,
+                reward_eligible: false,
+                economic_eligible: false,
+                finalized_at_unix_s: 121,
+            },
+            &SigningKey::from_bytes(&[0x32; 32]),
+        )
+        .expect("valid Paper Raid finality V3 command")
+    }
+
+    fn synthetic_verified_domain(
+        domain_command: VerifiedCometBftDomainCommandV2,
+    ) -> VerifiedCometBftReceiptV2 {
+        let (command_id, command_fingerprint_hex) = match &domain_command {
+            VerifiedCometBftDomainCommandV2::ResearchV1(command) => (
+                command.command_id.to_hex(),
+                lower_hex(&command.command_fingerprint()),
+            ),
+            VerifiedCometBftDomainCommandV2::PaperRaidFinalityV2(command) => (
+                command.command_id.to_hex(),
+                lower_hex(&command.command_fingerprint()),
+            ),
+            VerifiedCometBftDomainCommandV2::PaperRaidFinalityV3(command) => (
+                command.command_id.to_hex(),
+                lower_hex(&command.command_fingerprint()),
+            ),
+        };
+        VerifiedCometBftReceiptV2 {
+            receipt_hash_hex: "b1".repeat(32),
+            chain_id: "trnm-comet-spike".to_string(),
+            command_id,
+            command_fingerprint_hex,
+            comet_tx_hash_hex: "b2".repeat(32),
+            transaction_index: 0,
+            applied_command_object_key_hex: "b3".repeat(32),
+            execution_height: 7,
+            commitment_height: 8,
+            commitment_header_hash_hex: "b4".repeat(32),
+            app_hash_hex: "b5".repeat(32),
+            domain_command,
+        }
+    }
+
+    fn synthetic_verified_paper_raid_domain(version: u8) -> VerifiedCometBftReceiptV2 {
+        let domain_command = match version {
+            2 => {
+                let command = paper_raid_v2_domain_command();
+                command
+                    .validate()
+                    .expect("synthetic Paper Raid V2 signature must verify");
+                VerifiedCometBftDomainCommandV2::PaperRaidFinalityV2(Box::new(command))
+            }
+            3 => {
+                let command = paper_raid_v3_domain_command();
+                command
+                    .validate()
+                    .expect("synthetic Paper Raid V3 signature must verify");
+                VerifiedCometBftDomainCommandV2::PaperRaidFinalityV3(Box::new(command))
+            }
+            _ => panic!("unsupported synthetic Paper Raid domain version"),
+        };
+        synthetic_verified_domain(domain_command)
     }
 
     async fn exercise_legacy_lane_ordering(state: AppState) {
@@ -1995,6 +2508,12 @@ mod tests {
             crate::paper_raid_v2::endpoint_tests::seed_paper_chain_finality_test(state.clone())
                 .await;
         let command = fixture_bound_command(&binding);
+        let verified_fixture = verified_receipt_fixture();
+        assert!(matches!(
+            &verified_fixture.domain_command,
+            VerifiedCometBftDomainCommandV2::ResearchV1(receipt_command)
+                if receipt_command.as_ref() == &command.signed_command
+        ));
         state
             .transact(|league| {
                 league
@@ -2054,6 +2573,23 @@ mod tests {
             projection["local_command_id"],
             command.command_id.to_string()
         );
+        let after_created = paper_finality_side_effect_snapshot(&state).await;
+        let (replay_status, replayed_projection) = raw_request(
+            router.clone(),
+            &finality_path,
+            Some((TRNM_TOKEN_HEADER, "trnm")),
+            canonical_fixture_payload(RECEIPT_FILE).to_vec(),
+            None,
+            1,
+        )
+        .await;
+        assert_eq!(replay_status, StatusCode::OK, "{replayed_projection}");
+        assert_eq!(replayed_projection, projection);
+        assert_eq!(
+            paper_finality_side_effect_snapshot(&state).await,
+            after_created,
+            "an exact Research V1 Receipt V2 replay must return the same projection without mutating reachable Paper finality V1 state",
+        );
 
         let verified = legacy_lane_snapshot(&state, command.command_id).await;
         assert_eq!(verified["command_status"], "verified_finality");
@@ -2080,15 +2616,172 @@ mod tests {
         let (get_status, replayed_projection) = get_json(router, &finality_path).await;
         assert_eq!(get_status, StatusCode::OK, "{replayed_projection}");
         assert_eq!(replayed_projection, stored_projection);
+
+        state
+            .transact(|league| {
+                let queued = league
+                    .trnm_commands
+                    .get_mut(&command.command_id)
+                    .ok_or_else(|| ApiError::internal("queued Research command disappeared"))?;
+                queued.signed_command =
+                    signed_command(&binding, ExternalKey::from_bytes([0x42; 32]));
+                Ok(())
+            })
+            .await
+            .expect("tamper queued signed Research command after exact replay");
+        let after_queue_tamper = paper_finality_side_effect_snapshot(&state).await;
+        let (tampered_replay_status, tampered_replay_error) = raw_request(
+            app(state.clone()),
+            &finality_path,
+            Some((TRNM_TOKEN_HEADER, "trnm")),
+            canonical_fixture_payload(RECEIPT_FILE).to_vec(),
+            None,
+            1,
+        )
+        .await;
+        assert_eq!(
+            tampered_replay_status,
+            StatusCode::CONFLICT,
+            "{tampered_replay_error}"
+        );
+        assert_eq!(
+            tampered_replay_error["code"],
+            "trnm_receipt_domain_command_mismatch"
+        );
+        assert_eq!(
+            paper_finality_side_effect_snapshot(&state).await,
+            after_queue_tamper,
+            "the replay shortcut must not bypass exact equality with the queued signed Research command",
+        );
+        let (get_status, projection_after_tampered_replay) =
+            get_json(app(state), &finality_path).await;
+        assert_eq!(
+            get_status,
+            StatusCode::OK,
+            "{projection_after_tampered_replay}"
+        );
+        assert_eq!(projection_after_tampered_replay, stored_projection);
+    }
+
+    async fn exercise_mismatched_research_zero_side_effects(state: AppState) {
+        let binding =
+            crate::paper_raid_v2::endpoint_tests::seed_paper_chain_finality_test(state.clone())
+                .await;
+        let command = mismatched_fixture_bound_command(&binding);
+        state
+            .transact(|league| {
+                league
+                    .trnm_commands
+                    .insert(command.command_id, command.clone());
+                Ok(())
+            })
+            .await
+            .expect("seed mismatched fixture-bound command");
+        let router = app(state.clone());
+        admit_fixture_anchor(&router).await;
+        let before = paper_finality_side_effect_snapshot(&state).await;
+        let path = format!(
+            "/v2/hepta/papers/{}/chain-finality",
+            binding.paper_project_id
+        );
+        for _ in 0..2 {
+            let (status, error) = raw_request(
+                router.clone(),
+                &path,
+                Some((TRNM_TOKEN_HEADER, "trnm")),
+                canonical_fixture_payload(RECEIPT_FILE).to_vec(),
+                None,
+                1,
+            )
+            .await;
+            assert_eq!(status, StatusCode::CONFLICT, "{error}");
+            assert_eq!(error["code"], "trnm_receipt_domain_command_mismatch");
+        }
+        assert_eq!(
+            paper_finality_side_effect_snapshot(&state).await,
+            before,
+            "mismatched Research receipt must not alter business state, idempotency, events, projections, receipt inbox, or outbox",
+        );
+    }
+
+    async fn exercise_paper_raid_lane_guard_zero_side_effects(state: AppState) {
+        let binding =
+            crate::paper_raid_v2::endpoint_tests::seed_paper_chain_finality_test(state.clone())
+                .await;
+        let command = fixture_bound_command(&binding);
+        state
+            .transact(|league| {
+                league
+                    .trnm_commands
+                    .insert(command.command_id, command.clone());
+                Ok(())
+            })
+            .await
+            .expect("seed exact Research command before Paper Raid lane guard test");
+        let before = paper_finality_side_effect_snapshot(&state).await;
+        let canonical = Bytes::from_static(b"synthetic-post-verification-paper-raid-domain");
+        let canonical_sha256 = format!("sha256:{}", sha256_hex(&canonical));
+        let verified_at =
+            DateTime::<Utc>::from(std::time::UNIX_EPOCH + Duration::from_secs(VERIFICATION_TIME));
+        for version in [2, 3] {
+            for _ in 0..2 {
+                let verified = synthetic_verified_paper_raid_domain(version);
+                let error = if let Some(pool) = &state.pool {
+                    let mut tx = pool
+                        .begin()
+                        .await
+                        .expect("begin Paper Raid typed-domain guard transaction");
+                    let result = ingest_verified_paper_chain_finality_postgres(
+                        &state,
+                        &mut tx,
+                        binding.paper_project_id,
+                        ANCHOR_HASH,
+                        canonical.as_ref(),
+                        &canonical_sha256,
+                        &verified,
+                        verified_at,
+                    )
+                    .await;
+                    let error = result.expect_err(
+                        "Paper Raid domain must not enter PostgreSQL legacy Paper finality V1",
+                    );
+                    assert_eq!(error.status, StatusCode::CONFLICT);
+                    assert_eq!(error.code, "trnm_receipt_domain_lane_mismatch");
+                    tx.commit()
+                        .await
+                        .expect("commit expected Paper Raid typed-domain application rejection");
+                    error
+                } else {
+                    ingest_verified_paper_chain_finality_memory(
+                        &state,
+                        binding.paper_project_id,
+                        ANCHOR_HASH.to_string(),
+                        canonical.clone(),
+                        canonical_sha256.clone(),
+                        verified,
+                        verified_at,
+                    )
+                    .await
+                    .expect_err("Paper Raid domain must not enter memory legacy Paper finality V1")
+                };
+                assert_eq!(error.status, StatusCode::CONFLICT);
+                assert_eq!(error.code, "trnm_receipt_domain_lane_mismatch");
+            }
+        }
+        assert_eq!(
+            paper_finality_side_effect_snapshot(&state).await,
+            before,
+            "Paper Raid V2/V3 domain dispatch must precede mutation of every state surface reachable from the production memory/PG legacy finality V1 post-verification pipeline",
+        );
     }
 
     #[tokio::test]
-    async fn paper_bound_legacy_lanes_are_closed_before_and_after_receipt_v2_in_memory() {
+    async fn exact_research_accepts_and_legacy_lanes_stay_closed_in_memory() {
         exercise_legacy_lane_ordering(fixed_state()).await;
     }
 
     #[tokio::test]
-    async fn paper_bound_legacy_lanes_are_closed_before_and_after_receipt_v2_in_postgres() {
+    async fn exact_research_accepts_and_legacy_lanes_stay_closed_in_postgres() {
         let Ok(database_url) = std::env::var("HEPTA_TEST_DATABASE_URL") else {
             eprintln!("HEPTA_TEST_DATABASE_URL unset; legacy finality PostgreSQL test skipped");
             return;
@@ -2104,7 +2797,7 @@ mod tests {
             .await
             .expect("legacy finality PostgreSQL state");
         crate::paper_raid_v2::endpoint_tests::reset_postgres(&database_url).await;
-        state.paper_chain_verification_clock =
+        state.cometbft_local_verification_clock =
             Arc::new(|| std::time::UNIX_EPOCH + Duration::from_secs(VERIFICATION_TIME));
 
         exercise_legacy_lane_ordering(state).await;
@@ -2114,6 +2807,72 @@ mod tests {
             .execute(&mut lock)
             .await
             .expect("release Hepta PostgreSQL legacy finality lock");
+    }
+
+    #[tokio::test]
+    async fn mismatched_research_rejects_twice_with_zero_side_effects_in_memory() {
+        exercise_mismatched_research_zero_side_effects(fixed_state()).await;
+    }
+
+    #[tokio::test]
+    async fn mismatched_research_rejects_twice_with_zero_side_effects_in_postgres() {
+        let Ok(database_url) = std::env::var("HEPTA_TEST_DATABASE_URL") else {
+            eprintln!("HEPTA_TEST_DATABASE_URL unset; Research mismatch PostgreSQL test skipped");
+            return;
+        };
+        let mut lock = PgConnection::connect(&database_url)
+            .await
+            .expect("Research mismatch PostgreSQL test lock");
+        sqlx::query("select pg_advisory_lock(hashtext('hepta-research-league-pg-tests'))")
+            .execute(&mut lock)
+            .await
+            .expect("serialize Hepta PostgreSQL tests");
+        let mut state = AppState::connect(&database_url, security())
+            .await
+            .expect("Research mismatch PostgreSQL state");
+        crate::paper_raid_v2::endpoint_tests::reset_postgres(&database_url).await;
+        state.cometbft_local_verification_clock =
+            Arc::new(|| std::time::UNIX_EPOCH + Duration::from_secs(VERIFICATION_TIME));
+
+        exercise_mismatched_research_zero_side_effects(state).await;
+
+        crate::paper_raid_v2::endpoint_tests::reset_postgres(&database_url).await;
+        sqlx::query("select pg_advisory_unlock(hashtext('hepta-research-league-pg-tests'))")
+            .execute(&mut lock)
+            .await
+            .expect("release Research mismatch PostgreSQL lock");
+    }
+
+    #[tokio::test]
+    async fn paper_raid_v2_v3_reject_before_all_memory_side_effects() {
+        exercise_paper_raid_lane_guard_zero_side_effects(fixed_state()).await;
+    }
+
+    #[tokio::test]
+    async fn paper_raid_v2_v3_reject_before_all_postgres_side_effects() {
+        let Ok(database_url) = std::env::var("HEPTA_TEST_DATABASE_URL") else {
+            eprintln!("HEPTA_TEST_DATABASE_URL unset; Paper Raid lane PostgreSQL test skipped");
+            return;
+        };
+        let mut lock = PgConnection::connect(&database_url)
+            .await
+            .expect("Paper Raid lane PostgreSQL test lock");
+        sqlx::query("select pg_advisory_lock(hashtext('hepta-research-league-pg-tests'))")
+            .execute(&mut lock)
+            .await
+            .expect("serialize Hepta PostgreSQL tests");
+        let state = AppState::connect(&database_url, security())
+            .await
+            .expect("Paper Raid lane PostgreSQL state");
+        crate::paper_raid_v2::endpoint_tests::reset_postgres(&database_url).await;
+
+        exercise_paper_raid_lane_guard_zero_side_effects(state).await;
+
+        crate::paper_raid_v2::endpoint_tests::reset_postgres(&database_url).await;
+        sqlx::query("select pg_advisory_unlock(hashtext('hepta-research-league-pg-tests'))")
+            .execute(&mut lock)
+            .await
+            .expect("release Paper Raid lane PostgreSQL lock");
     }
 
     #[tokio::test]
@@ -2638,6 +3397,9 @@ mod tests {
             commitment_height: 8,
             commitment_header_hash_hex: "dd".repeat(32),
             app_hash_hex: "ee".repeat(32),
+            domain_command: VerifiedCometBftDomainCommandV2::ResearchV1(Box::new(
+                command.signed_command.clone(),
+            )),
         };
         assert_eq!(
             validate_command_identity(&command, binding.paper_project_id, &verified)

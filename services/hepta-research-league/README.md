@@ -31,6 +31,31 @@ The first runnable slice supports:
 
 ## Run
 
+Apply migrations and database grants with a one-shot process. This process is
+the only deployment unit that receives the schema-owner credential:
+
+```bash
+HEPTA_MIGRATION_DATABASE_URL_FILE='/run/secrets/hepta_migration_database_url' \
+HEPTA_RUNTIME_DATABASE_ROLE='hepta_runtime' \
+HEPTA_FINALITY_DATABASE_ROLE='hepta_finality' \
+cargo run -p hepta-research-league -- --migrate
+```
+
+For Compose, place the owner URL in the host file named by
+`HEPTA_MIGRATION_DATABASE_URL_FILE`, run
+`docker compose -f deploy/hepta-research-league/compose.yaml -f
+deploy/hepta-research-league/compose.migration.yaml --profile migration run
+--rm --no-deps hepta-migrate`, verify success and zero residual migration
+containers, and immediately destroy the host secret file. Then start or
+recreate the resident service using only the base Compose file. The base file
+has no migrator service or secret declaration, so later restart, SIGKILL
+recovery and Compose recreation cannot depend on the destroyed owner secret.
+The `--rm` boundary is mandatory: an exited migration container would retain
+the secret mount and privileged metadata.
+
+After that process exits successfully, start the resident service with only
+the ordinary runtime and isolated finality-writer credentials:
+
 ```bash
 HEPTA_OPERATOR_TOKEN='<operator-secret>' \
 HEPTA_NAKAMA_TOKEN='<different-nakama-secret>' \
@@ -54,7 +79,8 @@ HEPTA_TRNM_VALIDATOR_SETS_JSON='[]' \
 HEPTA_TRNM_COMETBFT_TRUST_ANCHOR_HASHES_JSON='[]' \
 HEPTA_TRNM_RECEIPT_V2_MAX_BODY_BYTES='32768' \
 HEPTA_TRNM_RECEIPT_V2_MAX_IN_FLIGHT='1' \
-HEPTA_DATABASE_URL='postgres://hepta:...@postgres/hepta' \
+HEPTA_DATABASE_URL='postgres://hepta_runtime:...@postgres/hepta' \
+HEPTA_FINALITY_DATABASE_URL='postgres://hepta_finality:...@postgres/hepta' \
 cargo run -p hepta-research-league
 ```
 
@@ -132,13 +158,40 @@ still required to prove the same legal Receipt can commit an already-bound
 Paper; this resource gate does not replace that state-machine evidence.
 
 `/ready` reports `finality_mode`, `pinned_cometbft_trust_anchor_hashes`,
-`trnm_receipt_v2_max_body_bytes`, and `trnm_receipt_v2_max_in_flight`; verified
-mode with a zero pin count is never ready.
+`trnm_receipt_v2_max_body_bytes`, `trnm_receipt_v2_max_in_flight`, the frozen
+Paper scientific-finality policy and its no-Appeal window, and
+`paper_chain_finality_v2_command_lane`. The latter retains the frozen
+`awaiting_chain_verifier_upgrade` compatibility value while the dedicated
+Paper-V2 projection adapter remains unactivated; the pinned verifier can now
+identify typed Paper Raid commands, but this readiness field is a capability
+disclosure, not a false service-readiness failure. Verified mode with a zero
+pin count is never ready.
 
 The default listener is `127.0.0.1:7011`. Override it with `HEPTA_BIND_ADDR`.
-Production startup requires PostgreSQL and three non-empty, pairwise-distinct
-service credentials. In-memory state is available only through the test
-constructor and is reported as `in_memory_test_only` by readiness.
+Production uses three distinct PostgreSQL roles. The separate
+`compose.migration.yaml` overlay runs `hepta-migrate` once from the same
+immutable image with `--migrate`; only that migration-profile job receives the
+owner URL as a read-only file secret, plus the runtime and finality role names.
+It applies and verifies migrations, installs the grants, is removed
+immediately, and its host secret is destroyed before resident startup. The
+base resident Compose file has no migration service or secret dependency. The
+resident `hepta` service never receives the owner URL or its secret-file path.
+
+`HEPTA_DATABASE_URL` authenticates the ordinary non-owner runtime role. It has
+the normal application DML needed outside the V2 evidence lane, but the three
+checkpoint/arm/preparation tables are read-only to it. The separate
+`HEPTA_FINALITY_DATABASE_URL` role may read the source tables and insert only
+the three V2 evidence records. Arm and preparation primary rows are their own
+immutable replay authority; the finality role cannot write the shared Paper
+Raid idempotency table. It cannot update or delete tables, own objects, create
+schema objects, truncate tables, install triggers, take references privileges,
+or inherit/set another database role.
+Its sole direct definer-function capability is the source-unsealed assertion;
+the arm, preparation, seal and source-mutation trigger helpers are not
+executable by either application role or by `PUBLIC`.
+The migration owner, runtime and finality writer must be distinct roles with no
+membership edges between them. In-memory state is available only through the
+test constructor and is reported as `in_memory_test_only` by readiness.
 
 ```bash
 HEPTA_BIND_ADDR=0.0.0.0:7011 cargo run -p hepta-research-league
@@ -170,11 +223,15 @@ HEPTA_BIND_ADDR=0.0.0.0:7011 cargo run -p hepta-research-league
 | `POST` | `/v1/hepta/trnm/finality` | Verify and project a complete TRNM finality receipt |
 | `POST` | `/v1/hepta/trnm/finality/verify` | Verify receipt, QC, and inclusion proof offline |
 | `POST` | `/v2/hepta/operator/trnm/trust-anchors` | Authenticated admission of an exactly pinned canonical CometBFT trust anchor |
+| `POST` | `/v2/hepta/operator/trnm/time-checkpoints` | Verify and persist an immutable dynamic CometBFT consensus-time checkpoint against an admitted, actively pinned anchor |
+| `POST` | `/v2/hepta/papers/:paper_id/chain-finality-v2/arm` | Bind current Paper-V2 source facts to a fresh Chain-time checkpoint and arm the versioned Appeal window without sealing sources |
+| `POST` | `/v2/hepta/papers/:paper_id/chain-finality-v2/prepare` | Recheck the armed source against a later Chain-time checkpoint and permanently seal the scientific-finality tuple; does not queue a Chain command |
 | `POST` | `/v2/hepta/papers/:paper_id/chain-finality` | Verify Receipt V2 and atomically create the Paper finality projection |
 | `GET` | `/ready` | Storage and architecture readiness |
 | `GET` | `/metrics` | Prometheus metrics |
 
-Challenge creation, evaluation, and TRNM command creation require
+Challenge creation, evaluation, TRNM command creation, trust-anchor/checkpoint
+admission, window arming and Paper-V2 preparation require
 `x-hepta-operator-token`. Nakama writes require `x-hepta-nakama-token`; TRNM
 receipt writes require `x-hepta-trnm-token`.
 
@@ -196,6 +253,86 @@ verification or inbox replay; only
 `verified_finality`. Receipt V2 is rejected unless its canonical bytes,
 queued command and Paper binding, CometBFT light proof, transaction/result
 proofs, AppHash object proof, and pinned trust anchor all verify locally.
+
+The independent Chain App-v6 Paper command is being integrated as a separate
+versioned lane. Its rights-preserving time protocol is deliberately split into
+dynamic checkpoint admission, an immutable window arm, and final preparation:
+
+1. `time-checkpoints` verifies a canonical CometBFT light-finality proof
+   against an already admitted, actively pinned trust anchor and persists its
+   Chain ID, height, header hash and consensus timestamp. The 2 MiB request cap
+   is enforced after operator authentication and before JSON parsing. A
+   different checkpoint at the same Chain height fails closed.
+2. `chain-finality-v2/arm` derives the exact Paper/submission, MatchEvidence,
+   release/bundle, canonical author-consent set, tolerance, latest
+   evaluation/reproduction, Research Session and Appeal-lineage facts. It binds
+   their source fingerprint to the highest admitted checkpoint, which must be
+   within 15 minutes of the local light-client observation. The immutable arm
+   does not seal the source tuple and does not claim scientific finality;
+   subsequent source changes invalidate preparation and require another arm.
+3. `chain-finality-v2/prepare` references the arm and a separately admitted
+   final checkpoint. That checkpoint must be on the same Chain, must advance
+   past both the start height and the maximum height observed by the arm, and
+   must reach the arm's consensus-time deadline. The endpoint re-derives the
+   complete source fingerprint before it creates the preparation and permanent
+   per-Paper seal.
+
+The no-Appeal deadline is exactly the start checkpoint's consensus time plus a
+conservative 15-minute checkpoint-lag allowance plus 24 hours; neither duration
+is an environment setting. A complete denied/upheld Appeal resolution uses the
+start consensus time plus the same allowance. The host clock is used only for
+CometBFT light-client trust-period/future-header validation, start-checkpoint
+freshness and a persistent rollback high-water. It cannot satisfy the Appeal
+deadline. If Chain time stops advancing, preparation remains unavailable and
+the Paper stays unsealed.
+
+The arm and preparation request bodies are capped at 16 KiB, with
+authentication performed before body polling. The current policy represents
+either no Appeal or exactly one fully resolved Appeal in the evaluation
+lineage; unresolved ancestors and multiple resolutions fail closed. A
+successful preparation permanently seals its Paper/submission, Research
+Session authorization/completion, evaluation, reproduction, Appeal and
+resolution sources. Application conflicts are backed by PostgreSQL triggers
+using the same persistent per-Paper anchor, so an older binary, stale
+`REPEATABLE READ` writer or direct SQL through the ordinary runtime role cannot
+forge the Chain-time evidence lane, mutate the frozen tuple, or partially
+commit earlier transaction side effects. The finality writer remains a narrow
+privileged capability. The current Alpha resident deliberately holds both
+application pools, so this is database-role separation, not process/RCE
+isolation: the application using it must authenticate the operator, verify
+CometBFT proofs, re-derive source fingerprints, and keep preparation atomic.
+Compromise of that credential is finality-capability loss, not something the
+database claims to cryptographically repair. Compromise of the schema owner
+is complete database-authority loss. The owner secret therefore exists only in
+the one-shot migration job, whose container and host secret file must be
+destroyed after successful exit. It must never be mounted into the resident
+container or exposed to request handlers.
+
+Preparations retain the compatibility status
+`awaiting_chain_verifier_upgrade`: they are neither signed nor queued and
+cannot be presented as `pending_finality` or `verified_finality`.
+`scientific_finality` is true only inside the prepared scientific tuple, while
+`score_eligible`, `ranking_eligible`, `reward_eligible` and
+`economic_eligible` remain false. The vendored Chain verifier now returns an
+authenticated typed Research V1, Paper Raid finality V2, or Paper Raid
+finality V3 command. This tranche hardens the legacy Paper finality V1 adapter:
+it accepts only the exact Research V1 command already queued by Hepta and
+rejects both Paper Raid versions as a lane mismatch before any local mutation.
+Activating the dedicated Paper-V2 command/projection path remains a separately
+reviewed change.
+
+The regression proof is intentionally combined rather than described as a
+V2/V3 HTTP end-to-end fixture. Vendored verifier tests construct and
+cryptographically verify all three typed receipt domains. Hepta tests then pass
+valid signed Paper Raid V2/V3 commands through the production post-verification
+memory and PostgreSQL pipelines twice each, require the exact lane-mismatch
+error, and compare all state surfaces reachable from this legacy adapter,
+including the V2 checkpoint/arm/preparation indexes and durable source/seal,
+inbox, receipt, projection, idempotency, event, and outbox records. The genuine
+Research V1 fixture separately exercises the HTTP endpoint: first submission
+creates the projection, exact replay returns it without mutation, and changing
+the queued signed command makes the same receipt fail exact-domain equality
+before the replay shortcut.
 
 ## Submission signature
 
@@ -282,7 +419,9 @@ binary has been exported. A disposable, checksum-pinned Buildx binary performs
 the build; the normalized release root is copied into the final image as one
 layer. The four Chain protocol crates required during compilation are
 byte-for-byte vendored from immutable Chain commit
-`f2e3da051effabc97c2d0e7c47acd1df3d0dd4aa`; their per-file provenance is in
+`4adfbadaa8c35cd3515f20381eb6b80d6885f457` (root tree
+`396ae6037b24037aff6983fd30d6baf906fda687`, source branch
+`feature/chain-paper-raid-receipt-v2`); their per-file provenance is in
 `vendor/trnm-chain-vendor-manifest.json` and is revalidated by the release gate.
 The tracked CycloneDX 1.5 application SBOM is generated only after two
 independent no-cache exports from the pinned builder produce the same runtime

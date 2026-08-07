@@ -1,8 +1,11 @@
 # Vendored TRNM protocol crates
 
-The following release-only protocol crates are copied byte-for-byte from
-Cargo's immutable Git checkout for Trillionnium Chain commit
-`f2e3da051effabc97c2d0e7c47acd1df3d0dd4aa`:
+The following release-only protocol crates are copied byte-for-byte from a
+repository-external fresh clone of the canonical Trillionnium Chain repository,
+checked out detached at commit
+`4adfbadaa8c35cd3515f20381eb6b80d6885f457` (root tree
+`396ae6037b24037aff6983fd30d6baf906fda687`) fetched from branch
+`feature/chain-paper-raid-receipt-v2`:
 
 - `trnm-research-protocol` 0.1.0
 - `trnm-protocol` 0.1.0
@@ -12,8 +15,9 @@ Cargo's immutable Git checkout for Trillionnium Chain commit
 They are vendored so the Hepta release image can be built without GitHub
 credentials or a sibling Chain worktree. Product code must continue treating
 these crates as frozen external protocol dependencies. Updating them requires
-an explicit new Chain revision, a byte-for-byte copy from Cargo's checkout,
-and regeneration of `Cargo.lock` and all cross-language golden vectors.
+an explicit new Chain revision, a byte-for-byte copy from another
+repository-external fresh detached checkout, and regeneration of `Cargo.lock`
+and all cross-language golden vectors.
 
 `trnm-protocol`, `trnm-finality-types`, and `trnm-finality-verifier` intentionally retain their
 upstream `edition.workspace`, `license.workspace`, and `authors.workspace`

@@ -4,9 +4,10 @@
 //! transaction executes at height `H`; the resulting AppHash and transaction
 //! results root are committed by the finalized header at `H + 1`.
 //! The included transaction must be the exact outer signed-command envelope
-//! committed in block `H`. Its payload must be the canonical typed Research
-//! transaction, and both signature layers plus every shared security field are
-//! rebound to the execution header and receipt.
+//! committed in block `H`. Its payload must be one supported canonical typed
+//! domain transaction (Research V1, App-v6 Paper Raid finality V2, or future
+//! App-v7 Paper Raid finality V3), and both signature layers plus every shared
+//! security field are rebound to the execution header and receipt.
 //!
 //! The AppHash-v4 object-key derivation and authenticated object wrapper are
 //! shared wire contracts.  This verifier therefore binds the proven object to
@@ -41,11 +42,17 @@ use trnm_finality_types::{
     COMETBFT_LIGHT_FINALITY_PROOF_SCHEMA_V1, COMETBFT_TRUST_ANCHOR_SCHEMA_V1,
 };
 use trnm_protocol::{
-    research_applied_command_key, CanonicalResearchTxV1, CANONICAL_RESEARCH_TX_PAYLOAD_TYPE_V1,
-    RESEARCH_APPLIED_COMMAND_OBJECT_TYPE_V1,
+    paper_raid_finality_applied_command_key, paper_raid_finality_applied_command_key_v3,
+    research_applied_command_key, CanonicalPaperRaidFinalityTxV2, CanonicalPaperRaidFinalityTxV3,
+    CanonicalResearchTxV1, PaperRaidFinalityAppliedRecordV2, PaperRaidFinalityAppliedRecordV3,
+    CANONICAL_PAPER_RAID_FINALITY_TX_PAYLOAD_TYPE_V2,
+    CANONICAL_PAPER_RAID_FINALITY_TX_PAYLOAD_TYPE_V3, CANONICAL_RESEARCH_TX_PAYLOAD_TYPE_V1,
+    PAPER_RAID_FINALITY_APPLIED_COMMAND_OBJECT_TYPE_V2,
+    PAPER_RAID_FINALITY_APPLIED_COMMAND_OBJECT_TYPE_V3, RESEARCH_APPLIED_COMMAND_OBJECT_TYPE_V1,
 };
 use trnm_research_protocol::{
-    AppliedCommandRecordV1, AuthorityRole, CanonicalCbor, SignedResearchCommandV1,
+    AppliedCommandRecordV1, AuthorityRole, CanonicalCbor, SignedPaperRaidFinalityCommandV2,
+    SignedPaperRaidFinalityCommandV3, SignedResearchCommandV1,
 };
 
 const JMT_LEAF_DOMAIN_SEPARATOR: &[u8] = b"JMT::LeafNode";
@@ -257,8 +264,23 @@ struct ResearchTransactionBinding {
     command_id: String,
     command_fingerprint_hex: String,
     applied_command_logical_key: String,
+    applied_command_object_type: &'static str,
+    applied_command_object_version: u64,
     applied_command_value: Vec<u8>,
     expected_gas_wanted: i64,
+    domain_command: VerifiedCometBftDomainCommandV2,
+}
+
+/// The exact independently verified domain command committed by Receipt V2.
+///
+/// Returning the typed command prevents downstream consumers from treating
+/// generic Research V1 acceptance as Paper Raid scientific finality, or from
+/// trusting a caller-supplied sidecar that was not itself bound to AppHash.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VerifiedCometBftDomainCommandV2 {
+    ResearchV1(Box<SignedResearchCommandV1>),
+    PaperRaidFinalityV2(Box<SignedPaperRaidFinalityCommandV2>),
+    PaperRaidFinalityV3(Box<SignedPaperRaidFinalityCommandV3>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -274,8 +296,54 @@ pub struct VerifiedCometBftReceiptV2 {
     pub commitment_height: u64,
     pub commitment_header_hash_hex: String,
     pub app_hash_hex: String,
+    pub domain_command: VerifiedCometBftDomainCommandV2,
 }
 
+/// Consensus-authenticated time carried by one independently verified
+/// CometBFT light header.  This is deliberately smaller than a receipt: it
+/// proves only the canonical Chain identity, height, header hash, and BFT
+/// timestamp needed by callers that must make rights-preserving time
+/// decisions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifiedCometBftChainTimeV1 {
+    pub chain_id: String,
+    pub height: u64,
+    pub header_hash_hex: String,
+    pub consensus_time_unix_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[must_use = "Chain-time verification outcomes must be checked"]
+pub enum ChainTimeVerificationOutcomeV1 {
+    Verified(VerifiedCometBftChainTimeV1),
+    StructuralInvalid { reason: String },
+    Untrusted { reason: String },
+    NotFinal { reason: String },
+}
+
+impl ChainTimeVerificationOutcomeV1 {
+    fn structural(error: impl core::fmt::Display) -> Self {
+        Self::StructuralInvalid {
+            reason: error.to_string(),
+        }
+    }
+
+    fn untrusted(error: impl core::fmt::Display) -> Self {
+        Self::Untrusted {
+            reason: error.to_string(),
+        }
+    }
+
+    fn not_final(error: impl core::fmt::Display) -> Self {
+        Self::NotFinal {
+            reason: error.to_string(),
+        }
+    }
+}
+
+// `Final(VerifiedCometBftReceiptV2)` is a frozen public source-level API used by
+// vendored consumers; boxing it would be a source-breaking enum shape change.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[must_use = "receipt verification outcomes must be checked"]
 pub enum ReceiptV2VerificationOutcome {
@@ -327,7 +395,7 @@ pub struct CometBftReceiptAssemblyInputV2 {
 }
 
 /// Assemble a Receipt V2 without trusting caller-supplied roots, indices, or
-/// Research metadata. All roots are rebuilt from ordered raw block/result
+/// domain-command metadata. All roots are rebuilt from ordered raw block/result
 /// bytes, and the supplied JMT proof is cryptographically checked against the
 /// H + 1 AppHash before the receipt hash is emitted.
 pub fn assemble_cometbft_apphash_finality_receipt_v2(
@@ -530,6 +598,7 @@ pub fn verify_cometbft_apphash_finality_receipt_v2(
             .header_hash_hex
             .clone(),
         app_hash_hex: receipt.commitment_light_proof.header.app_hash_hex.clone(),
+        domain_command: transaction_binding.domain_command.clone(),
     })
 }
 
@@ -565,6 +634,145 @@ pub fn verify_cometbft_apphash_finality_receipt_v2_with_trust_anchor(
         );
     }
     verify_cometbft_apphash_finality_receipt_v2(receipt, anchor.context(now))
+}
+
+/// Verify one standalone signed CometBFT header against a validated trust
+/// anchor and return its consensus timestamp.  The caller supplies the local
+/// verification time used solely for light-client trust-period and
+/// future-header checks; business logic must use the returned consensus time.
+pub fn verify_cometbft_light_finality_proof_v1_with_trust_anchor(
+    proof: &CometBftLightFinalityProofV1,
+    anchor: &ValidatedCometBftTrustAnchorV1,
+    verification_time: SystemTime,
+) -> ChainTimeVerificationOutcomeV1 {
+    if let Err(error) = proof.validate_shape() {
+        return ChainTimeVerificationOutcomeV1::structural(error);
+    }
+    let now = match system_time_to_tendermint_time(verification_time) {
+        Ok(now) => now,
+        Err(error) => return ChainTimeVerificationOutcomeV1::untrusted(error),
+    };
+    if now.checked_add(anchor.options.clock_drift).is_none() {
+        return ChainTimeVerificationOutcomeV1::untrusted(
+            "verification time plus clock drift is out of range",
+        );
+    }
+
+    let header = match decode_header(&proof.header) {
+        Ok(header) => header,
+        Err(error) => return ChainTimeVerificationOutcomeV1::structural(error),
+    };
+    let signed_bytes =
+        match canonical_hex_bytes("signed_header_proto_hex", &proof.signed_header_proto_hex) {
+            Ok(bytes) => bytes,
+            Err(error) => return ChainTimeVerificationOutcomeV1::structural(error),
+        };
+    let raw_signed =
+        match decode_canonical_message::<RawSignedHeader>("signed_header_proto_hex", &signed_bytes)
+        {
+            Ok(value) => value,
+            Err(error) => return ChainTimeVerificationOutcomeV1::structural(error),
+        };
+    let signed_header: block::signed_header::SignedHeader = match raw_signed.try_into() {
+        Ok(value) => value,
+        Err(error) => return ChainTimeVerificationOutcomeV1::structural(error),
+    };
+    if signed_header.header != header {
+        return ChainTimeVerificationOutcomeV1::structural(
+            "signed header does not contain the exact canonical header",
+        );
+    }
+
+    let validator_bytes =
+        match canonical_hex_bytes("validator_set_proto_hex", &proof.validator_set_proto_hex) {
+            Ok(bytes) => bytes,
+            Err(error) => return ChainTimeVerificationOutcomeV1::structural(error),
+        };
+    let raw_validators = match decode_canonical_message::<RawValidatorSet>(
+        "validator_set_proto_hex",
+        &validator_bytes,
+    ) {
+        Ok(value) => value,
+        Err(error) => return ChainTimeVerificationOutcomeV1::structural(error),
+    };
+    let validators: validator::Set = match raw_validators.try_into() {
+        Ok(value) => value,
+        Err(error) => return ChainTimeVerificationOutcomeV1::structural(error),
+    };
+    if validators.hash() != header.validators_hash {
+        return ChainTimeVerificationOutcomeV1::structural(
+            "validator set does not match canonical header validators_hash",
+        );
+    }
+    if anchor.trusted_next_validators.hash() != anchor.trusted_header.next_validators_hash {
+        return ChainTimeVerificationOutcomeV1::untrusted(
+            "trusted next validator set does not match its authenticated hash",
+        );
+    }
+    if header.chain_id != anchor.trusted_header.chain_id {
+        return ChainTimeVerificationOutcomeV1::untrusted(
+            "light header chain does not match the authenticated trust anchor",
+        );
+    }
+    if header.height <= anchor.trusted_header.height {
+        return ChainTimeVerificationOutcomeV1::untrusted(
+            "trust anchor height must precede the light header height",
+        );
+    }
+
+    let untrusted = UntrustedBlockState {
+        signed_header: &signed_header,
+        validators: &validators,
+        next_validators: None,
+    };
+    // Keep the owned context alive for the entire verifier call.  Besides
+    // avoiding a borrowed state extracted from a temporary, this guarantees
+    // that the trusted state, policy, and verification time are the exact
+    // coherent tuple produced by the validated anchor.
+    let trust = anchor.context(now);
+    let verdict = ProdVerifier::default().verify_update_header(
+        untrusted,
+        trust.trusted_state,
+        trust.options,
+        trust.now,
+    );
+    match verdict {
+        Verdict::Success => {}
+        Verdict::NotEnoughTrust(tally) => {
+            return ChainTimeVerificationOutcomeV1::untrusted(format!(
+                "trusted validator overlap is insufficient: {tally}"
+            ));
+        }
+        Verdict::Invalid(detail) => {
+            let reason = detail.to_string();
+            return match detail {
+                VerificationErrorDetail::NotWithinTrustPeriod(_)
+                | VerificationErrorDetail::ChainIdMismatch(_)
+                | VerificationErrorDetail::NonIncreasingHeight(_)
+                | VerificationErrorDetail::NonMonotonicBftTime(_)
+                | VerificationErrorDetail::NotEnoughTrust(_) => {
+                    ChainTimeVerificationOutcomeV1::untrusted(reason)
+                }
+                VerificationErrorDetail::HeaderFromTheFuture(_)
+                | VerificationErrorDetail::InsufficientSignersOverlap(_)
+                | VerificationErrorDetail::NoSignatureForCommit(_) => {
+                    ChainTimeVerificationOutcomeV1::not_final(reason)
+                }
+                _ => ChainTimeVerificationOutcomeV1::structural(reason),
+            };
+        }
+    }
+
+    let consensus_time_unix_ms = match consensus_timestamp_ms(&header.time) {
+        Ok(value) => value,
+        Err(error) => return ChainTimeVerificationOutcomeV1::structural(error),
+    };
+    ChainTimeVerificationOutcomeV1::Verified(VerifiedCometBftChainTimeV1 {
+        chain_id: header.chain_id.to_string(),
+        height: header.height.value(),
+        header_hash_hex: hex::encode(header.hash().as_bytes()),
+        consensus_time_unix_ms,
+    })
 }
 
 fn system_time_to_tendermint_time(value: SystemTime) -> Result<Time> {
@@ -610,68 +818,195 @@ fn decode_research_transaction_binding(
     envelope
         .validate_at(&envelope_chain_id, execution_timestamp_ms)
         .context("validate outer signed command envelope at execution height H")?;
-    ensure!(
-        envelope.payload_type == CANONICAL_RESEARCH_TX_PAYLOAD_TYPE_V1,
-        "outer envelope is not a typed Research transaction"
-    );
-
     let payload = envelope
         .payload_bytes()
-        .context("decode outer Research payload")?;
-    let tx = CanonicalResearchTxV1::from_canonical_bytes(&payload)
-        .context("decode canonical typed Research transaction payload")?;
-    ensure!(
-        tx.payload_type == envelope.payload_type,
-        "inner Research payload type does not match outer envelope"
-    );
-    ensure!(
-        tx.command_id == envelope.command_id,
-        "inner Research command ID does not match outer envelope"
-    );
-    let signed = tx
-        .signed_research_command()
-        .context("decode signed Research command from raw transaction")?;
-    ensure!(
-        signed.chain_id == envelope.chain_id,
-        "inner Research chain ID does not match outer envelope"
-    );
-    ensure!(
-        signed.command_id.to_hex() == envelope.command_id,
-        "signed Research command ID does not match outer envelope"
-    );
-    ensure!(
-        tx.sender == envelope.signer_id && signed.signer_did == envelope.signer_id,
-        "Research signer DID does not match outer envelope"
-    );
-    let expected_role = match signed.signer_role {
-        AuthorityRole::NakamaAuthority => "nakama",
-        AuthorityRole::HeptaAuthority => "hepta",
-    };
-    ensure!(
-        envelope.signer_role == expected_role,
-        "Research signer role does not match outer envelope"
-    );
-    ensure!(
-        envelope.public_key_hex == hex::encode(signed.public_key),
-        "Research signer public key does not match outer envelope"
-    );
-    ensure!(
-        tx.nonce == envelope.nonce && signed.nonce == envelope.nonce,
-        "Research nonce does not match outer envelope"
-    );
-    let command_fingerprint_hex = hex::encode(signed.command_fingerprint());
-    let applied_command_logical_key = research_applied_command_key(signed.command_id)
-        .context("derive applied-command logical object key")?;
-    let applied_command_record = expected_applied_command_record(&signed);
-    let applied_command_value = applied_command_record.canonical_bytes();
-    Ok(ResearchTransactionBinding {
-        chain_id: envelope.chain_id,
-        command_id: envelope.command_id,
-        command_fingerprint_hex,
-        applied_command_logical_key,
-        applied_command_value,
-        expected_gas_wanted: i64::try_from(tx.max_gas).unwrap_or(i64::MAX),
-    })
+        .context("decode outer typed-command payload")?;
+    match envelope.payload_type.as_str() {
+        CANONICAL_RESEARCH_TX_PAYLOAD_TYPE_V1 => {
+            let tx = CanonicalResearchTxV1::from_canonical_bytes(&payload)
+                .context("decode canonical typed Research transaction payload")?;
+            ensure!(
+                tx.payload_type == envelope.payload_type,
+                "inner Research payload type does not match outer envelope"
+            );
+            ensure!(
+                tx.command_id == envelope.command_id,
+                "inner Research command ID does not match outer envelope"
+            );
+            let signed = tx
+                .signed_research_command()
+                .context("decode signed Research command from raw transaction")?;
+            ensure!(
+                signed.chain_id == envelope.chain_id,
+                "inner Research chain ID does not match outer envelope"
+            );
+            ensure!(
+                signed.command_id.to_hex() == envelope.command_id,
+                "signed Research command ID does not match outer envelope"
+            );
+            ensure!(
+                tx.sender == envelope.signer_id && signed.signer_did == envelope.signer_id,
+                "Research signer DID does not match outer envelope"
+            );
+            let expected_role = match signed.signer_role {
+                AuthorityRole::NakamaAuthority => "nakama",
+                AuthorityRole::HeptaAuthority => "hepta",
+            };
+            ensure!(
+                envelope.signer_role == expected_role,
+                "Research signer role does not match outer envelope"
+            );
+            ensure!(
+                envelope.public_key_hex == hex::encode(signed.public_key),
+                "Research signer public key does not match outer envelope"
+            );
+            ensure!(
+                tx.nonce == envelope.nonce && signed.nonce == envelope.nonce,
+                "Research nonce does not match outer envelope"
+            );
+            let command_fingerprint_hex = hex::encode(signed.command_fingerprint());
+            let applied_command_logical_key = research_applied_command_key(signed.command_id)
+                .context("derive Research applied-command logical object key")?;
+            let applied_command_record = expected_applied_command_record(&signed);
+            let applied_command_value = applied_command_record.canonical_bytes();
+            Ok(ResearchTransactionBinding {
+                chain_id: envelope.chain_id,
+                command_id: envelope.command_id,
+                command_fingerprint_hex,
+                applied_command_logical_key,
+                applied_command_object_type: RESEARCH_APPLIED_COMMAND_OBJECT_TYPE_V1,
+                applied_command_object_version: 1,
+                applied_command_value,
+                expected_gas_wanted: i64::try_from(tx.max_gas).unwrap_or(i64::MAX),
+                domain_command: VerifiedCometBftDomainCommandV2::ResearchV1(Box::new(signed)),
+            })
+        }
+        CANONICAL_PAPER_RAID_FINALITY_TX_PAYLOAD_TYPE_V2 => {
+            let tx = CanonicalPaperRaidFinalityTxV2::from_canonical_bytes(&payload)
+                .context("decode canonical typed Paper Raid finality transaction payload")?;
+            ensure!(
+                tx.payload_type == envelope.payload_type,
+                "inner Paper Raid payload type does not match outer envelope"
+            );
+            ensure!(
+                tx.command_id == envelope.command_id,
+                "inner Paper Raid command ID does not match outer envelope"
+            );
+            let signed = tx
+                .signed_paper_raid_finality_command()
+                .context("decode signed Paper Raid finality command from raw transaction")?;
+            ensure!(
+                signed.chain_id == envelope.chain_id,
+                "inner Paper Raid chain ID does not match outer envelope"
+            );
+            ensure!(
+                signed.command_id.to_hex() == envelope.command_id,
+                "signed Paper Raid command ID does not match outer envelope"
+            );
+            ensure!(
+                tx.sender == envelope.signer_id && signed.signer_did == envelope.signer_id,
+                "Paper Raid signer DID does not match outer envelope"
+            );
+            ensure!(
+                signed.signer_role == AuthorityRole::HeptaAuthority
+                    && envelope.signer_role == "hepta",
+                "Paper Raid signer role does not match outer envelope"
+            );
+            ensure!(
+                envelope.public_key_hex == hex::encode(signed.public_key),
+                "Paper Raid signer public key does not match outer envelope"
+            );
+            ensure!(
+                tx.nonce == envelope.nonce && signed.nonce == envelope.nonce,
+                "Paper Raid nonce does not match outer envelope"
+            );
+            let command_fingerprint_hex = hex::encode(signed.command_fingerprint());
+            let applied_command_logical_key =
+                paper_raid_finality_applied_command_key(signed.command_id)
+                    .context("derive Paper Raid applied-command logical object key")?;
+            let applied_command_value = PaperRaidFinalityAppliedRecordV2::from_signed(&signed)
+                .context("derive Paper Raid applied-command record")?
+                .canonical_bytes()
+                .context("encode Paper Raid applied-command record")?;
+            Ok(ResearchTransactionBinding {
+                chain_id: envelope.chain_id,
+                command_id: envelope.command_id,
+                command_fingerprint_hex,
+                applied_command_logical_key,
+                applied_command_object_type: PAPER_RAID_FINALITY_APPLIED_COMMAND_OBJECT_TYPE_V2,
+                applied_command_object_version: 1,
+                applied_command_value,
+                expected_gas_wanted: i64::try_from(tx.max_gas).unwrap_or(i64::MAX),
+                domain_command: VerifiedCometBftDomainCommandV2::PaperRaidFinalityV2(Box::new(
+                    signed,
+                )),
+            })
+        }
+        CANONICAL_PAPER_RAID_FINALITY_TX_PAYLOAD_TYPE_V3 => {
+            let tx = CanonicalPaperRaidFinalityTxV3::from_canonical_bytes(&payload)
+                .context("decode canonical typed Paper Raid V3 finality transaction payload")?;
+            ensure!(
+                tx.payload_type == envelope.payload_type,
+                "inner Paper Raid V3 payload type does not match outer envelope"
+            );
+            ensure!(
+                tx.command_id == envelope.command_id,
+                "inner Paper Raid V3 command ID does not match outer envelope"
+            );
+            let signed = tx
+                .signed_paper_raid_finality_command()
+                .context("decode signed Paper Raid V3 finality command from raw transaction")?;
+            ensure!(
+                signed.chain_id == envelope.chain_id,
+                "inner Paper Raid V3 chain ID does not match outer envelope"
+            );
+            ensure!(
+                signed.command_id.to_hex() == envelope.command_id,
+                "signed Paper Raid V3 command ID does not match outer envelope"
+            );
+            ensure!(
+                tx.sender == envelope.signer_id && signed.signer_did == envelope.signer_id,
+                "Paper Raid V3 signer DID does not match outer envelope"
+            );
+            ensure!(
+                signed.signer_role == AuthorityRole::HeptaAuthority
+                    && envelope.signer_role == "hepta",
+                "Paper Raid V3 signer role does not match outer envelope"
+            );
+            ensure!(
+                envelope.public_key_hex == hex::encode(signed.public_key),
+                "Paper Raid V3 signer public key does not match outer envelope"
+            );
+            ensure!(
+                tx.nonce == envelope.nonce && signed.nonce == envelope.nonce,
+                "Paper Raid V3 nonce does not match outer envelope"
+            );
+            let command_fingerprint_hex = hex::encode(signed.command_fingerprint());
+            let applied_command_logical_key =
+                paper_raid_finality_applied_command_key_v3(signed.command_id)
+                    .context("derive Paper Raid V3 applied-command logical object key")?;
+            let applied_command_value = PaperRaidFinalityAppliedRecordV3::from_signed(&signed)
+                .context("derive Paper Raid V3 applied-command record")?
+                .canonical_bytes()
+                .context("encode Paper Raid V3 applied-command record")?;
+            Ok(ResearchTransactionBinding {
+                chain_id: envelope.chain_id,
+                command_id: envelope.command_id,
+                command_fingerprint_hex,
+                applied_command_logical_key,
+                applied_command_object_type: PAPER_RAID_FINALITY_APPLIED_COMMAND_OBJECT_TYPE_V3,
+                applied_command_object_version: 1,
+                applied_command_value,
+                expected_gas_wanted: i64::try_from(tx.max_gas).unwrap_or(i64::MAX),
+                domain_command: VerifiedCometBftDomainCommandV2::PaperRaidFinalityV3(Box::new(
+                    signed,
+                )),
+            })
+        }
+        _ => Err(anyhow!(
+            "outer envelope has an unsupported typed-command payload"
+        )),
+    }
 }
 
 fn expected_applied_command_record(signed: &SignedResearchCommandV1) -> AppliedCommandRecordV1 {
@@ -689,8 +1024,8 @@ fn verify_applied_command_binding(
     receipt
         .verify_applied_command_object_binding(
             &binding.applied_command_logical_key,
-            RESEARCH_APPLIED_COMMAND_OBJECT_TYPE_V1,
-            1,
+            binding.applied_command_object_type,
+            binding.applied_command_object_version,
             &binding.applied_command_value,
         )
         .context("bind authenticated applied-command object")?;
@@ -1007,7 +1342,10 @@ mod tests {
         COMETBFT_LIGHT_FINALITY_PROOF_SCHEMA_V1, COMETBFT_MERKLE_INCLUSION_PROOF_SCHEMA_V1,
     };
     use trnm_research_protocol::{
-        ExternalKey, MatchEvidenceCommitmentV1, ResearchCommandV1, SignedResearchCommandV1,
+        ExternalKey, MatchEvidenceCommitmentV1, ObjectRefV1, PaperRaidAppealStatusV2,
+        PaperRaidAppealStatusV3, PaperRaidFinalityCommitmentV2, PaperRaidFinalityCommitmentV3,
+        ResearchCommandV1, ResearchObjectKind, SignedPaperRaidFinalityCommandV2,
+        SignedPaperRaidFinalityCommandV3, SignedResearchCommandV1,
     };
 
     use super::*;
@@ -1060,6 +1398,10 @@ mod tests {
         SigningKey::from_bytes(&[0x11; 32])
     }
 
+    fn paper_raid_signing_key() -> SigningKey {
+        SigningKey::from_bytes(&[0x22; 32])
+    }
+
     fn signed_research_command() -> SignedResearchCommandV1 {
         SignedResearchCommandV1::sign(
             "trnm-test-1".to_string(),
@@ -1102,6 +1444,152 @@ mod tests {
             CANONICAL_RESEARCH_TX_PAYLOAD_TYPE_V1,
             &payload,
             &research_signing_key(),
+        )
+        .unwrap();
+        (tx, envelope)
+    }
+
+    fn signed_paper_raid_finality_command() -> SignedPaperRaidFinalityCommandV3 {
+        SignedPaperRaidFinalityCommandV3::sign(
+            "trnm-test-1".to_string(),
+            external_key("trnm.paper-raid.command", "command-001"),
+            "did:trnm:hepta-authority".to_string(),
+            9,
+            PaperRaidFinalityCommitmentV3 {
+                commitment_id: external_key("hepta.paper-raid.finality", "finality-001"),
+                paper_project_id: external_key("hepta.paper", "paper-001"),
+                submission_id: external_key("hepta.submission", "submission-001"),
+                match_evidence_ref: ObjectRefV1::new(
+                    ResearchObjectKind::MatchEvidence,
+                    external_key("nakama.commitment", "commitment-001"),
+                    1,
+                ),
+                release_candidate_hash: [0x21; 32],
+                paper_bundle_hash: [0x22; 32],
+                submission_commitment_hash: [0x23; 32],
+                author_consent_set_hash: [0x24; 32],
+                tolerance_policy_hash: [0x25; 32],
+                evaluation_id: external_key("hepta.evaluation", "evaluation-001"),
+                evaluation_hash: [0x26; 32],
+                evaluation_score_bps: 8_750,
+                evaluation_accepted: true,
+                evaluation_completed_at_unix_s: 1_753_449_400,
+                latest_reproduction_id: external_key("hepta.reproduction", "reproduction-001"),
+                latest_reproduction_hash: [0x27; 32],
+                latest_reproduction_accepted: true,
+                latest_reproduction_completed_at_unix_s: 1_753_449_450,
+                evaluation_supersedes: None,
+                evaluation_superseded_by: None,
+                reproduction_superseded_by: None,
+                appeal_status: PaperRaidAppealStatusV3::ClosedNoAppeal,
+                appeal_id: None,
+                appealed_evaluation_id: None,
+                appeal_resolution_hash: None,
+                appeal_window_closes_at_unix_s: 1_753_449_500,
+                settlement_policy_hash: [0x28; 32],
+                scientific_finality: true,
+                score_eligible: false,
+                ranking_eligible: false,
+                reward_eligible: false,
+                economic_eligible: false,
+                finalized_at_unix_s: 1_753_449_501,
+            },
+            &paper_raid_signing_key(),
+        )
+        .unwrap()
+    }
+
+    fn paper_raid_envelope(
+        signed: &SignedPaperRaidFinalityCommandV3,
+        issued_at_unix_ms: u64,
+        expires_at_unix_ms: u64,
+    ) -> (CanonicalPaperRaidFinalityTxV3, SignedCommandEnvelopeV1) {
+        let tx = CanonicalPaperRaidFinalityTxV3::from_signed_command(signed, 300_000, 1_000_000)
+            .unwrap();
+        let payload = tx.canonical_bytes().unwrap();
+        let envelope = SignedCommandEnvelopeV1::sign(
+            signed.chain_id.clone(),
+            signed.command_id.to_hex(),
+            signed.signer_did.clone(),
+            "hepta",
+            signed.nonce,
+            issued_at_unix_ms,
+            expires_at_unix_ms,
+            CANONICAL_PAPER_RAID_FINALITY_TX_PAYLOAD_TYPE_V3,
+            &payload,
+            &paper_raid_signing_key(),
+        )
+        .unwrap();
+        (tx, envelope)
+    }
+
+    fn app_v6_paper_raid_finality_command_v2() -> SignedPaperRaidFinalityCommandV2 {
+        let v3 = signed_paper_raid_finality_command();
+        let commitment = PaperRaidFinalityCommitmentV2 {
+            commitment_id: v3.commitment.commitment_id,
+            paper_project_id: v3.commitment.paper_project_id,
+            submission_id: v3.commitment.submission_id,
+            match_evidence_ref: v3.commitment.match_evidence_ref,
+            release_candidate_hash: v3.commitment.release_candidate_hash,
+            paper_bundle_hash: v3.commitment.paper_bundle_hash,
+            submission_commitment_hash: v3.commitment.submission_commitment_hash,
+            author_consent_set_hash: v3.commitment.author_consent_set_hash,
+            tolerance_policy_hash: v3.commitment.tolerance_policy_hash,
+            evaluation_id: v3.commitment.evaluation_id,
+            evaluation_hash: v3.commitment.evaluation_hash,
+            evaluation_score_bps: v3.commitment.evaluation_score_bps,
+            evaluation_accepted: v3.commitment.evaluation_accepted,
+            evaluation_completed_at_unix_s: v3.commitment.evaluation_completed_at_unix_s,
+            latest_reproduction_id: v3.commitment.latest_reproduction_id,
+            latest_reproduction_hash: v3.commitment.latest_reproduction_hash,
+            latest_reproduction_accepted: v3.commitment.latest_reproduction_accepted,
+            latest_reproduction_completed_at_unix_s: v3
+                .commitment
+                .latest_reproduction_completed_at_unix_s,
+            evaluation_superseded_by: v3.commitment.evaluation_superseded_by,
+            reproduction_superseded_by: v3.commitment.reproduction_superseded_by,
+            appeal_status: PaperRaidAppealStatusV2::ClosedNoAppeal,
+            appeal_id: None,
+            appeal_resolution_hash: None,
+            appeal_window_closes_at_unix_s: v3.commitment.appeal_window_closes_at_unix_s,
+            settlement_policy_hash: v3.commitment.settlement_policy_hash,
+            scientific_finality: v3.commitment.scientific_finality,
+            score_eligible: v3.commitment.score_eligible,
+            ranking_eligible: v3.commitment.ranking_eligible,
+            reward_eligible: v3.commitment.reward_eligible,
+            economic_eligible: v3.commitment.economic_eligible,
+            finalized_at_unix_s: v3.commitment.finalized_at_unix_s,
+        };
+        SignedPaperRaidFinalityCommandV2::sign(
+            v3.chain_id,
+            v3.command_id,
+            v3.signer_did,
+            v3.nonce,
+            commitment,
+            &paper_raid_signing_key(),
+        )
+        .unwrap()
+    }
+
+    fn app_v6_paper_raid_envelope_v2(
+        signed: &SignedPaperRaidFinalityCommandV2,
+        issued_at_unix_ms: u64,
+        expires_at_unix_ms: u64,
+    ) -> (CanonicalPaperRaidFinalityTxV2, SignedCommandEnvelopeV1) {
+        let tx = CanonicalPaperRaidFinalityTxV2::from_signed_command(signed, 300_000, 1_000_000)
+            .unwrap();
+        let payload = tx.canonical_bytes().unwrap();
+        let envelope = SignedCommandEnvelopeV1::sign(
+            signed.chain_id.clone(),
+            signed.command_id.to_hex(),
+            signed.signer_did.clone(),
+            "hepta",
+            signed.nonce,
+            issued_at_unix_ms,
+            expires_at_unix_ms,
+            CANONICAL_PAPER_RAID_FINALITY_TX_PAYLOAD_TYPE_V2,
+            &payload,
+            &paper_raid_signing_key(),
         )
         .unwrap();
         (tx, envelope)
@@ -1439,12 +1927,84 @@ mod tests {
         block::Header,
         validator::Set,
     ) {
-        let signed = signed_research_command();
-        let (_, target_envelope) = research_envelope(
-            &signed,
-            EXECUTION_TIMESTAMP_MS - 1_000,
-            EXECUTION_TIMESTAMP_MS + 10_000,
-        );
+        receipt_v2_e2e_fixture_for_domain(ReceiptFixtureDomain::ResearchV1)
+    }
+
+    fn paper_raid_receipt_v2_e2e_fixture() -> (
+        CometBftAppHashFinalityReceiptV2,
+        block::Header,
+        validator::Set,
+    ) {
+        receipt_v2_e2e_fixture_for_domain(ReceiptFixtureDomain::PaperRaidV3)
+    }
+
+    fn app_v6_paper_raid_v2_receipt_e2e_fixture() -> (
+        CometBftAppHashFinalityReceiptV2,
+        block::Header,
+        validator::Set,
+    ) {
+        receipt_v2_e2e_fixture_for_domain(ReceiptFixtureDomain::PaperRaidV2)
+    }
+
+    #[derive(Clone, Copy)]
+    enum ReceiptFixtureDomain {
+        ResearchV1,
+        PaperRaidV2,
+        PaperRaidV3,
+    }
+
+    fn receipt_v2_e2e_fixture_for_domain(
+        domain: ReceiptFixtureDomain,
+    ) -> (
+        CometBftAppHashFinalityReceiptV2,
+        block::Header,
+        validator::Set,
+    ) {
+        let (target_envelope, target_command_id, target_chain_id, envelope_signing_key) =
+            match domain {
+                ReceiptFixtureDomain::PaperRaidV3 => {
+                    let signed = signed_paper_raid_finality_command();
+                    let (_, envelope) = paper_raid_envelope(
+                        &signed,
+                        EXECUTION_TIMESTAMP_MS - 1_000,
+                        EXECUTION_TIMESTAMP_MS + 10_000,
+                    );
+                    (
+                        envelope,
+                        signed.command_id.to_hex(),
+                        signed.chain_id,
+                        paper_raid_signing_key(),
+                    )
+                }
+                ReceiptFixtureDomain::PaperRaidV2 => {
+                    let signed = app_v6_paper_raid_finality_command_v2();
+                    let (_, envelope) = app_v6_paper_raid_envelope_v2(
+                        &signed,
+                        EXECUTION_TIMESTAMP_MS - 1_000,
+                        EXECUTION_TIMESTAMP_MS + 10_000,
+                    );
+                    (
+                        envelope,
+                        signed.command_id.to_hex(),
+                        signed.chain_id,
+                        paper_raid_signing_key(),
+                    )
+                }
+                ReceiptFixtureDomain::ResearchV1 => {
+                    let signed = signed_research_command();
+                    let (_, envelope) = research_envelope(
+                        &signed,
+                        EXECUTION_TIMESTAMP_MS - 1_000,
+                        EXECUTION_TIMESTAMP_MS + 10_000,
+                    );
+                    (
+                        envelope,
+                        signed.command_id.to_hex(),
+                        signed.chain_id,
+                        research_signing_key(),
+                    )
+                }
+            };
         let target_raw_tx = envelope_wire(&target_envelope);
         let binding =
             decode_research_transaction_binding(&target_raw_tx, EXECUTION_TIMESTAMP_MS).unwrap();
@@ -1458,7 +2018,7 @@ mod tests {
                 other.command_id = hex::encode([0x80 + index; 32]);
                 raw_transactions.push(envelope_wire(&resign_envelope(
                     &other,
-                    &research_signing_key(),
+                    &envelope_signing_key,
                 )));
             }
         }
@@ -1485,8 +2045,8 @@ mod tests {
             .unwrap();
 
         let authenticated_record = AuthenticatedObjectRecordV1::new(
-            RESEARCH_APPLIED_COMMAND_OBJECT_TYPE_V1,
-            1,
+            binding.applied_command_object_type,
+            binding.applied_command_object_version,
             binding.applied_command_value.clone(),
         )
         .unwrap()
@@ -1510,7 +2070,7 @@ mod tests {
         .unwrap();
         let execution_header = block::Header {
             version: block::header::Version { block: 11, app: 5 },
-            chain_id: signed.chain_id.parse().unwrap(),
+            chain_id: target_chain_id.parse().unwrap(),
             height: block::Height::try_from(41u64).unwrap(),
             time: execution_time,
             last_block_id: None,
@@ -1548,7 +2108,7 @@ mod tests {
         let raw_validators: RawValidatorSet = validators.clone().into();
         let receipt =
             assemble_cometbft_apphash_finality_receipt_v2(CometBftReceiptAssemblyInputV2 {
-                target_command_id: signed.command_id.to_hex(),
+                target_command_id,
                 execution_header: encode_cometbft_header_v1(&execution_header).unwrap(),
                 commitment_header: encode_cometbft_header_v1(&commitment_header).unwrap(),
                 commitment_signed_header_proto,
@@ -1559,6 +2119,45 @@ mod tests {
             })
             .unwrap();
         (receipt, execution_header, validators)
+    }
+
+    fn owned_trust_anchor_fixture(
+        trusted_header: &block::Header,
+        trusted_validators: &validator::Set,
+    ) -> ValidatedCometBftTrustAnchorV1 {
+        let wire = encode_cometbft_trust_anchor_v1(
+            trusted_header,
+            trusted_validators,
+            2,
+            3,
+            Duration::from_secs(60),
+            Duration::from_secs(1),
+        )
+        .unwrap();
+        ValidatedCometBftTrustAnchorV1::try_from(wire).unwrap()
+    }
+
+    fn system_time_fixture(time: Time) -> SystemTime {
+        let nanos = u64::try_from(time.unix_timestamp_nanos()).unwrap();
+        UNIX_EPOCH + Duration::from_nanos(nanos)
+    }
+
+    fn light_proof_without_commit_signatures(
+        proof: &CometBftLightFinalityProofV1,
+    ) -> CometBftLightFinalityProofV1 {
+        let signed_bytes =
+            canonical_hex_bytes("signed_header_proto_hex", &proof.signed_header_proto_hex).unwrap();
+        let raw =
+            decode_canonical_message::<RawSignedHeader>("signed_header_proto_hex", &signed_bytes)
+                .unwrap();
+        let mut signed: block::signed_header::SignedHeader = raw.try_into().unwrap();
+        for signature in &mut signed.commit.signatures {
+            *signature = block::CommitSig::BlockIdFlagAbsent;
+        }
+        let raw: RawSignedHeader = signed.into();
+        let mut candidate = proof.clone();
+        candidate.signed_header_proto_hex = hex::encode(raw.encode_to_vec());
+        candidate
     }
 
     #[test]
@@ -1608,6 +2207,11 @@ mod tests {
         };
         assert_eq!(verified.command_id, receipt.command_id);
         assert_eq!(verified.transaction_index, 2);
+        assert!(matches!(
+            &verified.domain_command,
+            VerifiedCometBftDomainCommandV2::ResearchV1(command)
+                if command.as_ref() == &signed_research_command()
+        ));
 
         let mut tampered_object = receipt.clone();
         let mut value = tampered_object
@@ -1636,6 +2240,125 @@ mod tests {
             verify(&tampered_signed_header),
             ReceiptV2VerificationOutcome::StructuralInvalid { .. }
         ));
+    }
+
+    #[test]
+    fn public_receipt_v2_verifier_returns_the_exact_paper_raid_finality_command() {
+        let (receipt, trusted_header, trusted_validators) = paper_raid_receipt_v2_e2e_fixture();
+        assert_eq!(receipt.transaction_inclusion_proof.leaf_count, 5);
+        assert_eq!(receipt.result_inclusion_proof.leaf_count, 5);
+        let trust_options = options();
+        let now = (trusted_header.time + Duration::from_secs(2)).unwrap();
+        let outcome = verify_cometbft_apphash_finality_receipt_v2(
+            &receipt,
+            CometBftTrustContext {
+                trusted_state: TrustedBlockState {
+                    chain_id: &trusted_header.chain_id,
+                    header_time: trusted_header.time,
+                    height: trusted_header.height,
+                    next_validators: &trusted_validators,
+                    next_validators_hash: trusted_validators.hash(),
+                },
+                options: &trust_options,
+                now,
+            },
+        );
+        let ReceiptV2VerificationOutcome::Final(verified) = outcome else {
+            panic!("assembled Paper Raid Receipt V2 did not verify");
+        };
+        assert_eq!(verified.command_id, receipt.command_id);
+        assert_eq!(verified.transaction_index, 2);
+        assert!(matches!(
+            verified.domain_command,
+            VerifiedCometBftDomainCommandV2::PaperRaidFinalityV3(command)
+                if *command == signed_paper_raid_finality_command()
+        ));
+    }
+
+    #[test]
+    fn public_receipt_v2_verifier_preserves_the_app_v6_paper_raid_v2_command() {
+        let (receipt, trusted_header, trusted_validators) =
+            app_v6_paper_raid_v2_receipt_e2e_fixture();
+        let trust_options = options();
+        let now = (trusted_header.time + Duration::from_secs(2)).unwrap();
+        let outcome = verify_cometbft_apphash_finality_receipt_v2(
+            &receipt,
+            CometBftTrustContext {
+                trusted_state: TrustedBlockState {
+                    chain_id: &trusted_header.chain_id,
+                    header_time: trusted_header.time,
+                    height: trusted_header.height,
+                    next_validators: &trusted_validators,
+                    next_validators_hash: trusted_validators.hash(),
+                },
+                options: &trust_options,
+                now,
+            },
+        );
+        let ReceiptV2VerificationOutcome::Final(verified) = outcome else {
+            panic!("App-v6 Paper Raid V2 domain command did not verify");
+        };
+        assert!(matches!(
+            verified.domain_command,
+            VerifiedCometBftDomainCommandV2::PaperRaidFinalityV2(command)
+                if *command == app_v6_paper_raid_finality_command_v2()
+        ));
+    }
+
+    #[test]
+    fn paper_raid_binding_rejects_outer_role_and_applied_record_drift() {
+        let signed = signed_paper_raid_finality_command();
+        let (_, envelope) = paper_raid_envelope(
+            &signed,
+            EXECUTION_TIMESTAMP_MS - 1_000,
+            EXECUTION_TIMESTAMP_MS + 1_000,
+        );
+        let raw_tx = envelope_wire(&envelope);
+        let binding = verify_research_transaction_binding(
+            &raw_tx,
+            &signed.chain_id,
+            &signed.command_id.to_hex(),
+            &hex::encode(signed.command_fingerprint()),
+            EXECUTION_TIMESTAMP_MS,
+        )
+        .unwrap();
+        assert_eq!(
+            binding.applied_command_object_type,
+            PAPER_RAID_FINALITY_APPLIED_COMMAND_OBJECT_TYPE_V3
+        );
+        assert!(matches!(
+            &binding.domain_command,
+            VerifiedCometBftDomainCommandV2::PaperRaidFinalityV3(command)
+                if command.as_ref() == &signed
+        ));
+
+        let (mut receipt, _, _) = paper_raid_receipt_v2_e2e_fixture();
+        replace_authenticated_applied_command(
+            &mut receipt,
+            &binding.applied_command_logical_key,
+            RESEARCH_APPLIED_COMMAND_OBJECT_TYPE_V1,
+            1,
+            binding.applied_command_value.clone(),
+        );
+        assert!(verify_applied_command_binding(&receipt, &binding).is_err());
+
+        replace_authenticated_applied_command(
+            &mut receipt,
+            &binding.applied_command_logical_key,
+            PAPER_RAID_FINALITY_APPLIED_COMMAND_OBJECT_TYPE_V3,
+            1,
+            vec![0x42],
+        );
+        assert!(verify_applied_command_binding(&receipt, &binding).is_err());
+
+        let mut wrong_role = envelope;
+        wrong_role.signer_role = "nakama".to_string();
+        let wrong_role = resign_envelope(&wrong_role, &paper_raid_signing_key());
+        assert!(decode_research_transaction_binding(
+            &envelope_wire(&wrong_role),
+            EXECUTION_TIMESTAMP_MS
+        )
+        .is_err());
     }
 
     #[test]
@@ -1694,6 +2417,133 @@ mod tests {
                 &receipt, &anchor, expired,
             ),
             ReceiptV2VerificationOutcome::Untrusted { .. }
+        ));
+    }
+
+    #[test]
+    fn chain_time_verifier_returns_only_the_authenticated_header_tuple() {
+        let (receipt, trusted_header, trusted_validators) = receipt_v2_e2e_fixture();
+        let proof = &receipt.commitment_light_proof;
+        let anchor = owned_trust_anchor_fixture(&trusted_header, &trusted_validators);
+        let verification_time =
+            system_time_fixture((trusted_header.time + Duration::from_secs(2)).unwrap());
+
+        let ChainTimeVerificationOutcomeV1::Verified(verified) =
+            verify_cometbft_light_finality_proof_v1_with_trust_anchor(
+                proof,
+                &anchor,
+                verification_time,
+            )
+        else {
+            panic!("valid standalone CometBFT light proof did not verify");
+        };
+        assert_eq!(verified.chain_id, proof.header.chain_id);
+        assert_eq!(verified.height, proof.header.height);
+        assert_eq!(verified.header_hash_hex, proof.header.header_hash_hex);
+        assert_eq!(
+            verified.consensus_time_unix_ms,
+            EXECUTION_TIMESTAMP_MS + 1_000
+        );
+    }
+
+    #[test]
+    fn chain_time_verifier_classifies_trust_lifecycle_and_proof_failures_fail_closed() {
+        let (receipt, trusted_header, trusted_validators) = receipt_v2_e2e_fixture();
+        let proof = &receipt.commitment_light_proof;
+        let anchor = owned_trust_anchor_fixture(&trusted_header, &trusted_validators);
+        let valid_time =
+            system_time_fixture((trusted_header.time + Duration::from_secs(2)).unwrap());
+
+        let mut wrong_chain_header = trusted_header.clone();
+        wrong_chain_header.chain_id = "wrong-chain".parse().unwrap();
+        let wrong_chain_anchor =
+            owned_trust_anchor_fixture(&wrong_chain_header, &trusted_validators);
+        assert!(matches!(
+            verify_cometbft_light_finality_proof_v1_with_trust_anchor(
+                proof,
+                &wrong_chain_anchor,
+                valid_time,
+            ),
+            ChainTimeVerificationOutcomeV1::Untrusted { .. }
+        ));
+
+        let commitment_header = decode_header(&proof.header).unwrap();
+        let non_preceding_anchor =
+            owned_trust_anchor_fixture(&commitment_header, &trusted_validators);
+        assert!(matches!(
+            verify_cometbft_light_finality_proof_v1_with_trust_anchor(
+                proof,
+                &non_preceding_anchor,
+                valid_time,
+            ),
+            ChainTimeVerificationOutcomeV1::Untrusted { .. }
+        ));
+
+        let wrong_validator = TestgenValidator::new("wrong-receipt-validator")
+            .voting_power(100)
+            .generate()
+            .unwrap();
+        let wrong_validators = validator::Set::without_proposer(vec![wrong_validator]);
+        let raw_wrong_validators: RawValidatorSet = wrong_validators.into();
+        let mut wrong_validator_proof = proof.clone();
+        wrong_validator_proof.validator_set_proto_hex =
+            hex::encode(raw_wrong_validators.encode_to_vec());
+        assert!(matches!(
+            verify_cometbft_light_finality_proof_v1_with_trust_anchor(
+                &wrong_validator_proof,
+                &anchor,
+                valid_time,
+            ),
+            ChainTimeVerificationOutcomeV1::StructuralInvalid { .. }
+        ));
+
+        let no_commit_proof = light_proof_without_commit_signatures(proof);
+        assert!(matches!(
+            verify_cometbft_light_finality_proof_v1_with_trust_anchor(
+                &no_commit_proof,
+                &anchor,
+                valid_time,
+            ),
+            ChainTimeVerificationOutcomeV1::NotFinal { .. }
+        ));
+
+        let mut noncanonical_proof = proof.clone();
+        noncanonical_proof
+            .signed_header_proto_hex
+            .push_str("f80701");
+        assert!(matches!(
+            verify_cometbft_light_finality_proof_v1_with_trust_anchor(
+                &noncanonical_proof,
+                &anchor,
+                valid_time,
+            ),
+            ChainTimeVerificationOutcomeV1::StructuralInvalid { .. }
+        ));
+
+        let future_verification_time = system_time_fixture(
+            trusted_header
+                .time
+                .checked_sub(Duration::from_secs(1))
+                .unwrap(),
+        );
+        assert!(matches!(
+            verify_cometbft_light_finality_proof_v1_with_trust_anchor(
+                proof,
+                &anchor,
+                future_verification_time,
+            ),
+            ChainTimeVerificationOutcomeV1::NotFinal { .. }
+        ));
+
+        let expired_verification_time =
+            system_time_fixture((trusted_header.time + Duration::from_secs(61)).unwrap());
+        assert!(matches!(
+            verify_cometbft_light_finality_proof_v1_with_trust_anchor(
+                proof,
+                &anchor,
+                expired_verification_time,
+            ),
+            ChainTimeVerificationOutcomeV1::Untrusted { .. }
         ));
     }
 

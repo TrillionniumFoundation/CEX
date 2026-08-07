@@ -19,7 +19,12 @@ paths:
         Returns 200 only when PostgreSQL answers SELECT 1 and all Consumer
         Edge, distinct authorization/control/completion keys, the signed
         Nakama control origin/runtime key, and configured finality trust
-        anchors are internally valid. Returns 503 with ready=false otherwise.
+        anchors are internally valid. It also reports the frozen 24-hour
+        scientific-finality policy and exposes the Paper-V2 command lane as
+        awaiting_chain_verifier_upgrade until the reviewed Chain verifier is
+        vendored; that capability disclosure does not make otherwise healthy
+        legacy/Receipt-V2 service dependencies unready. Returns 503 with
+        ready=false otherwise.
       responses:
         "200": {description: Durable dependencies and trust configuration ready}
         "503": {description: Database unavailable or trust configuration invalid}
@@ -839,6 +844,125 @@ paths:
         "403": {description: Operator authentication failed or anchor hash is not pre-pinned}
         "409": {description: Anchor hash/content conflict}
         "413": {description: Body exceeds the upstream canonical wire limit}
+  /v2/hepta/operator/trnm/time-checkpoints:
+    post:
+      security:
+        - operatorServiceToken: []
+      operationId: admitPaperTrnmChainTimeCheckpointV1
+      description: >-
+        Authenticates a canonical CometBFT light-finality proof against an
+        already admitted and actively pinned trust anchor, then persists its
+        consensus height, header hash and consensus timestamp as an immutable
+        Chain-time checkpoint. The local verification clock is used only for
+        light-client trust-period/future-header checks and a persisted rollback
+        high-water; it never closes the Paper Appeal window. An exact proof
+        replay is stable, while a different checkpoint at the same Chain height
+        fails closed. The authenticated body is capped at 2 MiB before JSON
+        parsing.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/AdmitPaperTrnmChainTimeCheckpointV1Request"}
+      responses:
+        "201":
+          description: Authenticated immutable Chain-time checkpoint admitted
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PaperTrnmChainTimeCheckpointV1"}
+        "200":
+          description: Exact content replay of an existing checkpoint
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PaperTrnmChainTimeCheckpointV1"}
+        "400": {description: Malformed, noncanonical or structurally invalid proof}
+        "403": {description: Operator authentication failed or trust anchor is not actively pinned}
+        "404": {description: Pinned trust anchor has not been admitted locally}
+        "409": {description: Untrusted/non-final proof, local-clock rollback, same-height conflict or replay drift}
+        "413": {description: Body exceeds the 2 MiB authenticated checkpoint limit}
+  /v2/hepta/papers/{paper_id}/chain-finality-v2/arm:
+    parameters:
+      - {$ref: "#/components/parameters/PaperId"}
+    post:
+      security:
+        - operatorServiceToken: []
+      operationId: armPaperChainFinalityWindowV2
+      description: >-
+        Derives the exact latest Paper/submission, Research Session,
+        MatchEvidence, evaluation, reproduction and Appeal lineage facts and
+        binds their source fingerprint to the highest admitted, actively
+        pinned Chain-time checkpoint. The start checkpoint must be no more than
+        15 minutes behind the local light-client observation. For a no-Appeal
+        source, the earliest final Chain time is the start consensus time plus
+        that full 15-minute allowance plus 24 hours; a completely resolved
+        denied/upheld Appeal uses the start time plus the allowance. The arm is
+        immutable but does not seal source facts or claim scientific finality;
+        any later source change invalidates preparation and requires a new arm.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ArmPaperTrnmFinalityWindowV2Request"}
+      responses:
+        "201":
+          description: Immutable source fingerprint and Chain-time window arm created without sealing the Paper
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PaperTrnmFinalityWindowArmV2"}
+        "200":
+          description: Exact idempotent replay of the window arm
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PaperTrnmFinalityWindowArmV2"}
+        "400": {description: Malformed selectors, checkpoint hash or idempotency token}
+        "403": {description: Operator authentication failed or checkpoint anchor is no longer actively pinned}
+        "404": {description: Paper source, Research Session evidence or start checkpoint missing}
+        "409": {description: Stale/future/non-latest checkpoint, open or ambiguous Appeal lineage, source conflict, local-clock rollback or replay drift}
+        "413": {description: Body exceeds the 16 KiB window-arm limit}
+  /v2/hepta/papers/{paper_id}/chain-finality-v2/prepare:
+    parameters:
+      - {$ref: "#/components/parameters/PaperId"}
+    post:
+      security:
+        - operatorServiceToken: []
+      operationId: preparePaperChainFinalityV2
+      description: >-
+        References an immutable window arm and a separately admitted final
+        Chain-time checkpoint, re-derives the exact source fingerprint, and
+        freezes the complete versioned scientific-finality tuple only when the
+        source is unchanged. The final checkpoint must be on the same Chain,
+        must have been admitted after the arm at a greater height, and must
+        reach the arm's consensus-time deadline. A halted Chain therefore
+        remains unsealed rather than falling back to an ambient server clock.
+        This preparation is deliberately marked
+        awaiting_chain_verifier_upgrade: it is not a signed or queued Chain
+        command and cannot receive a Receipt until the canonical Chain
+        Paper-V2 verifier is vendored. A successful preparation permanently
+        seals the bound Paper/submission, Research Session authority/completion,
+        evaluation, reproduction, and Appeal sources against later mutation.
+        Exactly zero or one resolved Appeal is representable in the final
+        evaluation lineage.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/PreparePaperTrnmFinalityV2Request"}
+      responses:
+        "201":
+          description: Immutable local Paper-V2 tuple prepared, without claiming Chain finality
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PaperTrnmFinalityPreparationV2"}
+        "200":
+          description: Exact idempotent replay of the preparation
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PaperTrnmFinalityPreparationV2"}
+        "400": {description: Malformed identifiers or idempotency token}
+        "403": {description: Operator authentication failed}
+        "404": {description: Paper source, immutable arm or final checkpoint missing}
+        "409": {description: Window open, noncausal/cross-Chain checkpoint, changed or ambiguous source facts, sealed Paper, or replay conflict}
+        "413": {description: Body exceeds the 16 KiB preparation limit}
   /v2/hepta/papers/{paper_id}/chain-finality:
     parameters:
       - {$ref: "#/components/parameters/PaperId"}
@@ -972,10 +1096,222 @@ components:
     Sha256Digest:
       type: string
       pattern: '^sha256:[0-9a-f]{64}$'
+    RawSha256Hex:
+      type: string
+      pattern: '^[0-9a-f]{64}$'
+    CanonicalHexBytes:
+      type: string
+      minLength: 2
+      maxLength: 8388608
+      pattern: '^[0-9a-f]+$'
     IdempotencyKey:
       type: string
       minLength: 1
       maxLength: 200
+    CometBftHeaderV1:
+      type: object
+      additionalProperties: false
+      required: [schema, chain_id, height, header_hash_hex, last_block_id_hash_hex, data_hash_hex, app_hash_hex, last_results_hash_hex, validators_hash_hex, next_validators_hash_hex, header_proto_hex]
+      properties:
+        schema: {type: string, const: trnm_cometbft_header_v1}
+        chain_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: '^[a-z0-9._:/-]+$'
+        height: {type: integer, minimum: 1}
+        header_hash_hex: {$ref: "#/components/schemas/RawSha256Hex"}
+        last_block_id_hash_hex:
+          anyOf: [{$ref: "#/components/schemas/RawSha256Hex"}, {type: "null"}]
+        data_hash_hex:
+          anyOf: [{$ref: "#/components/schemas/RawSha256Hex"}, {type: "null"}]
+        app_hash_hex: {$ref: "#/components/schemas/RawSha256Hex"}
+        last_results_hash_hex:
+          anyOf: [{$ref: "#/components/schemas/RawSha256Hex"}, {type: "null"}]
+        validators_hash_hex: {$ref: "#/components/schemas/RawSha256Hex"}
+        next_validators_hash_hex: {$ref: "#/components/schemas/RawSha256Hex"}
+        header_proto_hex: {$ref: "#/components/schemas/CanonicalHexBytes"}
+    CometBftLightFinalityProofV1:
+      type: object
+      additionalProperties: false
+      required: [schema, header, commit_height, commit_block_id_hash_hex, signed_header_proto_hex, validator_set_proto_hex]
+      properties:
+        schema: {type: string, const: trnm_cometbft_light_finality_proof_v1}
+        header: {$ref: "#/components/schemas/CometBftHeaderV1"}
+        commit_height: {type: integer, minimum: 1}
+        commit_block_id_hash_hex: {$ref: "#/components/schemas/RawSha256Hex"}
+        signed_header_proto_hex: {$ref: "#/components/schemas/CanonicalHexBytes"}
+        validator_set_proto_hex: {$ref: "#/components/schemas/CanonicalHexBytes"}
+    AdmitPaperTrnmChainTimeCheckpointV1Request:
+      type: object
+      additionalProperties: false
+      required: [trust_anchor_hash, proof]
+      properties:
+        trust_anchor_hash: {$ref: "#/components/schemas/RawSha256Hex"}
+        proof: {$ref: "#/components/schemas/CometBftLightFinalityProofV1"}
+    PaperTrnmChainTimeCheckpointV1:
+      type: object
+      additionalProperties: false
+      required: [schema, checkpoint_hash, trust_anchor_hash, chain_id, height, header_hash, consensus_time_unix_ms, canonical_proof_sha256, locally_verified_at_unix_ms]
+      properties:
+        schema: {type: string, const: hepta.paper_raid.trnm_chain_time_checkpoint.v1}
+        checkpoint_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        trust_anchor_hash: {$ref: "#/components/schemas/RawSha256Hex"}
+        chain_id: {type: string, minLength: 1, maxLength: 128}
+        height: {type: integer, minimum: 1}
+        header_hash: {$ref: "#/components/schemas/RawSha256Hex"}
+        consensus_time_unix_ms: {type: integer, minimum: 1}
+        canonical_proof_sha256: {$ref: "#/components/schemas/Sha256Digest"}
+        locally_verified_at_unix_ms:
+          type: integer
+          minimum: 1
+          description: Local light-client verification observation; never the Paper Appeal deadline.
+    ArmPaperTrnmFinalityWindowV2Request:
+      type: object
+      additionalProperties: false
+      required: [submission_id, evaluation_id, latest_reproduction_id, research_session_id, research_session_roster_version, start_checkpoint_hash, idempotency_key]
+      properties:
+        submission_id: {type: string, format: uuid}
+        evaluation_id: {type: string, format: uuid}
+        latest_reproduction_id: {type: string, format: uuid}
+        research_session_id: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        research_session_roster_version: {type: integer, minimum: 1}
+        start_checkpoint_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        idempotency_key:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: '^[A-Za-z0-9._:-]+$'
+    PaperTrnmFinalityWindowArmV2:
+      type: object
+      additionalProperties: false
+      required: [schema, arm_id, paper_project_id, submission_id, evaluation_id, latest_reproduction_id, research_session_id, research_session_roster_version, source_fingerprint, appeal_status, appeal_id, appeal_resolution_id, start_checkpoint, observed_max_checkpoint_height, max_chain_time_lag_ms, earliest_final_checkpoint_time_unix_ms, idempotency_key, request_hash]
+      properties:
+        schema: {type: string, const: hepta.paper_raid.trnm_finality_window_arm.v2}
+        arm_id: {type: string, format: uuid}
+        paper_project_id: {type: string, format: uuid}
+        submission_id: {type: string, format: uuid}
+        evaluation_id: {type: string, format: uuid}
+        latest_reproduction_id: {type: string, format: uuid}
+        research_session_id: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        research_session_roster_version: {type: integer, minimum: 1}
+        source_fingerprint: {$ref: "#/components/schemas/Sha256Digest"}
+        appeal_status: {type: string, enum: [closed_no_appeal, resolved_denied, resolved_upheld]}
+        appeal_id:
+          anyOf: [{type: string, format: uuid}, {type: "null"}]
+        appeal_resolution_id:
+          anyOf: [{type: string, format: uuid}, {type: "null"}]
+        start_checkpoint: {$ref: "#/components/schemas/PaperTrnmChainTimeCheckpointV1"}
+        observed_max_checkpoint_height:
+          type: integer
+          minimum: 1
+          description: Highest admitted height observed atomically when the arm was created.
+        max_chain_time_lag_ms: {type: integer, const: 900000}
+        earliest_final_checkpoint_time_unix_ms:
+          type: integer
+          minimum: 1
+          description: Consensus-time boundary; no ambient server clock can satisfy it.
+        idempotency_key: {type: string, minLength: 1, maxLength: 128}
+        request_hash: {$ref: "#/components/schemas/Sha256Digest"}
+    PreparePaperTrnmFinalityV2Request:
+      type: object
+      additionalProperties: false
+      required: [arm_id, submission_id, evaluation_id, latest_reproduction_id, research_session_id, research_session_roster_version, final_checkpoint_hash, idempotency_key]
+      properties:
+        arm_id: {type: string, format: uuid}
+        submission_id: {type: string, format: uuid}
+        evaluation_id: {type: string, format: uuid}
+        latest_reproduction_id: {type: string, format: uuid}
+        research_session_id: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        research_session_roster_version: {type: integer, minimum: 1}
+        final_checkpoint_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        idempotency_key:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: '^[A-Za-z0-9._:-]+$'
+    PaperTrnmCommandBindingV2:
+      type: object
+      additionalProperties: false
+      required: [schema, commitment_id, source_fingerprint, window_arm_id, paper_project_id, submission_id, research_session_id, research_session_roster_version, match_evidence_commitment_id, match_evidence_object_version, release_candidate_hash, paper_bundle_hash, submission_commitment_hash, author_consent_set_hash, tolerance_policy_hash, evaluation_id, evaluation_signing_hash, evaluation_score_bps, evaluation_accepted, evaluation_completed_at_unix_s, evaluation_supersedes_evaluation_id, evaluation_superseded_by_evaluation_id, latest_reproduction_id, latest_reproduction_report_hash, latest_reproduction_accepted, latest_reproduction_completed_at_unix_s, reproduction_supersedes_reproduction_id, reproduction_superseded_by_reproduction_id, appeal_status, appeal_id, appealed_evaluation_id, appeal_resolution_id, appeal_resolution_hash, start_checkpoint_hash, start_checkpoint_anchor_hash, start_checkpoint_chain_id, start_checkpoint_height, start_checkpoint_header_hash, start_checkpoint_consensus_time_unix_ms, final_checkpoint_hash, final_checkpoint_anchor_hash, final_checkpoint_chain_id, final_checkpoint_height, final_checkpoint_header_hash, final_checkpoint_consensus_time_unix_ms, max_chain_time_lag_ms, appeal_window_closes_at_unix_ms, appeal_window_closes_at_unix_s, settlement_policy_hash, scientific_finality, score_eligible, ranking_eligible, reward_eligible, economic_eligible, finalized_at_unix_s]
+      properties:
+        schema: {type: string, const: hepta.paper_raid.trnm_command_binding.v2}
+        commitment_id: {$ref: "#/components/schemas/Sha256Digest"}
+        source_fingerprint: {$ref: "#/components/schemas/Sha256Digest"}
+        window_arm_id: {type: string, format: uuid}
+        paper_project_id: {type: string, format: uuid}
+        submission_id: {type: string, format: uuid}
+        research_session_id: {type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'}
+        research_session_roster_version: {type: integer, minimum: 1}
+        match_evidence_commitment_id: {$ref: "#/components/schemas/Sha256Digest"}
+        match_evidence_object_version: {type: integer, const: 1}
+        release_candidate_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        paper_bundle_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        submission_commitment_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        author_consent_set_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        tolerance_policy_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        evaluation_id: {type: string, format: uuid}
+        evaluation_signing_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        evaluation_score_bps: {type: integer, minimum: 0, maximum: 10000}
+        evaluation_accepted: {type: boolean}
+        evaluation_completed_at_unix_s: {type: integer, minimum: 1}
+        evaluation_supersedes_evaluation_id:
+          anyOf: [{type: string, format: uuid}, {type: "null"}]
+        evaluation_superseded_by_evaluation_id: {type: "null"}
+        latest_reproduction_id: {type: string, format: uuid}
+        latest_reproduction_report_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        latest_reproduction_accepted: {type: boolean}
+        latest_reproduction_completed_at_unix_s: {type: integer, minimum: 1}
+        reproduction_supersedes_reproduction_id:
+          anyOf: [{type: string, format: uuid}, {type: "null"}]
+        reproduction_superseded_by_reproduction_id: {type: "null"}
+        appeal_status: {type: string, enum: [closed_no_appeal, resolved_denied, resolved_upheld]}
+        appeal_id:
+          anyOf: [{type: string, format: uuid}, {type: "null"}]
+        appealed_evaluation_id:
+          anyOf: [{type: string, format: uuid}, {type: "null"}]
+        appeal_resolution_id:
+          anyOf: [{type: string, format: uuid}, {type: "null"}]
+        appeal_resolution_hash:
+          anyOf: [{$ref: "#/components/schemas/Sha256Digest"}, {type: "null"}]
+        start_checkpoint_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        start_checkpoint_anchor_hash: {$ref: "#/components/schemas/RawSha256Hex"}
+        start_checkpoint_chain_id: {type: string, minLength: 1, maxLength: 128}
+        start_checkpoint_height: {type: integer, minimum: 1}
+        start_checkpoint_header_hash: {$ref: "#/components/schemas/RawSha256Hex"}
+        start_checkpoint_consensus_time_unix_ms: {type: integer, minimum: 1}
+        final_checkpoint_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        final_checkpoint_anchor_hash: {$ref: "#/components/schemas/RawSha256Hex"}
+        final_checkpoint_chain_id: {type: string, minLength: 1, maxLength: 128}
+        final_checkpoint_height: {type: integer, minimum: 2}
+        final_checkpoint_header_hash: {$ref: "#/components/schemas/RawSha256Hex"}
+        final_checkpoint_consensus_time_unix_ms: {type: integer, minimum: 1}
+        max_chain_time_lag_ms: {type: integer, const: 900000}
+        appeal_window_closes_at_unix_ms:
+          type: integer
+          minimum: 1
+          description: Consensus-time deadline derived from the immutable start checkpoint.
+        appeal_window_closes_at_unix_s: {type: integer, minimum: 1}
+        settlement_policy_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        scientific_finality: {type: boolean, const: true}
+        score_eligible: {type: boolean, const: false}
+        ranking_eligible: {type: boolean, const: false}
+        reward_eligible: {type: boolean, const: false}
+        economic_eligible: {type: boolean, const: false}
+        finalized_at_unix_s: {type: integer, minimum: 1}
+    PaperTrnmFinalityPreparationV2:
+      type: object
+      additionalProperties: false
+      required: [schema, preparation_id, idempotency_key, request_hash, binding, binding_fingerprint, status, created_at]
+      properties:
+        schema: {type: string, const: hepta.paper_raid.trnm_finality_preparation.v2}
+        preparation_id: {type: string, format: uuid}
+        idempotency_key: {type: string, minLength: 1, maxLength: 128}
+        request_hash: {$ref: "#/components/schemas/Sha256Digest"}
+        binding: {$ref: "#/components/schemas/PaperTrnmCommandBindingV2"}
+        binding_fingerprint: {$ref: "#/components/schemas/Sha256Digest"}
+        status: {type: string, const: awaiting_chain_verifier_upgrade}
+        created_at: {type: string, format: date-time}
     PaperChainFinalityProjectionV1:
       type: object
       additionalProperties: false

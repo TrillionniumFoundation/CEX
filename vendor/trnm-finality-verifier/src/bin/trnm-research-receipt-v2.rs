@@ -1,8 +1,8 @@
 use std::{
     collections::BTreeSet,
     env, fs,
-    io::Write,
-    os::unix::fs::OpenOptionsExt,
+    io::{Read, Write},
+    os::unix::fs::{MetadataExt, OpenOptionsExt},
     path::Path,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -11,6 +11,7 @@ use anyhow::{anyhow, ensure, Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use ed25519_dalek::SigningKey;
 use prost::Message;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use tendermint::{block, validator};
 use tendermint_proto::v0_38::{
@@ -25,13 +26,18 @@ use trnm_finality_verifier::{
     assemble_cometbft_apphash_finality_receipt_v2, encode_cometbft_header_v1,
     encode_cometbft_trust_anchor_v1, verify_cometbft_apphash_finality_receipt_v2_with_trust_anchor,
     CometBftReceiptAssemblyInputV2, ReceiptV2VerificationOutcome, ValidatedCometBftTrustAnchorV1,
+    VerifiedCometBftDomainCommandV2,
 };
 use trnm_protocol::{
-    research_applied_command_key, CanonicalResearchTxV1, CANONICAL_RESEARCH_TX_PAYLOAD_TYPE_V1,
+    paper_raid_finality_applied_command_key, paper_raid_finality_applied_command_key_v3,
+    research_applied_command_key, CanonicalPaperRaidFinalityTxV2, CanonicalPaperRaidFinalityTxV3,
+    CanonicalResearchTxV1, CANONICAL_PAPER_RAID_FINALITY_TX_PAYLOAD_TYPE_V2,
+    CANONICAL_PAPER_RAID_FINALITY_TX_PAYLOAD_TYPE_V3, CANONICAL_RESEARCH_TX_PAYLOAD_TYPE_V1,
 };
 use trnm_research_protocol::{
-    AuthorityRole, ExternalKey, MatchEvidenceCommitmentV1, ResearchCommandV1,
-    SignedResearchCommandV1,
+    AuthorityRole, CanonicalCbor, ExternalKey, MatchEvidenceCommitmentV1,
+    PaperRaidFinalityCommitmentV2, PaperRaidFinalityCommitmentV3, ResearchCommandV1,
+    SignedPaperRaidFinalityCommandV2, SignedPaperRaidFinalityCommandV3, SignedResearchCommandV1,
 };
 
 const MAX_RPC_JSON_BYTES: u64 = 256 * 1024 * 1024;
@@ -41,24 +47,47 @@ const CLOCK_DRIFT_SECONDS: u64 = 10;
 
 fn usage(program: &str) -> anyhow::Error {
     anyhow!(
-        "usage:\n  {program} fixture-tx PRIVATE_KEY OUTPUT_TX\n  {program} assemble-and-verify EVIDENCE_DIR RECEIPT_OUTPUT TRUSTED_EXECUTION_HEADER_HASH_HEX"
+        "usage:\n  {program} fixture-tx PRIVATE_KEY OUTPUT_TX\n  {program} sign-and-wrap SIGNING_INPUT PRIVATE_KEY SIGNED_COMMAND_OUTPUT OUTPUT_TX\n  {program} paper-raid-v2-sign-and-wrap SIGNING_INPUT PRIVATE_KEY SIGNED_COMMAND_OUTPUT OUTPUT_TX\n  {program} paper-raid-v3-pre-v7-artifact SIGNING_INPUT PRIVATE_KEY SIGNED_COMMAND_OUTPUT OUTPUT_TX\n  {program} assemble-and-verify EVIDENCE_DIR RECEIPT_OUTPUT TRUSTED_EXECUTION_HEADER_HASH_HEX [TRUST_ANCHOR_OUTPUT]"
     )
 }
 
 fn read_bounded(path: &Path, max_bytes: u64) -> Result<Vec<u8>> {
-    let metadata = fs::symlink_metadata(path)
+    let path_metadata = fs::symlink_metadata(path)
         .with_context(|| format!("inspect evidence file {}", path.display()))?;
     ensure!(
-        metadata.file_type().is_file() && !metadata.file_type().is_symlink(),
+        path_metadata.file_type().is_file() && !path_metadata.file_type().is_symlink(),
         "evidence path is not a regular non-symlink file: {}",
         path.display()
     );
+    let file =
+        fs::File::open(path).with_context(|| format!("open evidence file {}", path.display()))?;
+    let opened_metadata = file
+        .metadata()
+        .with_context(|| format!("inspect opened evidence file {}", path.display()))?;
     ensure!(
-        metadata.len() <= max_bytes,
+        opened_metadata.file_type().is_file()
+            && opened_metadata.dev() == path_metadata.dev()
+            && opened_metadata.ino() == path_metadata.ino(),
+        "evidence path changed while it was opened: {}",
+        path.display()
+    );
+    ensure!(
+        opened_metadata.len() <= max_bytes,
         "evidence file exceeds the {max_bytes}-byte limit: {}",
         path.display()
     );
-    fs::read(path).with_context(|| format!("read evidence file {}", path.display()))
+    let mut bytes = Vec::with_capacity(
+        usize::try_from(opened_metadata.len()).context("evidence length exceeds usize")?,
+    );
+    file.take(max_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .with_context(|| format!("read evidence file {}", path.display()))?;
+    ensure!(
+        u64::try_from(bytes.len()).unwrap_or(u64::MAX) <= max_bytes,
+        "evidence file grew beyond the {max_bytes}-byte limit while reading: {}",
+        path.display()
+    );
+    Ok(bytes)
 }
 
 fn read_json(path: &Path) -> Result<Value> {
@@ -453,10 +482,9 @@ fn external_key(namespace: &str, value: &str) -> Result<ExternalKey> {
         .map_err(|error| anyhow!("create fixture {namespace} key: {error}"))
 }
 
-fn fixture_tx(private_key: &Path, output: &Path) -> Result<()> {
+fn read_signing_key(private_key: &Path) -> Result<SigningKey> {
     let encoded_key = read_bounded(private_key, 256)?;
-    let encoded_key =
-        std::str::from_utf8(&encoded_key).context("fixture private key is not UTF-8")?;
+    let encoded_key = std::str::from_utf8(&encoded_key).context("private key is not UTF-8")?;
     let encoded_key = match encoded_key.as_bytes() {
         bytes if bytes.len() == 64 => encoded_key,
         bytes if bytes.len() == 65 && bytes[64] == b'\n' => &encoded_key[..64],
@@ -466,12 +494,455 @@ fn fixture_tx(private_key: &Path, output: &Path) -> Result<()> {
         encoded_key.len() == 64
             && encoded_key.bytes().all(|byte| byte.is_ascii_hexdigit())
             && encoded_key == encoded_key.to_ascii_lowercase(),
-        "fixture private key must be one lowercase-hex Ed25519 seed plus an optional newline"
+        "private key must be one lowercase-hex Ed25519 seed plus an optional newline"
     );
     let seed: [u8; 32] = hex::decode(encoded_key)?
         .try_into()
-        .map_err(|_| anyhow!("fixture private key must encode 32 bytes"))?;
-    let signing_key = SigningKey::from_bytes(&seed);
+        .map_err(|_| anyhow!("private key must encode 32 bytes"))?;
+    Ok(SigningKey::from_bytes(&seed))
+}
+
+fn decode_canonical_hex(
+    label: &str,
+    value: &str,
+    exact_bytes: Option<usize>,
+    max: usize,
+) -> Result<Vec<u8>> {
+    ensure!(
+        !value.is_empty() && value.len().is_multiple_of(2) && value.len() <= max.saturating_mul(2),
+        "{label} is outside the canonical hex byte limit"
+    );
+    let bytes = hex::decode(value).with_context(|| format!("decode {label}"))?;
+    ensure!(
+        exact_bytes.is_none_or(|expected| bytes.len() == expected)
+            && bytes.len() <= max
+            && hex::encode(&bytes) == value,
+        "{label} is not canonical lowercase hex"
+    );
+    Ok(bytes)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SignAndWrapInputV1 {
+    schema: String,
+    chain_id: String,
+    command_namespace: String,
+    command_external_id: String,
+    signer_did: String,
+    signer_role: AuthorityRole,
+    nonce: u64,
+    max_gas: u64,
+    fee_limit: u128,
+    command: ResearchCommandV1,
+}
+
+#[derive(Serialize)]
+struct SignedCommandOutputV1 {
+    protocol: &'static str,
+    signed_command: SignedResearchCommandV1,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PaperRaidSignAndWrapInputV2 {
+    schema: String,
+    chain_id: String,
+    command_id_hex: String,
+    signer_did: String,
+    nonce: u64,
+    max_gas: u64,
+    fee_limit: u128,
+    issued_at_unix_ms: u64,
+    expires_at_unix_ms: u64,
+    commitment_cbor_hex: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct PaperRaidSignedCommandOutputV2 {
+    schema: String,
+    chain_id: String,
+    command_id: String,
+    signer_did: String,
+    nonce: u64,
+    public_key_hex: String,
+    signed_command_cbor_hex: String,
+    canonical_transaction_hex: String,
+    command_fingerprint_hex: String,
+    commitment_id: String,
+    commitment_hash_hex: String,
+    applied_command_logical_key: String,
+    outer_envelope_payload_hash_hex: String,
+    comet_tx_hash_hex: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PaperRaidSignAndWrapInputV3 {
+    schema: String,
+    chain_id: String,
+    command_id_hex: String,
+    signer_did: String,
+    nonce: u64,
+    max_gas: u64,
+    fee_limit: u128,
+    issued_at_unix_ms: u64,
+    expires_at_unix_ms: u64,
+    commitment_cbor_hex: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct PaperRaidSignedCommandOutputV3 {
+    schema: String,
+    required_consensus_app_version: u64,
+    broadcastable_on_app_v6: bool,
+    chain_id: String,
+    command_id: String,
+    signer_did: String,
+    nonce: u64,
+    public_key_hex: String,
+    signed_command_cbor_hex: String,
+    canonical_transaction_hex: String,
+    command_fingerprint_hex: String,
+    commitment_id: String,
+    commitment_hash_hex: String,
+    applied_command_logical_key: String,
+    outer_envelope_payload_hash_hex: String,
+    comet_tx_hash_hex: String,
+}
+
+fn signer_role_name(role: AuthorityRole) -> &'static str {
+    match role {
+        AuthorityRole::NakamaAuthority => "nakama",
+        AuthorityRole::HeptaAuthority => "hepta",
+    }
+}
+
+fn sign_and_wrap(
+    signing_input: &Path,
+    private_key: &Path,
+    signed_command_output: &Path,
+    transaction_output: &Path,
+) -> Result<()> {
+    ensure!(
+        signed_command_output != transaction_output,
+        "signed command and transaction outputs must be distinct"
+    );
+    let input: SignAndWrapInputV1 =
+        serde_json::from_slice(&read_bounded(signing_input, MAX_BINARY_EVIDENCE_BYTES)?)
+            .with_context(|| format!("decode signing input {}", signing_input.display()))?;
+    ensure!(
+        input.schema == "trnm_research_sign_and_wrap_input_v1",
+        "unsupported signing input schema"
+    );
+    let signing_key = read_signing_key(private_key)?;
+    let command_id =
+        ExternalKey::from_external_id(&input.command_namespace, &input.command_external_id)
+            .map_err(|error| anyhow!("create command external key: {error}"))?;
+    let signed = SignedResearchCommandV1::sign(
+        input.chain_id,
+        command_id,
+        input.signer_did,
+        input.signer_role,
+        input.nonce,
+        input.command,
+        &signing_key,
+    )
+    .context("sign research command")?;
+    let research_tx =
+        CanonicalResearchTxV1::from_signed_command(&signed, input.max_gas, input.fee_limit)
+            .context("build canonical research transaction")?;
+    let issued_at_unix_ms = now_unix_ms()?;
+    let envelope = SignedCommandEnvelopeV1::sign(
+        signed.chain_id.clone(),
+        signed.command_id.to_hex(),
+        signed.signer_did.clone(),
+        signer_role_name(signed.signer_role),
+        signed.nonce,
+        issued_at_unix_ms,
+        issued_at_unix_ms.saturating_add(300_000),
+        CANONICAL_RESEARCH_TX_PAYLOAD_TYPE_V1,
+        &research_tx.canonical_bytes()?,
+        &signing_key,
+    )?;
+    let signed_output = serde_json::to_vec(&SignedCommandOutputV1 {
+        protocol: "hepta_signed_trnm_command_v1",
+        signed_command: signed.clone(),
+    })?;
+    write_new(signed_command_output, &signed_output)?;
+    if let Err(error) = write_new(transaction_output, &envelope.to_wire_bytes()?) {
+        fs::remove_file(signed_command_output).with_context(|| {
+            format!(
+                "remove incomplete signed command output {}",
+                signed_command_output.display()
+            )
+        })?;
+        return Err(error);
+    }
+    println!(
+        "{}",
+        serde_json::to_string(&json!({
+            "schema":"trnm_research_sign_and_wrap_result_v1",
+            "signed_command_path":signed_command_output,
+            "transaction_path":transaction_output,
+            "command_id":signed.command_id.to_hex(),
+            "command_fingerprint_hex":hex::encode(signed.command_fingerprint()),
+            "applied_command_logical_key":research_applied_command_key(signed.command_id)?,
+            "public_key_hex":hex::encode(signing_key.verifying_key().to_bytes())
+        }))?
+    );
+    Ok(())
+}
+
+fn paper_raid_v2_sign_and_wrap(
+    signing_input: &Path,
+    private_key: &Path,
+    signed_command_output: &Path,
+    transaction_output: &Path,
+) -> Result<()> {
+    ensure!(
+        signed_command_output != transaction_output,
+        "signed command and transaction outputs must be distinct"
+    );
+    let input: PaperRaidSignAndWrapInputV2 =
+        serde_json::from_slice(&read_bounded(signing_input, MAX_BINARY_EVIDENCE_BYTES)?)
+            .with_context(|| format!("decode signing input {}", signing_input.display()))?;
+    ensure!(
+        input.schema == "trnm_paper_raid_finality_sign_and_wrap_input_v2",
+        "unsupported Paper Raid signing input schema"
+    );
+    ensure!(
+        input.expires_at_unix_ms > input.issued_at_unix_ms
+            && input
+                .expires_at_unix_ms
+                .saturating_sub(input.issued_at_unix_ms)
+                <= 300_000,
+        "Paper Raid outer-envelope lifetime must be 1..=300000 milliseconds"
+    );
+    let command_id: [u8; 32] =
+        decode_canonical_hex("command_id_hex", &input.command_id_hex, Some(32), 32)?
+            .try_into()
+            .map_err(|_| anyhow!("command_id_hex must encode 32 bytes"))?;
+    let commitment_bytes = decode_canonical_hex(
+        "commitment_cbor_hex",
+        &input.commitment_cbor_hex,
+        None,
+        256 * 1024,
+    )?;
+    let commitment = PaperRaidFinalityCommitmentV2::from_canonical_bytes(&commitment_bytes)
+        .context("decode canonical Paper Raid finality commitment")?;
+    ensure!(
+        !commitment.score_eligible
+            && !commitment.ranking_eligible
+            && !commitment.reward_eligible
+            && !commitment.economic_eligible,
+        "Paper Raid candidate signing keeps all settlement eligibility locked"
+    );
+    let signing_key = read_signing_key(private_key)?;
+    let signed = SignedPaperRaidFinalityCommandV2::sign(
+        input.chain_id,
+        ExternalKey::from_bytes(command_id),
+        input.signer_did,
+        input.nonce,
+        commitment,
+        &signing_key,
+    )
+    .context("sign Paper Raid finality command")?;
+    let canonical_tx = CanonicalPaperRaidFinalityTxV2::from_signed_command(
+        &signed,
+        input.max_gas,
+        input.fee_limit,
+    )
+    .context("build canonical Paper Raid finality transaction")?;
+    let canonical_tx_bytes = canonical_tx.canonical_bytes()?;
+    let envelope = SignedCommandEnvelopeV1::sign(
+        signed.chain_id.clone(),
+        signed.command_id.to_hex(),
+        signed.signer_did.clone(),
+        "hepta",
+        signed.nonce,
+        input.issued_at_unix_ms,
+        input.expires_at_unix_ms,
+        CANONICAL_PAPER_RAID_FINALITY_TX_PAYLOAD_TYPE_V2,
+        &canonical_tx_bytes,
+        &signing_key,
+    )?;
+    envelope
+        .validate_at(&signed.chain_id, now_unix_ms()?)
+        .context("validate Paper Raid outer envelope against the current clock")?;
+    let transaction_bytes = envelope.to_wire_bytes()?;
+    let signed_output = serde_json::to_vec(&PaperRaidSignedCommandOutputV2 {
+        schema: "trnm_paper_raid_signed_command_output_v2".to_string(),
+        chain_id: signed.chain_id.clone(),
+        command_id: signed.command_id.to_hex(),
+        signer_did: signed.signer_did.clone(),
+        nonce: signed.nonce,
+        public_key_hex: hex::encode(signed.public_key),
+        signed_command_cbor_hex: hex::encode(signed.canonical_bytes()),
+        canonical_transaction_hex: hex::encode(&canonical_tx_bytes),
+        command_fingerprint_hex: hex::encode(signed.command_fingerprint()),
+        commitment_id: signed.commitment.commitment_id.to_hex(),
+        commitment_hash_hex: hex::encode(signed.payload_hash()),
+        applied_command_logical_key: paper_raid_finality_applied_command_key(signed.command_id)?,
+        outer_envelope_payload_hash_hex: envelope.payload_hash_hex.clone(),
+        comet_tx_hash_hex: hex::encode(comet_tx_hash(&transaction_bytes)),
+    })?;
+    write_new(signed_command_output, &signed_output)?;
+    if let Err(error) = write_new(transaction_output, &transaction_bytes) {
+        fs::remove_file(signed_command_output).with_context(|| {
+            format!(
+                "remove incomplete Paper Raid signed command output {}",
+                signed_command_output.display()
+            )
+        })?;
+        return Err(error);
+    }
+    println!(
+        "{}",
+        serde_json::to_string(&json!({
+            "schema":"trnm_paper_raid_finality_sign_and_wrap_result_v2",
+            "signed_command_path":signed_command_output,
+            "transaction_path":transaction_output,
+            "command_id":signed.command_id.to_hex(),
+            "command_fingerprint_hex":hex::encode(signed.command_fingerprint()),
+            "commitment_id":signed.commitment.commitment_id.to_hex(),
+            "commitment_hash_hex":hex::encode(signed.payload_hash()),
+            "applied_command_logical_key":paper_raid_finality_applied_command_key(signed.command_id)?,
+            "public_key_hex":hex::encode(signing_key.verifying_key().to_bytes()),
+            "comet_tx_hash_hex":hex::encode(comet_tx_hash(&transaction_bytes))
+        }))?
+    );
+    Ok(())
+}
+
+fn paper_raid_v3_pre_v7_artifact(
+    signing_input: &Path,
+    private_key: &Path,
+    signed_command_output: &Path,
+    transaction_output: &Path,
+) -> Result<()> {
+    ensure!(
+        signed_command_output != transaction_output,
+        "signed command and transaction outputs must be distinct"
+    );
+    let input: PaperRaidSignAndWrapInputV3 =
+        serde_json::from_slice(&read_bounded(signing_input, MAX_BINARY_EVIDENCE_BYTES)?)
+            .with_context(|| format!("decode signing input {}", signing_input.display()))?;
+    ensure!(
+        input.schema == "trnm_paper_raid_finality_pre_v7_artifact_input_v3",
+        "unsupported Paper Raid V3 pre-v7 artifact input schema"
+    );
+    ensure!(
+        input.expires_at_unix_ms > input.issued_at_unix_ms
+            && input
+                .expires_at_unix_ms
+                .saturating_sub(input.issued_at_unix_ms)
+                <= 300_000,
+        "Paper Raid V3 outer-envelope lifetime must be 1..=300000 milliseconds"
+    );
+    let command_id: [u8; 32] =
+        decode_canonical_hex("command_id_hex", &input.command_id_hex, Some(32), 32)?
+            .try_into()
+            .map_err(|_| anyhow!("command_id_hex must encode 32 bytes"))?;
+    let commitment_bytes = decode_canonical_hex(
+        "commitment_cbor_hex",
+        &input.commitment_cbor_hex,
+        None,
+        256 * 1024,
+    )?;
+    let commitment = PaperRaidFinalityCommitmentV3::from_canonical_bytes(&commitment_bytes)
+        .context("decode canonical Paper Raid V3 finality commitment")?;
+    ensure!(
+        !commitment.score_eligible
+            && !commitment.ranking_eligible
+            && !commitment.reward_eligible
+            && !commitment.economic_eligible,
+        "Paper Raid V3 candidate signing keeps all settlement eligibility locked"
+    );
+    let signing_key = read_signing_key(private_key)?;
+    let signed = SignedPaperRaidFinalityCommandV3::sign(
+        input.chain_id,
+        ExternalKey::from_bytes(command_id),
+        input.signer_did,
+        input.nonce,
+        commitment,
+        &signing_key,
+    )
+    .context("sign Paper Raid V3 finality command")?;
+    let canonical_tx = CanonicalPaperRaidFinalityTxV3::from_signed_command(
+        &signed,
+        input.max_gas,
+        input.fee_limit,
+    )
+    .context("build canonical Paper Raid V3 finality transaction")?;
+    let canonical_tx_bytes = canonical_tx.canonical_bytes()?;
+    let envelope = SignedCommandEnvelopeV1::sign(
+        signed.chain_id.clone(),
+        signed.command_id.to_hex(),
+        signed.signer_did.clone(),
+        "hepta",
+        signed.nonce,
+        input.issued_at_unix_ms,
+        input.expires_at_unix_ms,
+        CANONICAL_PAPER_RAID_FINALITY_TX_PAYLOAD_TYPE_V3,
+        &canonical_tx_bytes,
+        &signing_key,
+    )?;
+    envelope
+        .validate_at(&signed.chain_id, now_unix_ms()?)
+        .context("validate Paper Raid V3 outer envelope against the current clock")?;
+    let transaction_bytes = envelope.to_wire_bytes()?;
+    let signed_output = serde_json::to_vec(&PaperRaidSignedCommandOutputV3 {
+        schema: "trnm_paper_raid_pre_v7_signed_command_artifact_v3".to_string(),
+        required_consensus_app_version: 7,
+        broadcastable_on_app_v6: false,
+        chain_id: signed.chain_id.clone(),
+        command_id: signed.command_id.to_hex(),
+        signer_did: signed.signer_did.clone(),
+        nonce: signed.nonce,
+        public_key_hex: hex::encode(signed.public_key),
+        signed_command_cbor_hex: hex::encode(signed.canonical_bytes()),
+        canonical_transaction_hex: hex::encode(&canonical_tx_bytes),
+        command_fingerprint_hex: hex::encode(signed.command_fingerprint()),
+        commitment_id: signed.commitment.commitment_id.to_hex(),
+        commitment_hash_hex: hex::encode(signed.payload_hash()),
+        applied_command_logical_key: paper_raid_finality_applied_command_key_v3(signed.command_id)?,
+        outer_envelope_payload_hash_hex: envelope.payload_hash_hex.clone(),
+        comet_tx_hash_hex: hex::encode(comet_tx_hash(&transaction_bytes)),
+    })?;
+    write_new(signed_command_output, &signed_output)?;
+    if let Err(error) = write_new(transaction_output, &transaction_bytes) {
+        fs::remove_file(signed_command_output).with_context(|| {
+            format!(
+                "remove incomplete Paper Raid V3 signed command output {}",
+                signed_command_output.display()
+            )
+        })?;
+        return Err(error);
+    }
+    println!(
+        "{}",
+        serde_json::to_string(&json!({
+            "schema":"trnm_paper_raid_finality_pre_v7_artifact_result_v3",
+            "required_consensus_app_version":7,
+            "broadcastable_on_app_v6":false,
+            "status":"pre_v7_offline_artifact_only",
+            "signed_command_path":signed_command_output,
+            "transaction_path":transaction_output,
+            "command_id":signed.command_id.to_hex(),
+            "command_fingerprint_hex":hex::encode(signed.command_fingerprint()),
+            "commitment_id":signed.commitment.commitment_id.to_hex(),
+            "commitment_hash_hex":hex::encode(signed.payload_hash()),
+            "applied_command_logical_key":paper_raid_finality_applied_command_key_v3(signed.command_id)?,
+            "public_key_hex":hex::encode(signing_key.verifying_key().to_bytes()),
+            "comet_tx_hash_hex":hex::encode(comet_tx_hash(&transaction_bytes))
+        }))?
+    );
+    Ok(())
+}
+
+fn fixture_tx(private_key: &Path, output: &Path) -> Result<()> {
+    let signing_key = read_signing_key(private_key)?;
     let signed = SignedResearchCommandV1::sign(
         "trnm-comet-spike".to_string(),
         external_key("trnm.command", "single-node-receipt-v2")?,
@@ -524,7 +995,14 @@ fn assemble_and_verify(
     evidence_dir: &Path,
     receipt_output: &Path,
     trusted_execution_header_hash_hex: &str,
+    trust_anchor_output: Option<&Path>,
 ) -> Result<()> {
+    if let Some(trust_anchor_output) = trust_anchor_output {
+        ensure!(
+            receipt_output != trust_anchor_output,
+            "receipt and trust-anchor outputs must be distinct"
+        );
+    }
     ensure!(
         evidence_dir.is_absolute()
             && evidence_dir.is_dir()
@@ -654,6 +1132,7 @@ fn assemble_and_verify(
         Duration::from_secs(CLOCK_DRIFT_SECONDS),
     )?;
     let trust_anchor_hash_hex = trust_anchor_wire.anchor_hash_hex.clone();
+    let trust_anchor_bytes = trust_anchor_wire.canonical_bytes()?;
     let trust_anchor = ValidatedCometBftTrustAnchorV1::try_from(trust_anchor_wire)?;
     let outcome = verify_cometbft_apphash_finality_receipt_v2_with_trust_anchor(
         &receipt,
@@ -665,16 +1144,34 @@ fn assemble_and_verify(
             "public Receipt V2 verifier did not return Final: {outcome:?}"
         ));
     };
+    let domain_command_version = match &verified.domain_command {
+        VerifiedCometBftDomainCommandV2::ResearchV1(_) => "research_v1",
+        VerifiedCometBftDomainCommandV2::PaperRaidFinalityV2(_) => "paper_raid_finality_v2",
+        VerifiedCometBftDomainCommandV2::PaperRaidFinalityV3(_) => "paper_raid_finality_v3",
+    };
     let receipt_bytes = receipt.canonical_bytes()?;
     write_new(receipt_output, &receipt_bytes)?;
+    if let Some(trust_anchor_output) = trust_anchor_output {
+        if let Err(error) = write_new(trust_anchor_output, &trust_anchor_bytes) {
+            fs::remove_file(receipt_output).with_context(|| {
+                format!(
+                    "remove incomplete receipt output {}",
+                    receipt_output.display()
+                )
+            })?;
+            return Err(error);
+        }
+    }
     println!(
         "{}",
         serde_json::to_string(&json!({
             "schema":"trnm_research_receipt_v2_assembly_result_v1",
             "status":"final",
             "receipt_path":receipt_output,
+            "trust_anchor_path":trust_anchor_output,
             "receipt_hash_hex":verified.receipt_hash_hex,
             "trust_anchor_hash_hex":trust_anchor_hash_hex,
+            "domain_command_version":domain_command_version,
             "command_id":verified.command_id,
             "execution_height":verified.execution_height,
             "commitment_height":verified.commitment_height,
@@ -691,11 +1188,34 @@ fn run() -> Result<()> {
         Some("fixture-tx") if arguments.len() == 4 => {
             fixture_tx(Path::new(&arguments[2]), Path::new(&arguments[3]))
         }
-        Some("assemble-and-verify") if arguments.len() == 5 => assemble_and_verify(
+        Some("sign-and-wrap") if arguments.len() == 6 => sign_and_wrap(
             Path::new(&arguments[2]),
             Path::new(&arguments[3]),
-            &arguments[4],
+            Path::new(&arguments[4]),
+            Path::new(&arguments[5]),
         ),
+        Some("paper-raid-v2-sign-and-wrap") if arguments.len() == 6 => paper_raid_v2_sign_and_wrap(
+            Path::new(&arguments[2]),
+            Path::new(&arguments[3]),
+            Path::new(&arguments[4]),
+            Path::new(&arguments[5]),
+        ),
+        Some("paper-raid-v3-pre-v7-artifact") if arguments.len() == 6 => {
+            paper_raid_v3_pre_v7_artifact(
+                Path::new(&arguments[2]),
+                Path::new(&arguments[3]),
+                Path::new(&arguments[4]),
+                Path::new(&arguments[5]),
+            )
+        }
+        Some("assemble-and-verify") if arguments.len() == 5 || arguments.len() == 6 => {
+            assemble_and_verify(
+                Path::new(&arguments[2]),
+                Path::new(&arguments[3]),
+                &arguments[4],
+                arguments.get(5).map(Path::new),
+            )
+        }
         _ => Err(usage(&arguments[0])),
     }
 }
@@ -704,5 +1224,292 @@ fn main() {
     if let Err(error) = run() {
         eprintln!("TRNM_RESEARCH_RECEIPT_V2_FAILED error={error:#}");
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::PathBuf;
+
+    use trnm_research_protocol::{
+        ObjectRefV1, PaperRaidAppealStatusV2, PaperRaidAppealStatusV3, ResearchObjectKind,
+    };
+
+    use super::*;
+
+    struct TestDirectory(PathBuf);
+
+    impl TestDirectory {
+        fn new() -> Self {
+            let unique = format!(
+                "trnm-paper-raid-signing-test-{}-{}",
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            );
+            let path = std::env::temp_dir().join(unique);
+            fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+
+        fn path(&self, name: &str) -> PathBuf {
+            self.0.join(name)
+        }
+    }
+
+    impl Drop for TestDirectory {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn key(byte: u8) -> ExternalKey {
+        ExternalKey::from_bytes([byte; 32])
+    }
+
+    fn commitment_v3() -> PaperRaidFinalityCommitmentV3 {
+        PaperRaidFinalityCommitmentV3 {
+            commitment_id: key(1),
+            paper_project_id: key(2),
+            submission_id: key(3),
+            match_evidence_ref: ObjectRefV1::new(ResearchObjectKind::MatchEvidence, key(4), 1),
+            release_candidate_hash: [5; 32],
+            paper_bundle_hash: [6; 32],
+            submission_commitment_hash: [7; 32],
+            author_consent_set_hash: [8; 32],
+            tolerance_policy_hash: [9; 32],
+            evaluation_id: key(10),
+            evaluation_hash: [11; 32],
+            evaluation_score_bps: 8_500,
+            evaluation_accepted: true,
+            evaluation_completed_at_unix_s: 1_753_449_400,
+            latest_reproduction_id: key(12),
+            latest_reproduction_hash: [13; 32],
+            latest_reproduction_accepted: true,
+            latest_reproduction_completed_at_unix_s: 1_753_449_450,
+            evaluation_supersedes: None,
+            evaluation_superseded_by: None,
+            reproduction_superseded_by: None,
+            appeal_status: PaperRaidAppealStatusV3::ClosedNoAppeal,
+            appeal_id: None,
+            appealed_evaluation_id: None,
+            appeal_resolution_hash: None,
+            appeal_window_closes_at_unix_s: 1_753_449_500,
+            settlement_policy_hash: [14; 32],
+            scientific_finality: true,
+            score_eligible: false,
+            ranking_eligible: false,
+            reward_eligible: false,
+            economic_eligible: false,
+            finalized_at_unix_s: 1_753_449_501,
+        }
+    }
+
+    fn commitment_v2() -> PaperRaidFinalityCommitmentV2 {
+        let v3 = commitment_v3();
+        PaperRaidFinalityCommitmentV2 {
+            commitment_id: v3.commitment_id,
+            paper_project_id: v3.paper_project_id,
+            submission_id: v3.submission_id,
+            match_evidence_ref: v3.match_evidence_ref,
+            release_candidate_hash: v3.release_candidate_hash,
+            paper_bundle_hash: v3.paper_bundle_hash,
+            submission_commitment_hash: v3.submission_commitment_hash,
+            author_consent_set_hash: v3.author_consent_set_hash,
+            tolerance_policy_hash: v3.tolerance_policy_hash,
+            evaluation_id: v3.evaluation_id,
+            evaluation_hash: v3.evaluation_hash,
+            evaluation_score_bps: v3.evaluation_score_bps,
+            evaluation_accepted: v3.evaluation_accepted,
+            evaluation_completed_at_unix_s: v3.evaluation_completed_at_unix_s,
+            latest_reproduction_id: v3.latest_reproduction_id,
+            latest_reproduction_hash: v3.latest_reproduction_hash,
+            latest_reproduction_accepted: v3.latest_reproduction_accepted,
+            latest_reproduction_completed_at_unix_s: v3.latest_reproduction_completed_at_unix_s,
+            evaluation_superseded_by: v3.evaluation_superseded_by,
+            reproduction_superseded_by: v3.reproduction_superseded_by,
+            appeal_status: PaperRaidAppealStatusV2::ClosedNoAppeal,
+            appeal_id: None,
+            appeal_resolution_hash: None,
+            appeal_window_closes_at_unix_s: v3.appeal_window_closes_at_unix_s,
+            settlement_policy_hash: v3.settlement_policy_hash,
+            scientific_finality: v3.scientific_finality,
+            score_eligible: v3.score_eligible,
+            ranking_eligible: v3.ranking_eligible,
+            reward_eligible: v3.reward_eligible,
+            economic_eligible: v3.economic_eligible,
+            finalized_at_unix_s: v3.finalized_at_unix_s,
+        }
+    }
+
+    #[test]
+    fn pre_v7_paper_raid_v3_lane_marks_artifacts_unbroadcastable_on_app_v6() {
+        let directory = TestDirectory::new();
+        let input_path = directory.path("input.json");
+        let private_key_path = directory.path("private-key.hex");
+        let signed_output_path = directory.path("signed-command.json");
+        let transaction_path = directory.path("transaction.json");
+        let now = now_unix_ms().unwrap();
+        let mut input = PaperRaidSignAndWrapInputV3 {
+            schema: "trnm_paper_raid_finality_pre_v7_artifact_input_v3".to_string(),
+            chain_id: "trnm-test-1".to_string(),
+            command_id_hex: hex::encode([0x31; 32]),
+            signer_did: "did:trnm:hepta-authority".to_string(),
+            nonce: 9,
+            max_gas: 300_000,
+            fee_limit: 1_000_000,
+            issued_at_unix_ms: now.saturating_sub(1_000),
+            expires_at_unix_ms: now.saturating_add(60_000),
+            commitment_cbor_hex: hex::encode(commitment_v3().canonical_bytes()),
+        };
+        fs::write(&input_path, serde_json::to_vec(&input).unwrap()).unwrap();
+        fs::write(&private_key_path, hex::encode([0x55; 32])).unwrap();
+
+        paper_raid_v3_pre_v7_artifact(
+            &input_path,
+            &private_key_path,
+            &signed_output_path,
+            &transaction_path,
+        )
+        .unwrap();
+
+        let output: PaperRaidSignedCommandOutputV3 =
+            serde_json::from_slice(&fs::read(&signed_output_path).unwrap()).unwrap();
+        assert_eq!(output.required_consensus_app_version, 7);
+        assert!(!output.broadcastable_on_app_v6);
+        let signed_bytes = decode_canonical_hex(
+            "signed_command_cbor_hex",
+            &output.signed_command_cbor_hex,
+            None,
+            256 * 1024,
+        )
+        .unwrap();
+        let signed = SignedPaperRaidFinalityCommandV3::from_canonical_bytes(&signed_bytes).unwrap();
+        assert_eq!(signed.command_id.to_hex(), input.command_id_hex);
+        assert_eq!(signed.commitment, commitment_v3());
+        assert_eq!(
+            output.commitment_hash_hex,
+            hex::encode(signed.payload_hash())
+        );
+        assert_eq!(
+            output.applied_command_logical_key,
+            paper_raid_finality_applied_command_key_v3(signed.command_id).unwrap()
+        );
+
+        let transaction_bytes = fs::read(&transaction_path).unwrap();
+        let envelope =
+            SignedCommandEnvelopeV1::from_canonical_wire_bytes(&transaction_bytes).unwrap();
+        envelope.validate_at(&input.chain_id, now).unwrap();
+        assert_eq!(
+            envelope.payload_type,
+            CANONICAL_PAPER_RAID_FINALITY_TX_PAYLOAD_TYPE_V3
+        );
+        let canonical_tx_bytes = envelope.payload_bytes().unwrap();
+        assert_eq!(
+            hex::encode(&canonical_tx_bytes),
+            output.canonical_transaction_hex
+        );
+        let canonical_tx =
+            CanonicalPaperRaidFinalityTxV3::from_canonical_bytes(&canonical_tx_bytes).unwrap();
+        assert_eq!(
+            canonical_tx.signed_paper_raid_finality_command().unwrap(),
+            signed
+        );
+        assert_eq!(
+            output.comet_tx_hash_hex,
+            hex::encode(comet_tx_hash(&transaction_bytes))
+        );
+        assert_eq!(
+            fs::metadata(&signed_output_path)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+
+        let mut unlocked = commitment_v3();
+        unlocked.score_eligible = true;
+        input.commitment_cbor_hex = hex::encode(unlocked.canonical_bytes());
+        let unlocked_input_path = directory.path("unlocked-input.json");
+        fs::write(&unlocked_input_path, serde_json::to_vec(&input).unwrap()).unwrap();
+        let error = paper_raid_v3_pre_v7_artifact(
+            &unlocked_input_path,
+            &private_key_path,
+            &directory.path("unlocked-signed.json"),
+            &directory.path("unlocked-transaction.json"),
+        )
+        .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("keeps all settlement eligibility locked"));
+    }
+
+    #[test]
+    fn app_v6_v2_signing_lane_remains_explicit_and_never_reinterprets_as_v3() {
+        let directory = TestDirectory::new();
+        let input_path = directory.path("v2-input.json");
+        let private_key_path = directory.path("v2-private-key.hex");
+        let signed_output_path = directory.path("v2-signed-command.json");
+        let transaction_path = directory.path("v2-transaction.json");
+        let now = now_unix_ms().unwrap();
+        let input = PaperRaidSignAndWrapInputV2 {
+            schema: "trnm_paper_raid_finality_sign_and_wrap_input_v2".to_string(),
+            chain_id: "trnm-test-1".to_string(),
+            command_id_hex: hex::encode([0x32; 32]),
+            signer_did: "did:trnm:hepta-authority".to_string(),
+            nonce: 10,
+            max_gas: 300_000,
+            fee_limit: 1_000_000,
+            issued_at_unix_ms: now.saturating_sub(1_000),
+            expires_at_unix_ms: now.saturating_add(60_000),
+            commitment_cbor_hex: hex::encode(commitment_v2().canonical_bytes()),
+        };
+        fs::write(&input_path, serde_json::to_vec(&input).unwrap()).unwrap();
+        fs::write(&private_key_path, hex::encode([0x56; 32])).unwrap();
+
+        paper_raid_v2_sign_and_wrap(
+            &input_path,
+            &private_key_path,
+            &signed_output_path,
+            &transaction_path,
+        )
+        .unwrap();
+        let output: PaperRaidSignedCommandOutputV2 =
+            serde_json::from_slice(&fs::read(&signed_output_path).unwrap()).unwrap();
+        assert_eq!(output.schema, "trnm_paper_raid_signed_command_output_v2");
+        let signed_bytes = decode_canonical_hex(
+            "signed_command_cbor_hex",
+            &output.signed_command_cbor_hex,
+            None,
+            256 * 1024,
+        )
+        .unwrap();
+        let signed = SignedPaperRaidFinalityCommandV2::from_canonical_bytes(&signed_bytes).unwrap();
+        assert_eq!(signed.commitment, commitment_v2());
+        assert!(SignedPaperRaidFinalityCommandV3::from_canonical_bytes(&signed_bytes).is_err());
+        assert_eq!(
+            output.applied_command_logical_key,
+            paper_raid_finality_applied_command_key(signed.command_id).unwrap()
+        );
+
+        let transaction_bytes = fs::read(&transaction_path).unwrap();
+        let envelope =
+            SignedCommandEnvelopeV1::from_canonical_wire_bytes(&transaction_bytes).unwrap();
+        assert_eq!(
+            envelope.payload_type,
+            CANONICAL_PAPER_RAID_FINALITY_TX_PAYLOAD_TYPE_V2
+        );
+        let canonical_tx_bytes = envelope.payload_bytes().unwrap();
+        let canonical_tx =
+            CanonicalPaperRaidFinalityTxV2::from_canonical_bytes(&canonical_tx_bytes).unwrap();
+        assert_eq!(
+            canonical_tx.signed_paper_raid_finality_command().unwrap(),
+            signed
+        );
+        assert!(CanonicalPaperRaidFinalityTxV3::from_canonical_bytes(&canonical_tx_bytes).is_err());
     }
 }
