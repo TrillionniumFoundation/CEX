@@ -1,8 +1,39 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$repo_dir"
+
+release_revision="$(git rev-parse --verify HEAD^{commit})"
+release_tree="$(git rev-parse --verify "$release_revision^{tree}")"
+
+verify_release_source_unchanged() {
+  local observed_revision observed_tree observed_repo_root observed_status
+
+  observed_revision="$(git rev-parse --verify HEAD^{commit})"
+  observed_tree="$(git rev-parse --verify "$observed_revision^{tree}")"
+  observed_repo_root="$(git rev-parse --show-toplevel)"
+  observed_status="$(git status --porcelain=v1 --untracked-files=all)"
+
+  if [[ "$observed_repo_root" != "$repo_dir" ]]; then
+    echo "Hepta release gate repository identity changed" >&2
+    return 1
+  fi
+  if [[ "$observed_revision" != "$release_revision" ]]; then
+    echo "Hepta release gate HEAD changed while evidence was collected" >&2
+    return 1
+  fi
+  if [[ "$observed_tree" != "$release_tree" ]]; then
+    echo "Hepta release gate source tree changed while evidence was collected" >&2
+    return 1
+  fi
+  if [[ -n "$observed_status" ]]; then
+    echo "Hepta release gate requires a clean worktree, including untracked files" >&2
+    return 1
+  fi
+}
+
+verify_release_source_unchanged
 
 : "${HEPTA_TEST_DATABASE_URL:?HEPTA_TEST_DATABASE_URL is required for the live PostgreSQL release gate}"
 cargo_gate="${HEPTA_CARGO_LOCK_FILE:-/tmp/trnm-paper-raid-cargo-gate.lock}"
@@ -251,3 +282,4 @@ cargo_locked fmt --all -- --check
 cargo_locked test --locked -p hepta-research-league
 cargo_locked check --locked --workspace
 cargo_locked clippy --locked --workspace --all-targets -- -D warnings
+verify_release_source_unchanged

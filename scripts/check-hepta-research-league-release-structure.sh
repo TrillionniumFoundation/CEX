@@ -636,6 +636,113 @@ def require_fragments(relative_path, fragments):
     return text
 
 
+def validate_release_source_identity_gate(text):
+    expected_start = r'''#!/usr/bin/env bash
+set -euo pipefail
+
+repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$repo_dir"
+
+release_revision="$(git rev-parse --verify HEAD^{commit})"
+release_tree="$(git rev-parse --verify "$release_revision^{tree}")"
+
+verify_release_source_unchanged() {
+  local observed_revision observed_tree observed_repo_root observed_status
+
+  observed_revision="$(git rev-parse --verify HEAD^{commit})"
+  observed_tree="$(git rev-parse --verify "$observed_revision^{tree}")"
+  observed_repo_root="$(git rev-parse --show-toplevel)"
+  observed_status="$(git status --porcelain=v1 --untracked-files=all)"
+
+  if [[ "$observed_repo_root" != "$repo_dir" ]]; then
+    echo "Hepta release gate repository identity changed" >&2
+    return 1
+  fi
+  if [[ "$observed_revision" != "$release_revision" ]]; then
+    echo "Hepta release gate HEAD changed while evidence was collected" >&2
+    return 1
+  fi
+  if [[ "$observed_tree" != "$release_tree" ]]; then
+    echo "Hepta release gate source tree changed while evidence was collected" >&2
+    return 1
+  fi
+  if [[ -n "$observed_status" ]]; then
+    echo "Hepta release gate requires a clean worktree, including untracked files" >&2
+    return 1
+  fi
+}
+
+verify_release_source_unchanged
+
+: "${HEPTA_TEST_DATABASE_URL:?HEPTA_TEST_DATABASE_URL is required for the live PostgreSQL release gate}"
+'''
+    if not text.startswith(expected_start):
+        fail("release gate does not begin with the exact clean Git identity boundary")
+    expected_end = r'''cargo_locked fmt --all -- --check
+cargo_locked test --locked -p hepta-research-league
+cargo_locked check --locked --workspace
+cargo_locked clippy --locked --workspace --all-targets -- -D warnings
+verify_release_source_unchanged'''
+    if not text.rstrip().endswith(expected_end):
+        fail("release gate does not end by re-verifying the exact clean Git identity")
+    if text.count("verify_release_source_unchanged() {") != 1:
+        fail("release gate clean Git identity verifier definition is not unique")
+    if text.count("\nverify_release_source_unchanged\n") != 2:
+        fail("release gate must invoke the clean Git identity verifier exactly at start and end")
+    if text.count("git status --porcelain=v1 --untracked-files=all") != 1:
+        fail("release gate clean check must include every untracked worktree path")
+
+
+release_script = (repo / "scripts/check-hepta-research-league-release.sh").read_text(
+    encoding="utf-8"
+)
+validate_release_source_identity_gate(release_script)
+release_gate_mutations = {
+    "initial check removed": release_script.replace(
+        "verify_release_source_unchanged\n\n: \"${HEPTA_TEST_DATABASE_URL",
+        "true\n\n: \"${HEPTA_TEST_DATABASE_URL",
+        1,
+    ),
+    "untracked files ignored": release_script.replace(
+        "git status --porcelain=v1 --untracked-files=all",
+        "git status --porcelain=v1 --untracked-files=no",
+        1,
+    ),
+    "HEAD comparison weakened": release_script.replace(
+        '[[ "$observed_revision" != "$release_revision" ]]',
+        '[[ "$observed_revision" != "$observed_revision" ]]',
+        1,
+    ),
+    "tree comparison weakened": release_script.replace(
+        '[[ "$observed_tree" != "$release_tree" ]]',
+        '[[ "$observed_tree" != "$observed_tree" ]]',
+        1,
+    ),
+    "dirty check ignored": release_script.replace(
+        'if [[ -n "$observed_status" ]]; then',
+        'if [[ -z "$observed_status" ]]; then',
+        1,
+    ),
+    "final check removed": release_script.rsplit(
+        "verify_release_source_unchanged", 1
+    )[0]
+    + "true\n",
+    "final check failure ignored": release_script.rsplit(
+        "verify_release_source_unchanged", 1
+    )[0]
+    + "verify_release_source_unchanged || true\n",
+}
+for mutation_name, mutation in release_gate_mutations.items():
+    if mutation == release_script:
+        fail(f"release source identity negative mutation was not applied: {mutation_name}")
+    try:
+        validate_release_source_identity_gate(mutation)
+    except AssertionError:
+        pass
+    else:
+        fail(f"release source identity negative mutation was accepted: {mutation_name}")
+
+
 runtime_script = require_fragments(
     "scripts/generate-hepta-research-league-runtime-sbom.sh",
     (
