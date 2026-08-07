@@ -189,7 +189,7 @@ assert hepta["environment"]["HEPTA_TRNM_COMETBFT_TRUST_ANCHOR_HASHES_JSON"] == (
     "${HEPTA_TRNM_COMETBFT_TRUST_ANCHOR_HASHES_JSON:?Receipt V2 pinned trust-anchor hashes required}"
 )
 assert hepta["environment"]["HEPTA_TRNM_RECEIPT_V2_MAX_BODY_BYTES"] == (
-    "${HEPTA_TRNM_RECEIPT_V2_MAX_BODY_BYTES:-67108864}"
+    "${HEPTA_TRNM_RECEIPT_V2_MAX_BODY_BYTES:-32768}"
 )
 assert hepta["environment"]["HEPTA_TRNM_RECEIPT_V2_MAX_IN_FLIGHT"] == (
     "${HEPTA_TRNM_RECEIPT_V2_MAX_IN_FLIGHT:-1}"

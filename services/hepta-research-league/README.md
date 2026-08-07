@@ -52,7 +52,7 @@ HEPTA_TRNM_TOKEN='<different-trnm-secret>' \
 HEPTA_FINALITY_MODE='pending_only' \
 HEPTA_TRNM_VALIDATOR_SETS_JSON='[]' \
 HEPTA_TRNM_COMETBFT_TRUST_ANCHOR_HASHES_JSON='[]' \
-HEPTA_TRNM_RECEIPT_V2_MAX_BODY_BYTES='67108864' \
+HEPTA_TRNM_RECEIPT_V2_MAX_BODY_BYTES='32768' \
 HEPTA_TRNM_RECEIPT_V2_MAX_IN_FLIGHT='1' \
 HEPTA_DATABASE_URL='postgres://hepta:...@postgres/hepta' \
 cargo run -p hepta-research-league
@@ -72,17 +72,64 @@ and one or more pinned anchor hashes; two entries are the normal overlap state:
 HEPTA_FINALITY_MODE='verified' \
 HEPTA_TRNM_VALIDATOR_SETS_JSON='[]' \
 HEPTA_TRNM_COMETBFT_TRUST_ANCHOR_HASHES_JSON='["<active-64-lowercase-hex>","<next-64-lowercase-hex>"]' \
-HEPTA_TRNM_RECEIPT_V2_MAX_BODY_BYTES='67108864' \
+HEPTA_TRNM_RECEIPT_V2_MAX_BODY_BYTES='32768' \
 HEPTA_TRNM_RECEIPT_V2_MAX_IN_FLIGHT='1'
 ```
 
-`HEPTA_TRNM_RECEIPT_V2_MAX_BODY_BYTES` is the deployment ingress cap. It
-defaults to 64 MiB, must be positive, and cannot exceed Chain's frozen 128 MiB
-Receipt V2 wire maximum. `HEPTA_TRNM_RECEIPT_V2_MAX_IN_FLIGHT` defaults to one
-and is restricted to 1-4 concurrent authenticated verifications. Authentication
-and trust-anchor header validation run before permit acquisition or body
-polling; when all permits are occupied, the endpoint returns stable HTTP 503
-without reading the body.
+`HEPTA_TRNM_RECEIPT_V2_MAX_BODY_BYTES` is the Paper-bound deployment ingress
+cap. It defaults to 32 KiB and must be positive. Hepta rejects configuration
+above its 1 MiB deployment ceiling even though Chain's generic Receipt V2 wire
+type remains frozen at 128 MiB. The current live candidate Receipt is about 16
+KiB and the Paper commitment has no legal padding field; operators must not
+raise the cap by fabricating padded fixtures. Any cap increase requires a fresh
+cryptographically valid live Receipt, the 512 MiB cgroup resource gate, and new
+evidence. `HEPTA_TRNM_RECEIPT_V2_MAX_IN_FLIGHT` defaults to one and is
+restricted to 1-4 concurrent authenticated verifications. Authentication and
+trust-anchor header validation run before permit acquisition or body polling;
+when all permits are occupied, the endpoint returns stable HTTP 503 without
+reading the body.
+
+The 512 MiB deployment resource gate consumes fresh live Chain evidence. It
+fails closed when the fixture is missing, expired, below 40% of the 32 KiB
+default cap, padded, or changed after packaging:
+
+```bash
+scripts/generate-hepta-receipt-v2-resource-fixtures.py \
+  --anchor /absolute/live/cometbft-trust-anchor-v1.json \
+  --receipt /absolute/live/research-receipt-v2.json \
+  --output /absolute/new/resource-fixture
+
+HEPTA_IMAGE='<immutable-local-image-ref>' \
+HEPTA_EXPECTED_IMAGE_ID='sha256:<docker-config-digest>' \
+HEPTA_RESOURCE_GATE_FIXTURE_DIR=/absolute/new/resource-fixture \
+HEPTA_RESOURCE_GATE_EVIDENCE_DIR=/absolute/new/resource-evidence \
+scripts/check-hepta-receipt-v2-resource-gate.sh
+```
+
+The gate first snapshots every fixture through `O_NOFOLLOW` into a private,
+read-only directory. It then runs two actual container phases: canonical
+Compose defaults must accept the legal Receipt up to the unbound-local-command
+boundary and reject default+1, while a forced recreate with the explicit 1 MiB
+ceiling exercises the exact-size canonical-shape adversarial document, max+1,
+and a genuinely occupied verification permit. Both phases sample the concrete
+cgroup `memory.peak` against a fixed 384 MiB policy ceiling (an invocation may
+only tighten it), save each phase's `/ready` document, check `OOMKilled=false`
+and zero restarts, and require the sorted full-row snapshots of the explicitly
+protected League state, outbox, inbox, module-receipt, paper-room event, Nakama
+control, trust-anchor and Paper finality tables to remain unchanged after
+anchor admission. The paper-room cursor sequence is compared separately because
+PostgreSQL sequence advancement is not rolled back with table rows. This is a
+scoped resource-probe invariant, not a claim about every database table.
+
+The requested evidence parent must already exist, be owned by the invoking
+user, and not be group/world writable. Evidence is assembled through a retained
+descriptor for a private sibling staging inode. Before publication the gate
+removes every Compose container/network/volume and its private scratch and token
+files, validates the exact artifact set plus both digest manifests using
+`O_NOFOLLOW|O_NONBLOCK`, and only then performs a dirfd-relative atomic
+no-replace rename with a post-rename inode check. A successful vertical E2E is
+still required to prove the same legal Receipt can commit an already-bound
+Paper; this resource gate does not replace that state-machine evidence.
 
 `/ready` reports `finality_mode`, `pinned_cometbft_trust_anchor_hashes`,
 `trnm_receipt_v2_max_body_bytes`, and `trnm_receipt_v2_max_in_flight`; verified

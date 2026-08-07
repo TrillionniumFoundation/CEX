@@ -1711,7 +1711,6 @@ mod tests {
     use serde_json::json;
     use sqlx::{Connection, PgConnection};
     use tower::ServiceExt;
-    use trnm_finality_types::MAX_COMETBFT_RECEIPT_V2_WIRE_BYTES;
 
     use super::*;
     use crate::{
@@ -1724,7 +1723,8 @@ mod tests {
         },
         workflows::TrnmCommand,
         FinalityMode, SecurityConfig, DEFAULT_TRNM_RECEIPT_V2_MAX_BODY_BYTES,
-        DEFAULT_TRNM_RECEIPT_V2_MAX_IN_FLIGHT, MAX_TRNM_RECEIPT_V2_MAX_IN_FLIGHT,
+        DEFAULT_TRNM_RECEIPT_V2_MAX_IN_FLIGHT, MAX_TRNM_RECEIPT_V2_DEPLOYMENT_BODY_BYTES,
+        MAX_TRNM_RECEIPT_V2_MAX_IN_FLIGHT,
     };
 
     const ANCHOR_FILE: &[u8] = include_bytes!(
@@ -2319,13 +2319,13 @@ mod tests {
         );
         assert!(SecurityConfig::new("operator", "nakama")
             .with_trnm_receipt_v2_ingress_limits(
-                MAX_COMETBFT_RECEIPT_V2_WIRE_BYTES,
+                MAX_TRNM_RECEIPT_V2_DEPLOYMENT_BODY_BYTES,
                 MAX_TRNM_RECEIPT_V2_MAX_IN_FLIGHT,
             )
             .is_ok());
         for (max_body_bytes, max_in_flight) in [
             (0, 1),
-            (MAX_COMETBFT_RECEIPT_V2_WIRE_BYTES + 1, 1),
+            (MAX_TRNM_RECEIPT_V2_DEPLOYMENT_BODY_BYTES + 1, 1),
             (1, 0),
             (1, MAX_TRNM_RECEIPT_V2_MAX_IN_FLIGHT + 1),
         ] {

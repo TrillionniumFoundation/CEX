@@ -40,9 +40,18 @@ pub const OPERATOR_TOKEN_HEADER: &str = "x-hepta-operator-token";
 pub const NAKAMA_TOKEN_HEADER: &str = "x-hepta-nakama-token";
 pub const TRNM_TOKEN_HEADER: &str = "x-hepta-trnm-token";
 pub const USER_ASSERTION_HEADER: &str = "x-hepta-user-assertion";
-pub const DEFAULT_TRNM_RECEIPT_V2_MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
+// The upstream Receipt V2 wire type is intentionally generic and permits
+// 128 MiB documents.  Hepta's Paper-bound lane is much narrower: the current
+// live candidate receipts are about 16 KiB and have no opaque padding
+// field.  Keep a separate deployment budget so a protocol-legal document
+// cannot turn a 512 MiB Hepta container into an allocation oracle.
+pub const DEFAULT_TRNM_RECEIPT_V2_MAX_BODY_BYTES: usize = 32 * 1024;
+pub const MAX_TRNM_RECEIPT_V2_DEPLOYMENT_BODY_BYTES: usize = 1024 * 1024;
 pub const DEFAULT_TRNM_RECEIPT_V2_MAX_IN_FLIGHT: usize = 1;
 pub const MAX_TRNM_RECEIPT_V2_MAX_IN_FLIGHT: usize = 4;
+
+const _: () =
+    assert!(MAX_TRNM_RECEIPT_V2_DEPLOYMENT_BODY_BYTES <= MAX_COMETBFT_RECEIPT_V2_WIRE_BYTES);
 
 const TRNM_RECEIPT_V2_MAX_BODY_BYTES_ENV: &str = "HEPTA_TRNM_RECEIPT_V2_MAX_BODY_BYTES";
 const TRNM_RECEIPT_V2_MAX_IN_FLIGHT_ENV: &str = "HEPTA_TRNM_RECEIPT_V2_MAX_IN_FLIGHT";
@@ -82,9 +91,9 @@ fn validate_trnm_receipt_v2_ingress_limits(
     max_body_bytes: usize,
     max_in_flight: usize,
 ) -> Result<(), String> {
-    if max_body_bytes == 0 || max_body_bytes > MAX_COMETBFT_RECEIPT_V2_WIRE_BYTES {
+    if max_body_bytes == 0 || max_body_bytes > MAX_TRNM_RECEIPT_V2_DEPLOYMENT_BODY_BYTES {
         return Err(format!(
-            "{TRNM_RECEIPT_V2_MAX_BODY_BYTES_ENV} must be between 1 and {MAX_COMETBFT_RECEIPT_V2_WIRE_BYTES}"
+            "{TRNM_RECEIPT_V2_MAX_BODY_BYTES_ENV} must be between 1 and {MAX_TRNM_RECEIPT_V2_DEPLOYMENT_BODY_BYTES}"
         ));
     }
     if max_in_flight == 0 || max_in_flight > MAX_TRNM_RECEIPT_V2_MAX_IN_FLIGHT {
@@ -621,7 +630,7 @@ impl SecurityConfig {
         let trnm_receipt_v2_max_body_bytes = parse_bounded_positive_decimal_env(
             TRNM_RECEIPT_V2_MAX_BODY_BYTES_ENV,
             DEFAULT_TRNM_RECEIPT_V2_MAX_BODY_BYTES,
-            MAX_COMETBFT_RECEIPT_V2_WIRE_BYTES,
+            MAX_TRNM_RECEIPT_V2_DEPLOYMENT_BODY_BYTES,
         )?;
         let trnm_receipt_v2_max_in_flight = parse_bounded_positive_decimal_env(
             TRNM_RECEIPT_V2_MAX_IN_FLIGHT_ENV,

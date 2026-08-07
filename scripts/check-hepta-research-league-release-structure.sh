@@ -14,7 +14,7 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-for command_name in bash cmp python3 sha256sum; do
+for command_name in bash cmp python3 sha256sum timeout; do
   command -v "$command_name" >/dev/null 2>&1 || {
     echo "Hepta release structure gate requires $command_name" >&2
     exit 1
@@ -23,6 +23,7 @@ done
 
 shell_scripts=(
   scripts/build-hepta-research-league-image.sh
+  scripts/check-hepta-receipt-v2-resource-gate.sh
   scripts/check-hepta-research-league-compose-smoke.sh
   scripts/check-hepta-research-league-release.sh
   scripts/check-hepta-research-league-release-structure.sh
@@ -32,6 +33,7 @@ shell_scripts=(
 )
 python_scripts=(
   scripts/check-hepta-route-openapi-parity.py
+  scripts/generate-hepta-receipt-v2-resource-fixtures.py
   scripts/generate-hepta-research-league-sbom.py
   scripts/verify-hepta-research-league-rootfs-tar.py
   scripts/verify-hepta-research-league-sbom.py
@@ -39,6 +41,9 @@ python_scripts=(
 for relative_path in "${shell_scripts[@]}"; do
   bash -n "$repo_dir/$relative_path"
 done
+
+timeout 30s "$repo_dir/scripts/generate-hepta-receipt-v2-resource-fixtures.py" \
+  --self-test >/dev/null
 for relative_path in "${python_scripts[@]}"; do
   python3 -c 'import pathlib; path = pathlib.Path(__import__("sys").argv[1]); compile(path.read_text(encoding="utf-8"), str(path), "exec")' \
     "$repo_dir/$relative_path"
@@ -52,6 +57,7 @@ import os
 import pathlib
 import re
 import shlex
+import stat
 import subprocess
 import sys
 import tarfile
@@ -745,9 +751,20 @@ require_fragments(
     "docs/openapi/hepta-paper-raid-v2.yaml",
     (
         "HEPTA_TRNM_RECEIPT_V2_MAX_BODY_BYTES",
-        "64 MiB by default",
-        "never above the upstream 128 MiB wire maximum",
+        "32 KiB by default",
+        "never above Hepta's 1 MiB deployment ceiling",
         "Authenticated Receipt V2 verification capacity is busy; body was not read",
+    ),
+)
+require_fragments(
+    "services/hepta-research-league/README.md",
+    (
+        "fixed 384 MiB policy ceiling",
+        "paper-room cursor sequence",
+        "not be group/world writable",
+        "removes every Compose container/network/volume",
+        "O_NOFOLLOW|O_NONBLOCK",
+        "dirfd-relative atomic",
     ),
 )
 
@@ -768,10 +785,324 @@ require_fragments(
         "HEPTA_TRNM_COMETBFT_TRUST_ANCHOR_HASHES_JSON",
         "configured_receipt_cap",
         "configured_receipt_in_flight",
-        ".trnm_receipt_v2_max_body_bytes == 67108864",
+        ".trnm_receipt_v2_max_body_bytes == 32768",
         ".trnm_receipt_v2_max_in_flight == 1",
     ),
 )
+
+require_fragments(
+    "scripts/generate-hepta-receipt-v2-resource-fixtures.py",
+    (
+        "fresh legal receipt is not near the default cap",
+        "trust anchor is expired or too close to expiry",
+        "canonical-shape-adversarial.json",
+        "output directory must not already exist",
+        "bundle digest mismatch",
+        "DEFAULT_CAP = 32 * 1024",
+        "DEPLOYMENT_MAX = 1024 * 1024",
+        "duplicate canonical JSON members",
+        "a symlinked manifest",
+        "os.O_NONBLOCK",
+        "a FIFO manifest without blocking",
+        "a tampered trust anchor",
+        "a tampered legal receipt",
+        "a bundle with a missing file",
+        "a bundle with an extra file",
+        "fixture cap drift",
+        "an expired trust anchor under the freshness policy",
+    ),
+)
+require_fragments(
+    "scripts/check-hepta-receipt-v2-resource-gate.sh",
+    (
+        "HEPTA_RESOURCE_GATE_FIXTURE_DIR",
+        "HEPTA_RESOURCE_GATE_EVIDENCE_DIR",
+        '--verify-bundle "$fixture_dir"',
+        ".HostConfig.Memory",
+        "memory.peak",
+        ".State.OOMKilled",
+        ".RestartCount",
+        "queued_trnm_command_not_found",
+        "trnm_receipt_v2_structural_invalid",
+        "request_body_too_large",
+        "trnm_receipt_v2_verification_busy",
+        "assert_db_unchanged",
+        "private_sibling_staging_then_atomic_noreplace_rename",
+        "renameat2",
+        "dir_fd=parent_fd",
+        "os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW",
+        "os.O_NONBLOCK",
+        "resource evidence artifact set differs",
+        "publication_authority",
+        "post_rename_inode_verified",
+        "PAYLOAD.SHA256",
+        "SHA256SUMS",
+        "evidence_parent_identity",
+        'evidence_dir="/proc/$$/fd/$evidence_staging_fd"',
+        "compose-default-rendered.json",
+        "default-container-inspect.json",
+        "default-ready.json",
+        "max-ready.json",
+        "default_cgroup_path",
+        "HEPTA_RESOURCE_GATE_MAX_PEAK_BYTES may only tighten the 384 MiB ceiling",
+        "memory_peak_policy_ceiling_bytes",
+        "compose_project_absent",
+        "teardown_compose_project",
+        "cleanup_failed=true",
+        'if [[ "$original_status" -eq 0 && "$cleanup_failed" == true ]]',
+        "private_scratch_and_tokens_removed",
+        "fixture_snapshot_identity",
+        "chmod u+rwx -- \"$fixture_dir\"",
+        "exit \"$original_status\"",
+        "db-baseline-db-rows.json",
+        "db-baseline-db-sequences.json",
+        "hepta_paper_room_events_cursor_seq",
+        "jsonb_agg(to_jsonb(row_value) order by",
+    ),
+)
+resource_gate_text = (
+    repo / "scripts/check-hepta-receipt-v2-resource-gate.sh"
+).read_text(encoding="utf-8")
+publisher_marker = 'python3 - \\\n  "$evidence_parent_fd"'
+publisher_call = resource_gate_text.find(publisher_marker)
+if publisher_call < 0:
+    fail("Receipt V2 evidence publisher invocation is missing")
+publisher_source_start = resource_gate_text.find("<<'PY'\n", publisher_call)
+publisher_source_end = resource_gate_text.find(
+    "\nPY\nevidence_published=true", publisher_source_start
+)
+if publisher_source_start < 0 or publisher_source_end < 0:
+    fail("Receipt V2 evidence publisher source boundary drifted")
+publisher_source = resource_gate_text[
+    publisher_source_start + len("<<'PY'\n") : publisher_source_end
+]
+compile(publisher_source, "embedded-receipt-v2-evidence-publisher", "exec")
+
+
+def evidence_identity(metadata):
+    return (
+        f"{metadata.st_dev}:{metadata.st_ino}:{metadata.st_uid}:"
+        f"{metadata.st_gid}:{stat.S_IMODE(metadata.st_mode):o}"
+    )
+
+
+def write_private(path, payload):
+    path.write_bytes(payload)
+    path.chmod(0o600)
+
+
+def sha256_path(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def make_publisher_fixture(name):
+    parent = scratch / f"publisher-{name}"
+    parent.mkdir(mode=0o700)
+    staging = parent / ".published.staging.test"
+    staging.mkdir(mode=0o700)
+    target_name = "published"
+    payload_names = ["artifact.txt"]
+    write_private(staging / payload_names[0], b"bound evidence payload\n")
+    payload_manifest = (
+        f"{sha256_path(staging / payload_names[0])}  {payload_names[0]}\n"
+    ).encode("ascii")
+    write_private(staging / "PAYLOAD.SHA256", payload_manifest)
+    parent_identity = evidence_identity(parent.stat())
+    staging_identity = evidence_identity(staging.stat())
+    summary = {
+        "schema": "hepta.receipt_v2.resource_gate_evidence.v3",
+        "result": "pass",
+        "publication": "private_sibling_staging_then_atomic_noreplace_rename",
+        "publication_authority": {
+            "parent_dev_inode_owner_mode": parent_identity,
+            "evidence_dev_inode_owner_mode": staging_identity,
+            "target_basename": target_name,
+            "retained_dirfds": True,
+            "exact_artifact_set_verified": True,
+            "manifests_verified": True,
+            "post_rename_inode_verified": True,
+        },
+        "memory_peak_policy_ceiling_bytes": 402653184,
+        "enforced_max_peak_bytes": 402653184,
+        "provenance": {
+            "payload_manifest_sha256": hashlib.sha256(payload_manifest).hexdigest()
+        },
+        "teardown": {
+            "compose_project_absent": True,
+            "named_volumes_absent": True,
+            "private_scratch_and_tokens_removed": True,
+        },
+        "phases": {
+            "canonical_default": {"readiness_evidence": "default-ready.json"},
+            "deployment_max_override": {"readiness_evidence": "max-ready.json"},
+        },
+    }
+    write_private(
+        staging / "summary.json",
+        json.dumps(summary, sort_keys=True, separators=(",", ":")).encode("utf-8"),
+    )
+    sha_entries = sorted(payload_names + ["PAYLOAD.SHA256", "summary.json"])
+    sha_manifest = "".join(
+        f"{sha256_path(staging / entry)}  {entry}\n" for entry in sha_entries
+    ).encode("ascii")
+    write_private(staging / "SHA256SUMS", sha_manifest)
+    parent_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY)
+    staging_fd = os.open(staging, os.O_RDONLY | os.O_DIRECTORY)
+    return {
+        "parent": parent,
+        "staging": staging,
+        "target_name": target_name,
+        "payload_names": payload_names,
+        "parent_identity": parent_identity,
+        "staging_identity": staging_identity,
+        "parent_fd": parent_fd,
+        "staging_fd": staging_fd,
+    }
+
+
+def run_publisher(fixture):
+    arguments = [
+        sys.executable,
+        "-",
+        str(fixture["parent_fd"]),
+        str(fixture["staging_fd"]),
+        str(fixture["parent"]),
+        fixture["staging"].name,
+        fixture["target_name"],
+        fixture["parent_identity"],
+        fixture["staging_identity"],
+        str(os.geteuid()),
+        *fixture["payload_names"],
+    ]
+    return subprocess.run(
+        arguments,
+        input=publisher_source.encode("utf-8"),
+        capture_output=True,
+        check=False,
+        timeout=5,
+        pass_fds=(fixture["parent_fd"], fixture["staging_fd"]),
+    )
+
+
+def close_publisher_fixture(fixture):
+    os.close(fixture["staging_fd"])
+    os.close(fixture["parent_fd"])
+
+
+positive_publisher = make_publisher_fixture("positive")
+positive_staging_stat = positive_publisher["staging"].stat()
+try:
+    positive_result = run_publisher(positive_publisher)
+finally:
+    close_publisher_fixture(positive_publisher)
+if positive_result.returncode != 0:
+    fail(
+        "Receipt V2 evidence publisher positive fixture failed: "
+        + positive_result.stderr.decode("utf-8", errors="replace")
+    )
+positive_target = positive_publisher["parent"] / positive_publisher["target_name"]
+if (
+    not positive_target.is_dir()
+    or positive_publisher["staging"].exists()
+    or positive_target.stat().st_dev != positive_staging_stat.st_dev
+    or positive_target.stat().st_ino != positive_staging_stat.st_ino
+):
+    fail("Receipt V2 evidence publisher did not preserve the staging inode")
+
+for mutation in ("fifo", "symlink", "extra", "digest", "target"):
+    fixture = make_publisher_fixture(mutation)
+    artifact = fixture["staging"] / fixture["payload_names"][0]
+    if mutation == "fifo":
+        artifact.unlink()
+        os.mkfifo(artifact, mode=0o600)
+    elif mutation == "symlink":
+        artifact.unlink()
+        artifact.symlink_to("summary.json")
+    elif mutation == "extra":
+        write_private(fixture["staging"] / "unbound.txt", b"not manifested\n")
+    elif mutation == "digest":
+        write_private(artifact, b"tampered after manifest\n")
+    elif mutation == "target":
+        (fixture["parent"] / fixture["target_name"]).mkdir(mode=0o700)
+    try:
+        result = run_publisher(fixture)
+    finally:
+        close_publisher_fixture(fixture)
+    if result.returncode == 0:
+        fail(f"Receipt V2 evidence publisher accepted negative fixture: {mutation}")
+
+staging_swap = make_publisher_fixture("staging-swap")
+held_staging = staging_swap["parent"] / ".published.staging.held"
+staging_swap["staging"].rename(held_staging)
+staging_swap["staging"].mkdir(mode=0o700)
+try:
+    staging_swap_result = run_publisher(staging_swap)
+finally:
+    close_publisher_fixture(staging_swap)
+if staging_swap_result.returncode == 0:
+    fail("Receipt V2 evidence publisher accepted a replaced staging path")
+
+parent_swap = make_publisher_fixture("parent-swap")
+held_parent = parent_swap["parent"].with_name(parent_swap["parent"].name + "-held")
+parent_swap["parent"].rename(held_parent)
+parent_swap["parent"].mkdir(mode=0o700)
+try:
+    parent_swap_result = run_publisher(parent_swap)
+finally:
+    close_publisher_fixture(parent_swap)
+if parent_swap_result.returncode == 0:
+    fail("Receipt V2 evidence publisher accepted a replaced parent path")
+
+override_match = re.search(
+    r'cat >"\$override" <<EOF\n(?P<yaml>services:\n.*?\nvolumes:\n  pgdata: \{\})\nEOF',
+    resource_gate_text,
+    flags=re.DOTALL,
+)
+if override_match is None:
+    fail("Receipt V2 resource gate generated override YAML authority drifted")
+
+
+class UniqueKeyLoader(yaml.SafeLoader):
+    pass
+
+
+def construct_unique_mapping(loader, node, deep=False):
+    result = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        if key in result:
+            fail(f"Receipt V2 resource override contains duplicate YAML key: {key}")
+        result[key] = loader.construct_object(value_node, deep=deep)
+    return result
+
+
+UniqueKeyLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
+    construct_unique_mapping,
+)
+try:
+    yaml.load("services: {}\nservices: {}\n", Loader=UniqueKeyLoader)
+except AssertionError as error:
+    if "duplicate YAML key" not in str(error):
+        raise
+else:
+    fail("duplicate-reject YAML loader accepted a duplicate canonical Compose key")
+resource_override = yaml.load(override_match.group("yaml"), Loader=UniqueKeyLoader)
+if set(resource_override) != {"services", "volumes"}:
+    fail("Receipt V2 resource override top-level keys drifted")
+resource_services = resource_override.get("services", {})
+if set(resource_services) != {"postgres", "hepta"}:
+    fail("Receipt V2 resource override service keys drifted")
+if resource_services["postgres"].get("environment") != {
+    "POSTGRES_USER": "hepta_resource",
+    "POSTGRES_PASSWORD": "hepta_resource_password",
+    "POSTGRES_DB": "hepta_resource",
+}:
+    fail("Receipt V2 resource override PostgreSQL environment drifted")
+if resource_services["hepta"].get("environment") != {
+    "HEPTA_DATABASE_URL": "postgres://hepta_resource:hepta_resource_password@postgres:5432/hepta_resource"
+}:
+    fail("Receipt V2 resource override Hepta environment drifted")
 compose_smoke_text = (
     repo / "scripts/check-hepta-research-league-compose-smoke.sh"
 ).read_text(encoding="utf-8")
@@ -792,7 +1123,7 @@ for fragment in (
     if fragment not in compose_text:
         fail(f"Compose release contract is missing {fragment!r}")
 try:
-    compose_document = yaml.safe_load(compose_text)
+    compose_document = yaml.load(compose_text, Loader=UniqueKeyLoader)
 except yaml.YAMLError as error:
     fail(f"Compose release contract is invalid YAML: {error}")
 if not isinstance(compose_document, dict):
@@ -812,7 +1143,7 @@ if hepta_compose.get("environment", {}).get(
     fail("Compose must require and forward the Receipt V2 trust-anchor pin ring")
 if hepta_compose.get("environment", {}).get(
     "HEPTA_TRNM_RECEIPT_V2_MAX_BODY_BYTES"
-) != "${HEPTA_TRNM_RECEIPT_V2_MAX_BODY_BYTES:-67108864}":
+) != "${HEPTA_TRNM_RECEIPT_V2_MAX_BODY_BYTES:-32768}":
     fail("Compose must forward the conservative Receipt V2 ingress byte cap")
 if hepta_compose.get("environment", {}).get(
     "HEPTA_TRNM_RECEIPT_V2_MAX_IN_FLIGHT"

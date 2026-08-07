@@ -96,7 +96,7 @@ HEPTA_TRNM_TOKEN=hepta-gate-trnm-token
 HEPTA_FINALITY_MODE=verified
 HEPTA_TRNM_VALIDATOR_SETS_JSON=[]
 HEPTA_TRNM_COMETBFT_TRUST_ANCHOR_HASHES_JSON=["88b73fc902dd554c35b9a44ff582ec6d76e59085a2e4fdf14292183f4b3846d5","9999999999999999999999999999999999999999999999999999999999999999"]
-HEPTA_TRNM_RECEIPT_V2_MAX_BODY_BYTES=67108864
+HEPTA_TRNM_RECEIPT_V2_MAX_BODY_BYTES=32768
 HEPTA_TRNM_RECEIPT_V2_MAX_IN_FLIGHT=1
 EOF
 cat >"$override" <<EOF
@@ -139,7 +139,7 @@ configured_receipt_in_flight=$("${compose[@]}" config --format json | jq -er \
 [[ "$configured_image" == "$HEPTA_IMAGE" && "$configured_postgres" == "$postgres_image" ]]
 [[ "$configured_anchor_pins" == \
   '["88b73fc902dd554c35b9a44ff582ec6d76e59085a2e4fdf14292183f4b3846d5","9999999999999999999999999999999999999999999999999999999999999999"]' ]]
-[[ "$configured_receipt_cap" == 67108864 && "$configured_receipt_in_flight" == 1 ]]
+[[ "$configured_receipt_cap" == 32768 && "$configured_receipt_in_flight" == 1 ]]
 "${compose[@]}" config --quiet
 started=true
 "${compose[@]}" up -d postgres
@@ -193,7 +193,7 @@ jq -e '
   and .finality_mode == "verified"
   and .trusted_validator_sets == 0
   and .pinned_cometbft_trust_anchor_hashes == 2
-  and .trnm_receipt_v2_max_body_bytes == 67108864
+  and .trnm_receipt_v2_max_body_bytes == 32768
   and .trnm_receipt_v2_max_in_flight == 1
 ' "$body" >/dev/null
 
