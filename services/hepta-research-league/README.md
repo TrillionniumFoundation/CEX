@@ -125,12 +125,26 @@ scripts/generate-hepta-receipt-v2-resource-fixtures.py \
   --receipt /absolute/live/research-receipt-v2.json \
   --output /absolute/new/resource-fixture
 
-HEPTA_IMAGE='<immutable-local-image-ref>' \
+HEPTA_IMAGE='<local-candidate-tag>' \
 HEPTA_EXPECTED_IMAGE_ID='sha256:<docker-config-digest>' \
-HEPTA_RESOURCE_GATE_FIXTURE_DIR=/absolute/new/resource-fixture \
-HEPTA_RESOURCE_GATE_EVIDENCE_DIR=/absolute/new/resource-evidence \
+HEPTA_IMAGE_BUILD_STDOUT='/absolute/repo-external/image-build.stdout' \
+HEPTA_IMAGE_BUILD_STDERR='/absolute/repo-external/image-build.stderr' \
+HEPTA_RESOURCE_GATE_FIXTURE_DIR='/absolute/new/resource-fixture' \
+HEPTA_RESOURCE_GATE_EVIDENCE_DIR='/absolute/new/resource-evidence' \
 scripts/check-hepta-receipt-v2-resource-gate.sh
 ```
+
+The image-build stdout and stderr must come from the same successful immutable
+build. They must be absolute, caller-owned, single-linked regular files outside
+the repository under a caller-owned parent that is not group/world writable.
+The gate snapshots both streams through `O_NOFOLLOW`, extracts exactly one
+final `hepta.release_image_provenance.v3` object from stdout, and binds it to the
+clean Git revision/tree, Docker config digest, Dockerfile, dedicated Cargo lock,
+Rust toolchain, application SBOM, vendored Chain manifest, runtime binary,
+committed build script, and image labels. Published evidence includes the raw
+build streams, canonical provenance, resource artifacts, `PAYLOAD.SHA256`,
+`summary.json`, and `SHA256SUMS`. The reported `closure_manifest_sha256` is the
+SHA-256 of `SHA256SUMS`.
 
 The gate first snapshots every fixture through `O_NOFOLLOW` into a private,
 read-only directory. It then runs two actual container phases: canonical
@@ -476,19 +490,75 @@ cargo test -p hepta-research-league
 cargo check --workspace
 ```
 
-The production release gate requires a disposable live PostgreSQL database and
-fails closed when the URL is missing:
+The production release gate requires one fully clean committed checkout and an
+exclusive disposable PostgreSQL database. It pins the exact revision/tree and
+verifies HEAD, index flags/stages, tracked modes/raw bytes, worktree identity,
+and non-ignored untracked files before any database, SBOM, or Cargo work and
+again after the final Clippy gate. The test database is reset destructively; it
+must never be shared or production. The gate fails closed when its URL is
+missing:
 
 ```bash
-HEPTA_TEST_DATABASE_URL='postgres://.../hepta_release_test' \
-  bash scripts/check-hepta-research-league-release.sh
+HEPTA_TEST_DATABASE_URL='postgres://.../exclusive_hepta_release_test' \
+HEPTA_CARGO_LOCK_FILE='/tmp/trnm-paper-raid-cargo-gate.lock' \
+RUST_TEST_THREADS=1 \
+bash scripts/check-hepta-research-league-release.sh
 ```
 
-The final image/provenance gate uses only the clean committed archive. It
-requires the pinned base images to be present locally, builds and extracts the
-candidate twice, and invokes the real-image PostgreSQL restart smoke itself:
+The image gate uses only the clean committed archive. It requires the pinned
+base images to be present locally, builds and extracts the candidate twice,
+and invokes the real-image PostgreSQL restart smoke itself. Capture both output
+streams outside the repository; without them the later resource closure cannot
+admit or preserve the double-build provenance:
 
 ```bash
-HEPTA_IMAGE_REF='registry.example/hepta-research-league:<immutable-revision>' \
-  bash scripts/build-hepta-research-league-image.sh
+set -euo pipefail
+umask 077
+
+REV=$(git rev-parse --verify 'HEAD^{commit}')
+TREE=$(git rev-parse --verify "$REV^{tree}")
+test -z "$(git status --porcelain=v1 --untracked-files=all)"
+
+EVIDENCE_ROOT=$(mktemp -d "/var/tmp/hepta-release.${REV:0:12}.XXXXXXXX")
+chmod 700 "$EVIDENCE_ROOT"
+IMAGE_REF="trnm/hepta-research-league:$REV"
+
+HEPTA_IMAGE_REF="$IMAGE_REF" \
+  bash scripts/build-hepta-research-league-image.sh \
+  >"$EVIDENCE_ROOT/image-build.stdout" \
+  2>"$EVIDENCE_ROOT/image-build.stderr" &&
+IMAGE_ID=$(docker image inspect "$IMAGE_REF" --format '{{.Id}}') &&
+[[ "$IMAGE_ID" =~ ^sha256:[0-9a-f]{64}$ ]]
 ```
+
+Only after that `&&` chain succeeds may the operator generate a fresh live
+Chain anchor/Receipt fixture. Do not reuse a fixture created before the image
+build or one close to its freshness boundary. Complete and verify the single
+resource evidence closure with:
+
+```bash
+scripts/generate-hepta-receipt-v2-resource-fixtures.py \
+  --anchor '/absolute/new/live/cometbft-trust-anchor-v1.json' \
+  --receipt '/absolute/new/live/research-receipt-v2.json' \
+  --output "$EVIDENCE_ROOT/resource-fixture" &&
+HEPTA_IMAGE="$IMAGE_REF" \
+HEPTA_EXPECTED_IMAGE_ID="$IMAGE_ID" \
+HEPTA_IMAGE_BUILD_STDOUT="$EVIDENCE_ROOT/image-build.stdout" \
+HEPTA_IMAGE_BUILD_STDERR="$EVIDENCE_ROOT/image-build.stderr" \
+HEPTA_RESOURCE_GATE_FIXTURE_DIR="$EVIDENCE_ROOT/resource-fixture" \
+HEPTA_RESOURCE_GATE_EVIDENCE_DIR="$EVIDENCE_ROOT/resource-evidence" \
+  scripts/check-hepta-receipt-v2-resource-gate.sh &&
+(
+  cd "$EVIDENCE_ROOT/resource-evidence"
+  sha256sum --check SHA256SUMS
+) &&
+sha256sum "$EVIDENCE_ROOT/resource-evidence/SHA256SUMS"
+```
+
+The final SHA-256 must equal the gate's reported
+`closure_manifest_sha256`. It is a content-closure digest, not a signature.
+`HEPTA_EXPECTED_IMAGE_ID` is the local Docker config digest; `$IMAGE_REF`
+remains a mutable tag even when it contains the Git revision. The resource gate
+freezes that invocation only by checking both values. Registry publication and
+Integration must use `repository@sha256:<registry-manifest-or-index-digest>`,
+never the tag alone, while retaining the local config digest in the evidence.

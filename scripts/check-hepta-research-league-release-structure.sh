@@ -32,11 +32,14 @@ shell_scripts=(
   scripts/generate-hepta-research-league-runtime-sbom.sh
 )
 python_scripts=(
+  scripts/admit-hepta-image-build-evidence.py
   scripts/check-hepta-route-openapi-parity.py
   scripts/generate-hepta-receipt-v2-resource-fixtures.py
   scripts/generate-hepta-research-league-sbom.py
+  scripts/verify-hepta-clean-source.py
   scripts/verify-hepta-research-league-rootfs-tar.py
   scripts/verify-hepta-research-league-sbom.py
+  scripts/verify-hepta-clean-source.py
 )
 for relative_path in "${shell_scripts[@]}"; do
   bash -n "$repo_dir/$relative_path"
@@ -636,61 +639,375 @@ def require_fragments(relative_path, fragments):
     return text
 
 
-def validate_release_source_identity_gate(text):
-    expected_start = r'''#!/usr/bin/env bash
-set -euo pipefail
+clean_source_helper_path = repo / "scripts/verify-hepta-clean-source.py"
+if (
+    clean_source_helper_path.is_symlink()
+    or not clean_source_helper_path.is_file()
+    or stat.S_IMODE(clean_source_helper_path.stat().st_mode) != 0o755
+):
+    fail("clean-source helper must be one executable, non-symlink regular file")
+clean_source_helper = clean_source_helper_path.read_text(encoding="utf-8")
 
-repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
-cd "$repo_dir"
 
-release_revision="$(git rev-parse --verify HEAD^{commit})"
-release_tree="$(git rev-parse --verify "$release_revision^{tree}")"
+def validate_clean_source_helper(text):
+    try:
+        compile(text, "verify-hepta-clean-source.py", "exec")
+    except SyntaxError as error:
+        fail(f"clean-source helper does not compile: {error}")
+    if hashlib.sha256(text.encode("utf-8")).hexdigest() != (
+        "995b9fccd290f7e4411078c268a605ea2dd3659a656b65e18fbf63c3d6f57560"
+    ):
+        fail("clean-source helper authority drifted")
+    for fragment in (
+        'argparse.ArgumentParser(allow_abbrev=False)',
+        'shutil.which("git", path=os.defpath)',
+        'b"GIT_NO_REPLACE_OBJECTS": b"1"',
+        'b"--no-replace-objects"',
+        'b"core.fsmonitor=false"',
+        'b"core.untrackedCache=false"',
+        'env=git_environment',
+        'git_output(b"ls-tree", b"-r", b"-z", b"--full-tree", expected_revision)',
+        'git_output(b"ls-files", b"--stage", b"-z")',
+        'stage != b"0"',
+        'mode not in {b"100644", b"100755"}',
+        'commit_entries.get(path) != (mode, object_id)',
+        'git_output(b"ls-files", b"-v", b"-z", b"--cached")',
+        'flag != b"H"',
+        'index_entries != commit_entries',
+        'index_flag_paths != set(index_entries)',
+        'b".cargo/config.toml"',
+        'b"rust-toolchain.toml"',
+        'os.path.realpath(worktree_path) != worktree_path',
+        'os.stat(worktree_path, follow_symlinks=False)',
+        'stat.S_ISREG(before.st_mode)',
+        'before.st_uid != os.geteuid() or before.st_nlink != 1',
+        'stat.S_IMODE(before.st_mode) & 0o111',
+        'actual_executable != expected_executable',
+        'b"hash-object"',
+        'b"--no-filters"',
+        'actual_object_id != expected_object_id',
+        'after_identity != before_identity',
+        'b"--untracked-files=all"',
+        'b"--ignore-submodules=none"',
+        'verify_identity_and_status()',
+        '"tracked_files": len(commit_entries)',
+        'sort_keys=True',
+        'separators=(",", ":")',
+    ):
+        if fragment not in text:
+            fail(f"clean-source helper is missing {fragment!r}")
+    if text.count('b"--no-filters"') != 1:
+        fail("clean-source helper raw-byte hashing authority is not unique")
+    if 'b"--path="' in text:
+        fail("clean-source helper must not permit Git clean filters to mask raw-byte drift")
+    if text.count("verify_identity_and_status()") != 3:
+        fail("clean-source helper must verify identity/status exactly before and after hashing")
 
-verify_release_source_unchanged() {
-  local observed_revision observed_tree observed_repo_root observed_status
 
-  observed_revision="$(git rev-parse --verify HEAD^{commit})"
-  observed_tree="$(git rev-parse --verify "$observed_revision^{tree}")"
-  observed_repo_root="$(git rev-parse --show-toplevel)"
-  observed_status="$(git status --porcelain=v1 --untracked-files=all)"
-
-  if [[ "$observed_repo_root" != "$repo_dir" ]]; then
-    echo "Hepta release gate repository identity changed" >&2
-    return 1
-  fi
-  if [[ "$observed_revision" != "$release_revision" ]]; then
-    echo "Hepta release gate HEAD changed while evidence was collected" >&2
-    return 1
-  fi
-  if [[ "$observed_tree" != "$release_tree" ]]; then
-    echo "Hepta release gate source tree changed while evidence was collected" >&2
-    return 1
-  fi
-  if [[ -n "$observed_status" ]]; then
-    echo "Hepta release gate requires a clean worktree, including untracked files" >&2
-    return 1
-  fi
+validate_clean_source_helper(clean_source_helper)
+clean_source_helper_mutations = {
+    "commit tree authority removed": clean_source_helper.replace(
+        'git_output(b"ls-tree", b"-r", b"-z", b"--full-tree", expected_revision)',
+        'git_output(b"ls-files", b"--stage", b"-z")',
+        1,
+    ),
+    "non-zero index stages accepted": clean_source_helper.replace(
+        'stage != b"0" or mode not in {b"100644", b"100755"}',
+        'mode not in {b"100644", b"100755"}',
+        1,
+    ),
+    "index blob detached from commit": clean_source_helper.replace(
+        'commit_entries.get(path) != (mode, object_id)',
+        '(mode, object_id) != (mode, object_id)',
+        1,
+    ),
+    "assume-unchanged accepted": clean_source_helper.replace(
+        'flag != b"H"',
+        'flag.lower() != b"h"',
+        1,
+    ),
+    "non-regular worktree accepted": clean_source_helper.replace(
+        'if not stat.S_ISREG(before.st_mode):',
+        'if False:',
+        1,
+    ),
+    "executable mode ignored": clean_source_helper.replace(
+        'if actual_executable != expected_executable:',
+        'if False:',
+        1,
+    ),
+    "Git clean filters allowed": clean_source_helper.replace(
+        'b"--no-filters",',
+        'b"--path=" + path,',
+        1,
+    ),
+    "worktree blob detached from commit": clean_source_helper.replace(
+        'if actual_object_id != expected_object_id:',
+        'if False:',
+        1,
+    ),
+    "replace objects enabled": clean_source_helper.replace(
+        'b"--no-replace-objects",',
+        '',
+        1,
+    ),
+    "fsmonitor config enabled": clean_source_helper.replace(
+        'b"core.fsmonitor=false",',
+        'b"core.fsmonitor=true",',
+        1,
+    ),
+    "untracked cache config enabled": clean_source_helper.replace(
+        'b"core.untrackedCache=false",',
+        'b"core.untrackedCache=true",',
+        1,
+    ),
+    "inherited Git environment accepted": clean_source_helper.replace(
+        'env=git_environment,',
+        'env=os.environ,',
+        1,
+    ),
+    "untracked toolchain authority accepted": clean_source_helper.replace(
+        'if authority_path not in commit_entries and os.path.lexists(',
+        'if False and os.path.lexists(',
+        1,
+    ),
+    "ancestor symlink accepted": clean_source_helper.replace(
+        'if os.path.realpath(worktree_path) != worktree_path:',
+        'if False:',
+        1,
+    ),
+    "unsafe owner or hardlink accepted": clean_source_helper.replace(
+        'if before.st_uid != os.geteuid() or before.st_nlink != 1:',
+        'if False:',
+        1,
+    ),
+    "tracked-file hash race ignored": clean_source_helper.replace(
+        'if after_identity != before_identity:',
+        'if False:',
+        1,
+    ),
 }
+for mutation_name, mutation in clean_source_helper_mutations.items():
+    if mutation == clean_source_helper:
+        fail(f"clean-source helper negative mutation was not applied: {mutation_name}")
+    try:
+        validate_clean_source_helper(mutation)
+    except AssertionError:
+        pass
+    else:
+        fail(f"clean-source helper negative mutation was accepted: {mutation_name}")
 
-verify_release_source_unchanged
 
-: "${HEPTA_TEST_DATABASE_URL:?HEPTA_TEST_DATABASE_URL is required for the live PostgreSQL release gate}"
-'''
-    if not text.startswith(expected_start):
-        fail("release gate does not begin with the exact clean Git identity boundary")
+def fixture_git(fixture, *arguments):
+    result = subprocess.run(
+        ["git", "-C", str(fixture), *arguments],
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        fail(f"clean-source helper fixture Git command failed: {arguments!r}")
+    return result.stdout
+
+
+def run_clean_source_helper(fixture, revision, tree, environment=None):
+    return subprocess.run(
+        [
+            sys.executable,
+            str(clean_source_helper_path),
+            "--repo-dir",
+            str(fixture),
+            "--revision",
+            revision,
+            "--tree",
+            tree,
+        ],
+        capture_output=True,
+        check=False,
+        timeout=15,
+        env=environment,
+    )
+
+
+source_fixture = scratch / "clean-source-helper-fixture"
+source_fixture.mkdir(mode=0o700)
+fixture_git(source_fixture, "init", "-q")
+fixture_git(source_fixture, "config", "user.name", "Hepta verifier fixture")
+fixture_git(source_fixture, "config", "user.email", "hepta-verifier@example.invalid")
+(source_fixture / ".gitattributes").write_text(
+    "filtered.txt filter=mask\n", encoding="utf-8"
+)
+(source_fixture / "source.txt").write_text("source authority\n", encoding="utf-8")
+(source_fixture / "filtered.txt").write_text("canonical\n", encoding="utf-8")
+(source_fixture / "runner").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+(source_fixture / "runner").chmod(0o755)
+fixture_git(source_fixture, "add", ".gitattributes", "source.txt", "filtered.txt", "runner")
+fixture_git(source_fixture, "commit", "-qm", "source verifier fixture")
+fixture_revision = fixture_git(source_fixture, "rev-parse", "HEAD").decode().strip()
+fixture_tree = fixture_git(source_fixture, "rev-parse", "HEAD^{tree}").decode().strip()
+fixture_result = run_clean_source_helper(
+    source_fixture, fixture_revision, fixture_tree
+)
+if fixture_result.returncode != 0:
+    fail("clean-source helper rejected a canonical clean fixture")
+try:
+    fixture_summary = json.loads(fixture_result.stdout)
+except (UnicodeDecodeError, json.JSONDecodeError):
+    fail("clean-source helper did not emit canonical JSON")
+if fixture_summary != {
+    "revision": fixture_revision,
+    "tree": fixture_tree,
+    "tracked_files": 4,
+}:
+    fail("clean-source helper summary identity drifted")
+if fixture_result.stdout != (
+    json.dumps(
+        fixture_summary, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    + b"\n"
+):
+    fail("clean-source helper summary is not canonical JSON")
+
+hostile_git_environment = dict(os.environ)
+hostile_git_environment.update(
+    {
+        "GIT_DIR": "/nonexistent/hostile-git-dir",
+        "GIT_INDEX_FILE": "/nonexistent/hostile-index",
+        "GIT_OBJECT_DIRECTORY": "/nonexistent/hostile-objects",
+        "GIT_REPLACE_REF_BASE": "refs/hostile-replacements/",
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": "core.bare",
+        "GIT_CONFIG_VALUE_0": "true",
+    }
+)
+if run_clean_source_helper(
+    source_fixture,
+    fixture_revision,
+    fixture_tree,
+    hostile_git_environment,
+).returncode != 0:
+    fail("clean-source helper inherited hostile Git environment authority")
+
+fixture_git(source_fixture, "update-index", "--assume-unchanged", "source.txt")
+if run_clean_source_helper(source_fixture, fixture_revision, fixture_tree).returncode == 0:
+    fail("clean-source helper accepted assume-unchanged")
+fixture_git(source_fixture, "update-index", "--no-assume-unchanged", "source.txt")
+fixture_git(source_fixture, "update-index", "--skip-worktree", "source.txt")
+if run_clean_source_helper(source_fixture, fixture_revision, fixture_tree).returncode == 0:
+    fail("clean-source helper accepted skip-worktree")
+fixture_git(source_fixture, "update-index", "--no-skip-worktree", "source.txt")
+
+hardlink_peer = scratch / "clean-source-hardlink-peer"
+os.link(source_fixture / "source.txt", hardlink_peer)
+if run_clean_source_helper(source_fixture, fixture_revision, fixture_tree).returncode == 0:
+    fail("clean-source helper accepted an externally mutable tracked hardlink")
+hardlink_peer.unlink()
+
+info_exclude = source_fixture / ".git/info/exclude"
+info_exclude.write_text(
+    info_exclude.read_text(encoding="utf-8") + "\n.cargo/\n",
+    encoding="utf-8",
+)
+(source_fixture / ".cargo").mkdir()
+(source_fixture / ".cargo/config.toml").write_text(
+    '[build]\nrustflags = ["--cfg", "untracked_authority"]\n',
+    encoding="utf-8",
+)
+if fixture_git(
+    source_fixture,
+    "status",
+    "--porcelain=v1",
+    "-z",
+    "--untracked-files=all",
+):
+    fail("untracked Cargo-authority fixture is not ignored")
+if run_clean_source_helper(source_fixture, fixture_revision, fixture_tree).returncode == 0:
+    fail("clean-source helper accepted an ignored Cargo authority")
+(source_fixture / ".cargo/config.toml").unlink()
+(source_fixture / ".cargo").rmdir()
+
+fixture_git(source_fixture, "config", "filter.mask.clean", "printf 'canonical\\n'")
+fixture_git(source_fixture, "config", "filter.mask.required", "true")
+(source_fixture / "filtered.txt").write_text("tampered!\n", encoding="utf-8")
+if fixture_git(
+    source_fixture,
+    "hash-object",
+    "--path=filtered.txt",
+    "--",
+    "filtered.txt",
+).strip() != fixture_git(source_fixture, "rev-parse", "HEAD:filtered.txt").strip():
+    fail("clean-source helper filter-masking fixture is invalid")
+if fixture_git(
+    source_fixture,
+    "status",
+    "--porcelain=v1",
+    "-z",
+    "--untracked-files=all",
+):
+    fail("clean-source helper filter-masking fixture did not hide from porcelain")
+filter_result = run_clean_source_helper(
+    source_fixture, fixture_revision, fixture_tree
+)
+if filter_result.returncode == 0 or b"bytes differ from HEAD" not in filter_result.stderr:
+    fail("clean-source helper allowed a clean filter to mask raw-byte drift")
+
+
+def validate_release_source_identity_gate(text):
+    database_marker = (
+        ': "${HEPTA_TEST_DATABASE_URL:?HEPTA_TEST_DATABASE_URL is required for the live PostgreSQL release gate}"\n'
+    )
+    if text.count(database_marker) != 1:
+        fail("release gate database boundary is missing or ambiguous")
+    boundary_end = text.index(database_marker) + len(database_marker)
+    source_boundary = text[:boundary_end]
+    if hashlib.sha256(source_boundary.encode("utf-8")).hexdigest() != (
+        "57a79758f89933eb48880dc79a6615deffd175bbeab83507cdb89f5d485fc9b0"
+    ):
+        fail("release gate initial clean-source authority drifted")
+    for fragment in (
+        'git_binary="$(PATH=/usr/bin:/bin command -v git)"',
+        "git_authority() {",
+        "env -i",
+        "GIT_CONFIG_NOSYSTEM=1",
+        "GIT_CONFIG_GLOBAL=/dev/null",
+        "GIT_NO_REPLACE_OBJECTS=1",
+        '"$git_binary" --no-replace-objects \\',
+        '-c core.fsmonitor=false',
+        '-c core.untrackedCache=false',
+        'release_lock="$(git_authority -C "$repo_dir" rev-parse --path-format=absolute',
+        '--git-path hepta-release-authority.lock)',
+        'exec 9>"$release_lock"',
+        'flock -n 9',
+        'release_revision="$(git_authority -C "$repo_dir" rev-parse --verify HEAD^{commit})"',
+        'release_tree="$(git_authority -C "$repo_dir" rev-parse --verify "$release_revision^{tree}")"',
+        'observed_status="$(git_authority -C "$repo_dir" status --porcelain=v1 --untracked-files=all)"',
+        'helper_entry="$(git_authority -C "$repo_dir" ls-tree "$release_revision" -- "$helper_relative_path")"',
+        '"$helper_mode" != "100755"',
+        '"$helper_object_type" != "blob"',
+        'actual_helper_blob="$(git_authority -C "$repo_dir" hash-object --no-filters -- "$helper_relative_path")"',
+        '"$actual_helper_blob" != "$expected_helper_blob"',
+        'python3 "$helper_path"',
+        '--revision "$release_revision"',
+        '--tree "$release_tree"',
+        ">/dev/null",
+    ):
+        if fragment not in source_boundary:
+            fail(f"release gate clean-source boundary is missing {fragment!r}")
     expected_end = r'''cargo_locked fmt --all -- --check
 cargo_locked test --locked -p hepta-research-league
 cargo_locked check --locked --workspace
 cargo_locked clippy --locked --workspace --all-targets -- -D warnings
 verify_release_source_unchanged'''
     if not text.rstrip().endswith(expected_end):
-        fail("release gate does not end by re-verifying the exact clean Git identity")
+        fail("release gate does not end by re-verifying the exact clean source identity")
     if text.count("verify_release_source_unchanged() {") != 1:
-        fail("release gate clean Git identity verifier definition is not unique")
+        fail("release gate clean source identity verifier definition is not unique")
     if text.count("\nverify_release_source_unchanged\n") != 2:
-        fail("release gate must invoke the clean Git identity verifier exactly at start and end")
-    if text.count("git status --porcelain=v1 --untracked-files=all") != 1:
-        fail("release gate clean check must include every untracked worktree path")
+        fail("release gate must invoke the clean source verifier exactly at start and end")
+    if text.count('python3 "$helper_path"') != 1:
+        fail("release gate shared clean-source helper invocation is not unique")
+    if text.count("git status --porcelain=v1 --untracked-files=all"):
+        fail("release gate must not use inherited Git authority")
+
 
 
 release_script = (repo / "scripts/check-hepta-research-league-release.sh").read_text(
@@ -704,8 +1021,8 @@ release_gate_mutations = {
         1,
     ),
     "untracked files ignored": release_script.replace(
-        "git status --porcelain=v1 --untracked-files=all",
-        "git status --porcelain=v1 --untracked-files=no",
+        "git_authority -C \"$repo_dir\" status --porcelain=v1 --untracked-files=all",
+        "git_authority -C \"$repo_dir\" status --porcelain=v1 --untracked-files=no",
         1,
     ),
     "HEAD comparison weakened": release_script.replace(
@@ -721,6 +1038,61 @@ release_gate_mutations = {
     "dirty check ignored": release_script.replace(
         'if [[ -n "$observed_status" ]]; then',
         'if [[ -z "$observed_status" ]]; then',
+        1,
+    ),
+    "shared helper removed": release_script.replace(
+        'python3 "$helper_path"',
+        'python3 -c "raise SystemExit(0)"',
+        1,
+    ),
+    "shared helper failure ignored": release_script.replace(
+        '    >/dev/null',
+        '    >/dev/null || true',
+        1,
+    ),
+    "shared helper revision detached": release_script.replace(
+        '    --revision "$release_revision" \\',
+        '    --revision "$(git rev-parse HEAD)" \\',
+        1,
+    ),
+    "shared helper tree detached": release_script.replace(
+        '    --tree "$release_tree" \\',
+        '    --tree "$(git rev-parse HEAD^{tree})" \\',
+        1,
+    ),
+    "inherited Git environment restored": release_script.replace(
+        "  env -i \\",
+        "  env \\",
+        1,
+    ),
+    "replace objects restored": release_script.replace(
+        '    "$git_binary" --no-replace-objects \\',
+        '    "$git_binary" \\',
+        1,
+    ),
+    "release authority lock removed": release_script.replace(
+        'flock -n 9 || {',
+        'true || {',
+        1,
+    ),
+    "helper commit authority removed": release_script.replace(
+        '  helper_entry="$(git_authority -C "$repo_dir" ls-tree "$release_revision" -- "$helper_relative_path")"',
+        '  helper_entry=""',
+        1,
+    ),
+    "helper executable mode weakened": release_script.replace(
+        '"$helper_mode" != "100755"',
+        '"$helper_mode" != "100644"',
+        1,
+    ),
+    "helper raw hash filtered": release_script.replace(
+        'hash-object --no-filters -- "$helper_relative_path"',
+        'hash-object --path="$helper_relative_path" -- "$helper_relative_path"',
+        1,
+    ),
+    "helper blob comparison ignored": release_script.replace(
+        'if [[ "$actual_helper_blob" != "$expected_helper_blob" ]]; then',
+        'if false; then',
         1,
     ),
     "final check removed": release_script.rsplit(
@@ -741,6 +1113,7 @@ for mutation_name, mutation in release_gate_mutations.items():
         pass
     else:
         fail(f"release source identity negative mutation was accepted: {mutation_name}")
+
 
 
 runtime_script = require_fragments(
@@ -1061,8 +1434,30 @@ require_fragments(
     ),
 )
 require_fragments(
+    "scripts/admit-hepta-image-build-evidence.py",
+    (
+        "MAX_LOG_BYTES = 64 * 1024 * 1024",
+        "os.O_NOFOLLOW | os.O_NONBLOCK",
+        "metadata.st_nlink != 1",
+        "metadata.st_uid != os.geteuid()",
+        "file_identity(os.fstat(stdout_fd)) != file_identity(stdout_before)",
+        "image build stdout and stderr must be distinct files",
+        "image build stdout must contain exactly one provenance object",
+        "image provenance must be the final stdout object",
+        "object_pairs_hook=reject_duplicate_keys",
+        'type(reproducibility["independent_no_cache_builds"]) is not int',
+        'type(reproducibility["identical_image_ids"]) is not bool',
+        '"version": "v0.36.1"',
+        "write_artifact(args.staging_fd, \"image-build.stdout\"",
+        "digest_artifact(args.staging_fd, \"image-build.stdout\")",
+        "canonical image provenance did not round-trip exactly",
+    ),
+)
+require_fragments(
     "scripts/check-hepta-receipt-v2-resource-gate.sh",
     (
+        "HEPTA_IMAGE_BUILD_STDOUT",
+        "HEPTA_IMAGE_BUILD_STDERR",
         "HEPTA_RESOURCE_GATE_FIXTURE_DIR",
         "HEPTA_RESOURCE_GATE_EVIDENCE_DIR",
         '--verify-bundle "$fixture_dir"',
@@ -1085,6 +1480,22 @@ require_fragments(
         "post_rename_inode_verified",
         "PAYLOAD.SHA256",
         "SHA256SUMS",
+        "image-build.stdout",
+        "image-build.stderr",
+        "image-provenance.json",
+        "closure_manifest_sha256",
+        "publication_contract",
+        "commit_index_worktree_identical",
+        "verify-hepta-clean-source.py",
+        "hepta-release-authority.lock",
+        "GIT_NO_REPLACE_OBJECTS=1",
+        '"$git_binary" --no-replace-objects',
+        "org.opencontainers.image.revision",
+        "io.trillionnium.hepta.application-sbom.sha256",
+        "io.trillionnium.hepta.runtime-base",
+        "vendor_manifest_sha256",
+        "image_build_admission_source_sha256",
+        "image_builder_source_sha256",
         "evidence_parent_identity",
         'evidence_dir="/proc/$$/fd/$evidence_staging_fd"',
         "compose-default-rendered.json",
@@ -1138,16 +1549,213 @@ require_fragments(
         "finality_v2_window_arm_rows",
     ),
 )
+image_admission_path = repo / "scripts/admit-hepta-image-build-evidence.py"
+if (
+    image_admission_path.is_symlink()
+    or not image_admission_path.is_file()
+    or stat.S_IMODE(image_admission_path.stat().st_mode) != 0o755
+):
+    fail("image-build evidence admission helper must be executable and regular")
+image_admission_text = image_admission_path.read_text(encoding="utf-8")
+if hashlib.sha256(image_admission_text.encode("utf-8")).hexdigest() != (
+    "1481e8c14d20ca15d55c03d0c560530f8e6d152f4c0a4b50ff54f29f76470b1b"
+):
+    fail("image-build evidence admission helper authority drifted")
+
+admission_hash = "a" * 64
+admission_runtime_hash = "b" * 64
+admission_revision = "c" * 40
+admission_tree = "d" * 40
+admission_image_id = "sha256:" + "1" * 64
+admission_provenance = {
+    "schema": "hepta.release_image_provenance.v3",
+    "image_ref": "trnm/hepta:test",
+    "image_id": admission_image_id,
+    "oci_index_digest": admission_image_id,
+    "iid": admission_image_id,
+    "source_revision": admission_revision,
+    "source_tree": admission_tree,
+    "source_date_epoch": 123,
+    "buildx": {
+        "version": "v0.36.1",
+        "binary_sha256": "48af8a397ebd60178778bf63611dbcebe5f5e7a9be90eb9147b24b9587455778",
+    },
+    "dockerfile_sha256": admission_hash,
+    "cargo_lock_sha256": admission_hash,
+    "rust_toolchain_sha256": admission_hash,
+    "vendor_manifest_sha256": admission_hash,
+    "application_sbom": {
+        "path": "/usr/share/doc/hepta-research-league/sbom.cdx.json",
+        "sha256": admission_hash,
+    },
+    "runtime_binary": {
+        "path": "/usr/local/bin/hepta-research-league",
+        "sha256": admission_runtime_hash,
+    },
+    "reproducibility": {
+        "independent_no_cache_builds": 2,
+        "identical_image_ids": True,
+        "extracted_binaries_identical": True,
+        "extracted_sboms_identical": True,
+    },
+    "compose_postgres_sigkill_smoke": True,
+}
+
+
+def canonical_json(document):
+    return json.dumps(document, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+
+
+def write_private(path, payload):
+    path.write_bytes(payload)
+    path.chmod(0o600)
+
+
+def sha256_path(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def run_image_admission(name, stdout_payload, mutation=None):
+    case = scratch / f"image-admission-{name}"
+    case.mkdir(mode=0o700)
+    stdout_path = case / "image-build.stdout"
+    stderr_path = case / "image-build.stderr"
+    staging = case / "staging"
+    staging.mkdir(mode=0o700)
+    write_private(stdout_path, stdout_payload)
+    write_private(stderr_path, b"bounded build diagnostic\n")
+    if mutation == "symlink":
+        stdout_path.unlink()
+        stdout_path.symlink_to(stderr_path.name)
+    elif mutation == "hardlink":
+        alias = case / "image-build-hardlink.stdout"
+        os.link(stdout_path, alias)
+        stdout_path = alias
+    elif mutation == "fifo":
+        stdout_path.unlink()
+        os.mkfifo(stdout_path, mode=0o600)
+    elif mutation == "oversize":
+        with stdout_path.open("r+b") as stream:
+            stream.truncate(64 * 1024 * 1024 + 1)
+    elif mutation == "same-inode":
+        stderr_path = stdout_path
+    staging_fd = os.open(staging, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(image_admission_path),
+                "--stdout",
+                str(stdout_path),
+                "--stderr",
+                str(stderr_path),
+                "--repo-dir",
+                str(repo),
+                "--staging-fd",
+                str(staging_fd),
+                "--image-ref",
+                "trnm/hepta:test",
+                "--image-id",
+                admission_image_id,
+                "--source-revision",
+                admission_revision,
+                "--source-tree",
+                admission_tree,
+                "--source-date-epoch",
+                "123",
+                "--dockerfile-sha256",
+                admission_hash,
+                "--cargo-lock-sha256",
+                admission_hash,
+                "--rust-toolchain-sha256",
+                admission_hash,
+                "--sbom-sha256",
+                admission_hash,
+                "--vendor-manifest-sha256",
+                admission_hash,
+                "--runtime-binary-sha256",
+                admission_runtime_hash,
+            ],
+            capture_output=True,
+            check=False,
+            timeout=5,
+            pass_fds=(staging_fd,),
+        )
+    finally:
+        os.close(staging_fd)
+    return result, staging
+
+
+admission_stdout = b"compose smoke: PASS\n" + canonical_json(admission_provenance)
+admission_positive, admission_staging = run_image_admission(
+    "positive", admission_stdout
+)
+if admission_positive.returncode != 0:
+    fail("image-build evidence admission rejected the canonical fixture")
+try:
+    admission_summary = json.loads(admission_positive.stdout)
+except (UnicodeDecodeError, json.JSONDecodeError):
+    fail("image-build evidence admission did not emit canonical JSON")
+if admission_summary.get("provenance") != admission_provenance:
+    fail("image-build evidence admission provenance summary differs")
+if json.loads((admission_staging / "image-provenance.json").read_bytes()) != admission_provenance:
+    fail("image-build evidence admission canonical artifact differs")
+if (admission_staging / "image-build.stdout").read_bytes() != admission_stdout:
+    fail("image-build evidence admission did not preserve raw stdout")
+
+admission_mutations = {
+    "duplicate-schema": admission_stdout + canonical_json(admission_provenance),
+    "trailing-bytes": admission_stdout + b"not-whitespace\n",
+    "bool-as-int": b"compose smoke: PASS\n"
+    + canonical_json(
+        {
+            **admission_provenance,
+            "reproducibility": {
+                **admission_provenance["reproducibility"],
+                "identical_image_ids": 1,
+            },
+        }
+    ),
+    "count-as-float": b"compose smoke: PASS\n"
+    + canonical_json(
+        {
+            **admission_provenance,
+            "reproducibility": {
+                **admission_provenance["reproducibility"],
+                "independent_no_cache_builds": 2.0,
+            },
+        }
+    ),
+    "wrong-input-hash": b"compose smoke: PASS\n"
+    + canonical_json({**admission_provenance, "dockerfile_sha256": "e" * 64}),
+}
+duplicate_key_json = canonical_json(admission_provenance).replace(
+    b'"schema":"hepta.release_image_provenance.v3"',
+    b'"schema":"hepta.release_image_provenance.v3","schema":"hepta.release_image_provenance.v3"',
+    1,
+)
+admission_mutations["duplicate-key"] = b"compose smoke: PASS\n" + duplicate_key_json
+for mutation_name, payload in admission_mutations.items():
+    result, _ = run_image_admission(mutation_name, payload)
+    if result.returncode == 0:
+        fail(f"image-build evidence admission accepted {mutation_name}")
+for mutation_name in ("symlink", "hardlink", "fifo", "oversize", "same-inode"):
+    result, _ = run_image_admission(
+        mutation_name, admission_stdout, mutation=mutation_name
+    )
+    if result.returncode == 0:
+        fail(f"image-build evidence admission accepted {mutation_name}")
+
 resource_gate_text = (
     repo / "scripts/check-hepta-receipt-v2-resource-gate.sh"
 ).read_text(encoding="utf-8")
-publisher_marker = 'python3 - \\\n  "$evidence_parent_fd"'
+publisher_marker = 'closure_manifest_sha256=$(python3 - \\\n  "$evidence_parent_fd"'
 publisher_call = resource_gate_text.find(publisher_marker)
 if publisher_call < 0:
     fail("Receipt V2 evidence publisher invocation is missing")
 publisher_source_start = resource_gate_text.find("<<'PY'\n", publisher_call)
 publisher_source_end = resource_gate_text.find(
-    "\nPY\nevidence_published=true", publisher_source_start
+    "\nPY\n)\nevidence_published=true", publisher_source_start
 )
 if publisher_source_start < 0 or publisher_source_end < 0:
     fail("Receipt V2 evidence publisher source boundary drifted")
@@ -1164,32 +1772,113 @@ def evidence_identity(metadata):
     )
 
 
-def write_private(path, payload):
-    path.write_bytes(payload)
-    path.chmod(0o600)
-
-
-def sha256_path(path):
-    return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
 def make_publisher_fixture(name):
     parent = scratch / f"publisher-{name}"
     parent.mkdir(mode=0o700)
     staging = parent / ".published.staging.test"
     staging.mkdir(mode=0o700)
     target_name = "published"
-    payload_names = ["artifact.txt"]
-    write_private(staging / payload_names[0], b"bound evidence payload\n")
-    payload_manifest = (
-        f"{sha256_path(staging / payload_names[0])}  {payload_names[0]}\n"
-    ).encode("ascii")
-    write_private(staging / "PAYLOAD.SHA256", payload_manifest)
     parent_identity = evidence_identity(parent.stat())
     staging_identity = evidence_identity(staging.stat())
+    image_labels = {
+        "org.opencontainers.image.revision": admission_revision,
+        "org.opencontainers.image.source": "https://github.com/TrillionniumFoundation/CEX.git",
+        "org.trillionnium.source.tree": admission_tree,
+        "org.trillionnium.sbom.sha256": admission_hash,
+        "org.trillionnium.cargo-lock.sha256": admission_hash,
+        "org.trillionnium.dockerfile.sha256": admission_hash,
+        "org.trillionnium.rust-toolchain.sha256": admission_hash,
+        "io.trillionnium.hepta.source-date-epoch": "123",
+        "io.trillionnium.hepta.source-tree": admission_tree,
+        "io.trillionnium.hepta.application-sbom.path": "/usr/share/doc/hepta-research-league/sbom.cdx.json",
+        "io.trillionnium.hepta.application-sbom.sha256": admission_hash,
+        "io.trillionnium.hepta.runtime-binary.sha256": admission_runtime_hash,
+        "io.trillionnium.hepta.runtime-base": "gcr.io/distroless/cc-debian12@sha256:471dbca9cad607b9a32c10e9c31fb09ffaeb2d460e0afbff86c27abbc80b1b98",
+        "io.trillionnium.hepta.builder-base": "docker.io/library/rust@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd578ed948b71b37c1d7fb",
+    }
+    payloads = {
+        "artifact.txt": b"bound evidence payload\n",
+        "compose-default-rendered.json": b"{}\n",
+        "compose-max-rendered.json": b"{}\n",
+        "default-ready.json": b"{}\n",
+        "max-ready.json": b"{}\n",
+        "default-container-inspect.json": b"{}\n",
+        "max-container-inspect.json": b"{}\n",
+        "hepta-image-inspect.json": canonical_json(
+            [{"Id": admission_image_id, "Config": {"Labels": image_labels}}]
+        ),
+        "image-build.stdout": admission_stdout,
+        "image-build.stderr": b"bounded build diagnostic\n",
+        "image-provenance.json": canonical_json(admission_provenance),
+    }
+    for artifact_name, payload in payloads.items():
+        write_private(staging / artifact_name, payload)
+    payload_names = sorted(payloads)
+    payload_manifest = "".join(
+        f"{sha256_path(staging / artifact)}  {artifact}\n"
+        for artifact in payload_names
+    ).encode("ascii")
+    write_private(staging / "PAYLOAD.SHA256", payload_manifest)
+    source_hashes = {
+        "gate_source_sha256": admission_hash,
+        "generator_source_sha256": admission_hash,
+        "image_build_admission_source_sha256": admission_hash,
+        "image_builder_source_sha256": admission_hash,
+        "clean_source_verifier_sha256": admission_hash,
+        "compose_source_sha256": admission_hash,
+        "migration_compose_source_sha256": admission_hash,
+        "compose_default_rendered_sha256": sha256_path(
+            staging / "compose-default-rendered.json"
+        ),
+        "compose_max_rendered_sha256": sha256_path(
+            staging / "compose-max-rendered.json"
+        ),
+        "image_inspect_sha256": sha256_path(staging / "hepta-image-inspect.json"),
+        "default_ready_sha256": sha256_path(staging / "default-ready.json"),
+        "max_ready_sha256": sha256_path(staging / "max-ready.json"),
+        "default_container_inspect_sha256": sha256_path(
+            staging / "default-container-inspect.json"
+        ),
+        "max_container_inspect_sha256": sha256_path(
+            staging / "max-container-inspect.json"
+        ),
+    }
+    committed_inputs = {
+        "dockerfile_sha256": admission_hash,
+        "cargo_lock_sha256": admission_hash,
+        "rust_toolchain_sha256": admission_hash,
+        "sbom_sha256": admission_hash,
+        "vendor_manifest_sha256": admission_hash,
+        "runtime_binary_sha256": admission_runtime_hash,
+    }
+    expected_contract = {
+        "image": "trnm/hepta:test",
+        "image_id": admission_image_id,
+        "source_revision": admission_revision,
+        "source_tree": admission_tree,
+        "source_date_epoch": 123,
+        "tracked_files": 4,
+        "image_build": {
+            "stdout_identity": "1:2:3:4:600:1:2:3:4",
+            "stderr_identity": "5:6:7:8:600:1:2:3:4",
+            "stdout_sha256": sha256_path(staging / "image-build.stdout"),
+            "stderr_sha256": sha256_path(staging / "image-build.stderr"),
+            "provenance_sha256": sha256_path(staging / "image-provenance.json"),
+            "committed_inputs": committed_inputs,
+        },
+        "provenance": source_hashes,
+    }
     summary = {
         "schema": "hepta.receipt_v2.resource_gate_evidence.v3",
         "result": "pass",
+        "image": "trnm/hepta:test",
+        "image_id": admission_image_id,
+        "source_revision": admission_revision,
+        "source_tree": admission_tree,
+        "source_date_epoch": 123,
+        "git_status_clean": True,
+        "commit_index_worktree_identical": True,
+        "tracked_files": 4,
         "publication": "private_sibling_staging_then_atomic_noreplace_rename",
         "publication_authority": {
             "parent_dev_inode_owner_mode": parent_identity,
@@ -1203,7 +1892,26 @@ def make_publisher_fixture(name):
         "memory_peak_policy_ceiling_bytes": 402653184,
         "enforced_max_peak_bytes": 402653184,
         "provenance": {
-            "payload_manifest_sha256": hashlib.sha256(payload_manifest).hexdigest()
+            **source_hashes,
+            "payload_manifest_sha256": hashlib.sha256(payload_manifest).hexdigest(),
+        },
+        "image_build": {
+            "stdout": {
+                "artifact": "image-build.stdout",
+                "admitted_source_identity": expected_contract["image_build"]["stdout_identity"],
+                "sha256": expected_contract["image_build"]["stdout_sha256"],
+            },
+            "stderr": {
+                "artifact": "image-build.stderr",
+                "admitted_source_identity": expected_contract["image_build"]["stderr_identity"],
+                "sha256": expected_contract["image_build"]["stderr_sha256"],
+            },
+            "canonical_provenance": {
+                "artifact": "image-provenance.json",
+                "sha256": expected_contract["image_build"]["provenance_sha256"],
+                "document": admission_provenance,
+            },
+            "committed_inputs": committed_inputs,
         },
         "teardown": {
             "compose_project_absent": True,
@@ -1224,6 +1932,7 @@ def make_publisher_fixture(name):
         f"{sha256_path(staging / entry)}  {entry}\n" for entry in sha_entries
     ).encode("ascii")
     write_private(staging / "SHA256SUMS", sha_manifest)
+    closure_manifest_sha256 = sha256_path(staging / "SHA256SUMS")
     parent_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY)
     staging_fd = os.open(staging, os.O_RDONLY | os.O_DIRECTORY)
     return {
@@ -1235,6 +1944,8 @@ def make_publisher_fixture(name):
         "staging_identity": staging_identity,
         "parent_fd": parent_fd,
         "staging_fd": staging_fd,
+        "closure_manifest_sha256": closure_manifest_sha256,
+        "expected_contract": expected_contract,
     }
 
 
@@ -1250,6 +1961,10 @@ def run_publisher(fixture):
         fixture["parent_identity"],
         fixture["staging_identity"],
         str(os.geteuid()),
+        fixture["closure_manifest_sha256"],
+        json.dumps(
+            fixture["expected_contract"], sort_keys=True, separators=(",", ":")
+        ),
         *fixture["payload_names"],
     ]
     return subprocess.run(
@@ -1278,6 +1993,10 @@ if positive_result.returncode != 0:
         "Receipt V2 evidence publisher positive fixture failed: "
         + positive_result.stderr.decode("utf-8", errors="replace")
     )
+if positive_result.stdout != (
+    positive_publisher["closure_manifest_sha256"].encode("ascii") + b"\n"
+):
+    fail("Receipt V2 evidence publisher emitted the wrong closure digest")
 positive_target = positive_publisher["parent"] / positive_publisher["target_name"]
 if (
     not positive_target.is_dir()
@@ -1308,6 +2027,32 @@ for mutation in ("fifo", "symlink", "extra", "digest", "target"):
         close_publisher_fixture(fixture)
     if result.returncode == 0:
         fail(f"Receipt V2 evidence publisher accepted negative fixture: {mutation}")
+
+contract_mismatch = make_publisher_fixture("contract-mismatch")
+contract_mismatch["expected_contract"]["image_id"] = "sha256:" + "2" * 64
+try:
+    contract_mismatch_result = run_publisher(contract_mismatch)
+finally:
+    close_publisher_fixture(contract_mismatch)
+if contract_mismatch_result.returncode == 0:
+    fail("Receipt V2 evidence publisher accepted a mismatched publication contract")
+
+wrong_closure = make_publisher_fixture("wrong-closure")
+wrong_closure_staging_stat = wrong_closure["staging"].stat()
+wrong_closure["closure_manifest_sha256"] = "f" * 64
+try:
+    wrong_closure_result = run_publisher(wrong_closure)
+finally:
+    close_publisher_fixture(wrong_closure)
+wrong_closure_target = wrong_closure["parent"] / wrong_closure["target_name"]
+if (
+    wrong_closure_result.returncode == 0
+    or wrong_closure_target.exists()
+    or not wrong_closure["staging"].is_dir()
+    or wrong_closure["staging"].stat().st_dev != wrong_closure_staging_stat.st_dev
+    or wrong_closure["staging"].stat().st_ino != wrong_closure_staging_stat.st_ino
+):
+    fail("Receipt V2 evidence publisher did not roll back a closure digest mismatch")
 
 staging_swap = make_publisher_fixture("staging-swap")
 held_staging = staging_swap["parent"] / ".published.staging.held"

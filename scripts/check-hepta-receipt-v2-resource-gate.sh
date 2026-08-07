@@ -2,9 +2,15 @@
 set -euo pipefail
 export LC_ALL=C
 
+while IFS='=' read -r environment_name _; do
+  [[ "$environment_name" == GIT_* ]] && unset "$environment_name"
+done < <(env)
+
 repo_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 : "${HEPTA_IMAGE:?immutable HEPTA_IMAGE must be set}"
 : "${HEPTA_EXPECTED_IMAGE_ID:?frozen HEPTA_EXPECTED_IMAGE_ID must be set}"
+: "${HEPTA_IMAGE_BUILD_STDOUT:?successful immutable image-build stdout file must be set}"
+: "${HEPTA_IMAGE_BUILD_STDERR:?successful immutable image-build stderr file must be set}"
 : "${HEPTA_RESOURCE_GATE_FIXTURE_DIR:?fresh fixture bundle directory must be set}"
 : "${HEPTA_RESOURCE_GATE_EVIDENCE_DIR:?new evidence directory path must be set}"
 
@@ -15,9 +21,17 @@ default_max_peak_bytes=402653184
 max_peak_bytes=${HEPTA_RESOURCE_GATE_MAX_PEAK_BYTES:-$default_max_peak_bytes}
 postgres_image='docker.io/library/postgres:17.6-alpine3.22@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94'
 fixture_generator="$repo_dir/scripts/generate-hepta-receipt-v2-resource-fixtures.py"
+image_build_admission="$repo_dir/scripts/admit-hepta-image-build-evidence.py"
+image_builder_source="$repo_dir/scripts/build-hepta-research-league-image.sh"
+clean_source_verifier="$repo_dir/scripts/verify-hepta-clean-source.py"
 gate_source="$repo_dir/scripts/check-hepta-receipt-v2-resource-gate.sh"
 compose_source="$repo_dir/deploy/hepta-research-league/compose.yaml"
 migration_compose_source="$repo_dir/deploy/hepta-research-league/compose.migration.yaml"
+dockerfile_source="$repo_dir/services/hepta-research-league/Dockerfile"
+cargo_lock_source="$repo_dir/services/hepta-research-league/docker/Cargo.lock"
+rust_toolchain_source="$repo_dir/services/hepta-research-league/docker/rust-toolchain.manifest"
+sbom_source="$repo_dir/deploy/hepta-research-league/hepta-research-league.cdx.json"
+vendor_manifest_source="$repo_dir/vendor/trnm-chain-vendor-manifest.json"
 scratch_parent=/var/tmp
 umask 077
 command -v mktemp >/dev/null 2>&1 && command -v stat >/dev/null 2>&1 || {
@@ -256,12 +270,30 @@ trap 'exit 143' TERM
 }
 scratch_identity=$(stat -c '%d:%i' -- "$scratch")
 
-for command_name in awk basename cmp cp curl cut dirname docker grep id jq mktemp python3 seq sha256sum sleep sort stat; do
+for command_name in awk basename cmp cp curl cut dirname docker env flock git grep id jq mktemp python3 seq sha256sum sleep sort stat; do
   command -v "$command_name" >/dev/null 2>&1 || {
     echo "Receipt V2 resource gate requires $command_name" >&2
     exit 1
   }
 done
+git_binary=$(PATH=/usr/bin:/bin command -v git)
+git_authority() {
+  env -i \
+    PATH=/usr/bin:/bin \
+    HOME=/nonexistent \
+    XDG_CONFIG_HOME=/nonexistent \
+    LC_ALL=C \
+    GIT_CONFIG_NOSYSTEM=1 \
+    GIT_CONFIG_GLOBAL=/dev/null \
+    GIT_NO_REPLACE_OBJECTS=1 \
+    "$git_binary" --no-replace-objects "$@"
+}
+release_lock=$(git_authority -C "$repo_dir" rev-parse --path-format=absolute --git-path hepta-release-authority.lock)
+exec 9>"$release_lock"
+flock -n 9 || {
+  echo "another Hepta release-authority process is already running" >&2
+  exit 1
+}
 [[ "$HEPTA_EXPECTED_IMAGE_ID" =~ ^sha256:[0-9a-f]{64}$ ]] || {
   echo "HEPTA_EXPECTED_IMAGE_ID is not a canonical Docker config digest" >&2
   exit 2
@@ -271,17 +303,107 @@ done
   echo "HEPTA_RESOURCE_GATE_MAX_PEAK_BYTES may only tighten the 384 MiB ceiling" >&2
   exit 2
 }
+release_revision=$(git_authority -C "$repo_dir" rev-parse HEAD)
+release_tree=$(git_authority -C "$repo_dir" rev-parse 'HEAD^{tree}')
+release_source_date_epoch=$(git_authority -C "$repo_dir" show -s --format=%ct "$release_revision")
+[[ "$release_revision" =~ ^[0-9a-f]{40}$ \
+  && "$release_tree" =~ ^[0-9a-f]{40}$ \
+  && "$release_source_date_epoch" =~ ^[0-9]+$ \
+  && -z $(git_authority -C "$repo_dir" status --porcelain=v1 --untracked-files=all) ]] || {
+  echo "resource evidence requires one canonical clean Git source identity" >&2
+  exit 2
+}
+
+committed_input_sha256() {
+  git_authority -C "$repo_dir" show "$release_revision:$1" | sha256sum | cut -d' ' -f1
+}
+
+clean_source_verifier_sha256=$(sha256sum "$clean_source_verifier" | cut -d' ' -f1)
+[[ "$clean_source_verifier_sha256" == \
+  "$(committed_input_sha256 scripts/verify-hepta-clean-source.py)" ]] || {
+  echo "resource evidence clean-source verifier differs from its committed blob" >&2
+  exit 2
+}
+source_authority=$(python3 "$clean_source_verifier" \
+  --repo-dir "$repo_dir" --revision "$release_revision" --tree "$release_tree")
+jq -e --arg revision "$release_revision" --arg tree "$release_tree" '
+  .revision == $revision and .tree == $tree and .tracked_files > 0
+' <<<"$source_authority" >/dev/null
+release_tracked_files=$(jq -er '.tracked_files' <<<"$source_authority")
+
+dockerfile_sha256=$(sha256sum "$dockerfile_source" | cut -d' ' -f1)
+cargo_lock_sha256=$(sha256sum "$cargo_lock_source" | cut -d' ' -f1)
+rust_toolchain_sha256=$(sha256sum "$rust_toolchain_source" | cut -d' ' -f1)
+sbom_sha256=$(sha256sum "$sbom_source" | cut -d' ' -f1)
+vendor_manifest_sha256=$(sha256sum "$vendor_manifest_source" | cut -d' ' -f1)
+[[ "$dockerfile_sha256" == \
+    "$(committed_input_sha256 services/hepta-research-league/Dockerfile)" \
+  && "$cargo_lock_sha256" == \
+    "$(committed_input_sha256 services/hepta-research-league/docker/Cargo.lock)" \
+  && "$rust_toolchain_sha256" == \
+    "$(committed_input_sha256 services/hepta-research-league/docker/rust-toolchain.manifest)" \
+  && "$sbom_sha256" == \
+    "$(committed_input_sha256 deploy/hepta-research-league/hepta-research-league.cdx.json)" \
+  && "$vendor_manifest_sha256" == \
+    "$(committed_input_sha256 vendor/trnm-chain-vendor-manifest.json)" ]] || {
+  echo "resource evidence release input differs from its committed blob" >&2
+  exit 2
+}
+runtime_binary_sha256=$(jq -er '
+  [.components[]? | select(.type == "file")] as $files
+  | if (($files | length) == 1
+      and $files[0].name == "/usr/local/bin/hepta-research-league"
+      and ($files[0].hashes | length) == 1
+      and $files[0].hashes[0].alg == "SHA-256")
+    then $files[0].hashes[0].content
+    else error("SBOM must bind exactly one Hepta runtime file")
+    end
+' "$sbom_source")
+[[ "$runtime_binary_sha256" =~ ^[0-9a-f]{64}$ ]] || {
+  echo "resource evidence SBOM runtime binary hash is not canonical" >&2
+  exit 2
+}
 
 gate_source_sha256=$(sha256sum "$gate_source" | cut -d' ' -f1)
 generator_source_sha256=$(sha256sum "$fixture_generator" | cut -d' ' -f1)
+image_build_admission_source_sha256=$(sha256sum "$image_build_admission" | cut -d' ' -f1)
+image_builder_source_sha256=$(sha256sum "$image_builder_source" | cut -d' ' -f1)
 compose_source_sha256=$(sha256sum "$compose_source" | cut -d' ' -f1)
 migration_compose_source_sha256=$(sha256sum "$migration_compose_source" | cut -d' ' -f1)
+[[ "$gate_source_sha256" == \
+    "$(committed_input_sha256 scripts/check-hepta-receipt-v2-resource-gate.sh)" \
+  && "$generator_source_sha256" == \
+    "$(committed_input_sha256 scripts/generate-hepta-receipt-v2-resource-fixtures.py)" \
+  && "$image_build_admission_source_sha256" == \
+    "$(committed_input_sha256 scripts/admit-hepta-image-build-evidence.py)" \
+  && "$image_builder_source_sha256" == \
+    "$(committed_input_sha256 scripts/build-hepta-research-league-image.sh)" \
+  && "$clean_source_verifier_sha256" == \
+    "$(committed_input_sha256 scripts/verify-hepta-clean-source.py)" \
+  && "$compose_source_sha256" == \
+    "$(committed_input_sha256 deploy/hepta-research-league/compose.yaml)" \
+  && "$migration_compose_source_sha256" == \
+    "$(committed_input_sha256 deploy/hepta-research-league/compose.migration.yaml)" ]] || {
+  echo "resource evidence execution authority differs from its committed blob" >&2
+  exit 2
+}
 
 verify_release_inputs_unchanged() {
-  [[ $(sha256sum "$gate_source" | cut -d' ' -f1) == "$gate_source_sha256" \
+  [[ $(git_authority -C "$repo_dir" rev-parse HEAD) == "$release_revision" \
+    && $(git_authority -C "$repo_dir" rev-parse 'HEAD^{tree}') == "$release_tree" \
+    && -z $(git_authority -C "$repo_dir" status --porcelain=v1 --untracked-files=all) \
+    && $(sha256sum "$gate_source" | cut -d' ' -f1) == "$gate_source_sha256" \
     && $(sha256sum "$fixture_generator" | cut -d' ' -f1) == "$generator_source_sha256" \
+    && $(sha256sum "$image_build_admission" | cut -d' ' -f1) == "$image_build_admission_source_sha256" \
+    && $(sha256sum "$image_builder_source" | cut -d' ' -f1) == "$image_builder_source_sha256" \
+    && $(sha256sum "$clean_source_verifier" | cut -d' ' -f1) == "$clean_source_verifier_sha256" \
     && $(sha256sum "$compose_source" | cut -d' ' -f1) == "$compose_source_sha256" \
-    && $(sha256sum "$migration_compose_source" | cut -d' ' -f1) == "$migration_compose_source_sha256" ]] || {
+    && $(sha256sum "$migration_compose_source" | cut -d' ' -f1) == "$migration_compose_source_sha256" \
+    && $(sha256sum "$dockerfile_source" | cut -d' ' -f1) == "$dockerfile_sha256" \
+    && $(sha256sum "$cargo_lock_source" | cut -d' ' -f1) == "$cargo_lock_sha256" \
+    && $(sha256sum "$rust_toolchain_source" | cut -d' ' -f1) == "$rust_toolchain_sha256" \
+    && $(sha256sum "$sbom_source" | cut -d' ' -f1) == "$sbom_sha256" \
+    && $(sha256sum "$vendor_manifest_source" | cut -d' ' -f1) == "$vendor_manifest_sha256" ]] || {
     echo "resource-gate source authority changed while the gate was running" >&2
     return 1
   }
@@ -434,6 +556,42 @@ exec {evidence_staging_fd}<"$evidence_staging"
 # bytes into a replacement directory and later pass the inode checks.
 evidence_dir="/proc/$$/fd/$evidence_staging_fd"
 
+verify_release_inputs_unchanged
+image_build_snapshot=$(python3 "$image_build_admission" \
+  --stdout "$HEPTA_IMAGE_BUILD_STDOUT" \
+  --stderr "$HEPTA_IMAGE_BUILD_STDERR" \
+  --repo-dir "$repo_dir" \
+  --staging-fd "$evidence_staging_fd" \
+  --image-ref "$HEPTA_IMAGE" \
+  --image-id "$HEPTA_EXPECTED_IMAGE_ID" \
+  --source-revision "$release_revision" \
+  --source-tree "$release_tree" \
+  --source-date-epoch "$release_source_date_epoch" \
+  --dockerfile-sha256 "$dockerfile_sha256" \
+  --cargo-lock-sha256 "$cargo_lock_sha256" \
+  --rust-toolchain-sha256 "$rust_toolchain_sha256" \
+  --sbom-sha256 "$sbom_sha256" \
+  --vendor-manifest-sha256 "$vendor_manifest_sha256" \
+  --runtime-binary-sha256 "$runtime_binary_sha256")
+jq -e '
+  (keys == [
+    "provenance",
+    "provenance_sha256",
+    "stderr_identity",
+    "stderr_sha256",
+    "stdout_identity",
+    "stdout_sha256"
+  ])
+  and (.stdout_sha256 | test("^[0-9a-f]{64}$"))
+  and (.stderr_sha256 | test("^[0-9a-f]{64}$"))
+  and (.provenance_sha256 | test("^[0-9a-f]{64}$"))
+' <<<"$image_build_snapshot" >/dev/null
+image_build_stdout_identity=$(jq -er '.stdout_identity' <<<"$image_build_snapshot")
+image_build_stderr_identity=$(jq -er '.stderr_identity' <<<"$image_build_snapshot")
+image_build_stdout_sha256=$(jq -er '.stdout_sha256' <<<"$image_build_snapshot")
+image_build_stderr_sha256=$(jq -er '.stderr_sha256' <<<"$image_build_snapshot")
+image_provenance_sha256=$(jq -er '.provenance_sha256' <<<"$image_build_snapshot")
+
 docker_command=(docker)
 if ! docker info >/dev/null 2>&1; then
   docker_command=(sudo -n docker)
@@ -445,8 +603,46 @@ frozen_image_id=$("${docker_command[@]}" image inspect "$HEPTA_IMAGE" --format '
   echo "Hepta image tag does not resolve to the frozen image ID" >&2
   exit 1
 }
-"${docker_command[@]}" image inspect "$HEPTA_IMAGE" | jq -S . \
+"${docker_command[@]}" image inspect "$HEPTA_EXPECTED_IMAGE_ID" | jq -S . \
   >"$evidence_dir/hepta-image-inspect.json"
+jq -e \
+  --arg image_id "$HEPTA_EXPECTED_IMAGE_ID" \
+  --arg revision "$release_revision" \
+  --arg source_tree "$release_tree" \
+  --arg source_date_epoch "$release_source_date_epoch" \
+  --arg sbom_sha256 "$sbom_sha256" \
+  --arg runtime_binary_sha256 "$runtime_binary_sha256" \
+  --arg cargo_lock_sha256 "$cargo_lock_sha256" \
+  --arg dockerfile_sha256 "$dockerfile_sha256" \
+  --arg rust_toolchain_sha256 "$rust_toolchain_sha256" \
+  --slurpfile image_provenance "$evidence_dir/image-provenance.json" '
+  length == 1
+  and .[0].Id == $image_id
+  and .[0].Config.Labels["org.opencontainers.image.revision"] == $revision
+  and .[0].Config.Labels["org.opencontainers.image.source"] == "https://github.com/TrillionniumFoundation/CEX.git"
+  and .[0].Config.Labels["org.trillionnium.source.tree"] == $source_tree
+  and .[0].Config.Labels["org.trillionnium.sbom.sha256"] == $sbom_sha256
+  and .[0].Config.Labels["org.trillionnium.cargo-lock.sha256"] == $cargo_lock_sha256
+  and .[0].Config.Labels["org.trillionnium.dockerfile.sha256"] == $dockerfile_sha256
+  and .[0].Config.Labels["org.trillionnium.rust-toolchain.sha256"] == $rust_toolchain_sha256
+  and .[0].Config.Labels["io.trillionnium.hepta.source-date-epoch"] == $source_date_epoch
+  and .[0].Config.Labels["io.trillionnium.hepta.source-tree"] == $source_tree
+  and .[0].Config.Labels["io.trillionnium.hepta.application-sbom.path"] == "/usr/share/doc/hepta-research-league/sbom.cdx.json"
+  and .[0].Config.Labels["io.trillionnium.hepta.application-sbom.sha256"] == $sbom_sha256
+  and .[0].Config.Labels["io.trillionnium.hepta.runtime-binary.sha256"] == $runtime_binary_sha256
+  and .[0].Config.Labels["io.trillionnium.hepta.runtime-base"] == "gcr.io/distroless/cc-debian12@sha256:471dbca9cad607b9a32c10e9c31fb09ffaeb2d460e0afbff86c27abbc80b1b98"
+  and .[0].Config.Labels["io.trillionnium.hepta.builder-base"] == "docker.io/library/rust@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd578ed948b71b37c1d7fb"
+  and ($image_provenance | length) == 1
+  and $image_provenance[0].image_id == .[0].Id
+  and $image_provenance[0].source_revision == .[0].Config.Labels["org.opencontainers.image.revision"]
+  and $image_provenance[0].source_tree == .[0].Config.Labels["org.trillionnium.source.tree"]
+  and $image_provenance[0].application_sbom.sha256 == .[0].Config.Labels["org.trillionnium.sbom.sha256"]
+  and $image_provenance[0].cargo_lock_sha256 == .[0].Config.Labels["org.trillionnium.cargo-lock.sha256"]
+  and $image_provenance[0].dockerfile_sha256 == .[0].Config.Labels["org.trillionnium.dockerfile.sha256"]
+  and $image_provenance[0].rust_toolchain_sha256 == .[0].Config.Labels["org.trillionnium.rust-toolchain.sha256"]
+  and ($image_provenance[0].source_date_epoch | tostring) == .[0].Config.Labels["io.trillionnium.hepta.source-date-epoch"]
+  and $image_provenance[0].runtime_binary.sha256 == .[0].Config.Labels["io.trillionnium.hepta.runtime-binary.sha256"]
+' "$evidence_dir/hepta-image-inspect.json" >/dev/null
 image_inspect_sha256=$(sha256sum "$evidence_dir/hepta-image-inspect.json" | cut -d' ' -f1)
 
 host_port=$(python3 - <<'PY'
@@ -1216,6 +1412,9 @@ expected_payload_artifacts() {
     default-ready.json \
     fixture-snapshot-manifest.json \
     hepta-image-inspect.json \
+    image-build.stderr \
+    image-build.stdout \
+    image-provenance.json \
     max-adversarial-response.json \
     max-busy-response.raw \
     max-cgroup-memory-peak-path.txt \
@@ -1271,12 +1470,31 @@ payload_manifest_sha256=$(sha256sum "$evidence_dir/PAYLOAD.SHA256" | cut -d' ' -
 jq -n \
   --slurpfile db_baseline "$evidence_dir/db-baseline-counts.json" \
   --slurpfile db_final "$evidence_dir/max-after-busy-db-counts.json" \
+  --slurpfile image_build_provenance "$evidence_dir/image-provenance.json" \
   --arg image "$HEPTA_IMAGE" \
   --arg image_id "$HEPTA_EXPECTED_IMAGE_ID" \
+  --arg source_revision "$release_revision" \
+  --arg source_tree "$release_tree" \
+  --argjson source_date_epoch "$release_source_date_epoch" \
+  --argjson tracked_files "$release_tracked_files" \
   --arg gate_source_sha256 "$gate_source_sha256" \
   --arg generator_source_sha256 "$generator_source_sha256" \
+  --arg image_build_admission_source_sha256 "$image_build_admission_source_sha256" \
+  --arg image_builder_source_sha256 "$image_builder_source_sha256" \
+  --arg clean_source_verifier_sha256 "$clean_source_verifier_sha256" \
   --arg compose_source_sha256 "$compose_source_sha256" \
   --arg migration_compose_source_sha256 "$migration_compose_source_sha256" \
+  --arg dockerfile_sha256 "$dockerfile_sha256" \
+  --arg cargo_lock_sha256 "$cargo_lock_sha256" \
+  --arg rust_toolchain_sha256 "$rust_toolchain_sha256" \
+  --arg sbom_sha256 "$sbom_sha256" \
+  --arg vendor_manifest_sha256 "$vendor_manifest_sha256" \
+  --arg runtime_binary_sha256 "$runtime_binary_sha256" \
+  --arg image_build_stdout_identity "$image_build_stdout_identity" \
+  --arg image_build_stderr_identity "$image_build_stderr_identity" \
+  --arg image_build_stdout_sha256 "$image_build_stdout_sha256" \
+  --arg image_build_stderr_sha256 "$image_build_stderr_sha256" \
+  --arg image_provenance_sha256 "$image_provenance_sha256" \
   --arg compose_default_sha256 "$compose_default_sha256" \
   --arg compose_max_sha256 "$compose_max_sha256" \
   --arg image_inspect_sha256 "$image_inspect_sha256" \
@@ -1324,6 +1542,12 @@ jq -n \
     result:"pass",
     image:$image,
     image_id:$image_id,
+    source_revision:$source_revision,
+    source_tree:$source_tree,
+    source_date_epoch:$source_date_epoch,
+    git_status_clean:true,
+    commit_index_worktree_identical:true,
+    tracked_files:$tracked_files,
     publication:"private_sibling_staging_then_atomic_noreplace_rename",
     publication_authority:{
       parent_dev_inode_owner_mode:$evidence_parent_identity,
@@ -1337,6 +1561,9 @@ jq -n \
     provenance:{
       gate_source_sha256:$gate_source_sha256,
       generator_source_sha256:$generator_source_sha256,
+      image_build_admission_source_sha256:$image_build_admission_source_sha256,
+      image_builder_source_sha256:$image_builder_source_sha256,
+      clean_source_verifier_sha256:$clean_source_verifier_sha256,
       compose_source_sha256:$compose_source_sha256,
       migration_compose_source_sha256:$migration_compose_source_sha256,
       compose_default_rendered_sha256:$compose_default_sha256,
@@ -1347,6 +1574,31 @@ jq -n \
       default_container_inspect_sha256:$default_inspect_sha256,
       max_container_inspect_sha256:$max_inspect_sha256,
       payload_manifest_sha256:$payload_manifest_sha256
+    },
+    image_build:{
+      stdout:{
+        artifact:"image-build.stdout",
+        admitted_source_identity:$image_build_stdout_identity,
+        sha256:$image_build_stdout_sha256
+      },
+      stderr:{
+        artifact:"image-build.stderr",
+        admitted_source_identity:$image_build_stderr_identity,
+        sha256:$image_build_stderr_sha256
+      },
+      canonical_provenance:{
+        artifact:"image-provenance.json",
+        sha256:$image_provenance_sha256,
+        document:$image_build_provenance[0]
+      },
+      committed_inputs:{
+        dockerfile_sha256:$dockerfile_sha256,
+        cargo_lock_sha256:$cargo_lock_sha256,
+        rust_toolchain_sha256:$rust_toolchain_sha256,
+        sbom_sha256:$sbom_sha256,
+        vendor_manifest_sha256:$vendor_manifest_sha256,
+        runtime_binary_sha256:$runtime_binary_sha256
+      }
     },
     fixture:{
       mode:"private_o_nofollow_snapshot",
@@ -1419,9 +1671,87 @@ mapfile -t final_manifest_artifacts < <(
   printf '%s\n' "${payload_artifacts[@]}" PAYLOAD.SHA256 summary.json | sort
 )
 (cd "$evidence_dir" && sha256sum -- "${final_manifest_artifacts[@]}" >SHA256SUMS)
+closure_manifest_sha256=$(sha256sum "$evidence_dir/SHA256SUMS" | cut -d' ' -f1)
+publication_contract=$(jq -cn \
+  --arg image "$HEPTA_IMAGE" \
+  --arg image_id "$HEPTA_EXPECTED_IMAGE_ID" \
+  --arg source_revision "$release_revision" \
+  --arg source_tree "$release_tree" \
+  --argjson source_date_epoch "$release_source_date_epoch" \
+  --argjson tracked_files "$release_tracked_files" \
+  --arg image_build_stdout_identity "$image_build_stdout_identity" \
+  --arg image_build_stderr_identity "$image_build_stderr_identity" \
+  --arg image_build_stdout_sha256 "$image_build_stdout_sha256" \
+  --arg image_build_stderr_sha256 "$image_build_stderr_sha256" \
+  --arg image_provenance_sha256 "$image_provenance_sha256" \
+  --arg dockerfile_sha256 "$dockerfile_sha256" \
+  --arg cargo_lock_sha256 "$cargo_lock_sha256" \
+  --arg rust_toolchain_sha256 "$rust_toolchain_sha256" \
+  --arg sbom_sha256 "$sbom_sha256" \
+  --arg vendor_manifest_sha256 "$vendor_manifest_sha256" \
+  --arg runtime_binary_sha256 "$runtime_binary_sha256" \
+  --arg gate_source_sha256 "$gate_source_sha256" \
+  --arg generator_source_sha256 "$generator_source_sha256" \
+  --arg image_build_admission_source_sha256 "$image_build_admission_source_sha256" \
+  --arg image_builder_source_sha256 "$image_builder_source_sha256" \
+  --arg clean_source_verifier_sha256 "$clean_source_verifier_sha256" \
+  --arg compose_source_sha256 "$compose_source_sha256" \
+  --arg migration_compose_source_sha256 "$migration_compose_source_sha256" \
+  --arg compose_default_sha256 "$compose_default_sha256" \
+  --arg compose_max_sha256 "$compose_max_sha256" \
+  --arg image_inspect_sha256 "$image_inspect_sha256" \
+  --arg default_ready_sha256 "$default_ready_sha256" \
+  --arg max_ready_sha256 "$max_ready_sha256" \
+  --arg default_inspect_sha256 "$default_inspect_sha256" \
+  --arg max_inspect_sha256 "$max_inspect_sha256" '
+  {
+    image:$image,
+    image_id:$image_id,
+    source_revision:$source_revision,
+    source_tree:$source_tree,
+    source_date_epoch:$source_date_epoch,
+    tracked_files:$tracked_files,
+    image_build:{
+      stdout_identity:$image_build_stdout_identity,
+      stderr_identity:$image_build_stderr_identity,
+      stdout_sha256:$image_build_stdout_sha256,
+      stderr_sha256:$image_build_stderr_sha256,
+      provenance_sha256:$image_provenance_sha256,
+      committed_inputs:{
+        dockerfile_sha256:$dockerfile_sha256,
+        cargo_lock_sha256:$cargo_lock_sha256,
+        rust_toolchain_sha256:$rust_toolchain_sha256,
+        sbom_sha256:$sbom_sha256,
+        vendor_manifest_sha256:$vendor_manifest_sha256,
+        runtime_binary_sha256:$runtime_binary_sha256
+      }
+    },
+    provenance:{
+      gate_source_sha256:$gate_source_sha256,
+      generator_source_sha256:$generator_source_sha256,
+      image_build_admission_source_sha256:$image_build_admission_source_sha256,
+      image_builder_source_sha256:$image_builder_source_sha256,
+      clean_source_verifier_sha256:$clean_source_verifier_sha256,
+      compose_source_sha256:$compose_source_sha256,
+      migration_compose_source_sha256:$migration_compose_source_sha256,
+      compose_default_rendered_sha256:$compose_default_sha256,
+      compose_max_rendered_sha256:$compose_max_sha256,
+      image_inspect_sha256:$image_inspect_sha256,
+      default_ready_sha256:$default_ready_sha256,
+      max_ready_sha256:$max_ready_sha256,
+      default_container_inspect_sha256:$default_inspect_sha256,
+      max_container_inspect_sha256:$max_inspect_sha256
+    }
+  }')
 
 verify_release_inputs_unchanged
-python3 - \
+final_source_authority=$(python3 "$clean_source_verifier" \
+  --repo-dir "$repo_dir" --revision "$release_revision" --tree "$release_tree")
+[[ "$final_source_authority" == "$source_authority" ]] || {
+  echo "resource evidence Git source authority changed before publication" >&2
+  exit 1
+}
+closure_manifest_sha256=$(python3 - \
   "$evidence_parent_fd" \
   "$evidence_staging_fd" \
   "$evidence_parent" \
@@ -1430,6 +1760,8 @@ python3 - \
   "$evidence_parent_identity" \
   "$evidence_staging_identity" \
   "$(id -u)" \
+  "$closure_manifest_sha256" \
+  "$publication_contract" \
   "${payload_artifacts[@]}" <<'PY'
 import ctypes
 import hashlib
@@ -1447,7 +1779,9 @@ target_name = sys.argv[5]
 expected_parent_identity = sys.argv[6]
 expected_staging_identity = sys.argv[7]
 expected_uid = int(sys.argv[8])
-payload_names = sys.argv[9:]
+expected_closure_manifest_sha256 = sys.argv[9]
+expected_contract = json.loads(sys.argv[10])
+payload_names = sys.argv[11:]
 if payload_names != sorted(payload_names) or len(payload_names) != len(set(payload_names)):
     raise RuntimeError("resource evidence payload authority is not sorted and unique")
 payload_set = set(payload_names)
@@ -1613,6 +1947,39 @@ summary = json.loads(
     read_artifact("summary.json").decode("utf-8"),
     object_pairs_hook=reject_duplicate_json,
 )
+if set(expected_contract) != {
+    "image",
+    "image_id",
+    "source_revision",
+    "source_tree",
+    "source_date_epoch",
+    "tracked_files",
+    "image_build",
+    "provenance",
+}:
+    raise RuntimeError("resource evidence publication contract shape differs")
+for key in ("image", "image_id", "source_revision", "source_tree", "source_date_epoch", "tracked_files"):
+    if summary.get(key) != expected_contract.get(key) or type(summary.get(key)) is not type(
+        expected_contract.get(key)
+    ):
+        raise RuntimeError(f"resource evidence summary differs from publication contract: {key}")
+expected_summary_provenance = dict(expected_contract["provenance"])
+expected_summary_provenance["payload_manifest_sha256"] = hashlib.sha256(
+    payload_manifest
+).hexdigest()
+if summary.get("provenance") != expected_summary_provenance:
+    raise RuntimeError("resource evidence summary provenance differs from publication contract")
+for field, artifact in {
+    "compose_default_rendered_sha256": "compose-default-rendered.json",
+    "compose_max_rendered_sha256": "compose-max-rendered.json",
+    "image_inspect_sha256": "hepta-image-inspect.json",
+    "default_ready_sha256": "default-ready.json",
+    "max_ready_sha256": "max-ready.json",
+    "default_container_inspect_sha256": "default-container-inspect.json",
+    "max_container_inspect_sha256": "max-container-inspect.json",
+}.items():
+    if expected_contract["provenance"].get(field) != digest_artifact(artifact):
+        raise RuntimeError(f"resource evidence payload hash differs: {artifact}")
 if (
     summary.get("schema") != "hepta.receipt_v2.resource_gate_evidence.v3"
     or summary.get("result") != "pass"
@@ -1630,6 +1997,137 @@ if (
     != "max-ready.json"
 ):
     raise RuntimeError("resource evidence summary release contract differs")
+git_identity = re.compile(r"^[0-9a-f]{40}$")
+sha256_digest = re.compile(r"^[0-9a-f]{64}$")
+docker_digest = re.compile(r"^sha256:[0-9a-f]{64}$")
+if (
+    not git_identity.fullmatch(summary.get("source_revision", ""))
+    or not git_identity.fullmatch(summary.get("source_tree", ""))
+    or type(summary.get("source_date_epoch")) is not int
+    or summary.get("source_date_epoch", 0) <= 0
+    or summary.get("git_status_clean") is not True
+    or summary.get("commit_index_worktree_identical") is not True
+    or type(summary.get("tracked_files")) is not int
+    or summary.get("tracked_files", 0) <= 0
+    or not docker_digest.fullmatch(summary.get("image_id", ""))
+):
+    raise RuntimeError("resource evidence summary Git/image identity differs")
+image_build = summary.get("image_build", {})
+if set(image_build) != {
+    "stdout",
+    "stderr",
+    "canonical_provenance",
+    "committed_inputs",
+}:
+    raise RuntimeError("resource evidence image-build contract differs")
+for stream_name in ("stdout", "stderr"):
+    stream = image_build.get(stream_name, {})
+    expected_artifact = f"image-build.{stream_name}"
+    if (
+        set(stream) != {"artifact", "admitted_source_identity", "sha256"}
+        or stream.get("artifact") != expected_artifact
+        or not isinstance(stream.get("admitted_source_identity"), str)
+        or not sha256_digest.fullmatch(stream.get("sha256", ""))
+        or stream.get("sha256") != digest_artifact(expected_artifact)
+        or stream.get("admitted_source_identity")
+        != expected_contract["image_build"].get(f"{stream_name}_identity")
+        or stream.get("sha256")
+        != expected_contract["image_build"].get(f"{stream_name}_sha256")
+    ):
+        raise RuntimeError(f"resource evidence image-build {stream_name} differs")
+canonical_provenance = image_build.get("canonical_provenance", {})
+if (
+    set(canonical_provenance) != {"artifact", "sha256", "document"}
+    or canonical_provenance.get("artifact") != "image-provenance.json"
+    or not sha256_digest.fullmatch(canonical_provenance.get("sha256", ""))
+    or canonical_provenance.get("sha256")
+    != digest_artifact("image-provenance.json")
+    or canonical_provenance.get("sha256")
+    != expected_contract["image_build"].get("provenance_sha256")
+):
+    raise RuntimeError("resource evidence canonical image provenance differs")
+provenance_bytes = read_artifact("image-provenance.json")
+provenance = json.loads(
+    provenance_bytes.decode("utf-8"), object_pairs_hook=reject_duplicate_json
+)
+expected_canonical_provenance = (
+    json.dumps(provenance, sort_keys=True, separators=(",", ":")) + "\n"
+).encode("utf-8")
+reproducibility = provenance.get("reproducibility", {})
+if (
+    provenance_bytes != expected_canonical_provenance
+    or canonical_provenance.get("document") != provenance
+    or provenance.get("schema") != "hepta.release_image_provenance.v3"
+    or provenance.get("image_ref") != summary.get("image")
+    or provenance.get("image_id") != summary.get("image_id")
+    or provenance.get("source_revision") != summary.get("source_revision")
+    or provenance.get("source_tree") != summary.get("source_tree")
+    or provenance.get("source_date_epoch") != summary.get("source_date_epoch")
+    or type(reproducibility.get("independent_no_cache_builds")) is not int
+    or type(reproducibility.get("identical_image_ids")) is not bool
+    or type(reproducibility.get("extracted_binaries_identical")) is not bool
+    or type(reproducibility.get("extracted_sboms_identical")) is not bool
+    or reproducibility
+    != {
+        "independent_no_cache_builds": 2,
+        "identical_image_ids": True,
+        "extracted_binaries_identical": True,
+        "extracted_sboms_identical": True,
+    }
+    or provenance.get("compose_postgres_sigkill_smoke") is not True
+):
+    raise RuntimeError("resource evidence image provenance release identity differs")
+committed_inputs = image_build.get("committed_inputs", {})
+expected_inputs = {
+    "dockerfile_sha256": provenance.get("dockerfile_sha256"),
+    "cargo_lock_sha256": provenance.get("cargo_lock_sha256"),
+    "rust_toolchain_sha256": provenance.get("rust_toolchain_sha256"),
+    "sbom_sha256": provenance.get("application_sbom", {}).get("sha256"),
+    "vendor_manifest_sha256": provenance.get("vendor_manifest_sha256"),
+    "runtime_binary_sha256": provenance.get("runtime_binary", {}).get("sha256"),
+}
+if committed_inputs != expected_inputs or committed_inputs != expected_contract["image_build"].get(
+    "committed_inputs"
+) or any(
+    not sha256_digest.fullmatch(value or "") for value in committed_inputs.values()
+):
+    raise RuntimeError("resource evidence committed input hashes differ")
+image_inspect = json.loads(
+    read_artifact("hepta-image-inspect.json").decode("utf-8"),
+    object_pairs_hook=reject_duplicate_json,
+)
+if not isinstance(image_inspect, list) or len(image_inspect) != 1:
+    raise RuntimeError("resource evidence image inspection shape differs")
+image = image_inspect[0]
+labels = image.get("Config", {}).get("Labels", {})
+if (
+    image.get("Id") != summary.get("image_id")
+    or labels.get("org.opencontainers.image.revision") != summary.get("source_revision")
+    or labels.get("org.opencontainers.image.source")
+    != "https://github.com/TrillionniumFoundation/CEX.git"
+    or labels.get("org.trillionnium.source.tree") != summary.get("source_tree")
+    or labels.get("org.trillionnium.sbom.sha256") != committed_inputs["sbom_sha256"]
+    or labels.get("org.trillionnium.cargo-lock.sha256")
+    != committed_inputs["cargo_lock_sha256"]
+    or labels.get("org.trillionnium.dockerfile.sha256")
+    != committed_inputs["dockerfile_sha256"]
+    or labels.get("org.trillionnium.rust-toolchain.sha256")
+    != committed_inputs["rust_toolchain_sha256"]
+    or labels.get("io.trillionnium.hepta.source-date-epoch")
+    != str(summary.get("source_date_epoch"))
+    or labels.get("io.trillionnium.hepta.source-tree") != summary.get("source_tree")
+    or labels.get("io.trillionnium.hepta.application-sbom.path")
+    != "/usr/share/doc/hepta-research-league/sbom.cdx.json"
+    or labels.get("io.trillionnium.hepta.application-sbom.sha256")
+    != committed_inputs["sbom_sha256"]
+    or labels.get("io.trillionnium.hepta.runtime-binary.sha256")
+    != committed_inputs["runtime_binary_sha256"]
+    or labels.get("io.trillionnium.hepta.runtime-base")
+    != "gcr.io/distroless/cc-debian12@sha256:471dbca9cad607b9a32c10e9c31fb09ffaeb2d460e0afbff86c27abbc80b1b98"
+    or labels.get("io.trillionnium.hepta.builder-base")
+    != "docker.io/library/rust@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd578ed948b71b37c1d7fb"
+):
+    raise RuntimeError("resource evidence image labels differ from the closure")
 teardown = summary.get("teardown", {})
 if teardown != {
     "compose_project_absent": True,
@@ -1687,6 +2185,9 @@ try:
             raise RuntimeError("published evidence target inode differs from staging")
         if set(os.listdir(target_fd)) != expected_all:
             raise RuntimeError("published evidence target artifact set differs")
+        actual_closure_manifest_sha256 = digest_artifact("SHA256SUMS")
+        if actual_closure_manifest_sha256 != expected_closure_manifest_sha256:
+            raise RuntimeError("published evidence closure manifest digest differs")
         os.fsync(target_fd)
     finally:
         os.close(target_fd)
@@ -1707,9 +2208,11 @@ except Exception:
                 "resource evidence publication failed and rollback also failed"
             ) from rollback_error
     raise
+print(actual_closure_manifest_sha256)
 PY
+)
 evidence_published=true
 evidence_dir=$evidence_target
 close_evidence_fds
 
-echo "Hepta Receipt V2 512 MiB resource gate: PASS evidence=$evidence_dir default_peak=$default_final_peak max_peak=$max_final_peak"
+echo "Hepta Receipt V2 512 MiB resource gate: PASS evidence=$evidence_dir closure_manifest_sha256=$closure_manifest_sha256 default_peak=$default_final_peak max_peak=$max_final_peak"

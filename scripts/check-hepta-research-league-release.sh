@@ -4,16 +4,43 @@ set -euo pipefail
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$repo_dir"
 
-release_revision="$(git rev-parse --verify HEAD^{commit})"
-release_tree="$(git rev-parse --verify "$release_revision^{tree}")"
+git_binary="$(PATH=/usr/bin:/bin command -v git)"
+
+git_authority() {
+  env -i \
+    PATH=/usr/bin:/bin \
+    HOME=/nonexistent \
+    XDG_CONFIG_HOME=/nonexistent \
+    LC_ALL=C \
+    GIT_CONFIG_NOSYSTEM=1 \
+    GIT_CONFIG_GLOBAL=/dev/null \
+    GIT_NO_REPLACE_OBJECTS=1 \
+    "$git_binary" --no-replace-objects \
+      -c core.fsmonitor=false \
+      -c core.untrackedCache=false \
+      "$@"
+}
+
+release_lock="$(git_authority -C "$repo_dir" rev-parse --path-format=absolute \
+  --git-path hepta-release-authority.lock)"
+exec 9>"$release_lock"
+flock -n 9 || {
+  echo "another Hepta release-authority process is already running" >&2
+  exit 1
+}
+
+release_revision="$(git_authority -C "$repo_dir" rev-parse --verify HEAD^{commit})"
+release_tree="$(git_authority -C "$repo_dir" rev-parse --verify "$release_revision^{tree}")"
 
 verify_release_source_unchanged() {
+  local actual_helper_blob expected_helper_blob helper_entry helper_metadata
+  local helper_mode helper_object_type helper_relative_path helper_path
   local observed_revision observed_tree observed_repo_root observed_status
 
-  observed_revision="$(git rev-parse --verify HEAD^{commit})"
-  observed_tree="$(git rev-parse --verify "$observed_revision^{tree}")"
-  observed_repo_root="$(git rev-parse --show-toplevel)"
-  observed_status="$(git status --porcelain=v1 --untracked-files=all)"
+  observed_revision="$(git_authority -C "$repo_dir" rev-parse --verify HEAD^{commit})"
+  observed_tree="$(git_authority -C "$repo_dir" rev-parse --verify "$observed_revision^{tree}")"
+  observed_repo_root="$(git_authority -C "$repo_dir" rev-parse --show-toplevel)"
+  observed_status="$(git_authority -C "$repo_dir" status --porcelain=v1 --untracked-files=all)"
 
   if [[ "$observed_repo_root" != "$repo_dir" ]]; then
     echo "Hepta release gate repository identity changed" >&2
@@ -31,6 +58,38 @@ verify_release_source_unchanged() {
     echo "Hepta release gate requires a clean worktree, including untracked files" >&2
     return 1
   fi
+
+  helper_relative_path="scripts/verify-hepta-clean-source.py"
+  helper_path="$repo_dir/$helper_relative_path"
+  if [[ ! -f "$helper_path" || -L "$helper_path" || ! -x "$helper_path" ]]; then
+    echo "Hepta release gate clean-source verifier is missing or non-regular" >&2
+    return 1
+  fi
+  helper_entry="$(git_authority -C "$repo_dir" ls-tree "$release_revision" -- "$helper_relative_path")"
+  helper_metadata="${helper_entry%%$'\t'*}"
+  if [[ "$helper_entry" == "$helper_metadata" ]]; then
+    echo "Hepta release gate clean-source verifier is absent from the release commit" >&2
+    return 1
+  fi
+  helper_relative_path="${helper_entry#*$'\t'}"
+  read -r helper_mode helper_object_type expected_helper_blob <<<"$helper_metadata"
+  if [[ "$helper_relative_path" != "scripts/verify-hepta-clean-source.py" || \
+        "$helper_mode" != "100755" || \
+        "$helper_object_type" != "blob" || \
+        ! "$expected_helper_blob" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]]; then
+    echo "Hepta release gate clean-source verifier commit authority is non-canonical" >&2
+    return 1
+  fi
+  actual_helper_blob="$(git_authority -C "$repo_dir" hash-object --no-filters -- "$helper_relative_path")"
+  if [[ "$actual_helper_blob" != "$expected_helper_blob" ]]; then
+    echo "Hepta release gate clean-source verifier bytes differ from the release commit" >&2
+    return 1
+  fi
+  python3 "$helper_path" \
+    --repo-dir "$repo_dir" \
+    --revision "$release_revision" \
+    --tree "$release_tree" \
+    >/dev/null
 }
 
 verify_release_source_unchanged
