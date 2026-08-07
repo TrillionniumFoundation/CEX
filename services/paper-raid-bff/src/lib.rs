@@ -7,4 +7,5 @@ pub mod error;
 pub mod hepta;
 pub mod html;
 pub mod nakama;
+pub mod oidc;
 pub mod probe;

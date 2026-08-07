@@ -14,6 +14,22 @@ Authority stays outside this process:
 - the BFF owns only sessions, revocation generations, CSRF uses, assertion
   audit IDs and the exact idempotent Hepta response cache.
 
+## Provider-neutral OIDC foundation
+
+`src/oidc.rs` freezes the provider-neutral OIDC security contract before any
+public login route is enabled. It validates HTTPS provider endpoints, binds the
+callback to the exact public origin, requires `openid`, enforces issuer,
+audience/authorized-party, nonce, expiry, issued-at and maximum-age checks, and
+maps the provider subject to a stable hashed local subject identifier without
+embedding provider PII.
+
+The claims API deliberately accepts only claims whose JWT signature and JOSE
+header have already been verified against the pinned provider JWKS. Token
+exchange, JWKS rotation/cache policy, PostgreSQL account provisioning and the
+browser callback route remain disabled until a real IdP is selected and tested.
+The fixed alpha login route remains the only active login path in this
+candidate, so this foundation is not evidence of a public Beta deployment.
+
 The alpha has two explicit edge scopes. `loopback_process` requires a
 loopback bind. `container_loopback_publish` requires an unspecified container
 bind and must be published by the host only on `127.0.0.1`, then reached over
