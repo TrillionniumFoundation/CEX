@@ -6,7 +6,6 @@ mode=${1:-}
 lock_relative=services/hepta-research-league/docker/Cargo.lock
 tracked_lock="$repo_dir/$lock_relative"
 scratch=$(mktemp -d)
-staged_output=
 revision=$(git -C "$repo_dir" rev-parse HEAD)
 source_tree=$(git -C "$repo_dir" rev-parse 'HEAD^{tree}')
 buildx_version=v0.36.1
@@ -17,14 +16,6 @@ buildx_plugin="$docker_config/cli-plugins/docker-buildx"
 source_context="$scratch/source"
 
 cleanup() {
-  if [[ -n "$staged_output" ]]; then
-    case "$staged_output" in
-      "$repo_dir/services/hepta-research-league/docker/".Cargo.lock.*)
-        rm -f -- "$staged_output"
-        ;;
-      *) echo "refusing to remove unexpected staged Docker lock path" >&2 ;;
-    esac
-  fi
   case "$scratch" in
     /tmp/tmp.*)
       if [[ ${docker_command[0]:-} == sudo ]]; then
@@ -44,14 +35,14 @@ verify_source_unchanged() {
   if [[ "$(git -C "$repo_dir" rev-parse HEAD)" != "$revision" ]] || \
      [[ "$(git -C "$repo_dir" rev-parse 'HEAD^{tree}')" != "$source_tree" ]] || \
      [[ -n "$(git -C "$repo_dir" status --porcelain=v1 --untracked-files=all)" ]]; then
-    echo "Hepta pinned Docker-lock source changed during generation" >&2
+    echo "Hepta pinned Docker-lock source changed during verification" >&2
     exit 1
   fi
 }
 
 case "$mode" in
-  --write|--check) ;;
-  *) echo "usage: $0 (--write|--check)" >&2; exit 2 ;;
+  --check) ;;
+  *) echo "usage: $0 --check" >&2; exit 2 ;;
 esac
 [[ "$revision" =~ ^[0-9a-f]{40}$ && "$source_tree" =~ ^[0-9a-f]{40}$ ]] || {
   echo "Hepta source identity is not canonical" >&2
@@ -59,10 +50,10 @@ esac
 }
 verify_source_unchanged
 
-for command_name in bash cmp curl cut docker find flock git id install mktemp mv \
+for command_name in bash cmp curl cut docker find flock git id mktemp \
   python3 rg sha256sum sort tar timeout uname; do
   command -v "$command_name" >/dev/null 2>&1 || {
-    echo "Hepta Docker-lock generator requires $command_name" >&2
+    echo "Hepta Docker-lock verifier requires $command_name" >&2
     exit 1
   }
 done
@@ -74,7 +65,7 @@ flock -n 9 || {
   exit 1
 }
 [[ "$(uname -m)" == x86_64 ]] || {
-  echo "Hepta Docker-lock generator requires x86_64" >&2
+  echo "Hepta Docker-lock verifier requires x86_64" >&2
   exit 1
 }
 docker_command=(docker)
@@ -143,8 +134,8 @@ for directory in "$scratch/first" "$scratch/second"; do
     exit 1
   fi
 done
-for generated_lock in "$first_lock" "$second_lock"; do
-  [[ -f "$generated_lock" && ! -L "$generated_lock" ]] || {
+for exported_lock in "$first_lock" "$second_lock"; do
+  [[ -f "$exported_lock" && ! -L "$exported_lock" ]] || {
     echo "pinned builder exported a non-regular Docker lock" >&2
     exit 1
   }
@@ -159,27 +150,27 @@ import tomllib
 path = pathlib.Path(sys.argv[1])
 document = tomllib.loads(path.read_text(encoding="utf-8"))
 if document.get("version") != 4 or set(document) != {"version", "package"}:
-    raise SystemExit("generated Docker lock has a non-canonical top-level shape")
+    raise SystemExit("verified Docker lock has a non-canonical top-level shape")
 packages = document.get("package")
 if not isinstance(packages, list) or not packages:
-    raise SystemExit("generated Docker lock contains no packages")
+    raise SystemExit("verified Docker lock contains no packages")
 identities = []
 local = []
 for package in packages:
     if not isinstance(package, dict):
-        raise SystemExit("generated Docker lock package is not an object")
+        raise SystemExit("verified Docker lock package is not an object")
     name = package.get("name")
     version = package.get("version")
     source = package.get("source")
     if not isinstance(name, str) or not isinstance(version, str):
-        raise SystemExit("generated Docker lock package identity is invalid")
+        raise SystemExit("verified Docker lock package identity is invalid")
     if isinstance(source, str) and source.startswith("git+"):
-        raise SystemExit("generated Docker lock contains a Git dependency")
+        raise SystemExit("verified Docker lock contains a Git dependency")
     identities.append((name, version, source))
     if source is None:
         local.append((name, version))
 if len(identities) != len(set(identities)):
-    raise SystemExit("generated Docker lock contains duplicate package identities")
+    raise SystemExit("verified Docker lock contains duplicate package identities")
 expected_local = {
     ("hepta-paper-raid-contracts", "0.1.0"),
     ("hepta-research-league", "0.1.0"),
@@ -189,52 +180,15 @@ expected_local = {
     ("trnm-research-protocol", "0.1.0"),
 }
 if set(local) != expected_local or len(local) != len(expected_local):
-    raise SystemExit(f"generated Docker lock local package closure drifted: {local!r}")
+    raise SystemExit(f"verified Docker lock local package closure drifted: {local!r}")
 PY
 
 verify_source_unchanged
-if [[ "$mode" == --check ]]; then
-  [[ -f "$tracked_lock" && ! -L "$tracked_lock" ]] || {
-    echo "tracked Hepta Docker lock is missing or non-regular" >&2
-    exit 1
-  }
-  cmp "$tracked_lock" "$first_lock"
-  verify_source_unchanged
-else
-  [[ ! -L "$tracked_lock" ]] || {
-    echo "tracked Hepta Docker lock must not be a symlink" >&2
-    exit 1
-  }
-  if git -C "$repo_dir" cat-file -e "$revision:$lock_relative" 2>/dev/null; then
-    expected_status=" M $lock_relative"
-  else
-    expected_status="?? $lock_relative"
-  fi
-  staged_output=$(mktemp \
-    "$repo_dir/services/hepta-research-league/docker/.Cargo.lock.XXXXXX")
-  install -m 0644 "$first_lock" "$staged_output"
-  cmp "$staged_output" "$first_lock"
-  staged_relative=${staged_output#"$repo_dir/"}
-  if [[ "$(git -C "$repo_dir" rev-parse HEAD)" != "$revision" ]] || \
-     [[ "$(git -C "$repo_dir" rev-parse 'HEAD^{tree}')" != "$source_tree" ]] || \
-     [[ "$(git -C "$repo_dir" status --porcelain=v1 --untracked-files=all)" != "?? $staged_relative" ]]; then
-    echo "Hepta source changed while staging the atomic Docker-lock write" >&2
-    exit 1
-  fi
-  mv -f -- "$staged_output" "$tracked_lock"
-  staged_output=
-  cmp "$tracked_lock" "$first_lock"
-  if [[ "$(git -C "$repo_dir" rev-parse HEAD)" != "$revision" ]] || \
-     [[ "$(git -C "$repo_dir" rev-parse 'HEAD^{tree}')" != "$source_tree" ]]; then
-    echo "Hepta source identity changed during the atomic Docker-lock write" >&2
-    exit 1
-  fi
-  write_status=$(git -C "$repo_dir" status --porcelain=v1 --untracked-files=all)
-  if [[ -n "$write_status" && "$write_status" != "$expected_status" ]]; then
-    echo "unexpected worktree change raced the atomic Hepta Docker-lock write" >&2
-    exit 1
-  fi
-  cmp "$tracked_lock" "$first_lock"
-fi
-printf 'Hepta pinned Docker lock %s: PASS sha256=%s\n' \
-  "${mode#--}" "$(sha256sum "$first_lock" | cut -d' ' -f1)"
+[[ -f "$tracked_lock" && ! -L "$tracked_lock" ]] || {
+  echo "tracked Hepta Docker lock is missing or non-regular" >&2
+  exit 1
+}
+cmp "$tracked_lock" "$first_lock"
+verify_source_unchanged
+printf 'Hepta pinned Docker lock check: PASS sha256=%s\n' \
+  "$(sha256sum "$first_lock" | cut -d' ' -f1)"

@@ -41,14 +41,17 @@ RUN test "$(sed -n '1p' /toolchain/rust-toolchain.manifest)" = \
     && test "$(rustc --version)" = "rustc 1.95.0 (59807616e 2026-04-14)" \
     && test "$(cargo --version)" = "cargo 1.95.0 (f2d3ce0bd 2026-03-21)"
 
-FROM workspace AS lockfile-generator
+FROM workspace AS lockfile-verifier
+COPY services/hepta-research-league/docker/Cargo.lock Cargo.lock
 RUN CARGO_HTTP_TIMEOUT=600 \
     CARGO_HTTP_LOW_SPEED_LIMIT=1 \
     CARGO_NET_RETRY=5 \
-    cargo generate-lockfile
+    cargo fetch --locked \
+    && cargo metadata --locked --offline --format-version 1 \
+      > /cargo-lock-metadata.json
 
 FROM scratch AS cargo-lock-export
-COPY --from=lockfile-generator /src/Cargo.lock /Cargo.lock
+COPY --from=lockfile-verifier /src/Cargo.lock /Cargo.lock
 
 FROM workspace AS builder
 COPY services/hepta-research-league/docker/Cargo.lock Cargo.lock

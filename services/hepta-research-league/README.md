@@ -442,15 +442,22 @@ Run the no-Cargo/no-Docker structure and negative gate first:
 bash scripts/check-hepta-research-league-release-structure.sh
 ```
 
-After changing the minimal compile manifests, generate its lock twice from the
-clean immutable revision with the pinned builder, review and commit it, then
-prove that the committed bytes regenerate exactly:
+The dedicated Docker `Cargo.lock` is a reviewed release input. The pinned
+builder fetches only its exact registry identities and checksums, then verifies
+the manifest-to-lock graph offline; it never re-resolves loose semver ranges
+against the moving crates.io index. From a clean immutable revision, two
+independent no-cache checks must export the tracked lock byte-for-byte:
 
 ```bash
-bash scripts/generate-hepta-research-league-docker-lock.sh --write
-# review and commit services/hepta-research-league/docker/Cargo.lock
 bash scripts/generate-hepta-research-league-docker-lock.sh --check
 ```
+
+Any dependency-graph change is a separate reviewed lock-update ceremony. A
+local package edge may be added only when it already resolves to an identity
+and checksum present in the dedicated lock, with every registry package record
+held byte-for-byte constant. Adding or refreshing a registry package requires
+an explicit supply-chain review before committing the new lock; the ordinary
+release path has no online `--write` mode.
 
 Next generate the runtime-bound SBOM with the pinned builder, review and commit
 the resulting SBOM, then prove that the committed bytes regenerate exactly:

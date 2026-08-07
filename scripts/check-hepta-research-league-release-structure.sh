@@ -131,6 +131,8 @@ def validate_dockerfile(text):
         fail("Dockerfile ADD instructions are forbidden")
     if re.search(r"(?mi)^\s*RUN\s+--mount(?:=|[ \t])", text):
         fail("Dockerfile RUN mounts are forbidden")
+    if re.search(r"(?m)\bcargo\s+(?:generate-lockfile|update)\b", text):
+        fail("Dockerfile must not resolve against a moving registry index")
     blocks = stage_blocks(text)
     identities = [(base, name) for base, name, _ in blocks]
     expected_identities = [
@@ -138,7 +140,7 @@ def validate_dockerfile(text):
             "docker.io/library/rust@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd578ed948b71b37c1d7fb",
             "workspace",
         ),
-        ("workspace", "lockfile-generator"),
+        ("workspace", "lockfile-verifier"),
         ("scratch", "cargo-lock-export"),
         ("workspace", "builder"),
         ("scratch", "runtime-binary-export"),
@@ -192,28 +194,50 @@ def validate_dockerfile(text):
     for fragment in required_workspace_fragments:
         if fragment not in workspace_stage:
             fail(f"workspace-stage authority is missing {fragment!r}")
-    lockfile_generator = blocks[1][2]
+    lockfile_verifier = blocks[1][2]
     lockfile_export = blocks[2][2]
     builder = blocks[3][2]
     runtime_export = blocks[4][2]
     metadata_export = blocks[5][2]
     release = blocks[6][2]
     final = blocks[7][2]
-    lockfile_generator_instructions = [
+    lockfile_verifier_instructions = [
         line.strip()
-        for line in lockfile_generator.splitlines()
+        for line in lockfile_verifier.splitlines()
         if line.strip() and not line.lstrip().startswith("#")
     ]
-    if lockfile_generator_instructions[0] != "FROM workspace AS lockfile-generator":
-        fail("lockfile generator stage identity drifted")
+    if lockfile_verifier_instructions[0] != "FROM workspace AS lockfile-verifier":
+        fail("lockfile verifier stage identity drifted")
     lockfile_heads = re.findall(
         r"(?mi)^(FROM|RUN|COPY|ADD|ARG|ENV|WORKDIR|LABEL|USER|ENTRYPOINT|CMD|HEALTHCHECK)\b",
-        lockfile_generator,
+        lockfile_verifier,
     )
-    if lockfile_heads != ["FROM", "RUN"]:
-        fail("lockfile generator must contain exactly one RUN instruction")
-    if "cargo generate-lockfile" not in lockfile_generator:
-        fail("lockfile generator does not use pinned Cargo authority")
+    if lockfile_heads != ["FROM", "COPY", "RUN"]:
+        fail("lockfile verifier must contain exactly one COPY and one RUN instruction")
+    if [
+        line
+        for line in lockfile_verifier_instructions
+        if line.startswith("COPY ")
+    ] != ["COPY services/hepta-research-league/docker/Cargo.lock Cargo.lock"]:
+        fail("lockfile verifier must consume only the dedicated Docker lock")
+    for fragment in (
+        "cargo fetch --locked",
+        "cargo metadata --locked --offline --format-version 1",
+    ):
+        if fragment not in lockfile_verifier:
+            fail(f"lockfile verifier is missing {fragment!r}")
+    if "cargo generate-lockfile" in lockfile_verifier or "cargo update" in lockfile_verifier:
+        fail("lockfile verifier must not resolve against a moving registry index")
+    expected_lockfile_verifier = r"""FROM workspace AS lockfile-verifier
+COPY services/hepta-research-league/docker/Cargo.lock Cargo.lock
+RUN CARGO_HTTP_TIMEOUT=600 \
+    CARGO_HTTP_LOW_SPEED_LIMIT=1 \
+    CARGO_NET_RETRY=5 \
+    cargo fetch --locked \
+    && cargo metadata --locked --offline --format-version 1 \
+      > /cargo-lock-metadata.json"""
+    if lockfile_verifier.strip() != expected_lockfile_verifier:
+        fail("lockfile verifier command sequence drifted")
     lockfile_export_instructions = [
         line.strip()
         for line in lockfile_export.splitlines()
@@ -221,9 +245,9 @@ def validate_dockerfile(text):
     ]
     if lockfile_export_instructions != [
         "FROM scratch AS cargo-lock-export",
-        "COPY --from=lockfile-generator /src/Cargo.lock /Cargo.lock",
+        "COPY --from=lockfile-verifier /src/Cargo.lock /Cargo.lock",
     ]:
-        fail("cargo-lock-export must export exactly the generated Docker lock")
+        fail("cargo-lock-export must export exactly the verified Docker lock")
     builder_instructions = [
         line.strip()
         for line in builder.splitlines()
@@ -249,6 +273,22 @@ def validate_dockerfile(text):
     for fragment in required_builder_fragments:
         if fragment not in builder:
             fail(f"compile-stage authority is missing {fragment!r}")
+    expected_builder = r"""FROM workspace AS builder
+COPY services/hepta-research-league/docker/Cargo.lock Cargo.lock
+RUN CARGO_HTTP_TIMEOUT=600 \
+    CARGO_HTTP_LOW_SPEED_LIMIT=1 \
+    CARGO_NET_RETRY=5 \
+    cargo fetch --locked
+RUN cargo metadata --locked --offline --format-version 1 > /cargo-metadata.json
+RUN env -u SOURCE_DATE_EPOCH \
+        -u RUNTIME_BINARY_SHA256 \
+        -u VCS_REF \
+        -u SOURCE_TREE \
+        -u SBOM_SHA256 \
+      cargo build --locked --offline --release \
+        -p hepta-research-league --bin hepta-research-league"""
+    if builder.strip() != expected_builder:
+        fail("compile builder command sequence drifted")
     runtime_instructions = [
         line.strip()
         for line in runtime_export.splitlines()
@@ -346,16 +386,72 @@ for mutation, expected in (
         "final image COPY",
     ),
     (
-        dockerfile.replace("cargo generate-lockfile", "cargo update", 1),
-        "pinned Cargo authority",
+        dockerfile.replace("cargo fetch --locked", "cargo fetch", 1),
+        "cargo fetch --locked",
     ),
     (
         dockerfile.replace(
-            "COPY services/hepta-research-league/docker/Cargo.lock Cargo.lock",
-            "COPY Cargo.lock Cargo.lock",
+            "cargo fetch --locked \\",
+            "cargo fetch --locked || true \\",
+            1,
+        ),
+        "lockfile verifier command sequence",
+    ),
+    (
+        dockerfile.replace(
+            "cargo metadata --locked --offline --format-version 1",
+            "cargo metadata --locked --format-version 1",
+            1,
+        ),
+        "cargo metadata --locked --offline --format-version 1",
+    ),
+    (
+        dockerfile.replace(
+            "cargo metadata --locked --offline --format-version 1",
+            "cargo metadata --offline --format-version 1",
+            1,
+        ),
+        "cargo metadata --locked --offline --format-version 1",
+    ),
+    (
+        dockerfile.replace(
+            "FROM workspace AS lockfile-verifier\nCOPY services/hepta-research-league/docker/Cargo.lock Cargo.lock",
+            "FROM workspace AS lockfile-verifier\nCOPY Cargo.lock Cargo.lock",
+            1,
+        ),
+        "lockfile verifier",
+    ),
+    (
+        dockerfile.replace(
+            "cargo fetch --locked \\",
+            "cargo fetch --locked \\\n    && cargo generate-lockfile \\",
+            1,
+        ),
+        "moving registry index",
+    ),
+    (
+        dockerfile.replace(
+            "FROM workspace AS builder\nCOPY services/hepta-research-league/docker/Cargo.lock Cargo.lock",
+            "FROM workspace AS builder\nCOPY Cargo.lock Cargo.lock",
             1,
         ),
         "dedicated Docker lock",
+    ),
+    (
+        dockerfile.replace(
+            "RUN cargo metadata --locked --offline --format-version 1 > /cargo-metadata.json",
+            "RUN cargo metadata --locked --offline --format-version 1 > /cargo-metadata.json\nRUN true",
+            1,
+        ),
+        "compile builder command sequence",
+    ),
+    (
+        dockerfile.replace(
+            "FROM workspace AS builder",
+            "FROM workspace AS builder\nRUN cargo update",
+            1,
+        ),
+        "moving registry index",
     ),
 ):
     try:
@@ -576,12 +672,14 @@ lock_script = require_fragments(
         'cmp "$first_lock" "$second_lock"',
         'sudo -n chown -R -- "$(id -u):$(id -g)" "$destination"',
         "expected_local",
-        "write_status=",
+        '*) echo "usage: $0 --check" >&2; exit 2 ;;',
         'cmp "$tracked_lock" "$first_lock"',
     ),
 )
 if lock_script.count("verify_source_unchanged") < 5:
-    fail("Docker-lock generation lacks repeated TOCTOU checks")
+    fail("Docker-lock verification lacks repeated TOCTOU checks")
+if "--write" in lock_script:
+    fail("ordinary Docker-lock verification must not expose an online write mode")
 
 image_script = require_fragments(
     "scripts/build-hepta-research-league-image.sh",
