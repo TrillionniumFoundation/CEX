@@ -27,21 +27,26 @@ use crate::{
         human_key_rotation_signing_bytes, paper_appeal_resolution_signing_bytes,
         paper_appeal_signing_bytes, paper_evaluation_signing_bytes,
         paper_reproduction_signing_bytes, paper_review_attestation_signing_bytes,
-        section_merge_signing_bytes, section_review_signing_bytes, sha256_digest,
-        sign_authorship_consent, sign_consumer_user_assertion,
-        team_member_acceptance_signing_bytes, AgentBindingKeyRotationClaimV2,
-        AgentBindingProofClaimV2, AgentProposalSigningV1, AuthorshipConsentSigningV2,
-        ConsumerUserAssertionClaimV2, HumanDecisionSigningV1, HumanEvidenceVerificationSigningV1,
-        HumanKeyRegistrationClaimV2, HumanKeyRevocationClaimV2, HumanKeyRotationClaimV2,
-        PaperAppealResolutionSigningV1, PaperAppealSigningV1, PaperEvaluationSigningV1,
-        PaperReproductionSigningV1, PaperReviewAttestationSigningV1, SectionMergeSigningV1,
-        SectionReviewSigningV1, TeamMemberAcceptanceSigningV2, AGENT_BINDING_KEY_ROTATION_V2,
-        AGENT_BINDING_PROOF_V2, AGENT_PROPOSAL_V1, AUTHORSHIP_CONSENT_V2,
-        CONSUMER_USER_ASSERTION_V2, HUMAN_DECISION_V1, HUMAN_EVIDENCE_VERIFICATION_V1,
-        HUMAN_KEY_REGISTRATION_V2, HUMAN_KEY_REVOCATION_V2, HUMAN_KEY_ROTATION_V2,
-        JSON_SAFE_U64_MAX, PAPER_APPEAL_RESOLUTION_V1, PAPER_APPEAL_V1, PAPER_EVALUATION_V1,
-        PAPER_REPRODUCTION_V1, PAPER_REVIEW_ATTESTATION_V1, SECTION_MERGE_V1, SECTION_REVIEW_V1,
-        TEAM_MEMBER_ACCEPTANCE_V2,
+        research_session_archive_hash, research_session_commitment_id,
+        research_session_completion_signing_bytes, research_session_event_hash,
+        research_session_event_id, research_session_event_root,
+        research_session_terminal_facts_frame, section_merge_signing_bytes,
+        section_review_signing_bytes, sha256_digest, sign_authorship_consent,
+        sign_consumer_user_assertion, team_member_acceptance_signing_bytes,
+        AgentBindingKeyRotationClaimV2, AgentBindingProofClaimV2, AgentProposalSigningV1,
+        AuthorshipConsentSigningV2, ConsumerUserAssertionClaimV2, HumanDecisionSigningV1,
+        HumanEvidenceVerificationSigningV1, HumanKeyRegistrationClaimV2, HumanKeyRevocationClaimV2,
+        HumanKeyRotationClaimV2, PaperAppealResolutionSigningV1, PaperAppealSigningV1,
+        PaperEvaluationSigningV1, PaperReproductionSigningV1, PaperReviewAttestationSigningV1,
+        ResearchSessionCompletionV1, ResearchSessionEventV1, ResearchSessionTerminalFactsV1,
+        SectionMergeSigningV1, SectionReviewSigningV1, TeamMemberAcceptanceSigningV2,
+        AGENT_BINDING_KEY_ROTATION_V2, AGENT_BINDING_PROOF_V2, AGENT_PROPOSAL_V1,
+        AUTHORSHIP_CONSENT_V2, CONSUMER_USER_ASSERTION_V2, HUMAN_DECISION_V1,
+        HUMAN_EVIDENCE_VERIFICATION_V1, HUMAN_KEY_REGISTRATION_V2, HUMAN_KEY_REVOCATION_V2,
+        HUMAN_KEY_ROTATION_V2, JSON_SAFE_U64_MAX, PAPER_APPEAL_RESOLUTION_V1, PAPER_APPEAL_V1,
+        PAPER_EVALUATION_V1, PAPER_REPRODUCTION_V1, PAPER_REVIEW_ATTESTATION_V1,
+        RESEARCH_SESSION_COMPLETION_V1, RESEARCH_SESSION_EVENT_V1, SECTION_MERGE_V1,
+        SECTION_REVIEW_V1, TEAM_MEMBER_ACCEPTANCE_V2,
     },
     AppState, SecurityConfig, NAKAMA_TOKEN_HEADER, OPERATOR_TOKEN_HEADER, TRNM_TOKEN_HEADER,
     USER_ASSERTION_HEADER,
@@ -848,6 +853,10 @@ pub(crate) async fn reset_postgres(database_url: &str) {
         .expect("maintenance pool");
     sqlx::raw_sql(
         "truncate table
+           hepta_paper_chain_finality_projections,
+           hepta_paper_chain_receipts,
+           hepta_paper_chain_finality_inbox,
+           hepta_trnm_cometbft_trust_anchors,
            hepta_paper_appeal_resolutions,
            hepta_paper_appeals,
            hepta_paper_reproductions,
@@ -3718,10 +3727,128 @@ pub(super) async fn seed_three_member_postgres_flow_for_control_test(state: AppS
     let _ = run_full_flow(state, 3, FlowOptions::default()).await;
 }
 
+async fn seeded_chain_finality_authorization_set(
+    state: &AppState,
+    session_id: &str,
+    roster_version: u64,
+) -> ResearchSessionAuthorizationSetV1 {
+    if let Some(pool) = &state.pool {
+        let record_json: Value = sqlx::query_scalar(
+            "select record_json from hepta_research_session_authorization_sets
+             where session_id=$1 and roster_version=$2",
+        )
+        .bind(session_id)
+        .bind(i64::try_from(roster_version).expect("fixture roster version fits PostgreSQL bigint"))
+        .fetch_one(pool)
+        .await
+        .expect("seeded PostgreSQL Research Session authorization set");
+        return serde_json::from_value(record_json)
+            .expect("decode seeded PostgreSQL Research Session authorization set");
+    }
+
+    state
+        .paper_raid
+        .read()
+        .await
+        .research_session_authorization_sets
+        .get(&(session_id.to_string(), roster_version))
+        .cloned()
+        .expect("seeded in-memory Research Session authorization set")
+}
+
+fn seeded_chain_finality_nakama_completion(
+    authorization_set: &ResearchSessionAuthorizationSetV1,
+    submission: &JointPaperSubmission,
+) -> (ResearchSessionCompletionV1, Vec<ResearchSessionEventV1>) {
+    assert_eq!(
+        authorization_set.status,
+        ResearchSessionAuthorizationSetStatus::Consumed,
+        "the fixture must exercise the real consumed-to-completed transition"
+    );
+    let first_claim = &authorization_set
+        .members
+        .first()
+        .expect("seeded Research Session has members")
+        .authorization
+        .claim;
+    let terminal_facts = ResearchSessionTerminalFactsV1 {
+        result_code: "paper_bundle_ready".to_string(),
+        paper_bundle_hash: submission.paper_bundle_hash.clone(),
+        paper_release_candidate_hash: submission.release_candidate_hash.clone(),
+        contribution_ledger_hash: submission
+            .paper_bundle
+            .release_candidate
+            .contribution_ledger_hash
+            .clone(),
+    };
+    let terminal_frame = research_session_terminal_facts_frame(&terminal_facts)
+        .expect("canonical terminal facts frame");
+    let completed_at_unix = Utc::now().timestamp();
+    let causation_id = sha256_digest(&terminal_frame);
+    let mut terminal_event = ResearchSessionEventV1 {
+        schema: RESEARCH_SESSION_EVENT_V1.to_string(),
+        event_id: research_session_event_id(&authorization_set.session_id, 1, &causation_id)
+            .expect("canonical terminal event ID"),
+        event_type: "research_session_completed".to_string(),
+        session_id: authorization_set.session_id.clone(),
+        team_id: authorization_set.team_id.to_string(),
+        paper_project_id: authorization_set.paper_project_id.to_string(),
+        challenge_id: authorization_set.challenge_id.to_string(),
+        roster_version: authorization_set.roster_version,
+        sequence: 1,
+        causation_id,
+        occurred_at_unix: completed_at_unix,
+        participant_slot: 0,
+        session_version: 2,
+        action_type: "server.complete".to_string(),
+        payload_type: "trnm.research-session.terminal-facts.v1".to_string(),
+        payload: BASE64.encode(&terminal_frame),
+        payload_hash: sha256_digest(&terminal_frame),
+        reference_hash: submission.release_candidate_hash.clone(),
+        event_hash: String::new(),
+    };
+    terminal_event.event_hash =
+        research_session_event_hash(&terminal_event).expect("canonical terminal event hash");
+    let archive = vec![terminal_event];
+    let event_root = research_session_event_root(&archive).expect("canonical event root");
+    let archive_hash =
+        research_session_archive_hash(&archive).expect("canonical Research Session archive hash");
+    let commitment_id =
+        research_session_commitment_id(&authorization_set.session_id, &event_root, &archive_hash)
+            .expect("canonical MatchEvidence commitment ID");
+    let mut completion = ResearchSessionCompletionV1 {
+        schema: RESEARCH_SESSION_COMPLETION_V1.to_string(),
+        commitment_id,
+        session_id: authorization_set.session_id.clone(),
+        team_id: authorization_set.team_id.to_string(),
+        paper_project_id: authorization_set.paper_project_id.to_string(),
+        challenge_id: authorization_set.challenge_id.to_string(),
+        roster_version: authorization_set.roster_version,
+        roster_root: authorization_set.roster_root.clone(),
+        terminal_facts,
+        event_count: u64::try_from(archive.len()).expect("fixture archive count fits u64"),
+        event_root,
+        archive_hash,
+        ruleset_hash: first_claim.ruleset_hash.clone(),
+        challenge_snapshot_hash: first_claim.challenge_snapshot_hash.clone(),
+        completed_at_unix,
+        authority_key_id: "nakama-paper-raid-test-v1".to_string(),
+        signature: String::new(),
+    };
+    let signing_frame = research_session_completion_signing_bytes(&completion)
+        .expect("canonical Nakama completion signing frame");
+    completion.signature = BASE64.encode(
+        SigningKey::from_bytes(&[0x75; 32])
+            .sign(&signing_frame)
+            .to_bytes(),
+    );
+    (completion, archive)
+}
+
 #[allow(dead_code)]
 pub(crate) async fn seed_paper_chain_finality_test(state: AppState) -> PaperTrnmCommandBindingV1 {
     let _ = run_full_flow(state.clone(), 3, FlowOptions::default()).await;
-    let router = app(state);
+    let router = app(state.clone());
     let authors = actors(3);
     let external = actors(11);
     register_prerequisites(&router, &external).await;
@@ -3788,14 +3915,46 @@ pub(crate) async fn seed_paper_chain_finality_test(state: AppState) -> PaperTrnm
         serde_json::from_value(reproduction).expect("decode seeded reproduction");
     let submission: JointPaperSubmission =
         serde_json::from_value(submission).expect("decode seeded submission");
+    let research_session_id = "paper-raid-3-session";
+    let research_session_roster_version = 1;
+    let authorization_set = seeded_chain_finality_authorization_set(
+        &state,
+        research_session_id,
+        research_session_roster_version,
+    )
+    .await;
+    let (completion, archive) =
+        seeded_chain_finality_nakama_completion(&authorization_set, &submission);
+    let completion_commitment_id = completion.commitment_id.clone();
+    let completion_key = "chain-finality-nakama-completion";
+    let completion_receipt = assert_status(
+        request(
+            &router,
+            "POST",
+            "/v2/hepta/nakama/research-session-completions",
+            json!({
+                "schema":"hepta.paper_raid.nakama_completion_ingest.v1",
+                "completion":completion,
+                "archive":archive,
+                "idempotency_key":completion_key,
+            }),
+            None,
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+    assert_eq!(
+        completion_receipt["commitment_id"], completion_commitment_id,
+        "Hepta must persist the exact archive-bound MatchEvidence commitment"
+    );
     let mut binding = PaperTrnmCommandBindingV1 {
         schema: PAPER_TRNM_COMMAND_BINDING_SCHEMA_V1.to_string(),
         paper_project_id: paper_id,
         submission_id: submission.submission_id,
         evaluation_id,
-        research_session_id: "paper-raid-3-session".to_string(),
-        research_session_roster_version: 1,
-        match_evidence_commitment_id: digest("paper-chain-finality-match-evidence"),
+        research_session_id: research_session_id.to_string(),
+        research_session_roster_version,
+        match_evidence_commitment_id: completion_commitment_id,
         match_evidence_object_version: 1,
         release_candidate_hash: submission.release_candidate_hash,
         paper_bundle_hash: submission.paper_bundle_hash,

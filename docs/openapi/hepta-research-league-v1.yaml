@@ -320,7 +320,9 @@ paths:
       description: >-
         The service token authenticates transport only. Projection succeeds
         only after offline validator-set, quorum-signature, command-fingerprint,
-        receipt-hash, and state inclusion-proof verification.
+        receipt-hash, and state inclusion-proof verification. Paper-bound
+        commands are rejected before verification and must use the Receipt V2
+        Paper finality endpoint.
       requestBody:
         required: true
         content:
@@ -329,6 +331,7 @@ paths:
       responses:
         "202": { description: Cryptographically verified final receipt projected }
         "400": { description: Receipt failed closed cryptographic verification }
+        "409": { description: Paper-bound command or immutable inbox conflict }
   /v1/hepta/trnm/finality/live:
     post:
       tags: [TRNM]
@@ -337,7 +340,9 @@ paths:
       description: >-
         Verifies a native trnm_chain_finality_receipt_v1 against local validator
         trust anchors and binds its domain command fingerprint and exact object
-        reference to the queued signed research command.
+        reference to the queued signed research command. Paper-bound commands
+        are rejected before verification and must use the Receipt V2 Paper
+        finality endpoint.
       requestBody:
         required: true
         content:
@@ -346,6 +351,7 @@ paths:
       responses:
         "202": { description: Native Chain receipt verified and durably projected }
         "400": { description: Receipt, fingerprint, object reference, QC, or proof rejected }
+        "409": { description: Paper-bound command or immutable inbox conflict }
   /v1/hepta/trnm/finality/live/{command_id}:
     get:
       tags: [TRNM]

@@ -27,6 +27,7 @@ The first runnable slice supports:
 14. Nakama authoritative match-event ingestion, binary Merkle-root validation, and reconciliation;
 15. OpenAPI, SDK fixtures, research terminal/operator reads, metrics, readiness, and rate limits.
 16. offline TRNM object-inclusion and validator-quorum verification against local trust anchors.
+17. canonical Receipt V2 verification against operator-admitted, locally pinned CometBFT trust anchors for Paper-bound commands.
 
 ## Run
 
@@ -49,7 +50,10 @@ TRNM_NAKAMA_AUTHORITY_PUBLIC_KEY_BASE64='<nakama-completion-public-key>' \
 TRNM_NAKAMA_AUTHORITY_PUBLIC_KEYS_JSON='{"old-key":"<old-public-key>","new-key":"<new-public-key>"}' \
 HEPTA_TRNM_TOKEN='<different-trnm-secret>' \
 HEPTA_FINALITY_MODE='pending_only' \
-HEPTA_TRNM_VALIDATOR_SETS_JSON='<trusted validator-set JSON>' \
+HEPTA_TRNM_VALIDATOR_SETS_JSON='[]' \
+HEPTA_TRNM_COMETBFT_TRUST_ANCHOR_HASHES_JSON='[]' \
+HEPTA_TRNM_RECEIPT_V2_MAX_BODY_BYTES='67108864' \
+HEPTA_TRNM_RECEIPT_V2_MAX_IN_FLIGHT='1' \
 HEPTA_DATABASE_URL='postgres://hepta:...@postgres/hepta' \
 cargo run -p hepta-research-league
 ```
@@ -60,6 +64,29 @@ zero-downtime rotation. The legacy key ID/public-key pair remains required and
 must byte-match any ring entry with the same key ID. Add the new public key,
 switch the signer, then retire the old key only after in-flight assertions and
 resumable sessions have drained.
+
+A Receipt-V2-only verified deployment uses an empty legacy validator-set list
+and one or more pinned anchor hashes; two entries are the normal overlap state:
+
+```bash
+HEPTA_FINALITY_MODE='verified' \
+HEPTA_TRNM_VALIDATOR_SETS_JSON='[]' \
+HEPTA_TRNM_COMETBFT_TRUST_ANCHOR_HASHES_JSON='["<active-64-lowercase-hex>","<next-64-lowercase-hex>"]' \
+HEPTA_TRNM_RECEIPT_V2_MAX_BODY_BYTES='67108864' \
+HEPTA_TRNM_RECEIPT_V2_MAX_IN_FLIGHT='1'
+```
+
+`HEPTA_TRNM_RECEIPT_V2_MAX_BODY_BYTES` is the deployment ingress cap. It
+defaults to 64 MiB, must be positive, and cannot exceed Chain's frozen 128 MiB
+Receipt V2 wire maximum. `HEPTA_TRNM_RECEIPT_V2_MAX_IN_FLIGHT` defaults to one
+and is restricted to 1-4 concurrent authenticated verifications. Authentication
+and trust-anchor header validation run before permit acquisition or body
+polling; when all permits are occupied, the endpoint returns stable HTTP 503
+without reading the body.
+
+`/ready` reports `finality_mode`, `pinned_cometbft_trust_anchor_hashes`,
+`trnm_receipt_v2_max_body_bytes`, and `trnm_receipt_v2_max_in_flight`; verified
+mode with a zero pin count is never ready.
 
 The default listener is `127.0.0.1:7011`. Override it with `HEPTA_BIND_ADDR`.
 Production startup requires PostgreSQL and three non-empty, pairwise-distinct
@@ -95,6 +122,8 @@ HEPTA_BIND_ADDR=0.0.0.0:7011 cargo run -p hepta-research-league
 | `POST` | `/v1/hepta/trnm/*` | Queue typed commitment/workload/claim/license/challenge/resolve commands |
 | `POST` | `/v1/hepta/trnm/finality` | Verify and project a complete TRNM finality receipt |
 | `POST` | `/v1/hepta/trnm/finality/verify` | Verify receipt, QC, and inclusion proof offline |
+| `POST` | `/v2/hepta/operator/trnm/trust-anchors` | Authenticated admission of an exactly pinned canonical CometBFT trust anchor |
+| `POST` | `/v2/hepta/papers/:paper_id/chain-finality` | Verify Receipt V2 and atomically create the Paper finality projection |
 | `GET` | `/ready` | Storage and architecture readiness |
 | `GET` | `/metrics` | Prometheus metrics |
 
@@ -103,12 +132,23 @@ Challenge creation, evaluation, and TRNM command creation require
 receipt writes require `x-hepta-trnm-token`.
 
 The TRNM token authenticates the delivery channel only. It never establishes
-finality. Production startup also requires
-`HEPTA_TRNM_VALIDATOR_SETS_JSON`, containing one or more trusted
-`chain_id + validator_set_id` entries with Ed25519 public keys and voting
-power. A receipt is rejected unless its canonical hash, queued command
-fingerprint, object inclusion proof, validator signatures, and greater-than
-two-thirds trusted voting power all verify without a Chain RPC call.
+finality. `verified` mode requires
+`HEPTA_TRNM_COMETBFT_TRUST_ANCHOR_HASHES_JSON` to contain at least one
+lowercase SHA-256 hash. Multiple hashes form an overlap ring: admit the new
+canonical anchor through the authenticated operator endpoint before Chain
+delivery switches to it, retain both hashes while in-flight receipts drain,
+then remove the retiring hash. Missing or empty pins make startup and readiness
+fail closed. The selected canonical anchor must also have been admitted to
+local durable storage before Receipt V2 is accepted.
+
+`HEPTA_TRNM_VALIDATOR_SETS_JSON` is retained only for unbound legacy v1
+receipts and may be `[]` in a Receipt-V2-only deployment. Both legacy mutation
+endpoints reject every Paper-bound command with HTTP 409 before receipt
+verification or inbox replay; only
+`/v2/hepta/papers/:paper_id/chain-finality` may advance such a command to
+`verified_finality`. Receipt V2 is rejected unless its canonical bytes,
+queued command and Paper binding, CometBFT light proof, transaction/result
+proofs, AppHash object proof, and pinned trust anchor all verify locally.
 
 ## Submission signature
 

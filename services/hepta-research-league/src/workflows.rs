@@ -274,6 +274,8 @@ struct ReadyResponse {
     finality_mode: &'static str,
     trusted_validator_sets: usize,
     pinned_cometbft_trust_anchor_hashes: usize,
+    trnm_receipt_v2_max_body_bytes: usize,
+    trnm_receipt_v2_max_in_flight: usize,
 }
 
 pub(crate) fn router() -> Router<AppState> {
@@ -416,6 +418,8 @@ async fn ready(State(state): State<AppState>) -> (StatusCode, Json<ReadyResponse
             .security
             .pinned_trnm_cometbft_trust_anchor_hashes
             .len(),
+        trnm_receipt_v2_max_body_bytes: state.security.trnm_receipt_v2_max_body_bytes,
+        trnm_receipt_v2_max_in_flight: state.security.trnm_receipt_v2_max_in_flight,
     };
     (
         if ready {
@@ -997,19 +1001,18 @@ async fn ingest_trnm_finality(
     headers: HeaderMap,
     Json(receipt): Json<FinalityReceiptV1>,
 ) -> Result<(StatusCode, Json<TrnmFinalityProjection>), ApiError> {
-    require_verified_finality_mode(&state)?;
     require_service_token(
         &headers,
         TRNM_TOKEN_HEADER,
         &state.security.trnm_token,
         "trnm_auth_failed",
     )?;
-    let command_fingerprint = state
+    let command = state
         .inspect(|league| {
             league
                 .trnm_commands
                 .get(&receipt.command_id)
-                .map(|command| command.command_fingerprint.clone())
+                .cloned()
                 .ok_or_else(|| {
                     ApiError::not_found(
                         "trnm_command_not_found",
@@ -1018,9 +1021,11 @@ async fn ingest_trnm_finality(
                 })
         })
         .await?;
+    reject_legacy_finality_for_paper_command(&command)?;
+    require_verified_finality_mode(&state)?;
     let verified = verify_finality_receipt(
         &receipt,
-        Some(&command_fingerprint),
+        Some(&command.command_fingerprint),
         &state.security.trusted_trnm_validator_sets,
     )
     .map_err(|error| {
@@ -1031,6 +1036,16 @@ async fn ingest_trnm_finality(
     })?;
     state
         .transact(|league| {
+            let command = league
+                .trnm_commands
+                .get(&receipt.command_id)
+                .ok_or_else(|| {
+                    ApiError::not_found(
+                        "trnm_command_not_found",
+                        format!("TRNM command {} does not exist", receipt.command_id),
+                    )
+                })?;
+            reject_legacy_finality_for_paper_command(command)?;
             let inbox_key = format!("trnm-finality-v2:{}", receipt.source_event_id);
             if let Some(existing_hash) = league.inbox_events.get(&inbox_key) {
                 if existing_hash != &receipt.receipt_hash {
@@ -1103,7 +1118,6 @@ async fn ingest_live_trnm_finality(
     headers: HeaderMap,
     Json(request): Json<LiveTrnmFinalityRequestV1>,
 ) -> Result<(StatusCode, Json<LiveTrnmFinalityProjection>), ApiError> {
-    require_verified_finality_mode(&state)?;
     require_service_token(
         &headers,
         TRNM_TOKEN_HEADER,
@@ -1130,6 +1144,8 @@ async fn ingest_live_trnm_finality(
                 })
         })
         .await?;
+    reject_legacy_finality_for_paper_command(&command)?;
+    require_verified_finality_mode(&state)?;
     verify_live_receipt_binding(
         &request.receipt,
         &command,
@@ -1144,6 +1160,11 @@ async fn ingest_live_trnm_finality(
 
     state
         .transact(|league| {
+            let queued = league
+                .trnm_commands
+                .get(&command_id)
+                .ok_or_else(|| ApiError::internal("queued TRNM command disappeared"))?;
+            reject_legacy_finality_for_paper_command(queued)?;
             let inbox_key = format!("trnm-live-finality-v1:{}", request.source_event_id);
             if let Some(existing_hash) = league.inbox_events.get(&inbox_key) {
                 if existing_hash != &request.receipt.receipt_hash_hex {
@@ -1186,6 +1207,16 @@ async fn ingest_live_trnm_finality(
             Ok((StatusCode::ACCEPTED, Json(projection)))
         })
         .await
+}
+
+fn reject_legacy_finality_for_paper_command(command: &TrnmCommand) -> Result<(), ApiError> {
+    if command.paper_binding.is_some() {
+        return Err(ApiError::conflict(
+            "paper_trnm_legacy_finality_forbidden",
+            "Paper-bound TRNM commands can be finalized only by the Receipt V2 Paper finality endpoint",
+        ));
+    }
+    Ok(())
 }
 
 async fn get_live_trnm_finality(
@@ -1782,6 +1813,42 @@ mod tests {
         assert!(response
             .failures
             .contains(&"nakama_research_authority_missing"));
+    }
+
+    #[tokio::test]
+    async fn readiness_fails_closed_when_verified_mode_has_no_receipt_v2_pins() {
+        let security = crate::SecurityConfig::new("operator", "nakama")
+            .with_trnm_token("trnm")
+            .with_finality_mode(FinalityMode::Verified);
+        assert_eq!(
+            security
+                .validate_finality_startup()
+                .expect_err("verified startup without Receipt V2 pins must fail closed"),
+            "verified HEPTA_FINALITY_MODE requires HEPTA_TRNM_COMETBFT_TRUST_ANCHOR_HASHES_JSON with at least one pinned trust-anchor hash"
+        );
+        let pinned_only = crate::SecurityConfig::new("operator", "nakama")
+            .with_trnm_token("trnm")
+            .with_finality_mode(FinalityMode::Verified)
+            .with_pinned_trnm_cometbft_trust_anchor_hash("11".repeat(32))
+            .expect("valid Receipt V2 pin");
+        pinned_only
+            .validate_finality_startup()
+            .expect("pinned-only verified startup is valid");
+        let state = AppState::new(security);
+        let (status, Json(response)) = ready(State(state)).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert!(!response.ready);
+        assert_eq!(response.finality_mode, "verified");
+        assert_eq!(response.pinned_cometbft_trust_anchor_hashes, 0);
+        assert_eq!(
+            response.trnm_receipt_v2_max_body_bytes,
+            crate::DEFAULT_TRNM_RECEIPT_V2_MAX_BODY_BYTES
+        );
+        assert_eq!(
+            response.trnm_receipt_v2_max_in_flight,
+            crate::DEFAULT_TRNM_RECEIPT_V2_MAX_IN_FLIGHT
+        );
+        assert!(response.failures.contains(&"trnm_finality_trust_missing"));
     }
 
     #[tokio::test]

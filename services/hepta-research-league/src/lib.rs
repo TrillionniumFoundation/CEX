@@ -19,7 +19,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Row};
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{Mutex, RwLock, Semaphore};
+use trnm_finality_types::MAX_COMETBFT_RECEIPT_V2_WIRE_BYTES;
 use uuid::Uuid;
 
 pub mod trnm_v1;
@@ -39,6 +40,60 @@ pub const OPERATOR_TOKEN_HEADER: &str = "x-hepta-operator-token";
 pub const NAKAMA_TOKEN_HEADER: &str = "x-hepta-nakama-token";
 pub const TRNM_TOKEN_HEADER: &str = "x-hepta-trnm-token";
 pub const USER_ASSERTION_HEADER: &str = "x-hepta-user-assertion";
+pub const DEFAULT_TRNM_RECEIPT_V2_MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
+pub const DEFAULT_TRNM_RECEIPT_V2_MAX_IN_FLIGHT: usize = 1;
+pub const MAX_TRNM_RECEIPT_V2_MAX_IN_FLIGHT: usize = 4;
+
+const TRNM_RECEIPT_V2_MAX_BODY_BYTES_ENV: &str = "HEPTA_TRNM_RECEIPT_V2_MAX_BODY_BYTES";
+const TRNM_RECEIPT_V2_MAX_IN_FLIGHT_ENV: &str = "HEPTA_TRNM_RECEIPT_V2_MAX_IN_FLIGHT";
+
+fn parse_bounded_positive_decimal_env(
+    field: &'static str,
+    default: usize,
+    maximum: usize,
+) -> Result<usize, String> {
+    let raw = match std::env::var(field) {
+        Ok(raw) => raw,
+        Err(std::env::VarError::NotPresent) => return Ok(default),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            return Err(format!("{field} must be canonical UTF-8 decimal"));
+        }
+    };
+    parse_bounded_positive_decimal(field, &raw, maximum)
+}
+
+fn parse_bounded_positive_decimal(field: &str, raw: &str, maximum: usize) -> Result<usize, String> {
+    if raw.is_empty()
+        || (raw.len() > 1 && raw.starts_with('0'))
+        || raw.bytes().any(|byte| !byte.is_ascii_digit())
+    {
+        return Err(format!("{field} must be canonical positive decimal"));
+    }
+    let value = raw
+        .parse::<usize>()
+        .map_err(|_| format!("{field} exceeds the supported platform range"))?;
+    if value == 0 || value > maximum {
+        return Err(format!("{field} must be between 1 and {maximum}"));
+    }
+    Ok(value)
+}
+
+fn validate_trnm_receipt_v2_ingress_limits(
+    max_body_bytes: usize,
+    max_in_flight: usize,
+) -> Result<(), String> {
+    if max_body_bytes == 0 || max_body_bytes > MAX_COMETBFT_RECEIPT_V2_WIRE_BYTES {
+        return Err(format!(
+            "{TRNM_RECEIPT_V2_MAX_BODY_BYTES_ENV} must be between 1 and {MAX_COMETBFT_RECEIPT_V2_WIRE_BYTES}"
+        ));
+    }
+    if max_in_flight == 0 || max_in_flight > MAX_TRNM_RECEIPT_V2_MAX_IN_FLIGHT {
+        return Err(format!(
+            "{TRNM_RECEIPT_V2_MAX_IN_FLIGHT_ENV} must be between 1 and {MAX_TRNM_RECEIPT_V2_MAX_IN_FLIGHT}"
+        ));
+    }
+    Ok(())
+}
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -62,6 +117,7 @@ pub struct AppState {
     paper_raid: Arc<RwLock<paper_raid_v2::PaperRaidMemory>>,
     paper_chain_finality: Arc<RwLock<paper_chain_finality_v1::PaperChainFinalityMemory>>,
     paper_chain_verification_clock: Arc<dyn Fn() -> std::time::SystemTime + Send + Sync + 'static>,
+    paper_chain_verification_permits: Arc<Semaphore>,
     pool: Option<PgPool>,
     security: Arc<SecurityConfig>,
     rate_limits: Arc<Mutex<HashMap<(String, String), RateWindow>>>,
@@ -137,6 +193,8 @@ pub struct SecurityConfig {
     finality_mode: FinalityMode,
     trusted_trnm_validator_sets: Vec<trnm_v1::TrustedValidatorSetV1>,
     pinned_trnm_cometbft_trust_anchor_hashes: HashSet<String>,
+    trnm_receipt_v2_max_body_bytes: usize,
+    trnm_receipt_v2_max_in_flight: usize,
 }
 
 impl SecurityConfig {
@@ -159,6 +217,8 @@ impl SecurityConfig {
             finality_mode: FinalityMode::PendingOnly,
             trusted_trnm_validator_sets: Vec::new(),
             pinned_trnm_cometbft_trust_anchor_hashes: HashSet::new(),
+            trnm_receipt_v2_max_body_bytes: DEFAULT_TRNM_RECEIPT_V2_MAX_BODY_BYTES,
+            trnm_receipt_v2_max_in_flight: DEFAULT_TRNM_RECEIPT_V2_MAX_IN_FLIGHT,
         }
     }
 
@@ -296,6 +356,17 @@ impl SecurityConfig {
     pub fn with_finality_mode(mut self, mode: FinalityMode) -> Self {
         self.finality_mode = mode;
         self
+    }
+
+    pub fn with_trnm_receipt_v2_ingress_limits(
+        mut self,
+        max_body_bytes: usize,
+        max_in_flight: usize,
+    ) -> Result<Self, String> {
+        validate_trnm_receipt_v2_ingress_limits(max_body_bytes, max_in_flight)?;
+        self.trnm_receipt_v2_max_body_bytes = max_body_bytes;
+        self.trnm_receipt_v2_max_in_flight = max_in_flight;
+        Ok(self)
     }
 
     pub fn with_pinned_trnm_cometbft_trust_anchor_hash(
@@ -547,6 +618,16 @@ impl SecurityConfig {
         let trusted_sets: Vec<trnm_v1::TrustedValidatorSetV1> =
             serde_json::from_str(&trusted_sets_json)
                 .map_err(|error| format!("decode HEPTA_TRNM_VALIDATOR_SETS_JSON: {error}"))?;
+        let trnm_receipt_v2_max_body_bytes = parse_bounded_positive_decimal_env(
+            TRNM_RECEIPT_V2_MAX_BODY_BYTES_ENV,
+            DEFAULT_TRNM_RECEIPT_V2_MAX_BODY_BYTES,
+            MAX_COMETBFT_RECEIPT_V2_WIRE_BYTES,
+        )?;
+        let trnm_receipt_v2_max_in_flight = parse_bounded_positive_decimal_env(
+            TRNM_RECEIPT_V2_MAX_IN_FLIGHT_ENV,
+            DEFAULT_TRNM_RECEIPT_V2_MAX_IN_FLIGHT,
+            MAX_TRNM_RECEIPT_V2_MAX_IN_FLIGHT,
+        )?;
         let mut consumer_keys = consumer_edge_keys.into_iter();
         let (consumer_key_id, consumer_public_key) = consumer_keys
             .next()
@@ -564,6 +645,10 @@ impl SecurityConfig {
                 nakama_authorization_seed,
                 nakama_control_issuer_key_id,
                 nakama_control_seed,
+            )?
+            .with_trnm_receipt_v2_ingress_limits(
+                trnm_receipt_v2_max_body_bytes,
+                trnm_receipt_v2_max_in_flight,
             )?;
         for (key_id, public_key) in consumer_keys {
             security = security.with_consumer_edge_verifying_key(key_id, public_key)?;
@@ -592,16 +677,24 @@ impl SecurityConfig {
         for anchor_hash in pinned_anchor_hashes {
             security = security.with_pinned_trnm_cometbft_trust_anchor_hash(anchor_hash)?;
         }
-        if finality_mode == FinalityMode::Verified
-            && security.trusted_trnm_validator_sets.is_empty()
-            && security.pinned_trnm_cometbft_trust_anchor_hashes.is_empty()
+        security.validate_finality_startup()?;
+        Ok(security)
+    }
+
+    fn validate_finality_startup(&self) -> Result<(), String> {
+        validate_trnm_receipt_v2_ingress_limits(
+            self.trnm_receipt_v2_max_body_bytes,
+            self.trnm_receipt_v2_max_in_flight,
+        )?;
+        if self.finality_mode == FinalityMode::Verified
+            && self.pinned_trnm_cometbft_trust_anchor_hashes.is_empty()
         {
             return Err(
-                "verified HEPTA_FINALITY_MODE requires either legacy validator sets or pinned CometBFT trust-anchor hashes"
+                "verified HEPTA_FINALITY_MODE requires HEPTA_TRNM_COMETBFT_TRUST_ANCHOR_HASHES_JSON with at least one pinned trust-anchor hash"
                     .to_string(),
             );
         }
-        Ok(security)
+        Ok(())
     }
 
     fn readiness_errors(&self) -> Vec<&'static str> {
@@ -639,9 +732,7 @@ impl SecurityConfig {
             errors.push("nakama_research_authority_missing");
         }
         if self.finality_mode == FinalityMode::Verified {
-            if self.trusted_trnm_validator_sets.is_empty()
-                && self.pinned_trnm_cometbft_trust_anchor_hashes.is_empty()
-            {
+            if self.pinned_trnm_cometbft_trust_anchor_hashes.is_empty() {
                 errors.push("trnm_finality_trust_missing");
             }
             if self
@@ -652,12 +743,22 @@ impl SecurityConfig {
                 errors.push("trnm_validator_set_invalid");
             }
         }
+        if validate_trnm_receipt_v2_ingress_limits(
+            self.trnm_receipt_v2_max_body_bytes,
+            self.trnm_receipt_v2_max_in_flight,
+        )
+        .is_err()
+        {
+            errors.push("trnm_receipt_v2_ingress_configuration_invalid");
+        }
         errors
     }
 }
 
 impl AppState {
     pub fn new(security: SecurityConfig) -> Self {
+        let paper_chain_verification_permits =
+            Arc::new(Semaphore::new(security.trnm_receipt_v2_max_in_flight));
         Self {
             inner: Arc::new(RwLock::new(LeagueState::default())),
             paper_raid: Arc::new(RwLock::new(paper_raid_v2::PaperRaidMemory::default())),
@@ -665,6 +766,7 @@ impl AppState {
                 paper_chain_finality_v1::PaperChainFinalityMemory::default(),
             )),
             paper_chain_verification_clock: Arc::new(std::time::SystemTime::now),
+            paper_chain_verification_permits,
             pool: None,
             security: Arc::new(security),
             rate_limits: Arc::new(Mutex::new(HashMap::new())),
@@ -730,6 +832,8 @@ impl AppState {
         .execute(&pool)
         .await
         .map_err(|error| format!("initialize Hepta state: {error}"))?;
+        let paper_chain_verification_permits =
+            Arc::new(Semaphore::new(security.trnm_receipt_v2_max_in_flight));
         Ok(Self {
             inner: Arc::new(RwLock::new(LeagueState::default())),
             paper_raid: Arc::new(RwLock::new(paper_raid_v2::PaperRaidMemory::default())),
@@ -737,6 +841,7 @@ impl AppState {
                 paper_chain_finality_v1::PaperChainFinalityMemory::default(),
             )),
             paper_chain_verification_clock: Arc::new(std::time::SystemTime::now),
+            paper_chain_verification_permits,
             pool: Some(pool),
             security: Arc::new(security),
             rate_limits: Arc::new(Mutex::new(HashMap::new())),
@@ -1303,6 +1408,14 @@ impl ApiError {
     fn bad_gateway(code: &'static str, message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::BAD_GATEWAY,
+            code,
+            message: message.into(),
+        }
+    }
+
+    fn service_unavailable(code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::SERVICE_UNAVAILABLE,
             code,
             message: message.into(),
         }

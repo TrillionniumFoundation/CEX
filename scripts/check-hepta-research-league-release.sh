@@ -179,8 +179,21 @@ for required_env in (
     "TRNM_NAKAMA_AUTHORITY_PUBLIC_KEY_BASE64",
     "TRNM_NAKAMA_AUTHORITY_PUBLIC_KEYS_JSON",
     "HEPTA_FINALITY_MODE",
+    "HEPTA_TRNM_VALIDATOR_SETS_JSON",
+    "HEPTA_TRNM_COMETBFT_TRUST_ANCHOR_HASHES_JSON",
+    "HEPTA_TRNM_RECEIPT_V2_MAX_BODY_BYTES",
+    "HEPTA_TRNM_RECEIPT_V2_MAX_IN_FLIGHT",
 ):
     assert required_env in hepta["environment"]
+assert hepta["environment"]["HEPTA_TRNM_COMETBFT_TRUST_ANCHOR_HASHES_JSON"] == (
+    "${HEPTA_TRNM_COMETBFT_TRUST_ANCHOR_HASHES_JSON:?Receipt V2 pinned trust-anchor hashes required}"
+)
+assert hepta["environment"]["HEPTA_TRNM_RECEIPT_V2_MAX_BODY_BYTES"] == (
+    "${HEPTA_TRNM_RECEIPT_V2_MAX_BODY_BYTES:-67108864}"
+)
+assert hepta["environment"]["HEPTA_TRNM_RECEIPT_V2_MAX_IN_FLIGHT"] == (
+    "${HEPTA_TRNM_RECEIPT_V2_MAX_IN_FLIGHT:-1}"
+)
 
 PY
 

@@ -742,6 +742,16 @@ for fixture_name, fixture_entries in negative_rootfs_fixtures.items():
         fail(f"rootfs src negative fixture was accepted: {fixture_name}")
 
 require_fragments(
+    "docs/openapi/hepta-paper-raid-v2.yaml",
+    (
+        "HEPTA_TRNM_RECEIPT_V2_MAX_BODY_BYTES",
+        "64 MiB by default",
+        "never above the upstream 128 MiB wire maximum",
+        "Authenticated Receipt V2 verification capacity is busy; body was not read",
+    ),
+)
+
+require_fragments(
     "scripts/check-hepta-research-league-compose-smoke.sh",
     (
         "HEPTA_EXPECTED_IMAGE_ID",
@@ -752,8 +762,14 @@ require_fragments(
         "state_rows_before",
         "state_rows_after",
         "content_type_count",
-        '.finality_mode == "pending_only"',
+        '.finality_mode == "verified"',
         ".trusted_validator_sets == 0",
+        ".pinned_cometbft_trust_anchor_hashes == 2",
+        "HEPTA_TRNM_COMETBFT_TRUST_ANCHOR_HASHES_JSON",
+        "configured_receipt_cap",
+        "configured_receipt_in_flight",
+        ".trnm_receipt_v2_max_body_bytes == 67108864",
+        ".trnm_receipt_v2_max_in_flight == 1",
     ),
 )
 compose_smoke_text = (
@@ -769,6 +785,9 @@ for fragment in (
     'image: ${HEPTA_IMAGE:?immutable HEPTA_IMAGE digest is required}',
     "pull_policy: never",
     '127.0.0.1:${HEPTA_HOST_PORT:-7011}:7011',
+    "HEPTA_TRNM_COMETBFT_TRUST_ANCHOR_HASHES_JSON",
+    "HEPTA_TRNM_RECEIPT_V2_MAX_BODY_BYTES",
+    "HEPTA_TRNM_RECEIPT_V2_MAX_IN_FLIGHT",
 ):
     if fragment not in compose_text:
         fail(f"Compose release contract is missing {fragment!r}")
@@ -787,6 +806,18 @@ if hepta_compose.get("pull_policy") != "never" or "build" in hepta_compose:
     fail("Compose Hepta service must use only the frozen local image")
 if hepta_compose.get("ports") != ["127.0.0.1:${HEPTA_HOST_PORT:-7011}:7011"]:
     fail("Compose Hepta host binding drifted")
+if hepta_compose.get("environment", {}).get(
+    "HEPTA_TRNM_COMETBFT_TRUST_ANCHOR_HASHES_JSON"
+) != "${HEPTA_TRNM_COMETBFT_TRUST_ANCHOR_HASHES_JSON:?Receipt V2 pinned trust-anchor hashes required}":
+    fail("Compose must require and forward the Receipt V2 trust-anchor pin ring")
+if hepta_compose.get("environment", {}).get(
+    "HEPTA_TRNM_RECEIPT_V2_MAX_BODY_BYTES"
+) != "${HEPTA_TRNM_RECEIPT_V2_MAX_BODY_BYTES:-67108864}":
+    fail("Compose must forward the conservative Receipt V2 ingress byte cap")
+if hepta_compose.get("environment", {}).get(
+    "HEPTA_TRNM_RECEIPT_V2_MAX_IN_FLIGHT"
+) != "${HEPTA_TRNM_RECEIPT_V2_MAX_IN_FLIGHT:-1}":
+    fail("Compose must forward the bounded Receipt V2 verification concurrency")
 if hepta_compose.get("read_only") is not True:
     fail("Compose Hepta rootfs must be read-only")
 if hepta_compose.get("cap_drop") != ["ALL"]:

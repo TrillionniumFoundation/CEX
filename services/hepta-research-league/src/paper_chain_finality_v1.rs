@@ -1,7 +1,7 @@
 use std::{collections::HashMap, time::SystemTime};
 
 use axum::{
-    body::to_bytes,
+    body::{to_bytes, Bytes},
     extract::{Path, Request, State},
     http::{header::CONTENT_LENGTH, HeaderMap, StatusCode},
     routing::post,
@@ -11,9 +11,9 @@ use chrono::{DateTime, Utc};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::{Postgres, Row, Transaction};
+use tokio::sync::TryAcquireError;
 use trnm_finality_types::{
-    CometBftAppHashFinalityReceiptV2, MAX_COMETBFT_RECEIPT_V2_WIRE_BYTES,
-    MAX_COMETBFT_TRUST_ANCHOR_V1_WIRE_BYTES,
+    CometBftAppHashFinalityReceiptV2, MAX_COMETBFT_TRUST_ANCHOR_V1_WIRE_BYTES,
 };
 use trnm_finality_verifier::{
     verify_cometbft_apphash_finality_receipt_v2_with_trust_anchor, ReceiptV2VerificationOutcome,
@@ -123,14 +123,14 @@ pub struct StoredPaperChainTrustAnchorV1 {
 #[derive(Clone)]
 struct MemoryTrustAnchor {
     record: StoredPaperChainTrustAnchorV1,
-    canonical: Vec<u8>,
+    canonical: Bytes,
 }
 
 #[derive(Clone)]
 struct MemoryReceipt {
     canonical_sha256: String,
     trust_anchor_hash: String,
-    canonical: Vec<u8>,
+    canonical: Bytes,
     projection: PaperChainFinalityProjectionV1,
 }
 
@@ -367,7 +367,7 @@ async fn ingest_trust_anchor(
         admitted_at,
     };
     if state.pool.is_some() {
-        ingest_trust_anchor_postgres(&state, canonical.to_vec(), record).await
+        ingest_trust_anchor_postgres(&state, canonical, record).await
     } else {
         let mut memory = state.paper_chain_finality.write().await;
         if let Some(existing) = memory.trust_anchors.get(&record.anchor_hash) {
@@ -387,7 +387,7 @@ async fn ingest_trust_anchor(
             record.anchor_hash.clone(),
             MemoryTrustAnchor {
                 record: record.clone(),
-                canonical: canonical.to_vec(),
+                canonical,
             },
         );
         Ok((StatusCode::CREATED, Json(record)))
@@ -396,7 +396,7 @@ async fn ingest_trust_anchor(
 
 async fn ingest_trust_anchor_postgres(
     state: &AppState,
-    canonical: Vec<u8>,
+    canonical: Bytes,
     record: StoredPaperChainTrustAnchorV1,
 ) -> Result<(StatusCode, Json<StoredPaperChainTrustAnchorV1>), ApiError> {
     let pool = state.pool.as_ref().expect("PostgreSQL checked");
@@ -419,7 +419,7 @@ async fn ingest_trust_anchor_postgres(
             admitted_at: existing.get("admitted_at"),
         };
         let existing_canonical: Vec<u8> = existing.get("canonical_anchor");
-        if existing_canonical == canonical
+        if existing_canonical.as_slice() == canonical.as_ref()
             && existing_record.canonical_sha256 == record.canonical_sha256
             && existing_record.chain_id == record.chain_id
             && existing_record.trusted_height == record.trusted_height
@@ -440,7 +440,7 @@ async fn ingest_trust_anchor_postgres(
     .bind(&record.anchor_hash)
     .bind(&record.chain_id)
     .bind(i64_from_u64(record.trusted_height, "trusted_height")?)
-    .bind(&canonical)
+    .bind(&canonical[..])
     .bind(&record.canonical_sha256)
     .bind(record.admitted_at)
     .execute(&mut *tx)
@@ -456,7 +456,8 @@ async fn ingest_paper_chain_finality(
     request: Request,
 ) -> Result<(StatusCode, Json<PaperChainFinalityProjectionV1>), ApiError> {
     // Keep this order invariant: authenticate, validate trusted-anchor selector,
-    // enforce byte limit while streaming, and only then parse canonical JSON.
+    // acquire bounded verification capacity, enforce the deployment byte limit
+    // while streaming, and only then parse canonical JSON.
     require_service_token(
         request.headers(),
         TRNM_TOKEN_HEADER,
@@ -465,7 +466,26 @@ async fn ingest_paper_chain_finality(
     )?;
     require_receipt_v2_enabled(&state)?;
     let trust_anchor_hash = trust_anchor_hash_header(request.headers())?;
-    let canonical = read_limited_body(request, MAX_COMETBFT_RECEIPT_V2_WIRE_BYTES).await?;
+    let _verification_permit = match state
+        .paper_chain_verification_permits
+        .clone()
+        .try_acquire_owned()
+    {
+        Ok(permit) => permit,
+        Err(TryAcquireError::NoPermits) => {
+            return Err(ApiError::service_unavailable(
+                "trnm_receipt_v2_verification_busy",
+                "Receipt V2 verification capacity is busy; retry without changing the request",
+            ));
+        }
+        Err(TryAcquireError::Closed) => {
+            return Err(ApiError::internal(
+                "Receipt V2 verification capacity is unavailable",
+            ));
+        }
+    };
+    let canonical =
+        read_limited_body(request, state.security.trnm_receipt_v2_max_body_bytes).await?;
     let receipt =
         CometBftAppHashFinalityReceiptV2::from_canonical_bytes(&canonical).map_err(|error| {
             ApiError::bad_request(
@@ -480,7 +500,7 @@ async fn ingest_paper_chain_finality(
             &state,
             paper_id,
             trust_anchor_hash,
-            canonical.to_vec(),
+            canonical,
             canonical_sha256,
             receipt,
             verification_time,
@@ -491,7 +511,7 @@ async fn ingest_paper_chain_finality(
             &state,
             paper_id,
             trust_anchor_hash,
-            canonical.to_vec(),
+            canonical,
             canonical_sha256,
             receipt,
             verification_time,
@@ -553,7 +573,7 @@ async fn ingest_paper_chain_finality_memory(
     state: &AppState,
     paper_id: Uuid,
     trust_anchor_hash: String,
-    canonical: Vec<u8>,
+    canonical: Bytes,
     canonical_sha256: String,
     receipt: CometBftAppHashFinalityReceiptV2,
     verification_time: SystemTime,
@@ -674,7 +694,7 @@ fn receipt_replay_memory(
         if existing.projection.paper_project_id == paper_id
             && existing.trust_anchor_hash == trust_anchor_hash
             && existing.canonical_sha256 == canonical_sha256
-            && existing.canonical == canonical
+            && existing.canonical.as_ref() == canonical
             && memory.inbox.get(receipt_hash) == Some(&existing.canonical_sha256)
         {
             return Ok(Some(existing.projection.clone()));
@@ -692,7 +712,7 @@ async fn ingest_paper_chain_finality_postgres(
     state: &AppState,
     paper_id: Uuid,
     trust_anchor_hash: String,
-    canonical: Vec<u8>,
+    canonical: Bytes,
     canonical_sha256: String,
     receipt: CometBftAppHashFinalityReceiptV2,
     verification_time: SystemTime,
@@ -852,7 +872,7 @@ async fn ingest_paper_chain_finality_postgres(
     )?)
     .bind(&projection.comet_tx_hash)
     .bind(&projection.app_hash)
-    .bind(&canonical)
+    .bind(&canonical[..])
     .bind(&canonical_sha256)
     .bind(projection.verified_at)
     .bind(&projection_json)
@@ -1691,16 +1711,20 @@ mod tests {
     use serde_json::json;
     use sqlx::{Connection, PgConnection};
     use tower::ServiceExt;
+    use trnm_finality_types::MAX_COMETBFT_RECEIPT_V2_WIRE_BYTES;
 
     use super::*;
     use crate::{
         app,
         trnm_v1::{
-            AuthorityRole, EvaluationCommitmentV1, ExternalKey, ObjectRefV1, ResearchCommandV1,
-            ResearchObjectKind, SignedResearchCommandV1, TrnmCommandKind,
+            AuthorityRole, EvaluationCommitmentV1, ExternalKey, FinalityReceiptV1,
+            ObjectInclusionProofV1, ObjectRefV1, QuorumCertificateV1, ResearchCommandV1,
+            ResearchObjectKind, SignedResearchCommandV1, TrnmCommandKind, FINALITY_RECEIPT_V1,
+            OBJECT_INCLUSION_PROOF_V1, QUORUM_CERTIFICATE_V1,
         },
         workflows::TrnmCommand,
-        FinalityMode, SecurityConfig,
+        FinalityMode, SecurityConfig, DEFAULT_TRNM_RECEIPT_V2_MAX_BODY_BYTES,
+        DEFAULT_TRNM_RECEIPT_V2_MAX_IN_FLIGHT, MAX_TRNM_RECEIPT_V2_MAX_IN_FLIGHT,
     };
 
     const ANCHOR_FILE: &[u8] = include_bytes!(
@@ -1711,6 +1735,10 @@ mod tests {
     );
     const ANCHOR_HASH: &str = "88b73fc902dd554c35b9a44ff582ec6d76e59085a2e4fdf14292183f4b3846d5";
     const VERIFICATION_TIME: u64 = 1_786_034_510;
+    const FIXTURE_COMMAND_ID: &str =
+        "54fe42942e0f514960bdd8dc9378d21af6b417f9712fe8511d6ad8d9e56a7529";
+    const FIXTURE_COMMAND_FINGERPRINT: &str =
+        "189f0888da2220b90d9ead78c8c80775206d09b07105d42811912f689453cad4";
 
     fn canonical_fixture_payload(file: &'static [u8]) -> &'static [u8] {
         file.strip_suffix(b"\n")
@@ -1723,10 +1751,36 @@ mod tests {
             .with_finality_mode(FinalityMode::Verified)
             .with_pinned_trnm_cometbft_trust_anchor_hash(ANCHOR_HASH)
             .expect("valid pinned anchor")
+            .with_trusted_nakama_research_authority(
+                "nakama-paper-raid-test-v1",
+                SigningKey::from_bytes(&[0x75; 32])
+                    .verifying_key()
+                    .to_bytes(),
+            )
+            .expect("valid Nakama test completion authority")
+    }
+
+    fn security_with_receipt_v2_limits(
+        max_body_bytes: usize,
+        max_in_flight: usize,
+    ) -> SecurityConfig {
+        security()
+            .with_trnm_receipt_v2_ingress_limits(max_body_bytes, max_in_flight)
+            .expect("valid Receipt V2 ingress limits")
     }
 
     fn fixed_state() -> AppState {
         let mut state = AppState::new(security());
+        state.paper_chain_verification_clock =
+            Arc::new(|| std::time::UNIX_EPOCH + Duration::from_secs(VERIFICATION_TIME));
+        state
+    }
+
+    fn fixed_state_with_receipt_v2_limits(max_body_bytes: usize, max_in_flight: usize) -> AppState {
+        let mut state = AppState::new(security_with_receipt_v2_limits(
+            max_body_bytes,
+            max_in_flight,
+        ));
         state.paper_chain_verification_clock =
             Arc::new(|| std::time::UNIX_EPOCH + Duration::from_secs(VERIFICATION_TIME));
         state
@@ -1764,6 +1818,302 @@ mod tests {
         let value = serde_json::from_slice(&body)
             .unwrap_or_else(|_| json!({"raw": String::from_utf8_lossy(&body)}));
         (status, value)
+    }
+
+    async fn get_json(router: Router, uri: &str) -> (StatusCode, Value) {
+        let response = router
+            .oneshot(
+                HttpRequest::builder()
+                    .method("GET")
+                    .uri(uri)
+                    .header(TRNM_TOKEN_HEADER, "trnm")
+                    .body(Body::empty())
+                    .expect("GET request"),
+            )
+            .await
+            .expect("GET response");
+        let status = response.status();
+        let body = response_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("GET response body");
+        let value = serde_json::from_slice(&body)
+            .unwrap_or_else(|_| json!({"raw": String::from_utf8_lossy(&body)}));
+        (status, value)
+    }
+
+    fn legacy_v1_receipt(command: &TrnmCommand) -> FinalityReceiptV1 {
+        FinalityReceiptV1 {
+            protocol: FINALITY_RECEIPT_V1.to_string(),
+            source_event_id: Uuid::new_v4(),
+            command_id: command.command_id,
+            command_fingerprint: command.command_fingerprint.clone(),
+            chain_id: "legacy-paper-finality-test".to_string(),
+            tx_hash: digest(0xa1),
+            tx_index: 0,
+            block_height: 1,
+            block_hash: digest(0xa2),
+            state_root: digest(0xa3),
+            object_ref: ObjectRefV1::new(
+                ResearchObjectKind::EvaluationCommitment,
+                ExternalKey::from_bytes([0xa4; 32]),
+                1,
+            ),
+            inclusion_proof: ObjectInclusionProofV1 {
+                protocol: OBJECT_INCLUSION_PROOF_V1.to_string(),
+                leaf_index: 0,
+                sibling_hashes: Vec::new(),
+            },
+            validator_set_id: "legacy-validator-set".to_string(),
+            quorum_certificate: QuorumCertificateV1 {
+                protocol: QUORUM_CERTIFICATE_V1.to_string(),
+                chain_id: "legacy-paper-finality-test".to_string(),
+                validator_set_id: "legacy-validator-set".to_string(),
+                block_height: 1,
+                block_hash: digest(0xa2),
+                state_root: digest(0xa3),
+                signed_voting_power: 0,
+                total_voting_power: 1,
+                signatures: Vec::new(),
+            },
+            confirmations: 1,
+            receipt_hash: digest(0xa5),
+        }
+    }
+
+    fn legacy_live_receipt(command: &TrnmCommand) -> Value {
+        json!({
+            "source_event_id": Uuid::new_v4(),
+            "receipt": {
+                "schema": "trnm_finality_receipt_v1",
+                "chain_id": "legacy-paper-finality-test",
+                "command_id": command.command_id.to_string(),
+                "domain_command_fingerprint_hex": command.command_fingerprint
+                    .strip_prefix("sha256:")
+                    .expect("canonical command fingerprint"),
+                "transaction_hash_hex": "a1".repeat(32),
+                "transaction_index": 0,
+                "block_height": 1,
+                "block_hash_hex": "a2".repeat(32),
+                "block_header": {
+                    "schema": "trnm_block_header_v1",
+                    "chain_id": "legacy-paper-finality-test",
+                    "height": 1,
+                    "previous_block_hash_hex": "00".repeat(32),
+                    "transaction_root_hex": "a3".repeat(32),
+                    "state_root_hex": "a4".repeat(32),
+                    "validator_set_id": "legacy-validator-set",
+                    "timestamp_unix_ms": 1,
+                },
+                "state_root_hex": "a4".repeat(32),
+                "transaction_root_hex": "a3".repeat(32),
+                "object_ref": null,
+                "transaction_inclusion_proof": {
+                    "tree_domain": "trnm.transactions.v1",
+                    "leaf_hash_hex": "a3".repeat(32),
+                    "leaf_index": 0,
+                    "leaf_count": 1,
+                    "steps": [],
+                },
+                "object_inclusion_proof": null,
+                "validator_set_id": "legacy-validator-set",
+                "quorum_certificate": {
+                    "validator_set_id": "legacy-validator-set",
+                    "height": 1,
+                    "block_hash_hex": "a2".repeat(32),
+                    "signatures": [],
+                },
+                "receipt_hash_hex": "a5".repeat(32),
+            },
+        })
+    }
+
+    async fn legacy_lane_snapshot(state: &AppState, command_id: Uuid) -> Value {
+        state
+            .inspect(|league| {
+                let command = league.trnm_commands.get(&command_id).ok_or_else(|| {
+                    ApiError::internal("legacy finality guard test command disappeared")
+                })?;
+                Ok(json!({
+                    "command_status": &command.status,
+                    "legacy_projection": league.trnm_finality.get(&command_id),
+                    "legacy_live_projection": league.trnm_live_finality.get(&command_id),
+                    "legacy_inbox": &league.inbox_events,
+                    "event_ids": league.events.iter().map(|event| event.event_id).collect::<Vec<_>>(),
+                    "event_types": league.events.iter().map(|event| event.event_type.clone()).collect::<Vec<_>>(),
+                }))
+            })
+            .await
+            .expect("legacy lane snapshot")
+    }
+
+    async fn assert_legacy_lanes_reject(router: &Router, command: &TrnmCommand) {
+        let (status, error) = raw_request(
+            router.clone(),
+            "/v1/hepta/trnm/finality",
+            Some((TRNM_TOKEN_HEADER, "trnm")),
+            serde_json::to_vec(&legacy_v1_receipt(command)).expect("legacy v1 receipt JSON"),
+            None,
+            0,
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{error}");
+        assert_eq!(error["code"], "paper_trnm_legacy_finality_forbidden");
+
+        let (status, error) = raw_request(
+            router.clone(),
+            "/v1/hepta/trnm/finality/live",
+            Some((TRNM_TOKEN_HEADER, "trnm")),
+            serde_json::to_vec(&legacy_live_receipt(command)).expect("legacy live receipt JSON"),
+            None,
+            0,
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{error}");
+        assert_eq!(error["code"], "paper_trnm_legacy_finality_forbidden");
+    }
+
+    fn fixture_bound_command(binding: &PaperTrnmCommandBindingV1) -> TrnmCommand {
+        let signed = signed_command(binding, ExternalKey::from_bytes([0x42; 32]));
+        TrnmCommand {
+            command_id: Uuid::new_v4(),
+            kind: TrnmCommandKind::EvaluationCommitment,
+            aggregate_id: signed.command.primary_object_ref().key.to_hex(),
+            idempotency_key: FIXTURE_COMMAND_ID.to_string(),
+            command_fingerprint: format!("sha256:{FIXTURE_COMMAND_FINGERPRINT}"),
+            paper_binding: Some(binding.clone()),
+            paper_binding_fingerprint: Some(
+                paper_binding_fingerprint(binding).expect("Paper binding fingerprint"),
+            ),
+            signed_command: signed,
+            status: TrnmProjectionStatus::PendingFinality,
+            created_at: Utc::now(),
+        }
+    }
+
+    async fn exercise_legacy_lane_ordering(state: AppState) {
+        let binding =
+            crate::paper_raid_v2::endpoint_tests::seed_paper_chain_finality_test(state.clone())
+                .await;
+        let command = fixture_bound_command(&binding);
+        state
+            .transact(|league| {
+                league
+                    .trnm_commands
+                    .insert(command.command_id, command.clone());
+                Ok(())
+            })
+            .await
+            .expect("seed fixture-bound command");
+        let router = app(state.clone());
+
+        let pending = legacy_lane_snapshot(&state, command.command_id).await;
+        assert_eq!(pending["command_status"], "pending_finality");
+        assert!(pending["legacy_projection"].is_null());
+        assert!(pending["legacy_live_projection"].is_null());
+        assert!(!pending["event_types"]
+            .as_array()
+            .expect("event types")
+            .iter()
+            .any(|event_type| matches!(
+                event_type.as_str(),
+                Some("trnm.receipt.projected.v2" | "trnm.live.receipt.projected.v1")
+            )));
+        assert_legacy_lanes_reject(&router, &command).await;
+        assert_eq!(
+            legacy_lane_snapshot(&state, command.command_id).await,
+            pending,
+            "legacy-before-v2 must not alter command, event, inbox, or projection state"
+        );
+
+        let (anchor_status, anchor) = raw_request(
+            router.clone(),
+            "/v2/hepta/operator/trnm/trust-anchors",
+            Some((OPERATOR_TOKEN_HEADER, "operator")),
+            canonical_fixture_payload(ANCHOR_FILE).to_vec(),
+            None,
+            0,
+        )
+        .await;
+        assert_eq!(anchor_status, StatusCode::CREATED, "{anchor}");
+        let finality_path = format!(
+            "/v2/hepta/papers/{}/chain-finality",
+            binding.paper_project_id
+        );
+        let (finality_status, projection) = raw_request(
+            router.clone(),
+            &finality_path,
+            Some((TRNM_TOKEN_HEADER, "trnm")),
+            canonical_fixture_payload(RECEIPT_FILE).to_vec(),
+            None,
+            1,
+        )
+        .await;
+        assert_eq!(finality_status, StatusCode::CREATED, "{projection}");
+        assert_eq!(projection["status"], "verified_finality");
+        assert_eq!(
+            projection["local_command_id"],
+            command.command_id.to_string()
+        );
+
+        let verified = legacy_lane_snapshot(&state, command.command_id).await;
+        assert_eq!(verified["command_status"], "verified_finality");
+        assert!(verified["legacy_projection"].is_null());
+        assert!(verified["legacy_live_projection"].is_null());
+        assert!(!verified["event_types"]
+            .as_array()
+            .expect("event types")
+            .iter()
+            .any(|event_type| matches!(
+                event_type.as_str(),
+                Some("trnm.receipt.projected.v2" | "trnm.live.receipt.projected.v1")
+            )));
+        let (get_status, stored_projection) = get_json(router.clone(), &finality_path).await;
+        assert_eq!(get_status, StatusCode::OK, "{stored_projection}");
+        assert_eq!(stored_projection, projection);
+
+        assert_legacy_lanes_reject(&router, &command).await;
+        assert_eq!(
+            legacy_lane_snapshot(&state, command.command_id).await,
+            verified,
+            "v2-before-legacy must preserve the verified command and emit no legacy side effect"
+        );
+        let (get_status, replayed_projection) = get_json(router, &finality_path).await;
+        assert_eq!(get_status, StatusCode::OK, "{replayed_projection}");
+        assert_eq!(replayed_projection, stored_projection);
+    }
+
+    #[tokio::test]
+    async fn paper_bound_legacy_lanes_are_closed_before_and_after_receipt_v2_in_memory() {
+        exercise_legacy_lane_ordering(fixed_state()).await;
+    }
+
+    #[tokio::test]
+    async fn paper_bound_legacy_lanes_are_closed_before_and_after_receipt_v2_in_postgres() {
+        let Ok(database_url) = std::env::var("HEPTA_TEST_DATABASE_URL") else {
+            eprintln!("HEPTA_TEST_DATABASE_URL unset; legacy finality PostgreSQL test skipped");
+            return;
+        };
+        let mut lock = PgConnection::connect(&database_url)
+            .await
+            .expect("legacy finality PostgreSQL test lock");
+        sqlx::query("select pg_advisory_lock(hashtext('hepta-research-league-pg-tests'))")
+            .execute(&mut lock)
+            .await
+            .expect("serialize Hepta PostgreSQL tests");
+        let mut state = AppState::connect(&database_url, security())
+            .await
+            .expect("legacy finality PostgreSQL state");
+        crate::paper_raid_v2::endpoint_tests::reset_postgres(&database_url).await;
+        state.paper_chain_verification_clock =
+            Arc::new(|| std::time::UNIX_EPOCH + Duration::from_secs(VERIFICATION_TIME));
+
+        exercise_legacy_lane_ordering(state).await;
+
+        crate::paper_raid_v2::endpoint_tests::reset_postgres(&database_url).await;
+        sqlx::query("select pg_advisory_unlock(hashtext('hepta-research-league-pg-tests'))")
+            .execute(&mut lock)
+            .await
+            .expect("release Hepta PostgreSQL legacy finality lock");
     }
 
     #[tokio::test]
@@ -1820,6 +2170,177 @@ mod tests {
             first.1, replay.1,
             "anchor replay must return stored admission time"
         );
+    }
+
+    #[tokio::test]
+    async fn receipt_v2_auth_and_anchor_header_precede_body_limit() {
+        let router = app(fixed_state());
+        let uri = format!("/v2/hepta/papers/{}/chain-finality", Uuid::new_v4());
+        let oversized = (DEFAULT_TRNM_RECEIPT_V2_MAX_BODY_BYTES + 1).to_string();
+
+        let (status, error) = raw_request(
+            router.clone(),
+            &uri,
+            None,
+            Vec::new(),
+            Some(oversized.clone()),
+            1,
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{error}");
+        assert_eq!(error["code"], "trnm_auth_failed");
+
+        let (status, error) = raw_request(
+            router.clone(),
+            &uri,
+            Some((TRNM_TOKEN_HEADER, "trnm")),
+            Vec::new(),
+            Some(oversized.clone()),
+            0,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+        assert_eq!(error["code"], "trnm_trust_anchor_hash_required");
+
+        let (status, error) = raw_request(
+            router,
+            &uri,
+            Some((TRNM_TOKEN_HEADER, "trnm")),
+            Vec::new(),
+            Some(oversized),
+            1,
+        )
+        .await;
+        assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE, "{error}");
+        assert_eq!(error["code"], "request_body_too_large");
+    }
+
+    #[tokio::test]
+    async fn receipt_v2_deployment_cap_accepts_max_and_rejects_max_plus_one() {
+        let receipt = canonical_fixture_payload(RECEIPT_FILE);
+        let cap = receipt.len();
+        let router = app(fixed_state_with_receipt_v2_limits(cap, 1));
+        let uri = format!("/v2/hepta/papers/{}/chain-finality", Uuid::new_v4());
+
+        let (status, error) = raw_request(
+            router.clone(),
+            &uri,
+            Some((TRNM_TOKEN_HEADER, "trnm")),
+            receipt.to_vec(),
+            Some(cap.to_string()),
+            1,
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{error}");
+        assert_eq!(error["code"], "trnm_trust_anchor_not_admitted");
+
+        let (status, error) = raw_request(
+            router.clone(),
+            &uri,
+            Some((TRNM_TOKEN_HEADER, "trnm")),
+            receipt.to_vec(),
+            Some((cap + 1).to_string()),
+            1,
+        )
+        .await;
+        assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE, "{error}");
+        assert_eq!(error["code"], "request_body_too_large");
+
+        let (status, error) = raw_request(
+            router,
+            &uri,
+            Some((TRNM_TOKEN_HEADER, "trnm")),
+            vec![b' '; cap + 1],
+            None,
+            1,
+        )
+        .await;
+        assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE, "{error}");
+        assert_eq!(error["code"], "request_body_too_large");
+    }
+
+    #[tokio::test]
+    async fn receipt_v2_concurrent_permit_rejects_busy_before_body_read() {
+        let state = fixed_state_with_receipt_v2_limits(1024, 2);
+        assert_eq!(
+            state.paper_chain_verification_permits.available_permits(),
+            2
+        );
+        let first_held_permit = state
+            .paper_chain_verification_permits
+            .clone()
+            .try_acquire_owned()
+            .expect("reserve the first Receipt V2 verification permit");
+        let second_held_permit = state
+            .paper_chain_verification_permits
+            .clone()
+            .try_acquire_owned()
+            .expect("reserve the second Receipt V2 verification permit");
+        let router = app(state);
+        let uri = format!("/v2/hepta/papers/{}/chain-finality", Uuid::new_v4());
+
+        let (status, error) = raw_request(
+            router.clone(),
+            &uri,
+            Some((TRNM_TOKEN_HEADER, "trnm")),
+            Vec::new(),
+            Some("1025".to_string()),
+            1,
+        )
+        .await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{error}");
+        assert_eq!(error["code"], "trnm_receipt_v2_verification_busy");
+
+        drop(first_held_permit);
+        let (status, error) = raw_request(
+            router,
+            &uri,
+            Some((TRNM_TOKEN_HEADER, "trnm")),
+            Vec::new(),
+            Some("1025".to_string()),
+            1,
+        )
+        .await;
+        assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE, "{error}");
+        assert_eq!(error["code"], "request_body_too_large");
+        drop(second_held_permit);
+    }
+
+    #[test]
+    fn receipt_v2_ingress_configuration_fails_closed_outside_bounds() {
+        let defaults = SecurityConfig::new("operator", "nakama");
+        assert_eq!(
+            defaults.trnm_receipt_v2_max_body_bytes,
+            DEFAULT_TRNM_RECEIPT_V2_MAX_BODY_BYTES
+        );
+        assert_eq!(
+            defaults.trnm_receipt_v2_max_in_flight,
+            DEFAULT_TRNM_RECEIPT_V2_MAX_IN_FLIGHT
+        );
+        assert!(SecurityConfig::new("operator", "nakama")
+            .with_trnm_receipt_v2_ingress_limits(
+                MAX_COMETBFT_RECEIPT_V2_WIRE_BYTES,
+                MAX_TRNM_RECEIPT_V2_MAX_IN_FLIGHT,
+            )
+            .is_ok());
+        for (max_body_bytes, max_in_flight) in [
+            (0, 1),
+            (MAX_COMETBFT_RECEIPT_V2_WIRE_BYTES + 1, 1),
+            (1, 0),
+            (1, MAX_TRNM_RECEIPT_V2_MAX_IN_FLIGHT + 1),
+        ] {
+            assert!(SecurityConfig::new("operator", "nakama")
+                .with_trnm_receipt_v2_ingress_limits(max_body_bytes, max_in_flight)
+                .is_err());
+        }
+        for raw in ["", "0", "01", "+1", " 1", "1 ", "five"] {
+            assert!(crate::parse_bounded_positive_decimal("receipt_limit", raw, 4).is_err());
+        }
+        assert_eq!(
+            crate::parse_bounded_positive_decimal("receipt_limit", "4", 4),
+            Ok(4)
+        );
+        assert!(crate::parse_bounded_positive_decimal("receipt_limit", "5", 4).is_err());
     }
 
     #[tokio::test]
@@ -2048,11 +2569,8 @@ mod tests {
                 &binding.evaluation_id.to_string(),
             )
             .expect("evaluation key"),
-            match_evidence_ref: ObjectRefV1::new(
-                ResearchObjectKind::MatchEvidence,
-                ExternalKey::from_bytes([0x77; 32]),
-                1,
-            ),
+            match_evidence_ref: paper_trnm_match_evidence_object_ref(binding)
+                .expect("MatchEvidence object ref"),
             submission_hash: crate::decode_digest(&binding.submission_commitment_hash).unwrap(),
             rubric_hash: crate::decode_digest(&binding.tolerance_policy_hash).unwrap(),
             evaluation_hash: crate::decode_digest(&binding.evaluation_signing_hash).unwrap(),

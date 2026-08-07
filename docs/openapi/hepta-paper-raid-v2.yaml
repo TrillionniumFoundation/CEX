@@ -858,13 +858,16 @@ paths:
         - trnmServiceToken: []
       operationId: ingestCanonicalPaperReceiptV2
       description: >-
-        Authenticates before reading any body bytes, then applies the upstream
-        128 MiB stream cap and exact canonical Receipt V2 decoder. The selected
-        stored trust anchor and server clock verify CometBFT finality. The
-        verified domain command_id binds TrnmCommand.idempotency_key (never its
-        local UUID), and the full signed EvaluationCommitmentV1 is rebound to
-        immutable Paper/submission/evaluation/reproduction records. Integrity
-        hold, open Appeal, or superseded evaluation/reproduction fails closed.
+        Authenticates and validates the trust-anchor selector before acquiring
+        bounded verification capacity or reading any body bytes. It then
+        applies HEPTA_TRNM_RECEIPT_V2_MAX_BODY_BYTES (64 MiB by default and
+        never above the upstream 128 MiB wire maximum) and the exact canonical
+        Receipt V2 decoder. The selected stored trust anchor and server clock
+        verify CometBFT finality. The verified domain command_id binds
+        TrnmCommand.idempotency_key (never its local UUID), and the full signed
+        EvaluationCommitmentV1 is rebound to immutable Paper/submission/
+        evaluation/reproduction records. Integrity hold, open Appeal, or
+        superseded evaluation/reproduction fails closed.
       parameters:
         - name: x-hepta-trnm-trust-anchor-hash
           in: header
@@ -889,7 +892,8 @@ paths:
         "403": {description: TRNM authentication or trust verification failed}
         "404": {description: Bound queued command or immutable Paper record missing}
         "409": {description: Binding, hold, Appeal, supersession, finality, or replay conflict}
-        "413": {description: Body exceeds the upstream canonical wire limit}
+        "413": {description: Body exceeds the configured deployment ingress cap}
+        "503": {description: Authenticated Receipt V2 verification capacity is busy; body was not read}
 components:
   securitySchemes:
     consumerUserAssertion:
