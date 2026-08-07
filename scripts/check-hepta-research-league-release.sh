@@ -338,6 +338,7 @@ node scripts/verify-hepta-paper-review-v4-fixture.mjs \
   docs/sdk-fixtures/hepta-paper-review-v4.json
 
 cargo_locked fmt --all -- --check
+cargo_locked test --locked -p trnm-finality-verifier --lib
 cargo_locked test --locked -p hepta-research-league
 cargo_locked check --locked --workspace
 cargo_locked clippy --locked --workspace --all-targets -- -D warnings

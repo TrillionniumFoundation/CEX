@@ -993,6 +993,7 @@ def validate_release_source_identity_gate(text):
         if fragment not in source_boundary:
             fail(f"release gate clean-source boundary is missing {fragment!r}")
     expected_end = r'''cargo_locked fmt --all -- --check
+cargo_locked test --locked -p trnm-finality-verifier --lib
 cargo_locked test --locked -p hepta-research-league
 cargo_locked check --locked --workspace
 cargo_locked clippy --locked --workspace --all-targets -- -D warnings
@@ -1093,6 +1094,11 @@ release_gate_mutations = {
     "helper blob comparison ignored": release_script.replace(
         'if [[ "$actual_helper_blob" != "$expected_helper_blob" ]]; then',
         'if false; then',
+        1,
+    ),
+    "vendored verifier tests removed": release_script.replace(
+        "cargo_locked test --locked -p trnm-finality-verifier --lib\n",
+        "",
         1,
     ),
     "final check removed": release_script.rsplit(

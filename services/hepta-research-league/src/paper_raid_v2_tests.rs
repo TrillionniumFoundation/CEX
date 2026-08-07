@@ -20,8 +20,8 @@ use super::*;
 use crate::{
     app,
     paper_chain_finality_v1::{
-        paper_trnm_submission_commitment_hash, PaperTrnmCommandBindingV1,
-        PAPER_TRNM_COMMAND_BINDING_SCHEMA_V1,
+        paper_finality_side_effect_snapshot, paper_trnm_submission_commitment_hash,
+        PaperTrnmCommandBindingV1, PAPER_TRNM_COMMAND_BINDING_SCHEMA_V1,
     },
     paper_chain_finality_v2::{
         binding_commitment_id_v2, paper_scientific_finality_policy_hash_v1, validate_binding_v2,
@@ -4228,6 +4228,373 @@ async fn arm_paper_chain_finality_v2_window(mut state: AppState) -> ArmedPaperFi
     ArmedPaperFinalityV2Test { state, legacy, arm }
 }
 
+#[derive(Debug, Clone, Copy)]
+enum ResolvedAppealScenarioV2 {
+    Denied,
+    Upheld,
+}
+
+impl ResolvedAppealScenarioV2 {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Denied => "denied",
+            Self::Upheld => "upheld",
+        }
+    }
+
+    fn outcome(self) -> &'static str {
+        match self {
+            Self::Denied => "denied",
+            Self::Upheld => "upheld",
+        }
+    }
+
+    fn expected_status(self) -> PaperTrnmAppealStatusV2 {
+        match self {
+            Self::Denied => PaperTrnmAppealStatusV2::ResolvedDenied,
+            Self::Upheld => PaperTrnmAppealStatusV2::ResolvedUpheld,
+        }
+    }
+}
+
+fn update_legacy_binding_for_latest_review(
+    legacy: &mut PaperTrnmCommandBindingV1,
+    evaluation: &PaperEvaluation,
+    reproduction: &PaperReproduction,
+) {
+    legacy.evaluation_id = evaluation.evaluation_id;
+    legacy.tolerance_policy_hash = evaluation.tolerance_policy_hash.clone();
+    legacy.evaluation_signing_hash = evaluation.evaluation_signing_hash.clone();
+    legacy.evaluation_score_bps = evaluation.paper_score.score_bps;
+    legacy.evaluation_accepted = evaluation.status == PaperEvaluationStatus::Accepted;
+    legacy.evaluation_completed_at_unix_s = u64::try_from(evaluation.created_at.timestamp())
+        .expect("positive replacement evaluation time");
+    legacy.reproduction_id = reproduction.reproduction_id;
+    legacy.reproduction_report_hash = reproduction.report_hash.clone();
+}
+
+async fn create_replacement_review_for_finality_v2(
+    router: &Router,
+    legacy: &mut PaperTrnmCommandBindingV1,
+    submission: &Value,
+    previous_evaluation: &Value,
+    external: &[Actor],
+    label: &str,
+) -> (Value, Value) {
+    let evaluation_id = Uuid::new_v4();
+    let evaluation_key = format!("paper-finality-v2-{label}-replacement-evaluation");
+    let evaluation = assert_status(
+        user_post(
+            router,
+            &external[6],
+            "create_paper_evaluation_v1",
+            &format!("/v2/hepta/papers/{}/evaluations", legacy.paper_project_id),
+            &evaluation_key,
+            evaluation_body(
+                legacy.paper_project_id,
+                submission,
+                &external[6],
+                [&external[7], &external[8]],
+                evaluation_id,
+                Some(legacy.evaluation_id),
+                &evaluation_key,
+            ),
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+    assert_eq!(
+        evaluation["supersedes_evaluation_id"],
+        previous_evaluation["evaluation_id"]
+    );
+    let reproduction_id = Uuid::new_v4();
+    let reproduction_key = format!("paper-finality-v2-{label}-replacement-reproduction");
+    let reproduction = assert_status(
+        user_post(
+            router,
+            &external[3],
+            "create_paper_reproduction_v1",
+            &format!(
+                "/v2/hepta/papers/{}/evaluations/{evaluation_id}/reproductions",
+                legacy.paper_project_id
+            ),
+            &reproduction_key,
+            reproduction_body(
+                legacy.paper_project_id,
+                &evaluation,
+                &external[3],
+                reproduction_id,
+                None,
+                true,
+                &reproduction_key,
+            ),
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+    let evaluation_record: PaperEvaluation =
+        serde_json::from_value(evaluation.clone()).expect("decode replacement evaluation");
+    let reproduction_record: PaperReproduction =
+        serde_json::from_value(reproduction.clone()).expect("decode replacement reproduction");
+    update_legacy_binding_for_latest_review(legacy, &evaluation_record, &reproduction_record);
+    (evaluation, reproduction)
+}
+
+async fn exercise_resolved_appeal_paper_chain_finality_v2(
+    mut state: AppState,
+    scenario: ResolvedAppealScenarioV2,
+) -> PaperTrnmFinalityPreparationV2 {
+    set_paper_chain_finality_v2_clock(
+        &mut state,
+        PAPER_FINALITY_V2_FIXTURE_VERIFICATION_TIME_UNIX_S * 1_000,
+    );
+    let router = app(state.clone());
+    admit_paper_chain_finality_v2_anchor(&router).await;
+    let start_checkpoint = admit_paper_chain_finality_v2_start_checkpoint(&router).await;
+    let mut legacy = seed_paper_chain_finality_test(state.clone()).await;
+    let authors = actors(3);
+    let external = actors(11);
+    let submission = assert_status(
+        user_get(
+            &router,
+            &authors[0],
+            "get_joint_paper_submission_v2",
+            &format!("/v2/hepta/papers/{}/submission", legacy.paper_project_id),
+            &format!("paper-finality-v2-{}-submission", scenario.label()),
+        )
+        .await,
+        StatusCode::OK,
+    );
+    let review = assert_status(
+        user_get(
+            &router,
+            &authors[0],
+            "get_paper_review_state_v1",
+            &format!("/v2/hepta/papers/{}/review-state", legacy.paper_project_id),
+            &format!("paper-finality-v2-{}-review", scenario.label()),
+        )
+        .await,
+        StatusCode::OK,
+    );
+    let appealed_evaluation = review["evaluations"]
+        .as_array()
+        .expect("evaluation array")
+        .iter()
+        .find(|record| record["evaluation_id"] == legacy.evaluation_id.to_string())
+        .cloned()
+        .expect("seeded evaluation");
+    let appealed_evaluation_id = legacy.evaluation_id;
+    let appeal_id = Uuid::new_v4();
+    let appeal_key = format!("paper-finality-v2-{}-appeal", scenario.label());
+    assert_status(
+        user_post(
+            &router,
+            &authors[0],
+            "create_paper_appeal_v1",
+            &format!(
+                "/v2/hepta/papers/{}/evaluations/{appealed_evaluation_id}/appeals",
+                legacy.paper_project_id
+            ),
+            &appeal_key,
+            appeal_body(
+                legacy.paper_project_id,
+                &appealed_evaluation,
+                &authors[0],
+                appeal_id,
+                &appeal_key,
+            ),
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+
+    if matches!(scenario, ResolvedAppealScenarioV2::Upheld) {
+        create_replacement_review_for_finality_v2(
+            &router,
+            &mut legacy,
+            &submission,
+            &appealed_evaluation,
+            &external,
+            scenario.label(),
+        )
+        .await;
+    }
+    let resolution_id = Uuid::new_v4();
+    let resolution_key = format!("paper-finality-v2-{}-resolution", scenario.label());
+    assert_status(
+        user_post(
+            &router,
+            &external[9],
+            "resolve_paper_appeal_v1",
+            &format!(
+                "/v2/hepta/papers/{}/appeals/{appeal_id}/resolve",
+                legacy.paper_project_id
+            ),
+            &resolution_key,
+            resolution_body(
+                legacy.paper_project_id,
+                &appealed_evaluation,
+                appeal_id,
+                &external[9],
+                ResolutionBody {
+                    resolution_id,
+                    outcome: scenario.outcome(),
+                    superseding_evaluation_id: matches!(scenario, ResolvedAppealScenarioV2::Upheld)
+                        .then_some(legacy.evaluation_id),
+                    idempotency_key: &resolution_key,
+                },
+            ),
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+
+    // The repository's real CometBFT proof predates these dynamically-created
+    // review records.  Keep that proof as the admission boundary, then advance
+    // to an already-authenticated repository checkpoint so the resolved-Appeal
+    // branch is tested without allowing a Chain-time timestamp regression.
+    let source_safe_start_time = u64::try_from(Utc::now().timestamp_millis())
+        .expect("positive resolved-Appeal source time")
+        .checked_add(1_000)
+        .expect("resolved-Appeal source time overflow");
+    let (source_safe_start_checkpoint, source_safe_start_proof) =
+        synthetic_authenticated_checkpoint(
+            &start_checkpoint,
+            start_checkpoint.height + 1,
+            source_safe_start_time,
+            &format!("{}-source-safe-start", scenario.label()),
+        );
+    seed_authenticated_chain_time_checkpoint(
+        &state,
+        &source_safe_start_checkpoint,
+        &source_safe_start_proof,
+    )
+    .await;
+    let start_checkpoint = source_safe_start_checkpoint;
+    set_paper_chain_finality_v2_clock(&mut state, source_safe_start_time);
+    let router = app(state.clone());
+
+    let arm_path = format!(
+        "/v2/hepta/papers/{}/chain-finality-v2/arm",
+        legacy.paper_project_id
+    );
+    let arm_body = json!({
+        "submission_id":legacy.submission_id,
+        "evaluation_id":legacy.evaluation_id,
+        "latest_reproduction_id":legacy.reproduction_id,
+        "research_session_id":legacy.research_session_id,
+        "research_session_roster_version":legacy.research_session_roster_version,
+        "start_checkpoint_hash":start_checkpoint.checkpoint_hash,
+        "idempotency_key":format!(
+            "paper-finality-v2-{}-window-arm",
+            scenario.label()
+        ),
+    });
+    let created_arm = assert_status(
+        request(&router, "POST", &arm_path, arm_body.clone(), None).await,
+        StatusCode::CREATED,
+    );
+    assert_eq!(
+        assert_status(
+            request(&router, "POST", &arm_path, arm_body, None).await,
+            StatusCode::OK,
+        ),
+        created_arm,
+        "resolved-Appeal window-arm replay must be byte-for-byte stable"
+    );
+    let arm: PaperTrnmFinalityWindowArmV2 =
+        serde_json::from_value(created_arm).expect("decode resolved-Appeal V2 window arm");
+    assert_eq!(arm.appeal_status, scenario.expected_status());
+    assert_eq!(arm.appeal_id, Some(appeal_id));
+    assert_eq!(arm.appeal_resolution_id, Some(resolution_id));
+
+    let (final_checkpoint, final_proof) = synthetic_authenticated_checkpoint(
+        &arm.start_checkpoint,
+        arm.start_checkpoint.height + 1,
+        arm.earliest_final_checkpoint_time_unix_ms,
+        scenario.label(),
+    );
+    seed_authenticated_chain_time_checkpoint(&state, &final_checkpoint, &final_proof).await;
+    let preparation_path = format!(
+        "/v2/hepta/papers/{}/chain-finality-v2/prepare",
+        legacy.paper_project_id
+    );
+    let preparation_body = json!({
+        "arm_id":arm.arm_id,
+        "submission_id":legacy.submission_id,
+        "evaluation_id":legacy.evaluation_id,
+        "latest_reproduction_id":legacy.reproduction_id,
+        "research_session_id":legacy.research_session_id,
+        "research_session_roster_version":legacy.research_session_roster_version,
+        "final_checkpoint_hash":final_checkpoint.checkpoint_hash,
+        "idempotency_key":format!(
+            "paper-finality-v2-{}-preparation",
+            scenario.label()
+        ),
+    });
+    let created_preparation = assert_status(
+        request(
+            &router,
+            "POST",
+            &preparation_path,
+            preparation_body.clone(),
+            None,
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+    assert_eq!(
+        assert_status(
+            request(&router, "POST", &preparation_path, preparation_body, None,).await,
+            StatusCode::OK,
+        ),
+        created_preparation,
+        "resolved-Appeal preparation replay must be byte-for-byte stable"
+    );
+    let preparation: PaperTrnmFinalityPreparationV2 =
+        serde_json::from_value(created_preparation).expect("decode resolved-Appeal V2 preparation");
+    assert_eq!(
+        preparation.binding.appeal_status,
+        scenario.expected_status()
+    );
+    assert_eq!(preparation.binding.appeal_id, Some(appeal_id));
+    assert_eq!(
+        preparation.binding.appealed_evaluation_id,
+        Some(appealed_evaluation_id)
+    );
+    assert_eq!(
+        preparation.binding.appeal_resolution_id,
+        Some(resolution_id)
+    );
+    assert!(preparation.binding.scientific_finality);
+    assert_eq!(
+        (
+            preparation.binding.score_eligible,
+            preparation.binding.ranking_eligible,
+            preparation.binding.reward_eligible,
+            preparation.binding.economic_eligible,
+        ),
+        (false, false, false, false)
+    );
+    match scenario {
+        ResolvedAppealScenarioV2::Denied => {
+            assert_eq!(preparation.binding.evaluation_id, appealed_evaluation_id);
+            assert_eq!(
+                preparation.binding.evaluation_supersedes_evaluation_id,
+                None
+            );
+        }
+        ResolvedAppealScenarioV2::Upheld => {
+            assert_ne!(preparation.binding.evaluation_id, appealed_evaluation_id);
+            assert_eq!(
+                preparation.binding.evaluation_supersedes_evaluation_id,
+                Some(appealed_evaluation_id)
+            );
+        }
+    }
+    preparation
+}
+
 pub(crate) async fn exercise_paper_chain_finality_v2_preparation(
     state: AppState,
 ) -> PaperTrnmFinalityPreparationV2 {
@@ -4533,9 +4900,248 @@ async fn memory_paper_chain_finality_v2_preparation_enforces_policy_and_fail_clo
 }
 
 #[tokio::test]
-async fn memory_paper_chain_finality_v2_arm_is_invalidated_by_source_drift() {
-    let armed =
-        arm_paper_chain_finality_v2_window(AppState::new(paper_chain_finality_v2_security())).await;
+async fn memory_paper_chain_finality_v2_resolved_appeal_branches_reach_preparation() {
+    for scenario in [
+        ResolvedAppealScenarioV2::Denied,
+        ResolvedAppealScenarioV2::Upheld,
+    ] {
+        exercise_resolved_appeal_paper_chain_finality_v2(
+            AppState::new(paper_chain_finality_v2_security()),
+            scenario,
+        )
+        .await;
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum AppealLineageRejectionScenarioV2 {
+    AncestorOpen,
+    MultipleResolved,
+}
+
+impl AppealLineageRejectionScenarioV2 {
+    fn label(self) -> &'static str {
+        match self {
+            Self::AncestorOpen => "ancestor-open",
+            Self::MultipleResolved => "multiple-resolved",
+        }
+    }
+
+    fn expected_code(self) -> &'static str {
+        match self {
+            Self::AncestorOpen => "paper_chain_finality_open_appeal",
+            Self::MultipleResolved => "paper_trnm_appeal_lineage_ambiguous",
+        }
+    }
+}
+
+async fn exercise_paper_chain_finality_v2_appeal_lineage_rejection(
+    mut state: AppState,
+    scenario: AppealLineageRejectionScenarioV2,
+) {
+    set_paper_chain_finality_v2_clock(
+        &mut state,
+        PAPER_FINALITY_V2_FIXTURE_VERIFICATION_TIME_UNIX_S * 1_000,
+    );
+    let router = app(state.clone());
+    admit_paper_chain_finality_v2_anchor(&router).await;
+    let start_checkpoint = admit_paper_chain_finality_v2_start_checkpoint(&router).await;
+    let mut legacy = seed_paper_chain_finality_test(state.clone()).await;
+    let authors = actors(3);
+    let external = actors(11);
+    let submission = assert_status(
+        user_get(
+            &router,
+            &authors[0],
+            "get_joint_paper_submission_v2",
+            &format!("/v2/hepta/papers/{}/submission", legacy.paper_project_id),
+            &format!("paper-finality-v2-{}-submission", scenario.label()),
+        )
+        .await,
+        StatusCode::OK,
+    );
+    let review = assert_status(
+        user_get(
+            &router,
+            &authors[0],
+            "get_paper_review_state_v1",
+            &format!("/v2/hepta/papers/{}/review-state", legacy.paper_project_id),
+            &format!("paper-finality-v2-{}-review", scenario.label()),
+        )
+        .await,
+        StatusCode::OK,
+    );
+    let original_evaluation = review["evaluations"]
+        .as_array()
+        .expect("evaluation array")
+        .iter()
+        .find(|record| record["evaluation_id"] == legacy.evaluation_id.to_string())
+        .cloned()
+        .expect("seeded evaluation");
+    let original_evaluation_id = legacy.evaluation_id;
+    let original_appeal_id = Uuid::new_v4();
+    let original_appeal_key = format!("paper-finality-v2-{}-appeal-1", scenario.label());
+    assert_status(
+        user_post(
+            &router,
+            &authors[0],
+            "create_paper_appeal_v1",
+            &format!(
+                "/v2/hepta/papers/{}/evaluations/{original_evaluation_id}/appeals",
+                legacy.paper_project_id
+            ),
+            &original_appeal_key,
+            appeal_body(
+                legacy.paper_project_id,
+                &original_evaluation,
+                &authors[0],
+                original_appeal_id,
+                &original_appeal_key,
+            ),
+        )
+        .await,
+        StatusCode::CREATED,
+    );
+    let (replacement_evaluation, _) = create_replacement_review_for_finality_v2(
+        &router,
+        &mut legacy,
+        &submission,
+        &original_evaluation,
+        &external,
+        scenario.label(),
+    )
+    .await;
+
+    if matches!(scenario, AppealLineageRejectionScenarioV2::MultipleResolved) {
+        let first_resolution_key = format!("paper-finality-v2-{}-resolution-1", scenario.label());
+        assert_status(
+            user_post(
+                &router,
+                &external[9],
+                "resolve_paper_appeal_v1",
+                &format!(
+                    "/v2/hepta/papers/{}/appeals/{original_appeal_id}/resolve",
+                    legacy.paper_project_id
+                ),
+                &first_resolution_key,
+                resolution_body(
+                    legacy.paper_project_id,
+                    &original_evaluation,
+                    original_appeal_id,
+                    &external[9],
+                    ResolutionBody {
+                        resolution_id: Uuid::new_v4(),
+                        outcome: "upheld",
+                        superseding_evaluation_id: Some(legacy.evaluation_id),
+                        idempotency_key: &first_resolution_key,
+                    },
+                ),
+            )
+            .await,
+            StatusCode::CREATED,
+        );
+        let second_appeal_id = Uuid::new_v4();
+        let second_appeal_key = format!("paper-finality-v2-{}-appeal-2", scenario.label());
+        assert_status(
+            user_post(
+                &router,
+                &authors[1],
+                "create_paper_appeal_v1",
+                &format!(
+                    "/v2/hepta/papers/{}/evaluations/{}/appeals",
+                    legacy.paper_project_id, legacy.evaluation_id
+                ),
+                &second_appeal_key,
+                appeal_body(
+                    legacy.paper_project_id,
+                    &replacement_evaluation,
+                    &authors[1],
+                    second_appeal_id,
+                    &second_appeal_key,
+                ),
+            )
+            .await,
+            StatusCode::CREATED,
+        );
+        let second_resolution_key = format!("paper-finality-v2-{}-resolution-2", scenario.label());
+        assert_status(
+            user_post(
+                &router,
+                &external[9],
+                "resolve_paper_appeal_v1",
+                &format!(
+                    "/v2/hepta/papers/{}/appeals/{second_appeal_id}/resolve",
+                    legacy.paper_project_id
+                ),
+                &second_resolution_key,
+                resolution_body(
+                    legacy.paper_project_id,
+                    &replacement_evaluation,
+                    second_appeal_id,
+                    &external[9],
+                    ResolutionBody {
+                        resolution_id: Uuid::new_v4(),
+                        outcome: "denied",
+                        superseding_evaluation_id: None,
+                        idempotency_key: &second_resolution_key,
+                    },
+                ),
+            )
+            .await,
+            StatusCode::CREATED,
+        );
+    }
+
+    let before = paper_finality_side_effect_snapshot(&state).await;
+    let error = error_code(
+        request(
+            &router,
+            "POST",
+            &format!(
+                "/v2/hepta/papers/{}/chain-finality-v2/arm",
+                legacy.paper_project_id
+            ),
+            json!({
+                "submission_id":legacy.submission_id,
+                "evaluation_id":legacy.evaluation_id,
+                "latest_reproduction_id":legacy.reproduction_id,
+                "research_session_id":legacy.research_session_id,
+                "research_session_roster_version":legacy.research_session_roster_version,
+                "start_checkpoint_hash":start_checkpoint.checkpoint_hash,
+                "idempotency_key":format!(
+                    "paper-finality-v2-{}-window-arm",
+                    scenario.label()
+                ),
+            }),
+            None,
+        )
+        .await,
+        StatusCode::CONFLICT,
+    );
+    assert_eq!(error, scenario.expected_code());
+    let after = paper_finality_side_effect_snapshot(&state).await;
+    assert_eq!(
+        after, before,
+        "Appeal lineage rejection must leave every reachable memory/PG side-effect surface unchanged"
+    );
+}
+
+#[tokio::test]
+async fn memory_paper_chain_finality_v2_appeal_lineage_rejections_are_atomic() {
+    for scenario in [
+        AppealLineageRejectionScenarioV2::AncestorOpen,
+        AppealLineageRejectionScenarioV2::MultipleResolved,
+    ] {
+        exercise_paper_chain_finality_v2_appeal_lineage_rejection(
+            AppState::new(paper_chain_finality_v2_security()),
+            scenario,
+        )
+        .await;
+    }
+}
+
+async fn exercise_paper_chain_finality_v2_arm_source_drift(state: AppState) {
+    let armed = arm_paper_chain_finality_v2_window(state).await;
     let state = armed.state;
     let legacy = armed.legacy;
     let arm = armed.arm;
@@ -4593,6 +5199,7 @@ async fn memory_paper_chain_finality_v2_arm_is_invalidated_by_source_drift() {
         "/v2/hepta/papers/{}/chain-finality-v2/prepare",
         legacy.paper_project_id
     );
+    let before = paper_finality_side_effect_snapshot(&state).await;
     assert_eq!(
         error_code(
             request(
@@ -4617,6 +5224,11 @@ async fn memory_paper_chain_finality_v2_arm_is_invalidated_by_source_drift() {
         "paper_trnm_v2_window_arm_stale",
         "an Appeal opened after arm must invalidate the observed source tuple"
     );
+    let after = paper_finality_side_effect_snapshot(&state).await;
+    assert_eq!(
+        after, before,
+        "source drift must not mutate any reachable memory/PG side-effect surface"
+    );
     assert!(
         !state
             .paper_chain_finality
@@ -4627,6 +5239,14 @@ async fn memory_paper_chain_finality_v2_arm_is_invalidated_by_source_drift() {
             .contains_key(&legacy.paper_project_id),
         "source drift must not leave a partial immutable preparation"
     );
+}
+
+#[tokio::test]
+async fn memory_paper_chain_finality_v2_arm_is_invalidated_by_source_drift() {
+    exercise_paper_chain_finality_v2_arm_source_drift(AppState::new(
+        paper_chain_finality_v2_security(),
+    ))
+    .await;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -6089,6 +6709,25 @@ async fn postgres_paper_chain_finality_v2_preparation_matches_memory_and_is_atom
     reset_postgres(&database_url).await;
     assert_paper_finality_v2_trigger_replay_repairs_tampering(&pool).await;
     assert_paper_finality_v2_constraint_replay_rejects_same_name_tampering(&pool).await;
+
+    for scenario in [
+        ResolvedAppealScenarioV2::Denied,
+        ResolvedAppealScenarioV2::Upheld,
+    ] {
+        reset_postgres(&database_url).await;
+        exercise_resolved_appeal_paper_chain_finality_v2(state.clone(), scenario).await;
+    }
+    for scenario in [
+        AppealLineageRejectionScenarioV2::AncestorOpen,
+        AppealLineageRejectionScenarioV2::MultipleResolved,
+    ] {
+        reset_postgres(&database_url).await;
+        exercise_paper_chain_finality_v2_appeal_lineage_rejection(state.clone(), scenario).await;
+    }
+    reset_postgres(&database_url).await;
+    exercise_paper_chain_finality_v2_arm_source_drift(state.clone()).await;
+
+    reset_postgres(&database_url).await;
     let stale_writer_preparation =
         prepare_paper_finality_v2_against_stale_repeatable_read_writer(state.clone()).await;
     assert_paper_finality_v2_cross_paper_updates_are_deadlock_free(

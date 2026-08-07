@@ -1791,6 +1791,11 @@ fn u64_from_i64(value: i64, field: &str) -> Result<u64, ApiError> {
 }
 
 #[cfg(test)]
+pub(crate) async fn paper_finality_side_effect_snapshot(state: &AppState) -> Value {
+    tests::paper_finality_side_effect_snapshot_impl(state).await
+}
+
+#[cfg(test)]
 mod tests {
     use std::{collections::HashSet, sync::Arc, time::Duration};
 
@@ -2126,7 +2131,7 @@ mod tests {
             .collect()
     }
 
-    async fn paper_finality_side_effect_snapshot(state: &AppState) -> Value {
+    pub(super) async fn paper_finality_side_effect_snapshot_impl(state: &AppState) -> Value {
         if let Some(pool) = &state.pool {
             let league = sqlx::query_scalar::<_, Value>(
                 "select to_jsonb(snapshot) from (
