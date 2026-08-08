@@ -4197,6 +4197,26 @@ async fn arm_paper_chain_finality_v2_window(mut state: AppState) -> ArmedPaperFi
     admit_paper_chain_finality_v2_anchor(&router).await;
     let start_checkpoint = admit_paper_chain_finality_v2_start_checkpoint(&router).await;
     let legacy = seed_paper_chain_finality_test(state.clone()).await;
+    let source_safe_start_time = u64::try_from(Utc::now().timestamp_millis())
+        .expect("positive preparation source time")
+        .checked_add(1_000)
+        .expect("preparation source time overflow");
+    let (source_safe_start_checkpoint, source_safe_start_proof) =
+        synthetic_authenticated_checkpoint(
+            &start_checkpoint,
+            start_checkpoint.height + 1,
+            source_safe_start_time,
+            "preparation-source-safe-start",
+        );
+    seed_authenticated_chain_time_checkpoint(
+        &state,
+        &source_safe_start_checkpoint,
+        &source_safe_start_proof,
+    )
+    .await;
+    let start_checkpoint = source_safe_start_checkpoint;
+    set_paper_chain_finality_v2_clock(&mut state, source_safe_start_time);
+    let router = app(state.clone());
     let arm_path = format!(
         "/v2/hepta/papers/{}/chain-finality-v2/arm",
         legacy.paper_project_id
@@ -6766,7 +6786,7 @@ async fn postgres_paper_chain_finality_v2_preparation_matches_memory_and_is_atom
     .fetch_one(&pool)
     .await
     .expect("inspect V2 checkpoint and arm rows");
-    assert_eq!(protocol_counts.get::<i64, _>("checkpoints"), 3);
+    assert_eq!(protocol_counts.get::<i64, _>("checkpoints"), 4);
     assert_eq!(protocol_counts.get::<i64, _>("arms"), 1);
 
     let evaluation_json_before = sqlx::query_scalar::<_, Value>(
