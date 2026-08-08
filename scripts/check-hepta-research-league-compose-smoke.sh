@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
 
 repo_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 : "${HEPTA_IMAGE:?HEPTA_IMAGE must name the already-built immutable candidate}"
@@ -33,6 +33,7 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+trap 'status=$?; echo "Hepta Compose smoke failed at line $LINENO with status $status" >&2; exit "$status"' ERR
 
 for command_name in awk curl docker grep jq python3 rg seq sleep sort; do
   command -v "$command_name" >/dev/null 2>&1 || {
