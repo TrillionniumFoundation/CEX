@@ -216,6 +216,15 @@ wait_hepta() {
     sleep 1
   done
   echo "Hepta candidate image did not become ready" >&2
+  "${compose[@]}" ps -a >&2 || true
+  "${compose[@]}" logs --no-color --tail 200 hepta >&2 || true
+  "${compose[@]}" logs --no-color --tail 80 postgres >&2 || true
+  local hepta_container
+  hepta_container=$("${compose[@]}" ps -a -q hepta 2>/dev/null || true)
+  if [[ -n "$hepta_container" ]]; then
+    "${docker_command[@]}" inspect "$hepta_container" \
+      --format '{{json .State}}' >&2 || true
+  fi
   return 1
 }
 
