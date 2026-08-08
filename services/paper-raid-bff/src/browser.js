@@ -258,6 +258,21 @@ async function sendCommand(command, resourceId, childId, payload) {
   });
 }
 
+async function recordProductEvent(eventName, values = {}) {
+  return mutation("/api/product-events", {
+    method: "POST",
+    headers: { "content-type": "application/json", "accept": "application/json" },
+    body: JSON.stringify({
+      event_id: uuid(),
+      event_name: eventName,
+      challenge_id: values.challengeId || null,
+      team_id: values.teamId || null,
+      paper_id: values.paperId || null,
+      phase: values.phase || null
+    })
+  });
+}
+
 async function sha256Label(bytes) {
   const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
   return `sha256:${Array.from(digest, byte => byte.toString(16).padStart(2, "0")).join("")}`;
@@ -548,6 +563,32 @@ function unsignedHumanPayload(command, payload) {
   return clean;
 }
 
+async function signHumanPayload(command, resourceId, childId, payload) {
+  if (!humanSigner) throw new Error("import_your_encrypted_human_key_bundle_first");
+  const frameResponse = await mutation("/api/onboarding/human/signing-frame", {
+    method: "POST",
+    headers: { "content-type": "application/json", "accept": "application/json" },
+    body: JSON.stringify({
+      command,
+      resource_id: resourceId || null,
+      child_id: childId || null,
+      payload: unsignedHumanPayload(command, payload)
+    })
+  });
+  const frame = await responseValue(frameResponse);
+  if (!frameResponse.ok) throw new Error(frame && frame.error ? frame.error : "signing_frame_failed");
+  if (frame.signing_public_key !== humanSigner.publicKeyBase64) {
+    throw new Error("imported_key_is_not_the_active_registered_human_key");
+  }
+  const signature = await crypto.subtle.sign(
+    "Ed25519",
+    humanSigner.privateKey,
+    base64ToBytes(frame.signing_bytes)
+  );
+  frame.payload.signature = bytesToBase64(signature);
+  return frame;
+}
+
 function bindLocalSigning() {
   for (const button of document.querySelectorAll(".local-sign")) {
     const form = button.closest("form");
@@ -555,32 +596,124 @@ function bindLocalSigning() {
       const output = form.querySelector("output");
       button.disabled = true;
       try {
-        if (!humanSigner) throw new Error("import_your_encrypted_human_key_bundle_first");
         const payload = JSON.parse(form.elements.payload.value);
         const child = form.elements.child_id ? form.elements.child_id.value.trim() : null;
-        const frameResponse = await mutation("/api/onboarding/human/signing-frame", {
-          method: "POST",
-          headers: { "content-type": "application/json", "accept": "application/json" },
-          body: JSON.stringify({
-            command: form.dataset.command,
-            resource_id: form.dataset.resourceId || null,
-            child_id: child || null,
-            payload: unsignedHumanPayload(form.dataset.command, payload)
-          })
-        });
-        const frame = await responseValue(frameResponse);
-        if (!frameResponse.ok) throw new Error(frame && frame.error ? frame.error : "signing_frame_failed");
-        if (frame.signing_public_key !== humanSigner.publicKeyBase64) {
-          throw new Error("imported_key_is_not_the_active_registered_human_key");
-        }
-        const signature = await crypto.subtle.sign(
-          "Ed25519",
-          humanSigner.privateKey,
-          base64ToBytes(frame.signing_bytes)
+        const frame = await signHumanPayload(
+          form.dataset.command,
+          form.dataset.resourceId || null,
+          child || null,
+          payload
         );
-        frame.payload.signature = bytesToBase64(signature);
         form.elements.payload.value = JSON.stringify(frame.payload, null, 2);
         show(output, `Locally signed with ${frame.signing_key_id}`, true);
+      } catch (error) {
+        show(output, error.message, false);
+      } finally {
+        button.disabled = false;
+      }
+    });
+  }
+}
+
+function bindFirstPlayableFormation() {
+  for (const form of document.querySelectorAll(".materialize-team-form")) {
+    form.addEventListener("submit", async event => {
+      event.preventDefault();
+      const button = form.querySelector("button");
+      const output = form.querySelector("output");
+      button.disabled = true;
+      try {
+        const response = await sendCommand("materialize_team_proposal", form.dataset.proposalId, null, {
+          expected_proposal_version: Number(form.dataset.proposalVersion)
+        });
+        const value = await responseValue(response);
+        show(output, response.ok ? "Team built. Loading ready check…" : value, response.ok);
+        if (response.ok) window.setTimeout(() => window.location.reload(), 400);
+      } catch (error) {
+        show(output, error.message, false);
+      } finally {
+        button.disabled = false;
+      }
+    });
+  }
+  for (const form of document.querySelectorAll(".team-ready-form")) {
+    form.addEventListener("submit", async event => {
+      event.preventDefault();
+      const button = form.querySelector("button");
+      const output = form.querySelector("output");
+      button.disabled = true;
+      try {
+        const payload = {
+          acceptance_id: uuid(),
+          expected_team_version: Number(form.dataset.teamVersion),
+          roster_version: Number(form.dataset.rosterVersion),
+          participant_slot: Number(form.dataset.participantSlot),
+          binding_id: form.dataset.bindingId,
+          role: form.dataset.role,
+          collaboration_compact_hash: form.dataset.compactHash
+        };
+        const frame = await signHumanPayload(
+          "accept_research_team_membership",
+          form.dataset.teamId,
+          null,
+          payload
+        );
+        const response = await sendCommand(
+          "accept_research_team_membership",
+          form.dataset.teamId,
+          null,
+          frame.payload
+        );
+        const value = await responseValue(response);
+        show(output, response.ok ? "Ready confirmed." : value, response.ok);
+        if (response.ok) window.setTimeout(() => window.location.reload(), 400);
+      } catch (error) {
+        show(output, error.message, false);
+      } finally {
+        button.disabled = false;
+      }
+    });
+  }
+  for (const form of document.querySelectorAll(".lock-team-form")) {
+    form.addEventListener("submit", async event => {
+      event.preventDefault();
+      const button = form.querySelector("button");
+      const output = form.querySelector("output");
+      button.disabled = true;
+      try {
+        const response = await sendCommand("lock_research_team", form.dataset.teamId, null, {
+          expected_version: Number(form.dataset.teamVersion)
+        });
+        const value = await responseValue(response);
+        show(output, response.ok ? "Roster locked. Name the Raid next." : value, response.ok);
+        if (response.ok) window.setTimeout(() => window.location.reload(), 400);
+      } catch (error) {
+        show(output, error.message, false);
+      } finally {
+        button.disabled = false;
+      }
+    });
+  }
+  for (const form of document.querySelectorAll(".create-paper-form")) {
+    form.addEventListener("submit", async event => {
+      event.preventDefault();
+      const button = form.querySelector("button");
+      const output = form.querySelector("output");
+      button.disabled = true;
+      try {
+        const paperId = uuid();
+        const response = await sendCommand("create_paper_project", null, null, {
+          paper_project_id: paperId,
+          team_id: form.dataset.teamId,
+          title: form.elements.title.value.trim(),
+          target_format: form.elements.target_format.value
+        });
+        const value = await responseValue(response);
+        const createdId = value && typeof value.paper_project_id === "string"
+          ? value.paper_project_id
+          : paperId;
+        show(output, response.ok ? "Paper created. Entering the Research Room…" : value, response.ok);
+        if (response.ok) window.setTimeout(() => window.location.assign(`/league/papers/${encodeURIComponent(createdId)}`), 300);
       } catch (error) {
         show(output, error.message, false);
       } finally {
@@ -722,6 +855,7 @@ function bindTimeline() {
       const output = button.parentElement.querySelector("output");
       button.disabled = true;
       try {
+        await recordProductEvent("replay_started", { paperId: button.dataset.paperId });
         const response = await fetch(`/api/papers/${encodeURIComponent(button.dataset.paperId)}/timeline?after_cursor=0&after_sequence=0`, {
           credentials: "same-origin",
           headers: { "accept": "application/json" }
@@ -734,6 +868,29 @@ function bindTimeline() {
         button.disabled = false;
       }
     });
+  }
+}
+
+function bindProductTelemetry() {
+  for (const link of document.querySelectorAll(".continue-raid-link")) {
+    link.addEventListener("click", async event => {
+      event.preventDefault();
+      const href = link.href;
+      try {
+        await recordProductEvent("continue_opened", {
+          teamId: link.dataset.teamId || null,
+          paperId: link.dataset.paperId || null
+        });
+      } catch (_) {
+        // Telemetry must never block the player's authoritative Continue path.
+      }
+      window.location.assign(href);
+    });
+  }
+  const paperMatch = window.location.pathname.match(/^\/league\/papers\/([0-9a-f-]{36})$/i);
+  const navigation = performance.getEntriesByType("navigation")[0];
+  if (paperMatch && navigation && navigation.type === "reload") {
+    recordProductEvent("reconnected", { paperId: paperMatch[1] }).catch(() => {});
   }
 }
 
@@ -750,7 +907,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindLocalSigning();
   bindQueueForms();
   bindProposalForms();
+  bindFirstPlayableFormation();
   bindCommandForms();
   bindArtifactForms();
   bindTimeline();
+  bindProductTelemetry();
 });

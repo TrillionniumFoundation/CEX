@@ -56,6 +56,7 @@ pub enum CommandName {
     CompleteNakamaResearchSessionControl,
     QueueMatchmaking,
     DecideTeamProposal,
+    MaterializeTeamProposal,
     CreateEvidenceCard,
     CreateCitationRecord,
     CreateExperimentPlan,
@@ -344,6 +345,10 @@ impl BrowserCommand {
             CommandName::DecideTeamProposal => post(
                 format!("/v2/hepta/team-proposals/{}/decisions", resource()?),
                 "create_team_proposal_decision_v3",
+            ),
+            CommandName::MaterializeTeamProposal => post(
+                format!("/v2/hepta/team-proposals/{}/materialize", resource()?),
+                "materialize_team_proposal_v1",
             ),
             CommandName::RegisterArtifact => post(
                 format!("/v2/hepta/papers/{}/artifact-manifests", resource()?),
@@ -957,6 +962,16 @@ impl HeptaClient {
             format!("/v2/hepta/team-proposals/{proposal_id}"),
             None,
             "get_team_proposal_v3",
+        )
+        .await
+    }
+
+    pub async fn get_player_raid_state(&self, identity: &AlphaIdentity) -> Result<Value, AppError> {
+        self.get_json(
+            identity,
+            "/v2/hepta/raid-state".into(),
+            None,
+            "get_player_raid_state_v1",
         )
         .await
     }
@@ -1751,6 +1766,11 @@ mod tests {
                 command(CommandName::DecideTeamProposal, Some(team), None, None),
                 format!("/v2/hepta/team-proposals/{team}/decisions"),
                 "create_team_proposal_decision_v3",
+            ),
+            (
+                command(CommandName::MaterializeTeamProposal, Some(team), None, None),
+                format!("/v2/hepta/team-proposals/{team}/materialize"),
+                "materialize_team_proposal_v1",
             ),
             (
                 command(CommandName::RegisterArtifact, Some(paper), None, None),

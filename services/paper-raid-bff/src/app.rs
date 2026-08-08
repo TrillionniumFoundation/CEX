@@ -21,7 +21,9 @@ use crate::{
     config::{AlphaIdentity, Config, EdgeScope},
     db,
     error::AppError,
-    hepta::{BrowserCommand, HeptaClient, HumanRegistrationProof, HumanSigningFrameRequest},
+    hepta::{
+        BrowserCommand, CommandName, HeptaClient, HumanRegistrationProof, HumanSigningFrameRequest,
+    },
     html,
     nakama::{member_session_accesses, MemberSessionAccess, NakamaArchiveClient},
 };
@@ -97,6 +99,7 @@ pub fn router(state: AppState) -> Router {
             post(human_signing_frame),
         )
         .route("/api/hepta/commands", post(forward_hepta_command))
+        .route("/api/product-events", post(record_browser_product_event))
         .route("/api/papers/:paper_id/timeline", get(paper_timeline))
         .route(
             "/api/papers/:paper_id/artifacts/:digest",
@@ -188,6 +191,24 @@ async fn alpha_login(
         .find_identity(&request.login_key)
         .ok_or(AppError::Unauthorized)?;
     let issue = state.sessions.issue(&identity).await?;
+    if let Err(error) = db::record_product_event(
+        &state.pool,
+        db::ProductEvent {
+            event_id: Uuid::new_v4(),
+            session_id: None,
+            player_id: identity.player_id,
+            event_name: "login_succeeded",
+            challenge_id: None,
+            team_id: None,
+            paper_id: None,
+            phase: None,
+            source: "server_command",
+        },
+    )
+    .await
+    {
+        tracing::warn!(%error, "could not record login telemetry");
+    }
     let response = (
         StatusCode::OK,
         Json(json!({
@@ -425,6 +446,9 @@ async fn forward_hepta_command(
         .await;
     let response = match result {
         Ok(upstream) => {
+            if (200..300).contains(&upstream.status) && !upstream.replayed {
+                record_server_command_event(&state, &session, &command, &upstream.body).await;
+            }
             let mut response = Response::builder()
                 .status(upstream.status)
                 .header(header::CONTENT_TYPE, "application/json")
@@ -443,13 +467,149 @@ async fn forward_hepta_command(
     with_rotated_csrf(private_no_store(response), next_csrf)
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BrowserProductEvent {
+    event_id: Uuid,
+    event_name: String,
+    challenge_id: Option<Uuid>,
+    team_id: Option<Uuid>,
+    paper_id: Option<Uuid>,
+    phase: Option<String>,
+}
+
+async fn record_browser_product_event(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(event): Json<BrowserProductEvent>,
+) -> Response {
+    let session = match state.session(&headers).await {
+        Ok(session) => session,
+        Err(error) => return error.into_response(),
+    };
+    let next_csrf = match state.sessions.consume_csrf(&headers, &session).await {
+        Ok(next_csrf) => next_csrf,
+        Err(error) => return error.into_response(),
+    };
+    let allowed = matches!(
+        event.event_name.as_str(),
+        "abandoned" | "reconnected" | "replay_started" | "continue_opened"
+    );
+    let phase_valid = event.phase.as_ref().map_or(true, |phase| {
+        matches!(
+            phase.as_str(),
+            "forming"
+                | "preregistering"
+                | "researching"
+                | "experimenting"
+                | "drafting"
+                | "integrity_review"
+                | "reproducing"
+                | "author_approval"
+                | "integrity_hold"
+                | "submission_ready"
+        )
+    });
+    let response = if !allowed || !phase_valid {
+        AppError::Invalid("unsupported product event".into()).into_response()
+    } else {
+        match db::record_product_event(
+            &state.pool,
+            db::ProductEvent {
+                event_id: event.event_id,
+                session_id: Some(session.session_id),
+                player_id: session.identity.player_id,
+                event_name: &event.event_name,
+                challenge_id: event.challenge_id,
+                team_id: event.team_id,
+                paper_id: event.paper_id,
+                phase: event.phase.as_deref(),
+                source: "browser_signal",
+            },
+        )
+        .await
+        {
+            Ok(()) => (StatusCode::NO_CONTENT, Body::empty()).into_response(),
+            Err(error) => AppError::from(error).into_response(),
+        }
+    };
+    with_rotated_csrf(private_no_store(response), next_csrf)
+}
+
+async fn record_server_command_event(
+    state: &AppState,
+    session: &AuthenticatedSession,
+    command: &BrowserCommand,
+    response_body: &[u8],
+) {
+    let event_name = match command.command {
+        CommandName::QueueMatchmaking => "queue_started",
+        CommandName::MaterializeTeamProposal => "team_formed",
+        CommandName::CreatePaperProject | CommandName::CreatePaperWorkItem => "first_action",
+        CommandName::TransitionPaperProject => "phase_entered",
+        CommandName::FinalizeJointPaperSubmission => "raid_completed",
+        _ => return,
+    };
+    let response = serde_json::from_slice::<Value>(response_body).unwrap_or(Value::Null);
+    let response_uuid = |field: &str| {
+        response
+            .get(field)
+            .and_then(Value::as_str)
+            .and_then(|value| Uuid::parse_str(value).ok())
+    };
+    let payload_uuid = |field: &str| {
+        command
+            .payload
+            .get(field)
+            .and_then(Value::as_str)
+            .and_then(|value| Uuid::parse_str(value).ok())
+    };
+    let challenge_id = response_uuid("challenge_id").or_else(|| payload_uuid("challenge_id"));
+    let team_id = response_uuid("team_id").or_else(|| payload_uuid("team_id"));
+    let paper_id = response_uuid("paper_project_id")
+        .or_else(|| payload_uuid("paper_project_id"))
+        .or_else(|| {
+            matches!(
+                command.command,
+                CommandName::TransitionPaperProject
+                    | CommandName::CreatePaperWorkItem
+                    | CommandName::FinalizeJointPaperSubmission
+            )
+            .then_some(command.resource_id)
+            .flatten()
+        });
+    let phase = response
+        .get("phase")
+        .and_then(Value::as_str)
+        .or_else(|| command.payload.get("next_phase").and_then(Value::as_str));
+    if let Err(error) = db::record_product_event(
+        &state.pool,
+        db::ProductEvent {
+            event_id: command.idempotency_key,
+            session_id: Some(session.session_id),
+            player_id: session.identity.player_id,
+            event_name,
+            challenge_id,
+            team_id,
+            paper_id,
+            phase,
+            source: "server_command",
+        },
+    )
+    .await
+    {
+        tracing::warn!(%error, event_name, "could not record product telemetry");
+    }
+}
+
 async fn lobby(State(state): State<AppState>, headers: HeaderMap) -> Result<Response, AppError> {
     let session = state.session(&headers).await?;
-    let (challenges, tickets, proposals, bindings) = tokio::join!(
+    let (challenges, tickets, proposals, bindings, raid_state) = tokio::join!(
         state.hepta.list_public_challenges(&session.identity),
         state.hepta.list_matchmaking_tickets(&session.identity),
         state.hepta.list_team_proposals(&session.identity),
         state.hepta.list_current_agent_bindings(&session.identity),
+        state.hepta.get_player_raid_state(&session.identity),
     );
     Ok(html::lobby(
         &session.identity,
@@ -457,6 +617,7 @@ async fn lobby(State(state): State<AppState>, headers: HeaderMap) -> Result<Resp
         read_state(&tickets),
         read_state(&proposals),
         read_state(&bindings),
+        read_state(&raid_state),
     ))
 }
 
@@ -466,7 +627,7 @@ async fn formation(
     Path(resource_id): Path<Uuid>,
 ) -> Result<Response, AppError> {
     let session = state.session(&headers).await?;
-    let (proposal, team, acceptances) = tokio::join!(
+    let (proposal, team, acceptances, raid_state) = tokio::join!(
         state
             .hepta
             .get_team_proposal(&session.identity, resource_id),
@@ -474,6 +635,7 @@ async fn formation(
         state
             .hepta
             .get_team_acceptances(&session.identity, resource_id),
+        state.hepta.get_player_raid_state(&session.identity),
     );
     Ok(html::formation(
         &session.identity,
@@ -481,6 +643,7 @@ async fn formation(
         read_state(&proposal),
         read_state(&team),
         read_state(&acceptances),
+        read_state(&raid_state),
     ))
 }
 

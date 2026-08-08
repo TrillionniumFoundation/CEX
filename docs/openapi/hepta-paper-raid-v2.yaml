@@ -111,6 +111,33 @@ paths:
       responses:
         "201": {description: Decision recorded with updated/replacement proposal}
         "409": {$ref: "#/components/responses/VersionConflict"}
+  /v2/hepta/team-proposals/{proposal_id}/materialize:
+    parameters:
+      - {$ref: "#/components/parameters/ProposalId"}
+    post:
+      operationId: materializeTeamProposal
+      description: >-
+        Idempotently derives the authoritative three-person Research Team from
+        an unanimously accepted proposal, its exact matched tickets, and each
+        member's single active Agent binding. The browser cannot supply roster,
+        role, Compact, or Agent authority fields.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/MaterializeTeamProposalRequest"}
+      responses:
+        "200": {description: Existing identical Research Team returned}
+        "201": {description: Research Team materialized}
+        "409": {$ref: "#/components/responses/VersionConflict"}
+  /v2/hepta/raid-state:
+    get:
+      operationId: getPlayerRaidState
+      description: >-
+        Returns only the asserted player's authoritative Team/Paper progress,
+        including the current active Raid used by browser Continue navigation.
+      responses:
+        "200": {description: Player-scoped active and historical Raid summaries}
   /v2/hepta/players:
     post:
       operationId: createHumanPlayer
@@ -1429,6 +1456,13 @@ components:
         decision_id: {type: string, format: uuid}
         expected_proposal_version: {type: integer, minimum: 1}
         decision: {type: string, enum: [accept, decline]}
+        idempotency_key: {$ref: "#/components/schemas/IdempotencyKey"}
+    MaterializeTeamProposalRequest:
+      type: object
+      additionalProperties: false
+      required: [expected_proposal_version, idempotency_key]
+      properties:
+        expected_proposal_version: {type: integer, minimum: 1}
         idempotency_key: {$ref: "#/components/schemas/IdempotencyKey"}
     ArtifactReference:
       type: object

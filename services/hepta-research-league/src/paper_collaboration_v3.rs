@@ -185,6 +185,48 @@ pub struct TeamProposalDecisionResponse {
     pub replacement_proposal: Option<TeamProposal>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MaterializeTeamProposalRequest {
+    pub expected_proposal_version: u64,
+    pub idempotency_key: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PaperRaidProgress {
+    pub paper_project_id: Uuid,
+    pub title: String,
+    pub phase: PaperPhase,
+    pub version: u64,
+    pub current_revision_id: Option<Uuid>,
+    pub release_candidate_revision_id: Option<Uuid>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PlayerRaidSummary {
+    pub team_id: Uuid,
+    pub challenge_id: Uuid,
+    pub team_status: TeamStatus,
+    pub team_version: u64,
+    pub roster_version: u64,
+    pub member_count: usize,
+    pub acceptance_count: usize,
+    pub participant_slot: u32,
+    pub role: String,
+    pub player_ready: bool,
+    pub paper: Option<PaperRaidProgress>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PlayerRaidState {
+    pub schema: String,
+    pub player_id: Uuid,
+    pub current_raid: Option<PlayerRaidSummary>,
+    pub raids: Vec<PlayerRaidSummary>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PublicChallenge {
     pub challenge_id: Uuid,
@@ -946,9 +988,14 @@ pub(super) fn router() -> Router<AppState> {
             get(get_team_proposal),
         )
         .route(
+            "/v2/hepta/team-proposals/:proposal_id/materialize",
+            post(materialize_team_proposal),
+        )
+        .route(
             "/v2/hepta/team-proposals/:proposal_id/decisions",
             post(create_team_proposal_decision),
         )
+        .route("/v2/hepta/raid-state", get(get_player_raid_state))
         .route(
             "/v2/hepta/papers/:paper_id/artifact-manifests",
             post(create_artifact_manifest),
@@ -2180,6 +2227,538 @@ async fn get_team_proposal(
             })?
     };
     Ok(Json(proposal))
+}
+
+fn first_playable_team(
+    proposal: &TeamProposal,
+    tickets: &[MatchmakingTicket],
+    bindings: &[AgentBinding],
+    now: DateTime<Utc>,
+) -> Result<ResearchTeam, ApiError> {
+    if proposal.status != TeamProposalStatus::Accepted
+        || proposal.requested_team_size != 3
+        || proposal.member_player_ids.len() != 3
+        || proposal.source_ticket_ids.len() != 3
+        || tickets.len() != 3
+        || bindings.len() != 3
+    {
+        return Err(ApiError::conflict(
+            "team_proposal_not_materializable",
+            "first-playable materialization requires one accepted three-player proposal with exact tickets and bindings",
+        ));
+    }
+    let mut used_roles = HashSet::new();
+    let mut members = Vec::with_capacity(3);
+    for (index, player_id) in proposal.member_player_ids.iter().enumerate() {
+        let ticket_id = proposal.source_ticket_ids[index];
+        let ticket = tickets
+            .iter()
+            .find(|ticket| ticket.ticket_id == ticket_id)
+            .ok_or_else(|| ApiError::internal("team proposal source ticket is missing"))?;
+        if ticket.player_id != *player_id
+            || ticket.challenge_id != proposal.challenge_id
+            || ticket.matched_proposal_id != Some(proposal.proposal_id)
+            || ticket.status != MatchmakingTicketStatus::Matched
+        {
+            return Err(ApiError::conflict(
+                "team_proposal_ticket_mismatch",
+                "team proposal no longer matches its exact player tickets",
+            ));
+        }
+        let role = ticket
+            .roles
+            .iter()
+            .find(|role| !used_roles.contains(role.as_str()))
+            .cloned()
+            .ok_or_else(|| {
+                ApiError::conflict(
+                    "team_roles_not_complementary",
+                    "first-playable materialization requires three distinct compatible roles",
+                )
+            })?;
+        used_roles.insert(role.clone());
+        let binding = bindings
+            .iter()
+            .find(|binding| binding.player_id == *player_id)
+            .ok_or_else(|| ApiError::internal("materialization Agent binding is missing"))?;
+        if binding.status != AgentBindingStatus::Active {
+            return Err(ApiError::conflict(
+                "agent_binding_not_active",
+                "materialization requires one active Agent binding per player",
+            ));
+        }
+        members.push(TeamMember {
+            participant_slot: u32::try_from(index + 1)
+                .map_err(|_| ApiError::internal("participant slot exceeds u32"))?,
+            player_id: *player_id,
+            binding_id: binding.binding_id,
+            agent_id: binding.agent_id.clone(),
+            role,
+            joined_at: now.to_owned(),
+        });
+    }
+    let compact = json!({
+        "schema": "hepta.paper_raid.first_playable_compact.v1",
+        "proposal_id": proposal.proposal_id,
+        "challenge_id": proposal.challenge_id,
+        "deterministic_match_key": &proposal.deterministic_match_key,
+        "members": members.iter().map(|member| json!({
+            "participant_slot": member.participant_slot,
+            "player_id": member.player_id,
+            "binding_id": member.binding_id,
+            "agent_id": &member.agent_id,
+            "role": &member.role,
+        })).collect::<Vec<_>>(),
+        "research_authority": "hepta",
+        "realtime_authority": "nakama",
+        "settlement_eligibility": false,
+    });
+    let compact_bytes = canonical_json_bytes(&compact).map_err(|error| {
+        ApiError::internal(format!("canonicalize collaboration compact: {error}"))
+    })?;
+    Ok(ResearchTeam {
+        team_id: proposal.proposal_id,
+        challenge_id: proposal.challenge_id,
+        collaboration_compact_hash: sha256_digest(&compact_bytes),
+        status: TeamStatus::Forming,
+        roster_version: 1,
+        members,
+        version: 1,
+        created_at: now.to_owned(),
+        updated_at: now,
+    })
+}
+
+fn same_materialized_team(existing: &ResearchTeam, expected: &ResearchTeam) -> bool {
+    existing.team_id == expected.team_id
+        && existing.challenge_id == expected.challenge_id
+        && existing.collaboration_compact_hash == expected.collaboration_compact_hash
+        && existing.roster_version == expected.roster_version
+        && existing.members.len() == expected.members.len()
+        && existing
+            .members
+            .iter()
+            .zip(&expected.members)
+            .all(|(left, right)| {
+                left.participant_slot == right.participant_slot
+                    && left.player_id == right.player_id
+                    && left.binding_id == right.binding_id
+                    && left.agent_id == right.agent_id
+                    && left.role == right.role
+            })
+}
+
+async fn materialize_team_proposal(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(proposal_id): Path<Uuid>,
+    Json(request): Json<MaterializeTeamProposalRequest>,
+) -> Result<(StatusCode, Json<ResearchTeam>), ApiError> {
+    const OPERATION: &str = "materialize_team_proposal_v1";
+    validate_idempotency_key(&request.idempotency_key)?;
+    if request.expected_proposal_version == 0 {
+        return Err(ApiError::bad_request(
+            "invalid_proposal_version",
+            "expected_proposal_version must be positive",
+        ));
+    }
+    let path = format!("/v2/hepta/team-proposals/{proposal_id}/materialize");
+    let request_hash = request_hash(&request)?;
+    let assertion = require_user_assertion(
+        &headers,
+        &state,
+        OPERATION,
+        "POST",
+        &path,
+        &request.idempotency_key,
+        &request_hash,
+    )?;
+    let now = Utc::now();
+
+    if state.pool.is_none() {
+        let mut memory_guard = state.paper_raid.write().await;
+        let mut memory = memory_guard.clone();
+        if let Some(replay) =
+            memory_replay(&memory, OPERATION, &request.idempotency_key, &request_hash)?
+        {
+            return Ok(replay);
+        }
+        let proposal = memory
+            .collaboration
+            .team_proposals
+            .get(&proposal_id)
+            .cloned()
+            .ok_or_else(|| {
+                ApiError::not_found("team_proposal_not_found", "team proposal does not exist")
+            })?;
+        if !proposal.member_player_ids.contains(&assertion.player_id) {
+            return Err(ApiError::forbidden(
+                "not_team_proposal_member",
+                "only an accepted proposal member can materialize its team",
+            ));
+        }
+        if proposal.version != request.expected_proposal_version {
+            return Err(version_conflict(
+                "team proposal",
+                request.expected_proposal_version,
+                proposal.version,
+            ));
+        }
+        let tickets = proposal
+            .source_ticket_ids
+            .iter()
+            .map(|ticket_id| {
+                memory
+                    .collaboration
+                    .tickets
+                    .get(ticket_id)
+                    .cloned()
+                    .ok_or_else(|| ApiError::internal("team proposal source ticket is missing"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut bindings = Vec::with_capacity(3);
+        for player_id in &proposal.member_player_ids {
+            let active = memory
+                .bindings
+                .values()
+                .filter(|binding| {
+                    binding.player_id == *player_id && binding.status == AgentBindingStatus::Active
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            if active.len() != 1 {
+                return Err(ApiError::conflict(
+                    "ambiguous_active_agent_binding",
+                    "first-playable materialization requires exactly one active Agent binding per player",
+                ));
+            }
+            bindings.push(active[0].clone());
+        }
+        let expected = first_playable_team(&proposal, &tickets, &bindings, now)?;
+        let (status, team) = if let Some(existing) = memory.teams.get(&proposal_id).cloned() {
+            if !same_materialized_team(&existing, &expected) {
+                return Err(ApiError::conflict(
+                    "research_team_conflict",
+                    "proposal team id already exists with a different roster",
+                ));
+            }
+            (StatusCode::OK, existing)
+        } else {
+            memory.teams.insert(expected.team_id, expected.clone());
+            push_memory_event(
+                &mut memory,
+                OPERATION,
+                &request.idempotency_key,
+                "hepta.paper_raid.team.materialized.v1",
+                expected.team_id,
+                expected.version,
+                json!({
+                    "proposal_id": proposal.proposal_id,
+                    "team_id": expected.team_id,
+                    "challenge_id": expected.challenge_id,
+                    "member_count": expected.members.len(),
+                }),
+            )?;
+            (StatusCode::CREATED, expected)
+        };
+        memory_remember(
+            &mut memory,
+            OPERATION,
+            &request.idempotency_key,
+            request_hash,
+            status,
+            &team,
+        )?;
+        *memory_guard = memory;
+        return Ok((status, Json(team)));
+    }
+
+    let (mut tx, replay) =
+        begin_postgres_idempotent(&state, OPERATION, &request.idempotency_key, &request_hash)
+            .await?;
+    if let Some(replay) = replay {
+        tx.commit().await.map_err(ApiError::database)?;
+        let team = serde_json::from_value(replay.response).map_err(|error| {
+            ApiError::internal(format!("decode materialization replay: {error}"))
+        })?;
+        return Ok((replay.status, Json(team)));
+    }
+    let proposal_row =
+        sqlx::query("select record_json from hepta_team_proposals where proposal_id=$1 for share")
+            .bind(proposal_id)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(ApiError::database)?
+            .ok_or_else(|| {
+                ApiError::not_found("team_proposal_not_found", "team proposal does not exist")
+            })?;
+    let proposal: TeamProposal = decode_record(proposal_row.get("record_json"), "team proposal")?;
+    if !proposal.member_player_ids.contains(&assertion.player_id) {
+        return Err(ApiError::forbidden(
+            "not_team_proposal_member",
+            "only an accepted proposal member can materialize its team",
+        ));
+    }
+    if proposal.version != request.expected_proposal_version {
+        return Err(version_conflict(
+            "team proposal",
+            request.expected_proposal_version,
+            proposal.version,
+        ));
+    }
+    let rows =
+        sqlx::query("select record_json from hepta_matchmaking_tickets where ticket_id = any($1)")
+            .bind(&proposal.source_ticket_ids)
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(ApiError::database)?;
+    let decoded = rows
+        .into_iter()
+        .map(|row| decode_record(row.get("record_json"), "matchmaking ticket"))
+        .collect::<Result<Vec<MatchmakingTicket>, _>>()?;
+    let tickets = proposal
+        .source_ticket_ids
+        .iter()
+        .map(|ticket_id| {
+            decoded
+                .iter()
+                .find(|ticket| ticket.ticket_id == *ticket_id)
+                .cloned()
+                .ok_or_else(|| ApiError::internal("team proposal source ticket is missing"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut bindings = Vec::with_capacity(3);
+    for player_id in &proposal.member_player_ids {
+        let rows = sqlx::query(
+            "select b.record_json from hepta_agent_bindings b
+             join hepta_human_players p on p.player_id=b.player_id
+             where b.player_id=$1 and b.status='active' and p.status='active'
+             order by b.updated_at desc, b.binding_id",
+        )
+        .bind(player_id)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(ApiError::database)?;
+        if rows.len() != 1 {
+            return Err(ApiError::conflict(
+                "ambiguous_active_agent_binding",
+                "first-playable materialization requires exactly one active Agent binding per player",
+            ));
+        }
+        bindings.push(decode_record(rows[0].get("record_json"), "Agent binding")?);
+    }
+    let expected = first_playable_team(&proposal, &tickets, &bindings, now)?;
+    let existing =
+        sqlx::query("select record_json from hepta_research_teams where team_id=$1 for update")
+            .bind(expected.team_id)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(ApiError::database)?;
+    let (status, team) =
+        if let Some(row) = existing {
+            let existing: ResearchTeam = decode_record(row.get("record_json"), "research team")?;
+            if !same_materialized_team(&existing, &expected) {
+                return Err(ApiError::conflict(
+                    "research_team_conflict",
+                    "proposal team id already exists with a different roster",
+                ));
+            }
+            (StatusCode::OK, existing)
+        } else {
+            let record_json = serde_json::to_value(&expected)
+                .map_err(|error| ApiError::internal(format!("encode research team: {error}")))?;
+            sqlx::query(
+                "insert into hepta_research_teams (
+                team_id, challenge_id, collaboration_compact_hash, status, roster_version,
+                version, record_json, created_at, updated_at
+             ) values ($1,$2,$3,'forming',1,1,$4::jsonb,$5,$5)",
+            )
+            .bind(expected.team_id)
+            .bind(expected.challenge_id)
+            .bind(&expected.collaboration_compact_hash)
+            .bind(record_json)
+            .bind(now)
+            .execute(&mut *tx)
+            .await
+            .map_err(ApiError::database)?;
+            for member in &expected.members {
+                sqlx::query(
+                    "insert into hepta_research_team_members (
+                    team_id, participant_slot, player_id, binding_id, role, joined_at
+                 ) values ($1,$2,$3,$4,$5,$6)",
+                )
+                .bind(expected.team_id)
+                .bind(i32::try_from(member.participant_slot).map_err(|_| {
+                    ApiError::internal("participant slot exceeds PostgreSQL integer")
+                })?)
+                .bind(member.player_id)
+                .bind(member.binding_id)
+                .bind(&member.role)
+                .bind(member.joined_at)
+                .execute(&mut *tx)
+                .await
+                .map_err(ApiError::database)?;
+            }
+            insert_postgres_event(
+                &mut tx,
+                OPERATION,
+                &request.idempotency_key,
+                "hepta.paper_raid.team.materialized.v1",
+                expected.team_id,
+                expected.version,
+                json!({
+                    "proposal_id": proposal.proposal_id,
+                    "team_id": expected.team_id,
+                    "challenge_id": expected.challenge_id,
+                    "member_count": expected.members.len(),
+                }),
+            )
+            .await?;
+            (StatusCode::CREATED, expected)
+        };
+    finish_postgres_idempotent(
+        &mut tx,
+        OPERATION,
+        &request.idempotency_key,
+        &request_hash,
+        Some(team.team_id),
+        status,
+        &team,
+    )
+    .await?;
+    tx.commit().await.map_err(ApiError::database)?;
+    Ok((status, Json(team)))
+}
+
+fn raid_summary(
+    team: &ResearchTeam,
+    paper: Option<&PaperProject>,
+    acceptance_count: usize,
+    player_ready: bool,
+    player_id: Uuid,
+) -> Result<PlayerRaidSummary, ApiError> {
+    let member = team
+        .members
+        .iter()
+        .find(|member| member.player_id == player_id)
+        .ok_or_else(|| ApiError::internal("visible raid team is missing the current player"))?;
+    Ok(PlayerRaidSummary {
+        team_id: team.team_id,
+        challenge_id: team.challenge_id,
+        team_status: team.status.clone(),
+        team_version: team.version,
+        roster_version: team.roster_version,
+        member_count: team.members.len(),
+        acceptance_count,
+        participant_slot: member.participant_slot,
+        role: member.role.clone(),
+        player_ready,
+        paper: paper.map(|paper| PaperRaidProgress {
+            paper_project_id: paper.paper_project_id,
+            title: paper.title.clone(),
+            phase: paper.phase,
+            version: paper.version,
+            current_revision_id: paper.current_revision_id,
+            release_candidate_revision_id: paper.release_candidate_revision_id,
+            updated_at: paper.updated_at.to_owned(),
+        }),
+        updated_at: paper.map_or_else(
+            || team.updated_at.to_owned(),
+            |paper| paper.updated_at.to_owned(),
+        ),
+    })
+}
+
+async fn get_player_raid_state(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<PlayerRaidState>, ApiError> {
+    const PATH: &str = "/v2/hepta/raid-state";
+    let assertion =
+        require_registered_player_read(&state, &headers, "get_player_raid_state_v1", PATH).await?;
+    let mut raids = if state.pool.is_none() {
+        let memory = state.paper_raid.read().await;
+        let mut raids = Vec::new();
+        for team in memory.teams.values().filter(|team| {
+            team.members
+                .iter()
+                .any(|member| member.player_id == assertion.player_id)
+        }) {
+            let paper = memory
+                .papers
+                .values()
+                .find(|paper| paper.team_id == team.team_id);
+            let acceptances = memory
+                .team_acceptances
+                .values()
+                .filter(|acceptance| {
+                    acceptance.team_id == team.team_id && acceptance.superseded_at.is_none()
+                })
+                .collect::<Vec<_>>();
+            raids.push(raid_summary(
+                team,
+                paper,
+                acceptances.len(),
+                acceptances
+                    .iter()
+                    .any(|acceptance| acceptance.player_id == assertion.player_id),
+                assertion.player_id,
+            )?);
+        }
+        raids
+    } else {
+        let pool = state.pool.as_ref().expect("checked PostgreSQL pool");
+        let rows = sqlx::query(
+            "select t.record_json as team_json, p.record_json as paper_json,
+                    (select count(*) from hepta_research_team_member_acceptances a
+                     where a.team_id=t.team_id and a.superseded_at is null) as acceptance_count,
+                    exists(select 1 from hepta_research_team_member_acceptances a
+                           where a.team_id=t.team_id and a.player_id=$1 and a.superseded_at is null) as player_ready
+             from hepta_research_team_members m
+             join hepta_research_teams t on t.team_id=m.team_id
+             left join hepta_paper_projects p on p.team_id=t.team_id
+             where m.player_id=$1",
+        )
+        .bind(assertion.player_id)
+        .fetch_all(pool)
+        .await
+        .map_err(ApiError::database)?;
+        let mut raids = Vec::with_capacity(rows.len());
+        for row in rows {
+            let team: ResearchTeam = decode_record(row.get("team_json"), "research team")?;
+            let paper_json: Option<Value> =
+                row.try_get("paper_json").map_err(ApiError::database)?;
+            let paper = paper_json
+                .map(|value| decode_record(value, "paper project"))
+                .transpose()?;
+            let acceptance_count: i64 = row.get("acceptance_count");
+            raids.push(raid_summary(
+                &team,
+                paper.as_ref(),
+                usize::try_from(acceptance_count)
+                    .map_err(|_| ApiError::internal("acceptance count exceeds usize"))?,
+                row.get("player_ready"),
+                assertion.player_id,
+            )?);
+        }
+        raids
+    };
+    raids.sort_by(|left, right| {
+        right
+            .updated_at
+            .cmp(&left.updated_at)
+            .then_with(|| left.team_id.cmp(&right.team_id))
+    });
+    let current_raid = raids
+        .iter()
+        .find(|raid| raid.team_status != TeamStatus::Archived)
+        .cloned();
+    Ok(Json(PlayerRaidState {
+        schema: "hepta.paper_raid.player_raid_state.v1".into(),
+        player_id: assertion.player_id,
+        current_raid,
+        raids,
+    }))
 }
 
 async fn create_team_proposal_decision(

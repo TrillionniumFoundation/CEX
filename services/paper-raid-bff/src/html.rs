@@ -43,6 +43,7 @@ pub fn lobby(
     tickets: ReadState<'_>,
     proposals: ReadState<'_>,
     bindings: ReadState<'_>,
+    raid_state: ReadState<'_>,
 ) -> Response {
     let challenge_cards = challenges
         .value()
@@ -77,15 +78,17 @@ pub fn lobby(
         true,
     );
     let binding_controls = active_agent_binding_controls(identity, bindings);
-    let mission_board = first_raid_mission_board(tickets, proposals);
+    let mission_board = first_raid_mission_board(tickets, proposals, raid_state);
+    let continue_raid = active_raid_card(raid_state);
     let body = format!(
         r#"<section class="hero"><span class="eyebrow">PAPER RAID · 论文远征</span><h1>Research Lobby</h1><p>Welcome, {}. Hepta is the only matchmaking and research authority.</p></section>
-        {}
+        {}{}
         <section class="panel"><h2>Challenges / 研究挑战</h2><p class="source-state">Hepta: {}</p><div class="grid">{}</div></section>
         <section class="grid"><article class="card"><h2>My Queue / 我的队列</h2><p class="source-state">Hepta: {}</p>{}</article><article class="card"><h2>Team Proposals / 组队提案</h2><p class="source-state">Hepta: {}</p>{}</article><article class="card"><h2>Alpha Rules / Alpha 规则</h2><p>Exactly 3 human players, each with an independently bound external Agent. Login keys never leave this page except in the login request.</p></article></section>
         <section class="panel"><h2>External Agent key continuity / 外部 Agent 密钥连续性</h2><p class="source-state">Hepta: {}</p><p>Rotation requires independent signatures from both the currently bound key and the replacement key. Only public proof fields enter this browser.</p><div class="action-grid">{}</div></section>"#,
         escape(&identity.display_name),
         mission_board,
+        continue_raid,
         escape(challenges.label()),
         challenge_cards,
         escape(tickets.label()),
@@ -98,7 +101,11 @@ pub fn lobby(
     page("Paper Raid Lobby", &identity.display_name, &body, true)
 }
 
-fn first_raid_mission_board(tickets: ReadState<'_>, proposals: ReadState<'_>) -> String {
+fn first_raid_mission_board(
+    tickets: ReadState<'_>,
+    proposals: ReadState<'_>,
+    raid_state: ReadState<'_>,
+) -> String {
     let ticket_count = tickets
         .value()
         .and_then(Value::as_array)
@@ -107,7 +114,25 @@ fn first_raid_mission_board(tickets: ReadState<'_>, proposals: ReadState<'_>) ->
         .value()
         .and_then(Value::as_array)
         .map_or(0, Vec::len);
-    let states = if proposal_count > 0 {
+    let current_raid = raid_state
+        .value()
+        .and_then(|value| value.get("current_raid"))
+        .filter(|value| !value.is_null());
+    let paper_phase = current_raid
+        .and_then(|raid| raid.get("paper"))
+        .filter(|value| !value.is_null())
+        .and_then(|paper| paper.get("phase"))
+        .and_then(Value::as_str);
+    let states = if paper_phase == Some("submission_ready") {
+        ["complete", "complete", "complete", "complete", "complete"]
+    } else if matches!(
+        paper_phase,
+        Some("integrity_review" | "reproducing" | "author_approval" | "integrity_hold")
+    ) {
+        ["complete", "complete", "complete", "complete", "current"]
+    } else if paper_phase.is_some() {
+        ["complete", "complete", "complete", "current", "upcoming"]
+    } else if current_raid.is_some() || proposal_count > 0 {
         ["complete", "complete", "current", "upcoming", "upcoming"]
     } else if ticket_count > 0 {
         ["complete", "current", "upcoming", "upcoming", "upcoming"]
@@ -152,6 +177,50 @@ fn first_raid_mission_board(tickets: ReadState<'_>, proposals: ReadState<'_>) ->
         .collect::<String>();
     format!(
         r#"<section class="panel mission-board"><div><span class="eyebrow">FIRST RAID / 首局任务</span><h2>One clear objective: finish a defensible paper.</h2><p class="muted">You never need to understand resource IDs or signatures to choose your first move. Start with the highlighted step.</p></div><ol class="raid-steps">{items}</ol></section>"#
+    )
+}
+
+fn active_raid_card(raid_state: ReadState<'_>) -> String {
+    let Some(raid) = raid_state
+        .value()
+        .and_then(|value| value.get("current_raid"))
+        .filter(|value| !value.is_null())
+    else {
+        return String::new();
+    };
+    let team_id = scalar(raid.get("team_id"));
+    let team_status = scalar(raid.get("team_status"));
+    let role = scalar(raid.get("role"));
+    let (href, label, detail, paper_id) = raid
+        .get("paper")
+        .filter(|value| !value.is_null())
+        .map(|paper| {
+            let paper_id = scalar(paper.get("paper_project_id"));
+            let phase = scalar(paper.get("phase"));
+            (
+                format!("/league/papers/{}", escape(&paper_id)),
+                "Continue Paper Raid / 继续上局",
+                format!("Paper phase: {}", escape(&phase)),
+                paper_id,
+            )
+        })
+        .unwrap_or_else(|| {
+            (
+                format!("/league/formation/{}", escape(&team_id)),
+                "Continue Team Formation / 继续组队",
+                format!("Team status: {}", escape(&team_status)),
+                String::new(),
+            )
+        });
+    format!(
+        r#"<section class="panel continue-raid"><span class="eyebrow">MY ACTIVE RAID / 我的进行中远征</span><h2>{}</h2><p>{} · Role: {}</p><a class="button primary continue-raid-link" data-team-id="{}" data-paper-id="{}" href="{}">{}</a></section>"#,
+        escape(&team_id),
+        detail,
+        escape(&role),
+        escape(&team_id),
+        escape(&paper_id),
+        href,
+        label,
     )
 }
 
@@ -225,6 +294,7 @@ pub fn formation(
     proposal: ReadState<'_>,
     team: ReadState<'_>,
     acceptances: ReadState<'_>,
+    raid_state: ReadState<'_>,
 ) -> Response {
     let roster = team
         .value()
@@ -283,54 +353,102 @@ pub fn formation(
         .filter(|value| !value.is_empty())
         .map(|items| format!("<ul>{items}</ul>"))
         .unwrap_or_else(|| unavailable("proposal members"));
-    let proposal_controls = if proposal.value().is_some() {
-        format!(
-            r#"<form class="proposal-decision" data-proposal-id="{}" data-proposal-version="{}"><button name="decision" value="accept" type="submit">Accept Proposal / 接受组队</button><button class="danger" name="decision" value="decline" type="submit">Decline / 拒绝</button><output></output></form>{}"#,
+    let proposal_controls = match (proposal.value(), team.value(), proposal_status.as_str()) {
+        (Some(_), None, "accepted") => format!(
+            r#"<form class="materialize-team-form" data-proposal-id="{}" data-proposal-version="{}"><h3>Build the team / 建立队伍</h3><p>All three players accepted. Hepta will derive the exact roster and role contract.</p><button type="submit">Build our Research Cell / 建立正式队伍</button><output></output></form>"#,
             escape(resource_id),
             proposal_version,
-            command_editor(
-                "Materialize Research Team / 建立正式队伍",
-                "After unanimous proposal acceptance, submit the exact P1 Team payload.",
-                "create_research_team",
-                None,
-                false,
-                r#"{"team_id":"...","challenge_id":"...","collaboration_compact_hash":"sha256:...","members":[{"participant_slot":1,"player_id":"...","binding_id":"...","role":"captain"}]}"#,
-            ),
-        )
-    } else {
-        unavailable("team proposal")
+        ),
+        (Some(_), _, "proposed") => format!(
+            r#"<form class="proposal-decision" data-proposal-id="{}" data-proposal-version="{}"><button name="decision" value="accept" type="submit">Accept Proposal / 接受组队</button><button class="danger" name="decision" value="decline" type="submit">Decline / 拒绝</button><output></output></form>"#,
+            escape(resource_id),
+            proposal_version,
+        ),
+        (Some(_), _, _) => String::new(),
+        (None, _, _) => unavailable("team proposal"),
     };
-    let team_controls = if team.value().is_some() {
-        format!(
-            "{}{}{}",
-            command_editor(
-                "Ready / 接受正式成员身份",
-                "Paste the human-signed acceptance payload produced by your local signer.",
-                "accept_research_team_membership",
-                Some(resource_id),
-                false,
-                r#"{"acceptance_id":"...","expected_team_version":1,"roster_version":1,"participant_slot":1,"binding_id":"...","role":"captain","collaboration_compact_hash":"sha256:..."}"#,
-            ),
-            command_editor(
-                "Lock Team / 锁定队伍",
-                "Captain submits the exact optimistic-lock payload after all acceptances.",
-                "lock_research_team",
-                Some(resource_id),
-                false,
-                r#"{"expected_version":1}"#,
-            ),
-            command_editor(
-                "Create Paper Project / 创建论文项目",
-                "After the three-person Team is locked, create its canonical PaperProject.",
-                "create_paper_project",
-                None,
-                false,
-                &format!(
-                    r#"{{"paper_project_id":"...","team_id":"{}","title":"...","target_format":"workshop-short-paper"}}"#,
-                    resource_id
-                ),
-            )
-        )
+    let acceptance_items = acceptances
+        .value()
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    let current_player_id = identity.player_id.to_string();
+    let player_ready = acceptance_items.iter().any(|acceptance| {
+        acceptance.get("player_id").and_then(Value::as_str) == Some(current_player_id.as_str())
+            && acceptance.get("superseded_at").map_or(true, Value::is_null)
+    });
+    let team_controls = if let Some(team_value) = team.value() {
+        let team_status = team_value
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("unavailable");
+        let team_version = team_value
+            .get("version")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let roster_version = team_value
+            .get("roster_version")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let compact_hash = scalar(team_value.get("collaboration_compact_hash"));
+        let current_member = team_value
+            .get("members")
+            .and_then(Value::as_array)
+            .and_then(|members| {
+                members.iter().find(|member| {
+                    member.get("player_id").and_then(Value::as_str)
+                        == Some(current_player_id.as_str())
+                })
+            });
+        let paper = raid_state
+            .value()
+            .and_then(|state| state.get("raids"))
+            .and_then(Value::as_array)
+            .and_then(|raids| {
+                raids
+                    .iter()
+                    .find(|raid| raid.get("team_id").and_then(Value::as_str) == Some(resource_id))
+            })
+            .and_then(|raid| raid.get("paper"))
+            .filter(|paper| !paper.is_null());
+        let mut controls = String::new();
+        if team_status == "forming" && !player_ready {
+            if let Some(member) = current_member {
+                controls.push_str(&format!(
+                    r#"<form class="team-ready-form" data-team-id="{}" data-team-version="{}" data-roster-version="{}" data-participant-slot="{}" data-binding-id="{}" data-role="{}" data-compact-hash="{}"><h3>Ready check / 就绪确认</h3><p>Sign your exact roster slot with the local non-exportable browser key.</p><button type="submit">I am ready / 我已准备</button><output></output></form>"#,
+                    escape(resource_id),
+                    team_version,
+                    roster_version,
+                    escape(&scalar(member.get("participant_slot"))),
+                    escape(&scalar(member.get("binding_id"))),
+                    escape(&scalar(member.get("role"))),
+                    escape(&compact_hash),
+                ));
+            }
+        }
+        let member_count = team_value
+            .get("members")
+            .and_then(Value::as_array)
+            .map_or(0, Vec::len);
+        if team_status == "forming" && member_count > 0 && acceptance_items.len() == member_count {
+            controls.push_str(&format!(
+                r#"<form class="lock-team-form" data-team-id="{}" data-team-version="{}"><h3>Lock roster / 锁定阵容</h3><p>Everyone is ready. Freeze the three-person roster and start the Raid.</p><button type="submit">Lock Team / 锁定队伍</button><output></output></form>"#,
+                escape(resource_id), team_version,
+            ));
+        }
+        if let Some(paper) = paper {
+            let paper_id = scalar(paper.get("paper_project_id"));
+            controls.push_str(&format!(
+                r#"<article class="guided-action"><h3>Research is live / 研究已开始</h3><p>Continue from the authoritative Paper phase.</p><a class="button primary continue-raid-link" data-team-id="{}" data-paper-id="{}" href="/league/papers/{}">Continue Paper Raid / 继续远征</a></article>"#,
+                escape(resource_id), escape(&paper_id), escape(&paper_id),
+            ));
+        } else if team_status == "locked" {
+            controls.push_str(&format!(
+                r#"<form class="create-paper-form" data-team-id="{}"><h3>Name the expedition / 命名本局</h3><label>Paper title / 论文标题<input name="title" minlength="3" maxlength="160" required value="First Paper Raid"></label><label>Target format / 目标格式<select name="target_format"><option value="workshop-short-paper">Workshop short paper</option><option value="replication-report">Replication report</option></select></label><button type="submit">Enter Research Room / 进入研究室</button><output></output></form>"#,
+                escape(resource_id),
+            ));
+        }
+        controls
     } else {
         unavailable("formal Team controls")
     };
@@ -870,7 +988,7 @@ fn command_editor(
         ""
     };
     format!(
-        r#"<article class="action"><h3>{}</h3><p>{}</p><form class="command-form" data-command="{}" data-resource-id="{}">{}<label>Exact typed JSON / 精确类型 JSON<textarea name="payload" rows="9" spellcheck="false" required>{}</textarea></label>{}<button type="submit">Submit typed action / 提交</button><output></output></form></article>"#,
+        r#"<details class="action advanced-action"><summary>{}</summary><p>{}</p><p class="muted">Developer/advanced protocol action. The normal first-Raid path does not require raw JSON.</p><form class="command-form" data-command="{}" data-resource-id="{}">{}<label>Exact typed JSON / 精确类型 JSON<textarea name="payload" rows="9" spellcheck="false" required>{}</textarea></label>{}<button type="submit">Submit typed action / 提交</button><output></output></form></details>"#,
         escape(title),
         escape(help),
         escape(command),
@@ -964,7 +1082,7 @@ const CSS: &str = r#"
 header{align-items:center;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;padding:16px clamp(18px,4vw,56px);position:sticky;top:0;background:#070b12e8;backdrop-filter:blur(12px)}header a{color:var(--cyan);font-weight:900;letter-spacing:.12em;text-decoration:none}header span,footer{color:var(--muted)}
 main{margin:auto;max-width:1180px;padding:clamp(24px,5vw,64px) clamp(16px,4vw,44px)}.hero{border-left:4px solid var(--cyan);padding:8px 0 12px 22px;margin-bottom:28px}.eyebrow{color:var(--amber);font-size:12px;font-weight:800;letter-spacing:.16em}.hero h1{font-size:clamp(32px,7vw,72px);line-height:1;margin:10px 0}.hero p{color:var(--muted);max-width:760px}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin:14px 0}.card,.panel{background:linear-gradient(145deg,#142036,#0d1421);border:1px solid var(--line);border-radius:14px;padding:18px;min-height:120px}.card h2,.panel h2{font-size:14px;letter-spacing:.05em;margin:0 0 12px}.card p{color:var(--text)}.unavailable{border-style:dashed;color:var(--muted)}.muted,.action p{color:var(--muted)}.dot{background:var(--pink);border-radius:50%;display:inline-block;height:8px;margin-right:8px;width:8px}.pill,.status{border:1px solid var(--amber);border-radius:999px;color:var(--amber);display:inline-block;font-size:12px;font-weight:800;padding:4px 9px}.status{padding:6px 12px}.status.missing{border-color:var(--pink);color:var(--pink)}.source-state{color:var(--muted);font-size:12px}.roster,.record-list{display:grid;gap:10px;list-style:none;margin:0;padding:0}.roster li{align-items:center;border-bottom:1px solid var(--line);display:grid;gap:8px;grid-template-columns:90px 1fr 1fr 1fr;padding:10px 0}.roster span{color:var(--muted);overflow-wrap:anywhere}.record-list li,.record-list a{align-items:center;display:flex;gap:8px;justify-content:space-between}.record-list a{color:var(--text);text-decoration:none;width:100%}.action-grid{display:grid;gap:14px;grid-template-columns:repeat(2,minmax(0,1fr))}.action{border:1px solid var(--line);border-radius:12px;padding:16px}.action h3{margin-top:0}form{display:grid;gap:12px}label{color:var(--muted);display:grid;font-size:12px;gap:6px}input,textarea,select,button{background:#07101d;border:1px solid var(--line);border-radius:8px;color:var(--text);font:inherit;padding:10px 12px}textarea{font:12px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;resize:vertical}button{background:#12334a;border-color:var(--cyan);color:var(--cyan);cursor:pointer;font-weight:800}button:hover{filter:brightness(1.2)}button.danger{border-color:var(--pink);color:var(--pink)}button:disabled{cursor:wait;opacity:.55}output{color:var(--amber);font:12px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;overflow-wrap:anywhere;white-space:pre-wrap}output.result-error{color:var(--pink)}output.result-ok{color:var(--amber)}.narrow{margin:auto;max-width:540px}#toast{background:#101826;border:1px solid var(--line);border-radius:10px;bottom:18px;display:block;max-width:min(520px,90vw);padding:12px 16px;position:fixed;right:18px;z-index:10}#toast[hidden]{display:none}code{color:var(--cyan);overflow-wrap:anywhere}footer{padding:28px;text-align:center}
 .key-vault{margin-bottom:18px;min-height:auto}.key-vault summary{color:var(--cyan);cursor:pointer;font-weight:800}.key-vault form{margin:14px 0}.human-key-status{display:block;margin-top:10px}
-.mission-board{display:grid;gap:18px;grid-template-columns:minmax(220px,.8fr) minmax(0,2fr);margin-bottom:20px}.mission-board h2{font-size:24px;letter-spacing:0;margin:6px 0}.raid-steps{display:grid;gap:8px;grid-template-columns:repeat(5,minmax(0,1fr));list-style:none;margin:0;padding:0}.raid-steps li{border:1px solid var(--line);border-radius:10px;display:grid;gap:8px;padding:12px}.raid-steps li>span{color:var(--muted);font-size:11px;font-weight:900}.raid-steps strong{display:block}.raid-steps p{color:var(--muted);font-size:11px;line-height:1.35;margin:4px 0 0}.raid-steps [data-step-state=current]{background:#12334a;border-color:var(--cyan)}.raid-steps [data-step-state=current]>span{color:var(--cyan)}.raid-steps [data-step-state=complete]{border-color:#3b8f78}.raid-steps [data-step-state=complete]>span{color:#67e8b5}.role-kit{border:1px solid var(--line);border-radius:10px;display:grid;gap:7px;margin:0;padding:12px}.role-kit legend{color:var(--amber);font-size:12px;font-weight:800;padding:0 6px}.role-kit span{color:var(--muted);font-size:12px}.role-kit strong{color:var(--text)}
+  .mission-board{display:grid;gap:18px;grid-template-columns:minmax(220px,.8fr) minmax(0,2fr);margin-bottom:20px}.mission-board h2{font-size:24px;letter-spacing:0;margin:6px 0}.raid-steps{display:grid;gap:8px;grid-template-columns:repeat(5,minmax(0,1fr));list-style:none;margin:0;padding:0}.raid-steps li{border:1px solid var(--line);border-radius:10px;display:grid;gap:8px;padding:12px}.raid-steps li>span{color:var(--muted);font-size:11px;font-weight:900}.raid-steps strong{display:block}.raid-steps p{color:var(--muted);font-size:11px;line-height:1.35;margin:4px 0 0}.raid-steps [data-step-state=current]{background:#12334a;border-color:var(--cyan)}.raid-steps [data-step-state=current]>span{color:var(--cyan)}.raid-steps [data-step-state=complete]{border-color:#3b8f78}.raid-steps [data-step-state=complete]>span{color:#67e8b5}.role-kit{border:1px solid var(--line);border-radius:10px;display:grid;gap:7px;margin:0;padding:12px}.role-kit legend{color:var(--amber);font-size:12px;font-weight:800;padding:0 6px}.role-kit span{color:var(--muted);font-size:12px}.role-kit strong{color:var(--text)}.advanced-action summary{color:var(--muted);cursor:pointer;font-weight:800}.advanced-action[open] summary{color:var(--cyan);margin-bottom:12px}.continue-raid{border-color:var(--cyan);margin-bottom:18px}.button{border:1px solid var(--cyan);border-radius:8px;color:var(--cyan);display:inline-block;font-weight:800;padding:10px 12px;text-decoration:none}.guided-action{border:1px solid var(--cyan);border-radius:12px;padding:16px}
 @media(max-width:820px){.grid,.action-grid,.mission-board,.raid-steps{grid-template-columns:1fr}.roster li{align-items:start;grid-template-columns:1fr}.hero h1{font-size:38px}header{position:static}.card{min-height:auto}}
 "#;
 
@@ -986,6 +1104,7 @@ mod tests {
             "<script>alert(1)</script>",
             ReadState::Unavailable,
             ReadState::Available(&team),
+            ReadState::Unavailable,
             ReadState::Unavailable,
         );
         let body = response
@@ -1020,6 +1139,7 @@ mod tests {
             ReadState::Available(&tickets),
             ReadState::Available(&proposals),
             ReadState::Available(&bindings),
+            ReadState::Unavailable,
         );
         let body = response
             .into_body()
@@ -1247,6 +1367,7 @@ mod tests {
             ReadState::Unavailable,
             ReadState::Unavailable,
             ReadState::Available(&bindings),
+            ReadState::Unavailable,
         );
         let body = response
             .into_body()
