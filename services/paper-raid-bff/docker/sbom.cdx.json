@@ -6,7 +6,7 @@
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "2ce322a780b2fe438d0cb049d2c8639686bba9effc4bc4af0eb14f2686a3c278"
+          "content": "7a240d74d01ac689aa54b19911f74d5af5f0843b3b9261b4cb1062135a298188"
         }
       ],
       "name": "/paper-raid-bff",
@@ -37,16 +37,16 @@
       "version": "0.2.21"
     },
     {
-      "bom-ref": "pkg:cargo/android_system_properties@0.1.5",
+      "bom-ref": "pkg:cargo/android_system_properties@0.1.6",
       "licenses": [
         {
-          "expression": "MIT/Apache-2.0"
+          "expression": "MIT OR Apache-2.0"
         }
       ],
       "name": "android_system_properties",
-      "purl": "pkg:cargo/android_system_properties@0.1.5",
+      "purl": "pkg:cargo/android_system_properties@0.1.6",
       "type": "library",
-      "version": "0.1.5"
+      "version": "0.1.6"
     },
     {
       "bom-ref": "pkg:cargo/anyhow@1.0.104",
@@ -3193,28 +3193,28 @@
       "version": "0.8.3"
     },
     {
-      "bom-ref": "pkg:cargo/zerocopy-derive@0.8.55",
+      "bom-ref": "pkg:cargo/zerocopy-derive@0.8.56",
       "licenses": [
         {
           "expression": "BSD-2-Clause OR Apache-2.0 OR MIT"
         }
       ],
       "name": "zerocopy-derive",
-      "purl": "pkg:cargo/zerocopy-derive@0.8.55",
+      "purl": "pkg:cargo/zerocopy-derive@0.8.56",
       "type": "library",
-      "version": "0.8.55"
+      "version": "0.8.56"
     },
     {
-      "bom-ref": "pkg:cargo/zerocopy@0.8.55",
+      "bom-ref": "pkg:cargo/zerocopy@0.8.56",
       "licenses": [
         {
           "expression": "BSD-2-Clause OR Apache-2.0 OR MIT"
         }
       ],
       "name": "zerocopy",
-      "purl": "pkg:cargo/zerocopy@0.8.55",
+      "purl": "pkg:cargo/zerocopy@0.8.56",
       "type": "library",
-      "version": "0.8.55"
+      "version": "0.8.56"
     },
     {
       "bom-ref": "pkg:cargo/zerofrom-derive@0.1.7",
@@ -3316,7 +3316,7 @@
       "dependsOn": [
         "pkg:cargo/libc@0.2.189"
       ],
-      "ref": "pkg:cargo/android_system_properties@0.1.5"
+      "ref": "pkg:cargo/android_system_properties@0.1.6"
     },
     {
       "dependsOn": [],
@@ -3870,7 +3870,7 @@
     },
     {
       "dependsOn": [
-        "pkg:cargo/android_system_properties@0.1.5",
+        "pkg:cargo/android_system_properties@0.1.6",
         "pkg:cargo/core-foundation-sys@0.8.7",
         "pkg:cargo/iana-time-zone-haiku@0.1.2",
         "pkg:cargo/js-sys@0.3.103",
@@ -4205,7 +4205,7 @@
     },
     {
       "dependsOn": [
-        "pkg:cargo/zerocopy@0.8.55"
+        "pkg:cargo/zerocopy@0.8.56"
       ],
       "ref": "pkg:cargo/ppv-lite86@0.2.21"
     },
@@ -5305,13 +5305,13 @@
         "pkg:cargo/quote@1.0.47",
         "pkg:cargo/syn@2.0.119"
       ],
-      "ref": "pkg:cargo/zerocopy-derive@0.8.55"
+      "ref": "pkg:cargo/zerocopy-derive@0.8.56"
     },
     {
       "dependsOn": [
-        "pkg:cargo/zerocopy-derive@0.8.55"
+        "pkg:cargo/zerocopy-derive@0.8.56"
       ],
-      "ref": "pkg:cargo/zerocopy@0.8.55"
+      "ref": "pkg:cargo/zerocopy@0.8.56"
     },
     {
       "dependsOn": [
@@ -5377,7 +5377,7 @@
     "properties": [
       {
         "name": "trnm:cargo-lock:sha256",
-        "value": "d47f746dcd0344bffc449153743752c161bf1cec1895711426240cc9cd284c65"
+        "value": "eb6a93ce72a6837952603cefe0ec2d05b7d956fb4518da51b940a29a452a6b15"
       }
     ],
     "tools": {
