@@ -422,7 +422,90 @@ runtime_role_boundary=$("${compose[@]}" exec -T postgres psql -X -A -t \
       )
     )::text
    from pg_roles as role where role.rolname='hepta_gate_runtime';")
-[[ "$runtime_role_boundary" == t ]]
+if [[ "$runtime_role_boundary" != true ]]; then
+  printf 'runtime database role boundary did not match the release policy: %q\n' \
+    "$runtime_role_boundary" >&2
+  "${compose[@]}" exec -T postgres psql -X -A -F '|' \
+    -U hepta_gate_migrator -d hepta_gate -v ON_ERROR_STOP=1 -c \
+    "select
+       not role.rolsuper and not role.rolinherit and not role.rolcreatedb
+         and not role.rolcreaterole and not role.rolreplication and not role.rolbypassrls as attributes,
+       not exists (select 1 from pg_auth_members as membership
+         where membership.member=role.oid or membership.roleid=role.oid) as memberships,
+       not exists (select 1 from pg_class as relation
+         join pg_namespace as namespace on namespace.oid=relation.relnamespace
+         where namespace.nspname='public' and relation.relowner=role.oid) as ownership,
+       has_schema_privilege(role.rolname, 'public', 'USAGE')
+         and not has_schema_privilege(role.rolname, 'public', 'CREATE') as schema_access,
+       has_database_privilege(role.rolname, current_database(), 'CONNECT')
+         and not has_database_privilege(role.rolname, current_database(), 'CREATE')
+         and not has_database_privilege(role.rolname, current_database(), 'TEMPORARY') as database_access,
+       not has_function_privilege(role.rolname, 'public.hepta_assert_paper_finality_v2_source_unsealed(uuid)', 'EXECUTE')
+         and not has_function_privilege(role.rolname, 'public.hepta_paper_finality_v2_lock_window_arm()', 'EXECUTE')
+         and not has_function_privilege(role.rolname, 'public.hepta_paper_finality_v2_lock_preparation()', 'EXECUTE')
+         and not has_function_privilege(role.rolname, 'public.hepta_paper_finality_v2_apply_seal()', 'EXECUTE')
+         and not has_function_privilege(role.rolname, 'public.hepta_reject_paper_finality_v2_source_mutation()', 'EXECUTE') as functions,
+       (select bool_and(
+          has_table_privilege(role.rolname, relation.oid, 'SELECT')
+          and not has_table_privilege(role.rolname, relation.oid, 'TRUNCATE')
+          and not has_table_privilege(role.rolname, relation.oid, 'REFERENCES')
+          and not has_table_privilege(role.rolname, relation.oid, 'TRIGGER')
+          and case when relation.relname = any(array[
+            'hepta_trnm_cometbft_time_checkpoints_v1',
+            'hepta_paper_chain_finality_window_arms_v2',
+            'hepta_paper_chain_finality_preparations_v2'
+          ]) then
+            not has_table_privilege(role.rolname, relation.oid, 'INSERT')
+            and not has_table_privilege(role.rolname, relation.oid, 'UPDATE')
+            and not has_table_privilege(role.rolname, relation.oid, 'DELETE')
+          else
+            has_table_privilege(role.rolname, relation.oid, 'INSERT')
+            and has_table_privilege(role.rolname, relation.oid, 'UPDATE')
+            and has_table_privilege(role.rolname, relation.oid, 'DELETE')
+          end)
+        from pg_class as relation
+        join pg_namespace as namespace on namespace.oid=relation.relnamespace
+        where namespace.nspname='public' and relation.relkind in ('r','p')) as tables
+     from pg_roles as role where role.rolname='hepta_gate_runtime';" >&2
+  "${compose[@]}" exec -T postgres psql -X -A -F '|' \
+    -U hepta_gate_migrator -d hepta_gate -v ON_ERROR_STOP=1 -c \
+    "select relation.relname,
+       has_table_privilege('hepta_gate_runtime', relation.oid, 'SELECT'),
+       has_table_privilege('hepta_gate_runtime', relation.oid, 'INSERT'),
+       has_any_column_privilege('hepta_gate_runtime', relation.oid, 'INSERT'),
+       has_table_privilege('hepta_gate_runtime', relation.oid, 'UPDATE'),
+       has_any_column_privilege('hepta_gate_runtime', relation.oid, 'UPDATE'),
+       has_table_privilege('hepta_gate_runtime', relation.oid, 'DELETE'),
+       has_table_privilege('hepta_gate_runtime', relation.oid, 'TRUNCATE'),
+       has_table_privilege('hepta_gate_runtime', relation.oid, 'REFERENCES'),
+       has_any_column_privilege('hepta_gate_runtime', relation.oid, 'REFERENCES'),
+       has_table_privilege('hepta_gate_runtime', relation.oid, 'TRIGGER')
+     from pg_class as relation
+     join pg_namespace as namespace on namespace.oid=relation.relnamespace
+     where namespace.nspname='public' and relation.relkind in ('r','p')
+     order by relation.relname;" >&2
+  "${compose[@]}" exec -T postgres psql -X -A -F '|' \
+    -U hepta_gate_migrator -d hepta_gate -v ON_ERROR_STOP=1 -c \
+    "select role.rolsuper, role.rolinherit, role.rolcreatedb, role.rolcreaterole,
+       role.rolreplication, role.rolbypassrls,
+       has_schema_privilege(role.rolname, 'public', 'USAGE'),
+       has_schema_privilege(role.rolname, 'public', 'CREATE'),
+       has_database_privilege(role.rolname, current_database(), 'CONNECT'),
+       has_database_privilege(role.rolname, current_database(), 'CREATE'),
+       has_database_privilege(role.rolname, current_database(), 'TEMPORARY'),
+       has_function_privilege(role.rolname, 'public.hepta_assert_paper_finality_v2_source_unsealed(uuid)', 'EXECUTE'),
+       has_function_privilege(role.rolname, 'public.hepta_paper_finality_v2_lock_window_arm()', 'EXECUTE'),
+       has_function_privilege(role.rolname, 'public.hepta_paper_finality_v2_lock_preparation()', 'EXECUTE'),
+       has_function_privilege(role.rolname, 'public.hepta_paper_finality_v2_apply_seal()', 'EXECUTE'),
+       has_function_privilege(role.rolname, 'public.hepta_reject_paper_finality_v2_source_mutation()', 'EXECUTE'),
+       (select count(*) from pg_auth_members as membership
+         where membership.member=role.oid or membership.roleid=role.oid),
+       (select count(*) from pg_class as relation
+         join pg_namespace as namespace on namespace.oid=relation.relnamespace
+         where namespace.nspname='public' and relation.relowner=role.oid)
+     from pg_roles as role where role.rolname='hepta_gate_runtime';" >&2
+  exit 1
+fi
 finality_role_boundary=$("${compose[@]}" exec -T postgres psql -X -A -t \
   -U hepta_gate_migrator -d hepta_gate -v ON_ERROR_STOP=1 -c \
   "select (
@@ -478,7 +561,7 @@ finality_role_boundary=$("${compose[@]}" exec -T postgres psql -X -A -t \
       )
     )::text
    from pg_roles as role where role.rolname='hepta_gate_finality';")
-[[ "$finality_role_boundary" == t ]]
+[[ "$finality_role_boundary" == true ]]
 definer_public_execute_count=$("${compose[@]}" exec -T postgres psql -X -A -t \
   -U hepta_gate_migrator -d hepta_gate -v ON_ERROR_STOP=1 -c \
   "select count(*)
@@ -529,7 +612,7 @@ state_rows_after=$("${compose[@]}" exec -T postgres psql -X -A -t \
   -U hepta_gate_migrator -d hepta_gate -v ON_ERROR_STOP=1 \
   -c "select count(*) from hepta_league_state where state_key='primary';")
 [[ "$state_rows_after" == "$state_rows_before" ]]
-[[ -z $("${compose[@]}" ps -a -q hepta-migrate) ]]
+[[ -z $("${migration_compose[@]}" --profile migration ps -a -q hepta-migrate) ]]
 [[ -z $("${docker_command[@]}" ps -aq \
   --filter "label=com.docker.compose.project=$project" \
   --filter 'label=com.docker.compose.service=hepta-migrate') ]]
