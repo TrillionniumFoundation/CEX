@@ -426,13 +426,18 @@ async fn ready(State(state): State<AppState>) -> (StatusCode, Json<ReadyResponse
     )
 }
 
-fn require_verified_finality_mode(state: &AppState) -> Result<(), ApiError> {
+fn require_verified_finality_mode_selected(state: &AppState) -> Result<(), ApiError> {
     if state.security.finality_mode != FinalityMode::Verified {
         return Err(ApiError::conflict(
             "finality_pending_only",
             "Hepta is configured for pending_only finality; receipts remain held and no finality write is accepted",
         ));
     }
+    Ok(())
+}
+
+fn require_verified_finality_mode(state: &AppState) -> Result<(), ApiError> {
+    require_verified_finality_mode_selected(state)?;
     if state.security.trusted_trnm_validator_sets.is_empty() {
         return Err(ApiError::internal(
             "verified finality mode has no trusted validator sets",
@@ -1002,6 +1007,7 @@ async fn ingest_trnm_finality(
         &state.security.trnm_token,
         "trnm_auth_failed",
     )?;
+    require_verified_finality_mode_selected(&state)?;
     let command = state
         .inspect(|league| {
             league
@@ -1125,6 +1131,7 @@ async fn ingest_live_trnm_finality(
             "live Chain receipt command_id must be the queued Hepta UUID",
         )
     })?;
+    require_verified_finality_mode_selected(&state)?;
     let command = state
         .inspect(|league| {
             league
@@ -1748,9 +1755,102 @@ fn hex_bytes(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::trnm_v1::{
+        ExternalKey, ResearchObjectKind, FINALITY_RECEIPT_V1, OBJECT_INCLUSION_PROOF_V1,
+        QUORUM_CERTIFICATE_V1,
+    };
+    use axum::http::HeaderValue;
     use ed25519_dalek::SigningKey;
     use sqlx::postgres::PgPoolOptions;
     use std::time::Duration;
+
+    fn unknown_command_finality_receipt() -> FinalityReceiptV1 {
+        let digest = |byte: u8| format!("sha256:{}", format!("{byte:02x}").repeat(32));
+        FinalityReceiptV1 {
+            protocol: FINALITY_RECEIPT_V1.to_string(),
+            source_event_id: Uuid::new_v4(),
+            command_id: Uuid::new_v4(),
+            command_fingerprint: digest(0x11),
+            chain_id: "pending-only-order-test".to_string(),
+            tx_hash: digest(0x22),
+            tx_index: 0,
+            block_height: 1,
+            block_hash: digest(0x33),
+            state_root: digest(0x44),
+            object_ref: ObjectRefV1::new(
+                ResearchObjectKind::EvaluationCommitment,
+                ExternalKey::from_bytes([0x55; 32]),
+                1,
+            ),
+            inclusion_proof: ObjectInclusionProofV1 {
+                protocol: OBJECT_INCLUSION_PROOF_V1.to_string(),
+                leaf_index: 0,
+                sibling_hashes: Vec::new(),
+            },
+            validator_set_id: "unknown-validator-set".to_string(),
+            quorum_certificate: QuorumCertificateV1 {
+                protocol: QUORUM_CERTIFICATE_V1.to_string(),
+                chain_id: "pending-only-order-test".to_string(),
+                validator_set_id: "unknown-validator-set".to_string(),
+                block_height: 1,
+                block_hash: digest(0x33),
+                state_root: digest(0x44),
+                signed_voting_power: 0,
+                total_voting_power: 1,
+                signatures: Vec::new(),
+            },
+            confirmations: 0,
+            receipt_hash: digest(0x66),
+        }
+    }
+
+    fn unknown_command_live_finality_request() -> LiveTrnmFinalityRequestV1 {
+        let zeros = "0".repeat(64);
+        let ones = "1".repeat(64);
+        LiveTrnmFinalityRequestV1 {
+            source_event_id: Uuid::new_v4(),
+            receipt: serde_json::from_value(json!({
+                "schema": "trnm_finality_receipt_v1",
+                "chain_id": "pending-only-order-test",
+                "command_id": Uuid::new_v4().to_string(),
+                "domain_command_fingerprint_hex": zeros,
+                "transaction_hash_hex": ones,
+                "transaction_index": 0,
+                "block_height": 1,
+                "block_hash_hex": "1".repeat(64),
+                "block_header": {
+                    "schema": "trnm_block_header_v1",
+                    "chain_id": "pending-only-order-test",
+                    "height": 1,
+                    "previous_block_hash_hex": "0".repeat(64),
+                    "transaction_root_hex": "1".repeat(64),
+                    "state_root_hex": "0".repeat(64),
+                    "validator_set_id": "unknown-validator-set",
+                    "timestamp_unix_ms": 1
+                },
+                "state_root_hex": "0".repeat(64),
+                "transaction_root_hex": "1".repeat(64),
+                "object_ref": null,
+                "transaction_inclusion_proof": {
+                    "tree_domain": "trnm.tx.v1",
+                    "leaf_hash_hex": "1".repeat(64),
+                    "leaf_index": 0,
+                    "leaf_count": 1,
+                    "steps": []
+                },
+                "object_inclusion_proof": null,
+                "validator_set_id": "unknown-validator-set",
+                "quorum_certificate": {
+                    "validator_set_id": "unknown-validator-set",
+                    "height": 1,
+                    "block_hash_hex": "1".repeat(64),
+                    "signatures": []
+                },
+                "receipt_hash_hex": "0".repeat(64)
+            }))
+            .expect("well-formed live finality fixture"),
+        }
+    }
 
     #[test]
     fn deterministic_scoring_is_fixed_point_and_order_independent() {
@@ -1808,6 +1908,44 @@ mod tests {
         assert!(response
             .failures
             .contains(&"nakama_research_authority_missing"));
+    }
+
+    #[tokio::test]
+    async fn pending_only_mode_precedes_unknown_finality_command_lookup() {
+        let state =
+            AppState::new(crate::SecurityConfig::new("operator", "nakama").with_trnm_token("trnm"));
+        let mut headers = HeaderMap::new();
+        headers.insert(TRNM_TOKEN_HEADER, HeaderValue::from_static("trnm"));
+
+        let error = ingest_trnm_finality(
+            State(state),
+            headers,
+            Json(unknown_command_finality_receipt()),
+        )
+        .await
+        .expect_err("pending-only mode must reject before command lookup");
+
+        assert_eq!(error.status, StatusCode::CONFLICT);
+        assert_eq!(error.code, "finality_pending_only");
+    }
+
+    #[tokio::test]
+    async fn pending_only_mode_precedes_unknown_live_finality_command_lookup() {
+        let state =
+            AppState::new(crate::SecurityConfig::new("operator", "nakama").with_trnm_token("trnm"));
+        let mut headers = HeaderMap::new();
+        headers.insert(TRNM_TOKEN_HEADER, HeaderValue::from_static("trnm"));
+
+        let error = ingest_live_trnm_finality(
+            State(state),
+            headers,
+            Json(unknown_command_live_finality_request()),
+        )
+        .await
+        .expect_err("pending-only mode must reject before live command lookup");
+
+        assert_eq!(error.status, StatusCode::CONFLICT);
+        assert_eq!(error.code, "finality_pending_only");
     }
 
     #[tokio::test]
