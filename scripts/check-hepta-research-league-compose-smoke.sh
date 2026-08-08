@@ -51,6 +51,7 @@ if ! docker info >/dev/null 2>&1; then
 fi
 "${docker_command[@]}" info >/dev/null
 if [[ ${docker_command[0]} == sudo ]]; then
+  host_kill=(sudo -n kill)
   compose=(sudo -n docker compose --project-name "$project" --env-file "$env_file" \
     --file "$repo_dir/deploy/hepta-research-league/compose.yaml" --file "$override")
   migration_compose=(sudo -n docker compose --project-name "$project" --env-file "$env_file" \
@@ -58,6 +59,7 @@ if [[ ${docker_command[0]} == sudo ]]; then
     --file "$repo_dir/deploy/hepta-research-league/compose.migration.yaml" \
     --file "$override")
 else
+  host_kill=(kill)
   compose=(docker compose --project-name "$project" --env-file "$env_file" \
     --file "$repo_dir/deploy/hepta-research-league/compose.yaml" --file "$override")
   migration_compose=(docker compose --project-name "$project" --env-file "$env_file" \
@@ -266,7 +268,9 @@ fi
 
 # The resident lifecycle must be independent of a destroyed migration-owner
 # secret: prove both restart-policy recovery and a fresh Compose recreation.
-"${docker_command[@]}" kill --signal KILL "$hepta_container" >/dev/null
+hepta_pid=$("${docker_command[@]}" inspect "$hepta_container" --format '{{.State.Pid}}')
+[[ "$hepta_pid" =~ ^[1-9][0-9]*$ ]]
+"${host_kill[@]}" -KILL "$hepta_pid"
 wait_hepta
 "${compose[@]}" up -d --no-deps --force-recreate hepta
 wait_hepta
