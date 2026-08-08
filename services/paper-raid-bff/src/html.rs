@@ -56,7 +56,7 @@ pub fn lobby(
                     let description = scalar(challenge.get("description"));
                     let status = scalar(challenge.get("status"));
                     format!(
-                        r#"<article class="card challenge"><span class="pill">{}</span><h2>{}</h2><p>{}</p><code>{}</code><form class="queue-form" data-challenge-id="{}"><label>Roles / 职业<input name="roles" value="captain,evidence,experiment" maxlength="200" required></label><label>Availability / 可用时间<input name="availability" value="alpha-window" maxlength="200" required></label><button type="submit">Queue 3-player Raid / 加入三人匹配</button><output></output></form></article>"#,
+                        r#"<article class="card challenge"><span class="pill">{}</span><h2>{}</h2><p>{}</p><code>{}</code><form class="queue-form" data-challenge-id="{}"><fieldset class="role-kit"><legend>Your three-person expedition / 三人远征队</legend><span><strong>Captain</strong> keeps the decision clock moving</span><span><strong>Evidence</strong> protects claim quality</span><span><strong>Experiment</strong> owns reproducibility</span></fieldset><input name="roles" type="hidden" value="captain,evidence,experiment"><label>Play window / 开局时间<select name="availability" required><option value="alpha-window">Join the next Alpha window / 下一场 Alpha</option><option value="now">Ready now / 现在可玩</option></select></label><button type="submit">Start my first Raid / 开始首局</button><output></output></form></article>"#,
                         escape(&status),
                         escape(&title),
                         escape(&description),
@@ -77,12 +77,15 @@ pub fn lobby(
         true,
     );
     let binding_controls = active_agent_binding_controls(identity, bindings);
+    let mission_board = first_raid_mission_board(tickets, proposals);
     let body = format!(
         r#"<section class="hero"><span class="eyebrow">PAPER RAID · 论文远征</span><h1>Research Lobby</h1><p>Welcome, {}. Hepta is the only matchmaking and research authority.</p></section>
+        {}
         <section class="panel"><h2>Challenges / 研究挑战</h2><p class="source-state">Hepta: {}</p><div class="grid">{}</div></section>
         <section class="grid"><article class="card"><h2>My Queue / 我的队列</h2><p class="source-state">Hepta: {}</p>{}</article><article class="card"><h2>Team Proposals / 组队提案</h2><p class="source-state">Hepta: {}</p>{}</article><article class="card"><h2>Alpha Rules / Alpha 规则</h2><p>Exactly 3 human players, each with an independently bound external Agent. Login keys never leave this page except in the login request.</p></article></section>
         <section class="panel"><h2>External Agent key continuity / 外部 Agent 密钥连续性</h2><p class="source-state">Hepta: {}</p><p>Rotation requires independent signatures from both the currently bound key and the replacement key. Only public proof fields enter this browser.</p><div class="action-grid">{}</div></section>"#,
         escape(&identity.display_name),
+        mission_board,
         escape(challenges.label()),
         challenge_cards,
         escape(tickets.label()),
@@ -93,6 +96,63 @@ pub fn lobby(
         binding_controls,
     );
     page("Paper Raid Lobby", &identity.display_name, &body, true)
+}
+
+fn first_raid_mission_board(tickets: ReadState<'_>, proposals: ReadState<'_>) -> String {
+    let ticket_count = tickets
+        .value()
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len);
+    let proposal_count = proposals
+        .value()
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len);
+    let states = if proposal_count > 0 {
+        ["complete", "complete", "current", "upcoming", "upcoming"]
+    } else if ticket_count > 0 {
+        ["complete", "current", "upcoming", "upcoming", "upcoming"]
+    } else {
+        ["current", "upcoming", "upcoming", "upcoming", "upcoming"]
+    };
+    let steps = [
+        (
+            "Choose",
+            "Pick one challenge and launch your balanced three-person queue.",
+        ),
+        (
+            "Match",
+            "Wait for Hepta to assemble three humans and their external Agents.",
+        ),
+        (
+            "Commit",
+            "Review the roster, accept the proposal, then lock the team.",
+        ),
+        (
+            "Research",
+            "Build evidence, run experiments, and review every major claim.",
+        ),
+        (
+            "Resolve",
+            "Submit, reproduce, appeal if needed, and reach scientific finality.",
+        ),
+    ];
+    let items = steps
+        .iter()
+        .zip(states)
+        .enumerate()
+        .map(|(index, ((title, help), state))| {
+            format!(
+                r#"<li data-step-state="{}"><span>{:02}</span><div><strong>{}</strong><p>{}</p></div></li>"#,
+                state,
+                index + 1,
+                title,
+                help,
+            )
+        })
+        .collect::<String>();
+    format!(
+        r#"<section class="panel mission-board"><div><span class="eyebrow">FIRST RAID / 首局任务</span><h2>One clear objective: finish a defensible paper.</h2><p class="muted">You never need to understand resource IDs or signatures to choose your first move. Start with the highlighted step.</p></div><ol class="raid-steps">{items}</ol></section>"#
+    )
 }
 
 fn active_agent_binding_controls(identity: &AlphaIdentity, bindings: ReadState<'_>) -> String {
@@ -904,7 +964,8 @@ const CSS: &str = r#"
 header{align-items:center;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;padding:16px clamp(18px,4vw,56px);position:sticky;top:0;background:#070b12e8;backdrop-filter:blur(12px)}header a{color:var(--cyan);font-weight:900;letter-spacing:.12em;text-decoration:none}header span,footer{color:var(--muted)}
 main{margin:auto;max-width:1180px;padding:clamp(24px,5vw,64px) clamp(16px,4vw,44px)}.hero{border-left:4px solid var(--cyan);padding:8px 0 12px 22px;margin-bottom:28px}.eyebrow{color:var(--amber);font-size:12px;font-weight:800;letter-spacing:.16em}.hero h1{font-size:clamp(32px,7vw,72px);line-height:1;margin:10px 0}.hero p{color:var(--muted);max-width:760px}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin:14px 0}.card,.panel{background:linear-gradient(145deg,#142036,#0d1421);border:1px solid var(--line);border-radius:14px;padding:18px;min-height:120px}.card h2,.panel h2{font-size:14px;letter-spacing:.05em;margin:0 0 12px}.card p{color:var(--text)}.unavailable{border-style:dashed;color:var(--muted)}.muted,.action p{color:var(--muted)}.dot{background:var(--pink);border-radius:50%;display:inline-block;height:8px;margin-right:8px;width:8px}.pill,.status{border:1px solid var(--amber);border-radius:999px;color:var(--amber);display:inline-block;font-size:12px;font-weight:800;padding:4px 9px}.status{padding:6px 12px}.status.missing{border-color:var(--pink);color:var(--pink)}.source-state{color:var(--muted);font-size:12px}.roster,.record-list{display:grid;gap:10px;list-style:none;margin:0;padding:0}.roster li{align-items:center;border-bottom:1px solid var(--line);display:grid;gap:8px;grid-template-columns:90px 1fr 1fr 1fr;padding:10px 0}.roster span{color:var(--muted);overflow-wrap:anywhere}.record-list li,.record-list a{align-items:center;display:flex;gap:8px;justify-content:space-between}.record-list a{color:var(--text);text-decoration:none;width:100%}.action-grid{display:grid;gap:14px;grid-template-columns:repeat(2,minmax(0,1fr))}.action{border:1px solid var(--line);border-radius:12px;padding:16px}.action h3{margin-top:0}form{display:grid;gap:12px}label{color:var(--muted);display:grid;font-size:12px;gap:6px}input,textarea,select,button{background:#07101d;border:1px solid var(--line);border-radius:8px;color:var(--text);font:inherit;padding:10px 12px}textarea{font:12px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;resize:vertical}button{background:#12334a;border-color:var(--cyan);color:var(--cyan);cursor:pointer;font-weight:800}button:hover{filter:brightness(1.2)}button.danger{border-color:var(--pink);color:var(--pink)}button:disabled{cursor:wait;opacity:.55}output{color:var(--amber);font:12px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;overflow-wrap:anywhere;white-space:pre-wrap}output.result-error{color:var(--pink)}output.result-ok{color:var(--amber)}.narrow{margin:auto;max-width:540px}#toast{background:#101826;border:1px solid var(--line);border-radius:10px;bottom:18px;display:block;max-width:min(520px,90vw);padding:12px 16px;position:fixed;right:18px;z-index:10}#toast[hidden]{display:none}code{color:var(--cyan);overflow-wrap:anywhere}footer{padding:28px;text-align:center}
 .key-vault{margin-bottom:18px;min-height:auto}.key-vault summary{color:var(--cyan);cursor:pointer;font-weight:800}.key-vault form{margin:14px 0}.human-key-status{display:block;margin-top:10px}
-@media(max-width:820px){.grid,.action-grid{grid-template-columns:1fr}.roster li{align-items:start;grid-template-columns:1fr}.hero h1{font-size:38px}header{position:static}.card{min-height:auto}}
+.mission-board{display:grid;gap:18px;grid-template-columns:minmax(220px,.8fr) minmax(0,2fr);margin-bottom:20px}.mission-board h2{font-size:24px;letter-spacing:0;margin:6px 0}.raid-steps{display:grid;gap:8px;grid-template-columns:repeat(5,minmax(0,1fr));list-style:none;margin:0;padding:0}.raid-steps li{border:1px solid var(--line);border-radius:10px;display:grid;gap:8px;padding:12px}.raid-steps li>span{color:var(--muted);font-size:11px;font-weight:900}.raid-steps strong{display:block}.raid-steps p{color:var(--muted);font-size:11px;line-height:1.35;margin:4px 0 0}.raid-steps [data-step-state=current]{background:#12334a;border-color:var(--cyan)}.raid-steps [data-step-state=current]>span{color:var(--cyan)}.raid-steps [data-step-state=complete]{border-color:#3b8f78}.raid-steps [data-step-state=complete]>span{color:#67e8b5}.role-kit{border:1px solid var(--line);border-radius:10px;display:grid;gap:7px;margin:0;padding:12px}.role-kit legend{color:var(--amber);font-size:12px;font-weight:800;padding:0 6px}.role-kit span{color:var(--muted);font-size:12px}.role-kit strong{color:var(--text)}
+@media(max-width:820px){.grid,.action-grid,.mission-board,.raid-steps{grid-template-columns:1fr}.roster li{align-items:start;grid-template-columns:1fr}.hero h1{font-size:38px}header{position:static}.card{min-height:auto}}
 "#;
 
 #[cfg(test)]
@@ -939,6 +1000,39 @@ mod tests {
         assert!(body.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
         assert!(body.contains("&lt;img src=x onerror=alert(1)&gt;"));
         assert_eq!(escape("<script>\"'&"), "&lt;script&gt;&quot;&#x27;&amp;");
+    }
+
+    #[tokio::test]
+    async fn lobby_guides_the_first_raid_without_a_role_json_editor() {
+        let identity = AlphaIdentity::test_identity("subject-a", Uuid::new_v4(), Uuid::new_v4());
+        let challenges = serde_json::json!([{
+            "challenge_id":"challenge-a",
+            "title":"Reproduce the signal",
+            "description":"Separate the claimed effect from measurement noise.",
+            "status":"open"
+        }]);
+        let tickets = serde_json::json!([]);
+        let proposals = serde_json::json!([]);
+        let bindings = serde_json::json!([]);
+        let response = lobby(
+            &identity,
+            ReadState::Available(&challenges),
+            ReadState::Available(&tickets),
+            ReadState::Available(&proposals),
+            ReadState::Available(&bindings),
+        );
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("collect lobby")
+            .to_bytes();
+        let body = std::str::from_utf8(&body).expect("UTF-8 lobby");
+        assert!(body.contains("FIRST RAID / 首局任务"));
+        assert!(body.contains("data-step-state=\"current\"><span>01</span>"));
+        assert!(body.contains("type=\"hidden\" value=\"captain,evidence,experiment\""));
+        assert!(body.contains("Start my first Raid / 开始首局"));
+        assert!(!body.contains("Roles / 职业<input"));
     }
 
     #[tokio::test]
