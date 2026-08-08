@@ -181,6 +181,23 @@ then
   echo "runtime binary image/SBOM equivalence gate is missing" >&2
   exit 1
 fi
+docker_lock_gate="$service_root/scripts/check-docker-lock.sh"
+for required in \
+  'cargo fetch \' \
+  '--locked' \
+  'cargo metadata \' \
+  '--offline' \
+  'paper-raid-bff committed minimal Docker lock verification: ok'
+do
+  if ! rg -q --fixed-strings -- "$required" "$docker_lock_gate"; then
+    echo "committed Docker lock verification boundary is missing: $required" >&2
+    exit 1
+  fi
+done
+if rg -n '\bcargo[[:space:]]+(generate-lockfile|update)\b' "$docker_lock_gate"; then
+  echo "Docker lock gate must not resolve against a moving registry index" >&2
+  exit 1
+fi
 for required in \
   "scan_runtime_image \"\$repro_image_id\"" \
   'runtime_binary_authority_sha256' \
