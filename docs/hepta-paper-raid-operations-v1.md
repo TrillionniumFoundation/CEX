@@ -96,7 +96,12 @@ run may debug the harness but cannot satisfy the 24-hour evidence requirement.
 
 ## Finality boundary
 
-`pending_finality` is the only allowed outcome until the canonical Chain ships
-typed research ingress and an AppHash/finality-bound receipt. Integration must
-remain `runnable=false`; no mock receipt, local fallback, or status rewrite may
-turn this gate green.
+Paper finality begins as `pending_finality`. The canonical Chain path now
+supports typed Paper-bound ingress and locally verified Receipt V2 evidence;
+only that exact, trust-anchor-pinned path may advance a Paper to
+`verified_finality`. A BFF label, mock receipt, local fallback or status rewrite
+must never advance it. Verified finality also does not imply ranking, score,
+reward or economic eligibility: those four gates remain independently false
+until their dedicated release policies are satisfied. Integration remains
+`runnable=false` while the current candidate lock or its terminal soak evidence
+is blocked, regardless of an individual Paper's finality.

@@ -11,7 +11,7 @@ use chrono::{DateTime, TimeZone, Utc};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use sqlx::{Postgres, Row, Transaction};
+use sqlx::{postgres::PgRow, Postgres, Row, Transaction};
 use uuid::Uuid;
 
 use super::collaboration_v3::{insert_room_event_postgres, push_room_event_memory};
@@ -30,15 +30,144 @@ pub const CONTRIBUTION_LEDGER_SCHEMA_V1: &str = "hepta.paper_raid.contribution_l
 pub const PAPER_SCORE_SCHEMA_V1: &str = "hepta.paper_raid.paper_score.v1";
 pub const RAID_SCORE_SCHEMA_V1: &str = "hepta.paper_raid.raid_score.v1";
 pub const TOLERANCE_POLICY_SCHEMA_V1: &str = "hepta.paper_raid.tolerance_policy.v1";
+pub const REVIEW_ASSIGNMENT_SCHEMA_V1: &str = "hepta.paper_raid.review_assignment.v1";
+pub const EVALUATION_DRAFT_SCHEMA_V1: &str = "hepta.paper_raid.evaluation_draft.v1";
+pub const EVALUATION_DRAFT_SCHEMA_V2: &str = "hepta.paper_raid.evaluation_draft.v2";
+pub const EVALUATION_DRAFT_ATTESTATION_SCHEMA_V1: &str =
+    "hepta.paper_raid.evaluation_draft_attestation.v1";
+pub const EVALUATION_DRAFT_QUORUM_SCHEMA_V1: &str = "hepta.paper_raid.evaluation_draft_quorum.v1";
+const REVIEW_ASSIGNMENT_TTL_HOURS: i64 = 24;
+const EVALUATION_DRAFT_LEASE_HOURS: i64 = 24;
+const ACCEPTED_ARTIFACT_MILESTONE_XP: u64 = 100;
+const ACCEPTED_REVIEW_MILESTONE_XP: u64 = 150;
+const ACCEPTED_AUTHOR_RAID_BASE_XP: u64 = 300;
 
 #[derive(Clone, Default)]
 pub(crate) struct ReviewMemory {
+    assignments: HashMap<Uuid, ReviewAssignment>,
+    evaluation_drafts: HashMap<Uuid, PaperEvaluationDraft>,
+    draft_attestations: HashMap<Uuid, EvaluationDraftAttestation>,
     contribution_ledgers: HashMap<Uuid, ContributionLedger>,
     pub(crate) evaluations: HashMap<Uuid, PaperEvaluation>,
     pub(crate) reproductions: HashMap<Uuid, PaperReproduction>,
     pub(crate) appeals: HashMap<Uuid, PaperAppeal>,
     pub(crate) resolutions: HashMap<Uuid, PaperAppealResolution>,
     raid_scores: HashMap<Uuid, RaidScore>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewAssignmentSlot {
+    Evaluator,
+    #[serde(rename = "reviewer_1")]
+    Reviewer1,
+    #[serde(rename = "reviewer_2")]
+    Reviewer2,
+    Reproducer,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewAssignmentStatus {
+    Claimed,
+    Pinned,
+    Consumed,
+    Expired,
+}
+
+impl ReviewAssignmentStatus {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Claimed => "claimed",
+            Self::Pinned => "pinned",
+            Self::Consumed => "consumed",
+            Self::Expired => "expired",
+        }
+    }
+}
+
+impl ReviewAssignmentSlot {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Evaluator => "evaluator",
+            Self::Reviewer1 => "reviewer_1",
+            Self::Reviewer2 => "reviewer_2",
+            Self::Reproducer => "reproducer",
+        }
+    }
+
+    fn rank(self) -> u8 {
+        match self {
+            Self::Evaluator => 0,
+            Self::Reviewer1 => 1,
+            Self::Reviewer2 => 2,
+            Self::Reproducer => 3,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReviewAssignment {
+    pub schema: String,
+    pub assignment_id: Uuid,
+    pub paper_project_id: Uuid,
+    pub submission_id: Uuid,
+    pub player_id: Uuid,
+    pub review_round: u64,
+    pub slot: ReviewAssignmentSlot,
+    pub pinned_evaluation_id: Option<Uuid>,
+    pub status: ReviewAssignmentStatus,
+    pub version: u64,
+    pub claimed_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClaimReviewAssignmentRequest {
+    pub assignment_id: Uuid,
+    pub player_id: Uuid,
+    pub review_round: u64,
+    pub slot: ReviewAssignmentSlot,
+    pub idempotency_key: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReviewAssignmentVacancy {
+    pub review_round: u64,
+    pub slot: ReviewAssignmentSlot,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReviewQueueItem {
+    pub paper_project_id: Uuid,
+    pub submission_id: Uuid,
+    pub challenge_id: Uuid,
+    pub title: String,
+    pub abstract_text: String,
+    pub target_format: String,
+    pub release_candidate_hash: String,
+    pub paper_bundle_hash: String,
+    pub author_count: u32,
+    pub submitted_at: DateTime<Utc>,
+    pub my_assignments: Vec<ReviewAssignment>,
+    pub open_slots: Vec<ReviewAssignmentVacancy>,
+}
+
+/// Assignment-scoped extension of the existing frozen JointPaperSubmission.
+///
+/// `submission` is flattened so existing review-bundle consumers continue to
+/// see the exact same top-level PaperBundle fields. The additive fields let a
+/// reviewer discover the evaluator draft and let the assigned reproducer
+/// discover the finalized evaluation without joining the author Paper Room.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PaperReviewBundleV1 {
+    #[serde(flatten)]
+    pub submission: JointPaperSubmission,
+    pub my_assignments: Vec<ReviewAssignment>,
+    pub evaluation_quorum: Option<EvaluationDraftQuorum>,
+    pub evaluation: Option<PaperEvaluation>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -347,6 +476,117 @@ pub struct CreatePaperEvaluationRequest {
     pub idempotency_key: String,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EvaluationDraftStatus {
+    Open,
+    Finalized,
+    Expired,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PaperEvaluationDraft {
+    pub schema: String,
+    pub evaluation_id: Uuid,
+    pub paper_project_id: Uuid,
+    pub submission_id: Uuid,
+    pub review_round: u64,
+    pub supersedes_evaluation_id: Option<Uuid>,
+    pub release_candidate_hash: String,
+    pub paper_bundle_hash: String,
+    pub tolerance_policy: TolerancePolicy,
+    pub tolerance_policy_hash: String,
+    pub reference_metrics_micros: BTreeMap<String, i64>,
+    pub paper_score: PaperScore,
+    pub evaluator_player_id: Uuid,
+    pub evaluator_signing_key_id: String,
+    pub evaluator_signing_public_key: String,
+    pub evaluator_signing_public_key_hash: String,
+    pub evaluator_coi_attestation_hash: String,
+    pub evaluator_signed_at_unix: i64,
+    pub evaluator_signature: String,
+    pub evaluation_signing_hash: String,
+    pub draft_hash: String,
+    pub status: EvaluationDraftStatus,
+    pub version: u64,
+    pub finalized_evaluation_id: Option<Uuid>,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub finalized_at: Option<DateTime<Utc>>,
+    pub expired_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreatePaperEvaluationDraftRequest {
+    pub evaluation_id: Uuid,
+    pub submission_id: Uuid,
+    pub supersedes_evaluation_id: Option<Uuid>,
+    pub release_candidate_hash: String,
+    pub paper_bundle_hash: String,
+    pub tolerance_policy: TolerancePolicy,
+    pub reference_metrics_micros: BTreeMap<String, i64>,
+    pub score_components: PaperScoreComponents,
+    pub hard_gates: PaperHardGates,
+    pub evaluator_player_id: Uuid,
+    pub evaluator_signing_key_id: String,
+    pub evaluator_signing_public_key: String,
+    pub evaluator_signing_public_key_hash: String,
+    pub evaluator_coi_attestation_hash: String,
+    pub evaluator_signed_at_unix: i64,
+    pub evaluator_signature: String,
+    pub idempotency_key: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SubmitEvaluationDraftAttestationRequest {
+    pub attestation_id: Uuid,
+    pub draft_hash: String,
+    pub reviewer_player_id: Uuid,
+    pub verdict: PanelVerdict,
+    pub signing_key_id: String,
+    pub signing_public_key: String,
+    pub signing_public_key_hash: String,
+    pub coi_attestation_hash: String,
+    pub signed_at_unix: i64,
+    pub signature: String,
+    pub idempotency_key: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EvaluationDraftAttestation {
+    pub schema: String,
+    pub attestation_id: Uuid,
+    pub evaluation_id: Uuid,
+    pub paper_project_id: Uuid,
+    pub submission_id: Uuid,
+    pub review_round: u64,
+    pub slot: ReviewAssignmentSlot,
+    pub draft_hash: String,
+    pub attestation: ReviewAttestation,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FinalizePaperEvaluationDraftRequest {
+    pub expected_draft_version: u64,
+    pub idempotency_key: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EvaluationDraftQuorum {
+    pub schema: String,
+    pub draft: PaperEvaluationDraft,
+    pub attestations: Vec<EvaluationDraftAttestation>,
+    pub required_slots: Vec<ReviewAssignmentSlot>,
+    pub missing_slots: Vec<ReviewAssignmentSlot>,
+    pub assignments_active: bool,
+    pub ready_to_finalize: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ReproductionStatus {
@@ -502,6 +742,8 @@ pub struct ResolvePaperAppealRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PaperReviewReadModel {
+    pub finality: ConsumerPaperFinalityV1,
+    pub assignments: Vec<ReviewAssignment>,
     pub contribution_ledgers: Vec<ContributionLedger>,
     pub evaluations: Vec<PaperEvaluation>,
     pub reproductions: Vec<PaperReproduction>,
@@ -510,8 +752,56 @@ pub struct PaperReviewReadModel {
     pub raid_scores: Vec<RaidScore>,
 }
 
+pub const CONSUMER_PAPER_FINALITY_SCHEMA_V1: &str = "hepta.paper_raid.consumer_finality.v1";
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ConsumerPaperFinalityV1 {
+    pub schema: String,
+    pub status: PaperChainFinalityStatusV1,
+    pub ranking_eligible: bool,
+    pub reward_eligible: bool,
+    pub score_eligible: bool,
+    pub economic_eligible: bool,
+    pub verified_at: Option<DateTime<Utc>>,
+}
+
+impl ConsumerPaperFinalityV1 {
+    fn pending() -> Self {
+        Self {
+            schema: CONSUMER_PAPER_FINALITY_SCHEMA_V1.to_string(),
+            status: PaperChainFinalityStatusV1::PendingFinality,
+            ranking_eligible: false,
+            reward_eligible: false,
+            score_eligible: false,
+            economic_eligible: false,
+            verified_at: None,
+        }
+    }
+
+    fn from_projection(projection: PaperChainFinalityProjectionV1) -> Self {
+        Self {
+            schema: CONSUMER_PAPER_FINALITY_SCHEMA_V1.to_string(),
+            status: projection.status,
+            ranking_eligible: projection.ranking_eligible,
+            reward_eligible: projection.reward_eligible,
+            score_eligible: projection.score_eligible,
+            economic_eligible: projection.economic_eligible,
+            verified_at: Some(projection.verified_at),
+        }
+    }
+}
+
 pub(super) fn router() -> Router<AppState> {
     Router::new()
+        .route("/v2/hepta/review-queue", get(get_review_queue))
+        .route(
+            "/v2/hepta/papers/:paper_id/review-assignments",
+            post(claim_review_assignment),
+        )
+        .route(
+            "/v2/hepta/papers/:paper_id/review-bundle",
+            get(get_paper_review_bundle),
+        )
         .route(
             "/v2/hepta/papers/:paper_id/contribution-ledgers",
             post(create_contribution_ledger),
@@ -519,6 +809,22 @@ pub(super) fn router() -> Router<AppState> {
         .route(
             "/v2/hepta/papers/:paper_id/evaluations",
             post(create_paper_evaluation),
+        )
+        .route(
+            "/v2/hepta/papers/:paper_id/evaluation-drafts",
+            post(create_paper_evaluation_draft),
+        )
+        .route(
+            "/v2/hepta/papers/:paper_id/evaluation-drafts/:evaluation_id",
+            get(get_paper_evaluation_draft),
+        )
+        .route(
+            "/v2/hepta/papers/:paper_id/evaluation-drafts/:evaluation_id/attestations",
+            post(submit_evaluation_draft_attestation),
+        )
+        .route(
+            "/v2/hepta/papers/:paper_id/evaluation-drafts/:evaluation_id/finalize",
+            post(finalize_paper_evaluation_draft),
         )
         .route(
             "/v2/hepta/papers/:paper_id/evaluations/:evaluation_id/reproductions",
@@ -661,6 +967,12 @@ fn verify_signature(
 }
 
 #[derive(Clone)]
+struct ReviewAccessContext {
+    paper: PaperProject,
+    team: ResearchTeam,
+}
+
+#[derive(Clone)]
 struct ReviewPaperContext {
     paper: PaperProject,
     team: ResearchTeam,
@@ -668,10 +980,10 @@ struct ReviewPaperContext {
     release_candidate_hash: String,
 }
 
-fn review_context_memory(
+fn review_access_context_memory(
     memory: &PaperRaidMemory,
     paper_id: Uuid,
-) -> Result<ReviewPaperContext, ApiError> {
+) -> Result<ReviewAccessContext, ApiError> {
     let paper = memory.papers.get(&paper_id).cloned().ok_or_else(|| {
         ApiError::not_found("paper_project_not_found", "paper project does not exist")
     })?;
@@ -680,6 +992,16 @@ fn review_context_memory(
         .get(&paper.team_id)
         .cloned()
         .ok_or_else(|| ApiError::internal("paper research team record is missing"))?;
+    Ok(ReviewAccessContext { paper, team })
+}
+
+fn review_context_memory(
+    memory: &PaperRaidMemory,
+    paper_id: Uuid,
+) -> Result<ReviewPaperContext, ApiError> {
+    let access = review_access_context_memory(memory, paper_id)?;
+    let paper = access.paper;
+    let team = access.team;
     let revision_id = paper.release_candidate_revision_id.ok_or_else(|| {
         ApiError::conflict(
             "release_candidate_required",
@@ -706,10 +1028,10 @@ fn review_context_memory(
     })
 }
 
-async fn review_context_postgres(
+async fn review_access_context_postgres(
     tx: &mut Transaction<'_, Postgres>,
     paper_id: Uuid,
-) -> Result<ReviewPaperContext, ApiError> {
+) -> Result<ReviewAccessContext, ApiError> {
     let row = sqlx::query(
         "select p.record_json as paper_record, t.record_json as team_record
          from hepta_paper_projects p
@@ -725,6 +1047,16 @@ async fn review_context_postgres(
     })?;
     let paper: PaperProject = decode_record(row.get("paper_record"), "paper project")?;
     let team: ResearchTeam = decode_record(row.get("team_record"), "research team")?;
+    Ok(ReviewAccessContext { paper, team })
+}
+
+async fn review_context_postgres(
+    tx: &mut Transaction<'_, Postgres>,
+    paper_id: Uuid,
+) -> Result<ReviewPaperContext, ApiError> {
+    let access = review_access_context_postgres(tx, paper_id).await?;
+    let paper = access.paper;
+    let team = access.team;
     let revision_id = paper.release_candidate_revision_id.ok_or_else(|| {
         ApiError::conflict(
             "release_candidate_required",
@@ -754,6 +1086,1535 @@ async fn review_context_postgres(
         team,
         release_candidate,
         release_candidate_hash,
+    })
+}
+
+fn active_registered_player_memory<'a>(
+    memory: &'a PaperRaidMemory,
+    assertion: &ConsumerUserAssertionClaimV2,
+) -> Result<&'a HumanPlayer, ApiError> {
+    let player = memory.players.get(&assertion.player_id).ok_or_else(|| {
+        ApiError::forbidden(
+            "human_player_not_registered",
+            "review access requires a registered human player",
+        )
+    })?;
+    assert_player_identity(assertion, player)?;
+    if player.status != HumanPlayerStatus::Active {
+        return Err(ApiError::forbidden(
+            "human_player_not_active",
+            "review access requires an active human player",
+        ));
+    }
+    Ok(player)
+}
+
+async fn active_registered_player_postgres(
+    tx: &mut Transaction<'_, Postgres>,
+    assertion: &ConsumerUserAssertionClaimV2,
+) -> Result<HumanPlayer, ApiError> {
+    let row =
+        sqlx::query("select record_json from hepta_human_players where player_id=$1 for share")
+            .bind(assertion.player_id)
+            .fetch_optional(&mut **tx)
+            .await
+            .map_err(ApiError::database)?
+            .ok_or_else(|| {
+                ApiError::forbidden(
+                    "human_player_not_registered",
+                    "review access requires a registered human player",
+                )
+            })?;
+    let player: HumanPlayer = decode_record(row.get("record_json"), "human player")?;
+    assert_player_identity(assertion, &player)?;
+    if player.status != HumanPlayerStatus::Active {
+        return Err(ApiError::forbidden(
+            "human_player_not_active",
+            "review access requires an active human player",
+        ));
+    }
+    Ok(player)
+}
+
+fn review_assignment_active(assignment: &ReviewAssignment, now: DateTime<Utc>) -> bool {
+    match assignment.status {
+        ReviewAssignmentStatus::Claimed => assignment.expires_at > now,
+        ReviewAssignmentStatus::Pinned => true,
+        ReviewAssignmentStatus::Consumed | ReviewAssignmentStatus::Expired => false,
+    }
+}
+
+fn latest_review_evaluation<'a>(
+    paper_id: Uuid,
+    evaluations: &'a [PaperEvaluation],
+) -> Option<&'a PaperEvaluation> {
+    evaluations
+        .iter()
+        .filter(|evaluation| evaluation.paper_project_id == paper_id)
+        .max_by_key(|evaluation| (evaluation.version, evaluation.evaluation_id))
+}
+
+fn evaluation_has_open_appeal(
+    evaluation_id: Uuid,
+    appeals: &[PaperAppeal],
+    resolutions: &[PaperAppealResolution],
+) -> bool {
+    appeals.iter().any(|appeal| {
+        appeal.evaluation_id == evaluation_id
+            && !resolutions
+                .iter()
+                .any(|resolution| resolution.appeal_id == appeal.appeal_id)
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn claimable_review_vacancies(
+    paper_id: Uuid,
+    player_id: Uuid,
+    evaluations: &[PaperEvaluation],
+    reproductions: &[PaperReproduction],
+    appeals: &[PaperAppeal],
+    resolutions: &[PaperAppealResolution],
+    assignments: &[ReviewAssignment],
+    now: DateTime<Utc>,
+) -> Result<Vec<ReviewAssignmentVacancy>, ApiError> {
+    let latest = latest_review_evaluation(paper_id, evaluations);
+    let mut vacancies = Vec::new();
+    let panel_round = match latest {
+        None => Some(1),
+        Some(evaluation)
+            if evaluation_has_open_appeal(evaluation.evaluation_id, appeals, resolutions) =>
+        {
+            Some(
+                evaluation
+                    .version
+                    .checked_add(1)
+                    .ok_or_else(|| ApiError::internal("review round overflow"))?,
+            )
+        }
+        Some(_) => None,
+    };
+    if let Some(review_round) = panel_round {
+        let was_prior_panel_member = evaluations.iter().any(|evaluation| {
+            evaluation.paper_project_id == paper_id
+                && evaluation.version < review_round
+                && (evaluation.evaluator_player_id == player_id
+                    || evaluation
+                        .reviewer_attestations
+                        .iter()
+                        .any(|review| review.reviewer_player_id == player_id))
+        });
+        if !was_prior_panel_member {
+            vacancies.extend(
+                [
+                    ReviewAssignmentSlot::Evaluator,
+                    ReviewAssignmentSlot::Reviewer1,
+                    ReviewAssignmentSlot::Reviewer2,
+                ]
+                .into_iter()
+                .map(|slot| ReviewAssignmentVacancy { review_round, slot }),
+            );
+        }
+    }
+    if let Some(evaluation) = latest {
+        let reports: Vec<_> = reproductions
+            .iter()
+            .filter(|report| report.evaluation_id == evaluation.evaluation_id)
+            .collect();
+        let is_panel_member = evaluation.evaluator_player_id == player_id
+            || evaluation
+                .reviewer_attestations
+                .iter()
+                .any(|review| review.reviewer_player_id == player_id);
+        if !is_panel_member
+            && (reports.is_empty()
+                || reports
+                    .iter()
+                    .all(|report| report.reproducer_player_id == player_id))
+        {
+            vacancies.push(ReviewAssignmentVacancy {
+                review_round: evaluation.version,
+                slot: ReviewAssignmentSlot::Reproducer,
+            });
+        }
+    }
+    vacancies.retain(|vacancy| {
+        !assignments.iter().any(|assignment| {
+            assignment.paper_project_id == paper_id
+                && assignment.review_round == vacancy.review_round
+                && assignment.slot == vacancy.slot
+                && review_assignment_active(assignment, now)
+        })
+    });
+    vacancies.sort_by_key(|vacancy| (vacancy.review_round, vacancy.slot.rank()));
+    Ok(vacancies)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn make_review_queue_item(
+    paper: &PaperProject,
+    submission: &JointPaperSubmission,
+    player_id: Uuid,
+    evaluations: &[PaperEvaluation],
+    reproductions: &[PaperReproduction],
+    appeals: &[PaperAppeal],
+    resolutions: &[PaperAppealResolution],
+    assignments: &[ReviewAssignment],
+    now: DateTime<Utc>,
+) -> Result<Option<ReviewQueueItem>, ApiError> {
+    if paper.phase != PaperPhase::SubmissionReady
+        || submission.status != JointSubmissionStatus::SubmissionReady
+        || submission.paper_project_id != paper.paper_project_id
+    {
+        return Ok(None);
+    }
+    let mut my_assignments: Vec<_> = assignments
+        .iter()
+        .filter(|assignment| {
+            assignment.paper_project_id == paper.paper_project_id
+                && assignment.player_id == player_id
+                && review_assignment_active(assignment, now)
+        })
+        .cloned()
+        .collect();
+    my_assignments.sort_by_key(|assignment| (assignment.review_round, assignment.slot.rank()));
+    let open_slots = claimable_review_vacancies(
+        paper.paper_project_id,
+        player_id,
+        evaluations,
+        reproductions,
+        appeals,
+        resolutions,
+        assignments,
+        now,
+    )?;
+    if open_slots.is_empty() && my_assignments.is_empty() {
+        return Ok(None);
+    }
+    let author_count = u32::try_from(submission.paper_bundle.release_candidate.authors.len())
+        .map_err(|_| ApiError::internal("PaperBundle author count overflow"))?;
+    Ok(Some(ReviewQueueItem {
+        paper_project_id: paper.paper_project_id,
+        submission_id: submission.submission_id,
+        challenge_id: paper.challenge_id,
+        title: submission.paper_bundle.release_candidate.title.clone(),
+        abstract_text: submission
+            .paper_bundle
+            .release_candidate
+            .abstract_text
+            .clone(),
+        target_format: submission
+            .paper_bundle
+            .release_candidate
+            .target_format
+            .clone(),
+        release_candidate_hash: submission.release_candidate_hash.clone(),
+        paper_bundle_hash: submission.paper_bundle_hash.clone(),
+        author_count,
+        submitted_at: submission.created_at,
+        my_assignments,
+        open_slots,
+    }))
+}
+
+fn is_author(context: &ReviewPaperContext, player_id: Uuid) -> bool {
+    context
+        .team
+        .members
+        .iter()
+        .any(|member| member.player_id == player_id)
+}
+
+fn has_review_assignment<'a>(
+    paper_id: Uuid,
+    player_id: Uuid,
+    assignments: impl Iterator<Item = &'a ReviewAssignment>,
+    now: DateTime<Utc>,
+) -> bool {
+    assignments.any(|assignment| {
+        assignment.paper_project_id == paper_id
+            && assignment.player_id == player_id
+            && review_assignment_active(assignment, now)
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_review_assignment_claim(
+    context: &ReviewPaperContext,
+    submission: &JointPaperSubmission,
+    player_id: Uuid,
+    requested: ReviewAssignmentVacancy,
+    evaluations: &[PaperEvaluation],
+    reproductions: &[PaperReproduction],
+    appeals: &[PaperAppeal],
+    resolutions: &[PaperAppealResolution],
+    assignments: &[ReviewAssignment],
+    now: DateTime<Utc>,
+) -> Result<(), ApiError> {
+    if context.paper.phase != PaperPhase::SubmissionReady
+        || submission.status != JointSubmissionStatus::SubmissionReady
+        || submission.paper_project_id != context.paper.paper_project_id
+    {
+        return Err(ApiError::conflict(
+            "paper_not_submission_ready",
+            "review assignments require a frozen submission-ready PaperBundle",
+        ));
+    }
+    if is_author(context, player_id) {
+        return Err(ApiError::forbidden(
+            "review_assignment_author_forbidden",
+            "authors cannot claim evaluator, reviewer, or reproducer assignments",
+        ));
+    }
+    if assignments.iter().any(|assignment| {
+        assignment.paper_project_id == context.paper.paper_project_id
+            && assignment.review_round == requested.review_round
+            && assignment.player_id == player_id
+            && review_assignment_active(assignment, now)
+    }) {
+        return Err(ApiError::conflict(
+            "review_actor_already_assigned",
+            "one player may hold only one active review role per Paper round",
+        ));
+    }
+    let vacancies = claimable_review_vacancies(
+        context.paper.paper_project_id,
+        player_id,
+        evaluations,
+        reproductions,
+        appeals,
+        resolutions,
+        assignments,
+        now,
+    )?;
+    if !vacancies.contains(&requested) {
+        return Err(ApiError::conflict(
+            "review_assignment_not_claimable",
+            "the requested Review Raid round and slot are not currently claimable",
+        ));
+    }
+    if requested.slot != ReviewAssignmentSlot::Reproducer && requested.review_round > 1 {
+        let prior_panel: HashSet<_> = evaluations
+            .iter()
+            .filter(|evaluation| {
+                evaluation.paper_project_id == context.paper.paper_project_id
+                    && evaluation.version < requested.review_round
+            })
+            .flat_map(|evaluation| {
+                std::iter::once(evaluation.evaluator_player_id).chain(
+                    evaluation
+                        .reviewer_attestations
+                        .iter()
+                        .map(|review| review.reviewer_player_id),
+                )
+            })
+            .collect();
+        if prior_panel.contains(&player_id) {
+            return Err(ApiError::forbidden(
+                "review_assignment_repanel_not_independent",
+                "Appeal repanel assignments must be disjoint from prior evaluation panels",
+            ));
+        }
+    }
+    if requested.slot == ReviewAssignmentSlot::Reproducer {
+        let evaluation = evaluations
+            .iter()
+            .find(|evaluation| {
+                evaluation.paper_project_id == context.paper.paper_project_id
+                    && evaluation.version == requested.review_round
+            })
+            .ok_or_else(|| {
+                ApiError::conflict(
+                    "review_assignment_evaluation_missing",
+                    "reproducer assignment requires an evaluation in the requested round",
+                )
+            })?;
+        if evaluation.evaluator_player_id == player_id
+            || evaluation
+                .reviewer_attestations
+                .iter()
+                .any(|review| review.reviewer_player_id == player_id)
+        {
+            return Err(ApiError::forbidden(
+                "review_assignment_reproducer_not_independent",
+                "reproducer must be distinct from the assigned evaluation panel",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn enforce_evaluation_assignments<'a>(
+    paper_id: Uuid,
+    submission_id: Uuid,
+    review_round: u64,
+    request: &CreatePaperEvaluationRequest,
+    assignments: impl Iterator<Item = &'a ReviewAssignment>,
+    now: DateTime<Utc>,
+) -> Result<(), ApiError> {
+    let assignments: Vec<_> = assignments
+        .filter(|assignment| {
+            assignment.paper_project_id == paper_id
+                && assignment.submission_id == submission_id
+                && assignment.review_round == review_round
+                && review_assignment_active(assignment, now)
+        })
+        .collect();
+    let assigned = |slot| {
+        assignments
+            .iter()
+            .find(|assignment| assignment.slot == slot)
+            .map(|assignment| assignment.player_id)
+    };
+    let reviewer_ids: HashSet<_> = request
+        .reviewer_attestations
+        .iter()
+        .map(|review| review.reviewer_player_id)
+        .collect();
+    let expected_reviewers = [
+        assigned(ReviewAssignmentSlot::Reviewer1),
+        assigned(ReviewAssignmentSlot::Reviewer2),
+    ];
+    if assigned(ReviewAssignmentSlot::Evaluator) != Some(request.evaluator_player_id)
+        || expected_reviewers.iter().any(Option::is_none)
+        || expected_reviewers
+            .into_iter()
+            .flatten()
+            .collect::<HashSet<_>>()
+            != reviewer_ids
+    {
+        return Err(ApiError::forbidden(
+            "review_assignment_panel_mismatch",
+            "evaluation actor and reviewers must exactly match the claimed Review Raid slots",
+        ));
+    }
+    Ok(())
+}
+
+fn pinned_evaluation_panel_assignment_ids(
+    paper_id: Uuid,
+    submission_id: Uuid,
+    review_round: u64,
+    request: &CreatePaperEvaluationRequest,
+    assignments: &[ReviewAssignment],
+) -> Result<Vec<Uuid>, ApiError> {
+    let evaluator = assignments.iter().find(|assignment| {
+        assignment.paper_project_id == paper_id
+            && assignment.submission_id == submission_id
+            && assignment.review_round == review_round
+            && assignment.slot == ReviewAssignmentSlot::Evaluator
+            && assignment.player_id == request.evaluator_player_id
+            && assignment.status == ReviewAssignmentStatus::Pinned
+            && assignment.pinned_evaluation_id == Some(request.evaluation_id)
+    });
+    let reviewer_ids = request
+        .reviewer_attestations
+        .iter()
+        .map(|review| review.reviewer_player_id)
+        .collect::<HashSet<_>>();
+    let reviewers = [
+        ReviewAssignmentSlot::Reviewer1,
+        ReviewAssignmentSlot::Reviewer2,
+    ]
+    .into_iter()
+    .map(|slot| {
+        assignments.iter().find(|assignment| {
+            assignment.paper_project_id == paper_id
+                && assignment.submission_id == submission_id
+                && assignment.review_round == review_round
+                && assignment.slot == slot
+                && reviewer_ids.contains(&assignment.player_id)
+                && assignment.status == ReviewAssignmentStatus::Pinned
+                && assignment.pinned_evaluation_id == Some(request.evaluation_id)
+        })
+    })
+    .collect::<Vec<_>>();
+    let Some(evaluator) = evaluator else {
+        return Err(ApiError::conflict(
+            "evaluation_draft_assignment_not_pinned",
+            "evaluation draft finalization requires its evaluator assignment to remain pinned",
+        ));
+    };
+    if reviewers.iter().any(|assignment| assignment.is_none()) {
+        return Err(ApiError::conflict(
+            "evaluation_draft_assignment_not_pinned",
+            "evaluation draft finalization requires both attesting reviewer assignments to remain pinned",
+        ));
+    }
+    let mut ids = vec![evaluator.assignment_id];
+    ids.extend(
+        reviewers
+            .into_iter()
+            .flatten()
+            .map(|assignment| assignment.assignment_id),
+    );
+    if ids.len() != 3 || ids.iter().copied().collect::<HashSet<_>>().len() != 3 {
+        return Err(ApiError::internal(
+            "evaluation draft pinned panel assignment identities are not distinct",
+        ));
+    }
+    Ok(ids)
+}
+
+fn enforce_reproducer_assignment<'a>(
+    paper_id: Uuid,
+    submission_id: Uuid,
+    review_round: u64,
+    reproducer_player_id: Uuid,
+    assignments: impl Iterator<Item = &'a ReviewAssignment>,
+    now: DateTime<Utc>,
+) -> Result<(), ApiError> {
+    if !assignments.into_iter().any(|assignment| {
+        assignment.paper_project_id == paper_id
+            && assignment.submission_id == submission_id
+            && assignment.review_round == review_round
+            && assignment.slot == ReviewAssignmentSlot::Reproducer
+            && assignment.player_id == reproducer_player_id
+            && review_assignment_active(assignment, now)
+    }) {
+        return Err(ApiError::forbidden(
+            "review_assignment_reproducer_mismatch",
+            "reproduction actor must match the claimed Review Raid reproducer slot",
+        ));
+    }
+    Ok(())
+}
+
+async fn load_review_assignments_postgres(
+    tx: &mut Transaction<'_, Postgres>,
+    paper_id: Uuid,
+) -> Result<Vec<ReviewAssignment>, ApiError> {
+    let rows = sqlx::query(
+        "select assignment_id,paper_project_id,submission_id,player_id,review_round,slot,pinned_evaluation_id,status,
+                version,record_json,created_at,expires_at,updated_at
+         from hepta_paper_review_assignments
+         where paper_project_id=$1 order by slot, assignment_id for share",
+    )
+    .bind(paper_id)
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(ApiError::database)?;
+    rows.iter().map(decode_review_assignment_row).collect()
+}
+
+fn decode_review_assignment_row(row: &PgRow) -> Result<ReviewAssignment, ApiError> {
+    let assignment: ReviewAssignment = decode_record(row.get("record_json"), "review assignment")?;
+    let version: i64 = row.get("version");
+    let created_at: DateTime<Utc> = row.get("created_at");
+    let expires_at: DateTime<Utc> = row.get("expires_at");
+    let updated_at: DateTime<Utc> = row.get("updated_at");
+    if assignment.schema != REVIEW_ASSIGNMENT_SCHEMA_V1
+        || assignment.assignment_id != row.get::<Uuid, _>("assignment_id")
+        || assignment.paper_project_id != row.get::<Uuid, _>("paper_project_id")
+        || assignment.submission_id != row.get::<Uuid, _>("submission_id")
+        || assignment.player_id != row.get::<Uuid, _>("player_id")
+        || i64::try_from(assignment.review_round).ok() != Some(row.get::<i64, _>("review_round"))
+        || assignment.slot.as_str() != row.get::<String, _>("slot")
+        || assignment.pinned_evaluation_id != row.get::<Option<Uuid>, _>("pinned_evaluation_id")
+        || assignment.status.as_str() != row.get::<String, _>("status")
+        || i64::try_from(assignment.version).ok() != Some(version)
+        || assignment.claimed_at.timestamp_micros() != created_at.timestamp_micros()
+        || assignment.expires_at.timestamp_micros() != expires_at.timestamp_micros()
+        || assignment.updated_at.timestamp_micros() != updated_at.timestamp_micros()
+    {
+        return Err(ApiError::internal(
+            "review assignment record does not match its durable index columns",
+        ));
+    }
+    Ok(assignment)
+}
+
+fn transition_review_assignment(
+    assignment: &mut ReviewAssignment,
+    next_status: ReviewAssignmentStatus,
+    pin_evaluation_id: Option<Uuid>,
+    now: DateTime<Utc>,
+) -> Result<(), ApiError> {
+    let permitted = matches!(
+        (assignment.status, next_status),
+        (
+            ReviewAssignmentStatus::Claimed,
+            ReviewAssignmentStatus::Pinned | ReviewAssignmentStatus::Expired
+        ) | (
+            ReviewAssignmentStatus::Pinned,
+            ReviewAssignmentStatus::Consumed | ReviewAssignmentStatus::Expired
+        )
+    );
+    let pin_valid = if next_status == ReviewAssignmentStatus::Pinned {
+        assignment.pinned_evaluation_id.is_none() && pin_evaluation_id.is_some()
+    } else {
+        pin_evaluation_id.is_none()
+    };
+    if !permitted
+        || !pin_valid
+        || (next_status == ReviewAssignmentStatus::Pinned && assignment.expires_at <= now)
+    {
+        return Err(ApiError::conflict(
+            "review_assignment_lifecycle_conflict",
+            "review assignment is no longer eligible for the requested lifecycle transition",
+        ));
+    }
+    if next_status == ReviewAssignmentStatus::Pinned {
+        assignment.pinned_evaluation_id = pin_evaluation_id;
+    }
+    assignment.status = next_status;
+    assignment.version = assignment
+        .version
+        .checked_add(1)
+        .ok_or_else(|| ApiError::internal("review assignment version overflow"))?;
+    assignment.updated_at = now;
+    Ok(())
+}
+
+fn transition_review_assignment_memory(
+    review: &mut ReviewMemory,
+    assignment_id: Uuid,
+    next_status: ReviewAssignmentStatus,
+    pin_evaluation_id: Option<Uuid>,
+    now: DateTime<Utc>,
+) -> Result<(), ApiError> {
+    let assignment = review
+        .assignments
+        .get_mut(&assignment_id)
+        .ok_or_else(|| ApiError::internal("review assignment disappeared during transition"))?;
+    transition_review_assignment(assignment, next_status, pin_evaluation_id, now)
+}
+
+async fn transition_review_assignment_postgres(
+    tx: &mut Transaction<'_, Postgres>,
+    assignment_id: Uuid,
+    next_status: ReviewAssignmentStatus,
+    pin_evaluation_id: Option<Uuid>,
+    now: DateTime<Utc>,
+) -> Result<(), ApiError> {
+    let row = sqlx::query(
+        "select assignment_id,paper_project_id,submission_id,player_id,review_round,slot,pinned_evaluation_id,status,
+                version,record_json,created_at,expires_at,updated_at
+         from hepta_paper_review_assignments where assignment_id=$1 for update",
+    )
+    .bind(assignment_id)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(ApiError::database)?
+    .ok_or_else(|| ApiError::internal("review assignment disappeared during transition"))?;
+    let mut assignment = decode_review_assignment_row(&row)?;
+    let expected_version = assignment.version;
+    let expected_status = assignment.status;
+    transition_review_assignment(&mut assignment, next_status, pin_evaluation_id, now)?;
+    let record_json = serde_json::to_value(&assignment)
+        .map_err(|error| ApiError::internal(format!("encode review assignment: {error}")))?;
+    let updated = sqlx::query(
+        "update hepta_paper_review_assignments
+         set status=$1,pinned_evaluation_id=$2,version=$3,record_json=$4::jsonb,updated_at=$5
+         where assignment_id=$6 and version=$7 and status=$8",
+    )
+    .bind(assignment.status.as_str())
+    .bind(assignment.pinned_evaluation_id)
+    .bind(i64::try_from(assignment.version).map_err(|_| ApiError::internal("version overflow"))?)
+    .bind(record_json)
+    .bind(now)
+    .bind(assignment_id)
+    .bind(i64::try_from(expected_version).map_err(|_| ApiError::internal("version overflow"))?)
+    .bind(expected_status.as_str())
+    .execute(&mut **tx)
+    .await
+    .map_err(ApiError::database)?;
+    if updated.rows_affected() != 1 {
+        return Err(ApiError::conflict(
+            "review_assignment_lifecycle_conflict",
+            "review assignment changed during its lifecycle transition",
+        ));
+    }
+    Ok(())
+}
+
+fn expire_review_assignments_memory(
+    review: &mut ReviewMemory,
+    paper_id: Uuid,
+    now: DateTime<Utc>,
+) -> Result<(), ApiError> {
+    for assignment in review.assignments.values_mut().filter(|assignment| {
+        assignment.paper_project_id == paper_id
+            && assignment.status == ReviewAssignmentStatus::Claimed
+            && assignment.expires_at <= now
+    }) {
+        transition_review_assignment(assignment, ReviewAssignmentStatus::Expired, None, now)?;
+    }
+    Ok(())
+}
+
+async fn expire_review_assignments_postgres(
+    tx: &mut Transaction<'_, Postgres>,
+    paper_id: Uuid,
+    now: DateTime<Utc>,
+) -> Result<Vec<ReviewAssignment>, ApiError> {
+    let mut assignments = load_review_assignments_postgres(tx, paper_id).await?;
+    for assignment in assignments.iter_mut().filter(|assignment| {
+        assignment.status == ReviewAssignmentStatus::Claimed && assignment.expires_at <= now
+    }) {
+        let expected_version = assignment.version;
+        transition_review_assignment(assignment, ReviewAssignmentStatus::Expired, None, now)?;
+        let record_json = serde_json::to_value(&assignment).map_err(|error| {
+            ApiError::internal(format!("encode expired review assignment: {error}"))
+        })?;
+        let updated = sqlx::query(
+            "update hepta_paper_review_assignments
+             set status='expired',version=$1,record_json=$2::jsonb,updated_at=$3
+             where assignment_id=$4 and version=$5 and status='claimed'",
+        )
+        .bind(
+            i64::try_from(assignment.version)
+                .map_err(|_| ApiError::internal("version overflow"))?,
+        )
+        .bind(record_json)
+        .bind(now)
+        .bind(assignment.assignment_id)
+        .bind(i64::try_from(expected_version).map_err(|_| ApiError::internal("version overflow"))?)
+        .execute(&mut **tx)
+        .await
+        .map_err(ApiError::database)?;
+        if updated.rows_affected() != 1 {
+            return Err(ApiError::conflict(
+                "review_assignment_expiry_conflict",
+                "review assignment changed while expiring its lease",
+            ));
+        }
+    }
+    Ok(assignments)
+}
+
+fn expire_stale_evaluation_drafts_memory(
+    memory: &mut PaperRaidMemory,
+    paper_id: Uuid,
+    now: DateTime<Utc>,
+    operation: &str,
+    idempotency_key: &str,
+) -> Result<(), ApiError> {
+    let mut stale_ids = memory
+        .review
+        .evaluation_drafts
+        .values()
+        .filter(|draft| {
+            draft.paper_project_id == paper_id
+                && draft.status == EvaluationDraftStatus::Open
+                && draft.expires_at <= now
+        })
+        .map(|draft| draft.evaluation_id)
+        .collect::<Vec<_>>();
+    stale_ids.sort_unstable();
+    for evaluation_id in stale_ids {
+        let draft = memory
+            .review
+            .evaluation_drafts
+            .get(&evaluation_id)
+            .cloned()
+            .ok_or_else(|| ApiError::internal("stale evaluation draft disappeared"))?;
+        let attestations = memory
+            .review
+            .draft_attestations
+            .values()
+            .filter(|record| record.evaluation_id == evaluation_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        let assignments = memory
+            .review
+            .assignments
+            .values()
+            .filter(|assignment| assignment.paper_project_id == paper_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        let released_assignment_ids =
+            expirable_pinned_assignment_ids(&draft, &attestations, &assignments)?;
+        let expired = memory
+            .review
+            .evaluation_drafts
+            .get_mut(&evaluation_id)
+            .ok_or_else(|| ApiError::internal("stale evaluation draft disappeared"))?;
+        if !expire_evaluation_draft(expired, now)? {
+            continue;
+        }
+        let expired = expired.clone();
+        for assignment_id in &released_assignment_ids {
+            transition_review_assignment_memory(
+                &mut memory.review,
+                *assignment_id,
+                ReviewAssignmentStatus::Expired,
+                None,
+                expired.expires_at,
+            )?;
+        }
+        push_room_event_memory(
+            memory,
+            operation,
+            &format!("{idempotency_key}:expired-draft:{evaluation_id}"),
+            "hepta.paper_raid.evaluation_draft.expired.v1",
+            paper_id,
+            paper_id,
+            expired.version,
+            json!({
+                "evaluation_id": evaluation_id,
+                "review_round": expired.review_round,
+                "draft_hash": expired.draft_hash,
+                "lease_expires_at": expired.expires_at,
+                "expired_at": expired.expired_at,
+                "released_panel_assignment_ids": released_assignment_ids,
+            }),
+        );
+    }
+    Ok(())
+}
+
+async fn expire_stale_evaluation_drafts_postgres(
+    tx: &mut Transaction<'_, Postgres>,
+    paper_id: Uuid,
+    now: DateTime<Utc>,
+    operation: &str,
+    idempotency_key: &str,
+) -> Result<(), ApiError> {
+    let rows = sqlx::query(
+        "select record_json from hepta_paper_evaluation_drafts
+         where paper_project_id=$1 and status='open' and expires_at <= $2
+         order by evaluation_id for update",
+    )
+    .bind(paper_id)
+    .bind(now)
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(ApiError::database)?;
+    for row in rows {
+        let mut draft = decode_evaluation_draft_row(&row)?;
+        let attestations = load_draft_attestations_postgres(tx, draft.evaluation_id).await?;
+        let assignments = load_review_assignments_postgres(tx, paper_id).await?;
+        let released_assignment_ids =
+            expirable_pinned_assignment_ids(&draft, &attestations, &assignments)?;
+        let expected_version = draft.version;
+        if !expire_evaluation_draft(&mut draft, now)? {
+            continue;
+        }
+        let record_json = serde_json::to_value(&draft)
+            .map_err(|error| ApiError::internal(format!("encode expired draft: {error}")))?;
+        let updated = sqlx::query(
+            "update hepta_paper_evaluation_drafts
+             set status='expired',version=$1,record_json=$2::jsonb,updated_at=$3,expired_at=$3
+             where evaluation_id=$4 and paper_project_id=$5 and status='open' and version=$6",
+        )
+        .bind(i64::try_from(draft.version).map_err(|_| ApiError::internal("version overflow"))?)
+        .bind(record_json)
+        .bind(draft.expires_at)
+        .bind(draft.evaluation_id)
+        .bind(paper_id)
+        .bind(i64::try_from(expected_version).map_err(|_| ApiError::internal("version overflow"))?)
+        .execute(&mut **tx)
+        .await
+        .map_err(ApiError::database)?;
+        if updated.rows_affected() != 1 {
+            return Err(ApiError::conflict(
+                "evaluation_draft_expiry_conflict",
+                "evaluation draft changed concurrently while its lease was expiring",
+            ));
+        }
+        for assignment_id in &released_assignment_ids {
+            transition_review_assignment_postgres(
+                tx,
+                *assignment_id,
+                ReviewAssignmentStatus::Expired,
+                None,
+                draft.expires_at,
+            )
+            .await?;
+        }
+        insert_room_event_postgres(
+            tx,
+            operation,
+            &format!("{idempotency_key}:expired-draft:{}", draft.evaluation_id),
+            "hepta.paper_raid.evaluation_draft.expired.v1",
+            paper_id,
+            paper_id,
+            draft.version,
+            json!({
+                "evaluation_id": draft.evaluation_id,
+                "review_round": draft.review_round,
+                "draft_hash": draft.draft_hash,
+                "lease_expires_at": draft.expires_at,
+                "expired_at": draft.expired_at,
+                "released_panel_assignment_ids": released_assignment_ids,
+            }),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+async fn get_review_queue(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<ReviewQueueItem>>, ApiError> {
+    const PATH: &str = "/v2/hepta/review-queue";
+    let assertion = require_member_read_assertion(&headers, &state, "get_review_queue_v1", PATH)?;
+    let now = Utc::now();
+    if state.pool.is_none() {
+        let memory = state.paper_raid.read().await;
+        active_registered_player_memory(&memory, &assertion)?;
+        let mut items = Vec::new();
+        for submission in memory.submissions.values() {
+            let Some(paper) = memory.papers.get(&submission.paper_project_id) else {
+                continue;
+            };
+            let Some(team) = memory.teams.get(&paper.team_id) else {
+                continue;
+            };
+            if team
+                .members
+                .iter()
+                .any(|member| member.player_id == assertion.player_id)
+            {
+                continue;
+            }
+            let evaluations: Vec<_> = memory
+                .review
+                .evaluations
+                .values()
+                .filter(|record| record.paper_project_id == paper.paper_project_id)
+                .cloned()
+                .collect();
+            let reproductions: Vec<_> = memory
+                .review
+                .reproductions
+                .values()
+                .filter(|record| record.paper_project_id == paper.paper_project_id)
+                .cloned()
+                .collect();
+            let appeals: Vec<_> = memory
+                .review
+                .appeals
+                .values()
+                .filter(|record| record.paper_project_id == paper.paper_project_id)
+                .cloned()
+                .collect();
+            let resolutions: Vec<_> = memory
+                .review
+                .resolutions
+                .values()
+                .filter(|record| record.paper_project_id == paper.paper_project_id)
+                .cloned()
+                .collect();
+            let mut assignments: Vec<_> = memory
+                .review
+                .assignments
+                .values()
+                .filter(|record| record.paper_project_id == paper.paper_project_id)
+                .cloned()
+                .collect();
+            let mut drafts = memory
+                .review
+                .evaluation_drafts
+                .values()
+                .filter(|record| record.paper_project_id == paper.paper_project_id)
+                .cloned()
+                .collect::<Vec<_>>();
+            project_evaluation_draft_expirations(&mut drafts, &mut assignments, now)?;
+            if let Some(item) = make_review_queue_item(
+                paper,
+                submission,
+                assertion.player_id,
+                &evaluations,
+                &reproductions,
+                &appeals,
+                &resolutions,
+                &assignments,
+                now,
+            )? {
+                items.push(item);
+            }
+        }
+        items.sort_by_key(|item| (item.submitted_at, item.paper_project_id));
+        return Ok(Json(items));
+    }
+
+    let pool = state.pool.as_ref().expect("checked PostgreSQL pool");
+    let mut tx = pool.begin().await.map_err(ApiError::database)?;
+    active_registered_player_postgres(&mut tx, &assertion).await?;
+    let assignment_rows = sqlx::query(
+        "select assignment_id,paper_project_id,submission_id,player_id,review_round,slot,pinned_evaluation_id,status,
+                version,record_json,created_at,expires_at,updated_at
+         from hepta_paper_review_assignments order by paper_project_id, slot",
+    )
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(ApiError::database)?;
+    let mut assignments: Vec<ReviewAssignment> = assignment_rows
+        .iter()
+        .map(decode_review_assignment_row)
+        .collect::<Result<_, _>>()?;
+    let draft_rows = sqlx::query(
+        "select record_json from hepta_paper_evaluation_drafts order by paper_project_id, evaluation_id",
+    )
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(ApiError::database)?;
+    let mut drafts = draft_rows
+        .iter()
+        .map(decode_evaluation_draft_row)
+        .collect::<Result<Vec<_>, _>>()?;
+    project_evaluation_draft_expirations(&mut drafts, &mut assignments, now)?;
+    let rows = sqlx::query(
+        "select p.record_json as paper_record, t.record_json as team_record,
+                s.record_json as submission_record
+         from hepta_paper_projects p
+         join hepta_research_teams t on t.team_id=p.team_id
+         join hepta_joint_paper_submissions s on s.paper_project_id=p.paper_project_id
+         where p.phase='submission_ready' and s.status='submission_ready'
+         order by s.created_at, p.paper_project_id",
+    )
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(ApiError::database)?;
+    let mut items = Vec::new();
+    for row in rows {
+        let paper: PaperProject = decode_record(row.get("paper_record"), "paper project")?;
+        let team: ResearchTeam = decode_record(row.get("team_record"), "research team")?;
+        if team
+            .members
+            .iter()
+            .any(|member| member.player_id == assertion.player_id)
+        {
+            continue;
+        }
+        let submission: JointPaperSubmission =
+            decode_record(row.get("submission_record"), "joint paper submission")?;
+        let evaluations = load_review_records(
+            &mut tx,
+            "hepta_paper_evaluations",
+            paper.paper_project_id,
+            "paper evaluation",
+        )
+        .await?;
+        let reproductions = load_review_records(
+            &mut tx,
+            "hepta_paper_reproductions",
+            paper.paper_project_id,
+            "paper reproduction",
+        )
+        .await?;
+        let appeals = load_review_records(
+            &mut tx,
+            "hepta_paper_appeals",
+            paper.paper_project_id,
+            "paper Appeal",
+        )
+        .await?;
+        let resolutions = load_review_records(
+            &mut tx,
+            "hepta_paper_appeal_resolutions",
+            paper.paper_project_id,
+            "Appeal resolution",
+        )
+        .await?;
+        if let Some(item) = make_review_queue_item(
+            &paper,
+            &submission,
+            assertion.player_id,
+            &evaluations,
+            &reproductions,
+            &appeals,
+            &resolutions,
+            &assignments,
+            now,
+        )? {
+            items.push(item);
+        }
+    }
+    tx.commit().await.map_err(ApiError::database)?;
+    Ok(Json(items))
+}
+
+async fn claim_review_assignment(
+    State(state): State<AppState>,
+    Path(paper_id): Path<Uuid>,
+    headers: HeaderMap,
+    Json(request): Json<ClaimReviewAssignmentRequest>,
+) -> Result<(StatusCode, Json<ReviewAssignment>), ApiError> {
+    const OPERATION: &str = "claim_paper_review_assignment_v1";
+    validate_idempotency_key(&request.idempotency_key)?;
+    if request.review_round == 0 {
+        return Err(ApiError::bad_request(
+            "invalid_review_round",
+            "review_round must be positive",
+        ));
+    }
+    let body_hash = request_hash(&request)?;
+    let path = format!("/v2/hepta/papers/{paper_id}/review-assignments");
+    let assertion = require_user_assertion(
+        &headers,
+        &state,
+        OPERATION,
+        "POST",
+        &path,
+        &request.idempotency_key,
+        &body_hash,
+    )?;
+    if assertion.player_id != request.player_id {
+        return Err(ApiError::forbidden(
+            "review_assignment_assertion_mismatch",
+            "Consumer assertion must identify the player claiming the review assignment",
+        ));
+    }
+    let now = Utc::now();
+    if state.pool.is_none() {
+        let mut memory = state.paper_raid.write().await;
+        if let Some(replay) =
+            memory_replay(&memory, OPERATION, &request.idempotency_key, &body_hash)?
+        {
+            return Ok(replay);
+        }
+        let mut next = memory.clone();
+        active_registered_player_memory(&next, &assertion)?;
+        expire_stale_evaluation_drafts_memory(
+            &mut next,
+            paper_id,
+            now,
+            OPERATION,
+            &request.idempotency_key,
+        )?;
+        expire_review_assignments_memory(&mut next.review, paper_id, now)?;
+        let context = review_context_memory(&next, paper_id)?;
+        let submission = next
+            .submissions
+            .values()
+            .find(|submission| {
+                submission.paper_project_id == paper_id
+                    && submission.status == JointSubmissionStatus::SubmissionReady
+            })
+            .cloned()
+            .ok_or_else(|| {
+                ApiError::conflict(
+                    "paper_not_submission_ready",
+                    "review assignments require a frozen submission-ready PaperBundle",
+                )
+            })?;
+        if next.review.assignments.contains_key(&request.assignment_id) {
+            return Err(ApiError::conflict(
+                "review_assignment_exists",
+                "assignment_id already exists",
+            ));
+        }
+        let evaluations: Vec<_> = next.review.evaluations.values().cloned().collect();
+        let reproductions: Vec<_> = next.review.reproductions.values().cloned().collect();
+        let appeals: Vec<_> = next.review.appeals.values().cloned().collect();
+        let resolutions: Vec<_> = next.review.resolutions.values().cloned().collect();
+        let assignments: Vec<_> = next.review.assignments.values().cloned().collect();
+        let requested = ReviewAssignmentVacancy {
+            review_round: request.review_round,
+            slot: request.slot,
+        };
+        validate_review_assignment_claim(
+            &context,
+            &submission,
+            request.player_id,
+            requested,
+            &evaluations,
+            &reproductions,
+            &appeals,
+            &resolutions,
+            &assignments,
+            now,
+        )?;
+        let expires_at = now
+            .checked_add_signed(chrono::Duration::hours(REVIEW_ASSIGNMENT_TTL_HOURS))
+            .ok_or_else(|| ApiError::internal("review assignment expiry overflow"))?;
+        let assignment = ReviewAssignment {
+            schema: REVIEW_ASSIGNMENT_SCHEMA_V1.to_string(),
+            assignment_id: request.assignment_id,
+            paper_project_id: paper_id,
+            submission_id: submission.submission_id,
+            player_id: request.player_id,
+            review_round: request.review_round,
+            slot: request.slot,
+            pinned_evaluation_id: None,
+            status: ReviewAssignmentStatus::Claimed,
+            version: 1,
+            claimed_at: now,
+            expires_at,
+            updated_at: now,
+        };
+        next.review
+            .assignments
+            .insert(assignment.assignment_id, assignment.clone());
+        push_room_event_memory(
+            &mut next,
+            OPERATION,
+            &request.idempotency_key,
+            "hepta.paper_raid.review_assignment.claimed.v1",
+            paper_id,
+            paper_id,
+            1,
+            json!({"assignment_id":assignment.assignment_id,"review_round":assignment.review_round,"slot":assignment.slot,"expires_at":assignment.expires_at}),
+        );
+        memory_remember(
+            &mut next,
+            OPERATION,
+            &request.idempotency_key,
+            body_hash,
+            StatusCode::CREATED,
+            &assignment,
+        )?;
+        *memory = next;
+        return Ok((StatusCode::CREATED, Json(assignment)));
+    }
+
+    let (mut tx, replay) =
+        begin_postgres_idempotent(&state, OPERATION, &request.idempotency_key, &body_hash).await?;
+    if let Some(replay) = replay {
+        return decode_stored(replay);
+    }
+    sqlx::query(
+        "select paper_project_id from hepta_paper_projects where paper_project_id=$1 for update",
+    )
+    .bind(paper_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(ApiError::database)?
+    .ok_or_else(|| {
+        ApiError::not_found("paper_project_not_found", "paper project does not exist")
+    })?;
+    active_registered_player_postgres(&mut tx, &assertion).await?;
+    expire_stale_evaluation_drafts_postgres(
+        &mut tx,
+        paper_id,
+        now,
+        OPERATION,
+        &request.idempotency_key,
+    )
+    .await?;
+    let context = review_context_postgres(&mut tx, paper_id).await?;
+    let submission_row = sqlx::query(
+        "select record_json from hepta_joint_paper_submissions
+         where paper_project_id=$1 and status='submission_ready' for share",
+    )
+    .bind(paper_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(ApiError::database)?
+    .ok_or_else(|| {
+        ApiError::conflict(
+            "paper_not_submission_ready",
+            "review assignments require a frozen submission-ready PaperBundle",
+        )
+    })?;
+    let submission: JointPaperSubmission =
+        decode_record(submission_row.get("record_json"), "joint paper submission")?;
+    let assignments = expire_review_assignments_postgres(&mut tx, paper_id, now).await?;
+    let evaluations = load_review_records(
+        &mut tx,
+        "hepta_paper_evaluations",
+        paper_id,
+        "paper evaluation",
+    )
+    .await?;
+    let reproductions = load_review_records(
+        &mut tx,
+        "hepta_paper_reproductions",
+        paper_id,
+        "paper reproduction",
+    )
+    .await?;
+    let appeals =
+        load_review_records(&mut tx, "hepta_paper_appeals", paper_id, "paper Appeal").await?;
+    let resolutions = load_review_records(
+        &mut tx,
+        "hepta_paper_appeal_resolutions",
+        paper_id,
+        "Appeal resolution",
+    )
+    .await?;
+    validate_review_assignment_claim(
+        &context,
+        &submission,
+        request.player_id,
+        ReviewAssignmentVacancy {
+            review_round: request.review_round,
+            slot: request.slot,
+        },
+        &evaluations,
+        &reproductions,
+        &appeals,
+        &resolutions,
+        &assignments,
+        now,
+    )?;
+    let expires_at = now
+        .checked_add_signed(chrono::Duration::hours(REVIEW_ASSIGNMENT_TTL_HOURS))
+        .ok_or_else(|| ApiError::internal("review assignment expiry overflow"))?;
+    let assignment = ReviewAssignment {
+        schema: REVIEW_ASSIGNMENT_SCHEMA_V1.to_string(),
+        assignment_id: request.assignment_id,
+        paper_project_id: paper_id,
+        submission_id: submission.submission_id,
+        player_id: request.player_id,
+        review_round: request.review_round,
+        slot: request.slot,
+        pinned_evaluation_id: None,
+        status: ReviewAssignmentStatus::Claimed,
+        version: 1,
+        claimed_at: now,
+        expires_at,
+        updated_at: now,
+    };
+    let assignment_json = serde_json::to_value(&assignment)
+        .map_err(|error| ApiError::internal(format!("encode review assignment: {error}")))?;
+    let inserted = sqlx::query(
+        "insert into hepta_paper_review_assignments
+         (assignment_id,paper_project_id,submission_id,player_id,review_round,slot,
+          pinned_evaluation_id,status,version,record_json,created_at,expires_at,updated_at)
+         values ($1,$2,$3,$4,$5,$6,null,'claimed',1,$7::jsonb,$8,$9,$8)",
+    )
+    .bind(assignment.assignment_id)
+    .bind(assignment.paper_project_id)
+    .bind(assignment.submission_id)
+    .bind(assignment.player_id)
+    .bind(
+        i64::try_from(assignment.review_round)
+            .map_err(|_| ApiError::internal("review round overflow"))?,
+    )
+    .bind(assignment.slot.as_str())
+    .bind(assignment_json)
+    .bind(assignment.claimed_at)
+    .bind(assignment.expires_at)
+    .execute(&mut *tx)
+    .await;
+    if let Err(error) = inserted {
+        if error
+            .as_database_error()
+            .is_some_and(|database| database.is_unique_violation())
+        {
+            return Err(ApiError::conflict(
+                "review_assignment_conflict",
+                "assignment identity, player, or slot was claimed concurrently",
+            ));
+        }
+        return Err(ApiError::database(error));
+    }
+    insert_room_event_postgres(
+        &mut tx,
+        OPERATION,
+        &request.idempotency_key,
+        "hepta.paper_raid.review_assignment.claimed.v1",
+        paper_id,
+        paper_id,
+        1,
+        json!({"assignment_id":assignment.assignment_id,"review_round":assignment.review_round,"slot":assignment.slot,"expires_at":assignment.expires_at}),
+    )
+    .await?;
+    finish_postgres_idempotent(
+        &mut tx,
+        OPERATION,
+        &request.idempotency_key,
+        &body_hash,
+        Some(assignment.assignment_id),
+        StatusCode::CREATED,
+        &assignment,
+    )
+    .await?;
+    tx.commit().await.map_err(ApiError::database)?;
+    Ok((StatusCode::CREATED, Json(assignment)))
+}
+
+async fn get_paper_review_bundle(
+    State(state): State<AppState>,
+    Path(paper_id): Path<Uuid>,
+    headers: HeaderMap,
+) -> Result<Json<PaperReviewBundleV1>, ApiError> {
+    let path = format!("/v2/hepta/papers/{paper_id}/review-bundle");
+    let assertion =
+        require_member_read_assertion(&headers, &state, "get_paper_review_bundle_v1", &path)?;
+    let now = Utc::now();
+    if state.pool.is_none() {
+        let memory = state.paper_raid.read().await;
+        active_registered_player_memory(&memory, &assertion)?;
+        let context = review_context_memory(&memory, paper_id)?;
+        let submission = memory
+            .submissions
+            .values()
+            .find(|submission| {
+                submission.paper_project_id == paper_id
+                    && submission.status == JointSubmissionStatus::SubmissionReady
+            })
+            .cloned()
+            .ok_or_else(|| {
+                ApiError::not_found(
+                    "review_bundle_not_found",
+                    "submission-ready review bundle does not exist",
+                )
+            })?;
+        let mut assignments = memory
+            .review
+            .assignments
+            .values()
+            .filter(|record| record.paper_project_id == paper_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut drafts = memory
+            .review
+            .evaluation_drafts
+            .values()
+            .filter(|record| record.paper_project_id == paper_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        project_evaluation_draft_expirations(&mut drafts, &mut assignments, now)?;
+        if !is_author(&context, assertion.player_id)
+            && !has_review_assignment(paper_id, assertion.player_id, assignments.iter(), now)
+        {
+            return Err(ApiError::forbidden(
+                "review_bundle_access_denied",
+                "review bundle is limited to authors and assigned review actors",
+            ));
+        }
+        return Ok(Json(make_paper_review_bundle(
+            submission,
+            assertion.player_id,
+            assignments,
+            drafts,
+            memory
+                .review
+                .draft_attestations
+                .values()
+                .filter(|record| record.paper_project_id == paper_id)
+                .cloned()
+                .collect(),
+            memory
+                .review
+                .evaluations
+                .values()
+                .filter(|record| record.paper_project_id == paper_id)
+                .cloned()
+                .collect(),
+            now,
+        )?));
+    }
+
+    let pool = state.pool.as_ref().expect("checked PostgreSQL pool");
+    let mut tx = pool.begin().await.map_err(ApiError::database)?;
+    active_registered_player_postgres(&mut tx, &assertion).await?;
+    let context = review_context_postgres(&mut tx, paper_id).await?;
+    let submission_row = sqlx::query(
+        "select record_json from hepta_joint_paper_submissions
+         where paper_project_id=$1 and status='submission_ready' for share",
+    )
+    .bind(paper_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(ApiError::database)?
+    .ok_or_else(|| {
+        ApiError::not_found(
+            "review_bundle_not_found",
+            "submission-ready review bundle does not exist",
+        )
+    })?;
+    let submission: JointPaperSubmission =
+        decode_record(submission_row.get("record_json"), "joint paper submission")?;
+    let mut assignments = load_review_assignments_postgres(&mut tx, paper_id).await?;
+    let mut drafts = load_review_records(
+        &mut tx,
+        "hepta_paper_evaluation_drafts",
+        paper_id,
+        "evaluation draft",
+    )
+    .await?;
+    project_evaluation_draft_expirations(&mut drafts, &mut assignments, now)?;
+    if !is_author(&context, assertion.player_id)
+        && !has_review_assignment(paper_id, assertion.player_id, assignments.iter(), now)
+    {
+        return Err(ApiError::forbidden(
+            "review_bundle_access_denied",
+            "review bundle is limited to authors and assigned review actors",
+        ));
+    }
+    let draft_attestations = load_review_records(
+        &mut tx,
+        "hepta_paper_evaluation_draft_attestations",
+        paper_id,
+        "evaluation draft attestation",
+    )
+    .await?;
+    let evaluations = load_review_records(
+        &mut tx,
+        "hepta_paper_evaluations",
+        paper_id,
+        "paper evaluation",
+    )
+    .await?;
+    let response = make_paper_review_bundle(
+        submission,
+        assertion.player_id,
+        assignments,
+        drafts,
+        draft_attestations,
+        evaluations,
+        now,
+    )?;
+    tx.commit().await.map_err(ApiError::database)?;
+    Ok(Json(response))
+}
+
+fn make_paper_review_bundle(
+    submission: JointPaperSubmission,
+    player_id: Uuid,
+    mut assignments: Vec<ReviewAssignment>,
+    mut drafts: Vec<PaperEvaluationDraft>,
+    draft_attestations: Vec<EvaluationDraftAttestation>,
+    evaluations: Vec<PaperEvaluation>,
+    now: DateTime<Utc>,
+) -> Result<PaperReviewBundleV1, ApiError> {
+    project_evaluation_draft_expirations(&mut drafts, &mut assignments, now)?;
+    let mut my_assignments = assignments
+        .iter()
+        .filter(|assignment| {
+            assignment.submission_id == submission.submission_id
+                && assignment.player_id == player_id
+                && review_assignment_active(assignment, now)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    my_assignments.sort_by_key(|assignment| (assignment.review_round, assignment.slot.rank()));
+    let active_rounds = my_assignments
+        .iter()
+        .map(|assignment| assignment.review_round)
+        .collect::<HashSet<_>>();
+    let draft = drafts
+        .into_iter()
+        .filter(|draft| {
+            draft.submission_id == submission.submission_id
+                && active_rounds.contains(&draft.review_round)
+        })
+        .max_by_key(|draft| (draft.review_round, draft.created_at, draft.evaluation_id));
+    let evaluation_quorum = draft
+        .map(|draft| {
+            let attestations = draft_attestations
+                .iter()
+                .filter(|record| record.evaluation_id == draft.evaluation_id)
+                .cloned()
+                .collect();
+            evaluation_draft_quorum(draft, attestations, &assignments, now)
+        })
+        .transpose()?;
+    let evaluation = evaluations
+        .into_iter()
+        .filter(|evaluation| {
+            evaluation.submission_id == submission.submission_id
+                && active_rounds.contains(&evaluation.version)
+        })
+        .max_by_key(|evaluation| {
+            (
+                evaluation.version,
+                evaluation.created_at,
+                evaluation.evaluation_id,
+            )
+        });
+    Ok(PaperReviewBundleV1 {
+        submission,
+        my_assignments,
+        evaluation_quorum,
+        evaluation,
     })
 }
 
@@ -912,6 +2773,18 @@ fn contribution_ledger_hash(
     )
 }
 
+fn milestone_contribution_points(artifact_count: usize, review_count: usize) -> u64 {
+    (if artifact_count == 0 {
+        0
+    } else {
+        ACCEPTED_ARTIFACT_MILESTONE_XP
+    }) + if review_count == 0 {
+        0
+    } else {
+        ACCEPTED_REVIEW_MILESTONE_XP
+    }
+}
+
 fn contribution_entry_skeletons(
     context: &ReviewPaperContext,
     request_entries: &[CreditContributionInput],
@@ -966,16 +2839,9 @@ fn contribution_entry_skeletons(
             &input.accepted_section_review_ids,
             256,
         )?;
-        let points = u64::try_from(artifacts.len())
-            .map_err(|_| ApiError::internal("artifact count overflow"))?
-            .checked_mul(100)
-            .and_then(|base| {
-                u64::try_from(reviews.len())
-                    .ok()
-                    .and_then(|count| count.checked_mul(150))
-                    .and_then(|extra| base.checked_add(extra))
-            })
-            .ok_or_else(|| ApiError::internal("contribution score overflow"))?;
+        // Contribution points are milestone-capped. Splitting one logical
+        // artifact or review into many records must never mint more XP.
+        let points = milestone_contribution_points(artifacts.len(), reviews.len());
         entries.push(CreditContribution {
             player_id: input.player_id,
             credit_roles: roles,
@@ -1385,12 +3251,79 @@ async fn load_contribution_ledger_postgres(
     decode_record(row.get("record_json"), "contribution ledger")
 }
 
+fn draft_request_as_evaluation_request(
+    request: &CreatePaperEvaluationDraftRequest,
+    reviewer_attestations: Vec<ReviewAttestationRequest>,
+) -> CreatePaperEvaluationRequest {
+    CreatePaperEvaluationRequest {
+        evaluation_id: request.evaluation_id,
+        submission_id: request.submission_id,
+        supersedes_evaluation_id: request.supersedes_evaluation_id,
+        release_candidate_hash: request.release_candidate_hash.clone(),
+        paper_bundle_hash: request.paper_bundle_hash.clone(),
+        tolerance_policy: request.tolerance_policy.clone(),
+        reference_metrics_micros: request.reference_metrics_micros.clone(),
+        score_components: request.score_components.clone(),
+        hard_gates: request.hard_gates.clone(),
+        evaluator_player_id: request.evaluator_player_id,
+        evaluator_signing_key_id: request.evaluator_signing_key_id.clone(),
+        evaluator_signing_public_key: request.evaluator_signing_public_key.clone(),
+        evaluator_signing_public_key_hash: request.evaluator_signing_public_key_hash.clone(),
+        evaluator_coi_attestation_hash: request.evaluator_coi_attestation_hash.clone(),
+        evaluator_signed_at_unix: request.evaluator_signed_at_unix,
+        evaluator_signature: request.evaluator_signature.clone(),
+        reviewer_attestations,
+        idempotency_key: request.idempotency_key.clone(),
+    }
+}
+
+fn stored_draft_as_evaluation_request(
+    draft: &PaperEvaluationDraft,
+    attestations: &[EvaluationDraftAttestation],
+    idempotency_key: &str,
+) -> CreatePaperEvaluationRequest {
+    CreatePaperEvaluationRequest {
+        evaluation_id: draft.evaluation_id,
+        submission_id: draft.submission_id,
+        supersedes_evaluation_id: draft.supersedes_evaluation_id,
+        release_candidate_hash: draft.release_candidate_hash.clone(),
+        paper_bundle_hash: draft.paper_bundle_hash.clone(),
+        tolerance_policy: draft.tolerance_policy.clone(),
+        reference_metrics_micros: draft.reference_metrics_micros.clone(),
+        score_components: draft.paper_score.components.clone(),
+        hard_gates: draft.paper_score.hard_gates.clone(),
+        evaluator_player_id: draft.evaluator_player_id,
+        evaluator_signing_key_id: draft.evaluator_signing_key_id.clone(),
+        evaluator_signing_public_key: draft.evaluator_signing_public_key.clone(),
+        evaluator_signing_public_key_hash: draft.evaluator_signing_public_key_hash.clone(),
+        evaluator_coi_attestation_hash: draft.evaluator_coi_attestation_hash.clone(),
+        evaluator_signed_at_unix: draft.evaluator_signed_at_unix,
+        evaluator_signature: draft.evaluator_signature.clone(),
+        reviewer_attestations: attestations
+            .iter()
+            .map(|stored| ReviewAttestationRequest {
+                attestation_id: stored.attestation.attestation_id,
+                reviewer_player_id: stored.attestation.reviewer_player_id,
+                verdict: stored.attestation.verdict.clone(),
+                signing_key_id: stored.attestation.signing_key_id.clone(),
+                signing_public_key: stored.attestation.signing_public_key.clone(),
+                signing_public_key_hash: stored.attestation.signing_public_key_hash.clone(),
+                coi_attestation_hash: stored.attestation.coi_attestation_hash.clone(),
+                signed_at_unix: stored.attestation.signed_at_unix,
+                signature: stored.attestation.signature.clone(),
+            })
+            .collect(),
+        idempotency_key: idempotency_key.to_string(),
+    }
+}
+
 fn validate_evaluation_context(
     context: &ReviewPaperContext,
     submission: &JointPaperSubmission,
     ledger: &ContributionLedger,
     request: &CreatePaperEvaluationRequest,
     now: DateTime<Utc>,
+    require_panel: bool,
 ) -> Result<PreparedEvaluation, ApiError> {
     if context.paper.phase != PaperPhase::SubmissionReady
         || submission.status != JointSubmissionStatus::SubmissionReady
@@ -1447,7 +3380,7 @@ fn validate_evaluation_context(
             ));
         }
     }
-    if request.reviewer_attestations.len() != 2 {
+    if require_panel && request.reviewer_attestations.len() != 2 {
         return Err(ApiError::bad_request(
             "review_panel_size_invalid",
             "evaluation requires exactly two independent reviewer attestations",
@@ -1464,10 +3397,16 @@ fn validate_evaluation_context(
         .iter()
         .map(|review| review.reviewer_player_id)
         .collect();
-    if reviewers.len() != 2
-        || reviewers.contains(&request.evaluator_player_id)
-        || authors.contains(&request.evaluator_player_id)
-        || reviewers.iter().any(|reviewer| authors.contains(reviewer))
+    if authors.contains(&request.evaluator_player_id) {
+        return Err(ApiError::forbidden(
+            "review_panel_not_independent",
+            "evaluator must be a non-author",
+        ));
+    }
+    if require_panel
+        && (reviewers.len() != 2
+            || reviewers.contains(&request.evaluator_player_id)
+            || reviewers.iter().any(|reviewer| authors.contains(reviewer)))
     {
         return Err(ApiError::forbidden(
             "review_panel_not_independent",
@@ -1640,16 +3579,25 @@ fn make_raid_score(
     ledger: &ContributionLedger,
     now: DateTime<Utc>,
 ) -> Result<RaidScore, ApiError> {
+    let quality_gate_passed =
+        evaluation.status == PaperEvaluationStatus::Accepted && evaluation.paper_score.eligible;
     let player_xp: BTreeMap<_, _> = ledger
         .entries
         .iter()
-        .map(|entry| (entry.player_id, entry.contribution_points))
-        .collect();
+        .map(|entry| {
+            let points = if quality_gate_passed {
+                ACCEPTED_AUTHOR_RAID_BASE_XP
+                    .checked_add(entry.contribution_points)
+                    .ok_or_else(|| ApiError::internal("player XP overflow"))?
+            } else {
+                0
+            };
+            Ok((entry.player_id, points))
+        })
+        .collect::<Result<BTreeMap<_, _>, ApiError>>()?;
     let team_xp = player_xp
         .values()
-        .try_fold(1_000_u64, |total, points| {
-            total.checked_add(*points).ok_or(())
-        })
+        .try_fold(0_u64, |total, points| total.checked_add(*points).ok_or(()))
         .map_err(|_| ApiError::internal("raid score overflow"))?;
     let score_hash = record_hash(
         &json!({
@@ -1847,6 +3795,1664 @@ async fn validate_supersession_postgres(
         .ok_or_else(|| ApiError::internal("evaluation version overflow"))
 }
 
+fn evaluation_draft_hash(draft: &PaperEvaluationDraft) -> Result<String, ApiError> {
+    let immutable_record = match draft.schema.as_str() {
+        EVALUATION_DRAFT_SCHEMA_V1 => json!({
+            "schema":EVALUATION_DRAFT_SCHEMA_V1,
+            "evaluation_id":draft.evaluation_id,
+            "paper_project_id":draft.paper_project_id,
+            "submission_id":draft.submission_id,
+            "review_round":draft.review_round,
+            "supersedes_evaluation_id":draft.supersedes_evaluation_id,
+            "release_candidate_hash":draft.release_candidate_hash,
+            "paper_bundle_hash":draft.paper_bundle_hash,
+            "tolerance_policy":draft.tolerance_policy,
+            "tolerance_policy_hash":draft.tolerance_policy_hash,
+            "reference_metrics_micros":draft.reference_metrics_micros,
+            "paper_score":draft.paper_score,
+            "evaluator_player_id":draft.evaluator_player_id,
+            "evaluator_signing_key_id":draft.evaluator_signing_key_id,
+            "evaluator_signing_public_key":draft.evaluator_signing_public_key,
+            "evaluator_signing_public_key_hash":draft.evaluator_signing_public_key_hash,
+            "evaluator_coi_attestation_hash":draft.evaluator_coi_attestation_hash,
+            "evaluator_signed_at_unix":draft.evaluator_signed_at_unix,
+            "evaluator_signature":draft.evaluator_signature,
+            "evaluation_signing_hash":draft.evaluation_signing_hash,
+        }),
+        EVALUATION_DRAFT_SCHEMA_V2 => json!({
+            "schema":EVALUATION_DRAFT_SCHEMA_V2,
+            "evaluation_id":draft.evaluation_id,
+            "paper_project_id":draft.paper_project_id,
+            "submission_id":draft.submission_id,
+            "review_round":draft.review_round,
+            "supersedes_evaluation_id":draft.supersedes_evaluation_id,
+            "release_candidate_hash":draft.release_candidate_hash,
+            "paper_bundle_hash":draft.paper_bundle_hash,
+            "tolerance_policy":draft.tolerance_policy,
+            "tolerance_policy_hash":draft.tolerance_policy_hash,
+            "reference_metrics_micros":draft.reference_metrics_micros,
+            "paper_score":draft.paper_score,
+            "evaluator_player_id":draft.evaluator_player_id,
+            "evaluator_signing_key_id":draft.evaluator_signing_key_id,
+            "evaluator_signing_public_key":draft.evaluator_signing_public_key,
+            "evaluator_signing_public_key_hash":draft.evaluator_signing_public_key_hash,
+            "evaluator_coi_attestation_hash":draft.evaluator_coi_attestation_hash,
+            "evaluator_signed_at_unix":draft.evaluator_signed_at_unix,
+            "evaluator_signature":draft.evaluator_signature,
+            "evaluation_signing_hash":draft.evaluation_signing_hash,
+            "expires_at":draft.expires_at,
+        }),
+        _ => {
+            return Err(ApiError::internal(
+                "evaluation draft uses an unsupported schema version",
+            ));
+        }
+    };
+    record_hash(&immutable_record, "evaluation draft")
+}
+
+fn make_evaluation_draft(
+    context: &ReviewPaperContext,
+    request: &CreatePaperEvaluationDraftRequest,
+    prepared: PreparedEvaluation,
+    review_round: u64,
+    now: DateTime<Utc>,
+) -> Result<PaperEvaluationDraft, ApiError> {
+    let expires_at = now
+        .checked_add_signed(chrono::Duration::hours(EVALUATION_DRAFT_LEASE_HOURS))
+        .ok_or_else(|| ApiError::internal("evaluation draft lease expiry overflow"))?;
+    let mut draft = PaperEvaluationDraft {
+        schema: EVALUATION_DRAFT_SCHEMA_V2.to_string(),
+        evaluation_id: request.evaluation_id,
+        paper_project_id: context.paper.paper_project_id,
+        submission_id: request.submission_id,
+        review_round,
+        supersedes_evaluation_id: request.supersedes_evaluation_id,
+        release_candidate_hash: request.release_candidate_hash.clone(),
+        paper_bundle_hash: request.paper_bundle_hash.clone(),
+        tolerance_policy: request.tolerance_policy.clone(),
+        tolerance_policy_hash: prepared.tolerance_policy_hash,
+        reference_metrics_micros: request.reference_metrics_micros.clone(),
+        paper_score: prepared.paper_score,
+        evaluator_player_id: request.evaluator_player_id,
+        evaluator_signing_key_id: request.evaluator_signing_key_id.clone(),
+        evaluator_signing_public_key: request.evaluator_signing_public_key.clone(),
+        evaluator_signing_public_key_hash: request.evaluator_signing_public_key_hash.clone(),
+        evaluator_coi_attestation_hash: request.evaluator_coi_attestation_hash.clone(),
+        evaluator_signed_at_unix: request.evaluator_signed_at_unix,
+        evaluator_signature: request.evaluator_signature.clone(),
+        evaluation_signing_hash: prepared.evaluation_signing_hash,
+        draft_hash: String::new(),
+        status: EvaluationDraftStatus::Open,
+        version: 1,
+        finalized_evaluation_id: None,
+        created_at: now,
+        expires_at,
+        updated_at: now,
+        finalized_at: None,
+        expired_at: None,
+    };
+    draft.draft_hash = evaluation_draft_hash(&draft)?;
+    Ok(draft)
+}
+
+fn ensure_evaluation_draft_lease_live(
+    draft: &PaperEvaluationDraft,
+    now: DateTime<Utc>,
+) -> Result<(), ApiError> {
+    match draft.status {
+        EvaluationDraftStatus::Open if draft.expires_at > now => Ok(()),
+        EvaluationDraftStatus::Open | EvaluationDraftStatus::Expired => Err(ApiError::conflict(
+            "evaluation_draft_lease_expired",
+            "evaluation draft lease expired; its pinned assignments must be reassigned through the Review Queue",
+        )),
+        EvaluationDraftStatus::Finalized => Err(ApiError::conflict(
+            "evaluation_draft_finalized",
+            "finalized evaluation drafts are immutable",
+        )),
+    }
+}
+
+fn expire_evaluation_draft(
+    draft: &mut PaperEvaluationDraft,
+    now: DateTime<Utc>,
+) -> Result<bool, ApiError> {
+    if draft.status != EvaluationDraftStatus::Open || draft.expires_at > now {
+        return Ok(false);
+    }
+    draft.status = EvaluationDraftStatus::Expired;
+    draft.version = draft
+        .version
+        .checked_add(1)
+        .ok_or_else(|| ApiError::internal("evaluation draft version overflow"))?;
+    draft.updated_at = draft.expires_at;
+    draft.expired_at = Some(draft.expires_at);
+    Ok(true)
+}
+
+fn expirable_pinned_assignment_ids(
+    draft: &PaperEvaluationDraft,
+    attestations: &[EvaluationDraftAttestation],
+    assignments: &[ReviewAssignment],
+) -> Result<Vec<Uuid>, ApiError> {
+    let mut expected =
+        HashSet::from([(ReviewAssignmentSlot::Evaluator, draft.evaluator_player_id)]);
+    for record in attestations {
+        if record.evaluation_id != draft.evaluation_id
+            || record.paper_project_id != draft.paper_project_id
+            || record.submission_id != draft.submission_id
+            || record.review_round != draft.review_round
+            || record.draft_hash != draft.draft_hash
+            || record.attestation.attestation_id != record.attestation_id
+            || record.attestation.evaluation_id != draft.evaluation_id
+            || record.attestation.evaluation_signing_hash != draft.evaluation_signing_hash
+            || !matches!(
+                record.slot,
+                ReviewAssignmentSlot::Reviewer1 | ReviewAssignmentSlot::Reviewer2
+            )
+            || !expected.insert((record.slot, record.attestation.reviewer_player_id))
+        {
+            return Err(ApiError::internal(
+                "expired evaluation draft has inconsistent immutable attestations",
+            ));
+        }
+    }
+
+    let pinned = assignments
+        .iter()
+        .filter(|assignment| {
+            assignment.paper_project_id == draft.paper_project_id
+                && assignment.submission_id == draft.submission_id
+                && assignment.review_round == draft.review_round
+                && assignment.status == ReviewAssignmentStatus::Pinned
+                && assignment.pinned_evaluation_id == Some(draft.evaluation_id)
+        })
+        .collect::<Vec<_>>();
+    if pinned.len() != expected.len()
+        || pinned
+            .iter()
+            .any(|assignment| !expected.contains(&(assignment.slot, assignment.player_id)))
+        || expected.iter().any(|(slot, player_id)| {
+            !pinned
+                .iter()
+                .any(|assignment| assignment.slot == *slot && assignment.player_id == *player_id)
+        })
+    {
+        return Err(ApiError::internal(
+            "expired evaluation draft does not exactly own its pinned panel assignments",
+        ));
+    }
+    let mut ids = pinned
+        .into_iter()
+        .map(|assignment| assignment.assignment_id)
+        .collect::<Vec<_>>();
+    ids.sort_unstable();
+    Ok(ids)
+}
+
+fn project_evaluation_draft_expirations(
+    drafts: &mut [PaperEvaluationDraft],
+    assignments: &mut [ReviewAssignment],
+    now: DateTime<Utc>,
+) -> Result<(), ApiError> {
+    let mut stale_scopes = HashMap::new();
+    for draft in drafts {
+        if expire_evaluation_draft(draft, now)? {
+            stale_scopes.insert(
+                (
+                    draft.paper_project_id,
+                    draft.submission_id,
+                    draft.review_round,
+                ),
+                (draft.evaluation_id, draft.expires_at),
+            );
+        }
+    }
+    for assignment in assignments.iter_mut().filter(|assignment| {
+        assignment.status == ReviewAssignmentStatus::Pinned
+            && stale_scopes
+                .get(&(
+                    assignment.paper_project_id,
+                    assignment.submission_id,
+                    assignment.review_round,
+                ))
+                .is_some_and(|(evaluation_id, _)| {
+                    assignment.pinned_evaluation_id == Some(*evaluation_id)
+                })
+    }) {
+        let expired_at = stale_scopes
+            .get(&(
+                assignment.paper_project_id,
+                assignment.submission_id,
+                assignment.review_round,
+            ))
+            .map(|(_, expired_at)| *expired_at)
+            .ok_or_else(|| ApiError::internal("projected draft expiry scope disappeared"))?;
+        transition_review_assignment(
+            assignment,
+            ReviewAssignmentStatus::Expired,
+            None,
+            expired_at,
+        )?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+pub(super) fn age_evaluation_draft_for_recovery_test(
+    draft: &mut PaperEvaluationDraft,
+    now: DateTime<Utc>,
+) -> Result<(), ApiError> {
+    draft.expires_at = draft
+        .created_at
+        .checked_add_signed(chrono::Duration::microseconds(1))
+        .ok_or_else(|| ApiError::internal("test draft lease overflow"))?;
+    if draft.expires_at >= now {
+        return Err(ApiError::internal(
+            "test clock did not advance beyond the synthetic draft deadline",
+        ));
+    }
+    draft.draft_hash = evaluation_draft_hash(draft)?;
+    Ok(())
+}
+
+#[cfg(test)]
+pub(super) fn age_memory_evaluation_draft_for_recovery_test(
+    memory: &mut PaperRaidMemory,
+    evaluation_id: Uuid,
+    now: DateTime<Utc>,
+) -> Result<PaperEvaluationDraft, ApiError> {
+    let draft = memory
+        .review
+        .evaluation_drafts
+        .get_mut(&evaluation_id)
+        .ok_or_else(|| ApiError::internal("test evaluation draft does not exist"))?;
+    age_evaluation_draft_for_recovery_test(draft, now)?;
+    Ok(draft.clone())
+}
+
+fn exact_active_assignment<'a>(
+    paper_id: Uuid,
+    submission_id: Uuid,
+    review_round: u64,
+    player_id: Uuid,
+    slot: ReviewAssignmentSlot,
+    assignments: impl Iterator<Item = &'a ReviewAssignment>,
+    now: DateTime<Utc>,
+) -> Result<&'a ReviewAssignment, ApiError> {
+    assignments
+        .filter(|assignment| {
+            assignment.paper_project_id == paper_id
+                && assignment.submission_id == submission_id
+                && assignment.review_round == review_round
+                && assignment.player_id == player_id
+                && assignment.slot == slot
+                && review_assignment_active(assignment, now)
+        })
+        .next()
+        .ok_or_else(|| {
+            ApiError::forbidden(
+                "evaluation_draft_assignment_mismatch",
+                "actor must hold the exact active Review Raid assignment for this draft round",
+            )
+        })
+}
+
+fn active_reviewer_assignment<'a>(
+    draft: &PaperEvaluationDraft,
+    player_id: Uuid,
+    assignments: impl Iterator<Item = &'a ReviewAssignment>,
+    now: DateTime<Utc>,
+) -> Result<&'a ReviewAssignment, ApiError> {
+    let matching = assignments
+        .filter(|assignment| {
+            assignment.paper_project_id == draft.paper_project_id
+                && assignment.submission_id == draft.submission_id
+                && assignment.review_round == draft.review_round
+                && assignment.player_id == player_id
+                && matches!(
+                    assignment.slot,
+                    ReviewAssignmentSlot::Reviewer1 | ReviewAssignmentSlot::Reviewer2
+                )
+                && assignment.pinned_evaluation_id.is_none()
+                && review_assignment_active(assignment, now)
+        })
+        .collect::<Vec<_>>();
+    if matching.len() != 1 {
+        return Err(ApiError::forbidden(
+            "evaluation_draft_reviewer_assignment_mismatch",
+            "attestation requires exactly one active reviewer_1 or reviewer_2 assignment",
+        ));
+    }
+    Ok(matching[0])
+}
+
+fn evaluation_draft_quorum(
+    draft: PaperEvaluationDraft,
+    mut attestations: Vec<EvaluationDraftAttestation>,
+    assignments: &[ReviewAssignment],
+    now: DateTime<Utc>,
+) -> Result<EvaluationDraftQuorum, ApiError> {
+    let mut projected_drafts = vec![draft];
+    let mut projected_assignments = assignments.to_vec();
+    project_evaluation_draft_expirations(&mut projected_drafts, &mut projected_assignments, now)?;
+    let draft = projected_drafts
+        .pop()
+        .ok_or_else(|| ApiError::internal("evaluation draft projection disappeared"))?;
+    attestations.sort_by_key(|record| record.slot.rank());
+    let required_slots = vec![
+        ReviewAssignmentSlot::Reviewer1,
+        ReviewAssignmentSlot::Reviewer2,
+    ];
+    let present: HashSet<_> = attestations.iter().map(|record| record.slot).collect();
+    let missing_slots = required_slots
+        .iter()
+        .copied()
+        .filter(|slot| !present.contains(slot))
+        .collect::<Vec<_>>();
+    let assignments_active = [
+        (draft.evaluator_player_id, ReviewAssignmentSlot::Evaluator),
+        (
+            attestations
+                .iter()
+                .find(|record| record.slot == ReviewAssignmentSlot::Reviewer1)
+                .map(|record| record.attestation.reviewer_player_id)
+                .unwrap_or(Uuid::nil()),
+            ReviewAssignmentSlot::Reviewer1,
+        ),
+        (
+            attestations
+                .iter()
+                .find(|record| record.slot == ReviewAssignmentSlot::Reviewer2)
+                .map(|record| record.attestation.reviewer_player_id)
+                .unwrap_or(Uuid::nil()),
+            ReviewAssignmentSlot::Reviewer2,
+        ),
+    ]
+    .into_iter()
+    .all(|(player_id, slot)| {
+        projected_assignments.iter().any(|assignment| {
+            assignment.paper_project_id == draft.paper_project_id
+                && assignment.submission_id == draft.submission_id
+                && assignment.review_round == draft.review_round
+                && assignment.player_id == player_id
+                && assignment.slot == slot
+                && assignment.pinned_evaluation_id == Some(draft.evaluation_id)
+                && review_assignment_active(assignment, now)
+        })
+    });
+    let ready_to_finalize = draft.status == EvaluationDraftStatus::Open
+        && missing_slots.is_empty()
+        && assignments_active;
+    Ok(EvaluationDraftQuorum {
+        schema: EVALUATION_DRAFT_QUORUM_SCHEMA_V1.to_string(),
+        draft,
+        attestations,
+        required_slots,
+        missing_slots,
+        assignments_active,
+        ready_to_finalize,
+    })
+}
+
+fn ensure_evaluation_draft_slot_memory(
+    memory: &PaperRaidMemory,
+    paper_id: Uuid,
+    submission_id: Uuid,
+    review_round: u64,
+    evaluation_id: Uuid,
+) -> Result<(), ApiError> {
+    if memory.review.evaluations.contains_key(&evaluation_id)
+        || memory.review.evaluation_drafts.values().any(|draft| {
+            draft.evaluation_id == evaluation_id
+                || (draft.paper_project_id == paper_id
+                    && draft.submission_id == submission_id
+                    && draft.review_round == review_round
+                    && draft.status != EvaluationDraftStatus::Expired)
+        })
+    {
+        return Err(ApiError::conflict(
+            "evaluation_draft_identity_or_round_exists",
+            "evaluation identity or submission review round is already reserved",
+        ));
+    }
+    Ok(())
+}
+
+async fn lock_evaluation_round_postgres(
+    tx: &mut Transaction<'_, Postgres>,
+    paper_id: Uuid,
+    review_round: u64,
+) -> Result<(), ApiError> {
+    sqlx::query("select pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!("hepta:evaluation-round:{paper_id}:{review_round}"))
+        .execute(&mut **tx)
+        .await
+        .map_err(ApiError::database)?;
+    Ok(())
+}
+
+async fn lock_evaluation_identity_postgres(
+    tx: &mut Transaction<'_, Postgres>,
+    evaluation_id: Uuid,
+) -> Result<(), ApiError> {
+    sqlx::query("select pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(format!("hepta:evaluation-identity:{evaluation_id}"))
+        .execute(&mut **tx)
+        .await
+        .map_err(ApiError::database)?;
+    Ok(())
+}
+
+async fn ensure_evaluation_draft_slot_postgres(
+    tx: &mut Transaction<'_, Postgres>,
+    paper_id: Uuid,
+    submission_id: Uuid,
+    review_round: u64,
+    evaluation_id: Uuid,
+) -> Result<(), ApiError> {
+    let exists = sqlx::query_scalar::<_, bool>(
+        "select exists(
+           select 1 from hepta_paper_evaluation_drafts
+           where evaluation_id=$4
+              or (paper_project_id=$1 and submission_id=$2 and review_round=$3
+                  and status in ('open','finalized'))
+           union all
+           select 1 from hepta_paper_evaluations where evaluation_id=$4
+         )",
+    )
+    .bind(paper_id)
+    .bind(submission_id)
+    .bind(i64::try_from(review_round).map_err(|_| ApiError::internal("review round overflow"))?)
+    .bind(evaluation_id)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(ApiError::database)?;
+    if exists {
+        return Err(ApiError::conflict(
+            "evaluation_draft_identity_or_round_exists",
+            "evaluation identity or submission review round is already reserved",
+        ));
+    }
+    Ok(())
+}
+
+fn decode_evaluation_draft_row(row: &PgRow) -> Result<PaperEvaluationDraft, ApiError> {
+    decode_record(row.get("record_json"), "evaluation draft")
+}
+
+async fn load_evaluation_draft_postgres(
+    tx: &mut Transaction<'_, Postgres>,
+    paper_id: Uuid,
+    evaluation_id: Uuid,
+    lock: bool,
+) -> Result<PaperEvaluationDraft, ApiError> {
+    let suffix = if lock { " for update" } else { " for share" };
+    let row = sqlx::query(&format!(
+        "select record_json from hepta_paper_evaluation_drafts
+         where paper_project_id=$1 and evaluation_id=$2{suffix}"
+    ))
+    .bind(paper_id)
+    .bind(evaluation_id)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(ApiError::database)?
+    .ok_or_else(|| {
+        ApiError::not_found(
+            "evaluation_draft_not_found",
+            "evaluation draft does not exist for this paper",
+        )
+    })?;
+    decode_evaluation_draft_row(&row)
+}
+
+async fn load_draft_attestations_postgres(
+    tx: &mut Transaction<'_, Postgres>,
+    evaluation_id: Uuid,
+) -> Result<Vec<EvaluationDraftAttestation>, ApiError> {
+    let rows = sqlx::query(
+        "select record_json from hepta_paper_evaluation_draft_attestations
+         where evaluation_id=$1 order by slot for share",
+    )
+    .bind(evaluation_id)
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(ApiError::database)?;
+    rows.iter()
+        .map(|row| decode_record(row.get("record_json"), "evaluation draft attestation"))
+        .collect()
+}
+
+async fn create_paper_evaluation_draft(
+    State(state): State<AppState>,
+    Path(paper_id): Path<Uuid>,
+    headers: HeaderMap,
+    Json(request): Json<CreatePaperEvaluationDraftRequest>,
+) -> Result<(StatusCode, Json<PaperEvaluationDraft>), ApiError> {
+    const OPERATION: &str = "create_paper_evaluation_draft_v1";
+    validate_idempotency_key(&request.idempotency_key)?;
+    validate_digest("release_candidate_hash", &request.release_candidate_hash)?;
+    validate_digest("paper_bundle_hash", &request.paper_bundle_hash)?;
+    validate_digest(
+        "evaluator_coi_attestation_hash",
+        &request.evaluator_coi_attestation_hash,
+    )?;
+    let body_hash = request_hash(&request)?;
+    let path = format!("/v2/hepta/papers/{paper_id}/evaluation-drafts");
+    let assertion = require_user_assertion(
+        &headers,
+        &state,
+        OPERATION,
+        "POST",
+        &path,
+        &request.idempotency_key,
+        &body_hash,
+    )?;
+    if assertion.player_id != request.evaluator_player_id {
+        return Err(ApiError::forbidden(
+            "evaluation_draft_evaluator_assertion_mismatch",
+            "Consumer assertion must identify the assigned evaluator",
+        ));
+    }
+    let now = Utc::now();
+    let evaluation_request = draft_request_as_evaluation_request(&request, Vec::new());
+
+    if state.pool.is_none() {
+        let mut memory = state.paper_raid.write().await;
+        if let Some(replay) =
+            memory_replay(&memory, OPERATION, &request.idempotency_key, &body_hash)?
+        {
+            return Ok(replay);
+        }
+        let _finality_guard = state.paper_chain_finality.read().await;
+        crate::paper_chain_finality_v2::ensure_paper_finality_v2_source_unsealed_memory(
+            &_finality_guard,
+            paper_id,
+        )?;
+        let mut next = memory.clone();
+        let context = review_context_memory(&next, paper_id)?;
+        let submission = load_submission_memory(&next, paper_id, request.submission_id)?;
+        let ledger =
+            load_contribution_ledger_memory(&next, paper_id, &request.release_candidate_hash)?;
+        let review_round = validate_supersession_memory(&next, paper_id, &evaluation_request)?;
+        ensure_evaluation_draft_slot_memory(
+            &next,
+            paper_id,
+            submission.submission_id,
+            review_round,
+            request.evaluation_id,
+        )?;
+        let evaluator_assignment_id = exact_active_assignment(
+            paper_id,
+            submission.submission_id,
+            review_round,
+            request.evaluator_player_id,
+            ReviewAssignmentSlot::Evaluator,
+            next.review.assignments.values(),
+            now,
+        )?
+        .assignment_id;
+        let prepared = validate_evaluation_context(
+            &context,
+            &submission,
+            &ledger,
+            &evaluation_request,
+            now,
+            false,
+        )?;
+        let (evaluator, evaluator_key) = active_player_key_memory(
+            &next,
+            request.evaluator_player_id,
+            &request.evaluator_signing_key_id,
+            &request.evaluator_signing_public_key,
+            &request.evaluator_signing_public_key_hash,
+        )?;
+        assert_player_identity(&assertion, &evaluator)?;
+        verify_signature(
+            &prepared.evaluator_frame,
+            &request.evaluator_signature,
+            &evaluator_key,
+            "evaluation_signature_failed",
+            "evaluation draft evaluator signature verification failed",
+        )?;
+        let draft = make_evaluation_draft(&context, &request, prepared, review_round, now)?;
+        if next
+            .review
+            .evaluation_drafts
+            .insert(draft.evaluation_id, draft.clone())
+            .is_some()
+        {
+            return Err(ApiError::conflict(
+                "evaluation_draft_exists",
+                "evaluation_id already identifies an immutable draft",
+            ));
+        }
+        transition_review_assignment_memory(
+            &mut next.review,
+            evaluator_assignment_id,
+            ReviewAssignmentStatus::Pinned,
+            Some(draft.evaluation_id),
+            now,
+        )?;
+        push_room_event_memory(
+            &mut next,
+            OPERATION,
+            &request.idempotency_key,
+            "hepta.paper_raid.evaluation_draft.created.v1",
+            paper_id,
+            paper_id,
+            review_round,
+            json!({"evaluation_id":draft.evaluation_id,"review_round":review_round,"draft_hash":draft.draft_hash,"evaluation_signing_hash":draft.evaluation_signing_hash,"lease_expires_at":draft.expires_at,"pinned_evaluator_assignment_id":evaluator_assignment_id}),
+        );
+        memory_remember(
+            &mut next,
+            OPERATION,
+            &request.idempotency_key,
+            body_hash,
+            StatusCode::CREATED,
+            &draft,
+        )?;
+        *memory = next;
+        return Ok((StatusCode::CREATED, Json(draft)));
+    }
+
+    let (mut tx, replay) =
+        begin_postgres_idempotent(&state, OPERATION, &request.idempotency_key, &body_hash).await?;
+    if let Some(replay) = replay {
+        return decode_stored(replay);
+    }
+    crate::paper_chain_finality_v2::lock_paper_finality_v2_source_unsealed_postgres(
+        &mut tx, paper_id,
+    )
+    .await?;
+    let context = review_context_postgres(&mut tx, paper_id).await?;
+    let submission = load_submission_postgres(&mut tx, paper_id, request.submission_id).await?;
+    let ledger =
+        load_contribution_ledger_postgres(&mut tx, paper_id, &request.release_candidate_hash)
+            .await?;
+    let candidate_round =
+        validate_supersession_postgres(&mut tx, paper_id, &evaluation_request).await?;
+    lock_evaluation_round_postgres(&mut tx, paper_id, candidate_round).await?;
+    lock_evaluation_identity_postgres(&mut tx, request.evaluation_id).await?;
+    let review_round =
+        validate_supersession_postgres(&mut tx, paper_id, &evaluation_request).await?;
+    if review_round != candidate_round {
+        return Err(ApiError::conflict(
+            "evaluation_round_changed",
+            "review round changed while the evaluation draft was being created",
+        ));
+    }
+    ensure_evaluation_draft_slot_postgres(
+        &mut tx,
+        paper_id,
+        submission.submission_id,
+        review_round,
+        request.evaluation_id,
+    )
+    .await?;
+    let assignments = load_review_assignments_postgres(&mut tx, paper_id).await?;
+    let evaluator_assignment_id = exact_active_assignment(
+        paper_id,
+        submission.submission_id,
+        review_round,
+        request.evaluator_player_id,
+        ReviewAssignmentSlot::Evaluator,
+        assignments.iter(),
+        now,
+    )?
+    .assignment_id;
+    let prepared = validate_evaluation_context(
+        &context,
+        &submission,
+        &ledger,
+        &evaluation_request,
+        now,
+        false,
+    )?;
+    let (evaluator, evaluator_key) = active_player_key_postgres(
+        &mut tx,
+        request.evaluator_player_id,
+        &request.evaluator_signing_key_id,
+        &request.evaluator_signing_public_key,
+        &request.evaluator_signing_public_key_hash,
+    )
+    .await?;
+    assert_player_identity(&assertion, &evaluator)?;
+    verify_signature(
+        &prepared.evaluator_frame,
+        &request.evaluator_signature,
+        &evaluator_key,
+        "evaluation_signature_failed",
+        "evaluation draft evaluator signature verification failed",
+    )?;
+    let draft = make_evaluation_draft(&context, &request, prepared, review_round, now)?;
+    let inserted = sqlx::query(
+        "insert into hepta_paper_evaluation_drafts (
+            evaluation_id,paper_project_id,submission_id,review_round,
+            supersedes_evaluation_id,evaluator_player_id,draft_hash,
+            evaluation_signing_hash,status,version,record_json,created_at,expires_at,updated_at
+         ) values ($1,$2,$3,$4,$5,$6,$7,$8,'open',1,$9::jsonb,$10,$11,$10)",
+    )
+    .bind(draft.evaluation_id)
+    .bind(paper_id)
+    .bind(draft.submission_id)
+    .bind(i64::try_from(review_round).map_err(|_| ApiError::internal("review round overflow"))?)
+    .bind(draft.supersedes_evaluation_id)
+    .bind(draft.evaluator_player_id)
+    .bind(&draft.draft_hash)
+    .bind(&draft.evaluation_signing_hash)
+    .bind(
+        serde_json::to_value(&draft)
+            .map_err(|error| ApiError::internal(format!("encode evaluation draft: {error}")))?,
+    )
+    .bind(now)
+    .bind(draft.expires_at)
+    .execute(&mut *tx)
+    .await;
+    if let Err(error) = inserted {
+        if error
+            .as_database_error()
+            .is_some_and(|database| database.is_unique_violation())
+        {
+            return Err(ApiError::conflict(
+                "evaluation_draft_exists",
+                "evaluation identity or immutable review-round slot already exists",
+            ));
+        }
+        return Err(ApiError::database(error));
+    }
+    transition_review_assignment_postgres(
+        &mut tx,
+        evaluator_assignment_id,
+        ReviewAssignmentStatus::Pinned,
+        Some(draft.evaluation_id),
+        now,
+    )
+    .await?;
+    insert_room_event_postgres(
+        &mut tx,
+        OPERATION,
+        &request.idempotency_key,
+        "hepta.paper_raid.evaluation_draft.created.v1",
+        paper_id,
+        paper_id,
+        review_round,
+        json!({"evaluation_id":draft.evaluation_id,"review_round":review_round,"draft_hash":draft.draft_hash,"evaluation_signing_hash":draft.evaluation_signing_hash,"lease_expires_at":draft.expires_at,"pinned_evaluator_assignment_id":evaluator_assignment_id}),
+    )
+    .await?;
+    finish_postgres_idempotent(
+        &mut tx,
+        OPERATION,
+        &request.idempotency_key,
+        &body_hash,
+        Some(draft.evaluation_id),
+        StatusCode::CREATED,
+        &draft,
+    )
+    .await?;
+    tx.commit().await.map_err(ApiError::database)?;
+    Ok((StatusCode::CREATED, Json(draft)))
+}
+
+async fn get_paper_evaluation_draft(
+    State(state): State<AppState>,
+    Path((paper_id, evaluation_id)): Path<(Uuid, Uuid)>,
+    headers: HeaderMap,
+) -> Result<Json<EvaluationDraftQuorum>, ApiError> {
+    let path = format!("/v2/hepta/papers/{paper_id}/evaluation-drafts/{evaluation_id}");
+    let assertion =
+        require_member_read_assertion(&headers, &state, "get_paper_evaluation_draft_v1", &path)?;
+    let now = Utc::now();
+    if state.pool.is_none() {
+        let memory = state.paper_raid.read().await;
+        active_registered_player_memory(&memory, &assertion)?;
+        let draft = memory
+            .review
+            .evaluation_drafts
+            .get(&evaluation_id)
+            .filter(|draft| draft.paper_project_id == paper_id)
+            .cloned()
+            .ok_or_else(|| {
+                ApiError::not_found(
+                    "evaluation_draft_not_found",
+                    "evaluation draft does not exist for this paper",
+                )
+            })?;
+        let assignments = memory
+            .review
+            .assignments
+            .values()
+            .filter(|assignment| assignment.paper_project_id == paper_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut projected_drafts = vec![draft];
+        let mut assignments = assignments;
+        project_evaluation_draft_expirations(&mut projected_drafts, &mut assignments, now)?;
+        let draft = projected_drafts
+            .pop()
+            .ok_or_else(|| ApiError::internal("evaluation draft projection disappeared"))?;
+        if !assignments.iter().any(|assignment| {
+            assignment.submission_id == draft.submission_id
+                && assignment.review_round == draft.review_round
+                && assignment.player_id == assertion.player_id
+                && review_assignment_active(assignment, now)
+        }) {
+            return Err(ApiError::forbidden(
+                "evaluation_draft_access_denied",
+                "evaluation draft quorum is limited to actively assigned panel members",
+            ));
+        }
+        let attestations = memory
+            .review
+            .draft_attestations
+            .values()
+            .filter(|record| record.evaluation_id == evaluation_id)
+            .cloned()
+            .collect();
+        return Ok(Json(evaluation_draft_quorum(
+            draft,
+            attestations,
+            &assignments,
+            now,
+        )?));
+    }
+    let pool = state.pool.as_ref().expect("checked PostgreSQL pool");
+    let mut tx = pool.begin().await.map_err(ApiError::database)?;
+    active_registered_player_postgres(&mut tx, &assertion).await?;
+    let draft = load_evaluation_draft_postgres(&mut tx, paper_id, evaluation_id, false).await?;
+    let assignments = load_review_assignments_postgres(&mut tx, paper_id).await?;
+    let mut projected_drafts = vec![draft];
+    let mut assignments = assignments;
+    project_evaluation_draft_expirations(&mut projected_drafts, &mut assignments, now)?;
+    let draft = projected_drafts
+        .pop()
+        .ok_or_else(|| ApiError::internal("evaluation draft projection disappeared"))?;
+    if !assignments.iter().any(|assignment| {
+        assignment.submission_id == draft.submission_id
+            && assignment.review_round == draft.review_round
+            && assignment.player_id == assertion.player_id
+            && review_assignment_active(assignment, now)
+    }) {
+        return Err(ApiError::forbidden(
+            "evaluation_draft_access_denied",
+            "evaluation draft quorum is limited to actively assigned panel members",
+        ));
+    }
+    let attestations = load_draft_attestations_postgres(&mut tx, evaluation_id).await?;
+    tx.commit().await.map_err(ApiError::database)?;
+    Ok(Json(evaluation_draft_quorum(
+        draft,
+        attestations,
+        &assignments,
+        now,
+    )?))
+}
+
+fn draft_attestation_request(
+    request: &SubmitEvaluationDraftAttestationRequest,
+) -> ReviewAttestationRequest {
+    ReviewAttestationRequest {
+        attestation_id: request.attestation_id,
+        reviewer_player_id: request.reviewer_player_id,
+        verdict: request.verdict.clone(),
+        signing_key_id: request.signing_key_id.clone(),
+        signing_public_key: request.signing_public_key.clone(),
+        signing_public_key_hash: request.signing_public_key_hash.clone(),
+        coi_attestation_hash: request.coi_attestation_hash.clone(),
+        signed_at_unix: request.signed_at_unix,
+        signature: request.signature.clone(),
+    }
+}
+
+async fn submit_evaluation_draft_attestation(
+    State(state): State<AppState>,
+    Path((paper_id, evaluation_id)): Path<(Uuid, Uuid)>,
+    headers: HeaderMap,
+    Json(request): Json<SubmitEvaluationDraftAttestationRequest>,
+) -> Result<(StatusCode, Json<EvaluationDraftAttestation>), ApiError> {
+    const OPERATION: &str = "submit_paper_evaluation_draft_attestation_v1";
+    validate_idempotency_key(&request.idempotency_key)?;
+    validate_digest("draft_hash", &request.draft_hash)?;
+    validate_digest(
+        "reviewer_coi_attestation_hash",
+        &request.coi_attestation_hash,
+    )?;
+    signed_time(request.signed_at_unix)?;
+    let body_hash = request_hash(&request)?;
+    let path =
+        format!("/v2/hepta/papers/{paper_id}/evaluation-drafts/{evaluation_id}/attestations");
+    let assertion = require_user_assertion(
+        &headers,
+        &state,
+        OPERATION,
+        "POST",
+        &path,
+        &request.idempotency_key,
+        &body_hash,
+    )?;
+    if assertion.player_id != request.reviewer_player_id {
+        return Err(ApiError::forbidden(
+            "evaluation_draft_reviewer_assertion_mismatch",
+            "Consumer assertion must identify the assigned reviewer",
+        ));
+    }
+    let now = Utc::now();
+    if state.pool.is_none() {
+        let mut memory = state.paper_raid.write().await;
+        if let Some(replay) =
+            memory_replay(&memory, OPERATION, &request.idempotency_key, &body_hash)?
+        {
+            return Ok(replay);
+        }
+        let _finality_guard = state.paper_chain_finality.read().await;
+        crate::paper_chain_finality_v2::ensure_paper_finality_v2_source_unsealed_memory(
+            &_finality_guard,
+            paper_id,
+        )?;
+        let mut next = memory.clone();
+        let draft = next
+            .review
+            .evaluation_drafts
+            .get(&evaluation_id)
+            .filter(|draft| draft.paper_project_id == paper_id)
+            .cloned()
+            .ok_or_else(|| {
+                ApiError::not_found(
+                    "evaluation_draft_not_found",
+                    "evaluation draft does not exist for this paper",
+                )
+            })?;
+        ensure_evaluation_draft_lease_live(&draft, now)?;
+        if draft.draft_hash != request.draft_hash {
+            return Err(ApiError::conflict(
+                "evaluation_draft_hash_mismatch",
+                "review attestation must bind the exact immutable draft hash",
+            ));
+        }
+        let (assignment_id, slot) = {
+            let assignment = active_reviewer_assignment(
+                &draft,
+                request.reviewer_player_id,
+                next.review.assignments.values(),
+                now,
+            )?;
+            (assignment.assignment_id, assignment.slot)
+        };
+        if next.review.draft_attestations.values().any(|record| {
+            record.evaluation_id == evaluation_id
+                && (record.slot == slot
+                    || record.attestation.reviewer_player_id == request.reviewer_player_id)
+        }) || next
+            .review
+            .draft_attestations
+            .contains_key(&request.attestation_id)
+        {
+            return Err(ApiError::conflict(
+                "evaluation_draft_attestation_exists",
+                "reviewer slot, reviewer, or attestation identity is already immutable",
+            ));
+        }
+        let (reviewer, key) = active_player_key_memory(
+            &next,
+            request.reviewer_player_id,
+            &request.signing_key_id,
+            &request.signing_public_key,
+            &request.signing_public_key_hash,
+        )?;
+        assert_player_identity(&assertion, &reviewer)?;
+        let attestation = review_attestation(
+            &draft_attestation_request(&request),
+            evaluation_id,
+            &draft.evaluation_signing_hash,
+            &key,
+        )?;
+        let stored = EvaluationDraftAttestation {
+            schema: EVALUATION_DRAFT_ATTESTATION_SCHEMA_V1.to_string(),
+            attestation_id: request.attestation_id,
+            evaluation_id,
+            paper_project_id: paper_id,
+            submission_id: draft.submission_id,
+            review_round: draft.review_round,
+            slot,
+            draft_hash: draft.draft_hash.clone(),
+            attestation,
+            created_at: now,
+        };
+        next.review
+            .draft_attestations
+            .insert(stored.attestation_id, stored.clone());
+        transition_review_assignment_memory(
+            &mut next.review,
+            assignment_id,
+            ReviewAssignmentStatus::Pinned,
+            Some(evaluation_id),
+            now,
+        )?;
+        push_room_event_memory(
+            &mut next,
+            OPERATION,
+            &request.idempotency_key,
+            "hepta.paper_raid.evaluation_draft.attested.v1",
+            paper_id,
+            paper_id,
+            draft.review_round,
+            json!({"evaluation_id":evaluation_id,"attestation_id":stored.attestation_id,"slot":slot,"draft_hash":stored.draft_hash,"pinned_reviewer_assignment_id":assignment_id}),
+        );
+        memory_remember(
+            &mut next,
+            OPERATION,
+            &request.idempotency_key,
+            body_hash,
+            StatusCode::CREATED,
+            &stored,
+        )?;
+        *memory = next;
+        return Ok((StatusCode::CREATED, Json(stored)));
+    }
+
+    let (mut tx, replay) =
+        begin_postgres_idempotent(&state, OPERATION, &request.idempotency_key, &body_hash).await?;
+    if let Some(replay) = replay {
+        return decode_stored(replay);
+    }
+    crate::paper_chain_finality_v2::lock_paper_finality_v2_source_unsealed_postgres(
+        &mut tx, paper_id,
+    )
+    .await?;
+    let draft = load_evaluation_draft_postgres(&mut tx, paper_id, evaluation_id, true).await?;
+    ensure_evaluation_draft_lease_live(&draft, now)?;
+    if draft.draft_hash != request.draft_hash {
+        return Err(ApiError::conflict(
+            "evaluation_draft_hash_mismatch",
+            "review attestation must bind the exact immutable draft hash",
+        ));
+    }
+    let assignments = load_review_assignments_postgres(&mut tx, paper_id).await?;
+    let (assignment_id, slot) = {
+        let assignment = active_reviewer_assignment(
+            &draft,
+            request.reviewer_player_id,
+            assignments.iter(),
+            now,
+        )?;
+        (assignment.assignment_id, assignment.slot)
+    };
+    let (reviewer, key) = active_player_key_postgres(
+        &mut tx,
+        request.reviewer_player_id,
+        &request.signing_key_id,
+        &request.signing_public_key,
+        &request.signing_public_key_hash,
+    )
+    .await?;
+    assert_player_identity(&assertion, &reviewer)?;
+    let attestation = review_attestation(
+        &draft_attestation_request(&request),
+        evaluation_id,
+        &draft.evaluation_signing_hash,
+        &key,
+    )?;
+    let stored = EvaluationDraftAttestation {
+        schema: EVALUATION_DRAFT_ATTESTATION_SCHEMA_V1.to_string(),
+        attestation_id: request.attestation_id,
+        evaluation_id,
+        paper_project_id: paper_id,
+        submission_id: draft.submission_id,
+        review_round: draft.review_round,
+        slot,
+        draft_hash: draft.draft_hash.clone(),
+        attestation,
+        created_at: now,
+    };
+    let inserted = sqlx::query(
+        "insert into hepta_paper_evaluation_draft_attestations (
+            attestation_id,evaluation_id,paper_project_id,submission_id,review_round,
+            slot,reviewer_player_id,draft_hash,evaluation_signing_hash,record_json,created_at
+         ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11)",
+    )
+    .bind(stored.attestation_id)
+    .bind(evaluation_id)
+    .bind(paper_id)
+    .bind(stored.submission_id)
+    .bind(
+        i64::try_from(stored.review_round)
+            .map_err(|_| ApiError::internal("review round overflow"))?,
+    )
+    .bind(slot.as_str())
+    .bind(stored.attestation.reviewer_player_id)
+    .bind(&stored.draft_hash)
+    .bind(&stored.attestation.evaluation_signing_hash)
+    .bind(serde_json::to_value(&stored).map_err(|error| {
+        ApiError::internal(format!("encode evaluation draft attestation: {error}"))
+    })?)
+    .bind(now)
+    .execute(&mut *tx)
+    .await;
+    if let Err(error) = inserted {
+        if error
+            .as_database_error()
+            .is_some_and(|database| database.is_unique_violation())
+        {
+            return Err(ApiError::conflict(
+                "evaluation_draft_attestation_exists",
+                "reviewer slot, reviewer, or attestation identity is already immutable",
+            ));
+        }
+        return Err(ApiError::database(error));
+    }
+    transition_review_assignment_postgres(
+        &mut tx,
+        assignment_id,
+        ReviewAssignmentStatus::Pinned,
+        Some(evaluation_id),
+        now,
+    )
+    .await?;
+    insert_room_event_postgres(
+        &mut tx,
+        OPERATION,
+        &request.idempotency_key,
+        "hepta.paper_raid.evaluation_draft.attested.v1",
+        paper_id,
+        paper_id,
+        draft.review_round,
+        json!({"evaluation_id":evaluation_id,"attestation_id":stored.attestation_id,"slot":slot,"draft_hash":stored.draft_hash,"pinned_reviewer_assignment_id":assignment_id}),
+    )
+    .await?;
+    finish_postgres_idempotent(
+        &mut tx,
+        OPERATION,
+        &request.idempotency_key,
+        &body_hash,
+        Some(stored.attestation_id),
+        StatusCode::CREATED,
+        &stored,
+    )
+    .await?;
+    tx.commit().await.map_err(ApiError::database)?;
+    Ok((StatusCode::CREATED, Json(stored)))
+}
+
+fn validate_draft_attestation_quorum(
+    draft: &PaperEvaluationDraft,
+    attestations: &[EvaluationDraftAttestation],
+) -> Result<(), ApiError> {
+    if attestations.len() != 2
+        || attestations.iter().any(|record| {
+            record.evaluation_id != draft.evaluation_id
+                || record.paper_project_id != draft.paper_project_id
+                || record.submission_id != draft.submission_id
+                || record.review_round != draft.review_round
+                || record.draft_hash != draft.draft_hash
+                || record.attestation.evaluation_signing_hash != draft.evaluation_signing_hash
+        })
+    {
+        return Err(ApiError::conflict(
+            "evaluation_draft_quorum_incomplete",
+            "finalization requires two attestations bound to the exact immutable draft",
+        ));
+    }
+    let slots: HashSet<_> = attestations.iter().map(|record| record.slot).collect();
+    let reviewers: HashSet<_> = attestations
+        .iter()
+        .map(|record| record.attestation.reviewer_player_id)
+        .collect();
+    if slots
+        != HashSet::from([
+            ReviewAssignmentSlot::Reviewer1,
+            ReviewAssignmentSlot::Reviewer2,
+        ])
+        || reviewers.len() != 2
+    {
+        return Err(ApiError::conflict(
+            "evaluation_draft_quorum_invalid",
+            "quorum must contain exactly reviewer_1 and reviewer_2 from distinct players",
+        ));
+    }
+    Ok(())
+}
+
+async fn finalize_paper_evaluation_draft(
+    State(state): State<AppState>,
+    Path((paper_id, evaluation_id)): Path<(Uuid, Uuid)>,
+    headers: HeaderMap,
+    Json(request): Json<FinalizePaperEvaluationDraftRequest>,
+) -> Result<(StatusCode, Json<PaperEvaluation>), ApiError> {
+    const OPERATION: &str = "finalize_paper_evaluation_draft_v1";
+    validate_idempotency_key(&request.idempotency_key)?;
+    let body_hash = request_hash(&request)?;
+    let path = format!("/v2/hepta/papers/{paper_id}/evaluation-drafts/{evaluation_id}/finalize");
+    let assertion = require_user_assertion(
+        &headers,
+        &state,
+        OPERATION,
+        "POST",
+        &path,
+        &request.idempotency_key,
+        &body_hash,
+    )?;
+    let now = Utc::now();
+
+    if state.pool.is_none() {
+        let mut memory = state.paper_raid.write().await;
+        if let Some(replay) =
+            memory_replay(&memory, OPERATION, &request.idempotency_key, &body_hash)?
+        {
+            return Ok(replay);
+        }
+        let _finality_guard = state.paper_chain_finality.read().await;
+        crate::paper_chain_finality_v2::ensure_paper_finality_v2_source_unsealed_memory(
+            &_finality_guard,
+            paper_id,
+        )?;
+        let mut next = memory.clone();
+        let mut draft = next
+            .review
+            .evaluation_drafts
+            .get(&evaluation_id)
+            .filter(|draft| draft.paper_project_id == paper_id)
+            .cloned()
+            .ok_or_else(|| {
+                ApiError::not_found(
+                    "evaluation_draft_not_found",
+                    "evaluation draft does not exist for this paper",
+                )
+            })?;
+        ensure_evaluation_draft_lease_live(&draft, now)?;
+        if draft.version != request.expected_draft_version {
+            return Err(ApiError::conflict(
+                "evaluation_draft_version_conflict",
+                "evaluation draft is finalized or changed from the expected version",
+            ));
+        }
+        if assertion.player_id != draft.evaluator_player_id {
+            return Err(ApiError::forbidden(
+                "evaluation_draft_finalizer_mismatch",
+                "only the assigned evaluator may finalize the draft",
+            ));
+        }
+        let mut attestations = next
+            .review
+            .draft_attestations
+            .values()
+            .filter(|record| record.evaluation_id == evaluation_id)
+            .cloned()
+            .collect::<Vec<_>>();
+        attestations.sort_by_key(|record| record.slot.rank());
+        validate_draft_attestation_quorum(&draft, &attestations)?;
+        let evaluation_request =
+            stored_draft_as_evaluation_request(&draft, &attestations, &request.idempotency_key);
+        let context = review_context_memory(&next, paper_id)?;
+        let submission = load_submission_memory(&next, paper_id, draft.submission_id)?;
+        let ledger =
+            load_contribution_ledger_memory(&next, paper_id, &draft.release_candidate_hash)?;
+        let review_round = validate_supersession_memory(&next, paper_id, &evaluation_request)?;
+        if review_round != draft.review_round {
+            return Err(ApiError::conflict(
+                "evaluation_draft_round_stale",
+                "Appeal or evaluation lineage changed after the draft was frozen",
+            ));
+        }
+        let mut prepared = validate_evaluation_context(
+            &context,
+            &submission,
+            &ledger,
+            &evaluation_request,
+            now,
+            true,
+        )?;
+        if prepared.evaluation_signing_hash != draft.evaluation_signing_hash
+            || evaluation_draft_hash(&draft)? != draft.draft_hash
+        {
+            return Err(ApiError::conflict(
+                "evaluation_draft_integrity_failed",
+                "frozen draft no longer derives its recorded signing or draft hash",
+            ));
+        }
+        prepared.paper_score = draft.paper_score.clone();
+        let assignments = next
+            .review
+            .assignments
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        enforce_evaluation_assignments(
+            paper_id,
+            submission.submission_id,
+            review_round,
+            &evaluation_request,
+            assignments.iter(),
+            now,
+        )?;
+        let panel_assignment_ids = pinned_evaluation_panel_assignment_ids(
+            paper_id,
+            submission.submission_id,
+            review_round,
+            &evaluation_request,
+            &assignments,
+        )?;
+        let (evaluator, evaluator_key) = active_player_key_memory(
+            &next,
+            draft.evaluator_player_id,
+            &draft.evaluator_signing_key_id,
+            &draft.evaluator_signing_public_key,
+            &draft.evaluator_signing_public_key_hash,
+        )?;
+        assert_player_identity(&assertion, &evaluator)?;
+        verify_signature(
+            &prepared.evaluator_frame,
+            &draft.evaluator_signature,
+            &evaluator_key,
+            "evaluation_signature_failed",
+            "evaluation draft evaluator signature verification failed",
+        )?;
+        let mut verified_attestations = Vec::with_capacity(2);
+        for stored in &attestations {
+            let (_, key) = active_player_key_memory(
+                &next,
+                stored.attestation.reviewer_player_id,
+                &stored.attestation.signing_key_id,
+                &stored.attestation.signing_public_key,
+                &stored.attestation.signing_public_key_hash,
+            )?;
+            verified_attestations.push(review_attestation(
+                &ReviewAttestationRequest {
+                    attestation_id: stored.attestation.attestation_id,
+                    reviewer_player_id: stored.attestation.reviewer_player_id,
+                    verdict: stored.attestation.verdict.clone(),
+                    signing_key_id: stored.attestation.signing_key_id.clone(),
+                    signing_public_key: stored.attestation.signing_public_key.clone(),
+                    signing_public_key_hash: stored.attestation.signing_public_key_hash.clone(),
+                    coi_attestation_hash: stored.attestation.coi_attestation_hash.clone(),
+                    signed_at_unix: stored.attestation.signed_at_unix,
+                    signature: stored.attestation.signature.clone(),
+                },
+                evaluation_id,
+                &draft.evaluation_signing_hash,
+                &key,
+            )?);
+        }
+        let evaluation = make_evaluation(
+            &context,
+            &evaluation_request,
+            prepared,
+            verified_attestations,
+            now,
+            review_round,
+        );
+        let raid_score = make_raid_score(&evaluation, &ledger, now)?;
+        if next
+            .review
+            .evaluations
+            .insert(evaluation_id, evaluation.clone())
+            .is_some()
+        {
+            return Err(ApiError::conflict(
+                "paper_evaluation_exists",
+                "evaluation_id already exists",
+            ));
+        }
+        next.review
+            .raid_scores
+            .insert(raid_score.raid_score_id, raid_score);
+        for assignment_id in &panel_assignment_ids {
+            transition_review_assignment_memory(
+                &mut next.review,
+                *assignment_id,
+                ReviewAssignmentStatus::Consumed,
+                None,
+                now,
+            )?;
+        }
+        draft.status = EvaluationDraftStatus::Finalized;
+        draft.version = draft
+            .version
+            .checked_add(1)
+            .ok_or_else(|| ApiError::internal("evaluation draft version overflow"))?;
+        draft.finalized_evaluation_id = Some(evaluation_id);
+        draft.updated_at = now;
+        draft.finalized_at = Some(now);
+        next.review
+            .evaluation_drafts
+            .insert(evaluation_id, draft.clone());
+        push_room_event_memory(
+            &mut next,
+            OPERATION,
+            &request.idempotency_key,
+            "hepta.paper_raid.evaluation.recorded.v1",
+            paper_id,
+            paper_id,
+            evaluation.version,
+            json!({"evaluation_id":evaluation_id,"status":evaluation.status,"settlement_state":evaluation.settlement_state,"paper_score_hash":evaluation.paper_score.score_hash}),
+        );
+        push_room_event_memory(
+            &mut next,
+            OPERATION,
+            &format!("{}:draft", request.idempotency_key),
+            "hepta.paper_raid.evaluation_draft.finalized.v1",
+            paper_id,
+            paper_id,
+            draft.version,
+            json!({"evaluation_id":evaluation_id,"review_round":draft.review_round,"draft_hash":draft.draft_hash,"consumed_panel_assignment_ids":panel_assignment_ids}),
+        );
+        memory_remember(
+            &mut next,
+            OPERATION,
+            &request.idempotency_key,
+            body_hash,
+            StatusCode::CREATED,
+            &evaluation,
+        )?;
+        *memory = next;
+        return Ok((StatusCode::CREATED, Json(evaluation)));
+    }
+
+    let (mut tx, replay) =
+        begin_postgres_idempotent(&state, OPERATION, &request.idempotency_key, &body_hash).await?;
+    if let Some(replay) = replay {
+        return decode_stored(replay);
+    }
+    crate::paper_chain_finality_v2::lock_paper_finality_v2_source_unsealed_postgres(
+        &mut tx, paper_id,
+    )
+    .await?;
+    let mut draft = load_evaluation_draft_postgres(&mut tx, paper_id, evaluation_id, true).await?;
+    ensure_evaluation_draft_lease_live(&draft, now)?;
+    if draft.version != request.expected_draft_version {
+        return Err(ApiError::conflict(
+            "evaluation_draft_version_conflict",
+            "evaluation draft is finalized or changed from the expected version",
+        ));
+    }
+    if assertion.player_id != draft.evaluator_player_id {
+        return Err(ApiError::forbidden(
+            "evaluation_draft_finalizer_mismatch",
+            "only the assigned evaluator may finalize the draft",
+        ));
+    }
+    lock_evaluation_round_postgres(&mut tx, paper_id, draft.review_round).await?;
+    let attestations = load_draft_attestations_postgres(&mut tx, evaluation_id).await?;
+    validate_draft_attestation_quorum(&draft, &attestations)?;
+    let evaluation_request =
+        stored_draft_as_evaluation_request(&draft, &attestations, &request.idempotency_key);
+    let context = review_context_postgres(&mut tx, paper_id).await?;
+    let submission = load_submission_postgres(&mut tx, paper_id, draft.submission_id).await?;
+    let ledger =
+        load_contribution_ledger_postgres(&mut tx, paper_id, &draft.release_candidate_hash).await?;
+    let review_round =
+        validate_supersession_postgres(&mut tx, paper_id, &evaluation_request).await?;
+    if review_round != draft.review_round {
+        return Err(ApiError::conflict(
+            "evaluation_draft_round_stale",
+            "Appeal or evaluation lineage changed after the draft was frozen",
+        ));
+    }
+    let mut prepared = validate_evaluation_context(
+        &context,
+        &submission,
+        &ledger,
+        &evaluation_request,
+        now,
+        true,
+    )?;
+    if prepared.evaluation_signing_hash != draft.evaluation_signing_hash
+        || evaluation_draft_hash(&draft)? != draft.draft_hash
+    {
+        return Err(ApiError::conflict(
+            "evaluation_draft_integrity_failed",
+            "frozen draft no longer derives its recorded signing or draft hash",
+        ));
+    }
+    prepared.paper_score = draft.paper_score.clone();
+    let assignments = load_review_assignments_postgres(&mut tx, paper_id).await?;
+    enforce_evaluation_assignments(
+        paper_id,
+        submission.submission_id,
+        review_round,
+        &evaluation_request,
+        assignments.iter(),
+        now,
+    )?;
+    let panel_assignment_ids = pinned_evaluation_panel_assignment_ids(
+        paper_id,
+        submission.submission_id,
+        review_round,
+        &evaluation_request,
+        &assignments,
+    )?;
+    let (evaluator, evaluator_key) = active_player_key_postgres(
+        &mut tx,
+        draft.evaluator_player_id,
+        &draft.evaluator_signing_key_id,
+        &draft.evaluator_signing_public_key,
+        &draft.evaluator_signing_public_key_hash,
+    )
+    .await?;
+    assert_player_identity(&assertion, &evaluator)?;
+    verify_signature(
+        &prepared.evaluator_frame,
+        &draft.evaluator_signature,
+        &evaluator_key,
+        "evaluation_signature_failed",
+        "evaluation draft evaluator signature verification failed",
+    )?;
+    let mut verified_attestations = Vec::with_capacity(2);
+    for stored in &attestations {
+        let (_, key) = active_player_key_postgres(
+            &mut tx,
+            stored.attestation.reviewer_player_id,
+            &stored.attestation.signing_key_id,
+            &stored.attestation.signing_public_key,
+            &stored.attestation.signing_public_key_hash,
+        )
+        .await?;
+        verified_attestations.push(review_attestation(
+            &ReviewAttestationRequest {
+                attestation_id: stored.attestation.attestation_id,
+                reviewer_player_id: stored.attestation.reviewer_player_id,
+                verdict: stored.attestation.verdict.clone(),
+                signing_key_id: stored.attestation.signing_key_id.clone(),
+                signing_public_key: stored.attestation.signing_public_key.clone(),
+                signing_public_key_hash: stored.attestation.signing_public_key_hash.clone(),
+                coi_attestation_hash: stored.attestation.coi_attestation_hash.clone(),
+                signed_at_unix: stored.attestation.signed_at_unix,
+                signature: stored.attestation.signature.clone(),
+            },
+            evaluation_id,
+            &draft.evaluation_signing_hash,
+            &key,
+        )?);
+    }
+    let evaluation = make_evaluation(
+        &context,
+        &evaluation_request,
+        prepared,
+        verified_attestations,
+        now,
+        review_round,
+    );
+    let raid_score = make_raid_score(&evaluation, &ledger, now)?;
+    insert_evaluation_postgres(&mut tx, &evaluation, &raid_score).await?;
+    for assignment_id in &panel_assignment_ids {
+        transition_review_assignment_postgres(
+            &mut tx,
+            *assignment_id,
+            ReviewAssignmentStatus::Consumed,
+            None,
+            now,
+        )
+        .await?;
+    }
+    draft.status = EvaluationDraftStatus::Finalized;
+    draft.version = draft
+        .version
+        .checked_add(1)
+        .ok_or_else(|| ApiError::internal("evaluation draft version overflow"))?;
+    draft.finalized_evaluation_id = Some(evaluation_id);
+    draft.updated_at = now;
+    draft.finalized_at = Some(now);
+    let updated = sqlx::query(
+        "update hepta_paper_evaluation_drafts
+         set status='finalized',version=$1,record_json=$2::jsonb,updated_at=$3,finalized_at=$3
+         where evaluation_id=$4 and paper_project_id=$5 and status='open' and version=$6",
+    )
+    .bind(i64::try_from(draft.version).map_err(|_| ApiError::internal("version overflow"))?)
+    .bind(
+        serde_json::to_value(&draft)
+            .map_err(|error| ApiError::internal(format!("encode evaluation draft: {error}")))?,
+    )
+    .bind(now)
+    .bind(evaluation_id)
+    .bind(paper_id)
+    .bind(
+        i64::try_from(request.expected_draft_version)
+            .map_err(|_| ApiError::internal("version overflow"))?,
+    )
+    .execute(&mut *tx)
+    .await
+    .map_err(ApiError::database)?;
+    if updated.rows_affected() != 1 {
+        return Err(ApiError::conflict(
+            "evaluation_draft_version_conflict",
+            "evaluation draft changed concurrently",
+        ));
+    }
+    insert_room_event_postgres(
+        &mut tx,
+        OPERATION,
+        &request.idempotency_key,
+        "hepta.paper_raid.evaluation.recorded.v1",
+        paper_id,
+        paper_id,
+        evaluation.version,
+        json!({"evaluation_id":evaluation_id,"status":evaluation.status,"settlement_state":evaluation.settlement_state,"paper_score_hash":evaluation.paper_score.score_hash}),
+    )
+    .await?;
+    insert_room_event_postgres(
+        &mut tx,
+        OPERATION,
+        &format!("{}:draft", request.idempotency_key),
+        "hepta.paper_raid.evaluation_draft.finalized.v1",
+        paper_id,
+        paper_id,
+        draft.version,
+        json!({"evaluation_id":evaluation_id,"review_round":draft.review_round,"draft_hash":draft.draft_hash,"consumed_panel_assignment_ids":panel_assignment_ids}),
+    )
+    .await?;
+    finish_postgres_idempotent(
+        &mut tx,
+        OPERATION,
+        &request.idempotency_key,
+        &body_hash,
+        Some(evaluation_id),
+        StatusCode::CREATED,
+        &evaluation,
+    )
+    .await?;
+    tx.commit().await.map_err(ApiError::database)?;
+    Ok((StatusCode::CREATED, Json(evaluation)))
+}
+
 async fn create_paper_evaluation(
     State(state): State<AppState>,
     Path(paper_id): Path<Uuid>,
@@ -1905,7 +5511,23 @@ async fn create_paper_evaluation(
         let ledger =
             load_contribution_ledger_memory(&next, paper_id, &request.release_candidate_hash)?;
         let version = validate_supersession_memory(&next, paper_id, &request)?;
-        let prepared = validate_evaluation_context(&context, &submission, &ledger, &request, now)?;
+        ensure_evaluation_draft_slot_memory(
+            &next,
+            paper_id,
+            submission.submission_id,
+            version,
+            request.evaluation_id,
+        )?;
+        let prepared =
+            validate_evaluation_context(&context, &submission, &ledger, &request, now, true)?;
+        enforce_evaluation_assignments(
+            paper_id,
+            submission.submission_id,
+            version,
+            &request,
+            next.review.assignments.values(),
+            now,
+        )?;
         let (evaluator, evaluator_key) = active_player_key_memory(
             &next,
             request.evaluator_player_id,
@@ -2001,8 +5623,35 @@ async fn create_paper_evaluation(
     let ledger =
         load_contribution_ledger_postgres(&mut tx, paper_id, &request.release_candidate_hash)
             .await?;
+    let candidate_version = validate_supersession_postgres(&mut tx, paper_id, &request).await?;
+    lock_evaluation_round_postgres(&mut tx, paper_id, candidate_version).await?;
+    lock_evaluation_identity_postgres(&mut tx, request.evaluation_id).await?;
     let version = validate_supersession_postgres(&mut tx, paper_id, &request).await?;
-    let prepared = validate_evaluation_context(&context, &submission, &ledger, &request, now)?;
+    if version != candidate_version {
+        return Err(ApiError::conflict(
+            "evaluation_round_changed",
+            "review round changed while the legacy evaluation was being created",
+        ));
+    }
+    ensure_evaluation_draft_slot_postgres(
+        &mut tx,
+        paper_id,
+        submission.submission_id,
+        version,
+        request.evaluation_id,
+    )
+    .await?;
+    let prepared =
+        validate_evaluation_context(&context, &submission, &ledger, &request, now, true)?;
+    let assignments = load_review_assignments_postgres(&mut tx, paper_id).await?;
+    enforce_evaluation_assignments(
+        paper_id,
+        submission.submission_id,
+        version,
+        &request,
+        assignments.iter(),
+        now,
+    )?;
     let (evaluator, evaluator_key) = active_player_key_postgres(
         &mut tx,
         request.evaluator_player_id,
@@ -2586,6 +6235,14 @@ async fn create_paper_reproduction(
             })?;
         let version = reproduction_version_memory(&next, evaluation_id, &request)?;
         let (report, frame) = prepare_reproduction(&context, &evaluation, &request, version, now)?;
+        enforce_reproducer_assignment(
+            paper_id,
+            evaluation.submission_id,
+            evaluation.version,
+            request.reproducer_player_id,
+            next.review.assignments.values(),
+            now,
+        )?;
         let (player, key) = active_player_key_memory(
             &next,
             request.reproducer_player_id,
@@ -2658,6 +6315,15 @@ async fn create_paper_reproduction(
     let evaluation: PaperEvaluation = decode_record(row.get("record_json"), "paper evaluation")?;
     let version = reproduction_version_postgres(&mut tx, evaluation_id, &request).await?;
     let (report, frame) = prepare_reproduction(&context, &evaluation, &request, version, now)?;
+    let assignments = load_review_assignments_postgres(&mut tx, paper_id).await?;
+    enforce_reproducer_assignment(
+        paper_id,
+        evaluation.submission_id,
+        evaluation.version,
+        request.reproducer_player_id,
+        assignments.iter(),
+        now,
+    )?;
     let (player, key) = active_player_key_postgres(
         &mut tx,
         request.reproducer_player_id,
@@ -3394,14 +7060,16 @@ fn project_settlement_states(
 
 fn review_actor_allowed(
     player_id: Uuid,
-    context: &ReviewPaperContext,
+    team: &ResearchTeam,
     model: &PaperReviewReadModel,
+    now: DateTime<Utc>,
 ) -> bool {
-    context
-        .team
-        .members
+    team.members
         .iter()
         .any(|member| member.player_id == player_id)
+        || model.assignments.iter().any(|assignment| {
+            assignment.player_id == player_id && review_assignment_active(assignment, now)
+        })
         || model.evaluations.iter().any(|evaluation| {
             evaluation.evaluator_player_id == player_id
                 || evaluation
@@ -3431,10 +7099,27 @@ async fn get_paper_review_state(
     let path = format!("/v2/hepta/papers/{paper_id}/review-state");
     let assertion =
         require_member_read_assertion(&headers, &state, "get_paper_review_state_v1", &path)?;
+    let now = Utc::now();
     if state.pool.is_none() {
+        let finality = state
+            .paper_chain_finality
+            .read()
+            .await
+            .projection_for_paper(paper_id)
+            .map(ConsumerPaperFinalityV1::from_projection)
+            .unwrap_or_else(ConsumerPaperFinalityV1::pending);
         let memory = state.paper_raid.read().await;
-        let context = review_context_memory(&memory, paper_id)?;
+        active_registered_player_memory(&memory, &assertion)?;
+        let context = review_access_context_memory(&memory, paper_id)?;
         let mut model = PaperReviewReadModel {
+            finality,
+            assignments: memory
+                .review
+                .assignments
+                .values()
+                .filter(|record| record.paper_project_id == paper_id)
+                .cloned()
+                .collect(),
             contribution_ledgers: memory
                 .review
                 .contribution_ledgers
@@ -3478,14 +7163,10 @@ async fn get_paper_review_state(
                 .cloned()
                 .collect(),
         };
-        let player = memory.players.get(&assertion.player_id).ok_or_else(|| {
-            ApiError::forbidden("review_actor_not_found", "asserted review actor is unknown")
-        })?;
-        assert_player_identity(&assertion, player)?;
-        if !review_actor_allowed(assertion.player_id, &context, &model) {
+        if !review_actor_allowed(assertion.player_id, &context.team, &model, now) {
             return Err(ApiError::forbidden(
                 "review_state_access_denied",
-                "review state is limited to authors and signed review participants",
+                "review state is limited to authors, assigned actors, and signed review participants",
             ));
         }
         project_settlement_states(&mut model.evaluations, &model.appeals, &model.resolutions);
@@ -3494,8 +7175,28 @@ async fn get_paper_review_state(
     }
     let pool = state.pool.as_ref().expect("checked PostgreSQL pool");
     let mut tx = pool.begin().await.map_err(ApiError::database)?;
-    let context = review_context_postgres(&mut tx, paper_id).await?;
+    active_registered_player_postgres(&mut tx, &assertion).await?;
+    let context = review_access_context_postgres(&mut tx, paper_id).await?;
+    let finality = sqlx::query(
+        "select record_json from hepta_paper_chain_finality_projections
+         where paper_project_id=$1",
+    )
+    .bind(paper_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(ApiError::database)?
+    .map(|row| {
+        decode_record::<PaperChainFinalityProjectionV1>(
+            row.get("record_json"),
+            "Paper Chain finality projection",
+        )
+        .map(ConsumerPaperFinalityV1::from_projection)
+    })
+    .transpose()?
+    .unwrap_or_else(ConsumerPaperFinalityV1::pending);
     let mut model = PaperReviewReadModel {
+        finality,
+        assignments: load_review_assignments_postgres(&mut tx, paper_id).await?,
         contribution_ledgers: load_review_records(
             &mut tx,
             "hepta_paper_contribution_ledgers",
@@ -3534,20 +7235,10 @@ async fn get_paper_review_state(
         )
         .await?,
     };
-    let player_row = sqlx::query("select record_json from hepta_human_players where player_id=$1")
-        .bind(assertion.player_id)
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(ApiError::database)?
-        .ok_or_else(|| {
-            ApiError::forbidden("review_actor_not_found", "asserted review actor is unknown")
-        })?;
-    let player: HumanPlayer = decode_record(player_row.get("record_json"), "human player")?;
-    assert_player_identity(&assertion, &player)?;
-    if !review_actor_allowed(assertion.player_id, &context, &model) {
+    if !review_actor_allowed(assertion.player_id, &context.team, &model, now) {
         return Err(ApiError::forbidden(
             "review_state_access_denied",
-            "review state is limited to authors and signed review participants",
+            "review state is limited to authors, assigned actors, and signed review participants",
         ));
     }
     project_settlement_states(&mut model.evaluations, &model.appeals, &model.resolutions);
@@ -3575,6 +7266,13 @@ async fn load_review_records<T: serde::de::DeserializeOwned>(
 }
 
 fn sort_review_model(model: &mut PaperReviewReadModel) {
+    model.assignments.sort_by_key(|record| {
+        (
+            record.review_round,
+            record.slot.rank(),
+            record.assignment_id,
+        )
+    });
     model
         .contribution_ledgers
         .sort_by_key(|record| record.contribution_ledger_id);
@@ -3630,5 +7328,448 @@ mod tests {
             ethics_transparency_bps: 0,
         };
         assert!(components.validate_and_total().is_err());
+    }
+
+    #[test]
+    fn contribution_xp_is_capped_by_milestone_not_record_count() {
+        assert_eq!(milestone_contribution_points(0, 0), 0);
+        assert_eq!(milestone_contribution_points(1, 0), 100);
+        assert_eq!(milestone_contribution_points(200, 0), 100);
+        assert_eq!(milestone_contribution_points(0, 1), 150);
+        assert_eq!(milestone_contribution_points(0, 200), 150);
+        assert_eq!(milestone_contribution_points(200, 200), 250);
+    }
+
+    fn assignment_fixture(
+        paper_project_id: Uuid,
+        player_id: Uuid,
+        slot: ReviewAssignmentSlot,
+    ) -> ReviewAssignment {
+        let now = Utc::now();
+        ReviewAssignment {
+            schema: REVIEW_ASSIGNMENT_SCHEMA_V1.to_string(),
+            assignment_id: Uuid::new_v4(),
+            paper_project_id,
+            submission_id: Uuid::new_v4(),
+            player_id,
+            review_round: 1,
+            slot,
+            pinned_evaluation_id: None,
+            status: ReviewAssignmentStatus::Claimed,
+            version: 1,
+            claimed_at: now,
+            expires_at: now + chrono::Duration::hours(1),
+            updated_at: now,
+        }
+    }
+
+    fn evaluation_draft_fixture(
+        paper_project_id: Uuid,
+        submission_id: Uuid,
+        evaluator_player_id: Uuid,
+        now: DateTime<Utc>,
+    ) -> PaperEvaluationDraft {
+        let evaluation_id = Uuid::new_v4();
+        let digest = format!("sha256:{}", "0".repeat(64));
+        let mut draft = PaperEvaluationDraft {
+            schema: EVALUATION_DRAFT_SCHEMA_V2.to_string(),
+            evaluation_id,
+            paper_project_id,
+            submission_id,
+            review_round: 1,
+            supersedes_evaluation_id: None,
+            release_candidate_hash: digest.clone(),
+            paper_bundle_hash: digest.clone(),
+            tolerance_policy: TolerancePolicy {
+                schema: TOLERANCE_POLICY_SCHEMA_V1.to_string(),
+                version: "fixture-v1".to_string(),
+                rules: Vec::new(),
+            },
+            tolerance_policy_hash: digest.clone(),
+            reference_metrics_micros: BTreeMap::new(),
+            paper_score: PaperScore {
+                schema: PAPER_SCORE_SCHEMA_V1.to_string(),
+                evaluation_id,
+                paper_project_id,
+                components: PaperScoreComponents {
+                    method_rigor_bps: 0,
+                    experiment_statistics_bps: 0,
+                    reproducibility_bps: 0,
+                    evidence_citations_bps: 0,
+                    value_originality_bps: 0,
+                    argument_expression_bps: 0,
+                    ethics_transparency_bps: 0,
+                },
+                hard_gates: PaperHardGates {
+                    citations_and_data_authentic: false,
+                    failed_runs_disclosed: false,
+                    all_authors_consented: false,
+                    core_claims_have_evidence: false,
+                    artifact_lineage_complete: false,
+                    license_ethics_coi_complete: false,
+                },
+                score_bps: 0,
+                eligible: false,
+                score_hash: digest.clone(),
+                created_at: now,
+            },
+            evaluator_player_id,
+            evaluator_signing_key_id: "fixture-key".to_string(),
+            evaluator_signing_public_key: "fixture-public-key".to_string(),
+            evaluator_signing_public_key_hash: digest.clone(),
+            evaluator_coi_attestation_hash: digest.clone(),
+            evaluator_signed_at_unix: now.timestamp(),
+            evaluator_signature: "fixture-signature".to_string(),
+            evaluation_signing_hash: digest,
+            draft_hash: String::new(),
+            status: EvaluationDraftStatus::Open,
+            version: 1,
+            finalized_evaluation_id: None,
+            created_at: now,
+            expires_at: now + chrono::Duration::hours(1),
+            updated_at: now,
+            finalized_at: None,
+            expired_at: None,
+        };
+        draft.draft_hash = evaluation_draft_hash(&draft).expect("fixture draft hash");
+        draft
+    }
+
+    #[test]
+    fn review_assignment_slots_have_stable_contract_names_and_vacancy_order() {
+        assert_eq!(
+            serde_json::to_value(ReviewAssignmentSlot::Reviewer1).unwrap(),
+            json!("reviewer_1")
+        );
+        assert_eq!(
+            serde_json::to_value(ReviewAssignmentSlot::Reviewer2).unwrap(),
+            json!("reviewer_2")
+        );
+        assert_eq!(
+            serde_json::to_value(ReviewAssignmentStatus::Pinned).unwrap(),
+            json!("pinned")
+        );
+        assert_eq!(
+            serde_json::to_value(ReviewAssignmentStatus::Consumed).unwrap(),
+            json!("consumed")
+        );
+        let paper_id = Uuid::new_v4();
+        let now = Utc::now();
+        let assignments = [assignment_fixture(
+            paper_id,
+            Uuid::new_v4(),
+            ReviewAssignmentSlot::Evaluator,
+        )];
+        assert_eq!(
+            claimable_review_vacancies(
+                paper_id,
+                Uuid::new_v4(),
+                &[],
+                &[],
+                &[],
+                &[],
+                &assignments,
+                now,
+            )
+            .unwrap(),
+            vec![
+                ReviewAssignmentVacancy {
+                    review_round: 1,
+                    slot: ReviewAssignmentSlot::Reviewer1,
+                },
+                ReviewAssignmentVacancy {
+                    review_round: 1,
+                    slot: ReviewAssignmentSlot::Reviewer2,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn assigned_review_raid_reproducer_is_fail_closed() {
+        let paper_id = Uuid::new_v4();
+        let assigned_player = Uuid::new_v4();
+        let assignments = [assignment_fixture(
+            paper_id,
+            assigned_player,
+            ReviewAssignmentSlot::Reproducer,
+        )];
+        let submission_id = assignments[0].submission_id;
+        let now = Utc::now();
+        enforce_reproducer_assignment(
+            paper_id,
+            submission_id,
+            1,
+            assigned_player,
+            assignments.iter(),
+            now,
+        )
+        .unwrap();
+        assert!(enforce_reproducer_assignment(
+            paper_id,
+            submission_id,
+            1,
+            Uuid::new_v4(),
+            assignments.iter(),
+            now,
+        )
+        .is_err());
+        assert!(enforce_reproducer_assignment(
+            Uuid::new_v4(),
+            submission_id,
+            1,
+            Uuid::new_v4(),
+            assignments.iter(),
+            now,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn expired_review_assignment_reopens_its_round_slot() {
+        let paper_id = Uuid::new_v4();
+        let now = Utc::now();
+        let mut expired =
+            assignment_fixture(paper_id, Uuid::new_v4(), ReviewAssignmentSlot::Evaluator);
+        expired.expires_at = now - chrono::Duration::seconds(1);
+        let vacancies = claimable_review_vacancies(
+            paper_id,
+            Uuid::new_v4(),
+            &[],
+            &[],
+            &[],
+            &[],
+            &[expired],
+            now,
+        )
+        .unwrap();
+        assert!(vacancies.contains(&ReviewAssignmentVacancy {
+            review_round: 1,
+            slot: ReviewAssignmentSlot::Evaluator,
+        }));
+    }
+
+    #[test]
+    fn expired_draft_releases_only_its_pinned_panel_and_allows_replacement() {
+        let paper_id = Uuid::new_v4();
+        let evaluator_id = Uuid::new_v4();
+        let reviewer_id = Uuid::new_v4();
+        let now = Utc::now();
+        let mut evaluator =
+            assignment_fixture(paper_id, evaluator_id, ReviewAssignmentSlot::Evaluator);
+        let submission_id = evaluator.submission_id;
+        evaluator.expires_at = now + chrono::Duration::minutes(5);
+        let evaluator_assignment_id = evaluator.assignment_id;
+        let mut reviewer =
+            assignment_fixture(paper_id, reviewer_id, ReviewAssignmentSlot::Reviewer1);
+        reviewer.submission_id = submission_id;
+        reviewer.expires_at = now + chrono::Duration::minutes(5);
+        let reviewer_assignment_id = reviewer.assignment_id;
+        let draft = evaluation_draft_fixture(paper_id, submission_id, evaluator_id, now);
+        let evaluation_id = draft.evaluation_id;
+        let draft_hash = draft.draft_hash.clone();
+        let evaluation_signing_hash = draft.evaluation_signing_hash.clone();
+        let mut memory = PaperRaidMemory::default();
+        memory
+            .review
+            .assignments
+            .insert(evaluator_assignment_id, evaluator);
+        memory
+            .review
+            .assignments
+            .insert(reviewer_assignment_id, reviewer);
+        memory
+            .review
+            .evaluation_drafts
+            .insert(evaluation_id, draft.clone());
+        transition_review_assignment_memory(
+            &mut memory.review,
+            evaluator_assignment_id,
+            ReviewAssignmentStatus::Pinned,
+            Some(evaluation_id),
+            now,
+        )
+        .expect("draft pins evaluator assignment");
+        transition_review_assignment_memory(
+            &mut memory.review,
+            reviewer_assignment_id,
+            ReviewAssignmentStatus::Pinned,
+            Some(evaluation_id),
+            now,
+        )
+        .expect("attestation pins reviewer assignment");
+        let attestation_id = Uuid::new_v4();
+        let old_attestation = EvaluationDraftAttestation {
+            schema: EVALUATION_DRAFT_ATTESTATION_SCHEMA_V1.to_string(),
+            attestation_id,
+            evaluation_id,
+            paper_project_id: paper_id,
+            submission_id,
+            review_round: 1,
+            slot: ReviewAssignmentSlot::Reviewer1,
+            draft_hash,
+            attestation: ReviewAttestation {
+                attestation_id,
+                evaluation_id,
+                evaluation_signing_hash,
+                reviewer_player_id: reviewer_id,
+                verdict: PanelVerdict::Approve,
+                signing_key_id: "fixture-reviewer-key".to_string(),
+                signing_public_key: "fixture-reviewer-public-key".to_string(),
+                signing_public_key_hash: format!("sha256:{}", "1".repeat(64)),
+                coi_attestation_hash: format!("sha256:{}", "2".repeat(64)),
+                signed_at_unix: now.timestamp(),
+                signature: "fixture-reviewer-signature".to_string(),
+            },
+            created_at: now,
+        };
+        memory
+            .review
+            .draft_attestations
+            .insert(old_attestation.attestation_id, old_attestation.clone());
+
+        let after_assignment_deadline = now + chrono::Duration::minutes(10);
+        expire_review_assignments_memory(&mut memory.review, paper_id, after_assignment_deadline)
+            .expect("expiry sweep ignores pinned assignment");
+        expire_stale_evaluation_drafts_memory(
+            &mut memory,
+            paper_id,
+            after_assignment_deadline,
+            "fixture_claim",
+            "fixture-before-deadline",
+        )
+        .expect("live draft remains pinned");
+        let pinned = memory
+            .review
+            .assignments
+            .get(&evaluator_assignment_id)
+            .unwrap();
+        assert_eq!(pinned.status, ReviewAssignmentStatus::Pinned);
+        assert_eq!(pinned.version, 2);
+        assert!(review_assignment_active(pinned, after_assignment_deadline));
+
+        let after_draft_deadline = now + chrono::Duration::hours(2);
+        expire_stale_evaluation_drafts_memory(
+            &mut memory,
+            paper_id,
+            after_draft_deadline,
+            "fixture_claim",
+            "fixture-after-deadline",
+        )
+        .expect("expired draft atomically releases its exact pinned panel");
+        let expired_draft = memory.review.evaluation_drafts.get(&evaluation_id).unwrap();
+        assert_eq!(expired_draft.status, EvaluationDraftStatus::Expired);
+        assert_eq!(expired_draft.version, 2);
+        assert_eq!(expired_draft.expired_at, Some(draft.expires_at));
+        assert!(ensure_evaluation_draft_lease_live(expired_draft, after_draft_deadline).is_err());
+        for assignment_id in [evaluator_assignment_id, reviewer_assignment_id] {
+            let expired = memory.review.assignments.get(&assignment_id).unwrap();
+            assert_eq!(expired.status, ReviewAssignmentStatus::Expired);
+            assert_eq!(expired.version, 3);
+            assert_eq!(expired.pinned_evaluation_id, Some(evaluation_id));
+            assert!(!review_assignment_active(expired, after_draft_deadline));
+        }
+        assert!(claimable_review_vacancies(
+            paper_id,
+            Uuid::new_v4(),
+            &[],
+            &[],
+            &[],
+            &[],
+            &memory
+                .review
+                .assignments
+                .values()
+                .cloned()
+                .collect::<Vec<_>>(),
+            after_draft_deadline,
+        )
+        .unwrap()
+        .contains(&ReviewAssignmentVacancy {
+            review_round: 1,
+            slot: ReviewAssignmentSlot::Evaluator,
+        }));
+        let replacement = evaluation_draft_fixture(
+            paper_id,
+            submission_id,
+            Uuid::new_v4(),
+            after_draft_deadline,
+        );
+        ensure_evaluation_draft_slot_memory(
+            &memory,
+            paper_id,
+            submission_id,
+            1,
+            replacement.evaluation_id,
+        )
+        .expect("expired historical draft does not reserve the active round");
+        assert!(validate_draft_attestation_quorum(&replacement, &[old_attestation]).is_err());
+
+        let mut finalized = replacement;
+        finalized.status = EvaluationDraftStatus::Finalized;
+        finalized.version = 2;
+        finalized.finalized_evaluation_id = Some(finalized.evaluation_id);
+        finalized.finalized_at = Some(after_draft_deadline);
+        assert!(!expire_evaluation_draft(
+            &mut finalized,
+            after_draft_deadline + chrono::Duration::days(2)
+        )
+        .expect("finalized result never enters expiry lifecycle"));
+        assert_eq!(finalized.status, EvaluationDraftStatus::Finalized);
+    }
+
+    #[test]
+    fn evaluation_draft_assignment_requires_exact_active_round_and_slot() {
+        let paper_id = Uuid::new_v4();
+        let player_id = Uuid::new_v4();
+        let now = Utc::now();
+        let mut assignment =
+            assignment_fixture(paper_id, player_id, ReviewAssignmentSlot::Reviewer1);
+        let submission_id = assignment.submission_id;
+
+        exact_active_assignment(
+            paper_id,
+            submission_id,
+            1,
+            player_id,
+            ReviewAssignmentSlot::Reviewer1,
+            std::iter::once(&assignment),
+            now,
+        )
+        .expect("exact active assignment");
+        assert!(exact_active_assignment(
+            paper_id,
+            submission_id,
+            1,
+            player_id,
+            ReviewAssignmentSlot::Reviewer2,
+            std::iter::once(&assignment),
+            now,
+        )
+        .is_err());
+
+        assignment.expires_at = now - chrono::Duration::seconds(1);
+        assert!(exact_active_assignment(
+            paper_id,
+            submission_id,
+            1,
+            player_id,
+            ReviewAssignmentSlot::Reviewer1,
+            std::iter::once(&assignment),
+            now,
+        )
+        .is_err());
+        assignment.status = ReviewAssignmentStatus::Pinned;
+        assignment.pinned_evaluation_id = Some(Uuid::new_v4());
+        exact_active_assignment(
+            paper_id,
+            submission_id,
+            1,
+            player_id,
+            ReviewAssignmentSlot::Reviewer1,
+            std::iter::once(&assignment),
+            now,
+        )
+        .expect("pinned assignment remains authoritative after its original deadline");
     }
 }

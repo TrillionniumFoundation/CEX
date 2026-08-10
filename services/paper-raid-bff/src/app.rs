@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, HashSet},
+    sync::Arc,
+};
 
 use axum::{
     body::Body,
@@ -8,7 +11,7 @@ use axum::{
     routing::{get, post, put},
     Json, Router,
 };
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use http_body_util::BodyExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -16,9 +19,11 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::{
+    access::AccessDirectory,
+    agent_bridge,
     auth::{AuthenticatedSession, SessionStore, CSRF_HEADER},
     cas::CasClient,
-    config::{AlphaIdentity, Config, EdgeScope},
+    config::{AlphaAuthorRole, AlphaIdentity, AlphaIdentityScope, Config, EdgeScope, IdentityMode},
     db,
     error::AppError,
     hepta::{
@@ -30,10 +35,11 @@ use crate::{
 
 #[derive(Clone)]
 pub struct AppState {
-    config: Arc<Config>,
-    pool: PgPool,
-    sessions: SessionStore,
-    hepta: HeptaClient,
+    pub(crate) config: Arc<Config>,
+    pub(crate) pool: PgPool,
+    pub(crate) sessions: SessionStore,
+    pub(crate) access: Option<AccessDirectory>,
+    pub(crate) hepta: HeptaClient,
     nakama: NakamaArchiveClient,
     cas: CasClient,
 }
@@ -43,14 +49,28 @@ impl AppState {
         let pool = db::connect(&config.database_url)
             .await
             .map_err(|error| format!("cannot connect BFF PostgreSQL: {error}"))?;
-        db::migrate(&pool)
-            .await
-            .map_err(|error| format!("cannot migrate BFF PostgreSQL: {error}"))?;
+        match config.identity_mode {
+            IdentityMode::FixedAlpha => db::migrate(&pool)
+                .await
+                .map_err(|error| format!("cannot migrate BFF PostgreSQL: {error}"))?,
+            IdentityMode::InviteAlpha if db::invite_schema_ready(&pool).await => {}
+            IdentityMode::InviteAlpha => {
+                return Err(
+                    "invite-alpha schema is not provisioned; run paper-raid-accessctl with the separate operator DSN before starting the BFF"
+                        .to_string(),
+                )
+            }
+        }
+        let access = config
+            .invite_alpha
+            .as_ref()
+            .map(|invite| AccessDirectory::new(pool.clone(), invite.quota));
         let sessions = SessionStore::new(
             pool.clone(),
             &config.session_key,
             config.session_ttl,
             &config.public_origin,
+            config.invite_alpha.as_ref().map(|invite| invite.quota),
         )?;
         let hepta = HeptaClient::new(
             config.hepta_base.clone(),
@@ -64,6 +84,7 @@ impl AppState {
             config: Arc::new(config),
             pool,
             sessions,
+            access,
             hepta,
             nakama,
             cas,
@@ -74,10 +95,49 @@ impl AppState {
         self.config.identity_for_subject(subject)
     }
 
-    async fn session(&self, headers: &HeaderMap) -> Result<AuthenticatedSession, AppError> {
-        self.sessions
-            .authenticate(headers, |subject| self.identity(subject))
-            .await
+    pub(crate) async fn session(
+        &self,
+        headers: &HeaderMap,
+    ) -> Result<AuthenticatedSession, AppError> {
+        match self.config.identity_mode {
+            IdentityMode::FixedAlpha => {
+                self.sessions
+                    .authenticate(headers, |subject| self.identity(subject))
+                    .await
+            }
+            IdentityMode::InviteAlpha => {
+                let (session_id, subject_id) = self.sessions.authenticate_subject(headers).await?;
+                let identity = self
+                    .access
+                    .as_ref()
+                    .ok_or(AppError::Internal)?
+                    .identity_for_subject(&subject_id)
+                    .await?
+                    .ok_or(AppError::Unauthorized)?;
+                Ok(AuthenticatedSession {
+                    session_id,
+                    identity,
+                })
+            }
+        }
+    }
+
+    /// Resolves an Agent Bridge owner without accepting a browser session,
+    /// login key, cookie, bearer token, or other Agent-side player credential.
+    pub(crate) async fn identity_for_agent_bridge(
+        &self,
+        subject_id: &str,
+    ) -> Result<Option<AlphaIdentity>, AppError> {
+        match self.config.identity_mode {
+            IdentityMode::FixedAlpha => Ok(self.config.identity_for_subject(subject_id)),
+            IdentityMode::InviteAlpha => {
+                self.access
+                    .as_ref()
+                    .ok_or(AppError::Internal)?
+                    .identity_for_subject(subject_id)
+                    .await
+            }
+        }
     }
 }
 
@@ -99,8 +159,36 @@ pub fn router(state: AppState) -> Router {
             post(human_signing_frame),
         )
         .route("/api/hepta/commands", post(forward_hepta_command))
+        .route("/api/agent-bindings", get(agent_bindings))
+        .route(
+            "/api/agent-bridge/pairing-grants",
+            get(agent_bridge::pairing_grant_status).post(agent_bridge::create_pairing_grant),
+        )
+        .route(
+            "/api/agent-bridge/pairing-grants/:grant_id/revoke",
+            post(agent_bridge::revoke_pairing_grant),
+        )
+        .route(
+            "/api/agent-bridge/pairing-context",
+            post(agent_bridge::pairing_context),
+        )
+        .route("/api/agent-bridge/pair", post(agent_bridge::pair_agent))
+        .route(
+            "/api/agent-bridge/binding",
+            get(agent_bridge::agent_binding),
+        )
+        .route("/api/agent-bridge/health", post(agent_bridge::agent_health))
+        .route("/api/agent-bridge/inbox", post(agent_bridge::agent_inbox))
+        .route(
+            "/api/agent-bridge/proposals",
+            post(agent_bridge::agent_proposal),
+        )
         .route("/api/product-events", post(record_browser_product_event))
         .route("/api/papers/:paper_id/timeline", get(paper_timeline))
+        .route(
+            "/api/papers/:paper_id/outcome",
+            post(transition_paper_challenge_outcome),
+        )
         .route(
             "/api/papers/:paper_id/artifacts/:digest",
             put(upload_artifact).get(download_artifact),
@@ -108,6 +196,8 @@ pub fn router(state: AppState) -> Router {
         .route("/league/start", get(league_start))
         .route("/league/onboarding", get(onboarding))
         .route("/league", get(lobby))
+        .route("/league/review", get(review_queue_page))
+        .route("/league/review/:paper_id", get(review_bundle_page))
         .route("/league/formation/:team_id", get(formation))
         .route("/league/papers/:paper_id", get(paper_room))
         .layer(DefaultBodyLimit::max(2 * 1024 * 1024))
@@ -128,13 +218,20 @@ async fn health() -> Json<Health<'static>> {
 }
 
 async fn ready(State(state): State<AppState>) -> Response {
-    let (postgres, hepta, nakama, cas) = tokio::join!(
+    let (postgres, hepta, nakama, cas, access_status, agent_bridge_status) = tokio::join!(
         db::ready(&state.pool),
         state.hepta.ready(),
         state.nakama.ready(),
-        state.cas.ready()
+        state.cas.ready(),
+        async {
+            match &state.access {
+                Some(access) => Some(access.status().await),
+                None => None,
+            }
+        },
+        db::agent_bridge_schema_status(&state.pool),
     );
-    let trust = state.config.identities.len() == 3
+    let trust = state.config.alpha_identity_topology_is_valid()
         && is_root_url(&state.config.hepta_base)
         && is_root_url(&state.config.nakama_base)
         && is_root_url(&state.config.cas.endpoint)
@@ -142,7 +239,29 @@ async fn ready(State(state): State<AppState>) -> Response {
             state.config.edge_scope,
             EdgeScope::LoopbackProcess | EdgeScope::ContainerLoopbackPublish
         );
-    let ready = postgres && hepta && nakama && cas && trust;
+    let access_directory_reachable = access_status
+        .as_ref()
+        .is_none_or(|status| status.directory_reachable);
+    let access_directory_within_capacity = access_status
+        .as_ref()
+        .is_none_or(|status| status.directory_within_capacity);
+    let access_audit_append_only = access_status
+        .as_ref()
+        .is_none_or(|status| status.audit_append_only);
+    let access_topology_ready = access_status
+        .as_ref()
+        .is_none_or(|status| status.topology_ready);
+    let ready = postgres
+        && hepta
+        && nakama
+        && cas
+        && access_directory_reachable
+        && access_directory_within_capacity
+        && access_audit_append_only
+        && access_topology_ready
+        && agent_bridge_status.schema_ready
+        && agent_bridge_status.integrity_ok
+        && trust;
     (
         if ready {
             StatusCode::OK
@@ -155,8 +274,27 @@ async fn ready(State(state): State<AppState>) -> Response {
             "hepta": hepta,
             "nakama": nakama,
             "cas": cas,
+            "access_directory_reachable": access_status.as_ref().map(|status| status.directory_reachable),
+            "access_directory_within_capacity": access_status.as_ref().map(|status| status.directory_within_capacity),
+            "access_audit_append_only": access_status.as_ref().map(|status| status.audit_append_only),
+            "access_topology_ready": access_status.as_ref().map(|status| status.topology_ready),
+            "access_provisioned_accounts": access_status.as_ref().map(|status| status.provisioned_accounts),
+            "access_active_accounts": access_status.as_ref().map(|status| status.active_accounts),
+            "access_authors": access_status.as_ref().map(|status| status.authors),
+            "access_captains": access_status.as_ref().map(|status| status.captains),
+            "access_evidence_authors": access_status.as_ref().map(|status| status.evidence_authors),
+            "access_experiment_authors": access_status.as_ref().map(|status| status.experiment_authors),
+            "access_evaluators": access_status.as_ref().map(|status| status.evaluators),
+            "access_reviewers": access_status.as_ref().map(|status| status.reviewers),
+            "access_reproducers": access_status.as_ref().map(|status| status.reproducers),
+            "agent_bridge_schema_ready": agent_bridge_status.schema_ready,
+            "agent_bridge_integrity_ok": agent_bridge_status.integrity_ok,
+            "identity_mode": match state.config.identity_mode {
+                IdentityMode::FixedAlpha => "fixed_alpha",
+                IdentityMode::InviteAlpha => "invite_alpha",
+            },
             "config_trust": trust,
-            "finality": "pending_only"
+            "finality": "paper_scoped_projection"
         })),
     )
         .into_response()
@@ -186,11 +324,36 @@ async fn alpha_login(
     Json(request): Json<AlphaLogin>,
 ) -> Result<Response, AppError> {
     state.sessions.validate_origin(&headers)?;
-    let identity = state
-        .config
-        .find_identity(&request.login_key)
-        .ok_or(AppError::Unauthorized)?;
-    let issue = state.sessions.issue(&identity).await?;
+    let (identity, expected_session_generation) = match state.config.identity_mode {
+        IdentityMode::FixedAlpha => (
+            state
+                .config
+                .find_identity(&request.login_key)
+                .ok_or(AppError::Unauthorized)?,
+            None,
+        ),
+        IdentityMode::InviteAlpha => {
+            let authentication = state
+                .access
+                .as_ref()
+                .ok_or(AppError::Internal)?
+                .authenticate_or_redeem(&request.login_key)
+                .await?;
+            (
+                authentication.identity,
+                Some(authentication.expected_session_generation),
+            )
+        }
+    };
+    let issue = match expected_session_generation {
+        Some(generation) => {
+            state
+                .sessions
+                .issue_at_generation(&identity, generation)
+                .await?
+        }
+        None => state.sessions.issue(&identity).await?,
+    };
     if let Err(error) = db::record_product_event(
         &state.pool,
         db::ProductEvent {
@@ -256,10 +419,24 @@ async fn session_info(
             "subject_id": session.identity.subject_id,
             "display_name": session.identity.display_name,
             "player_id": session.identity.player_id,
-            "finality": "pending_only"
+            "scopes": &*session.identity.scopes,
+            "author_roles": &*session.identity.author_roles,
+            "finality": "paper_scoped_projection"
         }))
         .into_response(),
     ))
+}
+
+async fn agent_bindings(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Response, AppError> {
+    let session = state.session(&headers).await?;
+    let bindings = state
+        .hepta
+        .list_current_agent_bindings(&session.identity)
+        .await?;
+    Ok(private_no_store(Json(bindings).into_response()))
 }
 
 async fn league_start(
@@ -273,12 +450,15 @@ async fn league_start(
         .await
     {
         Ok(_) => {
+            if !identity_requires_agent_binding(&session.identity) {
+                return Ok(Redirect::to(identity_home_path(&session.identity)).into_response());
+            }
             let bindings = state
                 .hepta
                 .list_current_agent_bindings(&session.identity)
                 .await?;
             if has_active_agent_binding(&bindings, session.identity.player_id)? {
-                Ok(Redirect::to("/league").into_response())
+                Ok(Redirect::to(identity_home_path(&session.identity)).into_response())
             } else {
                 Ok(Redirect::to("/league/onboarding").into_response())
             }
@@ -306,6 +486,9 @@ async fn onboarding(
             &session.identity,
             html::OnboardingStage::Unavailable,
         )),
+        Ok(_) if !identity_requires_agent_binding(&session.identity) => {
+            Ok(Redirect::to(identity_home_path(&session.identity)).into_response())
+        }
         Ok(_) => match state
             .hepta
             .list_current_agent_bindings(&session.identity)
@@ -316,7 +499,7 @@ async fn onboarding(
                     &session.identity,
                     html::OnboardingStage::AgentBinding,
                 )),
-                Ok(true) => Ok(Redirect::to("/league").into_response()),
+                Ok(true) => Ok(Redirect::to(identity_home_path(&session.identity)).into_response()),
                 Err(_) => Ok(html::onboarding(
                     &session.identity,
                     html::OnboardingStage::Unavailable,
@@ -416,6 +599,12 @@ async fn human_signing_frame(
         Ok(next_csrf) => next_csrf,
         Err(error) => return error.into_response(),
     };
+    if !identity_scope_allows_command(&session.identity, request.command) {
+        return with_rotated_csrf(
+            private_no_store(AppError::Forbidden.into_response()),
+            next_csrf,
+        );
+    }
     let response = match state
         .hepta
         .human_signing_frame(&session.identity, &request)
@@ -440,6 +629,18 @@ async fn forward_hepta_command(
         Ok(next_csrf) => next_csrf,
         Err(error) => return error.into_response(),
     };
+    if !identity_scope_allows_command(&session.identity, command.command) {
+        return with_rotated_csrf(
+            private_no_store(AppError::Forbidden.into_response()),
+            next_csrf,
+        );
+    }
+    if !identity_payload_allows_command(&session.identity, &command) {
+        return with_rotated_csrf(
+            private_no_store(AppError::Forbidden.into_response()),
+            next_csrf,
+        );
+    }
     let result = state
         .hepta
         .forward_command(&session.identity, &command)
@@ -465,6 +666,380 @@ async fn forward_hepta_command(
         Err(error) => error.into_response(),
     };
     with_rotated_csrf(private_no_store(response), next_csrf)
+}
+
+#[derive(Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum GuidedPaperOutcome {
+    Failed,
+    Expired,
+    Abandoned,
+}
+
+impl GuidedPaperOutcome {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Failed => "failed",
+            Self::Expired => "expired",
+            Self::Abandoned => "abandoned",
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GuidedPaperOutcomeRequest {
+    outcome: GuidedPaperOutcome,
+    reason_code: String,
+}
+
+fn guided_outcome_reason_allowed(outcome: GuidedPaperOutcome, reason_code: &str) -> bool {
+    matches!(
+        (outcome, reason_code),
+        (
+            GuidedPaperOutcome::Failed,
+            "quality_gate_failed" | "preregistered_result_failed" | "integrity_failure"
+        ) | (
+            GuidedPaperOutcome::Abandoned,
+            "team_withdrawal" | "resource_unavailable" | "challenge_infeasible"
+        ) | (GuidedPaperOutcome::Expired, "grace_window_elapsed")
+    )
+}
+
+fn room_actor_is_captain(room: &Value, player_id: Uuid) -> Result<bool, AppError> {
+    let members = room
+        .get("team")
+        .and_then(|value| value.get("members"))
+        .and_then(Value::as_array)
+        .ok_or(AppError::Upstream)?;
+    let expected = player_id.to_string();
+    let matches = members
+        .iter()
+        .filter(|member| member.get("player_id").and_then(Value::as_str) == Some(expected.as_str()))
+        .collect::<Vec<_>>();
+    if matches.len() != 1 {
+        return Err(AppError::Upstream);
+    }
+    Ok(matches[0].get("role").and_then(Value::as_str) == Some("captain"))
+}
+
+async fn transition_paper_challenge_outcome(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(paper_id): Path<Uuid>,
+    Json(request): Json<GuidedPaperOutcomeRequest>,
+) -> Response {
+    let session = match state.session(&headers).await {
+        Ok(session) => session,
+        Err(error) => return error.into_response(),
+    };
+    let next_csrf = match state.sessions.consume_csrf(&headers, &session).await {
+        Ok(next_csrf) => next_csrf,
+        Err(error) => return error.into_response(),
+    };
+    let response = transition_paper_challenge_outcome_inner(&state, &session, paper_id, request)
+        .await
+        .unwrap_or_else(|error| error.into_response());
+    with_rotated_csrf(private_no_store(response), next_csrf)
+}
+
+async fn transition_paper_challenge_outcome_inner(
+    state: &AppState,
+    session: &AuthenticatedSession,
+    paper_id: Uuid,
+    request: GuidedPaperOutcomeRequest,
+) -> Result<Response, AppError> {
+    if !session.identity.has_scope(AlphaIdentityScope::Author) {
+        return Err(AppError::Forbidden);
+    }
+    if !guided_outcome_reason_allowed(request.outcome, &request.reason_code) {
+        return Err(AppError::Invalid(
+            "outcome reason is not valid for the selected terminal outcome".into(),
+        ));
+    }
+    let room = state
+        .hepta
+        .get_paper_room(&session.identity, paper_id)
+        .await?;
+    if !room_actor_is_captain(&room, session.identity.player_id)? {
+        return Err(AppError::Forbidden);
+    }
+    let paper = room
+        .get("paper")
+        .filter(|value| value.is_object())
+        .ok_or(AppError::Upstream)?;
+    if paper
+        .get("paper_project_id")
+        .and_then(Value::as_str)
+        .and_then(|value| Uuid::parse_str(value).ok())
+        != Some(paper_id)
+    {
+        return Err(AppError::Upstream);
+    }
+    let current_outcome = paper
+        .get("outcome")
+        .and_then(Value::as_str)
+        .ok_or(AppError::Upstream)?;
+    if current_outcome != "in_progress" {
+        let same_terminal_fact = current_outcome == request.outcome.as_str()
+            && paper.get("outcome_reason").and_then(Value::as_str)
+                == Some(request.reason_code.as_str());
+        if same_terminal_fact {
+            let mut response = Json(paper.clone()).into_response();
+            response.headers_mut().insert(
+                "x-paper-raid-terminal-recovered",
+                HeaderValue::from_static("authoritative-self-read"),
+            );
+            return Ok(response);
+        }
+        return Err(AppError::Conflict(
+            "paper already has a different immutable challenge outcome".into(),
+        ));
+    }
+    if request.outcome == GuidedPaperOutcome::Expired {
+        let deadline_at = paper
+            .get("deadline_at")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                AppError::Conflict(
+                    "expired outcome is unavailable without an authoritative deadline".into(),
+                )
+            })?;
+        let grace_expires_at = paper
+            .get("grace_expires_at")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                AppError::Conflict(
+                    "expired outcome is unavailable without an authoritative grace deadline".into(),
+                )
+            })?;
+        let deadline_at = DateTime::parse_from_rfc3339(deadline_at)
+            .map_err(|_| AppError::Upstream)?
+            .with_timezone(&Utc);
+        let grace_expires_at = DateTime::parse_from_rfc3339(grace_expires_at)
+            .map_err(|_| AppError::Upstream)?
+            .with_timezone(&Utc);
+        if grace_expires_at < deadline_at {
+            return Err(AppError::Upstream);
+        }
+        if Utc::now() < grace_expires_at {
+            return Err(AppError::Conflict(
+                "expired outcome is unavailable until the authoritative grace window elapses"
+                    .into(),
+            ));
+        }
+    }
+    let expected_version = paper
+        .get("version")
+        .and_then(Value::as_u64)
+        .filter(|version| *version > 0)
+        .ok_or(AppError::Upstream)?;
+    let command = BrowserCommand {
+        command: CommandName::TransitionPaperChallengeOutcome,
+        resource_id: Some(paper_id),
+        child_id: None,
+        session_id: None,
+        idempotency_key: Uuid::new_v4(),
+        payload: json!({
+            "expected_version": expected_version,
+            "outcome": request.outcome.as_str(),
+            "reason_code": request.reason_code,
+        }),
+    };
+    let upstream = state
+        .hepta
+        .forward_command(&session.identity, &command)
+        .await?;
+    let mut response = Response::builder()
+        .status(upstream.status)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(upstream.body))
+        .unwrap_or_else(|_| AppError::Internal.into_response());
+    if upstream.replayed {
+        response.headers_mut().insert(
+            "x-paper-raid-idempotent-replay",
+            HeaderValue::from_static("true"),
+        );
+    }
+    Ok(response)
+}
+
+fn identity_scope_allows_command(identity: &AlphaIdentity, command: CommandName) -> bool {
+    let author = || identity.has_scope(AlphaIdentityScope::Author);
+    let evaluator = || {
+        !identity.has_scope(AlphaIdentityScope::Author)
+            && identity.has_scope(AlphaIdentityScope::Evaluator)
+    };
+    let reviewer = || {
+        !identity.has_scope(AlphaIdentityScope::Author)
+            && identity.has_scope(AlphaIdentityScope::Reviewer)
+    };
+    let reproducer = || {
+        !identity.has_scope(AlphaIdentityScope::Author)
+            && identity.has_scope(AlphaIdentityScope::Reproducer)
+    };
+    match command {
+        CommandName::RotateHumanSigningKey
+        | CommandName::RevokeHumanSigningKey
+        | CommandName::CreateAgentBinding
+        | CommandName::RotateAgentBindingKey => true,
+        // Only the dedicated guided endpoint may issue this command. It
+        // derives the Paper locator and version from a fresh Hepta room read.
+        CommandName::TransitionPaperChallengeOutcome => false,
+        CommandName::ClaimReviewAssignment => identity_has_review_scope(identity),
+        // The legacy atomic evaluation body bundled two reviewers' signatures.
+        // Browser callers must use the immutable draft/quorum protocol instead.
+        CommandName::CreatePaperEvaluation => false,
+        CommandName::CreatePaperEvaluationDraft => evaluator(),
+        CommandName::SubmitEvaluationDraftAttestation => reviewer(),
+        CommandName::FinalizePaperEvaluationDraft => evaluator(),
+        CommandName::SubmitReproduction => reproducer(),
+        // The protocol excludes authors, the appellant, evaluator and panel
+        // reviewers from resolving an Appeal.  In the seven-identity Alpha
+        // topology the independent reproducer is the remaining eligible
+        // human authority.
+        CommandName::ResolveAppeal => reproducer(),
+        CommandName::CreateResearchTeam
+        | CommandName::AcceptResearchTeamMembership
+        | CommandName::LockResearchTeam
+        | CommandName::CreatePaperProject
+        | CommandName::TransitionPaperProject
+        | CommandName::CreatePaperWorkItem
+        | CommandName::TransitionPaperWorkItem
+        | CommandName::CreatePaperRevision
+        | CommandName::PromotePaperReleaseCandidate
+        | CommandName::CreateAuthorshipConsent
+        | CommandName::FinalizeJointPaperSubmission
+        | CommandName::IssueResearchSessionAuthorizationSet
+        | CommandName::ReplaceResearchSessionAuthorizationSet
+        | CommandName::CreateNakamaResearchSessionControl
+        | CommandName::ResumeNakamaResearchSessionControl
+        | CommandName::ReplaceNakamaResearchSessionRosterControl
+        | CommandName::CompleteNakamaResearchSessionControl
+        | CommandName::QueueMatchmaking
+        | CommandName::CancelMatchmakingTicket
+        | CommandName::DecideTeamProposal
+        | CommandName::MaterializeTeamProposal
+        | CommandName::CreateEvidenceCard
+        | CommandName::CreateCitationRecord
+        | CommandName::CreateExperimentPlan
+        | CommandName::CreateRunRecord
+        | CommandName::CreateFigureLineage
+        | CommandName::CreateClaimRecord
+        | CommandName::AcquireSectionLease
+        | CommandName::SubmitAgentProposal
+        | CommandName::RecordHumanDecision
+        | CommandName::RegisterArtifact
+        | CommandName::CreateSectionRevision
+        | CommandName::SubmitReview
+        | CommandName::MergeSection
+        | CommandName::CreateContributionLedger
+        | CommandName::SubmitAppeal => author(),
+    }
+}
+
+fn identity_has_review_scope(identity: &AlphaIdentity) -> bool {
+    !identity.has_scope(AlphaIdentityScope::Author)
+        && (identity.has_scope(AlphaIdentityScope::Evaluator)
+            || identity.has_scope(AlphaIdentityScope::Reviewer)
+            || identity.has_scope(AlphaIdentityScope::Reproducer))
+}
+
+fn identity_requires_agent_binding(identity: &AlphaIdentity) -> bool {
+    identity.has_scope(AlphaIdentityScope::Author)
+        || identity.has_scope(AlphaIdentityScope::Reproducer)
+}
+
+fn identity_home_path(identity: &AlphaIdentity) -> &'static str {
+    if identity.has_scope(AlphaIdentityScope::Author) {
+        "/league"
+    } else {
+        "/league/review"
+    }
+}
+
+fn identity_payload_allows_command(identity: &AlphaIdentity, command: &BrowserCommand) -> bool {
+    match command.command {
+        CommandName::QueueMatchmaking => {
+            let Some(roles) = command.payload.get("roles").and_then(Value::as_array) else {
+                return false;
+            };
+            if roles.is_empty() || roles.len() > 3 {
+                return false;
+            }
+            let mut seen = HashSet::new();
+            roles.iter().all(|value| {
+                let Some(role) = value.as_str() else {
+                    return false;
+                };
+                let capability = match role {
+                    "captain" => AlphaAuthorRole::Captain,
+                    "evidence" => AlphaAuthorRole::Evidence,
+                    "experiment" => AlphaAuthorRole::Experiment,
+                    _ => return false,
+                };
+                seen.insert(role) && identity.supports_author_role(capability)
+            })
+        }
+        CommandName::ClaimReviewAssignment => {
+            let player_matches = command
+                .payload
+                .get("player_id")
+                .and_then(Value::as_str)
+                .and_then(|value| Uuid::parse_str(value).ok())
+                == Some(identity.player_id);
+            let slot_allowed = match command.payload.get("slot").and_then(Value::as_str) {
+                Some("evaluator") => identity.has_scope(AlphaIdentityScope::Evaluator),
+                Some("reviewer_1" | "reviewer_2") => {
+                    identity.has_scope(AlphaIdentityScope::Reviewer)
+                }
+                Some("reproducer") => identity.has_scope(AlphaIdentityScope::Reproducer),
+                _ => false,
+            };
+            player_matches && slot_allowed
+        }
+        CommandName::CreatePaperEvaluationDraft => {
+            command
+                .payload
+                .get("evaluator_player_id")
+                .and_then(Value::as_str)
+                .and_then(|value| Uuid::parse_str(value).ok())
+                == Some(identity.player_id)
+        }
+        CommandName::SubmitEvaluationDraftAttestation => {
+            command
+                .payload
+                .get("reviewer_player_id")
+                .and_then(Value::as_str)
+                .and_then(|value| Uuid::parse_str(value).ok())
+                == Some(identity.player_id)
+        }
+        CommandName::SubmitReproduction => {
+            command
+                .payload
+                .get("reproducer_player_id")
+                .and_then(Value::as_str)
+                .and_then(|value| Uuid::parse_str(value).ok())
+                == Some(identity.player_id)
+        }
+        CommandName::SubmitAppeal => {
+            command
+                .payload
+                .get("appellant_player_id")
+                .and_then(Value::as_str)
+                .and_then(|value| Uuid::parse_str(value).ok())
+                == Some(identity.player_id)
+        }
+        CommandName::ResolveAppeal => {
+            command
+                .payload
+                .get("resolver_player_id")
+                .and_then(Value::as_str)
+                .and_then(|value| Uuid::parse_str(value).ok())
+                == Some(identity.player_id)
+        }
+        _ => true,
+    }
 }
 
 #[derive(Deserialize)]
@@ -604,6 +1179,9 @@ async fn record_server_command_event(
 
 async fn lobby(State(state): State<AppState>, headers: HeaderMap) -> Result<Response, AppError> {
     let session = state.session(&headers).await?;
+    if !session.identity.has_scope(AlphaIdentityScope::Author) {
+        return Err(AppError::Forbidden);
+    }
     let (challenges, tickets, proposals, bindings, raid_state) = tokio::join!(
         state.hepta.list_public_challenges(&session.identity),
         state.hepta.list_matchmaking_tickets(&session.identity),
@@ -621,13 +1199,69 @@ async fn lobby(State(state): State<AppState>, headers: HeaderMap) -> Result<Resp
     ))
 }
 
+async fn review_queue_page(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Response, AppError> {
+    let session = state.session(&headers).await?;
+    if !identity_has_review_scope(&session.identity) {
+        return Err(AppError::Forbidden);
+    }
+    let queue = state.hepta.list_review_queue(&session.identity).await;
+    Ok(html::review_queue(&session.identity, read_state(&queue)))
+}
+
+async fn review_bundle_page(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(paper_id): Path<Uuid>,
+) -> Result<Response, AppError> {
+    let session = state.session(&headers).await?;
+    if !identity_has_review_scope(&session.identity) {
+        return Err(AppError::Forbidden);
+    }
+    let queue = state.hepta.list_review_queue(&session.identity).await?;
+    let paper_id_text = paper_id.to_string();
+    let assignment = queue
+        .as_array()
+        .and_then(|items| {
+            items.iter().find(|item| {
+                item.get("paper_project_id").and_then(Value::as_str) == Some(paper_id_text.as_str())
+                    && item
+                        .get("my_assignments")
+                        .and_then(Value::as_array)
+                        .is_some_and(|assignments| !assignments.is_empty())
+            })
+        })
+        .cloned()
+        .ok_or(AppError::Forbidden)?;
+    let (bundle, review_state) = tokio::join!(
+        state
+            .hepta
+            .get_paper_review_bundle(&session.identity, paper_id),
+        state
+            .hepta
+            .get_paper_review_state(&session.identity, paper_id),
+    );
+    let bundle = bundle?;
+    Ok(html::review_bundle(
+        &session.identity,
+        &assignment,
+        &bundle,
+        read_state(&review_state),
+    ))
+}
+
 async fn formation(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(resource_id): Path<Uuid>,
 ) -> Result<Response, AppError> {
     let session = state.session(&headers).await?;
-    let (proposal, team, acceptances, raid_state) = tokio::join!(
+    if !session.identity.has_scope(AlphaIdentityScope::Author) {
+        return Err(AppError::Forbidden);
+    }
+    let (proposal, team, acceptances, raid_state, tickets) = tokio::join!(
         state
             .hepta
             .get_team_proposal(&session.identity, resource_id),
@@ -636,6 +1270,7 @@ async fn formation(
             .hepta
             .get_team_acceptances(&session.identity, resource_id),
         state.hepta.get_player_raid_state(&session.identity),
+        state.hepta.list_matchmaking_tickets(&session.identity),
     );
     Ok(html::formation(
         &session.identity,
@@ -644,6 +1279,7 @@ async fn formation(
         read_state(&team),
         read_state(&acceptances),
         read_state(&raid_state),
+        read_state(&tickets),
     ))
 }
 
@@ -653,6 +1289,9 @@ async fn paper_room(
     Path(paper_id): Path<Uuid>,
 ) -> Result<Response, AppError> {
     let session = state.session(&headers).await?;
+    if !session.identity.has_scope(AlphaIdentityScope::Author) {
+        return Err(AppError::Forbidden);
+    }
     let (room, events, review) = tokio::join!(
         state.hepta.get_paper_room(&session.identity, paper_id),
         state
@@ -690,14 +1329,25 @@ async fn paper_timeline(
 ) -> Result<Response, AppError> {
     validate_timeline_query(&query)?;
     let session = state.session(&headers).await?;
-    let (room, events) = tokio::join!(
+    if !session.identity.has_scope(AlphaIdentityScope::Author) {
+        return Err(AppError::Forbidden);
+    }
+    let (room, events, review) = tokio::join!(
         state.hepta.get_paper_room(&session.identity, paper_id),
         state
             .hepta
             .list_paper_room_events(&session.identity, paper_id, query.after_cursor),
+        state
+            .hepta
+            .get_paper_review_state(&session.identity, paper_id),
     );
     let room = room?;
     let events = events?;
+    // Finality is an ancillary projection for the live timeline.  A fresh
+    // Paper has no release candidate yet, so the review aggregate may
+    // legitimately be absent/conflicted while authoring is fully available.
+    // Never let that expected state break Paper Room synchronization.
+    let finality = timeline_finality_projection(review);
     let accesses = latest_session_accesses(member_session_accesses(&room)?, None)?;
     if accesses.len() > MAX_TIMELINE_SESSION_HEADS {
         return Err(AppError::Upstream);
@@ -744,7 +1394,7 @@ async fn paper_timeline(
             "hepta_events": events,
             "research_sessions": session_heads,
             "nakama_archives": archives,
-            "finality": "pending_only",
+            "finality": finality,
         }))
         .into_response(),
     ))
@@ -1055,9 +1705,35 @@ fn read_state(result: &Result<Value, AppError>) -> html::ReadState<'_> {
     }
 }
 
+fn pending_consumer_finality() -> Value {
+    json!({
+        "schema": "hepta.paper_raid.consumer_finality.v1",
+        "status": "pending_finality",
+        "ranking_eligible": false,
+        "reward_eligible": false,
+        "score_eligible": false,
+        "economic_eligible": false,
+        "verified_at": null,
+    })
+}
+
+fn timeline_finality_projection(review: Result<Value, AppError>) -> Value {
+    match review {
+        Ok(value) => value
+            .get("finality")
+            .cloned()
+            .unwrap_or_else(pending_consumer_finality),
+        Err(AppError::NotFound | AppError::Conflict(_)) => pending_consumer_finality(),
+        Err(error) => {
+            tracing::warn!(%error, "Paper finality projection unavailable during timeline read");
+            pending_consumer_finality()
+        }
+    }
+}
+
 fn has_active_agent_binding(value: &Value, player_id: Uuid) -> Result<bool, AppError> {
     let bindings = value.as_array().ok_or(AppError::Upstream)?;
-    let mut active = false;
+    let mut active_count = 0_u32;
     for binding in bindings {
         let owner = binding
             .get("player_id")
@@ -1083,17 +1759,208 @@ fn has_active_agent_binding(value: &Value, player_id: Uuid) -> Result<bool, AppE
             return Err(AppError::Upstream);
         }
         match status {
-            "active" => active = true,
+            "active" => active_count += 1,
             "revoked" => {}
             _ => return Err(AppError::Upstream),
         }
     }
-    Ok(active)
+    Ok(active_count == 1)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn identity_scopes_separate_author_evaluator_and_reproducer_commands() {
+        let author = AlphaIdentity::test_identity("author", Uuid::new_v4(), Uuid::new_v4());
+        assert!(identity_scope_allows_command(
+            &author,
+            CommandName::QueueMatchmaking
+        ));
+        assert!(!identity_scope_allows_command(
+            &author,
+            CommandName::TransitionPaperChallengeOutcome
+        ));
+        assert!(!identity_scope_allows_command(
+            &author,
+            CommandName::CreatePaperEvaluation
+        ));
+
+        let mut evaluator =
+            AlphaIdentity::test_identity("evaluator", Uuid::new_v4(), Uuid::new_v4());
+        evaluator.scopes = Arc::from([AlphaIdentityScope::Evaluator]);
+        evaluator.author_roles = Arc::from([]);
+        assert_eq!(identity_home_path(&evaluator), "/league/review");
+        assert!(!identity_requires_agent_binding(&evaluator));
+        assert!(!identity_scope_allows_command(
+            &evaluator,
+            CommandName::CreatePaperEvaluation
+        ));
+        assert!(identity_scope_allows_command(
+            &evaluator,
+            CommandName::CreatePaperEvaluationDraft
+        ));
+        assert!(identity_scope_allows_command(
+            &evaluator,
+            CommandName::FinalizePaperEvaluationDraft
+        ));
+        assert!(!identity_scope_allows_command(
+            &evaluator,
+            CommandName::SubmitEvaluationDraftAttestation
+        ));
+        assert!(identity_scope_allows_command(
+            &evaluator,
+            CommandName::ClaimReviewAssignment
+        ));
+        assert!(!identity_scope_allows_command(
+            &evaluator,
+            CommandName::QueueMatchmaking
+        ));
+
+        let mut reproducer =
+            AlphaIdentity::test_identity("reproducer", Uuid::new_v4(), Uuid::new_v4());
+        reproducer.scopes = Arc::from([AlphaIdentityScope::Reproducer]);
+        reproducer.author_roles = Arc::from([]);
+        assert_eq!(identity_home_path(&reproducer), "/league/review");
+        assert!(identity_requires_agent_binding(&reproducer));
+        assert!(identity_scope_allows_command(
+            &reproducer,
+            CommandName::SubmitReproduction
+        ));
+        assert!(identity_scope_allows_command(
+            &reproducer,
+            CommandName::ResolveAppeal
+        ));
+        assert!(!identity_scope_allows_command(
+            &reproducer,
+            CommandName::CreatePaperEvaluation
+        ));
+
+        let mut mixed_author = evaluator.clone();
+        mixed_author.scopes =
+            Arc::from([AlphaIdentityScope::Author, AlphaIdentityScope::Evaluator]);
+        assert!(!identity_scope_allows_command(
+            &mixed_author,
+            CommandName::CreatePaperEvaluationDraft
+        ));
+        assert!(!identity_has_review_scope(&mixed_author));
+    }
+
+    #[test]
+    fn guided_terminal_outcome_reasons_are_typed_and_outcome_specific() {
+        assert!(guided_outcome_reason_allowed(
+            GuidedPaperOutcome::Failed,
+            "preregistered_result_failed"
+        ));
+        assert!(guided_outcome_reason_allowed(
+            GuidedPaperOutcome::Abandoned,
+            "team_withdrawal"
+        ));
+        assert!(guided_outcome_reason_allowed(
+            GuidedPaperOutcome::Expired,
+            "grace_window_elapsed"
+        ));
+        assert!(!guided_outcome_reason_allowed(
+            GuidedPaperOutcome::Expired,
+            "team_withdrawal"
+        ));
+        assert!(!guided_outcome_reason_allowed(
+            GuidedPaperOutcome::Failed,
+            "invented"
+        ));
+    }
+
+    #[test]
+    fn matchmaking_payload_cannot_exceed_identity_role_capabilities() {
+        let mut evidence = AlphaIdentity::test_identity("evidence", Uuid::new_v4(), Uuid::new_v4());
+        evidence.author_roles = Arc::from([AlphaAuthorRole::Evidence]);
+        let command = |roles: Value| BrowserCommand {
+            command: CommandName::QueueMatchmaking,
+            resource_id: None,
+            child_id: None,
+            session_id: None,
+            idempotency_key: Uuid::new_v4(),
+            payload: json!({"roles": roles}),
+        };
+        assert!(identity_payload_allows_command(
+            &evidence,
+            &command(json!(["evidence"]))
+        ));
+        assert!(!identity_payload_allows_command(
+            &evidence,
+            &command(json!(["captain"]))
+        ));
+        assert!(!identity_payload_allows_command(
+            &evidence,
+            &command(json!(["evidence", "evidence"]))
+        ));
+        assert!(!identity_payload_allows_command(
+            &evidence,
+            &command(json!(["invented"]))
+        ));
+    }
+
+    #[test]
+    fn review_claim_payload_is_bound_to_identity_and_exact_slot_scope() {
+        let mut reviewer = AlphaIdentity::test_identity("reviewer", Uuid::new_v4(), Uuid::new_v4());
+        reviewer.scopes = Arc::from([AlphaIdentityScope::Reviewer]);
+        reviewer.author_roles = Arc::from([]);
+        let command = |player_id: Uuid, slot: &str| BrowserCommand {
+            command: CommandName::ClaimReviewAssignment,
+            resource_id: Some(Uuid::new_v4()),
+            child_id: None,
+            session_id: None,
+            idempotency_key: Uuid::new_v4(),
+            payload: json!({
+                "assignment_id": Uuid::new_v4(),
+                "player_id": player_id,
+                "review_round": 1,
+                "slot": slot,
+            }),
+        };
+        assert!(identity_payload_allows_command(
+            &reviewer,
+            &command(reviewer.player_id, "reviewer_1")
+        ));
+        assert!(!identity_payload_allows_command(
+            &reviewer,
+            &command(Uuid::new_v4(), "reviewer_1")
+        ));
+        assert!(!identity_payload_allows_command(
+            &reviewer,
+            &command(reviewer.player_id, "evaluator")
+        ));
+        assert!(!identity_payload_allows_command(
+            &reviewer,
+            &command(reviewer.player_id, "invented")
+        ));
+    }
+
+    #[test]
+    fn fresh_paper_timeline_projects_pending_without_a_review_aggregate() {
+        let pending = timeline_finality_projection(Err(AppError::Conflict(
+            "release_candidate_required".into(),
+        )));
+        assert_eq!(pending["status"], "pending_finality");
+        assert_eq!(pending["ranking_eligible"], false);
+
+        let verified = json!({
+            "finality": {
+                "schema": "hepta.paper_raid.consumer_finality.v1",
+                "status": "verified_finality",
+                "ranking_eligible": false,
+                "reward_eligible": false,
+                "score_eligible": false,
+                "economic_eligible": false,
+                "verified_at": "2026-08-10T00:00:00Z"
+            }
+        });
+        assert_eq!(
+            timeline_finality_projection(Ok(verified))["status"],
+            "verified_finality"
+        );
+    }
 
     #[test]
     fn timeline_selects_only_latest_player_scoped_roster() {
@@ -1300,6 +2167,22 @@ mod tests {
             "status": "active"
         }]);
         assert!(has_active_agent_binding(&active, player_id).expect("active binding"));
+        let duplicate_active = json!([
+            {
+                "binding_id": binding_id,
+                "player_id": player_id,
+                "agent_id": "did:trnm:agent:alpha",
+                "status": "active"
+            },
+            {
+                "binding_id": Uuid::new_v4(),
+                "player_id": player_id,
+                "agent_id": "did:trnm:agent:beta",
+                "status": "active"
+            }
+        ]);
+        assert!(!has_active_agent_binding(&duplicate_active, player_id)
+            .expect("multiple active bindings are ambiguous"));
 
         let revoked = json!([{
             "binding_id": binding_id,

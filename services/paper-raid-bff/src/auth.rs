@@ -17,7 +17,11 @@ use sqlx::{PgPool, Row};
 use subtle::ConstantTimeEq;
 use uuid::Uuid;
 
-use crate::{config::AlphaIdentity, error::AppError};
+use crate::{
+    access,
+    config::{AlphaIdentity, DurableQuotaConfig},
+    error::AppError,
+};
 
 pub const SESSION_COOKIE: &str = "paper_raid_session";
 pub const CSRF_HEADER: &str = "x-paper-raid-csrf";
@@ -29,6 +33,7 @@ pub struct SessionStore {
     cipher: Arc<LessSafeKey>,
     ttl: Duration,
     public_origin: String,
+    mutation_quota: Option<DurableQuotaConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -58,6 +63,7 @@ impl SessionStore {
         key_bytes: &[u8; 32],
         ttl: Duration,
         public_origin: &url::Url,
+        mutation_quota: Option<DurableQuotaConfig>,
     ) -> Result<Self, String> {
         let key = UnboundKey::new(&aead::AES_256_GCM, key_bytes)
             .map_err(|_| "session key is not valid for AES-256-GCM".to_string())?;
@@ -66,10 +72,27 @@ impl SessionStore {
             cipher: Arc::new(LessSafeKey::new(key)),
             ttl,
             public_origin: public_origin.as_str().trim_end_matches('/').to_string(),
+            mutation_quota,
         })
     }
 
     pub async fn issue(&self, identity: &AlphaIdentity) -> Result<SessionIssue, AppError> {
+        self.issue_inner(identity, None).await
+    }
+
+    pub async fn issue_at_generation(
+        &self,
+        identity: &AlphaIdentity,
+        expected_generation: i64,
+    ) -> Result<SessionIssue, AppError> {
+        self.issue_inner(identity, Some(expected_generation)).await
+    }
+
+    async fn issue_inner(
+        &self,
+        identity: &AlphaIdentity,
+        expected_generation: Option<i64>,
+    ) -> Result<SessionIssue, AppError> {
         let mut tx = self.pool.begin().await?;
         sqlx::query(
             "INSERT INTO paper_raid_bff_session_generation(subject_id, generation) \
@@ -84,6 +107,9 @@ impl SessionStore {
         .bind(&identity.subject_id)
         .fetch_one(&mut *tx)
         .await?;
+        if expected_generation.is_some_and(|expected| expected != generation) {
+            return Err(AppError::Unauthorized);
+        }
 
         let session_id = Uuid::new_v4();
         let csrf = random_secret();
@@ -122,6 +148,18 @@ impl SessionStore {
         headers: &HeaderMap,
         identity_lookup: impl FnOnce(&str) -> Option<AlphaIdentity>,
     ) -> Result<AuthenticatedSession, AppError> {
+        let (session_id, subject_id) = self.authenticate_subject(headers).await?;
+        let identity = identity_lookup(&subject_id).ok_or(AppError::Unauthorized)?;
+        Ok(AuthenticatedSession {
+            session_id,
+            identity,
+        })
+    }
+
+    pub async fn authenticate_subject(
+        &self,
+        headers: &HeaderMap,
+    ) -> Result<(Uuid, String), AppError> {
         let encrypted = cookie_value(headers, SESSION_COOKIE).ok_or(AppError::Unauthorized)?;
         let ticket = self.open_ticket(encrypted)?;
         if ticket.schema != "paper-raid-bff.session.v1"
@@ -156,17 +194,13 @@ impl SessionStore {
         {
             return Err(AppError::Unauthorized);
         }
-        let identity = identity_lookup(&ticket.subject_id).ok_or(AppError::Unauthorized)?;
         sqlx::query(
             "UPDATE paper_raid_bff_sessions SET last_seen_at = now() WHERE session_id = $1",
         )
         .bind(ticket.session_id)
         .execute(&self.pool)
         .await?;
-        Ok(AuthenticatedSession {
-            session_id: ticket.session_id,
-            identity,
-        })
+        Ok((ticket.session_id, ticket.subject_id))
     }
 
     pub fn validate_origin(&self, headers: &HeaderMap) -> Result<(), AppError> {
@@ -192,6 +226,9 @@ impl SessionStore {
             .ok_or(AppError::Forbidden)?;
         if presented.is_empty() || presented.len() > 128 {
             return Err(AppError::Forbidden);
+        }
+        if let Some(quota) = self.mutation_quota {
+            access::enforce_mutation_quota(&self.pool, quota, &session.identity.subject_id).await?;
         }
 
         let old_hash = digest(presented.as_bytes());
@@ -386,7 +423,7 @@ mod tests {
         let identity = AlphaIdentity::test_identity(&subject, Uuid::new_v4(), Uuid::new_v4());
         let origin = Url::parse("http://127.0.0.1:7020").expect("origin");
         let key = [23_u8; 32];
-        let store = SessionStore::new(pool.clone(), &key, Duration::from_secs(3600), &origin)
+        let store = SessionStore::new(pool.clone(), &key, Duration::from_secs(3600), &origin, None)
             .expect("session store");
         let first = store.issue(&identity).await.expect("issue session");
         let cookie = first
@@ -422,8 +459,9 @@ mod tests {
             .expect("commit rotation before simulated response loss");
         assert_ne!(lost_next, first.csrf);
 
-        let restarted = SessionStore::new(pool.clone(), &key, Duration::from_secs(3600), &origin)
-            .expect("restart session store");
+        let restarted =
+            SessionStore::new(pool.clone(), &key, Duration::from_secs(3600), &origin, None)
+                .expect("restart session store");
         let recovered_session = restarted
             .authenticate(&auth_headers, |_| Some(identity.clone()))
             .await
@@ -455,6 +493,10 @@ mod tests {
             restarted
                 .authenticate(&auth_headers, |_| Some(identity.clone()))
                 .await,
+            Err(AppError::Unauthorized)
+        ));
+        assert!(matches!(
+            restarted.issue_at_generation(&identity, 0).await,
             Err(AppError::Unauthorized)
         ));
     }

@@ -4,6 +4,8 @@
 //! Nakama research-session runtime. They deliberately do not widen or alter
 //! any legacy `trnm.match.*.v1` contract.
 
+use std::collections::HashSet;
+
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
@@ -13,6 +15,7 @@ use uuid::Uuid;
 pub const PAPER_RAID_PROTOCOL_V2: &str = "hepta.paper_raid.v2";
 pub const JSON_SAFE_U64_MAX: u64 = 9_007_199_254_740_991;
 pub const PAPER_RELEASE_CANDIDATE_V2: &str = "hepta.paper_raid.release_candidate.v2";
+pub const SECTION_MATERIALIZATION_V1: &str = "hepta.paper_raid.section_materialization.v1";
 pub const PAPER_BUNDLE_V2: &str = "hepta.paper_raid.paper_bundle.v2";
 pub const PAPER_RAID_EVIDENCE_ENVELOPE_V1: &str = "hepta.paper_raid.evidence_envelope.v1";
 pub const PUBLICATION_RELEASE_V1: &str = "hepta.paper_raid.publication_release.v1";
@@ -23,6 +26,10 @@ pub const AUTHORIZATION_SET_CONSUMPTION_RECEIPT_V1: &str =
     "hepta.paper_raid.authorization_set_consumption_receipt.v1";
 pub const HUMAN_KEY_REGISTRATION_V2: &str = "hepta.paper_raid.human_key_registration.v2";
 pub const AGENT_BINDING_PROOF_V2: &str = "hepta.paper_raid.agent_binding_proof.v2";
+pub const AGENT_BINDING_PROOF_V3: &str = "hepta.paper_raid.agent_binding_proof.v3";
+pub const AGENT_CAPABILITY_DISCLOSURE_V1: &str = "hepta.paper_raid.agent_capability_disclosure.v1";
+pub const AGENT_BRIDGE_REQUEST_PROOF_V1: &str = "hepta.paper_raid.agent_bridge_request_proof.v1";
+pub const AGENT_BRIDGE_REQUEST_PROOF_MAX_LIFETIME_SECONDS: i64 = 60;
 pub const AGENT_BINDING_KEY_ROTATION_V2: &str = "hepta.paper_raid.agent_binding_key_rotation.v2";
 pub const HUMAN_KEY_ROTATION_V2: &str = "hepta.paper_raid.human_key_rotation.v2";
 pub const HUMAN_KEY_REVOCATION_V2: &str = "hepta.paper_raid.human_key_revocation.v2";
@@ -473,6 +480,414 @@ pub fn verify_agent_binding_proof(
     let signature = decode_base64_exact::<64>("agent_proof_signature", signature)?;
     key.verify(&message, &Signature::from_bytes(&signature))
         .map_err(|_| "Agent binding proof-of-possession failed".to_string())
+}
+
+/// A bounded, Agent-signed statement of supported task classes.  It is a
+/// self-declaration, not an attestation by Hepta and never grants authority or
+/// scientific, score, ranking, reward, or economic eligibility.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentCapabilityDisclosureAssuranceV1 {
+    SelfDeclaredUnverified,
+}
+
+impl AgentCapabilityDisclosureAssuranceV1 {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::SelfDeclaredUnverified => "self_declared_unverified",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentCapabilityV1 {
+    ArtifactAnalysis,
+    CitationVerification,
+    EvidenceSearch,
+    ExperimentExecution,
+    ExperimentPlanning,
+    Reproduction,
+    ResearchSessionSigning,
+    SectionDrafting,
+}
+
+impl AgentCapabilityV1 {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ArtifactAnalysis => "artifact_analysis",
+            Self::CitationVerification => "citation_verification",
+            Self::EvidenceSearch => "evidence_search",
+            Self::ExperimentExecution => "experiment_execution",
+            Self::ExperimentPlanning => "experiment_planning",
+            Self::Reproduction => "reproduction",
+            Self::ResearchSessionSigning => "research_session_signing",
+            Self::SectionDrafting => "section_drafting",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentResourceClassV1 {
+    ArtifactIo,
+    Browser,
+    CodeExecution,
+    Cpu,
+    Gpu,
+    Network,
+    Sandbox,
+}
+
+impl AgentResourceClassV1 {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ArtifactIo => "artifact_io",
+            Self::Browser => "browser",
+            Self::CodeExecution => "code_execution",
+            Self::Cpu => "cpu",
+            Self::Gpu => "gpu",
+            Self::Network => "network",
+            Self::Sandbox => "sandbox",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AgentCapabilityDisclosureV1 {
+    pub schema: String,
+    pub assurance: AgentCapabilityDisclosureAssuranceV1,
+    pub capabilities: Vec<AgentCapabilityV1>,
+    pub resource_classes: Vec<AgentResourceClassV1>,
+    pub max_parallel_tasks: u32,
+}
+
+pub fn validate_agent_capability_disclosure(
+    disclosure: &AgentCapabilityDisclosureV1,
+) -> Result<(), String> {
+    if disclosure.schema != AGENT_CAPABILITY_DISCLOSURE_V1 {
+        return Err(format!(
+            "unsupported Agent capability disclosure schema {}",
+            disclosure.schema
+        ));
+    }
+    if disclosure.capabilities.is_empty() || disclosure.capabilities.len() > 16 {
+        return Err("Agent capability disclosure must contain 1 to 16 capabilities".to_string());
+    }
+    if disclosure.resource_classes.len() > 16 {
+        return Err(
+            "Agent capability disclosure must contain at most 16 resource classes".to_string(),
+        );
+    }
+    if !(1..=32).contains(&disclosure.max_parallel_tasks) {
+        return Err("max_parallel_tasks must be between 1 and 32".to_string());
+    }
+    if disclosure
+        .capabilities
+        .windows(2)
+        .any(|pair| pair[0].as_str() >= pair[1].as_str())
+    {
+        return Err("Agent capabilities must be lexicographically sorted and unique".to_string());
+    }
+    if disclosure
+        .resource_classes
+        .windows(2)
+        .any(|pair| pair[0].as_str() >= pair[1].as_str())
+    {
+        return Err(
+            "Agent resource classes must be lexicographically sorted and unique".to_string(),
+        );
+    }
+    Ok(())
+}
+
+/// Frozen language-neutral frame for one bounded self-declaration.
+pub fn agent_capability_disclosure_frame(
+    disclosure: &AgentCapabilityDisclosureV1,
+) -> Result<Vec<u8>, String> {
+    validate_agent_capability_disclosure(disclosure)?;
+    let mut frame = CanonicalFrame::new("hepta_paper_raid_agent_capability_disclosure_v1")
+        .string(&disclosure.schema)?
+        .string(disclosure.assurance.as_str())?
+        .u32(
+            u32::try_from(disclosure.capabilities.len())
+                .map_err(|_| "Agent capability count exceeds uint32".to_string())?,
+        );
+    for capability in &disclosure.capabilities {
+        frame = frame.string(capability.as_str())?;
+    }
+    frame = frame.u32(
+        u32::try_from(disclosure.resource_classes.len())
+            .map_err(|_| "Agent resource-class count exceeds uint32".to_string())?,
+    );
+    for resource_class in &disclosure.resource_classes {
+        frame = frame.string(resource_class.as_str())?;
+    }
+    Ok(frame.u32(disclosure.max_parallel_tasks).finish())
+}
+
+pub fn agent_capability_disclosure_hash(
+    disclosure: &AgentCapabilityDisclosureV1,
+) -> Result<String, String> {
+    agent_capability_disclosure_frame(disclosure).map(|frame| sha256_digest(&frame))
+}
+
+/// V3 preserves the V2 identity/key/owner proof and additionally binds the
+/// hash of the exact bounded capability/resource self-declaration.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AgentBindingProofClaimV3 {
+    pub schema: String,
+    pub binding_id: Uuid,
+    pub agent_id: String,
+    pub agent_key_id: String,
+    pub agent_public_key: String,
+    pub agent_public_key_hash: String,
+    pub capability_disclosure_hash: String,
+    pub subject_id: String,
+    pub player_id: Uuid,
+    pub nonce: String,
+    pub issued_at_unix: i64,
+    pub expires_at_unix: i64,
+}
+
+pub fn agent_binding_proof_v3_signing_bytes(
+    claim: &AgentBindingProofClaimV3,
+) -> Result<Vec<u8>, String> {
+    if claim.schema != AGENT_BINDING_PROOF_V3 {
+        return Err(format!(
+            "unsupported Agent binding proof schema {}",
+            claim.schema
+        ));
+    }
+    for (field, value) in [
+        ("agent_id", claim.agent_id.as_str()),
+        ("agent_key_id", claim.agent_key_id.as_str()),
+        ("subject_id", claim.subject_id.as_str()),
+        ("nonce", claim.nonce.as_str()),
+    ] {
+        validate_text(field, value)?;
+    }
+    if claim.issued_at_unix < 0 || claim.expires_at_unix <= claim.issued_at_unix {
+        return Err("Agent binding proof validity interval is invalid".to_string());
+    }
+    let key = decode_base64_exact::<32>("agent_public_key", &claim.agent_public_key)?;
+    if sha256_digest(&key) != claim.agent_public_key_hash {
+        return Err("agent_public_key_hash does not match key".to_string());
+    }
+    if claim.agent_key_id != claim.agent_public_key_hash {
+        return Err("agent_key_id must equal agent_public_key_hash".to_string());
+    }
+    Ok(
+        CanonicalFrame::new("hepta_paper_raid_agent_binding_proof_v3")
+            .string(&claim.schema)?
+            .string(&claim.binding_id.to_string())?
+            .string(&claim.agent_id)?
+            .string(&claim.agent_key_id)?
+            .bytes(&key)?
+            .digest(&claim.agent_public_key_hash)?
+            .digest(&claim.capability_disclosure_hash)?
+            .string(&claim.subject_id)?
+            .string(&claim.player_id.to_string())?
+            .string(&claim.nonce)?
+            .i64(claim.issued_at_unix)
+            .i64(claim.expires_at_unix)
+            .finish(),
+    )
+}
+
+pub fn verify_agent_binding_proof_v3(
+    claim: &AgentBindingProofClaimV3,
+    signature: &str,
+) -> Result<(), String> {
+    let message = agent_binding_proof_v3_signing_bytes(claim)?;
+    let key = decode_base64_exact::<32>("agent_public_key", &claim.agent_public_key)?;
+    let key = VerifyingKey::from_bytes(&key)
+        .map_err(|_| "Agent public key is not valid Ed25519".to_string())?;
+    let signature = decode_base64_exact::<64>("agent_proof_signature", signature)?;
+    key.verify(&message, &Signature::from_bytes(&signature))
+        .map_err(|_| "Agent binding proof-of-possession failed".to_string())
+}
+
+/// Per-request proof used only by the dedicated Consumer Edge Agent Bridge
+/// surface. It authenticates one already-bound external Agent key; it is not
+/// a browser session, bearer credential, capability grant, or scientific fact.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AgentBridgeRequestProofV1 {
+    pub schema: String,
+    pub binding_id: Uuid,
+    pub agent_id: String,
+    pub agent_key_id: String,
+    pub http_method: String,
+    pub canonical_path: String,
+    pub canonical_query: String,
+    pub body_hash: String,
+    pub nonce: Uuid,
+    pub issued_at_unix: i64,
+    pub expires_at_unix: i64,
+}
+
+fn agent_bridge_path_method_allowed(method: &str, path: &str) -> bool {
+    matches!(
+        (method, path),
+        ("GET", "/api/agent-bridge/binding")
+            | ("POST", "/api/agent-bridge/health")
+            | ("POST", "/api/agent-bridge/inbox")
+            | ("POST", "/api/agent-bridge/proposals")
+    )
+}
+
+fn canonical_query_hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn agent_bridge_query_component(value: &str, field: &str) -> Result<String, String> {
+    let encoded = value.as_bytes();
+    let mut decoded = Vec::with_capacity(encoded.len());
+    let mut cursor = 0;
+    while cursor < encoded.len() {
+        let byte = encoded[cursor];
+        if byte == b'%' {
+            if cursor + 2 >= encoded.len() {
+                return Err(format!("{field} contains a truncated percent escape"));
+            }
+            let high = canonical_query_hex_value(encoded[cursor + 1])
+                .ok_or_else(|| format!("{field} percent escapes must use uppercase hex"))?;
+            let low = canonical_query_hex_value(encoded[cursor + 2])
+                .ok_or_else(|| format!("{field} percent escapes must use uppercase hex"))?;
+            let decoded_byte = (high << 4) | low;
+            if decoded_byte.is_ascii_alphanumeric()
+                || matches!(decoded_byte, b'-' | b'.' | b'_' | b'~')
+            {
+                return Err(format!("{field} percent-encodes an unreserved byte"));
+            }
+            decoded.push(decoded_byte);
+            cursor += 3;
+            continue;
+        }
+        if !(byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~')) {
+            return Err(format!("{field} contains a non-canonical query byte"));
+        }
+        decoded.push(byte);
+        cursor += 1;
+    }
+    String::from_utf8(decoded).map_err(|_| format!("{field} is not valid UTF-8"))
+}
+
+/// Validates the exact RFC3986-style representation signed by both Rust and
+/// non-Rust Bridge implementations. Keys are unique and encoded pairs are
+/// strictly ascending; `+`, lowercase escapes, redundant escapes, fragments,
+/// and a leading `?` are rejected.
+pub fn validate_agent_bridge_canonical_query(value: &str) -> Result<(), String> {
+    if value.len() > 2_048 {
+        return Err("canonical Agent Bridge query exceeds 2048 bytes".to_string());
+    }
+    if value.is_empty() {
+        return Ok(());
+    }
+    let mut keys = HashSet::new();
+    let mut previous: Option<&str> = None;
+    let mut count = 0_usize;
+    for pair in value.split('&') {
+        count += 1;
+        if count > 32 {
+            return Err("canonical Agent Bridge query exceeds 32 pairs".to_string());
+        }
+        let (encoded_key, encoded_value) = pair
+            .split_once('=')
+            .ok_or_else(|| "canonical Agent Bridge query pairs require '='".to_string())?;
+        if encoded_key.is_empty() || encoded_value.contains('=') {
+            return Err("canonical Agent Bridge query pair is malformed".to_string());
+        }
+        let key = agent_bridge_query_component(encoded_key, "query key")?;
+        let decoded_value = agent_bridge_query_component(encoded_value, "query value")?;
+        if key.chars().count() > 64 || decoded_value.chars().count() > 512 {
+            return Err("canonical Agent Bridge query key or value is too long".to_string());
+        }
+        if !keys.insert(key) {
+            return Err("canonical Agent Bridge query keys must be unique".to_string());
+        }
+        if previous.is_some_and(|prior| prior.as_bytes() >= pair.as_bytes()) {
+            return Err(
+                "canonical Agent Bridge query pairs must be strictly lexicographically sorted"
+                    .to_string(),
+            );
+        }
+        previous = Some(pair);
+    }
+    Ok(())
+}
+
+pub fn agent_bridge_request_proof_signing_bytes(
+    claim: &AgentBridgeRequestProofV1,
+) -> Result<Vec<u8>, String> {
+    if claim.schema != AGENT_BRIDGE_REQUEST_PROOF_V1 {
+        return Err(format!(
+            "unsupported Agent Bridge request proof schema {}",
+            claim.schema
+        ));
+    }
+    validate_text("agent_id", &claim.agent_id)?;
+    decode_digest(&claim.agent_key_id)?;
+    decode_digest(&claim.body_hash)?;
+    if !agent_bridge_path_method_allowed(&claim.http_method, &claim.canonical_path) {
+        return Err("Agent Bridge request method/path is not allowed".to_string());
+    }
+    validate_agent_bridge_canonical_query(&claim.canonical_query)?;
+    if claim.http_method == "GET" && claim.body_hash != sha256_digest(&[]) {
+        return Err("Agent Bridge GET body hash must be SHA-256(empty)".to_string());
+    }
+    if claim.issued_at_unix < 0
+        || claim.expires_at_unix <= claim.issued_at_unix
+        || claim.expires_at_unix - claim.issued_at_unix
+            > AGENT_BRIDGE_REQUEST_PROOF_MAX_LIFETIME_SECONDS
+    {
+        return Err("Agent Bridge request proof validity interval is invalid".to_string());
+    }
+    Ok(
+        CanonicalFrame::new("hepta_paper_raid_agent_bridge_request_proof_v1")
+            .string(&claim.schema)?
+            .string(&claim.binding_id.to_string())?
+            .string(&claim.agent_id)?
+            .digest(&claim.agent_key_id)?
+            .string(&claim.http_method)?
+            .string(&claim.canonical_path)?
+            .bytes(claim.canonical_query.as_bytes())?
+            .digest(&claim.body_hash)?
+            .string(&claim.nonce.to_string())?
+            .i64(claim.issued_at_unix)
+            .i64(claim.expires_at_unix)
+            .finish(),
+    )
+}
+
+pub fn agent_bridge_request_proof_hash(
+    claim: &AgentBridgeRequestProofV1,
+) -> Result<String, String> {
+    agent_bridge_request_proof_signing_bytes(claim).map(|frame| sha256_digest(&frame))
+}
+
+pub fn verify_agent_bridge_request_proof(
+    claim: &AgentBridgeRequestProofV1,
+    agent_public_key: &str,
+    signature: &str,
+) -> Result<(), String> {
+    let message = agent_bridge_request_proof_signing_bytes(claim)?;
+    let key = decode_base64_exact::<32>("agent_public_key", agent_public_key)?;
+    if sha256_digest(&key) != claim.agent_key_id {
+        return Err("Agent Bridge proof key does not match agent_key_id".to_string());
+    }
+    let key = VerifyingKey::from_bytes(&key)
+        .map_err(|_| "Agent Bridge public key is not valid Ed25519".to_string())?;
+    let signature = decode_base64_exact::<64>("Agent Bridge signature", signature)?;
+    key.verify(&message, &Signature::from_bytes(&signature))
+        .map_err(|_| "Agent Bridge request proof-of-possession failed".to_string())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -2038,6 +2453,78 @@ pub struct PaperReleaseAuthorV2 {
     pub credit_roles: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(deny_unknown_fields)]
+pub struct SectionMaterializationEntryV1 {
+    pub section_key: String,
+    pub base_paper_revision_id: Uuid,
+    pub head_section_revision_id: Uuid,
+    pub merge_id: Uuid,
+    pub patch_manifest_id: Uuid,
+    pub patch_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SectionMaterializationDescriptorV1 {
+    pub schema: String,
+    pub paper_project_id: Uuid,
+    pub revision_id: Uuid,
+    pub parent_revision_id: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_materialization_root: Option<String>,
+    pub sections: Vec<SectionMaterializationEntryV1>,
+}
+
+pub fn section_materialization_root(
+    descriptor: &SectionMaterializationDescriptorV1,
+) -> Result<String, String> {
+    if descriptor.schema != SECTION_MATERIALIZATION_V1 {
+        return Err(format!(
+            "unsupported section materialization schema {}",
+            descriptor.schema
+        ));
+    }
+    if descriptor.paper_project_id.is_nil() || descriptor.revision_id.is_nil() {
+        return Err("section materialization paper and revision ids must be non-nil".to_string());
+    }
+    if descriptor.parent_revision_id == Some(descriptor.revision_id) {
+        return Err("section materialization revision cannot parent itself".to_string());
+    }
+    if descriptor.parent_revision_id.is_none() && descriptor.parent_materialization_root.is_some() {
+        return Err(
+            "root section materialization cannot name a parent materialization root".to_string(),
+        );
+    }
+    if let Some(root) = descriptor.parent_materialization_root.as_deref() {
+        decode_digest(root)?;
+    }
+    let mut canonical_sections = descriptor.sections.clone();
+    canonical_sections.sort();
+    if canonical_sections != descriptor.sections {
+        return Err(
+            "section materialization entries must be canonically sorted and unique".to_string(),
+        );
+    }
+    for pair in canonical_sections.windows(2) {
+        if pair[0].section_key == pair[1].section_key {
+            return Err("section materialization section keys must be unique".to_string());
+        }
+    }
+    for entry in &canonical_sections {
+        validate_logical_id("section_key", &entry.section_key)?;
+        if entry.base_paper_revision_id.is_nil()
+            || entry.head_section_revision_id.is_nil()
+            || entry.merge_id.is_nil()
+            || entry.patch_manifest_id.is_nil()
+        {
+            return Err("section materialization ids must be non-nil".to_string());
+        }
+        decode_digest(&entry.patch_hash)?;
+    }
+    canonical_json_sha256(descriptor)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct PaperReleaseCandidateV2 {
@@ -2056,6 +2543,8 @@ pub struct PaperReleaseCandidateV2 {
     pub artifact_manifest_hash: String,
     pub bibliography_hash: String,
     pub claim_evidence_graph_hash: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section_materialization_root: Option<String>,
     pub collaboration_compact_hash: String,
     pub research_protocol_snapshot_hash: String,
     pub ethics_disclosure_hash: String,
@@ -2162,6 +2651,9 @@ pub fn paper_release_candidate_frame(
             }
             frame = frame.string(&role)?;
         }
+    }
+    if let Some(root) = candidate.section_materialization_root.as_deref() {
+        frame = frame.string(SECTION_MATERIALIZATION_V1)?.digest(root)?;
     }
     Ok(frame.finish())
 }

@@ -2,20 +2,24 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use ed25519_dalek::VerifyingKey;
 use hepta_research_league::paper_raid_contracts::{
     agent_binding_key_rotation_signing_bytes, agent_binding_proof_signing_bytes,
-    authorization_set_consumption_receipt_signing_bytes, authorship_consent_signing_bytes,
-    canonical_json_sha256, consumer_user_assertion_signing_bytes,
+    agent_binding_proof_v3_signing_bytes, agent_capability_disclosure_frame,
+    agent_capability_disclosure_hash, authorization_set_consumption_receipt_signing_bytes,
+    authorship_consent_signing_bytes, canonical_json_sha256, consumer_user_assertion_signing_bytes,
     nakama_completion_receipt_signing_bytes, paper_bundle_frame, paper_bundle_hash,
     paper_raid_evidence_envelope_hash, paper_raid_evidence_envelope_signing_bytes,
     paper_release_candidate_frame, paper_release_candidate_hash, publication_release_frame,
     publication_release_hash, sha256_digest, verify_agent_binding_key_rotation_signatures,
-    verify_agent_binding_proof, verify_authorization_set_consumption_receipt,
-    verify_authorship_consent_signature, verify_consumer_user_assertion_signature,
-    verify_nakama_completion_receipt, verify_paper_raid_evidence_envelope,
-    verify_paper_raid_evidence_envelope_against, verify_publication_release_against,
-    AgentBindingKeyRotationClaimV2, AgentBindingProofClaimV2, AuthorshipConsentSigningV2,
-    PaperBundleV2, PaperReleaseCandidateV2, PublicationReleaseV1,
-    SignedAuthorizationSetConsumptionReceiptV1, SignedConsumerUserAssertionV2,
-    SignedNakamaCompletionReceiptV1, SignedPaperRaidEvidenceEnvelopeV1, JSON_SAFE_U64_MAX,
+    verify_agent_binding_proof, verify_agent_binding_proof_v3,
+    verify_authorization_set_consumption_receipt, verify_authorship_consent_signature,
+    verify_consumer_user_assertion_signature, verify_nakama_completion_receipt,
+    verify_paper_raid_evidence_envelope, verify_paper_raid_evidence_envelope_against,
+    verify_publication_release_against, AgentBindingKeyRotationClaimV2, AgentBindingProofClaimV2,
+    AgentBindingProofClaimV3, AgentCapabilityDisclosureAssuranceV1, AgentCapabilityDisclosureV1,
+    AgentCapabilityV1, AgentResourceClassV1, AuthorshipConsentSigningV2, PaperBundleV2,
+    PaperReleaseCandidateV2, PublicationReleaseV1, SignedAuthorizationSetConsumptionReceiptV1,
+    SignedConsumerUserAssertionV2, SignedNakamaCompletionReceiptV1,
+    SignedPaperRaidEvidenceEnvelopeV1, AGENT_BINDING_PROOF_V3, AGENT_CAPABILITY_DISCLOSURE_V1,
+    JSON_SAFE_U64_MAX,
 };
 use serde::Deserialize;
 
@@ -119,6 +123,62 @@ fn decode_hex(value: &str) -> Vec<u8> {
 }
 
 #[test]
+fn agent_binding_v3_capability_disclosure_has_frozen_cross_language_bytes() {
+    const DISCLOSURE_FRAME_HEX: &str = "68657074615f70617065725f726169645f6167656e745f6361706162696c6974795f646973636c6f737572655f7631000000002f68657074612e70617065725f726169642e6167656e745f6361706162696c6974795f646973636c6f737572652e76310000001873656c665f6465636c617265645f756e7665726966696564000000030000001161727469666163745f616e616c797369730000000f65766964656e63655f7365617263680000001073656374696f6e5f6472616674696e67000000030000000b61727469666163745f696f000000036370750000000773616e64626f7800000002";
+    const PROOF_FRAME_HEX: &str = "68657074615f70617065725f726169645f6167656e745f62696e64696e675f70726f6f665f7633000000002768657074612e70617065725f726169642e6167656e745f62696e64696e675f70726f6f662e76330000002433313030303030302d303030302d343030302d383030302d303030303030303030303033000000236469643a74726e6d3a70617065722d726169642d676f6c64656e2d6167656e742d7633000000477368613235363a6430326662626562373665323164663962636538306537626362663838316637313963386565366437626131646331656437376532326234363865336664633200000020b8fc9d70b330b5d377a521047bce772144a747caa203c453a91385de86e177ccd02fbbeb76e21df9bce80e7bcbf881f719c8ee6d7ba1dc1ed77e22b468e3fdc222aeaec9954e5774212ab9103e28d7e3e52c827c8d976839715d9b3b1cc41fec000000206f6964637c70617065722d726169642d676f6c64656e2d617574686f722d76330000002433303030303030302d303030302d343030302d383030302d3030303030303030303030330000002670617065722d726169642d676f6c64656e2d6167656e742d62696e64696e672d76332d303031000000006b4b58a0000000006b4b59cc";
+    const SIGNATURE: &str =
+        "asP/gO6V+ntcYVGQaarHmVpCKqpXLm7kOyvCspAFBSRcl6WeV2lI4YMgbmOgpbOGZqOXzXbyBSl/nShkrvWYBg==";
+    let disclosure = AgentCapabilityDisclosureV1 {
+        schema: AGENT_CAPABILITY_DISCLOSURE_V1.to_string(),
+        assurance: AgentCapabilityDisclosureAssuranceV1::SelfDeclaredUnverified,
+        capabilities: vec![
+            AgentCapabilityV1::ArtifactAnalysis,
+            AgentCapabilityV1::EvidenceSearch,
+            AgentCapabilityV1::SectionDrafting,
+        ],
+        resource_classes: vec![
+            AgentResourceClassV1::ArtifactIo,
+            AgentResourceClassV1::Cpu,
+            AgentResourceClassV1::Sandbox,
+        ],
+        max_parallel_tasks: 2,
+    };
+    assert_eq!(
+        agent_capability_disclosure_frame(&disclosure).unwrap(),
+        decode_hex(DISCLOSURE_FRAME_HEX)
+    );
+    let disclosure_hash = agent_capability_disclosure_hash(&disclosure).unwrap();
+    assert_eq!(
+        disclosure_hash,
+        "sha256:22aeaec9954e5774212ab9103e28d7e3e52c827c8d976839715d9b3b1cc41fec"
+    );
+    let claim = AgentBindingProofClaimV3 {
+        schema: AGENT_BINDING_PROOF_V3.to_string(),
+        binding_id: "31000000-0000-4000-8000-000000000003".parse().unwrap(),
+        agent_id: "did:trnm:paper-raid-golden-agent-v3".into(),
+        agent_key_id: "sha256:d02fbbeb76e21df9bce80e7bcbf881f719c8ee6d7ba1dc1ed77e22b468e3fdc2"
+            .into(),
+        agent_public_key: "uPydcLMwtdN3pSEEe853IUSnR8qiA8RTqROF3obhd8w=".into(),
+        agent_public_key_hash:
+            "sha256:d02fbbeb76e21df9bce80e7bcbf881f719c8ee6d7ba1dc1ed77e22b468e3fdc2".into(),
+        capability_disclosure_hash: disclosure_hash,
+        subject_id: "oidc|paper-raid-golden-author-v3".into(),
+        player_id: "30000000-0000-4000-8000-000000000003".parse().unwrap(),
+        nonce: "paper-raid-golden-agent-binding-v3-001".into(),
+        issued_at_unix: 1_800_100_000,
+        expires_at_unix: 1_800_100_300,
+    };
+    assert_eq!(
+        agent_binding_proof_v3_signing_bytes(&claim).unwrap(),
+        decode_hex(PROOF_FRAME_HEX)
+    );
+    verify_agent_binding_proof_v3(&claim, SIGNATURE).unwrap();
+    let mut tampered = claim;
+    tampered.capability_disclosure_hash = sha256_digest(b"tampered capability disclosure");
+    assert!(verify_agent_binding_proof_v3(&tampered, SIGNATURE).is_err());
+}
+
+#[test]
 fn rust_verifies_hepta_owned_cross_language_vectors_and_tamper_negatives() {
     assert_eq!(sha256_digest(FIXTURE), FIXTURE_SHA256);
     let fixture: Fixture = serde_json::from_slice(FIXTURE).expect("Paper Raid fixture");
@@ -184,6 +244,22 @@ fn rust_verifies_hepta_owned_cross_language_vectors_and_tamper_negatives() {
     );
     assert_eq!(
         paper_release_candidate_hash(&fixture.release_candidate.value).unwrap(),
+        fixture.release_candidate.hash
+    );
+    assert!(
+        fixture
+            .release_candidate
+            .value
+            .section_materialization_root
+            .is_none(),
+        "legacy fixture must exercise the byte-for-byte compatible unextended v2 frame"
+    );
+    let mut rooted_release = fixture.release_candidate.value.clone();
+    rooted_release.section_materialization_root = Some(sha256_digest(b"materialized-sections"));
+    let rooted_frame = paper_release_candidate_frame(&rooted_release).unwrap();
+    assert!(rooted_frame.starts_with(&release_frame));
+    assert_ne!(
+        paper_release_candidate_hash(&rooted_release).unwrap(),
         fixture.release_candidate.hash
     );
     for consent in &fixture.authorship_consents {

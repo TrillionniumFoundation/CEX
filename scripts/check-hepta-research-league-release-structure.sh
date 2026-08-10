@@ -80,6 +80,53 @@ def fail(message):
     raise AssertionError(message)
 
 
+collaboration_source = (
+    repo / "services/hepta-research-league/src/paper_collaboration_v3.rs"
+).read_text(encoding="utf-8")
+proposal_authority_start = collaboration_source.find("fn verify_agent_proposal(")
+proposal_authority_end = collaboration_source.find(
+    "\nfn verify_human_decision(", proposal_authority_start
+)
+if proposal_authority_start < 0 or proposal_authority_end < 0:
+    fail("Agent proposal authority implementation is missing")
+proposal_authority = collaboration_source[
+    proposal_authority_start:proposal_authority_end
+]
+for forbidden in (
+    "AgentRegistration",
+    "agent_not_registered",
+    "agent_registration_mismatch",
+    "hepta_league_state",
+    "league.agents",
+    "state.inspect",
+):
+    if forbidden in proposal_authority:
+        fail(f"Agent proposal escaped active AgentBinding authority: {forbidden}")
+for required in (
+    "binding: &AgentBinding",
+    "binding.status != AgentBindingStatus::Active",
+    "binding.agent_public_key_hash != expected_key_id",
+    'decode_record(scope_row.get("binding_json"), "Agent binding")',
+    "verify_agent_proposal(paper_id, &request, &manifest.manifest_hash, &binding)",
+):
+    if required not in proposal_authority:
+        fail(f"Agent proposal active-binding authority is incomplete: {required}")
+
+proposal_authority_tests = (
+    repo / "services/hepta-research-league/src/paper_raid_v2_tests.rs"
+).read_text(encoding="utf-8")
+for required in (
+    "memory_agent_proposals_trust_only_the_active_secure_binding",
+    "postgres_agent_proposals_trust_only_the_active_secure_binding",
+    "legacy_league_state_snapshot_bytes",
+    "secure Agent bindings must not require the legacy Agent registry",
+    "AgentBindingStatus::Revoked",
+    '"agent_key_not_current"',
+):
+    if required not in proposal_authority_tests:
+        fail(f"Agent proposal active-binding regression proof is missing: {required}")
+
+
 def stage_blocks(text):
     matches = list(
         re.finditer(
@@ -119,6 +166,11 @@ expected_copy_sources = {
     "migrations/0036_add_hepta_nakama_research_control.sql",
     "migrations/0037_add_hepta_paper_chain_finality_v1.sql",
     "migrations/0038_add_hepta_paper_chain_finality_v2.sql",
+    "migrations/0039_add_hepta_review_assignments.sql",
+    "migrations/0040_add_hepta_evaluation_draft_quorum.sql",
+    "migrations/0041_add_hepta_agent_capability_disclosure.sql",
+    "migrations/0042_add_hepta_team_proposal_deadlines.sql",
+    "migrations/0043_add_hepta_challenge_ruleset_v1.sql",
     "docs/openapi/hepta-research-league-v1.yaml",
     "docs/openapi/hepta-paper-raid-v2.yaml",
 }
@@ -1339,6 +1391,9 @@ require_fragments(
         "32 KiB by default",
         "never above Hepta's 1 MiB deployment ceiling",
         "Authenticated Receipt V2 verification capacity is busy; body was not read",
+        "enum: [claimed, pinned, consumed, expired]",
+        "Pinned seats remain authoritative past the original",
+        "all three panel assignments are consumed",
     ),
 )
 require_fragments(
@@ -1405,6 +1460,296 @@ require_fragments(
         "hepta_nakama_completions_finality_v2_source_guard",
     ),
 )
+
+require_fragments(
+    "migrations/0039_add_hepta_review_assignments.sql",
+    (
+        "hepta_paper_review_assignments",
+        "(paper_project_id, review_round, slot)",
+        "(paper_project_id, review_round, player_id)",
+        "where status = 'claimed'",
+        "expires_at timestamptz not null",
+        "'evaluator', 'reviewer_1', 'reviewer_2', 'reproducer'",
+        "references hepta_joint_paper_submissions(submission_id, paper_project_id)",
+    ),
+)
+
+require_fragments(
+    "migrations/0040_add_hepta_evaluation_draft_quorum.sql",
+    (
+        "'claimed', 'pinned', 'consumed', 'expired'",
+        "where status in ('claimed', 'pinned')",
+        "hepta_guard_review_assignment_draft_lifecycle_v1",
+        "hepta_review_assignment_draft_lifecycle_guard",
+        "old.status = 'pinned' and new.status = 'consumed'",
+        "hepta_paper_evaluation_drafts",
+        "hepta_paper_evaluation_draft_attestations",
+        "hepta_paper_evaluation_drafts_round_idx",
+        "hepta_paper_evaluation_draft_attestations_slot_idx",
+        "hepta_guard_evaluation_draft_lifecycle_v1",
+        "hepta_evaluation_draft_truncate_guard",
+        "hepta_evaluation_draft_attestation_update_guard",
+        "evaluation draft records are append-only",
+    ),
+)
+
+require_fragments(
+    "migrations/0041_add_hepta_agent_capability_disclosure.sql",
+    (
+        "capability_disclosure_hash text",
+        "hepta_agent_bindings_capability_record_check",
+        "hepta_agent_capability_disclosure_valid_v1",
+        "count(*) from jsonb_object_keys(disclosure)) <> 5",
+        "max_parallel_text::integer not between 1 and 32",
+        "research_session_signing",
+        "hepta.paper_raid.agent_capability_disclosure.v1",
+        "self_declared_unverified",
+        "hepta_reject_agent_capability_disclosure_mutation",
+        "hepta_agent_capability_disclosure_update_guard",
+        "Agent capability disclosure is immutable after binding creation",
+    ),
+)
+
+require_fragments(
+    "migrations/0042_add_hepta_team_proposal_deadlines.sql",
+    (
+        "add column if not exists expires_at timestamptz",
+        "created_at + interval '5 minutes'",
+        "jsonb_set(record_json, '{expires_at}', to_jsonb(expires_at), true)",
+        "team proposal deadline column/JSON projection diverged; operator repair required",
+        "alter column expires_at set not null",
+        "hepta_team_proposals_open_deadline_idx",
+        "duplicate queued/matched matchmaking authority requires operator review",
+        "where status in ('proposed', 'accepted')",
+        "status in ('proposed', 'accepted', 'materialized', 'declined', 'expired')",
+        "where status in ('queued', 'matched')",
+        "status in ('queued', 'matched', 'consumed', 'cancelled', 'expired')",
+        "hepta_research_teams t on t.team_id = p.proposal_id",
+        "'\"materialized\"'::jsonb",
+        "materialized team/proposal authority diverged; operator repair required",
+        "materialized team/roster authority diverged; operator repair required",
+        "materialized team/source-ticket authority diverged; operator repair required",
+        "materialized proposal/ticket terminal backfill did not converge",
+        "open team proposal topology diverged; operator repair required",
+        "open team proposal/source-ticket authority diverged; operator repair required",
+        "one matched ticket cannot belong to multiple open team proposals",
+        "generate_subscripts(p.source_ticket_ids, 1)",
+        "one matchmaking ticket cannot materialize multiple research teams",
+        "materialized proposal is missing its proven research team",
+        "hepta.paper_raid.team.materialized.v1",
+    ),
+)
+
+require_fragments(
+    "migrations/0043_add_hepta_challenge_ruleset_v1.sql",
+    (
+        "challenge_ruleset_snapshot_hash text",
+        "outcome in ('in_progress','submission_ready','failed','expired','abandoned')",
+        "hepta_guard_paper_challenge_ruleset_v1",
+        "paper challenge ruleset snapshot and deadlines are immutable",
+        "authoritative paper challenge requires typed rules and deadlines",
+        "legacy-unranked paper challenge cannot invent typed rules or deadlines",
+        "terminal_at >= grace_expires_at",
+        "paper terminal challenge outcome is immutable",
+        "hepta_paper_projects_active_deadline_v1_idx",
+    ),
+)
+
+require_fragments(
+    "services/hepta-research-league/src/challenge_ruleset_v1.rs",
+    (
+        'CHALLENGE_RULESET_V1: &str = "hepta.challenge.ruleset.v1"',
+        "phase_gates must contain every forward transition exactly once",
+        "BenchmarkAblation",
+        "RetainedFailedRuns",
+        "canonical_json_sha256(self)",
+        "LegacyUnranked",
+    ),
+)
+
+require_fragments(
+    "services/hepta-research-league/src/lib.rs",
+    (
+        'include_str!("../../../migrations/0043_add_hepta_challenge_ruleset_v1.sql")',
+        'mod challenge_ruleset_v1;',
+        'pub use challenge_ruleset_v1::*;',
+    ),
+)
+
+require_fragments(
+    "services/hepta-research-league/src/paper_collaboration_v3.rs",
+    (
+        "TEAM_PROPOSAL_RESPONSE_TTL_SECONDS: i64 = 5 * 60",
+        "team_proposal_deadline",
+        "expire_team_proposal_memory",
+        "expire_due_team_proposals_postgres",
+        "hepta.paper_raid.team_proposal.expired.v1",
+        "hepta.paper_raid.team_proposal.withdrawn.v1",
+        "team_proposal_expired",
+        "materialized_team_cannot_withdraw",
+        "MatchmakingTicketStatus::Queued | MatchmakingTicketStatus::Matched",
+        "TeamProposalStatus::Materialized",
+        "MatchmakingTicketStatus::Consumed",
+        "auto_match_all_queued_tickets_postgres",
+        "hepta-paper-raid-team-id:",
+        "matchmaking_team_id_conflict",
+        "for share of p,b",
+    ),
+)
+
+require_fragments(
+    "services/hepta-research-league/src/paper_raid_v2.rs",
+    (
+        "generic_team_id_namespace_reserved",
+        "direct team creation requires a UUIDv4 team_id",
+        "team_id_reserved_for_matchmaking",
+        "hepta-paper-raid-team-id:",
+        "where player_id = $1 for update",
+    ),
+)
+
+require_fragments(
+    "services/hepta-research-league/src/paper_review_v4.rs",
+    (
+        '"/v2/hepta/review-queue"',
+        '"/v2/hepta/papers/:paper_id/review-assignments"',
+        '"/v2/hepta/papers/:paper_id/review-bundle"',
+        "REVIEW_ASSIGNMENT_TTL_HOURS",
+        "expire_review_assignments_postgres",
+        "review_assignment_author_forbidden",
+        "review_assignment_panel_mismatch",
+        "review_assignment_repanel_not_independent",
+        "review_assignment_reproducer_mismatch",
+        '"/v2/hepta/papers/:paper_id/evaluation-drafts"',
+        '"/v2/hepta/papers/:paper_id/evaluation-drafts/:evaluation_id"',
+        '"/v2/hepta/papers/:paper_id/evaluation-drafts/:evaluation_id/attestations"',
+        '"/v2/hepta/papers/:paper_id/evaluation-drafts/:evaluation_id/finalize"',
+        "PaperReviewBundleV1",
+        "evaluation_quorum",
+        "make_paper_review_bundle",
+        "evaluation_draft_assignment_mismatch",
+        "evaluation_draft_hash_mismatch",
+        "evaluation_draft_quorum_incomplete",
+        "transition_review_assignment_memory",
+        "transition_review_assignment_postgres",
+        "evaluation_draft_assignment_not_pinned",
+        "ReviewAssignmentStatus::Pinned",
+        "ReviewAssignmentStatus::Consumed",
+        "lock_evaluation_round_postgres",
+        "lock_evaluation_identity_postgres",
+    ),
+)
+
+require_fragments(
+    "services/paper-raid-bff/src/config.rs",
+    (
+        "MIN_ALPHA_AUTHOR_IDENTITIES: usize = 3",
+        "MIN_ALPHA_INDEPENDENT_REVIEW_IDENTITIES: usize = 4",
+        "distinct_author_role_assignment",
+        "distinct_independent_review_assignment",
+        "deploy_alpha_env_example_is_accepted_by_the_production_identity_parser",
+        'include_str!("../deploy/alpha.env.example")',
+    ),
+)
+
+alpha_env_path = repo / "services/paper-raid-bff/deploy/alpha.env.example"
+alpha_prefix = "PAPER_RAID_BFF_ALPHA_IDENTITIES_JSON="
+alpha_lines = [
+    line[len(alpha_prefix):]
+    for line in alpha_env_path.read_text(encoding="utf-8").splitlines()
+    if line.startswith(alpha_prefix)
+]
+if len(alpha_lines) != 1:
+    fail("Alpha deployment example must define exactly one identity JSON variable")
+try:
+    alpha_identities = json.loads(alpha_lines[0])
+except json.JSONDecodeError as error:
+    fail(f"Alpha deployment identity fixture is invalid JSON: {error}")
+if not isinstance(alpha_identities, list) or len(alpha_identities) != 7:
+    fail("Alpha deployment example must contain exactly seven identities")
+
+allowed_scopes = {"author", "evaluator", "reviewer", "reproducer"}
+allowed_roles = {"captain", "evidence", "experiment"}
+for identity in alpha_identities:
+    if not isinstance(identity, dict):
+        fail("Alpha deployment identity fixture entries must be objects")
+    if set(identity) != {
+        "login_key",
+        "subject_id",
+        "display_name",
+        "nakama_user_id",
+        "player_id",
+        "scopes",
+        "author_roles",
+    }:
+        fail("Alpha deployment identities must use the explicit production field set")
+    if not isinstance(identity["login_key"], str) or len(identity["login_key"]) < 32:
+        fail("Alpha deployment login keys must contain at least 32 bytes")
+    if not isinstance(identity["subject_id"], str) or not re.fullmatch(
+        r"[A-Za-z0-9._:-]{1,128}", identity["subject_id"]
+    ):
+        fail("Alpha deployment subject identifiers are invalid")
+    if (
+        not isinstance(identity["display_name"], str)
+        or not identity["display_name"].strip()
+        or len(identity["display_name"]) > 80
+    ):
+        fail("Alpha deployment display names are invalid")
+    for uuid_field in ("nakama_user_id", "player_id"):
+        if not isinstance(identity[uuid_field], str) or not re.fullmatch(
+            r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+            identity[uuid_field],
+        ):
+            fail(f"Alpha deployment {uuid_field} is not a canonical UUID")
+    scopes = identity["scopes"]
+    roles = identity["author_roles"]
+    if (
+        not isinstance(scopes, list)
+        or not scopes
+        or len(scopes) != len(set(scopes))
+        or not set(scopes) <= allowed_scopes
+    ):
+        fail("Alpha deployment identity scopes are invalid")
+    if (
+        not isinstance(roles, list)
+        or len(roles) != len(set(roles))
+        or not set(roles) <= allowed_roles
+        or (("author" in scopes) != bool(roles))
+    ):
+        fail("Alpha deployment identity author roles are invalid")
+
+for field in ("login_key", "subject_id", "nakama_user_id", "player_id"):
+    values = [identity[field] for identity in alpha_identities]
+    if len(values) != len(set(values)):
+        fail(f"Alpha deployment identity fixture has duplicate {field}")
+
+authors = [identity for identity in alpha_identities if "author" in identity["scopes"]]
+independent = [identity for identity in alpha_identities if "author" not in identity["scopes"]]
+if len(authors) != 3 or len(independent) != 4:
+    fail("Alpha deployment fixture must separate three authors and four non-authors")
+
+
+def has_distinct_assignment(identities, requirements, field):
+    def assign(position, used):
+        if position == len(requirements):
+            return True
+        for index, identity in enumerate(identities):
+            if index not in used and requirements[position] in identity[field]:
+                if assign(position + 1, used | {index}):
+                    return True
+        return False
+
+    return assign(0, set())
+
+
+if not has_distinct_assignment(
+    authors, ["captain", "evidence", "experiment"], "author_roles"
+):
+    fail("Alpha deployment authors cannot fill the three distinct author roles")
+if not has_distinct_assignment(
+    independent, ["evaluator", "reviewer", "reviewer", "reproducer"], "scopes"
+):
+    fail("Alpha deployment non-authors cannot fill the four distinct review seats")
 
 require_fragments(
     "services/hepta-research-league/src/paper_chain_finality_v2.rs",

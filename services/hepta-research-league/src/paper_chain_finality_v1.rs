@@ -144,6 +144,15 @@ pub(crate) struct PaperChainFinalityMemory {
         crate::paper_chain_finality_v2::PaperChainFinalityPreparationMemoryV2,
 }
 
+impl PaperChainFinalityMemory {
+    pub(crate) fn projection_for_paper(
+        &self,
+        paper_id: Uuid,
+    ) -> Option<PaperChainFinalityProjectionV1> {
+        self.projections.get(&paper_id).cloned()
+    }
+}
+
 pub(crate) fn validated_trust_anchor_memory_v1(
     memory: &PaperChainFinalityMemory,
     anchor_hash: &str,

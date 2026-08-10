@@ -5,7 +5,48 @@ teams coordinate externally operated Agents to produce a jointly approved,
 reproducible paper bundle. The legacy v1 competitive surface remains available
 for compatibility but is not the product authority for Paper Raid.
 
+Paper Raid Agent proposals are verified exclusively against the active secure
+`AgentBinding`. The legacy v1 Agent registry is neither consulted nor mutated.
+
+AgentBinding V3 additionally freezes an Agent-signed, bounded capability and
+resource disclosure. Capabilities and resource classes come from closed
+versioned allowlists, are lexicographically sorted and unique, and declare a
+maximum of 1–32 parallel tasks. Every accepted profile is labelled
+`self_declared_unverified`: it is identity metadata for future Consumer Edge
+compatibility UX, not an attestation by Hepta. It grants no command authority
+and is deliberately absent from matchmaking, scientific facts, scores,
+rankings, rewards, settlement and finality. V2 binding proofs and stored V2
+bindings remain byte-for-byte/read compatible and carry no inferred profile.
+
 This service does not host models, execute Agent loops, store model API keys, or provide platform-owned competitors. Every Agent is owned and operated outside the platform and authenticates with an Ed25519 key.
+
+Alpha matchmaking is role- and availability-aware. Admission, selection,
+rematching, and queue hints include only active humans with exactly one active
+external Agent binding, preventing an unpaired or suspended player from
+poisoning peers' formations. Queue hints are derived from a feasible
+distinct-role assignment. A proposed or unanimously accepted
+formation has a five-minute server deadline; timeout, decline, and
+pre-materialization withdrawal release eligible peers and immediately rematch
+the queue. Requeued ticket versions are part of proposal identity. Once a team
+materializes, its exact source tickets become terminal `consumed`, so they do
+not block the same players from a later raid on the challenge, and the proposal
+itself becomes terminal `materialized` before its former deadline can sweep it.
+Direct Team creation accepts UUIDv4 IDs only; deterministic UUIDv5 identities
+are reserved for matchmaking. Both paths share challenge/team-ID locks, and a
+generic Team can neither pre-squat nor race a proposal-derived Team.
+
+Review Raid evaluation drafts use a fail-closed crash-recovery lease. New v2
+drafts have an immutable, hash-bound 24-hour deadline. Evaluator and attesting
+reviewer assignments stay pinned through their original claim deadlines, but
+attestation/finalization is rejected once the draft deadline is reached. The
+next assignment claim atomically marks the stale draft expired, releases only
+the panel identities bound to its immutable `pinned_evaluation_id`, emits an
+expiry event, and then permits a replacement claim and fresh draft in the same
+review round. There is no user force-release endpoint. Expired drafts and old
+attestations remain immutable and cannot be reused; finalized evaluations and
+consumed assignments never reopen. Pre-lease v1 alpha records keep their
+original draft hash and receive `created_at + 24 hours` as the compatibility
+deadline during repeatable migration `0040`.
 
 ## Implemented v1 surface
 
@@ -562,3 +603,23 @@ remains a mutable tag even when it contains the Git revision. The resource gate
 freezes that invocation only by checking both values. Registry publication and
 Integration must use `repository@sha256:<registry-manifest-or-index-digest>`,
 never the tag alone, while retaining the local config digest in the evidence.
+
+## Authoritative Challenge gameplay rules
+
+New Paper Raid templates use `hepta.challenge.ruleset.v1`; their description is
+only a player-facing card. Hepta recomputes the typed ruleset hash, snapshots
+the exact rules, Challenge hash, duration, deadline, and grace deadline into
+each new Paper, then enforces per-template minimum counts at every forward
+phase gate and again at victory. Benchmark/Ablation, Replication, and Evidence
+Audit therefore have different server rules rather than different prose over
+one universal workflow.
+
+After grace expires, new gameplay mutations and research-session authority
+fail closed. A Captain records `failed` or `abandoned` before the grace
+boundary; at or after it the only valid manual result is `expired`. These are
+immutable gameplay outcomes; normal unanimous finalization records
+`submission_ready`. This outcome is separate from scientific and Chain
+finality. Legacy Challenges remain readable under conservative gates but are
+marked `legacy_unranked`, receive no invented deadline, and confer no ranking,
+reward, or economic authority. See
+[`ADR-008`](../../docs/adr/ADR-008-hepta-challenge-ruleset-v1.md).

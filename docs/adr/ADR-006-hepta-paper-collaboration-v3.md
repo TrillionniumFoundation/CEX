@@ -64,9 +64,11 @@ tampered descriptors are rejected before revision state changes.
 ### 3. Human and Agent actions
 
 External Agents submit Ed25519-signed `AgentProposal` records bound to Paper,
-work item, section, parent revision, artifact root, Agent registration and the
-frozen human-owned binding. Agent proposals do not rely on a Consumer user
-assertion.
+work item, section, parent revision, artifact root and the active human-owned
+`AgentBinding`. The binding is the sole Agent identity and key authority for
+Paper Raid proposals: Agent ID, key ID, canonical public key and public-key
+hash must agree. The legacy v1 Agent registry is neither read nor written, and
+Agent proposals do not rely on a Consumer user assertion.
 
 Human evidence verification, proposal decisions, section reviews and merges
 use the current human signing key and a Consumer Edge assertion that binds the
@@ -86,6 +88,17 @@ Parents are resolved through a Paper-scoped revision namespace containing both
 whole-Paper and section revisions. Cross-Paper, cross-section, stale and cyclic
 parents fail. A merge atomically advances the section head and consumes the
 exact lease; older fencing tokens can never write after a newer lease exists.
+
+Creating a whole-Paper revision is the materialization barrier. Hepta rejects
+the operation while a section lease, proposal or revision is still in flight,
+then atomically captures a canonical descriptor for every advanced section
+head. Each entry binds the section key, whole-Paper base, section head, signed
+merge id, patch manifest and patch digest. The descriptor root is stored on the
+Paper revision, chained to its parent's root, and included in every newly
+promoted release-candidate hash. In the same transaction, section heads are
+rebased to the new whole-Paper revision so an author-approval rollback can
+continue drafting without an explicit out-of-band rebase. Historical records
+without the optional root retain their exact V2 serialization and hash.
 
 ### 5. Phase gates
 
@@ -111,9 +124,66 @@ deliberately fixed to exactly three distinct human players. Queue selection and
 replacement are deterministic; all three must accept, and any decline requeues
 the tickets without inventing a Team.
 
+Every newly created roster is fail-closed to one `captain`, one `evidence`, and
+one `experiment` seat; optional fourth and fifth seats are `support`. This is
+validated again at the Hepta write boundary, so a Consumer cannot bypass the
+matcher with arbitrary role strings and regain the former permissive duty
+path. Historical noncanonical rosters remain readable for audit but cannot use
+role-gated author mutations; they must form a new canonical Team.
+
 The Paper Room is a player-scoped aggregate projection. PostgreSQL builds it in
 one `REPEATABLE READ` transaction and exposes only the asserted member's
 research-session access. Cursor catch-up reads persisted typed room events.
+
+### 7. Review Raid draft leases and crash recovery
+
+An evaluation draft is not an unbounded lock. New
+`hepta.paper_raid.evaluation_draft.v2` records receive an immutable,
+server-owned 24-hour `expires_at`, included in the draft hash. The evaluator
+assignment is pinned when the draft is created; each reviewer assignment is
+pinned only with its immutable attestation. Every pinned assignment stores the
+exact `pinned_evaluation_id`; this identity is retained after consumption or
+expiry, so a prior expired draft can never authorize release of a replacement
+panel. Attestation and finalization writes fail closed at the deadline.
+
+There is no player or reviewer force-release command. A later assignment claim
+holds the Paper lock, locks every stale open draft, verifies that its pinned
+seats exactly match the evaluator and stored attestations, then atomically:
+
+1. transitions the draft `open -> expired` at its fixed deadline;
+2. transitions only that exact pinned panel to `expired`;
+3. appends `hepta.paper_raid.evaluation_draft.expired.v1` with the immutable
+   draft hash, deadline and released assignment IDs; and
+4. evaluates the new claim against the resulting vacancies.
+
+Expired drafts and attestations remain append-only, but no longer reserve the
+round; a newly claimed evaluator must use a fresh evaluation identity and
+draft hash. Old attestations cannot satisfy the new quorum. A finalized draft
+and its consumed assignments never enter the expiry path. PostgreSQL enforces
+the same ownership relation in triggers, so a direct pinned-to-expired update
+without the matching expired draft (and reviewer attestation, where required)
+fails. Migrated v1 alpha drafts retain their original scientific hash and
+receive the deterministic compatibility deadline `created_at + 24 hours`.
+
+Matchmaking proposals have a server-owned five-minute response/materialization
+deadline. Both `proposed` and unanimously `accepted` formations remain subject
+to it until a team exists. Timeout, decline, or a matched-player withdrawal
+atomically releases eligible peers and immediately runs the deterministic
+role/availability matcher. Proposal identity binds source ticket IDs **and
+their versions**, so a requeued trio cannot collide with its expired attempt.
+Queue admission, selection, timeout requeue, decision, and materialization all
+fail closed unless every affected human is active and has exactly one active
+external Agent binding; ineligible historical tickets remain auditable but do
+not influence compatible-pool or ETA projections.
+Successful materialization transitions all exact source tickets from `matched`
+to terminal `consumed` and its proposal from `accepted` to terminal
+`materialized`; only `queued` and `matched` participate in the one-live ticket
+uniqueness boundary. Direct Team creation is a disjoint UUIDv4 namespace;
+matcher proposal/Team IDs are deterministic UUIDv5 values. Shared challenge
+and Team-ID locks plus explicit materialization events prevent generic Team
+creation from racing or impersonating matcher provenance. Queue hints derive
+their shortage from an actual three-role bipartite assignment, not merely a
+role-name union.
 
 ## Consequences
 
@@ -131,7 +201,8 @@ research-session access. Cursor catch-up reads persisted typed room events.
 ## Verification
 
 Release gates require exact Integration fixture parsing and hash equality,
-Rust/Node signing vectors, memory/PostgreSQL parity, repeatable application of
-`0033`, concurrent matchmaking decisions, 3-player unanimity and decline
-requeue, URI/DOI tamper rejection, cross-scope/stale/cycle/fence rejection,
-phase freeze, Paper Room consistency and live PostgreSQL tests.
+Rust/Node signing vectors, memory/PostgreSQL parity, repeatable migrations,
+concurrent matchmaking decisions, version-aware requeue/rematch, accepted
+proposal expiry, materialization ticket consumption, 3-player unanimity,
+URI/DOI tamper rejection, cross-scope/stale/cycle/fence rejection, phase
+freeze, Paper Room consistency and live PostgreSQL tests.

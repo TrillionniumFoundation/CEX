@@ -25,11 +25,13 @@ use uuid::Uuid;
 
 pub mod trnm_v1;
 pub use hepta_paper_raid_contracts as paper_raid_contracts;
+mod challenge_ruleset_v1;
 mod paper_chain_finality_v1;
 mod paper_chain_finality_v2;
 mod paper_raid_v2;
 mod workflows;
 
+pub use challenge_ruleset_v1::*;
 pub use paper_chain_finality_v1::*;
 pub use paper_chain_finality_v2::*;
 pub use paper_raid_v2::*;
@@ -815,6 +817,26 @@ async fn apply_hepta_migrations(pool: &PgPool) -> Result<(), String> {
         (
             "Paper Chain finality V2",
             include_str!("../../../migrations/0038_add_hepta_paper_chain_finality_v2.sql"),
+        ),
+        (
+            "Paper review assignments",
+            include_str!("../../../migrations/0039_add_hepta_review_assignments.sql"),
+        ),
+        (
+            "Paper evaluation draft quorum",
+            include_str!("../../../migrations/0040_add_hepta_evaluation_draft_quorum.sql"),
+        ),
+        (
+            "Agent capability disclosure",
+            include_str!("../../../migrations/0041_add_hepta_agent_capability_disclosure.sql"),
+        ),
+        (
+            "team proposal deadlines",
+            include_str!("../../../migrations/0042_add_hepta_team_proposal_deadlines.sql"),
+        ),
+        (
+            "ChallengeRuleset V1",
+            include_str!("../../../migrations/0043_add_hepta_challenge_ruleset_v1.sql"),
         ),
     ] {
         sqlx::raw_sql(migration)
@@ -2062,6 +2084,8 @@ pub struct ResearchChallenge {
     pub ruleset_hash: String,
     pub dataset_manifest_hash: String,
     pub evaluator_manifest_hash: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ruleset: Option<ChallengeRulesetV1>,
     pub status: ChallengeStatus,
     pub created_at: DateTime<Utc>,
 }
@@ -2074,6 +2098,8 @@ pub struct CreateChallengeRequest {
     pub ruleset_hash: String,
     pub dataset_manifest_hash: String,
     pub evaluator_manifest_hash: String,
+    #[serde(default)]
+    pub ruleset: Option<ChallengeRulesetV1>,
     pub status: ChallengeStatus,
 }
 
@@ -2555,6 +2581,20 @@ async fn create_challenge(
     validate_hash("ruleset_hash", &request.ruleset_hash)?;
     validate_hash("dataset_manifest_hash", &request.dataset_manifest_hash)?;
     validate_hash("evaluator_manifest_hash", &request.evaluator_manifest_hash)?;
+    if let Some(ruleset) = &request.ruleset {
+        ruleset
+            .validate()
+            .map_err(|message| ApiError::bad_request("invalid_challenge_ruleset", message))?;
+        let computed_hash = ruleset
+            .canonical_hash()
+            .map_err(|message| ApiError::bad_request("invalid_challenge_ruleset", message))?;
+        if request.ruleset_hash != computed_hash {
+            return Err(ApiError::bad_request(
+                "challenge_ruleset_hash_mismatch",
+                format!("ruleset_hash must equal the canonical typed ruleset hash {computed_hash}"),
+            ));
+        }
+    }
 
     let challenge = ResearchChallenge {
         challenge_id: Uuid::new_v4(),
@@ -2564,6 +2604,7 @@ async fn create_challenge(
         ruleset_hash: request.ruleset_hash,
         dataset_manifest_hash: request.dataset_manifest_hash,
         evaluator_manifest_hash: request.evaluator_manifest_hash,
+        ruleset: request.ruleset,
         status: request.status,
         created_at: Utc::now(),
     };
@@ -2580,6 +2621,7 @@ async fn create_challenge(
                     "challenge_id": challenge.challenge_id,
                     "ruleset_version": challenge.ruleset_version,
                     "ruleset_hash": challenge.ruleset_hash,
+                    "ruleset_enforcement": if challenge.ruleset.is_some() { "authoritative_v1" } else { "legacy_unranked" },
                     "status": challenge.status,
                 }),
             );

@@ -176,6 +176,7 @@ fn main() {
         artifact_manifest_hash: digest("artifact-manifest:golden:v2"),
         bibliography_hash: digest("bibliography:golden:v2"),
         claim_evidence_graph_hash: digest("claim-evidence:golden:v2"),
+        section_materialization_root: None,
         collaboration_compact_hash: digest("collaboration-compact:golden:v2"),
         research_protocol_snapshot_hash: digest("research-protocol:golden:v2"),
         ethics_disclosure_hash: digest("ethics-disclosure:golden:v2"),

@@ -1,16 +1,28 @@
-use std::time::Duration;
+use std::{
+    collections::{BTreeMap, HashSet},
+    time::Duration,
+};
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use chrono::Utc;
 use ed25519_dalek::VerifyingKey;
 use hepta_paper_raid_contracts::{
-    authorship_consent_signing_bytes, canonical_json_bytes, human_key_registration_signing_bytes,
-    paper_appeal_signing_bytes, section_review_signing_bytes, sha256_digest,
-    sign_consumer_user_assertion, team_member_acceptance_signing_bytes,
-    verify_human_key_registration_pop, AuthorshipConsentSigningV2, ConsumerUserAssertionClaimV2,
-    HumanKeyRegistrationClaimV2, PaperAppealSigningV1, SectionReviewSigningV1,
-    TeamMemberAcceptanceSigningV2, AUTHORSHIP_CONSENT_V2, CONSUMER_USER_ASSERTION_V2,
-    HUMAN_KEY_REGISTRATION_V2, PAPER_APPEAL_V1, SECTION_REVIEW_V1, TEAM_MEMBER_ACCEPTANCE_V2,
+    authorship_consent_signing_bytes, canonical_json_bytes, human_decision_signing_bytes,
+    human_evidence_verification_signing_bytes, human_key_registration_signing_bytes,
+    paper_appeal_resolution_signing_bytes, paper_appeal_signing_bytes,
+    paper_evaluation_signing_bytes, paper_reproduction_signing_bytes,
+    paper_review_attestation_signing_bytes, section_merge_signing_bytes,
+    section_review_signing_bytes, sha256_digest, sign_consumer_user_assertion,
+    team_member_acceptance_signing_bytes, verify_human_key_registration_pop,
+    AuthorshipConsentSigningV2, ConsumerUserAssertionClaimV2, HumanDecisionSigningV1,
+    HumanEvidenceVerificationSigningV1, HumanKeyRegistrationClaimV2,
+    PaperAppealResolutionSigningV1, PaperAppealSigningV1, PaperEvaluationSigningV1,
+    PaperReproductionSigningV1, PaperReviewAttestationSigningV1, SectionMergeSigningV1,
+    SectionReviewSigningV1, TeamMemberAcceptanceSigningV2, AUTHORSHIP_CONSENT_V2,
+    CONSUMER_USER_ASSERTION_V2, HUMAN_DECISION_V1, HUMAN_EVIDENCE_VERIFICATION_V1,
+    HUMAN_KEY_REGISTRATION_V2, PAPER_APPEAL_RESOLUTION_V1, PAPER_APPEAL_V1, PAPER_EVALUATION_V1,
+    PAPER_REPRODUCTION_V1, PAPER_REVIEW_ATTESTATION_V1, SECTION_MERGE_V1, SECTION_REVIEW_V1,
+    TEAM_MEMBER_ACCEPTANCE_V2,
 };
 use reqwest::{header, Client, Method, StatusCode};
 use serde::{Deserialize, Serialize};
@@ -21,7 +33,7 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::{
-    config::{AlphaIdentity, ConsumerAssertionConfig},
+    config::{AlphaAuthorRole, AlphaIdentity, AlphaIdentityScope, ConsumerAssertionConfig},
     error::AppError,
 };
 
@@ -41,6 +53,7 @@ pub enum CommandName {
     AcceptResearchTeamMembership,
     LockResearchTeam,
     CreatePaperProject,
+    TransitionPaperChallengeOutcome,
     TransitionPaperProject,
     CreatePaperWorkItem,
     TransitionPaperWorkItem,
@@ -55,6 +68,7 @@ pub enum CommandName {
     ReplaceNakamaResearchSessionRosterControl,
     CompleteNakamaResearchSessionControl,
     QueueMatchmaking,
+    CancelMatchmakingTicket,
     DecideTeamProposal,
     MaterializeTeamProposal,
     CreateEvidenceCard,
@@ -71,7 +85,11 @@ pub enum CommandName {
     SubmitReview,
     MergeSection,
     CreateContributionLedger,
+    ClaimReviewAssignment,
     CreatePaperEvaluation,
+    CreatePaperEvaluationDraft,
+    SubmitEvaluationDraftAttestation,
+    FinalizePaperEvaluationDraft,
     SubmitReproduction,
     SubmitAppeal,
     ResolveAppeal,
@@ -89,6 +107,8 @@ pub struct HumanSigningFrameRequest {
 #[derive(Debug, Serialize)]
 pub struct HumanSigningFrameResponse {
     pub command: CommandName,
+    pub resource_id: Option<Uuid>,
+    pub child_id: Option<Uuid>,
     pub payload: Value,
     pub signing_bytes: String,
     pub signing_key_id: String,
@@ -147,6 +167,28 @@ struct ReviewFramePayload {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct HumanDecisionFramePayload {
+    decision_id: Uuid,
+    proposal_id: Uuid,
+    expected_proposal_version: u64,
+    decision: String,
+    reason_hash: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SectionMergeFramePayload {
+    merge_id: Uuid,
+    section_revision_id: Uuid,
+    expected_revision_version: u64,
+    parent_revision_id: Uuid,
+    merged_section_revision_id: Uuid,
+    lease_id: Uuid,
+    fencing_token: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ConsentFramePayload {
     consent_id: Uuid,
     expected_paper_version: u64,
@@ -158,9 +200,142 @@ struct ConsentFramePayload {
 #[serde(deny_unknown_fields)]
 struct AppealFramePayload {
     appeal_id: Uuid,
-    release_candidate_hash: String,
     grounds_hash: String,
-    evidence_manifest_hash: String,
+    #[serde(default)]
+    evidence_manifest_id: Option<Uuid>,
+    #[serde(default)]
+    release_candidate_hash: Option<String>,
+    #[serde(default)]
+    evidence_manifest_hash: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AppealResolutionFramePayload {
+    resolution_id: Uuid,
+    outcome: String,
+    decision_hash: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct EvaluationScoreComponentsInput {
+    method_rigor_bps: u16,
+    experiment_statistics_bps: u16,
+    reproducibility_bps: u16,
+    evidence_citations_bps: u16,
+    value_originality_bps: u16,
+    argument_expression_bps: u16,
+    ethics_transparency_bps: u16,
+}
+
+impl EvaluationScoreComponentsInput {
+    fn checked_total(&self) -> Result<u16, AppError> {
+        for (field, value, maximum) in [
+            ("method_rigor_bps", self.method_rigor_bps, 2_500),
+            (
+                "experiment_statistics_bps",
+                self.experiment_statistics_bps,
+                1_500,
+            ),
+            ("reproducibility_bps", self.reproducibility_bps, 1_500),
+            ("evidence_citations_bps", self.evidence_citations_bps, 1_500),
+            ("value_originality_bps", self.value_originality_bps, 1_500),
+            (
+                "argument_expression_bps",
+                self.argument_expression_bps,
+                1_000,
+            ),
+            ("ethics_transparency_bps", self.ethics_transparency_bps, 500),
+        ] {
+            if value > maximum {
+                return Err(AppError::Invalid(format!(
+                    "{field} exceeds the frozen {maximum} bps maximum"
+                )));
+            }
+        }
+        Ok(self.method_rigor_bps
+            + self.experiment_statistics_bps
+            + self.reproducibility_bps
+            + self.evidence_citations_bps
+            + self.value_originality_bps
+            + self.argument_expression_bps
+            + self.ethics_transparency_bps)
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct EvaluationHardGatesInput {
+    citations_and_data_authentic: bool,
+    failed_runs_disclosed: bool,
+    all_authors_consented: bool,
+    core_claims_have_evidence: bool,
+    artifact_lineage_complete: bool,
+    license_ethics_coi_complete: bool,
+}
+
+impl EvaluationHardGatesInput {
+    fn eligible(&self) -> bool {
+        self.citations_and_data_authentic
+            && self.failed_runs_disclosed
+            && self.all_authors_consented
+            && self.core_claims_have_evidence
+            && self.artifact_lineage_complete
+            && self.license_ethics_coi_complete
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EvaluationDraftFramePayload {
+    evaluation_id: Uuid,
+    supersedes_evaluation_id: Option<Uuid>,
+    tolerance_policy: Value,
+    reference_metrics_micros: BTreeMap<String, i64>,
+    score_components: EvaluationScoreComponentsInput,
+    hard_gates: EvaluationHardGatesInput,
+    evaluator_coi_attestation_hash: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EvaluationAttestationFramePayload {
+    attestation_id: Uuid,
+    verdict: String,
+    coi_attestation_hash: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReproductionFramePayload {
+    reproduction_id: Uuid,
+    supersedes_reproduction_id: Option<Uuid>,
+    observed_metrics_micros: BTreeMap<String, i64>,
+    statistical_evidence: BTreeMap<String, Value>,
+    seed_set_hash: String,
+    environment_hash: String,
+    run_manifest_hash: String,
+    coi_attestation_hash: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EvidenceVerificationFramePayload {
+    evidence_card_id: Uuid,
+    source_uri: String,
+    source_hash: String,
+    locator: String,
+    license: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CitationVerificationFramePayload {
+    citation_id: Uuid,
+    evidence_card_id: Uuid,
+    doi: Option<String>,
+    canonical_url: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -263,6 +438,10 @@ impl BrowserCommand {
             CommandName::CreatePaperProject => {
                 post("/v2/hepta/papers".into(), "create_paper_project_v2")
             }
+            CommandName::TransitionPaperChallengeOutcome => post(
+                format!("/v2/hepta/papers/{}/outcome", resource()?),
+                "transition_paper_challenge_outcome_v1",
+            ),
             CommandName::TransitionPaperProject => post(
                 format!("/v2/hepta/papers/{}/transition", resource()?),
                 "transition_paper_project_v2",
@@ -342,6 +521,10 @@ impl BrowserCommand {
                 "/v2/hepta/matchmaking/tickets".into(),
                 "create_matchmaking_ticket_v3",
             ),
+            CommandName::CancelMatchmakingTicket => post(
+                format!("/v2/hepta/matchmaking/tickets/{}/cancel", resource()?),
+                "cancel_matchmaking_ticket_v3",
+            ),
             CommandName::DecideTeamProposal => post(
                 format!("/v2/hepta/team-proposals/{}/decisions", resource()?),
                 "create_team_proposal_decision_v3",
@@ -410,18 +593,48 @@ impl BrowserCommand {
                 format!("/v2/hepta/papers/{}/contribution-ledgers", resource()?),
                 "create_contribution_ledger_v1",
             ),
+            CommandName::ClaimReviewAssignment => post(
+                format!("/v2/hepta/papers/{}/review-assignments", resource()?),
+                "claim_paper_review_assignment_v1",
+            ),
             CommandName::CreatePaperEvaluation => post(
                 format!("/v2/hepta/papers/{}/evaluations", resource()?),
                 "create_paper_evaluation_v1",
             ),
-            CommandName::SubmitReproduction => post(
-                format!(
-                    "/v2/hepta/papers/{}/evaluations/{}/reproductions",
-                    resource()?,
-                    child()?
-                ),
-                "create_paper_reproduction_v1",
-            ),
+            CommandName::CreatePaperEvaluationDraft => {
+                let paper_id = self.require_resource_only()?;
+                post(
+                    format!("/v2/hepta/papers/{paper_id}/evaluation-drafts"),
+                    "create_paper_evaluation_draft_v1",
+                )
+            }
+            CommandName::SubmitEvaluationDraftAttestation => {
+                let (paper_id, evaluation_id) = self.require_resource_child()?;
+                post(
+                    format!(
+                        "/v2/hepta/papers/{paper_id}/evaluation-drafts/{evaluation_id}/attestations"
+                    ),
+                    "submit_paper_evaluation_draft_attestation_v1",
+                )
+            }
+            CommandName::FinalizePaperEvaluationDraft => {
+                let (paper_id, evaluation_id) = self.require_resource_child()?;
+                post(
+                    format!(
+                        "/v2/hepta/papers/{paper_id}/evaluation-drafts/{evaluation_id}/finalize"
+                    ),
+                    "finalize_paper_evaluation_draft_v1",
+                )
+            }
+            CommandName::SubmitReproduction => {
+                let (paper_id, evaluation_id) = self.require_resource_child()?;
+                post(
+                    format!(
+                        "/v2/hepta/papers/{paper_id}/evaluations/{evaluation_id}/reproductions"
+                    ),
+                    "create_paper_reproduction_v1",
+                )
+            }
             CommandName::SubmitAppeal => post(
                 format!(
                     "/v2/hepta/papers/{}/evaluations/{}/appeals",
@@ -468,6 +681,30 @@ impl BrowserCommand {
             ));
         }
         Ok(())
+    }
+
+    fn require_resource_only(&self) -> Result<Uuid, AppError> {
+        if self.child_id.is_some() || self.session_id.is_some() {
+            return Err(AppError::Invalid(
+                "command requires exactly one resource locator".into(),
+            ));
+        }
+        self.resource_id
+            .ok_or_else(|| AppError::Invalid("resource_id is required".into()))
+    }
+
+    fn require_resource_child(&self) -> Result<(Uuid, Uuid), AppError> {
+        if self.session_id.is_some() {
+            return Err(AppError::Invalid(
+                "command does not accept a session locator".into(),
+            ));
+        }
+        Ok((
+            self.resource_id
+                .ok_or_else(|| AppError::Invalid("resource_id is required".into()))?,
+            self.child_id
+                .ok_or_else(|| AppError::Invalid("child_id is required".into()))?,
+        ))
     }
 }
 
@@ -555,6 +792,26 @@ impl HeptaClient {
         .await
     }
 
+    pub async fn create_agent_binding_v3(
+        &self,
+        identity: &AlphaIdentity,
+        idempotency_key: Uuid,
+        payload: &Value,
+    ) -> Result<UpstreamResponse, AppError> {
+        self.send(
+            identity,
+            Route {
+                method: Method::POST,
+                path: "/v2/hepta/agent-bindings".into(),
+                query: None,
+                operation: "create_agent_binding_v3",
+            },
+            idempotency_key,
+            payload,
+        )
+        .await
+    }
+
     pub fn human_registration_challenge(
         identity: &AlphaIdentity,
         signing_public_key: &str,
@@ -625,6 +882,8 @@ impl HeptaClient {
             return Err(AppError::Forbidden);
         }
         let signed_at_unix = Utc::now().timestamp();
+        let derived_resource_id = request.resource_id;
+        let mut derived_child_id = request.child_id;
         let (payload, signing_bytes) = match request.command {
             CommandName::AcceptResearchTeamMembership => {
                 let team_id = request
@@ -688,6 +947,179 @@ impl HeptaClient {
                 });
                 (payload, bytes)
             }
+            CommandName::CreateEvidenceCard => {
+                let paper_id = request
+                    .resource_id
+                    .ok_or_else(|| AppError::Invalid("resource_id is required".into()))?;
+                if request.child_id.is_some() {
+                    return Err(AppError::Invalid("child_id is not allowed".into()));
+                }
+                let input: EvidenceVerificationFramePayload =
+                    serde_json::from_value(request.payload.clone()).map_err(|_| {
+                        AppError::Invalid("invalid evidence verification frame payload".into())
+                    })?;
+                validate_frame_https_uri(&input.source_uri)?;
+                let room = self.get_paper_room(identity, paper_id).await?;
+                require_room_paper_id(&room, paper_id)?;
+                let signing = HumanEvidenceVerificationSigningV1 {
+                    schema: HUMAN_EVIDENCE_VERIFICATION_V1.into(),
+                    verification_id: input.evidence_card_id,
+                    paper_project_id: paper_id,
+                    record_kind: "evidence_card".into(),
+                    record_id: input.evidence_card_id,
+                    source_identifier: format!("evidence-uri\n{}", input.source_uri),
+                    source_hash: input.source_hash.clone(),
+                    locator: input.locator.clone(),
+                    license: input.license.clone(),
+                    player_id: identity.player_id,
+                    signing_key_id: player.signing_key_id.clone(),
+                    signing_public_key_hash: player.signing_public_key_hash.clone(),
+                    signed_at_unix,
+                };
+                let bytes = human_evidence_verification_signing_bytes(&signing)
+                    .map_err(AppError::Invalid)?;
+                let payload = serde_json::json!({
+                    "evidence_card_id": input.evidence_card_id,
+                    "source_uri": input.source_uri,
+                    "source_hash": input.source_hash,
+                    "locator": input.locator,
+                    "license": input.license,
+                    "verification_key_id": player.signing_key_id.clone(),
+                    "verification_public_key": player.signing_public_key.clone(),
+                    "verification_public_key_hash": player.signing_public_key_hash.clone(),
+                    "signed_at_unix": signed_at_unix,
+                });
+                (payload, bytes)
+            }
+            CommandName::CreateCitationRecord => {
+                let paper_id = request
+                    .resource_id
+                    .ok_or_else(|| AppError::Invalid("resource_id is required".into()))?;
+                if request.child_id.is_some() {
+                    return Err(AppError::Invalid("child_id is not allowed".into()));
+                }
+                let input: CitationVerificationFramePayload =
+                    serde_json::from_value(request.payload.clone()).map_err(|_| {
+                        AppError::Invalid("invalid citation verification frame payload".into())
+                    })?;
+                if input.doi.is_none() && input.canonical_url.is_none() {
+                    return Err(AppError::Invalid(
+                        "citation requires a DOI or canonical_url".into(),
+                    ));
+                }
+                if let Some(doi) = input.doi.as_deref() {
+                    if !doi.starts_with("10.")
+                        || !doi.contains('/')
+                        || doi.bytes().any(|byte| byte.is_ascii_whitespace())
+                    {
+                        return Err(AppError::Invalid("citation DOI is invalid".into()));
+                    }
+                }
+                if let Some(url) = input.canonical_url.as_deref() {
+                    validate_frame_https_uri(url)?;
+                }
+                let room = self.get_paper_room(identity, paper_id).await?;
+                require_room_paper_id(&room, paper_id)?;
+                let evidence_id = input.evidence_card_id.to_string();
+                let evidence = room
+                    .get("evidence_cards")
+                    .and_then(Value::as_array)
+                    .and_then(|records| {
+                        records.iter().find(|record| {
+                            record.get("evidence_card_id").and_then(Value::as_str)
+                                == Some(evidence_id.as_str())
+                        })
+                    })
+                    .ok_or(AppError::NotFound)?;
+                let source_hash = required_string(evidence, "source_hash")?;
+                let locator = required_string(evidence, "locator")?;
+                let license = required_string(evidence, "license")?;
+                let source_identifier = format!(
+                    "citation-doi\n{}\ncitation-url\n{}",
+                    input.doi.as_deref().unwrap_or("-"),
+                    input.canonical_url.as_deref().unwrap_or("-")
+                );
+                let signing = HumanEvidenceVerificationSigningV1 {
+                    schema: HUMAN_EVIDENCE_VERIFICATION_V1.into(),
+                    verification_id: input.citation_id,
+                    paper_project_id: paper_id,
+                    record_kind: "citation".into(),
+                    record_id: input.citation_id,
+                    source_identifier,
+                    source_hash: source_hash.clone(),
+                    locator: locator.clone(),
+                    license: license.clone(),
+                    player_id: identity.player_id,
+                    signing_key_id: player.signing_key_id.clone(),
+                    signing_public_key_hash: player.signing_public_key_hash.clone(),
+                    signed_at_unix,
+                };
+                let bytes = human_evidence_verification_signing_bytes(&signing)
+                    .map_err(AppError::Invalid)?;
+                let payload = serde_json::json!({
+                    "citation_id": input.citation_id,
+                    "evidence_card_id": input.evidence_card_id,
+                    "doi": input.doi,
+                    "canonical_url": input.canonical_url,
+                    "source_hash": source_hash,
+                    "locator": locator,
+                    "license": license,
+                    "verification_key_id": player.signing_key_id.clone(),
+                    "verification_public_key": player.signing_public_key.clone(),
+                    "verification_public_key_hash": player.signing_public_key_hash.clone(),
+                    "signed_at_unix": signed_at_unix,
+                });
+                (payload, bytes)
+            }
+            CommandName::RecordHumanDecision => {
+                let paper_id = request
+                    .resource_id
+                    .ok_or_else(|| AppError::Invalid("resource_id is required".into()))?;
+                if request.child_id.is_some() {
+                    return Err(AppError::Invalid("child_id is not allowed".into()));
+                }
+                let input: HumanDecisionFramePayload =
+                    serde_json::from_value(request.payload.clone()).map_err(|_| {
+                        AppError::Invalid("invalid human decision frame payload".into())
+                    })?;
+                let room = self.get_paper_room(identity, paper_id).await?;
+                require_room_paper_id(&room, paper_id)?;
+                let proposal =
+                    find_room_record(&room, "proposals", "proposal_id", input.proposal_id)?;
+                if required_u64(proposal, "version")? != input.expected_proposal_version
+                    || proposal.get("status").and_then(Value::as_str) != Some("submitted")
+                {
+                    return Err(AppError::Conflict(
+                        "human decision must bind the current submitted proposal".into(),
+                    ));
+                }
+                let signing = HumanDecisionSigningV1 {
+                    schema: HUMAN_DECISION_V1.into(),
+                    decision_id: input.decision_id,
+                    paper_project_id: paper_id,
+                    proposal_id: input.proposal_id,
+                    player_id: identity.player_id,
+                    decision: input.decision.clone(),
+                    reason_hash: input.reason_hash.clone(),
+                    expected_proposal_version: input.expected_proposal_version,
+                    signing_key_id: player.signing_key_id.clone(),
+                    signing_public_key_hash: player.signing_public_key_hash.clone(),
+                    signed_at_unix,
+                };
+                let bytes = human_decision_signing_bytes(&signing).map_err(AppError::Invalid)?;
+                let payload = serde_json::json!({
+                    "decision_id": input.decision_id,
+                    "proposal_id": input.proposal_id,
+                    "expected_proposal_version": input.expected_proposal_version,
+                    "decision": input.decision,
+                    "reason_hash": input.reason_hash,
+                    "signing_key_id": player.signing_key_id.clone(),
+                    "signing_public_key": player.signing_public_key.clone(),
+                    "signing_public_key_hash": player.signing_public_key_hash.clone(),
+                    "signed_at_unix": signed_at_unix,
+                });
+                (payload, bytes)
+            }
             CommandName::SubmitReview => {
                 let paper_id = request
                     .resource_id
@@ -697,6 +1129,26 @@ impl HeptaClient {
                     .ok_or_else(|| AppError::Invalid("child_id is required".into()))?;
                 let input: ReviewFramePayload = serde_json::from_value(request.payload.clone())
                     .map_err(|_| AppError::Invalid("invalid review frame payload".into()))?;
+                let room = self.get_paper_room(identity, paper_id).await?;
+                require_room_paper_id(&room, paper_id)?;
+                let revision = find_room_record(
+                    &room,
+                    "section_revisions",
+                    "section_revision_id",
+                    section_revision_id,
+                )?;
+                if required_u64(revision, "version")? != input.expected_revision_version
+                    || revision.get("status").and_then(Value::as_str) != Some("proposed")
+                {
+                    return Err(AppError::Conflict(
+                        "section review must bind the current proposed revision".into(),
+                    ));
+                }
+                let lease_id = required_uuid(revision, "lease_id")?;
+                let lease = find_room_record(&room, "leases", "lease_id", lease_id)?;
+                if required_uuid(lease, "holder_player_id")? == identity.player_id {
+                    return Err(AppError::Forbidden);
+                }
                 let signing = SectionReviewSigningV1 {
                     schema: SECTION_REVIEW_V1.into(),
                     review_id: input.review_id,
@@ -720,6 +1172,106 @@ impl HeptaClient {
                     "signing_public_key": player.signing_public_key.clone(),
                     "signing_public_key_hash": player.signing_public_key_hash.clone(),
                     "signed_at_unix": signed_at_unix,
+                });
+                (payload, bytes)
+            }
+            CommandName::MergeSection => {
+                let paper_id = request
+                    .resource_id
+                    .ok_or_else(|| AppError::Invalid("resource_id is required".into()))?;
+                if request.child_id.is_some() {
+                    return Err(AppError::Invalid("child_id is not allowed".into()));
+                }
+                let input: SectionMergeFramePayload =
+                    serde_json::from_value(request.payload.clone()).map_err(|_| {
+                        AppError::Invalid("invalid section merge frame payload".into())
+                    })?;
+                if input.merged_section_revision_id != input.section_revision_id {
+                    return Err(AppError::Invalid(
+                        "merge must advance to the reviewed section revision".into(),
+                    ));
+                }
+                let room = self.get_paper_room(identity, paper_id).await?;
+                require_room_paper_id(&room, paper_id)?;
+                let revision = find_room_record(
+                    &room,
+                    "section_revisions",
+                    "section_revision_id",
+                    input.section_revision_id,
+                )?;
+                let section_key = required_string(revision, "section_key")?;
+                if required_u64(revision, "version")? != input.expected_revision_version
+                    || revision.get("status").and_then(Value::as_str) != Some("approved")
+                    || required_uuid(revision, "parent_revision_id")? != input.parent_revision_id
+                    || required_uuid(revision, "lease_id")? != input.lease_id
+                    || required_u64(revision, "fencing_token")? != input.fencing_token
+                {
+                    return Err(AppError::Conflict(
+                        "section merge must bind the current approved revision".into(),
+                    ));
+                }
+                let lease = find_room_record(&room, "leases", "lease_id", input.lease_id)?;
+                let lease_expires_at = lease
+                    .get("expires_at")
+                    .and_then(Value::as_str)
+                    .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+                    .ok_or(AppError::Upstream)?;
+                if required_uuid(lease, "holder_player_id")? != identity.player_id
+                    || lease.get("status").and_then(Value::as_str) != Some("active")
+                    || lease.get("section_key").and_then(Value::as_str)
+                        != Some(section_key.as_str())
+                    || required_u64(lease, "fencing_token")? != input.fencing_token
+                    || lease_expires_at.timestamp() <= signed_at_unix
+                {
+                    return Err(AppError::Conflict(
+                        "section merge requires the holder's current unexpired lease".into(),
+                    ));
+                }
+                let head = room
+                    .get("section_heads")
+                    .and_then(Value::as_array)
+                    .and_then(|records| {
+                        records.iter().find(|record| {
+                            record.get("section_key").and_then(Value::as_str)
+                                == Some(section_key.as_str())
+                        })
+                    })
+                    .ok_or(AppError::NotFound)?;
+                if required_uuid(head, "current_head_revision_id")? != input.parent_revision_id
+                    || required_u64(head, "fencing_token")? != input.fencing_token
+                {
+                    return Err(AppError::Conflict(
+                        "section merge does not match the authoritative head".into(),
+                    ));
+                }
+                let signing = SectionMergeSigningV1 {
+                    schema: SECTION_MERGE_V1.into(),
+                    merge_id: input.merge_id,
+                    paper_project_id: paper_id,
+                    section_key,
+                    section_revision_id: input.section_revision_id,
+                    parent_revision_id: input.parent_revision_id,
+                    merged_section_revision_id: input.merged_section_revision_id,
+                    lease_id: input.lease_id,
+                    fencing_token: input.fencing_token,
+                    merged_by_player_id: identity.player_id,
+                    signing_key_id: player.signing_key_id.clone(),
+                    signing_public_key_hash: player.signing_public_key_hash.clone(),
+                    merged_at_unix: signed_at_unix,
+                };
+                let bytes = section_merge_signing_bytes(&signing).map_err(AppError::Invalid)?;
+                let payload = serde_json::json!({
+                    "merge_id": input.merge_id,
+                    "section_revision_id": input.section_revision_id,
+                    "expected_revision_version": input.expected_revision_version,
+                    "parent_revision_id": input.parent_revision_id,
+                    "merged_section_revision_id": input.merged_section_revision_id,
+                    "lease_id": input.lease_id,
+                    "fencing_token": input.fencing_token,
+                    "signing_key_id": player.signing_key_id.clone(),
+                    "signing_public_key": player.signing_public_key.clone(),
+                    "signing_public_key_hash": player.signing_public_key_hash.clone(),
+                    "merged_at_unix": signed_at_unix,
                 });
                 (payload, bytes)
             }
@@ -759,49 +1311,378 @@ impl HeptaClient {
                 });
                 (payload, bytes)
             }
-            CommandName::SubmitAppeal => {
+            CommandName::CreatePaperEvaluationDraft => {
+                let paper_id = request
+                    .resource_id
+                    .ok_or_else(|| AppError::Invalid("resource_id is required".into()))?;
+                if request.child_id.is_some() {
+                    return Err(AppError::Invalid("child_id is not allowed".into()));
+                }
+                let input: EvaluationDraftFramePayload =
+                    serde_json::from_value(request.payload.clone()).map_err(|_| {
+                        AppError::Invalid("invalid evaluation draft frame payload".into())
+                    })?;
+                let bundle = self.get_paper_review_bundle(identity, paper_id).await?;
+                let (submission_id, release_candidate_hash, paper_bundle_hash) =
+                    require_review_bundle_scope(&bundle, paper_id, identity)?;
+                if bundle
+                    .get("evaluation_quorum")
+                    .is_some_and(|value| !value.is_null())
+                    || bundle
+                        .get("evaluation")
+                        .is_some_and(|value| !value.is_null())
+                {
+                    return Err(AppError::Conflict(
+                        "the assigned review round already has an authoritative draft or evaluation"
+                            .into(),
+                    ));
+                }
+                let player_id = identity.player_id.to_string();
+                let assignment = bundle
+                    .get("my_assignments")
+                    .and_then(Value::as_array)
+                    .and_then(|assignments| {
+                        assignments.iter().find(|assignment| {
+                            assignment.get("slot").and_then(Value::as_str) == Some("evaluator")
+                                && assignment.get("player_id").and_then(Value::as_str)
+                                    == Some(player_id.as_str())
+                        })
+                    })
+                    .ok_or(AppError::Forbidden)?;
+                let review_round = required_u64(assignment, "review_round")?;
+                require_exact_review_assignment(
+                    &bundle,
+                    identity,
+                    submission_id,
+                    review_round,
+                    &["evaluator"],
+                )?;
+                if input.reference_metrics_micros.is_empty()
+                    || input.reference_metrics_micros.len() > 256
+                    || input.tolerance_policy.get("schema").and_then(Value::as_str)
+                        != Some("hepta.paper_raid.tolerance_policy.v1")
+                    || input
+                        .tolerance_policy
+                        .get("version")
+                        .and_then(Value::as_str)
+                        != Some("1")
+                    || !input
+                        .tolerance_policy
+                        .get("rules")
+                        .and_then(Value::as_array)
+                        .is_some_and(|rules| !rules.is_empty())
+                {
+                    return Err(AppError::Invalid(
+                        "evaluation requires a frozen v1 tolerance policy and reference metrics"
+                            .into(),
+                    ));
+                }
+                let score_bps = input.score_components.checked_total()?;
+                let eligible = input.hard_gates.eligible();
+                let score_components = serde_json::to_value(&input.score_components)
+                    .map_err(|_| AppError::Internal)?;
+                let hard_gates =
+                    serde_json::to_value(&input.hard_gates).map_err(|_| AppError::Internal)?;
+                let paper_score_hash = canonical_value_hash(&serde_json::json!({
+                    "schema": "hepta.paper_raid.paper_score.v1",
+                    "evaluation_id": input.evaluation_id,
+                    "paper_project_id": paper_id,
+                    "components": score_components,
+                    "hard_gates": hard_gates,
+                    "score_bps": score_bps,
+                    "eligible": eligible,
+                }))?;
+                let tolerance_policy_hash = canonical_value_hash(&input.tolerance_policy)?;
+                let reference_metrics_hash = canonical_value_hash(&input.reference_metrics_micros)?;
+                let hard_gates_hash = canonical_value_hash(&input.hard_gates)?;
+                let signing = PaperEvaluationSigningV1 {
+                    schema: PAPER_EVALUATION_V1.into(),
+                    evaluation_id: input.evaluation_id,
+                    paper_project_id: paper_id,
+                    submission_id,
+                    release_candidate_hash: release_candidate_hash.clone(),
+                    paper_bundle_hash: paper_bundle_hash.clone(),
+                    supersedes_evaluation_id: input.supersedes_evaluation_id,
+                    tolerance_policy_hash,
+                    paper_score_hash,
+                    reference_metrics_hash,
+                    hard_gates_hash,
+                    evaluator_player_id: identity.player_id,
+                    signing_key_id: player.signing_key_id.clone(),
+                    signing_public_key_hash: player.signing_public_key_hash.clone(),
+                    coi_attestation_hash: input.evaluator_coi_attestation_hash.clone(),
+                    signed_at_unix,
+                };
+                let bytes = paper_evaluation_signing_bytes(&signing).map_err(AppError::Invalid)?;
+                let payload = serde_json::json!({
+                    "evaluation_id": input.evaluation_id,
+                    "submission_id": submission_id,
+                    "supersedes_evaluation_id": input.supersedes_evaluation_id,
+                    "release_candidate_hash": release_candidate_hash,
+                    "paper_bundle_hash": paper_bundle_hash,
+                    "tolerance_policy": input.tolerance_policy,
+                    "reference_metrics_micros": input.reference_metrics_micros,
+                    "score_components": input.score_components,
+                    "hard_gates": input.hard_gates,
+                    "evaluator_player_id": identity.player_id,
+                    "evaluator_signing_key_id": player.signing_key_id.clone(),
+                    "evaluator_signing_public_key": player.signing_public_key.clone(),
+                    "evaluator_signing_public_key_hash": player.signing_public_key_hash.clone(),
+                    "evaluator_coi_attestation_hash": input.evaluator_coi_attestation_hash,
+                    "evaluator_signed_at_unix": signed_at_unix,
+                });
+                (payload, bytes)
+            }
+            CommandName::SubmitEvaluationDraftAttestation => {
                 let paper_id = request
                     .resource_id
                     .ok_or_else(|| AppError::Invalid("resource_id is required".into()))?;
                 let evaluation_id = request
                     .child_id
                     .ok_or_else(|| AppError::Invalid("child_id is required".into()))?;
-                let input: AppealFramePayload = serde_json::from_value(request.payload.clone())
-                    .map_err(|_| AppError::Invalid("invalid Appeal frame payload".into()))?;
-                let review = self.get_paper_review_state(identity, paper_id).await?;
-                let evaluation_id_text = evaluation_id.to_string();
-                let evaluation = review
-                    .get("evaluations")
+                let input: EvaluationAttestationFramePayload =
+                    serde_json::from_value(request.payload.clone()).map_err(|_| {
+                        AppError::Invalid("invalid evaluation attestation frame payload".into())
+                    })?;
+                if !matches!(input.verdict.as_str(), "approve" | "reject") {
+                    return Err(AppError::Invalid(
+                        "review verdict must be approve or reject".into(),
+                    ));
+                }
+                let bundle = self.get_paper_review_bundle(identity, paper_id).await?;
+                let (submission_id, _, _) =
+                    require_review_bundle_scope(&bundle, paper_id, identity)?;
+                let quorum = bundle
+                    .get("evaluation_quorum")
+                    .filter(|value| !value.is_null())
+                    .ok_or(AppError::NotFound)?;
+                let draft = quorum.get("draft").ok_or(AppError::Upstream)?;
+                if required_uuid(draft, "evaluation_id")? != evaluation_id
+                    || required_uuid(draft, "paper_project_id")? != paper_id
+                    || required_uuid(draft, "submission_id")? != submission_id
+                    || draft.get("status").and_then(Value::as_str) != Some("open")
+                {
+                    return Err(AppError::Conflict(
+                        "review attestation must bind the current open immutable draft".into(),
+                    ));
+                }
+                let review_round = required_u64(draft, "review_round")?;
+                let assignment = require_exact_review_assignment(
+                    &bundle,
+                    identity,
+                    submission_id,
+                    review_round,
+                    &["reviewer_1", "reviewer_2"],
+                )?;
+                let slot = required_string(assignment, "slot")?;
+                let player_id = identity.player_id.to_string();
+                if quorum
+                    .get("attestations")
                     .and_then(Value::as_array)
-                    .and_then(|evaluations| {
-                        evaluations.iter().find(|evaluation| {
-                            evaluation.get("evaluation_id").and_then(Value::as_str)
-                                == Some(evaluation_id_text.as_str())
+                    .is_some_and(|records| {
+                        records.iter().any(|record| {
+                            record.get("slot").and_then(Value::as_str) == Some(slot.as_str())
+                                || record
+                                    .get("attestation")
+                                    .and_then(|value| value.get("reviewer_player_id"))
+                                    .and_then(Value::as_str)
+                                    == Some(player_id.as_str())
                         })
                     })
+                {
+                    return Err(AppError::Conflict(
+                        "this reviewer slot already has its immutable attestation".into(),
+                    ));
+                }
+                let evaluation_signing_hash = required_string(draft, "evaluation_signing_hash")?;
+                let draft_hash = required_string(draft, "draft_hash")?;
+                let signing = PaperReviewAttestationSigningV1 {
+                    schema: PAPER_REVIEW_ATTESTATION_V1.into(),
+                    attestation_id: input.attestation_id,
+                    evaluation_id,
+                    evaluation_signing_hash,
+                    reviewer_player_id: identity.player_id,
+                    verdict: input.verdict.clone(),
+                    signing_key_id: player.signing_key_id.clone(),
+                    signing_public_key_hash: player.signing_public_key_hash.clone(),
+                    coi_attestation_hash: input.coi_attestation_hash.clone(),
+                    signed_at_unix,
+                };
+                let bytes =
+                    paper_review_attestation_signing_bytes(&signing).map_err(AppError::Invalid)?;
+                let payload = serde_json::json!({
+                    "attestation_id": input.attestation_id,
+                    "draft_hash": draft_hash,
+                    "reviewer_player_id": identity.player_id,
+                    "verdict": input.verdict,
+                    "signing_key_id": player.signing_key_id.clone(),
+                    "signing_public_key": player.signing_public_key.clone(),
+                    "signing_public_key_hash": player.signing_public_key_hash.clone(),
+                    "coi_attestation_hash": input.coi_attestation_hash,
+                    "signed_at_unix": signed_at_unix,
+                });
+                (payload, bytes)
+            }
+            CommandName::SubmitReproduction => {
+                let paper_id = request
+                    .resource_id
+                    .ok_or_else(|| AppError::Invalid("resource_id is required".into()))?;
+                let evaluation_id = request
+                    .child_id
+                    .ok_or_else(|| AppError::Invalid("child_id is required".into()))?;
+                let input: ReproductionFramePayload =
+                    serde_json::from_value(request.payload.clone()).map_err(|_| {
+                        AppError::Invalid("invalid reproduction frame payload".into())
+                    })?;
+                let bundle = self.get_paper_review_bundle(identity, paper_id).await?;
+                let (submission_id, release_candidate_hash, paper_bundle_hash) =
+                    require_review_bundle_scope(&bundle, paper_id, identity)?;
+                let evaluation = bundle
+                    .get("evaluation")
+                    .filter(|value| !value.is_null())
                     .ok_or(AppError::NotFound)?;
-                let current_release = evaluation
-                    .get("release_candidate_hash")
+                if required_uuid(evaluation, "evaluation_id")? != evaluation_id
+                    || required_uuid(evaluation, "paper_project_id")? != paper_id
+                    || required_uuid(evaluation, "submission_id")? != submission_id
+                    || required_string(evaluation, "release_candidate_hash")?
+                        != release_candidate_hash
+                    || required_string(evaluation, "paper_bundle_hash")? != paper_bundle_hash
+                {
+                    return Err(AppError::Conflict(
+                        "reproduction must bind the current finalized evaluation".into(),
+                    ));
+                }
+                let review_round = required_u64(evaluation, "version")?;
+                require_exact_review_assignment(
+                    &bundle,
+                    identity,
+                    submission_id,
+                    review_round,
+                    &["reproducer"],
+                )?;
+                let observed_metrics_hash = canonical_value_hash(&input.observed_metrics_micros)?;
+                let statistical_evidence_hash = canonical_value_hash(&input.statistical_evidence)?;
+                let signing = PaperReproductionSigningV1 {
+                    schema: PAPER_REPRODUCTION_V1.into(),
+                    reproduction_id: input.reproduction_id,
+                    evaluation_id,
+                    paper_project_id: paper_id,
+                    release_candidate_hash: release_candidate_hash.clone(),
+                    paper_bundle_hash: paper_bundle_hash.clone(),
+                    tolerance_policy_hash: required_string(evaluation, "tolerance_policy_hash")?,
+                    observed_metrics_hash,
+                    statistical_evidence_hash,
+                    seed_set_hash: input.seed_set_hash.clone(),
+                    environment_hash: input.environment_hash.clone(),
+                    run_manifest_hash: input.run_manifest_hash.clone(),
+                    supersedes_reproduction_id: input.supersedes_reproduction_id,
+                    reproducer_player_id: identity.player_id,
+                    signing_key_id: player.signing_key_id.clone(),
+                    signing_public_key_hash: player.signing_public_key_hash.clone(),
+                    coi_attestation_hash: input.coi_attestation_hash.clone(),
+                    signed_at_unix,
+                };
+                let bytes =
+                    paper_reproduction_signing_bytes(&signing).map_err(AppError::Invalid)?;
+                let payload = serde_json::json!({
+                    "reproduction_id": input.reproduction_id,
+                    "supersedes_reproduction_id": input.supersedes_reproduction_id,
+                    "release_candidate_hash": release_candidate_hash,
+                    "paper_bundle_hash": paper_bundle_hash,
+                    "observed_metrics_micros": input.observed_metrics_micros,
+                    "statistical_evidence": input.statistical_evidence,
+                    "seed_set_hash": input.seed_set_hash,
+                    "environment_hash": input.environment_hash,
+                    "run_manifest_hash": input.run_manifest_hash,
+                    "reproducer_player_id": identity.player_id,
+                    "signing_key_id": player.signing_key_id.clone(),
+                    "signing_public_key": player.signing_public_key.clone(),
+                    "signing_public_key_hash": player.signing_public_key_hash.clone(),
+                    "coi_attestation_hash": input.coi_attestation_hash,
+                    "signed_at_unix": signed_at_unix,
+                });
+                (payload, bytes)
+            }
+            CommandName::SubmitAppeal => {
+                let paper_id = request
+                    .resource_id
+                    .ok_or_else(|| AppError::Invalid("resource_id is required".into()))?;
+                let input: AppealFramePayload = serde_json::from_value(request.payload.clone())
+                    .map_err(|_| AppError::Invalid("invalid Appeal frame payload".into()))?;
+                let guided = request.child_id.is_none();
+                let guided_payload = input.evidence_manifest_id.is_some()
+                    && input.release_candidate_hash.is_none()
+                    && input.evidence_manifest_hash.is_none();
+                let advanced_payload = input.evidence_manifest_id.is_none()
+                    && input.release_candidate_hash.is_some()
+                    && input.evidence_manifest_hash.is_some();
+                if (guided && !guided_payload) || (!guided && !advanced_payload) {
+                    return Err(AppError::Invalid(
+                        "guided Appeal requires one evidence_manifest_id; the Advanced frame requires exact release and manifest hashes"
+                            .into(),
+                    ));
+                }
+                let room = self.get_paper_room(identity, paper_id).await?;
+                require_room_paper_id(&room, paper_id)?;
+                let review = self.get_paper_review_state(identity, paper_id).await?;
+                if review
+                    .get("finality")
+                    .and_then(|value| value.get("status"))
                     .and_then(Value::as_str)
-                    .ok_or(AppError::Upstream)?;
-                let paper_id_text = paper_id.to_string();
-                if evaluation.get("paper_project_id").and_then(Value::as_str)
-                    != Some(paper_id_text.as_str())
-                    || current_release != input.release_candidate_hash
+                    != Some("pending_finality")
+                {
+                    return Err(AppError::Conflict(
+                        "Appeal signing requires pending scientific finality".into(),
+                    ));
+                }
+                let evaluation = match request.child_id {
+                    Some(evaluation_id) => {
+                        paper_evaluation_by_id(&review, paper_id, evaluation_id)?
+                    }
+                    None => latest_paper_evaluation(&review, paper_id)?,
+                };
+                let evaluation_id = required_uuid(evaluation, "evaluation_id")?;
+                let current_release = required_string(evaluation, "release_candidate_hash")?;
+                if input
+                    .release_candidate_hash
+                    .as_deref()
+                    .is_some_and(|supplied| supplied != current_release)
                 {
                     return Err(AppError::Conflict(
                         "Appeal payload does not match the evaluated release candidate".into(),
                     ));
                 }
+                let evaluation_id_text = evaluation_id.to_string();
+                let prior_appeals = review
+                    .get("appeals")
+                    .and_then(Value::as_array)
+                    .ok_or(AppError::Upstream)?
+                    .iter()
+                    .filter(|appeal| {
+                        appeal.get("evaluation_id").and_then(Value::as_str)
+                            == Some(evaluation_id_text.as_str())
+                    })
+                    .count();
+                if prior_appeals != 0 {
+                    return Err(AppError::Conflict(
+                        "the current evaluation already has an immutable Appeal".into(),
+                    ));
+                }
+                let evidence_manifest_hash = exact_manifest_hash(
+                    &room,
+                    paper_id,
+                    input.evidence_manifest_id,
+                    input.evidence_manifest_hash.as_deref(),
+                )?;
                 let signing = PaperAppealSigningV1 {
                     schema: PAPER_APPEAL_V1.into(),
                     appeal_id: input.appeal_id,
                     evaluation_id,
                     paper_project_id: paper_id,
-                    release_candidate_hash: input.release_candidate_hash.clone(),
+                    release_candidate_hash: current_release.clone(),
                     appellant_player_id: identity.player_id,
                     grounds_hash: input.grounds_hash.clone(),
-                    evidence_manifest_hash: input.evidence_manifest_hash.clone(),
+                    evidence_manifest_hash: evidence_manifest_hash.clone(),
                     signing_key_id: player.signing_key_id.clone(),
                     signing_public_key_hash: player.signing_public_key_hash.clone(),
                     signed_at_unix,
@@ -809,15 +1690,140 @@ impl HeptaClient {
                 let bytes = paper_appeal_signing_bytes(&signing).map_err(AppError::Invalid)?;
                 let payload = serde_json::json!({
                     "appeal_id": input.appeal_id,
-                    "release_candidate_hash": input.release_candidate_hash,
+                    "release_candidate_hash": current_release,
                     "appellant_player_id": identity.player_id,
                     "grounds_hash": input.grounds_hash,
-                    "evidence_manifest_hash": input.evidence_manifest_hash,
+                    "evidence_manifest_hash": evidence_manifest_hash,
                     "signing_key_id": player.signing_key_id.clone(),
                     "signing_public_key": player.signing_public_key.clone(),
                     "signing_public_key_hash": player.signing_public_key_hash.clone(),
                     "signed_at_unix": signed_at_unix,
                 });
+                derived_child_id = Some(evaluation_id);
+                (payload, bytes)
+            }
+            CommandName::ResolveAppeal => {
+                let paper_id = request
+                    .resource_id
+                    .ok_or_else(|| AppError::Invalid("resource_id is required".into()))?;
+                if request.child_id.is_some() {
+                    return Err(AppError::Invalid(
+                        "guided Appeal resolution derives child_id from the current review state"
+                            .into(),
+                    ));
+                }
+                let input: AppealResolutionFramePayload =
+                    serde_json::from_value(request.payload.clone()).map_err(|_| {
+                        AppError::Invalid("invalid Appeal resolution frame payload".into())
+                    })?;
+                if !matches!(input.outcome.as_str(), "denied" | "upheld") {
+                    return Err(AppError::Invalid(
+                        "Appeal resolution outcome must be denied or upheld".into(),
+                    ));
+                }
+                let bundle = self.get_paper_review_bundle(identity, paper_id).await?;
+                let (submission_id, release_candidate_hash, paper_bundle_hash) =
+                    require_review_bundle_scope(&bundle, paper_id, identity)?;
+                let assigned_evaluation = bundle
+                    .get("evaluation")
+                    .filter(|value| !value.is_null())
+                    .ok_or(AppError::NotFound)?;
+                let evaluation_id = required_uuid(assigned_evaluation, "evaluation_id")?;
+                let review_round = required_u64(assigned_evaluation, "version")?;
+                if required_uuid(assigned_evaluation, "paper_project_id")? != paper_id
+                    || required_uuid(assigned_evaluation, "submission_id")? != submission_id
+                    || required_string(assigned_evaluation, "release_candidate_hash")?
+                        != release_candidate_hash
+                    || required_string(assigned_evaluation, "paper_bundle_hash")?
+                        != paper_bundle_hash
+                {
+                    return Err(AppError::Conflict(
+                        "Appeal resolver assignment does not bind the current frozen evaluation"
+                            .into(),
+                    ));
+                }
+                require_exact_review_assignment(
+                    &bundle,
+                    identity,
+                    submission_id,
+                    review_round,
+                    &["reproducer"],
+                )?;
+                let review = self.get_paper_review_state(identity, paper_id).await?;
+                if review
+                    .get("finality")
+                    .and_then(|value| value.get("status"))
+                    .and_then(Value::as_str)
+                    != Some("pending_finality")
+                {
+                    return Err(AppError::Conflict(
+                        "Appeal resolution requires pending scientific finality".into(),
+                    ));
+                }
+                let evaluation = paper_evaluation_by_id(&review, paper_id, evaluation_id)?;
+                if required_uuid(evaluation, "submission_id")? != submission_id
+                    || required_string(evaluation, "release_candidate_hash")?
+                        != release_candidate_hash
+                    || required_string(evaluation, "paper_bundle_hash")? != paper_bundle_hash
+                    || required_u64(evaluation, "version")? != review_round
+                    || evaluation_panel_contains(evaluation, identity.player_id)?
+                {
+                    return Err(AppError::Forbidden);
+                }
+                let appeal = exact_open_appeal(&review, paper_id, evaluation_id)?;
+                if required_uuid(appeal, "evaluation_id")? != evaluation_id
+                    || required_string(appeal, "release_candidate_hash")? != release_candidate_hash
+                    || required_uuid(appeal, "appellant_player_id")? == identity.player_id
+                {
+                    return Err(AppError::Forbidden);
+                }
+                let superseding = exact_superseding_evaluation(&review, evaluation)?;
+                let superseding_evaluation_id = match input.outcome.as_str() {
+                    "denied" => None,
+                    "upheld" => {
+                        let replacement = superseding.ok_or_else(|| {
+                            AppError::Conflict(
+                                "upheld Appeal requires one exact eligible superseding evaluation"
+                                    .into(),
+                            )
+                        })?;
+                        if evaluation_panel_contains(replacement, identity.player_id)? {
+                            return Err(AppError::Forbidden);
+                        }
+                        Some(required_uuid(replacement, "evaluation_id")?)
+                    }
+                    _ => unreachable!("validated resolution outcome"),
+                };
+                let appeal_id = required_uuid(appeal, "appeal_id")?;
+                let signing = PaperAppealResolutionSigningV1 {
+                    schema: PAPER_APPEAL_RESOLUTION_V1.into(),
+                    resolution_id: input.resolution_id,
+                    appeal_id,
+                    evaluation_id,
+                    paper_project_id: paper_id,
+                    release_candidate_hash: release_candidate_hash.clone(),
+                    outcome: input.outcome.clone(),
+                    superseding_evaluation_id,
+                    decision_hash: input.decision_hash.clone(),
+                    resolver_player_id: identity.player_id,
+                    signing_key_id: player.signing_key_id.clone(),
+                    signing_public_key_hash: player.signing_public_key_hash.clone(),
+                    signed_at_unix,
+                };
+                let bytes =
+                    paper_appeal_resolution_signing_bytes(&signing).map_err(AppError::Invalid)?;
+                let payload = serde_json::json!({
+                    "resolution_id": input.resolution_id,
+                    "outcome": input.outcome,
+                    "superseding_evaluation_id": superseding_evaluation_id,
+                    "decision_hash": input.decision_hash,
+                    "resolver_player_id": identity.player_id,
+                    "signing_key_id": player.signing_key_id.clone(),
+                    "signing_public_key": player.signing_public_key.clone(),
+                    "signing_public_key_hash": player.signing_public_key_hash.clone(),
+                    "signed_at_unix": signed_at_unix,
+                });
+                derived_child_id = Some(appeal_id);
                 (payload, bytes)
             }
             _ => {
@@ -828,6 +1834,8 @@ impl HeptaClient {
         };
         Ok(HumanSigningFrameResponse {
             command: request.command,
+            resource_id: derived_resource_id,
+            child_id: derived_child_id,
             payload,
             signing_bytes: BASE64.encode(signing_bytes),
             signing_key_id: player.signing_key_id,
@@ -1019,6 +2027,30 @@ impl HeptaClient {
         .await
     }
 
+    pub async fn list_review_queue(&self, identity: &AlphaIdentity) -> Result<Value, AppError> {
+        self.get_json(
+            identity,
+            "/v2/hepta/review-queue".into(),
+            None,
+            "get_review_queue_v1",
+        )
+        .await
+    }
+
+    pub async fn get_paper_review_bundle(
+        &self,
+        identity: &AlphaIdentity,
+        paper_id: Uuid,
+    ) -> Result<Value, AppError> {
+        self.get_json(
+            identity,
+            format!("/v2/hepta/papers/{paper_id}/review-bundle"),
+            None,
+            "get_paper_review_bundle_v1",
+        )
+        .await
+    }
+
     async fn get_json(
         &self,
         identity: &AlphaIdentity,
@@ -1048,6 +2080,7 @@ impl HeptaClient {
     ) -> Result<UpstreamResponse, AppError> {
         let route = command.route()?;
         let payload = command.canonical_payload()?;
+        validate_identity_command_payload(identity, command.command, &payload)?;
         self.send(identity, route, command.idempotency_key, &payload)
             .await
     }
@@ -1252,6 +2285,471 @@ impl HeptaClient {
         }
         Ok(())
     }
+}
+
+fn validate_identity_command_payload(
+    identity: &AlphaIdentity,
+    command: CommandName,
+    payload: &Value,
+) -> Result<(), AppError> {
+    if matches!(
+        command,
+        CommandName::ClaimReviewAssignment
+            | CommandName::CreatePaperEvaluation
+            | CommandName::CreatePaperEvaluationDraft
+            | CommandName::SubmitEvaluationDraftAttestation
+            | CommandName::FinalizePaperEvaluationDraft
+            | CommandName::SubmitReproduction
+            | CommandName::ResolveAppeal
+    ) && identity.has_scope(AlphaIdentityScope::Author)
+    {
+        return Err(AppError::Forbidden);
+    }
+    match command {
+        CommandName::QueueMatchmaking => {
+            let roles = payload
+                .get("roles")
+                .and_then(Value::as_array)
+                .filter(|roles| !roles.is_empty() && roles.len() <= 3)
+                .ok_or_else(|| {
+                    AppError::Invalid("roles must contain 1 to 3 authorized roles".into())
+                })?;
+            let mut accepted = Vec::with_capacity(roles.len());
+            for value in roles {
+                let role = match value.as_str() {
+                    Some("captain") => AlphaAuthorRole::Captain,
+                    Some("evidence") => AlphaAuthorRole::Evidence,
+                    Some("experiment") => AlphaAuthorRole::Experiment,
+                    _ => return Err(AppError::Forbidden),
+                };
+                if accepted.contains(&role) || !identity.supports_author_role(role) {
+                    return Err(AppError::Forbidden);
+                }
+                accepted.push(role);
+            }
+        }
+        CommandName::ClaimReviewAssignment => {
+            let player_id = payload
+                .get("player_id")
+                .and_then(Value::as_str)
+                .and_then(|value| Uuid::parse_str(value).ok())
+                .ok_or_else(|| AppError::Invalid("claim player_id must be a UUID".into()))?;
+            if player_id != identity.player_id {
+                return Err(AppError::Forbidden);
+            }
+            let required_scope = match payload.get("slot").and_then(Value::as_str) {
+                Some("evaluator") => AlphaIdentityScope::Evaluator,
+                Some("reviewer_1" | "reviewer_2") => AlphaIdentityScope::Reviewer,
+                Some("reproducer") => AlphaIdentityScope::Reproducer,
+                _ => return Err(AppError::Forbidden),
+            };
+            if !identity.has_scope(required_scope) {
+                return Err(AppError::Forbidden);
+            }
+        }
+        CommandName::CreatePaperEvaluationDraft => {
+            require_payload_player(identity, payload, "evaluator_player_id")?;
+        }
+        CommandName::SubmitEvaluationDraftAttestation => {
+            require_payload_player(identity, payload, "reviewer_player_id")?;
+        }
+        CommandName::SubmitReproduction => {
+            require_payload_player(identity, payload, "reproducer_player_id")?;
+        }
+        CommandName::SubmitAppeal => {
+            require_payload_player(identity, payload, "appellant_player_id")?;
+        }
+        CommandName::ResolveAppeal => {
+            require_payload_player(identity, payload, "resolver_player_id")?;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn require_payload_player(
+    identity: &AlphaIdentity,
+    payload: &Value,
+    field: &str,
+) -> Result<(), AppError> {
+    let player_id = payload
+        .get(field)
+        .and_then(Value::as_str)
+        .and_then(|value| Uuid::parse_str(value).ok())
+        .ok_or_else(|| AppError::Invalid(format!("{field} must be a UUID")))?;
+    if player_id != identity.player_id {
+        return Err(AppError::Forbidden);
+    }
+    Ok(())
+}
+
+fn validate_frame_https_uri(value: &str) -> Result<(), AppError> {
+    if value.is_empty() || value.len() > 480 || value.bytes().any(|byte| byte.is_ascii_control()) {
+        return Err(AppError::Invalid(
+            "source URI must be a bounded canonical HTTPS URL".into(),
+        ));
+    }
+    let parsed = Url::parse(value)
+        .map_err(|_| AppError::Invalid("source URI must be a canonical HTTPS URL".into()))?;
+    if parsed.scheme() != "https"
+        || parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.fragment().is_some()
+    {
+        return Err(AppError::Invalid(
+            "source URI must be credential-free HTTPS without a fragment".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn require_room_paper_id(room: &Value, paper_id: Uuid) -> Result<(), AppError> {
+    let expected = paper_id.to_string();
+    if room
+        .get("paper")
+        .and_then(|paper| paper.get("paper_project_id"))
+        .and_then(Value::as_str)
+        == Some(expected.as_str())
+    {
+        Ok(())
+    } else {
+        Err(AppError::Upstream)
+    }
+}
+
+fn required_string(value: &Value, field: &str) -> Result<String, AppError> {
+    value
+        .get(field)
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .ok_or(AppError::Upstream)
+}
+
+fn required_u64(value: &Value, field: &str) -> Result<u64, AppError> {
+    value
+        .get(field)
+        .and_then(Value::as_u64)
+        .ok_or(AppError::Upstream)
+}
+
+fn required_uuid(value: &Value, field: &str) -> Result<Uuid, AppError> {
+    value
+        .get(field)
+        .and_then(Value::as_str)
+        .and_then(|value| Uuid::parse_str(value).ok())
+        .ok_or(AppError::Upstream)
+}
+
+fn find_room_record<'a>(
+    room: &'a Value,
+    collection: &str,
+    id_field: &str,
+    id: Uuid,
+) -> Result<&'a Value, AppError> {
+    let expected = id.to_string();
+    room.get(collection)
+        .and_then(Value::as_array)
+        .and_then(|records| {
+            records.iter().find(|record| {
+                record.get(id_field).and_then(Value::as_str) == Some(expected.as_str())
+            })
+        })
+        .ok_or(AppError::NotFound)
+}
+
+fn latest_paper_evaluation<'a>(review: &'a Value, paper_id: Uuid) -> Result<&'a Value, AppError> {
+    let evaluations = review
+        .get("evaluations")
+        .and_then(Value::as_array)
+        .ok_or(AppError::Upstream)?;
+    let mut scoped = Vec::new();
+    for evaluation in evaluations {
+        if required_uuid(evaluation, "paper_project_id")? != paper_id {
+            return Err(AppError::Upstream);
+        }
+        let _ = required_uuid(evaluation, "evaluation_id")?;
+        let _ = required_u64(evaluation, "version")?;
+        let _ = required_string(evaluation, "release_candidate_hash")?;
+        scoped.push(evaluation);
+    }
+    let latest_version = scoped
+        .iter()
+        .map(|evaluation| required_u64(evaluation, "version"))
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .max()
+        .ok_or(AppError::NotFound)?;
+    let latest = scoped
+        .into_iter()
+        .filter(|evaluation| {
+            evaluation.get("version").and_then(Value::as_u64) == Some(latest_version)
+        })
+        .collect::<Vec<_>>();
+    if latest.len() != 1 {
+        return Err(AppError::Conflict(
+            "the current Paper evaluation is ambiguous".into(),
+        ));
+    }
+    Ok(latest[0])
+}
+
+fn paper_evaluation_by_id<'a>(
+    review: &'a Value,
+    paper_id: Uuid,
+    evaluation_id: Uuid,
+) -> Result<&'a Value, AppError> {
+    let wanted = evaluation_id.to_string();
+    let matches = review
+        .get("evaluations")
+        .and_then(Value::as_array)
+        .ok_or(AppError::Upstream)?
+        .iter()
+        .filter(|evaluation| {
+            evaluation.get("evaluation_id").and_then(Value::as_str) == Some(wanted.as_str())
+        })
+        .collect::<Vec<_>>();
+    if matches.len() != 1 {
+        return Err(if matches.is_empty() {
+            AppError::NotFound
+        } else {
+            AppError::Upstream
+        });
+    }
+    if required_uuid(matches[0], "paper_project_id")? != paper_id {
+        return Err(AppError::Conflict(
+            "evaluation does not belong to the requested Paper".into(),
+        ));
+    }
+    Ok(matches[0])
+}
+
+fn exact_open_appeal<'a>(
+    review: &'a Value,
+    paper_id: Uuid,
+    evaluation_id: Uuid,
+) -> Result<&'a Value, AppError> {
+    let resolutions = review
+        .get("resolutions")
+        .and_then(Value::as_array)
+        .ok_or(AppError::Upstream)?;
+    let appeal_id_is_resolved = |appeal_id: &str| {
+        resolutions.iter().any(|resolution| {
+            resolution.get("appeal_id").and_then(Value::as_str) == Some(appeal_id)
+        })
+    };
+    let evaluation = evaluation_id.to_string();
+    let mut open = Vec::new();
+    for appeal in review
+        .get("appeals")
+        .and_then(Value::as_array)
+        .ok_or(AppError::Upstream)?
+    {
+        if required_uuid(appeal, "paper_project_id")? != paper_id {
+            return Err(AppError::Upstream);
+        }
+        if appeal.get("evaluation_id").and_then(Value::as_str) != Some(evaluation.as_str()) {
+            continue;
+        }
+        let appeal_id = required_string(appeal, "appeal_id")?;
+        if !appeal_id_is_resolved(&appeal_id) {
+            open.push(appeal);
+        }
+    }
+    if open.len() != 1 {
+        return Err(if open.is_empty() {
+            AppError::NotFound
+        } else {
+            AppError::Conflict("multiple unresolved Appeals are visible".into())
+        });
+    }
+    Ok(open[0])
+}
+
+fn evaluation_panel_ids(evaluation: &Value) -> Result<HashSet<Uuid>, AppError> {
+    let mut panel = HashSet::from([required_uuid(evaluation, "evaluator_player_id")?]);
+    let reviewers = evaluation
+        .get("reviewer_attestations")
+        .and_then(Value::as_array)
+        .ok_or(AppError::Upstream)?;
+    if reviewers.len() != 2 {
+        return Err(AppError::Upstream);
+    }
+    for attestation in reviewers {
+        panel.insert(required_uuid(attestation, "reviewer_player_id")?);
+    }
+    if panel.len() != 3 {
+        return Err(AppError::Upstream);
+    }
+    Ok(panel)
+}
+
+fn evaluation_panel_contains(evaluation: &Value, player_id: Uuid) -> Result<bool, AppError> {
+    Ok(evaluation_panel_ids(evaluation)?.contains(&player_id))
+}
+
+fn exact_superseding_evaluation<'a>(
+    review: &'a Value,
+    appealed: &Value,
+) -> Result<Option<&'a Value>, AppError> {
+    let appealed_id = required_uuid(appealed, "evaluation_id")?;
+    let appealed_id_text = appealed_id.to_string();
+    let paper_id = required_uuid(appealed, "paper_project_id")?;
+    let submission_id = required_uuid(appealed, "submission_id")?;
+    let release_candidate_hash = required_string(appealed, "release_candidate_hash")?;
+    let paper_bundle_hash = required_string(appealed, "paper_bundle_hash")?;
+    let expected_version = required_u64(appealed, "version")?
+        .checked_add(1)
+        .ok_or(AppError::Upstream)?;
+    let candidates = review
+        .get("evaluations")
+        .and_then(Value::as_array)
+        .ok_or(AppError::Upstream)?
+        .iter()
+        .filter(|evaluation| {
+            evaluation
+                .get("supersedes_evaluation_id")
+                .and_then(Value::as_str)
+                == Some(appealed_id_text.as_str())
+        })
+        .collect::<Vec<_>>();
+    if candidates.is_empty() {
+        return Ok(None);
+    }
+    if candidates.len() != 1 {
+        return Err(AppError::Conflict(
+            "the superseding evaluation lineage is ambiguous".into(),
+        ));
+    }
+    let candidate = candidates[0];
+    if required_uuid(candidate, "paper_project_id")? != paper_id
+        || required_uuid(candidate, "submission_id")? != submission_id
+        || required_string(candidate, "release_candidate_hash")? != release_candidate_hash
+        || required_string(candidate, "paper_bundle_hash")? != paper_bundle_hash
+        || required_u64(candidate, "version")? != expected_version
+    {
+        return Err(AppError::Conflict(
+            "the superseding evaluation does not bind the exact appealed release".into(),
+        ));
+    }
+    if !evaluation_panel_ids(appealed)?.is_disjoint(&evaluation_panel_ids(candidate)?) {
+        return Err(AppError::Conflict(
+            "the superseding evaluation panel is not independent".into(),
+        ));
+    }
+    Ok(Some(candidate))
+}
+
+fn exact_manifest_hash(
+    room: &Value,
+    paper_id: Uuid,
+    manifest_id: Option<Uuid>,
+    manifest_hash: Option<&str>,
+) -> Result<String, AppError> {
+    let manifests = room
+        .get("artifact_manifests")
+        .and_then(Value::as_array)
+        .ok_or(AppError::Upstream)?;
+    let matches = manifests
+        .iter()
+        .filter(|manifest| {
+            let id_matches = manifest_id.is_none_or(|wanted| {
+                manifest
+                    .get("manifest_id")
+                    .and_then(Value::as_str)
+                    .and_then(|value| Uuid::parse_str(value).ok())
+                    == Some(wanted)
+            });
+            let hash_matches = manifest_hash.is_none_or(|wanted| {
+                manifest.get("manifest_hash").and_then(Value::as_str) == Some(wanted)
+            });
+            id_matches && hash_matches
+        })
+        .collect::<Vec<_>>();
+    if matches.len() != 1 {
+        return Err(if matches.is_empty() {
+            AppError::NotFound
+        } else {
+            AppError::Conflict("the selected evidence manifest is ambiguous".into())
+        });
+    }
+    if required_uuid(matches[0], "paper_project_id")? != paper_id {
+        return Err(AppError::Conflict(
+            "the selected evidence manifest belongs to another Paper".into(),
+        ));
+    }
+    required_string(matches[0], "manifest_hash")
+}
+
+fn canonical_value_hash<T: Serialize>(value: &T) -> Result<String, AppError> {
+    Ok(sha256_digest(
+        &canonical_json_bytes(value).map_err(AppError::Invalid)?,
+    ))
+}
+
+fn require_review_bundle_scope(
+    bundle: &Value,
+    paper_id: Uuid,
+    identity: &AlphaIdentity,
+) -> Result<(Uuid, String, String), AppError> {
+    if required_uuid(bundle, "paper_project_id")? != paper_id
+        || bundle.get("status").and_then(Value::as_str) != Some("submission_ready")
+    {
+        return Err(AppError::Conflict(
+            "review action must bind the current submission-ready PaperBundle".into(),
+        ));
+    }
+    let player_id = identity.player_id.to_string();
+    let is_author = bundle
+        .get("paper_bundle")
+        .and_then(|value| value.get("release_candidate"))
+        .and_then(|value| value.get("authors"))
+        .and_then(Value::as_array)
+        .is_some_and(|authors| {
+            authors.iter().any(|author| {
+                author.get("player_id").and_then(Value::as_str) == Some(player_id.as_str())
+            })
+        });
+    if is_author || identity.has_scope(AlphaIdentityScope::Author) {
+        return Err(AppError::Forbidden);
+    }
+    Ok((
+        required_uuid(bundle, "submission_id")?,
+        required_string(bundle, "release_candidate_hash")?,
+        required_string(bundle, "paper_bundle_hash")?,
+    ))
+}
+
+fn require_exact_review_assignment<'a>(
+    bundle: &'a Value,
+    identity: &AlphaIdentity,
+    submission_id: Uuid,
+    review_round: u64,
+    allowed_slots: &[&str],
+) -> Result<&'a Value, AppError> {
+    let player_id = identity.player_id.to_string();
+    let submission_id = submission_id.to_string();
+    let matches = bundle
+        .get("my_assignments")
+        .and_then(Value::as_array)
+        .ok_or(AppError::Upstream)?
+        .iter()
+        .filter(|assignment| {
+            assignment.get("player_id").and_then(Value::as_str) == Some(player_id.as_str())
+                && assignment.get("submission_id").and_then(Value::as_str)
+                    == Some(submission_id.as_str())
+                && assignment.get("review_round").and_then(Value::as_u64) == Some(review_round)
+                && assignment
+                    .get("slot")
+                    .and_then(Value::as_str)
+                    .is_some_and(|slot| allowed_slots.contains(&slot))
+        })
+        .collect::<Vec<_>>();
+    if matches.len() != 1 {
+        return Err(AppError::Forbidden);
+    }
+    Ok(matches[0])
 }
 
 fn build_human_registration_challenge(
@@ -1494,6 +2992,122 @@ mod tests {
     };
 
     #[test]
+    fn appeal_player_frames_derive_one_exact_authoritative_lineage() {
+        let paper_id = Uuid::new_v4();
+        let submission_id = Uuid::new_v4();
+        let first_id = Uuid::new_v4();
+        let second_id = Uuid::new_v4();
+        let appeal_id = Uuid::new_v4();
+        let first_panel = [Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4()];
+        let second_panel = [Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4()];
+        let release = format!("sha256:{}", "a".repeat(64));
+        let bundle = format!("sha256:{}", "b".repeat(64));
+        let evaluation =
+            |evaluation_id: Uuid, version: u64, supersedes: Option<Uuid>, panel: [Uuid; 3]| {
+                serde_json::json!({
+                    "evaluation_id":evaluation_id,
+                    "paper_project_id":paper_id,
+                    "submission_id":submission_id,
+                    "release_candidate_hash":release,
+                    "paper_bundle_hash":bundle,
+                    "version":version,
+                    "supersedes_evaluation_id":supersedes,
+                    "evaluator_player_id":panel[0],
+                    "reviewer_attestations":[
+                        {"reviewer_player_id":panel[1]},
+                        {"reviewer_player_id":panel[2]}
+                    ]
+                })
+            };
+        let review = serde_json::json!({
+            "evaluations":[
+                evaluation(first_id, 1, None, first_panel),
+                evaluation(second_id, 2, Some(first_id), second_panel)
+            ],
+            "appeals":[{
+                "appeal_id":appeal_id,
+                "evaluation_id":first_id,
+                "paper_project_id":paper_id,
+                "release_candidate_hash":release,
+                "appellant_player_id":Uuid::new_v4()
+            }],
+            "resolutions":[]
+        });
+        assert_eq!(
+            required_uuid(
+                latest_paper_evaluation(&review, paper_id).expect("latest evaluation"),
+                "evaluation_id"
+            )
+            .expect("evaluation ID"),
+            second_id
+        );
+        let appealed =
+            paper_evaluation_by_id(&review, paper_id, first_id).expect("appealed evaluation");
+        assert_eq!(
+            required_uuid(
+                exact_open_appeal(&review, paper_id, first_id).expect("one open Appeal"),
+                "appeal_id"
+            )
+            .expect("Appeal ID"),
+            appeal_id
+        );
+        assert_eq!(
+            required_uuid(
+                exact_superseding_evaluation(&review, appealed)
+                    .expect("valid lineage")
+                    .expect("superseding evaluation"),
+                "evaluation_id"
+            )
+            .expect("superseding ID"),
+            second_id
+        );
+        assert!(evaluation_panel_contains(appealed, first_panel[0]).expect("panel"));
+        assert!(!evaluation_panel_contains(appealed, Uuid::new_v4()).expect("independent"));
+
+        let mut ambiguous = review.clone();
+        ambiguous["evaluations"]
+            .as_array_mut()
+            .expect("evaluations")
+            .push(evaluation(
+                Uuid::new_v4(),
+                2,
+                Some(first_id),
+                [Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4()],
+            ));
+        assert!(matches!(
+            exact_superseding_evaluation(&ambiguous, appealed),
+            Err(AppError::Conflict(_))
+        ));
+    }
+
+    #[test]
+    fn appeal_evidence_selector_resolves_only_one_paper_manifest() {
+        let paper_id = Uuid::new_v4();
+        let manifest_id = Uuid::new_v4();
+        let manifest_hash = format!("sha256:{}", "c".repeat(64));
+        let room = serde_json::json!({
+            "artifact_manifests":[{
+                "manifest_id":manifest_id,
+                "paper_project_id":paper_id,
+                "manifest_hash":manifest_hash
+            }]
+        });
+        assert_eq!(
+            exact_manifest_hash(&room, paper_id, Some(manifest_id), None)
+                .expect("selected manifest"),
+            manifest_hash
+        );
+        assert!(matches!(
+            exact_manifest_hash(&room, Uuid::new_v4(), Some(manifest_id), None),
+            Err(AppError::Conflict(_))
+        ));
+        assert!(matches!(
+            exact_manifest_hash(&room, paper_id, Some(Uuid::new_v4()), None),
+            Err(AppError::NotFound)
+        ));
+    }
+
+    #[test]
     fn human_registration_is_server_derived_and_exactly_signed() {
         let identity = AlphaIdentity::test_identity(
             "subject-alpha",
@@ -1604,8 +3218,112 @@ mod tests {
     }
 
     #[test]
+    fn matchmaking_roles_are_restricted_to_identity_authorizations() {
+        let mut identity =
+            AlphaIdentity::test_identity("subject-role", Uuid::new_v4(), Uuid::new_v4());
+        identity.author_roles = vec![AlphaAuthorRole::Evidence, AlphaAuthorRole::Experiment].into();
+        validate_identity_command_payload(
+            &identity,
+            CommandName::QueueMatchmaking,
+            &serde_json::json!({"roles":["evidence","experiment"]}),
+        )
+        .expect("authorized preferences");
+        assert!(matches!(
+            validate_identity_command_payload(
+                &identity,
+                CommandName::QueueMatchmaking,
+                &serde_json::json!({"roles":["captain"]}),
+            ),
+            Err(AppError::Forbidden)
+        ));
+        assert!(matches!(
+            validate_identity_command_payload(
+                &identity,
+                CommandName::QueueMatchmaking,
+                &serde_json::json!({"roles":["evidence","evidence"]}),
+            ),
+            Err(AppError::Forbidden)
+        ));
+    }
+
+    #[test]
+    fn review_claim_is_bound_to_identity_and_exact_scope() {
+        let mut reviewer =
+            AlphaIdentity::test_identity("subject-reviewer", Uuid::new_v4(), Uuid::new_v4());
+        reviewer.scopes = vec![AlphaIdentityScope::Reviewer].into();
+        reviewer.author_roles = Vec::new().into();
+        let payload = serde_json::json!({
+            "assignment_id": Uuid::new_v4(),
+            "player_id": reviewer.player_id,
+            "review_round": 1,
+            "slot": "reviewer_2",
+        });
+        validate_identity_command_payload(&reviewer, CommandName::ClaimReviewAssignment, &payload)
+            .expect("reviewer may claim reviewer slot");
+
+        let mut wrong_player = payload.clone();
+        wrong_player["player_id"] = Value::String(Uuid::new_v4().to_string());
+        assert!(matches!(
+            validate_identity_command_payload(
+                &reviewer,
+                CommandName::ClaimReviewAssignment,
+                &wrong_player,
+            ),
+            Err(AppError::Forbidden)
+        ));
+
+        let mut wrong_scope = payload;
+        wrong_scope["slot"] = Value::String("evaluator".into());
+        assert!(matches!(
+            validate_identity_command_payload(
+                &reviewer,
+                CommandName::ClaimReviewAssignment,
+                &wrong_scope,
+            ),
+            Err(AppError::Forbidden)
+        ));
+    }
+
+    #[test]
+    fn appeal_actor_fields_are_bound_to_the_authenticated_identity() {
+        let author = AlphaIdentity::test_identity("author", Uuid::new_v4(), Uuid::new_v4());
+        validate_identity_command_payload(
+            &author,
+            CommandName::SubmitAppeal,
+            &serde_json::json!({"appellant_player_id":author.player_id}),
+        )
+        .expect("author identity matches Appeal payload");
+        assert!(matches!(
+            validate_identity_command_payload(
+                &author,
+                CommandName::SubmitAppeal,
+                &serde_json::json!({"appellant_player_id":Uuid::new_v4()}),
+            ),
+            Err(AppError::Forbidden)
+        ));
+
+        let mut resolver = AlphaIdentity::test_identity("resolver", Uuid::new_v4(), Uuid::new_v4());
+        resolver.scopes = vec![AlphaIdentityScope::Reproducer].into();
+        resolver.author_roles = Vec::new().into();
+        validate_identity_command_payload(
+            &resolver,
+            CommandName::ResolveAppeal,
+            &serde_json::json!({"resolver_player_id":resolver.player_id}),
+        )
+        .expect("resolver identity matches resolution payload");
+        assert!(matches!(
+            validate_identity_command_payload(
+                &author,
+                CommandName::ResolveAppeal,
+                &serde_json::json!({"resolver_player_id":author.player_id}),
+            ),
+            Err(AppError::Forbidden)
+        ));
+    }
+
+    #[test]
     fn p5_child_routes_fail_closed_without_exact_child() {
-        let command = BrowserCommand {
+        let missing_child = BrowserCommand {
             command: CommandName::SubmitReproduction,
             resource_id: Some(Uuid::new_v4()),
             child_id: None,
@@ -1613,7 +3331,33 @@ mod tests {
             idempotency_key: Uuid::new_v4(),
             payload: Value::Null,
         };
-        assert!(matches!(command.route(), Err(AppError::Invalid(_))));
+        assert!(matches!(missing_child.route(), Err(AppError::Invalid(_))));
+
+        for name in [
+            CommandName::SubmitEvaluationDraftAttestation,
+            CommandName::FinalizePaperEvaluationDraft,
+            CommandName::SubmitReproduction,
+        ] {
+            assert!(command(name, Some(Uuid::new_v4()), None, None)
+                .route()
+                .is_err());
+            assert!(command(
+                name,
+                Some(Uuid::new_v4()),
+                Some(Uuid::new_v4()),
+                Some("forbidden.session")
+            )
+            .route()
+            .is_err());
+        }
+        assert!(command(
+            CommandName::CreatePaperEvaluationDraft,
+            Some(Uuid::new_v4()),
+            Some(Uuid::new_v4()),
+            None,
+        )
+        .route()
+        .is_err());
     }
 
     #[test]
@@ -1676,6 +3420,16 @@ mod tests {
                 ),
                 format!("/v2/hepta/teams/{team}/member-acceptances"),
                 "accept_research_team_membership_v2",
+            ),
+            (
+                command(
+                    CommandName::TransitionPaperChallengeOutcome,
+                    Some(paper),
+                    None,
+                    None,
+                ),
+                format!("/v2/hepta/papers/{paper}/outcome"),
+                "transition_paper_challenge_outcome_v1",
             ),
             (
                 command(
@@ -1763,6 +3517,11 @@ mod tests {
                 "create_matchmaking_ticket_v3",
             ),
             (
+                command(CommandName::CancelMatchmakingTicket, Some(team), None, None),
+                format!("/v2/hepta/matchmaking/tickets/{team}/cancel"),
+                "cancel_matchmaking_ticket_v3",
+            ),
+            (
                 command(CommandName::DecideTeamProposal, Some(team), None, None),
                 format!("/v2/hepta/team-proposals/{team}/decisions"),
                 "create_team_proposal_decision_v3",
@@ -1798,9 +3557,44 @@ mod tests {
                 "create_contribution_ledger_v1",
             ),
             (
+                command(CommandName::ClaimReviewAssignment, Some(paper), None, None),
+                format!("/v2/hepta/papers/{paper}/review-assignments"),
+                "claim_paper_review_assignment_v1",
+            ),
+            (
                 command(CommandName::CreatePaperEvaluation, Some(paper), None, None),
                 format!("/v2/hepta/papers/{paper}/evaluations"),
                 "create_paper_evaluation_v1",
+            ),
+            (
+                command(
+                    CommandName::CreatePaperEvaluationDraft,
+                    Some(paper),
+                    None,
+                    None,
+                ),
+                format!("/v2/hepta/papers/{paper}/evaluation-drafts"),
+                "create_paper_evaluation_draft_v1",
+            ),
+            (
+                command(
+                    CommandName::SubmitEvaluationDraftAttestation,
+                    Some(paper),
+                    Some(revision),
+                    None,
+                ),
+                format!("/v2/hepta/papers/{paper}/evaluation-drafts/{revision}/attestations"),
+                "submit_paper_evaluation_draft_attestation_v1",
+            ),
+            (
+                command(
+                    CommandName::FinalizePaperEvaluationDraft,
+                    Some(paper),
+                    Some(revision),
+                    None,
+                ),
+                format!("/v2/hepta/papers/{paper}/evaluation-drafts/{revision}/finalize"),
+                "finalize_paper_evaluation_draft_v1",
             ),
             (
                 command(

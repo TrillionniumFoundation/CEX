@@ -1,0 +1,16 @@
+{
+  "name": "@trillionnium/paper-raid-agent-bridge",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "Local-key bridge for external Hepta Paper Raid Agents",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "bin": {
+    "paper-raid-agent-bridge": "./src/cli.mjs"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  }
+}
