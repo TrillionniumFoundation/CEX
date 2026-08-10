@@ -95,7 +95,19 @@ The browser alpha is a same-origin, external-script flow:
    the Consumer user assertion.
 8. `/api/papers/<paper-id>/timeline` combines query-bound Hepta room events
    with Nakama archives selected only from Hepta's player-scoped
-   `member_research_sessions`. The Nakama HTTP key never reaches the browser.
+   `member_research_sessions`. The response also repeats the current
+   player-scoped Paper Room read model so the browser can update the phase,
+   teammate connected/ready state and durable event list without reloading.
+   Paper Room clients poll the incremental Hepta/Nakama cursors every 1.25
+   seconds, retain only the non-secret Hepta integer cursor in session storage,
+   and use a capped five-second reconnect backoff. Nakama positions and roster
+   epochs stay in memory, independently for each already-visible logical
+   research session, so one session's sequence cannot skip another's durable
+   events. A reload safely replays every Nakama archive from zero. Catch-up
+   pages run immediately while `has_more` is true and the UI does not claim
+   `Live` until all pages are current. Nakama realtime delivery remains a hint;
+   durable archive catch-up is the recovery authority. The Nakama HTTP key
+   never reaches the browser.
 
 CAS upload is streamed and capped independently at 32 MiB. The BFF recomputes
 the requested `sha256:<64-lowercase-hex>` API digest and returns both that

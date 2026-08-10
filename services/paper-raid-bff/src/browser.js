@@ -849,25 +849,236 @@ function bindArtifactForms() {
   }
 }
 
-function bindTimeline() {
-  for (const button of document.querySelectorAll(".timeline-refresh")) {
-    button.addEventListener("click", async () => {
-      const output = button.parentElement.querySelector("output");
-      button.disabled = true;
+function liveCursorKey(paperId) {
+  return `hepta.paper-raid.live-cursor.v1:${paperId}`;
+}
+
+function validLogicalSessionId(value) {
+  return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value);
+}
+
+function readLiveCursor(paperId) {
+  try {
+    const value = JSON.parse(sessionStorage.getItem(liveCursorKey(paperId)) || "{}");
+    return {
+      hepta: Number.isSafeInteger(value.hepta) && value.hepta >= 0 ? value.hepta : 0
+    };
+  } catch (_) {
+    return { hepta: 0 };
+  }
+}
+
+function nextHeptaCursor(events, current) {
+  if (!Array.isArray(events)) return current;
+  return events.reduce((cursor, event) => {
+    const value = event && event.cursor;
+    return Number.isSafeInteger(value) && value > cursor ? value : cursor;
+  }, current);
+}
+
+function reconcileNakamaSessions(heads, current) {
+  if (!Array.isArray(heads) || heads.length > 1) throw new Error("invalid_research_session_heads");
+  const next = new Map();
+  for (const head of heads) {
+    const sessionId = head && head.logical_session_id;
+    const rosterVersion = head && head.roster_version;
+    if (!validLogicalSessionId(sessionId)
+      || !Number.isSafeInteger(rosterVersion)
+      || rosterVersion <= 0
+      || head.nakama_completion_received !== false
+      || next.has(sessionId)) {
+      throw new Error("invalid_research_session_head");
+    }
+    const previous = current.get(sessionId);
+    next.set(sessionId, previous && previous.rosterVersion === rosterVersion
+      ? previous
+      : { rosterVersion, sequence: 0, hasMore: true });
+  }
+  return next;
+}
+
+function acceptNakamaArchive(entry, state) {
+  const archive = entry && entry.archive;
+  const nextSequence = archive && archive.next_after_sequence;
+  if (!entry
+    || entry.logical_session_id === undefined
+    || entry.roster_version !== state.rosterVersion
+    || entry.requested_after_sequence !== state.sequence
+    || !archive
+    || archive.schema !== "trnm.nakama.research-session.archive.v1"
+    || archive.logical_session_id !== entry.logical_session_id
+    || archive.roster_version !== state.rosterVersion
+    || archive.after_sequence !== state.sequence
+    || !Number.isSafeInteger(nextSequence)
+    || nextSequence < state.sequence
+    || typeof archive.has_more !== "boolean"
+    || (archive.has_more && nextSequence === state.sequence)) {
+    throw new Error("invalid_nakama_archive_cursor");
+  }
+  return {
+    rosterVersion: state.rosterVersion,
+    sequence: nextSequence,
+    hasMore: archive.has_more
+  };
+}
+
+async function fetchTimelineValue(paperId, query) {
+  const response = await fetch(`/api/papers/${encodeURIComponent(paperId)}/timeline?${query}`, {
+    credentials: "same-origin",
+    headers: { "accept": "application/json" }
+  });
+  const value = await responseValue(response);
+  if (!response.ok) throw new Error(value && value.error ? value.error : "live_sync_failed");
+  return value;
+}
+
+function paperRoomPhase(value) {
+  const room = value && value.paper_room && typeof value.paper_room === "object" ? value.paper_room : {};
+  const paper = room.paper && typeof room.paper === "object" ? room.paper : {};
+  return typeof paper.phase === "string" ? paper.phase : "waiting_for_authority";
+}
+
+function renderLiveRaid(card, value) {
+  card.querySelector(".live-phase").textContent = `Phase: ${paperRoomPhase(value)}`;
+  const participantList = card.querySelector(".live-participants");
+  const archives = Array.isArray(value && value.nakama_archives) ? value.nakama_archives : [];
+  const activeArchives = archives.filter(entry => entry.archive && entry.archive.status !== "completed");
+  const presenceArchives = activeArchives.length > 0 ? activeArchives : archives.slice(-1);
+  const participants = presenceArchives.flatMap(entry => Array.isArray(entry.archive && entry.archive.participants) ? entry.archive.participants : []);
+  participantList.replaceChildren(...participants.map(participant => {
+    const item = document.createElement("li");
+    const connected = participant.connected === true;
+    item.dataset.connected = String(connected);
+    item.textContent = `${participant.role || "teammate"} · ${connected ? "online" : "offline"} · ${participant.ready ? "ready" : "not ready"}`;
+    return item;
+  }));
+  if (participants.length === 0) {
+    const item = document.createElement("li");
+    item.textContent = "Research session has not materialized yet.";
+    participantList.replaceChildren(item);
+  }
+  const eventList = card.querySelector(".live-events");
+  const events = [
+    ...(Array.isArray(value && value.hepta_events) ? value.hepta_events : []).map(event => ({
+      source: "hepta",
+      event,
+    })),
+    ...archives.flatMap(entry => (Array.isArray(entry.archive && entry.archive.events) ? entry.archive.events : []).map(event => ({
+      source: `nakama:${entry.logical_session_id || "unknown"}`,
+      event,
+    })))
+  ];
+  for (const record of events.slice(-12)) {
+    const event = record.event;
+    const identity = event.event_id || event.cursor || `${event.event_type || "event"}:${event.sequence || "0"}`;
+    const key = `${record.source}:${identity}`;
+    if (eventList.querySelector(`[data-event-key="${CSS.escape(key)}"]`)) continue;
+    const item = document.createElement("li");
+    item.dataset.eventKey = key;
+    item.textContent = event.event_type || event.action_type || event.kind || `Event ${event.sequence || event.cursor || ""}`;
+    eventList.append(item);
+  }
+  while (eventList.children.length > 12) eventList.firstElementChild.remove();
+}
+
+function createLiveRaidSync(card) {
+  const paperId = card.dataset.paperId;
+  const button = card.querySelector(".timeline-refresh");
+  const connection = card.querySelector(".live-connection");
+  const output = card.querySelector(".live-detail");
+  const cursor = readLiveCursor(paperId);
+  let nakamaSessions = new Map();
+  let timer = null;
+  let running = false;
+  let failures = 0;
+  let wasDisconnected = false;
+  const schedule = delay => {
+    window.clearTimeout(timer);
+    timer = window.setTimeout(() => sync.run(false), delay);
+  };
+  const sync = {
+    async run(manual) {
+      if (running || (!manual && document.visibilityState === "hidden")) {
+        schedule(1250);
+        return;
+      }
+      running = true;
+      if (manual) button.disabled = true;
       try {
-        await recordProductEvent("replay_started", { paperId: button.dataset.paperId });
-        const response = await fetch(`/api/papers/${encodeURIComponent(button.dataset.paperId)}/timeline?after_cursor=0&after_sequence=0`, {
-          credentials: "same-origin",
-          headers: { "accept": "application/json" }
+        const discoveryQuery = new URLSearchParams({
+          after_cursor: String(cursor.hepta),
+          after_sequence: "0"
         });
-        const value = await responseValue(response);
-        show(output, value, response.ok);
+        const value = await fetchTimelineValue(paperId, discoveryQuery);
+        const nextHepta = nextHeptaCursor(value.hepta_events, cursor.hepta);
+        const discoveredSessions = reconcileNakamaSessions(value.research_sessions, nakamaSessions);
+        const archiveResults = await Promise.all(Array.from(discoveredSessions, async ([sessionId, state]) => {
+          const archiveQuery = new URLSearchParams({
+            after_cursor: String(nextHepta),
+            after_sequence: String(state.sequence),
+            logical_session_id: sessionId,
+            expected_roster_version: String(state.rosterVersion)
+          });
+          const page = await fetchTimelineValue(paperId, archiveQuery);
+          if (!Array.isArray(page.nakama_archives) || page.nakama_archives.length !== 1) {
+            throw new Error("invalid_nakama_archive_page");
+          }
+          const entry = page.nakama_archives[0];
+          if (entry.logical_session_id !== sessionId) throw new Error("invalid_nakama_archive_session");
+          return [sessionId, acceptNakamaArchive(entry, state), entry];
+        }));
+        const nextSessions = new Map();
+        const archives = [];
+        for (const [sessionId, state, entry] of archiveResults) {
+          nextSessions.set(sessionId, state);
+          archives.push(entry);
+        }
+        value.nakama_archives = archives;
+        renderLiveRaid(card, value);
+        cursor.hepta = nextHepta;
+        nakamaSessions = nextSessions;
+        sessionStorage.setItem(liveCursorKey(paperId), JSON.stringify({ hepta: cursor.hepta }));
+        const catchingUp = Array.from(nakamaSessions.values()).some(state => state.hasMore);
+        connection.dataset.state = catchingUp ? "catching-up" : "live";
+        connection.textContent = catchingUp
+          ? "Catching up / 正在补齐"
+          : "Live · synced / 实时已同步";
+        if (wasDisconnected) {
+          try { await recordProductEvent("reconnected", { paperId }); } catch (_) {}
+          wasDisconnected = false;
+        }
+        failures = 0;
+        const sequences = Array.from(nakamaSessions.values(), state => state.sequence);
+        const maxSequence = sequences.length > 0 ? Math.max(...sequences) : 0;
+        show(output, `cursor ${cursor.hepta} · ${sequences.length} session(s) · max sequence ${maxSequence}`, true);
+        schedule(catchingUp ? 25 : 1250);
       } catch (error) {
+        failures += 1;
+        wasDisconnected = true;
+        connection.dataset.state = "reconnecting";
+        connection.textContent = "Reconnecting / 正在重连";
         show(output, error.message, false);
+        schedule(Math.min(5000, 1250 * (2 ** Math.min(failures, 2))));
       } finally {
+        running = false;
         button.disabled = false;
       }
-    });
+    }
+  };
+  button.addEventListener("click", async () => {
+    try { await recordProductEvent("replay_started", { paperId }); } catch (_) {}
+    sync.run(true);
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") sync.run(true);
+  });
+  return sync;
+}
+
+function bindTimeline() {
+  for (const card of document.querySelectorAll(".live-raid")) {
+    const sync = createLiveRaidSync(card);
+    sync.run(true);
   }
 }
 

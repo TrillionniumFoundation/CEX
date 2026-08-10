@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 use axum::{
     body::Body,
@@ -495,7 +495,7 @@ async fn record_browser_product_event(
         event.event_name.as_str(),
         "abandoned" | "reconnected" | "replay_started" | "continue_opened"
     );
-    let phase_valid = event.phase.as_ref().map_or(true, |phase| {
+    let phase_valid = event.phase.as_ref().is_none_or(|phase| {
         matches!(
             phase.as_str(),
             "forming"
@@ -679,6 +679,7 @@ struct TimelineQuery {
     #[serde(default)]
     after_sequence: u64,
     logical_session_id: Option<String>,
+    expected_roster_version: Option<u64>,
 }
 
 async fn paper_timeline(
@@ -687,6 +688,7 @@ async fn paper_timeline(
     Path(paper_id): Path<Uuid>,
     Query(query): Query<TimelineQuery>,
 ) -> Result<Response, AppError> {
+    validate_timeline_query(&query)?;
     let session = state.session(&headers).await?;
     let (room, events) = tokio::join!(
         state.hepta.get_paper_room(&session.identity, paper_id),
@@ -696,17 +698,40 @@ async fn paper_timeline(
     );
     let room = room?;
     let events = events?;
-    let accesses = latest_session_accesses(
-        member_session_accesses(&room)?,
-        query.logical_session_id.as_deref(),
-    )?;
-    let mut archives = Vec::with_capacity(accesses.len());
-    for access in accesses {
-        let archive = state.nakama.archive(&access, query.after_sequence).await?;
+    let accesses = latest_session_accesses(member_session_accesses(&room)?, None)?;
+    if accesses.len() > MAX_TIMELINE_SESSION_HEADS {
+        return Err(AppError::Upstream);
+    }
+    let live_access = current_live_session_access(&accesses)?;
+    let session_heads: Vec<_> = live_access
+        .into_iter()
+        .map(|access| {
+            json!({
+                "logical_session_id": access.logical_session_id,
+                "roster_version": access.roster_version,
+                "nakama_completion_received": access.nakama_completion_received,
+            })
+        })
+        .collect();
+    let mut archives = Vec::with_capacity(usize::from(query.logical_session_id.is_some()));
+    if let Some(logical_session_id) = query.logical_session_id.as_deref() {
+        let Some(access) = live_access else {
+            return Err(AppError::Conflict("archive_epoch_changed".into()));
+        };
+        if access.logical_session_id != logical_session_id
+            || query.expected_roster_version != Some(access.roster_version)
+        {
+            return Err(AppError::Conflict("archive_epoch_changed".into()));
+        }
+        let archive = state
+            .nakama
+            .archive(access, paper_id, query.after_sequence)
+            .await?;
         archives.push(json!({
             "logical_session_id": access.logical_session_id,
             "roster_version": access.roster_version,
             "nakama_completion_received": access.nakama_completion_received,
+            "requested_after_sequence": query.after_sequence,
             "archive": archive,
         }));
     }
@@ -715,7 +740,9 @@ async fn paper_timeline(
             "paper_id": paper_id,
             "after_cursor": query.after_cursor,
             "after_sequence": query.after_sequence,
+            "paper_room": room,
             "hepta_events": events,
+            "research_sessions": session_heads,
             "nakama_archives": archives,
             "finality": "pending_only",
         }))
@@ -847,17 +874,10 @@ fn latest_session_accesses(
     accesses: Vec<MemberSessionAccess>,
     logical_session_id: Option<&str>,
 ) -> Result<Vec<MemberSessionAccess>, AppError> {
-    if logical_session_id.is_some_and(|value| {
-        value.is_empty()
-            || value.len() > 128
-            || value.bytes().any(|byte| {
-                !(byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-'))
-            })
-    }) {
+    if logical_session_id.is_some_and(|value| !valid_logical_session_id(value)) {
         return Err(AppError::Invalid("logical_session_id is invalid".into()));
     }
-    let mut latest: std::collections::BTreeMap<String, MemberSessionAccess> =
-        std::collections::BTreeMap::new();
+    let mut latest: BTreeMap<String, MemberSessionAccess> = BTreeMap::new();
     for access in accesses {
         if logical_session_id.is_some_and(|wanted| wanted != access.logical_session_id) {
             continue;
@@ -873,6 +893,49 @@ fn latest_session_accesses(
         return Err(AppError::NotFound);
     }
     Ok(latest.into_values().collect())
+}
+
+fn current_live_session_access(
+    accesses: &[MemberSessionAccess],
+) -> Result<Option<&MemberSessionAccess>, AppError> {
+    let mut live = accesses.iter().filter(|access| {
+        matches!(access.status.as_str(), "issued" | "consumed")
+            && !access.nakama_completion_received
+    });
+    let current = live.next();
+    if live.next().is_some() {
+        return Err(AppError::Upstream);
+    }
+    Ok(current)
+}
+
+const MAX_TIMELINE_SESSION_HEADS: usize = 64;
+const JSON_SAFE_U64_MAX: u64 = 9_007_199_254_740_991;
+
+fn valid_logical_session_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-'))
+}
+
+fn validate_timeline_query(query: &TimelineQuery) -> Result<(), AppError> {
+    if query.after_cursor > JSON_SAFE_U64_MAX
+        || query.after_sequence > JSON_SAFE_U64_MAX
+        || query
+            .expected_roster_version
+            .is_some_and(|version| version == 0 || version > JSON_SAFE_U64_MAX)
+        || query
+            .logical_session_id
+            .as_deref()
+            .is_some_and(|value| !valid_logical_session_id(value))
+        || query.logical_session_id.is_some() != query.expected_roster_version.is_some()
+        || (query.logical_session_id.is_none() && query.after_sequence != 0)
+    {
+        return Err(AppError::Invalid("timeline cursor is invalid".into()));
+    }
+    Ok(())
 }
 
 fn authorized_artifact_media(
@@ -1040,18 +1103,21 @@ mod tests {
                 logical_session_id: logical_session_id.clone(),
                 authorization_id: Uuid::new_v4(),
                 roster_version: 1,
+                status: "superseded".into(),
                 nakama_completion_received: false,
             },
             MemberSessionAccess {
                 logical_session_id: logical_session_id.clone(),
                 authorization_id: Uuid::new_v4(),
                 roster_version: 2,
+                status: "completed".into(),
                 nakama_completion_received: true,
             },
             MemberSessionAccess {
                 logical_session_id: "paper.raid:other".into(),
                 authorization_id: Uuid::new_v4(),
                 roster_version: 1,
+                status: "issued".into(),
                 nakama_completion_received: false,
             },
         ];
@@ -1060,10 +1126,82 @@ mod tests {
         assert_eq!(selected.len(), 1);
         assert_eq!(selected[0].roster_version, 2);
         assert!(selected[0].nakama_completion_received);
+        let latest = latest_session_accesses(accesses.clone(), None).expect("latest heads");
+        assert_eq!(
+            current_live_session_access(&latest)
+                .expect("one live head")
+                .expect("live head")
+                .logical_session_id,
+            "paper.raid:other"
+        );
+        let mut ambiguous = latest.clone();
+        ambiguous.push(MemberSessionAccess {
+            logical_session_id: "paper.raid:third".into(),
+            authorization_id: Uuid::new_v4(),
+            roster_version: 1,
+            status: "consumed".into(),
+            nakama_completion_received: false,
+        });
+        assert!(matches!(
+            current_live_session_access(&ambiguous),
+            Err(AppError::Upstream)
+        ));
         assert!(matches!(
             latest_session_accesses(accesses, Some("not-visible")),
             Err(AppError::NotFound)
         ));
+    }
+
+    #[test]
+    fn timeline_requires_an_exact_nakama_session_epoch() {
+        for valid in [
+            TimelineQuery {
+                after_cursor: 7,
+                after_sequence: 0,
+                logical_session_id: None,
+                expected_roster_version: None,
+            },
+            TimelineQuery {
+                after_cursor: 7,
+                after_sequence: 19,
+                logical_session_id: Some("paper.raid:alpha".into()),
+                expected_roster_version: Some(2),
+            },
+        ] {
+            validate_timeline_query(&valid).expect("valid timeline cursor");
+        }
+
+        for invalid in [
+            TimelineQuery {
+                after_cursor: 0,
+                after_sequence: 1,
+                logical_session_id: None,
+                expected_roster_version: None,
+            },
+            TimelineQuery {
+                after_cursor: 0,
+                after_sequence: 1,
+                logical_session_id: Some("paper.raid:alpha".into()),
+                expected_roster_version: None,
+            },
+            TimelineQuery {
+                after_cursor: 0,
+                after_sequence: 1,
+                logical_session_id: Some("bad/session".into()),
+                expected_roster_version: Some(1),
+            },
+            TimelineQuery {
+                after_cursor: 0,
+                after_sequence: 1,
+                logical_session_id: Some("paper.raid:alpha".into()),
+                expected_roster_version: Some(0),
+            },
+        ] {
+            assert!(matches!(
+                validate_timeline_query(&invalid),
+                Err(AppError::Invalid(_))
+            ));
+        }
     }
 
     #[test]

@@ -244,6 +244,27 @@ async function runContext(browser, index) {
         ],
       );
       await page.getByText("pending_finality", { exact: true }).first().waitFor();
+      await page.locator('.live-connection[data-state="live"]').waitFor({ timeout: 15000 });
+      const renderedPhase = await page.locator(".live-phase").textContent();
+      const authorityState = await page.evaluate(async paperId => {
+        const response = await fetch(`/api/papers/${encodeURIComponent(paperId)}/timeline?after_cursor=0&after_sequence=0`, {
+          credentials: "same-origin",
+          headers: { accept: "application/json" },
+        });
+        const value = await response.json();
+        return {
+          ok: response.ok,
+          phase: value.paper_room?.paper?.phase ?? "waiting_for_authority",
+        };
+      }, credentials.paper_id);
+      assert.equal(authorityState.ok, true);
+      assert.equal(renderedPhase, `Phase: ${authorityState.phase}`);
+      assert.ok(await page.locator(".live-participants li").count() >= 1);
+      const cursorState = await page.evaluate(paperId => JSON.parse(
+        sessionStorage.getItem(`hepta.paper-raid.live-cursor.v1:${paperId}`),
+      ));
+      assert.equal(Number.isSafeInteger(cursorState.hepta) && cursorState.hepta >= 0, true);
+      assert.deepEqual(Object.keys(cursorState), ["hepta"]);
     }
 
     const unexpectedFailures = requestFailures.filter(failure => {

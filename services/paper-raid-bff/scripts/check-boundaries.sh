@@ -58,10 +58,17 @@ fi
 browser="$service_root/src/browser.js"
 html="$service_root/src/html.rs"
 hepta="$service_root/src/hepta.rs"
-if rg -n 'localStorage|sessionStorage|indexedDB|\.style' "$browser" || \
+if rg -n 'localStorage|indexedDB|\.style' "$browser" || \
   rg -n '<input[^>]+name=\\?"agent_(private_key|seed|mnemonic)' "$html"
 then
   echo "browser persistence or external Agent secret input detected" >&2
+  exit 1
+fi
+if [[ $(rg -o 'sessionStorage' "$browser" | wc -l) -ne 2 ]] || \
+   ! rg -q --fixed-strings 'sessionStorage.getItem(liveCursorKey(paperId))' "$browser" || \
+   ! rg -q --fixed-strings 'sessionStorage.setItem(liveCursorKey(paperId), JSON.stringify({ hepta: cursor.hepta }))' "$browser"
+then
+  echo "browser session storage is not limited to non-secret live cursors" >&2
   exit 1
 fi
 
