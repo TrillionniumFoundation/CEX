@@ -74,7 +74,7 @@ const FROZEN_EVALUATORS = new Map([
     "sha256:cf34d96f7f0075d4a7e60cdc49fee5ecd15b9d29bcb19eb935c9ec32e2e96eea",
     Object.freeze({
       support: Object.freeze([
-        "sha256:fa6258ddd7604eaf83441922f2a90ef588888a952f99f30093a14427c8f9ef66",
+        "sha256:f0ca6e845f87f5344b8763490ad18e1c436c9da6acf36e9c5b7c2464f5071393",
       ]),
     }),
   ],
@@ -82,7 +82,7 @@ const FROZEN_EVALUATORS = new Map([
     "sha256:3c256c75533b8154305b821cb30de3c5dd4c3f575ed1f72e6513320d87eddbf4",
     Object.freeze({
       support: Object.freeze([
-        "sha256:8b068332435a84549f61db316f55ac56e9e6da4fcbeac6c067a86310cc9c294e",
+        "sha256:199d18b168d6e09d46b75c3108757aaffbb2426cf758a71951c6b51451b58422",
       ]),
     }),
   ],

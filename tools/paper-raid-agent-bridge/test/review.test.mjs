@@ -304,7 +304,7 @@ async function supportPackValue(pack) {
       evaluator: "benchmark-ablation-evaluator.py",
       evaluatorDigest: "sha256:cf34d96f7f0075d4a7e60cdc49fee5ecd15b9d29bcb19eb935c9ec32e2e96eea",
       support: "benchmark-ablation-baseline.py",
-      supportDigest: "sha256:fa6258ddd7604eaf83441922f2a90ef588888a952f99f30093a14427c8f9ef66",
+      supportDigest: "sha256:f0ca6e845f87f5344b8763490ad18e1c436c9da6acf36e9c5b7c2464f5071393",
       dataset: Buffer.from([
         "sample_id,signal,shortcut,target", "s01,1,0,2", "s02,2,1,5",
         "s03,3,0,6", "s04,4,-1,7", "s05,5,1,11", "s06,6,0,12",
@@ -316,7 +316,7 @@ async function supportPackValue(pack) {
       evaluator: "replication-evaluator.py",
       evaluatorDigest: "sha256:3c256c75533b8154305b821cb30de3c5dd4c3f575ed1f72e6513320d87eddbf4",
       support: "replication-baseline.py",
-      supportDigest: "sha256:8b068332435a84549f61db316f55ac56e9e6da4fcbeac6c067a86310cc9c294e",
+      supportDigest: "sha256:199d18b168d6e09d46b75c3108757aaffbb2426cf758a71951c6b51451b58422",
       dataset: Buffer.from([
         "observation_id,group,value", "c01,control,4", "c02,control,6",
         "c03,control,5", "c04,control,7", "c05,control,3", "c06,control,5",
