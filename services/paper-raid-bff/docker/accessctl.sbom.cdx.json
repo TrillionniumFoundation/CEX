@@ -6,7 +6,7 @@
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "0000000000000000000000000000000000000000000000000000000000000000"
+          "content": "53ab9dabe095ac0dec10d13607f5b4fb6acf480bb66167f68408560ea8dc3cfe"
         }
       ],
       "name": "/paper-raid-accessctl",
@@ -29,7 +29,7 @@
     "properties": [
       {
         "name": "org.trillionnium.release-state",
-        "value": "unbound-must-regenerate-from-release-binary"
+        "value": "bound-release-binary"
       }
     ]
   },
